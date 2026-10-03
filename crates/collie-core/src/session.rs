@@ -1,12 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
     AgentWatchParams, ClientFrame, Empty, ErrorBody, ErrorCode, Event, Flock, HelloParams,
-    HelloResult, Label, PROTOCOL_VERSION, ReadParams, ReadSource, Request, RequestId, Response,
-    ServerFrame, TerminalId, TerminalRead, WS_PATH, WS_SUBPROTOCOL,
+    HelloResult, Label, PROTOCOL_VERSION, PushRegisterParams, ReadParams, ReadSource, Request,
+    RequestId, Response, ServerFrame, TerminalId, TerminalRead, WS_PATH, WS_SUBPROTOCOL,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
@@ -19,6 +19,7 @@ use tokio_tungstenite::tungstenite::{self, Message};
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_MESSAGE_BYTES: usize = 4 << 20;
 const MAX_REPLAY_EVENTS: usize = 1024;
+const MAX_APPROVAL_EVENTS: usize = 64;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum SessionError {
@@ -136,8 +137,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         request: Request,
         timeout: Duration,
     ) -> Result<Response, SessionError> {
-        let id = self.send(request).await?;
         tokio::time::timeout(timeout, async {
+            let id = self.send(request).await?;
             loop {
                 match self.recv().await? {
                     ServerFrame::Result { id: rid, result } if rid == id => return Ok(result),
@@ -183,14 +184,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         let _ = tokio::time::timeout(Duration::from_secs(2), self.ws.close(None)).await;
     }
 
+    /// `push` is re-registered on every session so collied always has the current token.
     pub async fn run(
         mut self,
         requests: &mut tokio::sync::mpsc::Receiver<(Request, Reply)>,
         state: &Mutex<FlockState>,
+        push: Option<PushRegisterParams>,
         stop: impl Future<Output = ()>,
     ) -> SessionError {
-        let mut pending: HashMap<RequestId, Option<Reply>> = HashMap::new();
+        let mut pending: HashMap<RequestId, Pending> = HashMap::new();
         let mut seed = vec![Request::FlockSnapshot(Empty {})];
+        seed.extend(push.map(Request::PushRegister));
         if let Some(terminal_id) = lock(state).watched.clone() {
             seed.push(Request::AgentWatch(AgentWatchParams {
                 terminal_id: Some(terminal_id.clone()),
@@ -202,8 +206,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
             }));
         }
         for request in seed {
+            let read_mark = read_mark(state, &request);
             match self.send(request).await {
-                Ok(id) => pending.insert(id, None),
+                Ok(id) => pending.insert(id, (None, read_mark)),
                 Err(e) => return e,
             };
         }
@@ -216,8 +221,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                     if reply.is_closed() {
                         continue;
                     }
+                    let read_mark = read_mark(state, &request);
                     match self.send(request).await {
-                        Ok(id) => { pending.insert(id, Some(reply)); }
+                        Ok(id) => { pending.insert(id, (Some(reply), read_mark)); }
                         Err(e) => { let _ = reply.send(Err(e.clone())); break e; }
                     }
                 }
@@ -228,12 +234,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                     };
                     match frame {
                         ServerFrame::Result { id, result } => {
+                            let (reply, read_mark) = pending.remove(&id).unwrap_or_default();
                             match &result {
                                 Response::Flock(flock) => lock(state).apply_snapshot(flock.clone()),
-                                Response::Terminal(read) => lock(state).apply_output(read.clone()),
+                                Response::Terminal(read) => {
+                                    lock(state).apply_read(read.clone(), read_mark);
+                                }
                                 _ => {}
                             }
-                            if let Some(Some(reply)) = pending.remove(&id) {
+                            if let Some(reply) = reply {
                                 let _ = reply.send(Ok(result));
                             }
                         }
@@ -242,7 +251,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                             if err.is_auth() {
                                 break err;
                             }
-                            if let Some(Some(reply)) = pending.remove(&id) {
+                            if let Some((Some(reply), _)) = pending.remove(&id) {
                                 let _ = reply.send(Err(err));
                             }
                         }
@@ -250,7 +259,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                         ServerFrame::Event { seq, event } => {
                             if lock(state).apply_event(seq, event) == EventOutcome::NeedsSnapshot {
                                 match self.send(Request::FlockSnapshot(Empty {})).await {
-                                    Ok(id) => { pending.insert(id, None); }
+                                    Ok(id) => { pending.insert(id, (None, None)); }
                                     Err(e) => break e,
                                 }
                             }
@@ -259,11 +268,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                 }
             }
         };
-        for reply in pending.into_values().flatten() {
+        for reply in pending.into_values().filter_map(|(reply, _)| reply) {
             let _ = reply.send(Err(end.clone()));
         }
         end
     }
+}
+
+type Pending = (Option<Reply>, Option<u64>);
+
+fn read_mark(state: &Mutex<FlockState>, request: &Request) -> Option<u64> {
+    matches!(request, Request::AgentRead(_)).then(|| lock(state).output_events)
 }
 
 pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -308,6 +323,10 @@ pub struct FlockState {
     pub watched: Option<TerminalId>,
     pub output: Option<TerminalRead>,
     pub output_revision: u64,
+    /// `approval.needed` and `approval.resolved` events, numbered by `approval_revision`.
+    pub approval_events: VecDeque<(u64, Event)>,
+    pub approval_revision: u64,
+    output_events: u64,
     last_seq: u64,
     since_snapshot: Vec<(u64, Event)>,
 }
@@ -327,10 +346,22 @@ impl FlockState {
 
     /// Only `recent` reads of the watched agent are kept: that is what `agent.output`
     /// carries, so a `visible` read would flicker against the stream.
-    pub fn apply_output(&mut self, read: TerminalRead) {
-        if read.source == ReadSource::Recent && self.watched.as_ref() == Some(&read.terminal_id) {
+    fn apply_output(&mut self, read: TerminalRead) -> bool {
+        let watched =
+            read.source == ReadSource::Recent && self.watched.as_ref() == Some(&read.terminal_id);
+        if watched {
             self.output = Some(read);
             self.output_revision += 1;
+        }
+        watched
+    }
+
+    /// A read reply is not ordered against `agent.output` events: collied may have read
+    /// herdr before an event it sent first. `mark` is the event count when the read was
+    /// sent; if an event was applied since, the reply is older than the screen.
+    pub fn apply_read(&mut self, read: TerminalRead, mark: Option<u64>) {
+        if mark.is_none_or(|m| m == self.output_events) {
+            self.apply_output(read);
         }
     }
 
@@ -340,12 +371,27 @@ impl FlockState {
         }
         self.last_seq = seq;
         match event {
-            Event::AgentOutput(read) => self.apply_output(read),
+            Event::AgentOutput(read) => {
+                if self.apply_output(read) {
+                    self.output_events += 1;
+                }
+            }
             Event::FlockChanged {} => return EventOutcome::NeedsSnapshot,
             Event::Unrecognized => {}
             event => {
                 if let Some(flock) = &mut self.flock {
                     apply(flock, &event);
+                }
+                if matches!(
+                    event,
+                    Event::ApprovalNeeded { .. } | Event::ApprovalResolved { .. }
+                ) {
+                    if self.approval_events.len() == MAX_APPROVAL_EVENTS {
+                        self.approval_events.pop_front();
+                    }
+                    self.approval_revision += 1;
+                    self.approval_events
+                        .push_back((self.approval_revision, event.clone()));
                 }
                 if self.since_snapshot.len() == MAX_REPLAY_EVENTS {
                     self.since_snapshot.remove(0);
@@ -557,6 +603,56 @@ mod tests {
         assert!(s.flock.as_ref().unwrap().approvals.is_empty());
     }
 
+    #[test]
+    fn approval_events_are_numbered_and_capped() {
+        let mut s = FlockState::default();
+        s.apply_snapshot(flock(0, vec![]));
+        let resolved = |id: &str| Event::ApprovalResolved {
+            approval_id: ApprovalId::new(id).unwrap(),
+            outcome: protocol::ApprovalOutcome::Superseded,
+        };
+        s.apply_event(1, resolved("a1"));
+        s.apply_event(1, resolved("dup"));
+        s.apply_event(2, status_event("t1", AgentStatus::Idle));
+        assert_eq!(s.approval_revision, 1);
+        for seq in 3..(3 + MAX_APPROVAL_EVENTS as u64) {
+            s.apply_event(seq, resolved("a2"));
+        }
+        assert_eq!(s.approval_events.len(), MAX_APPROVAL_EVENTS);
+        assert_eq!(s.approval_events.front().unwrap().0, 2);
+        s.new_connection();
+        s.apply_event(1, resolved("a3"));
+        assert_eq!(
+            s.approval_revision,
+            MAX_APPROVAL_EVENTS as u64 + 2,
+            "revisions never go back across connections"
+        );
+    }
+
+    #[test]
+    fn read_reply_older_than_an_applied_event_is_dropped() {
+        let mut s = FlockState::default();
+        s.watch(Some(TerminalId::new("t1").unwrap()));
+        let ev = |ansi| Event::AgentOutput(output("t1", ansi, ReadSource::Recent));
+        let mark = s.output_events;
+        s.apply_event(1, ev("newer"));
+        s.apply_read(output("t1", "older", ReadSource::Recent), Some(mark));
+        assert_eq!((shown(&s), s.output_revision), (Some("newer"), 1));
+        s.apply_read(
+            output("t1", "fresh", ReadSource::Recent),
+            Some(s.output_events),
+        );
+        assert_eq!((shown(&s), s.output_revision), (Some("fresh"), 2));
+        let mark = s.output_events;
+        s.apply_event(2, Event::AgentOutput(output("t2", "x", ReadSource::Recent)));
+        s.apply_read(output("t1", "still fresh", ReadSource::Recent), Some(mark));
+        assert_eq!(
+            shown(&s),
+            Some("still fresh"),
+            "an unwatched agent's event does not count"
+        );
+    }
+
     fn output(id: &str, ansi: &str, source: ReadSource) -> TerminalRead {
         TerminalRead {
             terminal_id: TerminalId::new(id).unwrap(),
@@ -587,7 +683,7 @@ mod tests {
         assert_eq!(s.apply_event(3, ev("t1", "dup")), EventOutcome::Dropped);
         assert_eq!(s.apply_event(2, ev("t1", "old")), EventOutcome::Dropped);
         s.apply_event(4, ev("t2", "other agent"));
-        s.apply_output(output("t1", "visible", ReadSource::Visible));
+        s.apply_read(output("t1", "visible", ReadSource::Visible), None);
         assert_eq!((shown(&s), s.output_revision), (Some("a"), 1));
         s.apply_event(5, ev("t1", "b"));
         assert_eq!((shown(&s), s.output_revision), (Some("b"), 2));
@@ -870,7 +966,10 @@ mod tests {
                 .await
                 .unwrap();
         };
-        let (end, ()) = tokio::join!(session.run(&mut rx, &state, std::future::pending()), client);
+        let (end, ()) = tokio::join!(
+            session.run(&mut rx, &state, None, std::future::pending()),
+            client
+        );
         assert!(end.is_auth(), "{end:?}");
         assert!(matches!(
             c_rx.await.unwrap(),
@@ -937,7 +1036,9 @@ mod tests {
             )
             .await;
         });
-        let end = session.run(&mut rx, &state, std::future::pending()).await;
+        let end = session
+            .run(&mut rx, &state, None, std::future::pending())
+            .await;
         assert!(
             !end.is_auth(),
             "an internal request error does not end the session"
@@ -962,7 +1063,9 @@ mod tests {
             read(&mut ws).await;
             drop(ws);
         });
-        let end = session.run(&mut rx, &state, std::future::pending()).await;
+        let end = session
+            .run(&mut rx, &state, None, std::future::pending())
+            .await;
         assert!(!end.is_auth());
         assert!(a_rx.await.unwrap().is_err());
         server.await.unwrap();

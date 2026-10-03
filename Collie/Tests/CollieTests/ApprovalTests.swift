@@ -1,0 +1,328 @@
+import CollieCore
+import Foundation
+import Synchronization
+import Testing
+import UserNotifications
+
+@testable import Collie
+
+@Test func actionIdentifiersMapToDecisions() {
+    #expect(ApprovalNotification.decision(forAction: "APPROVE") == .approve)
+    #expect(ApprovalNotification.decision(forAction: "DENY") == .deny)
+    #expect(ApprovalNotification.decision(forAction: UNNotificationDefaultActionIdentifier) == nil)
+    #expect(ApprovalNotification.decision(forAction: UNNotificationDismissActionIdentifier) == nil)
+    #expect(ApprovalNotification.decision(forAction: "approve") == nil)
+
+    let info: [AnyHashable: Any] = ["node_id": "nMAC123", "approval_id": "ap_1", "aps": ["category": "APPROVAL"]]
+    let link = ApprovalLink(nodeId: "nMAC123", approvalId: "ap_1")!
+    #expect(NotificationResponse(actionIdentifier: "APPROVE", userInfo: info) == .decide(link, .approve))
+    #expect(NotificationResponse(actionIdentifier: "DENY", userInfo: info) == .decide(link, .deny))
+    #expect(NotificationResponse(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: info) == .open(link))
+    #expect(NotificationResponse(actionIdentifier: UNNotificationDismissActionIdentifier, userInfo: info) == .ignore)
+    #expect(NotificationResponse(actionIdentifier: "APPROVE", userInfo: ["approval_id": "ap_1"]) == .ignore)
+}
+
+@Test func approvalCategoryNeedsAuthenticationForBothActions() throws {
+    let category = try #require(ApprovalNotification.categories.first)
+    #expect(ApprovalNotification.categories.count == 1)
+    #expect(category.identifier == "APPROVAL")
+    #expect(category.actions.map(\.identifier) == ["APPROVE", "DENY"])
+    #expect(category.actions.map(\.title) == ["Approve", "Deny"])
+    #expect(category.actions.allSatisfy { $0.options.contains(.authenticationRequired) })
+    #expect(!category.actions.contains { $0.options.contains(.foreground) })
+    #expect(category.actions[1].options.contains(.destructive))
+    #expect(!category.actions[0].options.contains(.destructive))
+}
+
+@Test func deepLinkParsing() {
+    let link = ApprovalLink(userInfo: ["node_id": "nABC123CNTRL", "approval_id": "ap_x-Y_9"])
+    #expect(link?.nodeId == "nABC123CNTRL")
+    #expect(link?.approvalId == "ap_x-Y_9")
+    #expect(link.map { ApprovalLink(userInfo: $0.userInfo) } == link)
+
+    #expect(ApprovalLink(userInfo: [:]) == nil)
+    #expect(ApprovalLink(userInfo: ["node_id": "nABC"]) == nil)
+    #expect(ApprovalLink(userInfo: ["node_id": "nABC", "approval_id": 7]) == nil)
+    #expect(ApprovalLink(userInfo: ["node_id": "", "approval_id": "ap_1"]) == nil)
+    #expect(ApprovalLink(userInfo: ["node_id": "nABC", "approval_id": "../ap"]) == nil)
+    #expect(ApprovalLink(userInfo: ["node_id": "nABC", "approval_id": "ap 1"]) == nil)
+    #expect(ApprovalLink(userInfo: ["node_id": "nABC", "approval_id": "ap_é"]) == nil)
+    #expect(ApprovalLink(userInfo: ["node_id": "nABC", "approval_id": String(repeating: "a", count: 65)]) == nil)
+    #expect(ApprovalLink(userInfo: ["node_id": "nABC", "approval_id": String(repeating: "a", count: 64)]) != nil)
+}
+
+@Test func reachabilityParsing() {
+    let json = Data(
+        #"{"nUP":{"last_ok_ms":200,"last_fail_ms":100},"nDOWN":{"last_ok_ms":100,"last_fail_ms":200},"nNEVER":{"last_ok_ms":null,"last_fail_ms":5},"nNEW":{"last_ok_ms":7,"last_fail_ms":null}}"#.utf8
+    )
+    let seen = MacReachability.parse(json)
+    #expect(seen.count == 4)
+    #expect(seen["nUP"] == MacReachability(lastOkMs: 200, lastFailMs: 100))
+    #expect(seen["nUP"]?.lastSeenUnreachable == false)
+    #expect(seen["nDOWN"]?.lastSeenUnreachable == true)
+    #expect(seen["nNEVER"]?.lastSeenUnreachable == true)
+    #expect(seen["nNEW"]?.lastSeenUnreachable == false)
+    #expect(MacReachability(lastOkMs: 5, lastFailMs: 5).lastSeenUnreachable == false)
+    #expect(MacReachability.parse(Data("{}".utf8)).isEmpty)
+    #expect(MacReachability.parse(Data("not json".utf8)).isEmpty)
+    #expect(MacReachability.parse(Data(#"{"n":{"last_ok_ms":"x"}}"#.utf8)).isEmpty)
+}
+
+@Test func pushBodyRewrite() {
+    let hint = Data(#"{"nDOWN":{"last_ok_ms":1,"last_fail_ms":2},"nUP":{"last_ok_ms":2,"last_fail_ms":1}}"#.utf8)
+    let body = "Blocked in collie"
+    let rewritten = "Blocked in collie (Mac may be unreachable, open collie to check)"
+    #expect(PushBody.rewrite(body, nodeId: "nDOWN", reachability: hint) == rewritten)
+    #expect(PushBody.rewrite(rewritten, nodeId: "nDOWN", reachability: hint) == rewritten)
+    #expect(PushBody.rewrite(body, nodeId: "nUP", reachability: hint) == body)
+    #expect(PushBody.rewrite(body, nodeId: "nOTHER", reachability: hint) == body)
+    #expect(PushBody.rewrite(body, nodeId: nil, reachability: hint) == body)
+    #expect(PushBody.rewrite(body, nodeId: "nDOWN", reachability: nil) == body)
+    #expect(PushBody.rewrite(body, nodeId: "nDOWN", reachability: Data("garbage".utf8)) == body)
+}
+
+@Test func followUpNeverClaimsSuccessWithoutConfirmation() {
+    let applied = FollowUp.after(.applied(decision: .approve), decision: .approve, agent: "claude")
+    #expect(applied.title == "Approved: claude")
+    #expect(!applied.opensApproval)
+    #expect(FollowUp.after(.applied(decision: .deny), decision: .deny, agent: "claude").title == "Denied: claude")
+
+    let unconfirmed = FollowUp.after(.unconfirmed(decision: .approve), decision: .approve, agent: "claude")
+    #expect(unconfirmed.title.contains("not confirmed"))
+    #expect(unconfirmed.opensApproval)
+
+    for outcome: BackgroundOutcome in [
+        .unreachable(stage: .connect, message: "timeout"), .unreachable(stage: .nodeUp, message: "x"),
+        .unauthorized(message: "x"), .failed(message: "x"), .unknownMachine,
+    ] {
+        let followUp = FollowUp.after(outcome, decision: .approve, agent: "claude")
+        #expect(followUp.body == "Couldn't reach collied, open to decide")
+        #expect(followUp.opensApproval)
+    }
+    let unknown = FollowUp.after(.unreachable(stage: .decide, message: "x"), decision: .deny, agent: "claude")
+    #expect(unknown.body.contains("denial"))
+    #expect(unknown.opensApproval)
+}
+
+@Test func countdownFormatting() {
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    #expect(Countdown.string(untilMs: 1_700_000_000_000 + 125_000, now: now) == "2:05")
+    #expect(Countdown.string(untilMs: 1_700_000_000_000 + 600_000, now: now) == "10:00")
+    #expect(Countdown.string(untilMs: 1_700_000_000_000, now: now) == "expired")
+    #expect(Countdown.string(untilMs: 0, now: now) == "expired")
+}
+
+final class FakeApprovalCore: ApprovalCore {
+    struct State {
+        var pending: [PendingApproval] = []
+        var decisions: [String] = []
+        var error: CoreError?
+        var outcome = DecisionOutcome.applied(decision: .approve, by: "phone")
+        var link = LinkPhase.connected
+        var flocks = 0
+    }
+
+    let state = Mutex(State())
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "nMAC")
+
+    func machines() -> [Machine] { [machine] }
+    func approvalFeed(machineId: String, afterRevision: UInt64) -> ApprovalFeed? {
+        let (link, pending) = state.withLock { ($0.link, $0.pending) }
+        return ApprovalFeed(link: link, revision: 1, missed: false, events: [], pending: pending)
+    }
+    func flock(machineId: String) async throws -> MachineFlock {
+        let link = state.withLock { s in
+            s.flocks += 1
+            return s.link
+        }
+        return MachineFlock(machine: machine, link: link, lastError: nil, details: nil, workspaces: [], agents: [], approvalsCount: 0)
+    }
+    func decide(machineId: String, approvalId: String, decision: ApprovalDecision) async throws -> DecisionOutcome {
+        let (error, outcome) = state.withLock { s in
+            s.decisions.append("\(machineId) \(approvalId) \(decision)")
+            return (s.error, s.outcome)
+        }
+        if let error { throw error }
+        return outcome
+    }
+}
+
+final class FakeAuthenticator: Authenticator {
+    struct State {
+        var result = true
+        var reasons: [String] = []
+        var hold = false
+        var held: [CheckedContinuation<Void, Never>] = []
+    }
+
+    let state = Mutex(State())
+
+    func authenticate(reason: String) async -> Bool {
+        let hold = state.withLock { s in
+            s.reasons.append(reason)
+            return s.hold
+        }
+        if hold {
+            await withCheckedContinuation { continuation in
+                state.withLock { $0.held.append(continuation) }
+            }
+        }
+        return state.withLock { $0.result }
+    }
+
+    func waitHeld() async {
+        while state.withLock({ $0.held.isEmpty }) {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    func release(result: Bool) {
+        let held = state.withLock { s in
+            s.result = result
+            s.hold = false
+            defer { s.held = [] }
+            return s.held
+        }
+        held.forEach { $0.resume() }
+    }
+}
+
+private func approval(_ id: String, options: [ApprovalDecision] = [.approve, .approveAlways, .deny]) -> PendingApproval {
+    PendingApproval(
+        approvalId: id, terminalId: "term_1", agentLabel: "claude", workspaceLabel: "collie", snippet: "Do you want to proceed?",
+        toolName: "Bash", toolSummary: "cargo test", options: options, createdAtMs: 1, expiresAtMs: .max
+    )
+}
+
+@MainActor
+private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator) -> ApprovalsModel {
+    core.state.withLock { $0.pending = [approval("ap_1"), approval("ap_2", options: [.approve, .deny])] }
+    let model = ApprovalsModel(core: core, auth: auth)
+    model.poll()
+    return model
+}
+
+@MainActor
+@Test func decisionWaitsForLocalAuthentication() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    let model = approvalsModel(core, auth)
+    let item = try #require(model.items.first)
+    #expect(model.items.map(\.id) == ["ap_1", "ap_2"])
+
+    auth.state.withLock { $0.hold = true }
+    let decide = Task { await model.decide(item, .approve) }
+    await auth.waitHeld()
+    #expect(model.steps["ap_1"] == .authenticating(.approve))
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+
+    await model.decide(item, .deny)
+    #expect(auth.state.withLock { $0.reasons } == ["Approve claude"])
+
+    auth.release(result: true)
+    await decide.value
+    #expect(core.state.withLock { $0.decisions } == ["m1 ap_1 approve"])
+    #expect(model.steps["ap_1"] == nil)
+    #expect(model.notice == "Approved: claude. The agent moved on.")
+}
+
+@MainActor
+@Test func failedAuthenticationSendsNothing() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    auth.state.withLock { $0.result = false }
+    let model = approvalsModel(core, auth)
+    let item = try #require(model.items.first)
+
+    await model.decide(item, .deny)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+    #expect(model.steps.isEmpty)
+    #expect(model.notice?.contains("Nothing was sent") == true)
+    #expect(auth.state.withLock { $0.reasons } == ["Deny claude"])
+
+    auth.state.withLock { $0.result = true }
+    await model.decide(item, .deny)
+    #expect(core.state.withLock { $0.decisions } == ["m1 ap_1 deny"])
+}
+
+@MainActor
+@Test func decisionsOutsideTheOptionsAreRefused() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    let model = approvalsModel(core, auth)
+    let item = try #require(model.items.last)
+    await model.decide(item, .approveAlways)
+    #expect(auth.state.withLock { $0.reasons }.isEmpty)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+}
+
+@MainActor
+@Test func unconfirmedAndFailedDecisionsAreReported() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    let model = approvalsModel(core, auth)
+    let item = try #require(model.items.first)
+
+    core.state.withLock { $0.outcome = .unconfirmed(decision: .approve, by: "phone") }
+    await model.decide(item, .approve)
+    #expect(model.notice?.contains("not confirmed") == true)
+
+    core.state.withLock { $0.error = .ApprovalExpired }
+    await model.decide(item, .approve)
+    #expect(model.notice == CoreError.ApprovalExpired.description)
+    #expect(model.steps.isEmpty)
+}
+
+@MainActor
+@Test func agentBannerShowsOnlyThatAgentsApprovals() {
+    let core = FakeApprovalCore()
+    let model = ApprovalsModel(core: core, auth: FakeAuthenticator())
+    var other = approval("ap_9")
+    other.terminalId = "term_2"
+    core.state.withLock { $0.pending = [approval("ap_1"), other] }
+    model.poll()
+    #expect(model.items(machineId: "m1", terminalId: "term_1").map(\.id) == ["ap_1"])
+    #expect(model.items(machineId: "m2", terminalId: "term_1").isEmpty)
+
+    model.open(ApprovalLink(nodeId: "nMAC", approvalId: "ap_9")!)
+    #expect(model.highlighted == "ap_9")
+}
+
+@MainActor
+@Test func notificationTapLoadsUntilTheMacIsConnected() async throws {
+    let core = FakeApprovalCore()
+    core.state.withLock { $0.link = .connecting }
+    let model = ApprovalsModel(core: core, auth: FakeAuthenticator())
+    let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+    let load = model.open(link)
+    #expect(model.loading?.link == link)
+    #expect(model.highlighted == "ap_1")
+    while core.state.withLock({ $0.flocks }) < 2 {
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(model.loading?.phase == .connecting)
+    #expect(model.items.isEmpty)
+
+    core.state.withLock { s in
+        s.link = .connected
+        s.pending = [approval("ap_1")]
+    }
+    await load?.value
+    #expect(model.loading == nil)
+    #expect(model.items.map(\.id) == ["ap_1"])
+    #expect(model.notice == nil)
+}
+
+@MainActor
+@Test func notificationTapForAGoneApprovalSaysSoOnceConnected() async throws {
+    let core = FakeApprovalCore()
+    let model = ApprovalsModel(core: core, auth: FakeAuthenticator())
+    let gone = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_gone"))
+    await model.open(gone)?.value
+    #expect(model.loading == nil)
+    #expect(model.notice == "This approval is no longer pending.")
+
+    let unknown = try #require(ApprovalLink(nodeId: "nOTHER", approvalId: "ap_1"))
+    #expect(model.open(unknown) == nil)
+    #expect(model.loading == nil)
+}

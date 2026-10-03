@@ -20,8 +20,13 @@ pub const LABEL: &str = "E2E iPhone";
 // libtailscale's Go runtime reads TS_* knobs once at load, so each test re-runs itself
 // in a child process that has them (same approach as crates/tailnet/tests/end_to_end.rs).
 pub fn in_child(test: &str) -> bool {
+    in_child_with(test, &[])
+}
+
+pub fn in_child_with(test: &str, env: &[(&str, &str)]) -> bool {
     if KNOBS
         .iter()
+        .chain(env)
         .all(|(k, v)| std::env::var(k).as_deref() == Ok(*v))
     {
         std::thread::spawn(|| {
@@ -34,6 +39,7 @@ pub fn in_child(test: &str) -> bool {
     let out = Command::new(std::env::current_exe().unwrap())
         .args([test, "--exact", "--nocapture"])
         .envs(KNOBS)
+        .envs(env.iter().copied())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -128,7 +134,13 @@ pub struct Net {
 
 impl Net {
     pub fn start(root: &Path) -> Self {
-        let key = format!("tskey-auth-colliee2e{}", std::process::id());
+        Self::with_key(
+            root,
+            format!("test-authkey-colliee2e{}", std::process::id()),
+        )
+    }
+
+    pub fn with_key(root: &Path, key: String) -> Self {
         let control = TestControl::start(&key, root);
         let url = control.url.clone();
         let mac = start_node(

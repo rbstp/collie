@@ -24,6 +24,7 @@ use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode, header};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Bytes, Error as WsError, Message};
 
+use crate::approvals::{self, Approvals};
 use crate::audit::Audit;
 use crate::control::{self, Candidate, PairAttempt, StatusInfo};
 use crate::drive::{self, Authorized, Driver, Origin, Reply, Watched, Watcher};
@@ -31,6 +32,7 @@ use crate::flock::{self, Baseline, StatusTracker};
 use crate::gate::{self, Decision};
 use crate::pairing::{Attempt, Pairing};
 use crate::peers::{self, Peer, Store};
+use crate::push::{self, Push};
 use crate::{config, herdr};
 
 const MAX_CONNECTIONS: usize = 64;
@@ -41,7 +43,7 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const PING_EVERY: Duration = Duration::from_secs(15);
 const SILENCE_LIMIT: Duration = Duration::from_secs(45);
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
-const RECONCILE_EVERY: Duration = Duration::from_secs(2);
+const RECONCILE_EVERY: Duration = Duration::from_secs(1);
 const RECONCILE_MAX_BACKOFF: Duration = Duration::from_secs(30);
 const RATE_PER_SEC: f64 = 20.0;
 const RATE_BURST: f64 = 40.0;
@@ -54,6 +56,7 @@ pub struct ServerConfig {
     pub owner_user_id: Option<i64>,
     pub herdr_session: String,
     pub machine_name: String,
+    pub approval_ttl: Duration,
 }
 
 pub struct ServerHandle {
@@ -145,7 +148,7 @@ pub struct State {
     machine: MachineInfo,
     dns_name: String,
     herdr: PathBuf,
-    peers: Mutex<Store>,
+    peers: Arc<Mutex<Store>>,
     pairing: Mutex<Pairing<mpsc::Sender<PairAttempt>>>,
     sessions: Mutex<Sessions>,
     buckets: Mutex<HashMap<String, TokenBucket>>,
@@ -153,6 +156,8 @@ pub struct State {
     tracker: Mutex<StatusTracker>,
     events: broadcast::Sender<Event>,
     drive: Arc<Driver>,
+    approvals: Arc<Approvals>,
+    push: Arc<Push>,
     pub(crate) audit: Arc<Audit>,
 }
 
@@ -218,6 +223,9 @@ impl State {
             }
         }
         drop(store);
+        if let Err(e) = self.push.forget(&peer.stable_id) {
+            tracing::error!(error = %e, "could not drop the revoked phone's APNs token");
+        }
         self.audit.log(
             &peer.label,
             "peers.revoke",
@@ -312,6 +320,16 @@ pub async fn start_with_tasks(
     herdr_socket: PathBuf,
     tasks: &config::TasksConfig,
 ) -> anyhow::Result<ServerHandle> {
+    start_with(node, cfg, herdr_socket, tasks, None).await
+}
+
+pub async fn start_with(
+    node: Node,
+    cfg: ServerConfig,
+    herdr_socket: PathBuf,
+    tasks: &config::TasksConfig,
+    apns: Option<Arc<dyn push::Sender>>,
+) -> anyhow::Result<ServerHandle> {
     crate::ensure_private_dir(&cfg.data_dir)?;
     let roots = match &tasks.roots {
         Some(roots) => roots.clone(),
@@ -347,7 +365,28 @@ pub async fn start_with_tasks(
             "owner_user_id {configured} in the config differs from {stored} in peers.json"
         );
     }
+    let peers = Arc::new(Mutex::new(store));
     let audit = Arc::new(Audit::open(&cfg.data_dir.join(config::AUDIT_FILE))?);
+    let push = {
+        let peers = peers.clone();
+        Push::open(
+            cfg.data_dir.join(config::PUSH_FILE),
+            apns,
+            Arc::new(move |id| lock(&peers).get(id).is_some()),
+        )?
+    };
+    push.retain_paired(&lock(&peers))?;
+    let events = broadcast::channel(256).0;
+    let approvals = Arc::new(
+        Approvals::new(
+            herdr_socket.clone(),
+            me.stable_id.clone(),
+            events.clone(),
+            audit.clone(),
+            Some(push.clone()),
+        )
+        .with_timing(cfg.approval_ttl, approvals::SETTLE),
+    );
     let control = control::bind(&cfg.data_dir.join(config::CONTROL_SOCKET)).await?;
     let listener = node.listen("tcp", &format!(":{}", cfg.port))?;
 
@@ -361,7 +400,7 @@ pub async fn start_with_tasks(
         cfg,
         dns_name,
         herdr: herdr_socket,
-        peers: Mutex::new(store),
+        peers,
         pairing: Mutex::new(Pairing::default()),
         sessions: Mutex::new(Sessions {
             next: 1,
@@ -370,8 +409,10 @@ pub async fn start_with_tasks(
         buckets: Mutex::new(HashMap::new()),
         reject_buckets: Mutex::new(HashMap::new()),
         tracker: Mutex::new(StatusTracker::default()),
-        events: broadcast::channel(256).0,
+        events,
         drive,
+        approvals,
+        push,
         audit,
     });
     let (shutdown, rx) = watch::channel(false);
@@ -896,10 +937,38 @@ impl Session<'_> {
             }
             Request::WorkspaceClose(p) => (drive.workspace_close(p, &auth).await, None),
             Request::PaneClose(p) => (drive.pane_close(p, &auth).await, None),
-            Request::ApprovalList(_)
-            | Request::ApprovalDecide(_)
-            | Request::PushRegister(_)
-            | Request::PushActivityToken(_) => {
+            Request::ApprovalList(_) => (
+                Ok(Response::Approvals {
+                    approvals: self.state.approvals.pending(),
+                }),
+                None,
+            ),
+            // Detached so a session dropped mid-decision still resolves the approval; it
+            // audits every attempt itself.
+            Request::ApprovalDecide(p) => {
+                let (approvals, name) = (self.state.approvals.clone(), self.peer.name.clone());
+                let reply =
+                    tokio::spawn(async move { approvals.decide(&name, &peer, p, &auth).await })
+                        .await
+                        .unwrap_or_else(|_| err(ErrorCode::Internal, "decision failed"));
+                (reply, Some(Origin::Ran))
+            }
+            Request::PushRegister(_) if !auth() => (
+                err(ErrorCode::NotPaired, "peer is no longer authorized"),
+                None,
+            ),
+            Request::PushRegister(p) => (
+                self.state
+                    .push
+                    .register(&peer, p.apns_token, p.environment)
+                    .map(|()| Response::Ok)
+                    .map_err(|e| {
+                        tracing::error!(error = %e, "push.register");
+                        (ErrorCode::Internal, "could not store the token".to_owned())
+                    }),
+                None,
+            ),
+            Request::PushActivityToken(_) => {
                 (err(ErrorCode::NotImplemented, "not implemented"), None)
             }
         };
@@ -917,7 +986,10 @@ impl Session<'_> {
 
     /// A mutation that ran in this call was already audited by the detached operation.
     async fn finish(&mut self, method: &str, done: Finished) -> Flow {
-        let quiet = matches!(method, "hello" | "flock.snapshot" | "workspace.list");
+        let quiet = matches!(
+            method,
+            "hello" | "flock.snapshot" | "workspace.list" | "approval.list"
+        );
         if !quiet && done.origin != Some(Origin::Ran) {
             let mut result = outcome(&done.reply);
             if done.origin == Some(Origin::Replayed) {
@@ -1005,13 +1077,15 @@ impl Session<'_> {
     async fn flock(&self) -> Reply {
         let snap = herdr_result(herdr::session_snapshot(&self.state.herdr).await)?;
         let mut tracker = lock(&self.state.tracker);
-        Ok(Response::Flock(flock::map_flock(
+        let mut flock = flock::map_flock(
             &snap,
             &mut tracker,
             crate::now_ms(),
             self.state.machine.clone(),
             self.seq,
-        )))
+        );
+        flock.approvals = self.state.approvals.pending();
+        Ok(Response::Flock(flock))
     }
 
     async fn workspaces(&self) -> Reply {
@@ -1283,6 +1357,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         }
         base = Some(next);
         outage = false;
+        state.approvals.observe(&agents, &workspaces).await;
     }
 }
 

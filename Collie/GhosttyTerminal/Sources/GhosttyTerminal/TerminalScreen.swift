@@ -49,7 +49,7 @@ public struct TerminalFrame: Equatable, Sendable {
 /// Nothing is registered for terminal output (WRITE_PTY), clipboard or other effects, so the
 /// rendered content can never send bytes anywhere.
 public final class TerminalScreen {
-    // Bounds on untrusted snapshot dimensions. Wider rows are clipped (autowrap is off).
+    // Bounds on untrusted snapshot dimensions. Without wrapping, wider rows are clipped.
     static let maxColumns: UInt16 = 500
     static let maxRows: UInt16 = 500
 
@@ -57,6 +57,7 @@ public final class TerminalScreen {
     private let renderState: OpaquePointer
     private let rowIterator: OpaquePointer
     private let rowCells: OpaquePointer
+    private var columns = TerminalScreen.maxColumns
     private var rows: UInt16 = 1
 
     public init?(background: TerminalRGB, foreground: TerminalRGB) {
@@ -96,22 +97,82 @@ public final class TerminalScreen {
         ghostty_terminal_free(terminal)
     }
 
-    /// Replaces the screen with `snapshot`: rows of SGR-styled text joined by "\r\n".
-    public func render(ansiSnapshot snapshot: String) -> TerminalFrame {
-        var bytes = Array(snapshot.utf8)
-        let lines = bytes.reduce(1) { $1 == UInt8(ascii: "\n") ? $0 + 1 : $0 }
-        let wanted = UInt16(min(lines, Int(Self.maxRows)))
+    /// Replaces the screen with `snapshot`: rows of SGR-styled text joined by "\r\n". With
+    /// `wrapColumns`, rows wrap at that width after trailing blanks are trimmed; without it they
+    /// are clipped at `maxColumns`.
+    public func render(ansiSnapshot snapshot: String, wrapColumns: Int? = nil) -> TerminalFrame {
+        let wantedColumns: UInt16
+        let wantedRows: UInt16
+        var bytes: [UInt8]
+        if let wrapColumns {
+            wantedColumns = UInt16(min(max(wrapColumns, 1), Int(Self.maxColumns)))
+            // Wrapped height is unknown before writing; rows past the content are dropped by
+            // readFrame, and content beyond maxRows scrolls the oldest rows off the top.
+            wantedRows = Self.maxRows
+            bytes = Array("\u{1B}[?7h".utf8) + Array(Self.trimmingTrailingBlanks(snapshot).utf8)
+        } else {
+            bytes = Array(snapshot.utf8)
+            let lines = bytes.reduce(1) { $1 == UInt8(ascii: "\n") ? $0 + 1 : $0 }
+            wantedColumns = Self.maxColumns
+            wantedRows = UInt16(min(lines, Int(Self.maxRows)))
+            // Autowrap off so rows wider than the terminal clip instead of shifting every later row.
+            bytes.insert(contentsOf: Array("\u{1B}[?7l".utf8), at: 0)
+        }
 
         ghostty_terminal_reset(terminal)
-        if wanted != rows {
-            ghostty_terminal_resize(terminal, Self.maxColumns, wanted, 1, 1)
-            rows = wanted
+        if wantedColumns != columns || wantedRows != rows {
+            ghostty_terminal_resize(terminal, wantedColumns, wantedRows, 1, 1)
+            columns = wantedColumns
+            rows = wantedRows
         }
-        // Autowrap off so rows wider than the terminal clip instead of shifting every later row.
-        bytes.insert(contentsOf: Array("\u{1B}[?7l".utf8), at: 0)
         bytes.withUnsafeBufferPointer { ghostty_terminal_vt_write(terminal, $0.baseAddress, $0.count) }
         ghostty_render_state_update(renderState, terminal)
         return readFrame()
+    }
+
+    /// Columns that fit `width` points of cells `cellWidth` wide, within 1...maxColumns.
+    public static func wrapColumns(width: Double, cellWidth: Double) -> Int {
+        guard cellWidth > 0, width.isFinite, width > 0 else { return 1 }
+        return Int(min(max((width / cellWidth).rounded(.down), 1), Double(maxColumns)))
+    }
+
+    /// Drops spaces and tabs at the end of every row, also when SGR sequences sit between them,
+    /// so padding to the Mac pane width does not wrap into blank rows. Those SGR sequences are
+    /// kept so the style state for later rows is unchanged.
+    static func trimmingTrailingBlanks(_ snapshot: String) -> String {
+        let scalars = Array(snapshot.unicodeScalars)
+        var out = String.UnicodeScalarView()
+        out.reserveCapacity(scalars.count)
+        var rowStart = 0
+        while rowStart <= scalars.count {
+            let newline = scalars[rowStart...].firstIndex(of: "\n") ?? scalars.count
+            var rowEnd = newline
+            if rowEnd > rowStart && scalars[rowEnd - 1] == "\r" { rowEnd -= 1 }
+            var contentEnd = rowStart
+            var trailingSGR: [Range<Int>] = []
+            var i = rowStart
+            while i < rowEnd {
+                if scalars[i] == "\u{1B}", i + 1 < rowEnd, scalars[i + 1] == "[" {
+                    var j = i + 2
+                    while j < rowEnd, "0123456789;:".unicodeScalars.contains(scalars[j]) { j += 1 }
+                    if j < rowEnd, scalars[j] == "m" {
+                        trailingSGR.append(i..<(j + 1))
+                        i = j + 1
+                        continue
+                    }
+                }
+                if scalars[i] != " " && scalars[i] != "\t" {
+                    contentEnd = i + 1
+                    trailingSGR.removeAll()
+                }
+                i += 1
+            }
+            out.append(contentsOf: scalars[rowStart..<contentEnd])
+            for range in trailingSGR { out.append(contentsOf: scalars[range]) }
+            out.append(contentsOf: scalars[rowEnd..<min(newline + 1, scalars.count)])
+            rowStart = newline + 1
+        }
+        return String(out)
     }
 
     private func readFrame() -> TerminalFrame {

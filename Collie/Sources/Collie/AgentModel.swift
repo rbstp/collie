@@ -12,6 +12,7 @@ final class AgentModel {
     private(set) var link: LinkPhase?
     private(set) var linkError: String?
     private(set) var ansi = ""
+    private(set) var refreshing = false
     private var revision: UInt64 = 0
 
     var draft = ""
@@ -26,13 +27,20 @@ final class AgentModel {
     var close = CloseConfirmation()
     private(set) var closed = false
 
+    private let prefsFile: URL?
+    var wrapLines: Bool {
+        didSet { DevicePrefs(wrapLines: wrapLines).save(to: prefsFile) }
+    }
+
     // One chain for every screen: a late unwatch from a popped screen must not land after
     // the next screen's watch.
     private static var watchChain: Task<Void, Never>?
 
-    init(core: any AgentCore, route: AgentRoute) {
+    init(core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file) {
         self.core = core
         self.route = route
+        self.prefsFile = prefsFile
+        wrapLines = DevicePrefs.load(from: prefsFile).wrapLines
     }
 
     var canSendPrompt: Bool { !sendingPrompt && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -59,6 +67,9 @@ final class AgentModel {
     }
 
     func refresh() async {
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
         do {
             ansi = try await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent).ansi
             notice = nil
@@ -67,15 +78,19 @@ final class AgentModel {
         }
     }
 
+    /// Text typed while the send is in flight stays in the draft.
     func sendPrompt() async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sent = draft
+        let text = sent.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sendingPrompt, !text.isEmpty else { return }
         sendingPrompt = true
         promptError = nil
         defer { sendingPrompt = false }
         do {
             try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text)
-            draft = ""
+            if draft.hasPrefix(sent) {
+                draft = String(draft.dropFirst(sent.count).drop(while: \.isWhitespace))
+            }
         } catch {
             promptError = Self.message(for: error)
         }
@@ -119,12 +134,7 @@ final class AgentModel {
     func performClose() async {
         guard let target = close.confirm() else { return }
         do {
-            switch target {
-            case .pane:
-                try await core.closePane(machineId: route.machineId, terminalId: route.terminalId, confirm: true)
-            case .workspace(let workspaceId):
-                try await core.closeWorkspace(machineId: route.machineId, workspaceId: workspaceId, confirm: true)
-            }
+            try await core.closeConfirmed(target, route: route)
             closed = true
         } catch {
             notice = Self.message(for: error)
@@ -143,9 +153,21 @@ final class AgentModel {
 
     static func message(for error: any Error) -> String {
         if let error = error as? CoreError, error == .AgentBlocked {
-            return "The agent is waiting for an approval. Approvals from the phone come in Phase 3; answer it on the Mac for now."
+            return "The agent is waiting for an approval. Answer it above or in the Approvals tab."
         }
         return describe(error)
+    }
+}
+
+extension AgentCore {
+    /// Only for a target that `CloseConfirmation.confirm()` returned.
+    func closeConfirmed(_ target: CloseTarget, route: AgentRoute) async throws {
+        switch target {
+        case .pane:
+            try await closePane(machineId: route.machineId, terminalId: route.terminalId, confirm: true)
+        case .workspace(let workspaceId):
+            try await closeWorkspace(machineId: route.machineId, workspaceId: workspaceId, confirm: true)
+        }
     }
 }
 

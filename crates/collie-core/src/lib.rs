@@ -1,5 +1,7 @@
+mod approvals;
 mod conn;
 mod pin;
+mod reach;
 mod session;
 mod store;
 
@@ -13,15 +15,20 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
-    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTarget, AgentWatchParams, Cwd, Empty,
-    ErrorCode, Key, Label, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
-    ReadParams, ReadSource, Request, Response, TaskNewParams, TerminalId, TerminalRead,
-    WorkspaceCloseParams, WorkspaceId, limits,
+    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTarget, AgentWatchParams, ApprovalId,
+    Cwd, Empty, ErrorCode, Key, Label, OpId, PairCompleteParams, PairingInvite, PaneCloseParams,
+    PromptText, PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response,
+    TaskNewParams, TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use zeroize::Zeroizing;
 
-use conn::{Conn, ConnectError, LinkPhase, NodeSlot, RequestError, blocking};
+pub use approvals::{
+    ApprovalDecision, ApprovalEvent, ApprovalFeed, BackgroundDecideReport, BackgroundOutcome,
+    DecideStage, DecisionOutcome, PendingApproval,
+};
+use conn::{Conn, ConnectError, LinkPhase, NodeSlot, PushSlot, RequestError, blocking};
+use reach::Reachability;
 use session::{CALL_TIMEOUT, SessionError, expect_flock, expect_paired, lock, unexpected};
 pub use store::Machine;
 use store::{MachineStore, random_id};
@@ -39,6 +46,13 @@ const PAIR_CONFIRM_TIMEOUT: Duration = Duration::from_secs(75);
 const DRIVE_TIMEOUT: Duration = Duration::from_secs(30);
 /// herdr's `agent.start` waits up to 30 s for the agent before collied prompts it.
 const TASK_NEW_TIMEOUT: Duration = Duration::from_secs(90);
+/// An unanswered mutation's `op_id` is reused for an identical retry within this window.
+/// Longer than any mutation timeout, shorter than collied's 600 s outcome cache.
+const OP_REUSE_WINDOW: Duration = Duration::from_secs(180);
+/// collied waits for the agent to leave `blocked` before it answers `approval.decide`.
+const DECIDE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Of the roughly 25 s iOS gives a background action, leaving time to post a fallback.
+const BACKGROUND_BUDGET: Duration = Duration::from_secs(20);
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 #[uniffi::export(Display)]
@@ -76,6 +90,12 @@ pub enum CoreError {
     HerdrUnavailable,
     #[error("too many requests, try again in a moment")]
     RateLimited,
+    #[error("this approval is no longer pending")]
+    ApprovalNotFound,
+    #[error("this approval expired")]
+    ApprovalExpired,
+    #[error("this approval was already answered")]
+    ApprovalAlreadyResolved,
     #[error("the Mac does not support this yet, update collied")]
     NotImplemented,
     #[error("stopped retrying: {message}. Pair this Mac again.")]
@@ -126,9 +146,12 @@ impl From<SessionError> for CoreError {
             _ if e.is_auth() => Self::Unauthorized { message },
             SessionError::Server { code, .. } => match code {
                 ErrorCode::InvalidParams => Self::InvalidInput {
-                    field: None,
+                    field: invalid_field(&message),
                     message,
                 },
+                ErrorCode::ApprovalNotFound => Self::ApprovalNotFound,
+                ErrorCode::ApprovalExpired => Self::ApprovalExpired,
+                ErrorCode::ApprovalAlreadyResolved => Self::ApprovalAlreadyResolved,
                 ErrorCode::AgentBlocked => Self::AgentBlocked,
                 ErrorCode::AgentNotReady => Self::AgentNotReady,
                 ErrorCode::ConfirmRequired => Self::ConfirmRequired,
@@ -335,6 +358,21 @@ pub struct TaskStarted {
     pub terminal_id: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PushEnvironment {
+    Sandbox,
+    Production,
+}
+
+impl From<PushEnvironment> for protocol::ApnsEnvironment {
+    fn from(e: PushEnvironment) -> Self {
+        match e {
+            PushEnvironment::Sandbox => Self::Sandbox,
+            PushEnvironment::Production => Self::Production,
+        }
+    }
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct BuildInfo {
     pub core_version: String,
@@ -393,6 +431,9 @@ struct Inner {
     cold_start: Mutex<Option<ColdStartReport>>,
     measured: AtomicBool,
     login_name: Mutex<Option<String>>,
+    push: PushSlot,
+    reach: Arc<Reachability>,
+    ops: Mutex<HashMap<String, (OpId, Instant)>>,
 }
 
 #[uniffi::export]
@@ -403,7 +444,13 @@ impl CollieCore {
     }
 
     pub fn tailnet_configured(&self) -> bool {
-        self.inner.state_dir.join("tsnet/tailscaled.state").exists()
+        self.inner.tailnet_configured()
+    }
+
+    /// The App Group container, where `reachability.json` is kept current for the
+    /// Notification Service Extension.
+    pub fn set_app_group_dir(&self, path: String) -> Result<(), CoreError> {
+        Ok(self.inner.reach.set_dir(PathBuf::from(path))?)
     }
 
     /// The key is used once to build the node and never stored by collie-core.
@@ -674,6 +721,123 @@ impl CollieCore {
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
     }
 
+    pub async fn approvals(&self, machine_id: String) -> Result<Vec<PendingApproval>, CoreError> {
+        match self
+            .call(&machine_id, Request::ApprovalList(Empty {}), CALL_TIMEOUT)
+            .await?
+        {
+            Response::Approvals { approvals } => Ok(approvals.iter().map(Into::into).collect()),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
+    /// Uses the nonce collie-core holds from the flock and `approval.needed`, fetching
+    /// `approval.list` when it has none. Not retried: the nonce is single use.
+    pub async fn decide(
+        &self,
+        machine_id: String,
+        approval_id: String,
+        decision: ApprovalDecision,
+    ) -> Result<DecisionOutcome, CoreError> {
+        let approval_id = ApprovalId::new(approval_id)
+            .map_err(|_| invalid("approval_id", "invalid approval id"))?;
+        let conn = self.conn(&machine_id)?;
+        self.run(async move {
+            let cached = approvals::cached_nonce(&lock(&conn.shared.flock), &approval_id);
+            let nonce = match cached {
+                Some(nonce) => nonce,
+                None => {
+                    let list = conn
+                        .request(Request::ApprovalList(Empty {}), CALL_TIMEOUT)
+                        .await
+                        .map_err(|e| request_error(&conn, e))?;
+                    approvals::listed_nonce(list, &approval_id)?
+                        .ok_or(CoreError::ApprovalNotFound)?
+                }
+            };
+            let request = Request::ApprovalDecide(protocol::ApprovalDecideParams {
+                approval_id,
+                decision: decision.into(),
+                nonce,
+            });
+            let response = conn
+                .request(request, DECIDE_TIMEOUT)
+                .await
+                .map_err(|e| request_error(&conn, e))?;
+            Ok(approvals::expect_resolved(response)?.into())
+        })
+        .await
+    }
+
+    /// Local and cheap, meant to be polled. `None` when the machine has no connection yet.
+    pub fn approval_feed(&self, machine_id: String, after_revision: u64) -> Option<ApprovalFeed> {
+        let conn = lock(&self.inner.conns).get(&machine_id).cloned()?;
+        let link = lock(&conn.shared.link).phase;
+        Some(approvals::feed(
+            link,
+            &lock(&conn.shared.flock),
+            after_revision,
+        ))
+    }
+
+    /// Lock-screen Approve/Deny. Starts the tailnet from cached state if needed (never
+    /// a login), dials the Mac pinned to `machine_node_id`, fetches the nonce and
+    /// decides, all within `budget_ms` (default and at most 20 s, 0 is refused). Never
+    /// throws: the report carries the outcome and step timings.
+    pub async fn decide_from_notification(
+        &self,
+        machine_node_id: String,
+        approval_id: String,
+        decision: ApprovalDecision,
+        budget_ms: Option<u64>,
+    ) -> BackgroundDecideReport {
+        let budget = match budget_ms {
+            None => BACKGROUND_BUDGET,
+            Some(0) => return BackgroundDecideReport::failed("budget_ms must be positive".into()),
+            Some(ms) => Duration::from_millis(ms).min(BACKGROUND_BUDGET),
+        };
+        let inner = self.inner.clone();
+        let fut =
+            approvals::decide_in_background(inner, machine_node_id, approval_id, decision, budget);
+        match self.runtime.spawn(fut).await {
+            Ok(report) => report,
+            Err(e) => BackgroundDecideReport::failed(e.to_string()),
+        }
+    }
+
+    /// Stores the token (0600, state dir) and sends `push.register` to every paired
+    /// machine that is connected; every later connection registers it again.
+    pub fn register_push(
+        &self,
+        apns_token_hex: String,
+        environment: PushEnvironment,
+    ) -> Result<(), CoreError> {
+        let push = PushRegisterParams {
+            apns_token: PushToken::new(apns_token_hex.trim()).map_err(|_| {
+                invalid("apns_token", "APNs token must be 64 to 256 hex characters")
+            })?,
+            live_activity_push_to_start_token: None,
+            environment: environment.into(),
+        };
+        self.inner.store.save_push(&push)?;
+        *lock(&self.inner.push) = Some(push.clone());
+        let ids: Vec<String> = lock(&self.inner.machines)
+            .iter()
+            .map(|m| m.id.clone())
+            .collect();
+        for id in ids {
+            let Ok(conn) = self.conn(&id) else { continue };
+            if lock(&conn.shared.link).phase != LinkPhase::Connected {
+                continue;
+            }
+            let request = Request::PushRegister(push.clone());
+            self.runtime.spawn(async move {
+                let _ = conn.request(request, CALL_TIMEOUT).await;
+            });
+        }
+        Ok(())
+    }
+
     /// Fails with `ConfirmRequired` unless `confirm` is true.
     pub async fn close_pane(
         &self,
@@ -709,6 +873,7 @@ impl CollieCore {
             })?;
         let store = MachineStore::new(state_dir.clone());
         let machines = store.load()?;
+        let push = store.load_push();
         Ok(Arc::new(Self {
             runtime,
             inner: Arc::new(Inner {
@@ -722,6 +887,9 @@ impl CollieCore {
                 cold_start: Mutex::default(),
                 measured: Default::default(),
                 login_name: Mutex::default(),
+                push: Arc::new(Mutex::new(push)),
+                reach: Arc::default(),
+                ops: Mutex::default(),
             }),
         }))
     }
@@ -755,18 +923,29 @@ impl CollieCore {
     }
 
     /// For requests carrying an `op_id`: the same request, op_id included, is resent
-    /// after a dropped connection.
+    /// after a dropped connection. Until collied answers, an identical request (a re-tap
+    /// after a local timeout) reuses that op_id, so collied replays the first outcome
+    /// instead of running it twice.
     async fn mutate(
         &self,
         machine_id: &str,
-        request: Request,
+        mut request: Request,
         timeout: Duration,
     ) -> Result<Response, CoreError> {
         let conn = self.conn(machine_id)?;
+        let key = self.inner.claim_op(machine_id, &mut request);
+        let inner = self.inner.clone();
         self.run(async move {
-            conn.mutate(request, timeout)
-                .await
-                .map_err(|e| request_error(&conn, e))
+            let result = conn.mutate(request, timeout).await;
+            let answered = match &result {
+                Ok(_) => true,
+                Err(RequestError::Failed(e)) => !e.is_transport(),
+                Err(_) => false,
+            };
+            if answered && let Some(key) = key {
+                lock(&inner.ops).remove(&key);
+            }
+            result.map_err(|e| request_error(&conn, e))
         })
         .await
     }
@@ -788,6 +967,8 @@ impl CollieCore {
                     self.runtime.handle(),
                     machine,
                     self.inner.node.clone(),
+                    self.inner.push.clone(),
+                    self.inner.reach.clone(),
                 ))
             })
             .clone())
@@ -795,6 +976,30 @@ impl CollieCore {
 }
 
 impl Inner {
+    fn tailnet_configured(&self) -> bool {
+        self.state_dir.join("tsnet/tailscaled.state").exists()
+    }
+
+    fn claim_op(&self, machine_id: &str, request: &mut Request) -> Option<String> {
+        let mut probe = request.clone();
+        *op_id_mut(&mut probe)? = OpId::new("A".repeat(22)).expect("valid op_id");
+        let key = format!(
+            "{machine_id}\n{}",
+            serde_json::to_string(&probe).expect("requests serialize")
+        );
+        let mut ops = lock(&self.ops);
+        let now = Instant::now();
+        ops.retain(|_, (_, at)| now.duration_since(*at) < OP_REUSE_WINDOW);
+        let op_id = op_id_mut(request)?;
+        match ops.get(&key) {
+            Some((reused, _)) => op_id.clone_from(reused),
+            None => {
+                ops.insert(key.clone(), (op_id.clone(), now));
+            }
+        }
+        Some(key)
+    }
+
     fn node_start(self: &Arc<Self>, key: Option<Zeroizing<String>>) -> Result<(), CoreError> {
         let _starting = lock(&self.starting);
         let current = lock(&self.node).clone();
@@ -1029,6 +1234,39 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
     }
 }
 
+fn op_id_mut(request: &mut Request) -> Option<&mut OpId> {
+    match request {
+        Request::AgentPrompt(p) => Some(&mut p.op_id),
+        Request::AgentSendKeys(p) => Some(&mut p.op_id),
+        Request::TaskNew(p) => Some(&mut p.op_id),
+        _ => None,
+    }
+}
+
+/// collied's `invalid_params` messages come from the protocol decoder: `invalid <Type>`
+/// from a validated id, or serde's "missing field `x`" / "unknown field `x`".
+fn invalid_field(message: &str) -> Option<String> {
+    if let Some(ty) = message.strip_prefix("invalid ") {
+        let field = match ty {
+            "TerminalId" => "terminal_id",
+            "WorkspaceId" => "workspace_id",
+            "ApprovalId" => "approval_id",
+            "AgentKind" => "agent",
+            "Cwd" => "cwd",
+            "PromptText" => "prompt",
+            "Label" => "label",
+            "Nonce" => "nonce",
+            "OpId" => "op_id",
+            "PushToken" => "apns_token",
+            _ => return None,
+        };
+        return Some(field.into());
+    }
+    let (_, rest) = message.split_once("field `")?;
+    let (field, _) = rest.split_once('`')?;
+    Some(field.into())
+}
+
 fn new_op_id() -> OpId {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("system RNG");
@@ -1122,7 +1360,7 @@ mod tests {
         ));
         let e = server(ErrorCode::InvalidParams, "invalid Cwd");
         assert!(
-            matches!(&e, CoreError::InvalidInput { field: None, message } if message == "invalid Cwd")
+            matches!(&e, CoreError::InvalidInput { field: Some(f), message } if f == "cwd" && message == "invalid Cwd")
         );
         assert!(matches!(
             server(ErrorCode::NotPaired, ""),
@@ -1136,6 +1374,112 @@ mod tests {
             CoreError::from(SessionError::Closed),
             CoreError::Unreachable { .. }
         ));
+    }
+
+    #[test]
+    fn invalid_params_carry_the_field() {
+        let field = |m: &str| match server(ErrorCode::InvalidParams, m) {
+            CoreError::InvalidInput { field, .. } => field,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(field("invalid Cwd"), Some("cwd".into()));
+        assert_eq!(field("invalid TerminalId"), Some("terminal_id".into()));
+        assert_eq!(field("missing field `nonce`"), Some("nonce".into()));
+        assert_eq!(
+            field("unknown field `pane_id`, expected `terminal_id`"),
+            Some("pane_id".into())
+        );
+        assert_eq!(field("params out of range"), None);
+        assert_eq!(field("invalid Sheep"), None);
+    }
+
+    #[test]
+    fn approval_errors_map_to_variants() {
+        assert!(matches!(
+            server(ErrorCode::ApprovalExpired, ""),
+            CoreError::ApprovalExpired
+        ));
+        assert!(matches!(
+            server(ErrorCode::ApprovalAlreadyResolved, ""),
+            CoreError::ApprovalAlreadyResolved
+        ));
+        assert!(matches!(
+            server(ErrorCode::ApprovalNotFound, ""),
+            CoreError::ApprovalNotFound
+        ));
+        assert!(matches!(
+            server(ErrorCode::ApprovalNonceMismatch, ""),
+            CoreError::Rejected { .. }
+        ));
+    }
+
+    #[test]
+    fn unanswered_mutation_op_id_is_reused_by_an_identical_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = CollieCore::new(dir.path().join("s").to_string_lossy().into()).unwrap();
+        let prompt = |text: &str| {
+            Request::AgentPrompt(AgentPromptParams {
+                op_id: new_op_id(),
+                terminal_id: TerminalId::new("term_1").unwrap(),
+                text: PromptText::new(text).unwrap(),
+            })
+        };
+        let op = |r: &mut Request| op_id_mut(r).unwrap().clone();
+        let mut first = prompt("run the tests");
+        let sent = op(&mut first);
+        let key = core.inner.claim_op("m1", &mut first).unwrap();
+        assert_eq!(op(&mut first), sent);
+
+        let mut retap = prompt("run the tests");
+        assert_eq!(core.inner.claim_op("m1", &mut retap), Some(key.clone()));
+        assert_eq!(op(&mut retap), sent, "same request reuses the op_id");
+
+        let mut other = prompt("something else");
+        let fresh = op(&mut other);
+        core.inner.claim_op("m1", &mut other);
+        assert_eq!(op(&mut other), fresh);
+        let mut elsewhere = prompt("run the tests");
+        let fresh = op(&mut elsewhere);
+        core.inner.claim_op("m2", &mut elsewhere);
+        assert_eq!(op(&mut elsewhere), fresh, "keyed per machine");
+
+        lock(&core.inner.ops).remove(&key);
+        let mut after = prompt("run the tests");
+        let fresh = op(&mut after);
+        core.inner.claim_op("m1", &mut after);
+        assert_eq!(op(&mut after), fresh, "answered: a new tap is a new action");
+
+        lock(&core.inner.ops).get_mut(&key).unwrap().1 -= OP_REUSE_WINDOW;
+        let mut late = prompt("run the tests");
+        let fresh = op(&mut late);
+        core.inner.claim_op("m1", &mut late);
+        assert_eq!(op(&mut late), fresh, "window expired");
+
+        let mut focus = Request::AgentFocus(AgentTarget {
+            terminal_id: TerminalId::new("term_1").unwrap(),
+        });
+        assert_eq!(core.inner.claim_op("m1", &mut focus), None);
+    }
+
+    #[test]
+    fn push_token_is_validated_and_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("s");
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        assert!(matches!(
+            core.register_push("not hex".into(), PushEnvironment::Sandbox),
+            Err(CoreError::InvalidInput { field: Some(f), .. }) if f == "apns_token"
+        ));
+        core.register_push(
+            format!(" {} ", "ab".repeat(32)),
+            PushEnvironment::Production,
+        )
+        .unwrap();
+        drop(core);
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        let push = lock(&core.inner.push).clone().unwrap();
+        assert_eq!(push.apns_token.as_str(), "ab".repeat(32));
+        assert_eq!(push.environment, protocol::ApnsEnvironment::Production);
     }
 
     #[test]
@@ -1289,13 +1633,36 @@ mod tailnet_tests {
         }
     }
 
-    /// What the fake collied saw, shared across connections.
+    /// What the fake collied saw, shared across connections. `approvals` are pending
+    /// on the fake and announced with `approval.needed` after every snapshot.
     #[derive(Default)]
     struct Seen {
         watches: Vec<Option<String>>,
         prompt_ops: Vec<String>,
         executed: HashMap<String, Response>,
         task_ops: Vec<String>,
+        approvals: Vec<protocol::Approval>,
+        lists: usize,
+        decisions: Vec<(String, protocol::Decision)>,
+        pushes: Vec<String>,
+    }
+
+    const NONCE: &str = "Tm9uY2VOb25jZU5vbmNlTm9uY2VOb25jZU5vbmNlTm9";
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn approval(id: &str) -> protocol::Approval {
+        protocol::Approval {
+            approval_id: ApprovalId::new(id).unwrap(),
+            terminal_id: TerminalId::new("term_1").unwrap(),
+            agent_label: "claude".into(),
+            workspace_label: "collie".into(),
+            snippet: "Run cargo test?".into(),
+            tool: None,
+            options: vec![protocol::Decision::Approve, protocol::Decision::Deny],
+            nonce: protocol::Nonce::new(NONCE).unwrap(),
+            created_at_ms: 1,
+            expires_at_ms: u64::MAX,
+        }
     }
 
     fn terminal_read(ansi: &str) -> TerminalRead {
@@ -1355,6 +1722,19 @@ mod tailnet_tests {
                             Ok(Response::Paired { machine })
                         }
                         Request::FlockSnapshot(_) => {
+                            events = lock(&seen)
+                                .approvals
+                                .iter()
+                                .zip(seq + 1..)
+                                .map(|(a, s)| {
+                                    (
+                                        s,
+                                        protocol::Event::ApprovalNeeded {
+                                            approval: a.clone(),
+                                        },
+                                    )
+                                })
+                                .collect();
                             Ok(Response::Flock(Flock { machine, ..flock() }))
                         }
                         Request::AgentWatch(p) => {
@@ -1364,8 +1744,11 @@ mod tailnet_tests {
                         Request::AgentRead(p) => {
                             assert_eq!(p.terminal_id.as_str(), "term_1");
                             events = vec![
-                                (seq + 1, terminal_read("live")),
-                                (seq + 1, terminal_read("replayed")),
+                                (seq + 1, protocol::Event::AgentOutput(terminal_read("live"))),
+                                (
+                                    seq + 1,
+                                    protocol::Event::AgentOutput(terminal_read("replayed")),
+                                ),
                             ];
                             Ok(Response::Terminal(terminal_read("read")))
                         }
@@ -1405,6 +1788,48 @@ mod tailnet_tests {
                             })
                         }
                         Request::PaneClose(p) if !p.confirm => Err(ErrorCode::ConfirmRequired),
+                        Request::ApprovalList(_) => {
+                            let mut seen = lock(&seen);
+                            seen.lists += 1;
+                            Ok(Response::Approvals {
+                                approvals: seen.approvals.clone(),
+                            })
+                        }
+                        Request::ApprovalDecide(p) => {
+                            let mut seen = lock(&seen);
+                            match seen
+                                .approvals
+                                .iter()
+                                .position(|a| a.approval_id == p.approval_id)
+                            {
+                                Some(i) if seen.approvals[i].nonce == p.nonce => {
+                                    seen.approvals.remove(i);
+                                    seen.decisions
+                                        .push((p.approval_id.as_str().into(), p.decision));
+                                    let outcome = protocol::ApprovalOutcome::Applied {
+                                        decision: p.decision,
+                                        by: "phone".into(),
+                                    };
+                                    events = vec![(
+                                        seq + 1,
+                                        protocol::Event::ApprovalResolved {
+                                            approval_id: p.approval_id.clone(),
+                                            outcome: outcome.clone(),
+                                        },
+                                    )];
+                                    Ok(Response::ApprovalResolved {
+                                        approval_id: p.approval_id,
+                                        outcome,
+                                    })
+                                }
+                                Some(_) => Err(ErrorCode::ApprovalNonceMismatch),
+                                None => Err(ErrorCode::ApprovalNotFound),
+                            }
+                        }
+                        Request::PushRegister(p) => {
+                            lock(&seen).pushes.push(p.apns_token.as_str().into());
+                            Ok(Response::Ok)
+                        }
                         other => panic!("unexpected {}", other.method()),
                     };
                     let reply = match result {
@@ -1422,12 +1847,9 @@ mod tailnet_tests {
                     };
                     let text = serde_json::to_string(&reply).unwrap();
                     ws.send(Message::text(text)).await.unwrap();
-                    for (s, read) in events {
+                    for (s, event) in events {
                         seq = s;
-                        let event = ServerFrame::Event {
-                            seq,
-                            event: protocol::Event::AgentOutput(read),
-                        };
+                        let event = ServerFrame::Event { seq, event };
                         let text = serde_json::to_string(&event).unwrap();
                         ws.send(Message::text(text)).await.unwrap();
                     }
@@ -1452,36 +1874,61 @@ mod tailnet_tests {
         }
     }
 
-    #[test]
-    fn tailnet_end_to_end() {
-        // libtailscale reads TS_* knobs once at load, so they need a fresh process.
+    /// libtailscale reads TS_* knobs once at load, so a tailnet test runs itself again
+    /// in a fresh process with them set. Returns true in the parent, after the child.
+    fn ran_in_child(test: &str, env: &[(&str, &str)]) -> bool {
         if KNOBS
             .iter()
-            .any(|(k, v)| std::env::var(k).as_deref() != Ok(*v))
+            .chain(env)
+            .all(|(k, v)| std::env::var(k).as_deref() == Ok(*v))
         {
-            let out = Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "tailnet_tests::tailnet_end_to_end",
-                    "--exact",
-                    "--nocapture",
-                ])
-                .envs(KNOBS)
-                .output()
-                .unwrap();
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            print!("{stdout}");
-            eprint!("{}", String::from_utf8_lossy(&out.stderr));
-            assert!(out.status.success(), "child run failed: {}", out.status);
-            assert!(stdout.contains("1 passed"));
+            let test = test.to_owned();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(180));
+                eprintln!("watchdog: {test} still running");
+                std::process::exit(101);
+            });
+            return false;
+        }
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([test, "--exact", "--nocapture"])
+            .envs(KNOBS)
+            .envs(env.iter().copied())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        print!("{stdout}");
+        eprint!("{}", String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "child run failed: {}", out.status);
+        assert!(stdout.contains("1 passed"));
+        true
+    }
+
+    fn poll<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
+        (0..400)
+            .find_map(|_| {
+                let found = f();
+                if found.is_none() {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                found
+            })
+            .unwrap_or_else(|| panic!("timed out waiting for {what}"))
+    }
+
+    fn reachability(dir: &Path, node_id: &str) -> reach::Seen {
+        let map: HashMap<String, reach::Seen> =
+            serde_json::from_slice(&std::fs::read(dir.join(reach::FILE)).unwrap()).unwrap();
+        map[node_id]
+    }
+
+    #[test]
+    fn tailnet_end_to_end() {
+        if ran_in_child("tailnet_tests::tailnet_end_to_end", &[]) {
             return;
         }
-        std::thread::spawn(|| {
-            std::thread::sleep(Duration::from_secs(180));
-            eprintln!("watchdog: tailnet_end_to_end still running");
-            std::process::exit(101);
-        });
 
-        let key = format!("tskey-auth-collie-core{}", std::process::id());
+        let key = format!("test-authkey-collie-core{}", std::process::id());
         let root = tempfile::tempdir().unwrap();
         let control = TestControl::start(&key, root.path());
         let phone_dir = root.path().join("phone");
@@ -1685,6 +2132,226 @@ mod tailnet_tests {
         assert!(core.cached_flock(machine.id).is_none());
         core.remove_machine(again.id).unwrap();
         assert!(core.machines().is_empty());
+        drop(control);
+    }
+
+    #[test]
+    fn approvals_end_to_end() {
+        // testcontrol demands the auth key on every registration, even a known node
+        // key re-registering from cached state, which real control accepts. tsnet falls
+        // back to TS_AUTHKEY, so the cold start below passes no key itself.
+        const KEY: &str = "test-authkey-collie-approvals";
+        if ran_in_child(
+            "tailnet_tests::approvals_end_to_end",
+            &[("TS_AUTHKEY", KEY)],
+        ) {
+            return;
+        }
+        let key = KEY.to_owned();
+        let root = tempfile::tempdir().unwrap();
+        let control = TestControl::start(&key, root.path());
+        let phone_dir = root.path().join("phone");
+        let group = root.path().join("group");
+        std::fs::create_dir(&group).unwrap();
+        std::fs::create_dir(&phone_dir).unwrap();
+        std::fs::set_permissions(&phone_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let core = CollieCore::with_control_url(phone_dir.clone(), control.1.clone()).unwrap();
+        core.set_app_group_dir(group.to_string_lossy().into())
+            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(core.node_start(Some(key.clone()))).unwrap();
+        let mac = Node::new(&Config {
+            state_dir: root.path().join("mac"),
+            hostname: "it-mac".into(),
+            auth_key: Some(Zeroizing::new(key.clone())),
+            control_url: Some(control.1.clone()),
+            advertise_tags: vec![pin::MAC_TAG.into()],
+            log_to_stderr: false,
+        })
+        .unwrap();
+        mac.start().unwrap();
+        let mac_self = wait_running(&mac, 1).self_node.unwrap();
+        let phone_node = lock(&core.inner.node).clone().unwrap();
+        let phone_id = wait_running(&phone_node, 1).self_node.unwrap().stable_id;
+        drop(phone_node);
+        let mac_id = mac_self.stable_id.clone();
+
+        // The fake collied outlives the phone's runtime, which is dropped for the cold start.
+        let server_rt = tokio::runtime::Runtime::new().unwrap();
+        let seen = Arc::new(Mutex::new(Seen {
+            approvals: vec![approval("a1")],
+            ..Seen::default()
+        }));
+        server_rt.spawn(serve(mac.clone(), phone_id, mac_id.clone(), seen.clone()));
+        let invite = PairingInvite {
+            host: mac_self.dns_name.trim_end_matches('.').to_owned(),
+            port: DEFAULT_PORT,
+            node_id: mac_id.clone(),
+            code: PairingCode::new(CODE).unwrap(),
+        };
+        let machine = rt
+            .block_on(core.pair(invite.to_uri(), "iPhone".into()))
+            .unwrap();
+        let id = || machine.id.clone();
+        poll("connected", || {
+            let f = rt.block_on(core.flock(id())).unwrap();
+            (f.link == LinkPhase::Connected && f.details.is_some()).then_some(())
+        });
+        assert!(reachability(&group, &mac_id).last_ok_ms.is_some());
+
+        let feed = poll("approval.needed", || {
+            core.approval_feed(id(), 0)
+                .filter(|f| !f.events.is_empty() && !f.pending.is_empty())
+        });
+        let pending = PendingApproval::from(&approval("a1"));
+        assert_eq!(
+            feed.events[0],
+            ApprovalEvent::Needed {
+                approval: pending.clone()
+            }
+        );
+        assert_eq!(feed.pending, vec![pending.clone()]);
+        let listed = rt.block_on(core.approvals(id())).unwrap();
+        assert_eq!(listed, vec![pending]);
+        for shown in [format!("{feed:?}"), format!("{listed:?}")] {
+            assert!(
+                !shown.contains(NONCE) && !shown.contains("Nonce"),
+                "{shown}"
+            );
+        }
+        assert_eq!(lock(&seen).lists, 1);
+        let outcome = rt
+            .block_on(core.decide(id(), "a1".into(), ApprovalDecision::Approve))
+            .unwrap();
+        assert_eq!(
+            outcome,
+            DecisionOutcome::Applied {
+                decision: ApprovalDecision::Approve,
+                by: "phone".into()
+            }
+        );
+        assert_eq!(
+            lock(&seen).lists,
+            1,
+            "decided with the nonce held since approval.needed"
+        );
+        assert_eq!(
+            lock(&seen).decisions,
+            vec![("a1".to_owned(), protocol::Decision::Approve)]
+        );
+        let resolved = poll("approval.resolved", || {
+            core.approval_feed(id(), feed.revision)
+                .filter(|f| !f.events.is_empty())
+        });
+        assert!(matches!(
+            &resolved.events[0],
+            ApprovalEvent::Resolved { approval_id, .. } if approval_id == "a1"
+        ));
+        assert!(resolved.pending.is_empty());
+        let err = rt
+            .block_on(core.decide(id(), "a1".into(), ApprovalDecision::Approve))
+            .unwrap_err();
+        assert!(matches!(err, CoreError::ApprovalNotFound), "{err:?}");
+
+        core.register_push(TOKEN.into(), PushEnvironment::Sandbox)
+            .unwrap();
+        poll("push.register", || {
+            (lock(&seen).pushes.len() == 1).then_some(())
+        });
+        core.resume(60);
+        poll("push.register after reconnect", || {
+            (lock(&seen).pushes.len() == 2).then_some(())
+        });
+
+        // Cold start: a new process on the same state dir, node not started, no conns.
+        lock(&seen).approvals.push(approval("a2"));
+        let node = Arc::downgrade(&lock(&core.inner.node).clone().unwrap());
+        drop(core);
+        assert!(node.upgrade().is_none(), "the old node is closed");
+        let core = CollieCore::with_control_url(phone_dir.clone(), control.1.clone()).unwrap();
+        core.set_app_group_dir(group.to_string_lossy().into())
+            .unwrap();
+        assert!(lock(&core.inner.node).is_none());
+        let report = rt.block_on(core.decide_from_notification(
+            mac_id.clone(),
+            "a2".into(),
+            ApprovalDecision::Deny,
+            Some(15_000),
+        ));
+        println!("cold background decide: {report:?}");
+        assert_eq!(
+            report.outcome,
+            BackgroundOutcome::Applied {
+                decision: ApprovalDecision::Deny
+            }
+        );
+        assert!(!report.node_was_running);
+        assert!(report.total_ms <= 15_000);
+        let steps = [
+            report.node_up_ms,
+            report.connect_ms,
+            report.lookup_ms,
+            report.decide_ms,
+        ];
+        assert!(steps.iter().all(Option::is_some), "{report:?}");
+        assert_eq!(lock(&seen).lists, 3, "the cold path fetched approval.list");
+        assert_eq!(
+            lock(&seen).decisions.last(),
+            Some(&("a2".to_owned(), protocol::Decision::Deny))
+        );
+
+        let again = rt.block_on(core.decide_from_notification(
+            mac_id.clone(),
+            "a2".into(),
+            ApprovalDecision::Deny,
+            Some(u64::MAX),
+        ));
+        assert_eq!(again.outcome, BackgroundOutcome::NotFound);
+        assert!(again.node_was_running);
+        let unknown = rt.block_on(core.decide_from_notification(
+            "nNOPE".into(),
+            "a2".into(),
+            ApprovalDecision::Approve,
+            None,
+        ));
+        assert_eq!(unknown.outcome, BackgroundOutcome::UnknownMachine);
+        let zero = rt.block_on(core.decide_from_notification(
+            mac_id.clone(),
+            "a2".into(),
+            ApprovalDecision::Approve,
+            Some(0),
+        ));
+        assert!(
+            matches!(zero.outcome, BackgroundOutcome::Failed { .. }),
+            "{zero:?}"
+        );
+        assert_eq!(reachability(&group, &mac_id).last_fail_ms, None);
+        let late = rt.block_on(core.decide_from_notification(
+            mac_id.clone(),
+            "a2".into(),
+            ApprovalDecision::Approve,
+            Some(1),
+        ));
+        assert!(
+            matches!(late.outcome, BackgroundOutcome::Unreachable { .. }),
+            "{late:?}"
+        );
+        assert!(reachability(&group, &mac_id).last_fail_ms.is_some());
+
+        poll("connected after cold start", || {
+            let f = rt.block_on(core.flock(id())).unwrap();
+            (f.link == LinkPhase::Connected).then_some(())
+        });
+        poll("stored token registered by the new process", || {
+            (lock(&seen).pushes.len() == 3).then_some(())
+        });
+        assert!(lock(&seen).pushes.iter().all(|t| t == TOKEN));
+        drop(core);
+        drop(server_rt);
         drop(control);
     }
 }

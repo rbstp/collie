@@ -59,3 +59,58 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
     let frame = try render("\u{1B}[6n\u{1B}[c\u{1B}]52;c;aGVsbG8=\u{07}\u{1B}_Ga=T,t=f;L2V0Yy9wYXNzd2Q=\u{1B}\\ok")
     #expect(frame.runs.map(\.text) == ["ok"])
 }
+
+@Test func longRowsWrapAtTheGivenWidth() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    for columns in [4, 37, 50, 57, 200] {
+        let frame = screen.render(ansiSnapshot: "\u{1B}[1m\(String(repeating: "x", count: 200))\u{1B}[0m\r\nnext", wrapColumns: columns)
+        let wrapped = (200 + columns - 1) / columns
+        #expect(frame.rows == wrapped + 1)
+        #expect(frame.columns == columns)
+        #expect(frame.runs.filter(\.style.bold).map(\.text).joined() == String(repeating: "x", count: 200))
+        #expect(frame.runs.last?.row == wrapped && frame.runs.last?.text == "next")
+    }
+}
+
+@Test func wrappingTrimsPaddingBeforeWrapping() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let padded = "ab\u{1B}[0m" + String(repeating: " ", count: 150) + "\u{1B}[48;5;1m" + String(repeating: " ", count: 40) + "\u{1B}[0m"
+    let frame = screen.render(ansiSnapshot: "\(padded)\r\ncd", wrapColumns: 40)
+    #expect(frame.rows == 2)
+    #expect(frame.runs.map(\.text) == ["ab", "cd"])
+    #expect(screen.render(ansiSnapshot: "\(padded)\r\ncd").columns == 192)
+}
+
+@Test func wrapModeCanBeTurnedOffAgain() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let long = String(repeating: "y", count: 200)
+    #expect(screen.render(ansiSnapshot: long, wrapColumns: 50).rows == 4)
+    let frame = screen.render(ansiSnapshot: "\(long)\r\nnext")
+    #expect(frame.rows == 2)
+    #expect(frame.columns == 200)
+    #expect(frame.runs.first?.text == long)
+}
+
+@Test func trailingBlanksAndPaddingAreTrimmedPerRow() {
+    let cases = [
+        ("", ""),
+        ("abc   ", "abc"),
+        ("abc \t \r\n  x  \r\n", "abc\r\n  x\r\n"),
+        ("a\u{1B}[0m   \u{1B}[48;2;1;2;3m  \u{1B}[0m\r\nb", "a\u{1B}[0m\u{1B}[48;2;1;2;3m\u{1B}[0m\r\nb"),
+        ("\u{1B}[1m a \u{1B}[22m b\u{1B}[0m ", "\u{1B}[1m a \u{1B}[22m b\u{1B}[0m"),
+        ("   \u{1B}[0m\n\n x", "\u{1B}[0m\n\n x"),
+        ("\u{4E2D}\u{00A0}", "\u{4E2D}\u{00A0}"),
+    ]
+    for (input, trimmed) in cases {
+        #expect(TerminalScreen.trimmingTrailingBlanks(input) == trimmed, "\(input.debugDescription)")
+    }
+}
+
+@Test func wrapColumnsFitTheWidth() {
+    #expect(TerminalScreen.wrapColumns(width: 377, cellWidth: 6.6) == 57)
+    #expect(TerminalScreen.wrapColumns(width: 66, cellWidth: 6.6) == 10)
+    #expect(TerminalScreen.wrapColumns(width: 65.9, cellWidth: 6.6) == 9)
+    #expect(TerminalScreen.wrapColumns(width: 3, cellWidth: 6.6) == 1)
+    #expect(TerminalScreen.wrapColumns(width: 100_000, cellWidth: 6.6) == Int(TerminalScreen.maxColumns))
+    #expect(TerminalScreen.wrapColumns(width: 377, cellWidth: 0) == 1)
+}

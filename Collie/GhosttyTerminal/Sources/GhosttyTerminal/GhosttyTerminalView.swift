@@ -33,7 +33,17 @@ public final class GhosttyTerminalUIView: UIScrollView {
         didSet {
             guard fontSize != oldValue else { return }
             canvas.metrics = CellMetrics(size: fontSize)
-            prepare()
+            wraps ? render() : prepare()
+        }
+    }
+
+    /// Wraps rows at the view width instead of clipping them at the Mac pane width and
+    /// scrolling horizontally.
+    public var wraps = false {
+        didSet {
+            guard wraps != oldValue else { return }
+            contentOffset.x = -adjustedContentInset.left
+            render()
         }
     }
 
@@ -41,6 +51,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private let canvas = TerminalCanvas()
     private var snapshot: String?
     private var frameData: TerminalFrame?
+    private var renderedColumns: Int?
     private var followsBottom = true
     private var laidOutSize = CGSize.zero
 
@@ -61,9 +72,24 @@ public final class GhosttyTerminalUIView: UIScrollView {
     }
 
     public func show(ansiSnapshot: String) {
-        guard ansiSnapshot != snapshot, let screen else { return }
+        guard ansiSnapshot != snapshot else { return }
         snapshot = ansiSnapshot
-        frameData = screen.render(ansiSnapshot: ansiSnapshot)
+        render()
+    }
+
+    private var wrapColumns: Int? {
+        let width = bounds.width - adjustedContentInset.left - adjustedContentInset.right - 2 * canvas.metrics.inset
+        guard wraps, width > 0 else { return nil }
+        return TerminalScreen.wrapColumns(width: width, cellWidth: canvas.metrics.width)
+    }
+
+    private func render() {
+        guard let snapshot, let screen else { return }
+        let columns = wrapColumns
+        // Wait for a width: rendering at one column would flash a tall, narrow frame.
+        if wraps && columns == nil { return }
+        frameData = screen.render(ansiSnapshot: snapshot, wrapColumns: columns)
+        renderedColumns = columns
         prepare()
     }
 
@@ -88,6 +114,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
         if bounds.size != laidOutSize {
             laidOutSize = bounds.size
             if followsBottom { scrollToBottom() }
+            if wraps && wrapColumns != renderedColumns { render() }
         }
         if canvas.frame != bounds {
             canvas.frame = bounds

@@ -1,0 +1,780 @@
+use std::io::Read;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
+
+use anyhow::Context;
+use apns_h2::request::payload::PayloadLike;
+use apns_h2::{
+    Client, ClientConfig, CollapseId, Endpoint, ErrorReason, NotificationOptions, Priority,
+    PushType,
+};
+use futures_util::future::BoxFuture;
+use protocol::{ApnsEnvironment, Approval, Decision, PushToken};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use tokio::sync::mpsc;
+use zeroize::Zeroizing;
+
+use crate::config::{self, ApnsConfig, ApnsKey};
+use crate::keychain;
+use crate::peers::{self, Store};
+
+const QUEUE: usize = 64;
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+pub const CATEGORY: &str = "APPROVAL";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Device {
+    pub stable_id: String,
+    pub token: PushToken,
+    pub environment: ApnsEnvironment,
+    pub registered_at: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Devices {
+    pub devices: Vec<Device>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Alert {
+    pub payload: Value,
+    pub collapse_id: Option<String>,
+    pub expiration: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum Rejection {
+    #[error("device token is no longer registered")]
+    Unregistered,
+    #[error("bad device token")]
+    BadDeviceToken,
+    #[error("{0}")]
+    Other(String),
+}
+
+pub type Paired = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+pub trait Sender: Send + Sync {
+    fn send<'a>(
+        &'a self,
+        device: &'a Device,
+        alert: &'a Alert,
+    ) -> BoxFuture<'a, Result<(), Rejection>>;
+}
+
+/// Carries labels only: never the snippet, the nonce or any terminal text, since the
+/// payload transits Apple. `title` must not come from a terminal title either.
+pub fn approval_alert(a: &Approval, title: &str, node_id: &str) -> Alert {
+    let mut aps = json!({
+        "alert": {
+            "title": title,
+            "body": format!("Blocked in {}", a.workspace_label),
+        },
+        "thread-id": a.terminal_id.as_str(),
+        "mutable-content": 1,
+    });
+    if a.options.contains(&Decision::Approve) && a.options.contains(&Decision::Deny) {
+        aps["category"] = json!(CATEGORY);
+    }
+    Alert {
+        payload: json!({
+            "aps": aps,
+            "approval_id": a.approval_id.as_str(),
+            "node_id": node_id,
+        }),
+        // One alert per terminal: a reissued approval replaces the dead one.
+        collapse_id: Some(a.terminal_id.as_str().to_owned()),
+        expiration: Some(a.expires_at_ms / 1000),
+    }
+}
+
+pub fn test_alert() -> Alert {
+    Alert {
+        payload: json!({
+            "aps": {
+                "alert": {"title": "collie", "body": "Test notification from collied"},
+                "thread-id": "collie-test",
+            },
+        }),
+        collapse_id: None,
+        expiration: None,
+    }
+}
+
+pub struct Push {
+    path: PathBuf,
+    devices: Mutex<Devices>,
+    queue: Option<mpsc::Sender<Alert>>,
+}
+
+impl Push {
+    pub fn open(
+        path: PathBuf,
+        sender: Option<Arc<dyn Sender>>,
+        paired: Paired,
+    ) -> Result<Arc<Self>, peers::Error> {
+        let devices = peers::load_json(&path)?;
+        let (queue, worker) = match sender {
+            Some(s) => {
+                let (tx, rx) = mpsc::channel(QUEUE);
+                (Some(tx), Some((rx, s)))
+            }
+            None => (None, None),
+        };
+        let push = Arc::new(Self {
+            path,
+            devices: Mutex::new(devices),
+            queue,
+        });
+        if let Some((rx, sender)) = worker {
+            tokio::spawn(deliver(Arc::downgrade(&push), rx, sender, paired));
+        }
+        Ok(push)
+    }
+
+    pub fn devices(&self) -> Vec<Device> {
+        self.lock().devices.clone()
+    }
+
+    pub fn register(
+        &self,
+        stable_id: &str,
+        token: PushToken,
+        environment: ApnsEnvironment,
+    ) -> Result<(), peers::Error> {
+        self.update(|d| {
+            d.devices
+                .retain(|x| x.stable_id != stable_id && x.token != token);
+            d.devices.push(Device {
+                stable_id: stable_id.to_owned(),
+                token,
+                environment,
+                registered_at: crate::now_ms(),
+            });
+        })
+    }
+
+    pub fn forget(&self, stable_id: &str) -> Result<(), peers::Error> {
+        self.update(|d| d.devices.retain(|x| x.stable_id != stable_id))
+    }
+
+    pub fn retain_paired(&self, store: &Store) -> Result<(), peers::Error> {
+        self.update(|d| d.devices.retain(|x| store.get(&x.stable_id).is_some()))
+    }
+
+    pub fn notify(&self, alert: Alert) {
+        if let Some(q) = &self.queue
+            && q.try_send(alert).is_err()
+        {
+            tracing::warn!("APNs queue full or closed; alert dropped");
+        }
+    }
+
+    fn drop_token(&self, token: &PushToken) {
+        if let Err(e) = self.update(|d| d.devices.retain(|x| x.token != *token)) {
+            tracing::error!(error = %e, "could not remove a dead APNs token");
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Devices> {
+        self.devices.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn update(&self, f: impl FnOnce(&mut Devices)) -> Result<(), peers::Error> {
+        let mut devices = self.lock();
+        let mut next = devices.clone();
+        f(&mut next);
+        if next != *devices {
+            peers::save_json(&self.path, &next)?;
+            *devices = next;
+        }
+        Ok(())
+    }
+}
+
+// `paired` is checked on every send: a token stored by a registration that raced a revoke
+// must never receive an alert.
+async fn deliver(
+    push: Weak<Push>,
+    mut rx: mpsc::Receiver<Alert>,
+    sender: Arc<dyn Sender>,
+    paired: Paired,
+) {
+    while let Some(alert) = rx.recv().await {
+        let Some(push) = push.upgrade() else {
+            return;
+        };
+        for device in push.devices() {
+            if !paired(&device.stable_id) {
+                continue;
+            }
+            match sender.send(&device, &alert).await {
+                Ok(()) => {}
+                Err(e @ (Rejection::Unregistered | Rejection::BadDeviceToken)) => {
+                    tracing::info!(peer = %device.stable_id, reason = %e, "removing APNs token");
+                    push.drop_token(&device.token);
+                }
+                Err(e) => tracing::warn!(peer = %device.stable_id, error = %e, "APNs send failed"),
+            }
+        }
+    }
+}
+
+pub struct Apns {
+    sandbox: Client,
+    production: Client,
+    topic: String,
+}
+
+impl Apns {
+    pub fn new(cfg: &ApnsConfig) -> anyhow::Result<Self> {
+        check_ids(cfg)?;
+        let key = load_key(cfg)?;
+        Self::with_key(cfg, &key)
+    }
+
+    /// Signs a provider JWT with the key right away, without any network use. Fails
+    /// unless the key is a PKCS#8 P-256 (ES256) key.
+    pub fn with_key(cfg: &ApnsConfig, key: &[u8]) -> anyhow::Result<Self> {
+        let client = |endpoint| {
+            Client::token(
+                key,
+                cfg.key_id.as_str(),
+                cfg.team_id.as_str(),
+                ClientConfig {
+                    request_timeout: Some(SEND_TIMEOUT),
+                    ..ClientConfig::new(endpoint)
+                },
+            )
+            .context("APNs key")
+        };
+        Ok(Self {
+            sandbox: client(Endpoint::Sandbox)?,
+            production: client(Endpoint::Production)?,
+            topic: cfg.bundle_id.clone(),
+        })
+    }
+}
+
+struct Request<'a> {
+    body: &'a Value,
+    token: &'a str,
+    options: NotificationOptions<'a>,
+}
+
+impl std::fmt::Debug for Request<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Request(<redacted>)")
+    }
+}
+
+impl Serialize for Request<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.body.serialize(s)
+    }
+}
+
+impl PayloadLike for Request<'_> {
+    fn get_device_token(&self) -> &str {
+        self.token
+    }
+
+    fn get_options(&self) -> &NotificationOptions<'_> {
+        &self.options
+    }
+}
+
+impl Sender for Apns {
+    fn send<'a>(
+        &'a self,
+        device: &'a Device,
+        alert: &'a Alert,
+    ) -> BoxFuture<'a, Result<(), Rejection>> {
+        Box::pin(async move {
+            let collapse_id = match alert.collapse_id.as_deref().map(CollapseId::new) {
+                Some(Ok(c)) => Some(c),
+                Some(Err(e)) => return Err(Rejection::Other(e.to_string())),
+                None => None,
+            };
+            let request = Request {
+                body: &alert.payload,
+                token: device.token.as_str(),
+                options: NotificationOptions {
+                    apns_push_type: Some(PushType::Alert),
+                    apns_priority: Some(Priority::High),
+                    apns_expiration: alert.expiration,
+                    apns_collapse_id: collapse_id,
+                    apns_topic: Some(&self.topic),
+                    ..Default::default()
+                },
+            };
+            let client = match device.environment {
+                ApnsEnvironment::Sandbox => &self.sandbox,
+                ApnsEnvironment::Production => &self.production,
+            };
+            match client.send(request).await {
+                Ok(_) => Ok(()),
+                Err(apns_h2::Error::ResponseError(r)) => {
+                    Err(match r.error.as_ref().map(|e| &e.reason) {
+                        Some(ErrorReason::Unregistered) => Rejection::Unregistered,
+                        Some(ErrorReason::BadDeviceToken) => Rejection::BadDeviceToken,
+                        Some(reason) => Rejection::Other(format!("{} {reason}", r.code)),
+                        None => Rejection::Other(format!("HTTP {}", r.code)),
+                    })
+                }
+                Err(e) => Err(Rejection::Other(e.to_string())),
+            }
+        })
+    }
+}
+
+fn apple_id(s: &str) -> bool {
+    s.len() == 10
+        && s.bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+}
+
+pub fn check_ids(cfg: &ApnsConfig) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        apple_id(&cfg.key_id),
+        "key_id must be the 10-character key ID"
+    );
+    anyhow::ensure!(
+        apple_id(&cfg.team_id),
+        "team_id must be the 10-character team ID"
+    );
+    anyhow::ensure!(
+        !cfg.bundle_id.is_empty()
+            && cfg
+                .bundle_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'),
+        "bundle_id is not a bundle identifier"
+    );
+    Ok(())
+}
+
+pub fn load_key(cfg: &ApnsConfig) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+    match &cfg.key {
+        ApnsKey::File(path) => Ok(read_key(path)?.0),
+        ApnsKey::Keychain => keychain::read(None, &cfg.key_id)
+            .with_context(|| keychain_item(&cfg.key_id))?
+            .with_context(|| {
+                format!(
+                    "{} not found: run `collied apns import <AuthKey.p8>`",
+                    keychain_item(&cfg.key_id)
+                )
+            }),
+    }
+}
+
+pub fn keychain_item(key_id: &str) -> String {
+    format!("Keychain item {}/{key_id}", keychain::SERVICE)
+}
+
+/// Opened without following symlinks and checked on the open descriptor: a regular file
+/// owned by the current user with no group or world bits.
+pub fn read_key(path: &Path) -> anyhow::Result<(Zeroizing<Vec<u8>>, rustix::fs::Stat)> {
+    use rustix::fs::{FileType, Mode, OFlags};
+    let fd = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .with_context(|| format!("open {}", path.display()))?;
+    let st = rustix::fs::fstat(&fd)?;
+    anyhow::ensure!(
+        FileType::from_raw_mode(st.st_mode) == FileType::RegularFile
+            && st.st_uid == rustix::process::geteuid().as_raw()
+            && st.st_mode & 0o077 == 0,
+        "{}: must be a regular file with mode 0600 owned by the current user",
+        path.display()
+    );
+    let mut key = Zeroizing::new(Vec::new());
+    std::fs::File::from(fd).read_to_end(&mut key)?;
+    Ok((key, st))
+}
+
+/// Moves a `.p8` into the login Keychain, readable without a prompt only by this
+/// executable's signing identity, then offers to delete the file.
+pub fn import(config_path: &Path, explicit: bool, path: &Path) -> anyhow::Result<bool> {
+    let config = config::load(config_path, explicit)?.unwrap_or_default();
+    let cfg = config.apns.with_context(|| {
+        format!(
+            "no [apns] section in {}: add key_id, team_id and bundle_id first",
+            config_path.display()
+        )
+    })?;
+    check_ids(&cfg)?;
+    if let Some(named) = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix("AuthKey_")?.strip_suffix(".p8"))
+    {
+        anyhow::ensure!(
+            named == cfg.key_id,
+            "{} is key {named}, but [apns] key_id is {}",
+            path.display(),
+            cfg.key_id
+        );
+    }
+    let (key, st) = read_key(path)?;
+    Apns::with_key(&cfg, &key).context("not an APNs ES256 key")?;
+    // The item trusts the importing binary's designated requirement, so only the
+    // installed, signed collied may create it.
+    crate::doctor::signed_as_collied()
+        .map_err(|e| anyhow::anyhow!("{e}: run the collied installed by `just collied-install`"))?;
+    let item = keychain_item(&cfg.key_id);
+    match keychain::store(None, &cfg.key_id, &key).with_context(|| format!("store {item}"))? {
+        keychain::Stored::Added => println!("stored {item}"),
+        keychain::Stored::AlreadyPresent => println!("{item} already exists"),
+    }
+    let stored = keychain::read(None, &cfg.key_id)
+        .with_context(|| format!("read back {item}"))?
+        .with_context(|| format!("{item} not found after storing it"))?;
+    anyhow::ensure!(
+        stored.as_slice() == key.as_slice(),
+        "{item} holds a different key; remove it with `security delete-generic-password -s {} -a {}` and import again",
+        keychain::SERVICE,
+        cfg.key_id
+    );
+    drop(stored);
+    drop(key);
+    println!("read back {item}: identical");
+
+    if let ApnsKey::File(_) = cfg.key {
+        let text = std::fs::read_to_string(config_path)?;
+        match config::use_keychain(&text) {
+            Some(new) => {
+                config::rewrite(config_path, &new)?;
+                println!(
+                    "{}: [apns] now reads the key from the Keychain",
+                    config_path.display()
+                );
+            }
+            None => {
+                println!(
+                    "{}: could not switch [apns] automatically; replace key_path with key = \"keychain\" yourself",
+                    config_path.display()
+                );
+                return Ok(false);
+            }
+        }
+    }
+
+    // Discard anything typed earlier so a stray "y" cannot delete the file.
+    let _ = rustix::termios::tcflush(std::io::stdin(), rustix::termios::QueueSelector::IFlush);
+    print!("Delete {}? [y/N] ", path.display());
+    std::io::Write::flush(&mut std::io::stdout())?;
+    let mut answer = String::new();
+    std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut answer)?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        println!("kept {}", path.display());
+        return Ok(true);
+    }
+    let now = std::fs::symlink_metadata(path)?;
+    anyhow::ensure!(
+        (now.dev(), now.ino()) == (st.st_dev as u64, st.st_ino),
+        "{} changed since it was read; not deleted",
+        path.display()
+    );
+    std::fs::remove_file(path)?;
+    println!("deleted {}", path.display());
+    Ok(true)
+}
+
+pub async fn send_test(data_dir: &Path, cfg: &ApnsConfig) -> anyhow::Result<bool> {
+    let apns = Apns::new(cfg)?;
+    let store = peers::load(&data_dir.join(config::PEERS_FILE))?;
+    let devices: Devices = peers::load_json(&data_dir.join(config::PUSH_FILE))?;
+    let alert = test_alert();
+    let mut ok = true;
+    let mut sent = 0;
+    for d in &devices.devices {
+        let Some(peer) = store.get(&d.stable_id) else {
+            continue;
+        };
+        let label = crate::printable(&peer.label);
+        match apns.send(d, &alert).await {
+            Ok(()) => {
+                sent += 1;
+                println!("sent to {label} ({:?})", d.environment);
+            }
+            Err(e) => {
+                ok = false;
+                println!("{label} ({:?}): {e}", d.environment);
+            }
+        }
+    }
+    if sent == 0 && ok {
+        println!("no registered device: open the app on a paired phone first");
+        return Ok(false);
+    }
+    Ok(ok)
+}
+
+#[cfg(test)]
+pub mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use protocol::{ApprovalId, Nonce, TerminalId};
+
+    use super::*;
+
+    // Throwaway P-256 key generated for these tests; it belongs to no Apple account.
+    pub const TEST_KEY: &str = "-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgj6IYYL0j3crLL2nG
+Bap7WFtnJXjk8LolPAeMAK5sGsihRANCAARdncq60MvYDS4pw5g/pzIRZGwXi4Xr
+UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
+-----END PRIVATE KEY-----
+";
+
+    fn token(c: char) -> PushToken {
+        PushToken::new(c.to_string().repeat(64)).unwrap()
+    }
+
+    fn approval(options: Vec<Decision>) -> Approval {
+        Approval {
+            approval_id: ApprovalId::new("AAAAAAAAAAAAAAAAAAAAAA").unwrap(),
+            terminal_id: TerminalId::new("term_1").unwrap(),
+            agent_label: "TITLE from the terminal".into(),
+            workspace_label: "api".into(),
+            snippet: "rm -rf build SNIPPET".into(),
+            tool: None,
+            options,
+            nonce: Nonce::new("N".repeat(43)).unwrap(),
+            created_at_ms: 1_000_000,
+            expires_at_ms: 1_600_000,
+        }
+    }
+
+    #[test]
+    fn approval_payload_carries_labels_only() {
+        let a = approval(vec![
+            Decision::Approve,
+            Decision::ApproveAlways,
+            Decision::Deny,
+        ]);
+        let alert = approval_alert(&a, "api-fixer", "nMAC");
+        assert_eq!(
+            alert.payload,
+            json!({
+                "aps": {
+                    "alert": {"title": "api-fixer", "body": "Blocked in api"},
+                    "category": "APPROVAL",
+                    "thread-id": "term_1",
+                    "mutable-content": 1,
+                },
+                "approval_id": "AAAAAAAAAAAAAAAAAAAAAA",
+                "node_id": "nMAC",
+            })
+        );
+        assert_eq!(alert.collapse_id.as_deref(), Some("term_1"));
+        assert_eq!(alert.expiration, Some(1600));
+        let text = alert.payload.to_string();
+        assert!(
+            !text.contains("SNIPPET") && !text.contains("NNNN") && !text.contains("TITLE"),
+            "{text}"
+        );
+
+        let deny_only = approval_alert(&approval(vec![Decision::Deny]), "t", "nMAC");
+        assert!(deny_only.payload["aps"].get("category").is_none());
+        assert!(
+            approval_alert(&approval(vec![]), "t", "nMAC").payload["aps"]
+                .get("category")
+                .is_none()
+        );
+    }
+
+    struct Mock {
+        dead: PushToken,
+        sent: Mutex<Vec<(String, Alert)>>,
+        calls: AtomicUsize,
+    }
+
+    impl Sender for Mock {
+        fn send<'a>(
+            &'a self,
+            device: &'a Device,
+            alert: &'a Alert,
+        ) -> BoxFuture<'a, Result<(), Rejection>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if device.token == self.dead {
+                    return Err(Rejection::Unregistered);
+                }
+                self.sent
+                    .lock()
+                    .unwrap()
+                    .push((device.token.as_str().to_owned(), alert.clone()));
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn store_is_private_and_drops_dead_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("push.json");
+        let mock = Arc::new(Mock {
+            dead: token('b'),
+            sent: Mutex::new(Vec::new()),
+            calls: AtomicUsize::new(0),
+        });
+        let paired: Paired = Arc::new(|id| id != "nRevoked");
+        let push = Push::open(path.clone(), Some(mock.clone()), paired).unwrap();
+        push.register("nA", token('a'), ApnsEnvironment::Sandbox)
+            .unwrap();
+        push.register("nB", token('b'), ApnsEnvironment::Production)
+            .unwrap();
+        push.register("nA", token('c'), ApnsEnvironment::Sandbox)
+            .unwrap();
+        push.register("nRevoked", token('d'), ApnsEnvironment::Sandbox)
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let stored: Devices = peers::load_json(&path).unwrap();
+        let tokens: Vec<&str> = stored.devices.iter().map(|d| d.token.as_str()).collect();
+        assert_eq!(
+            tokens,
+            [
+                token('b').as_str(),
+                token('c').as_str(),
+                token('d').as_str()
+            ]
+        );
+
+        push.notify(test_alert());
+        while mock.calls.load(Ordering::SeqCst) < 2 || push.devices().len() == 3 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let sent = mock.sent.lock().unwrap().clone();
+        assert_eq!(sent, [(token('c').as_str().to_owned(), test_alert())]);
+        let stored: Devices = peers::load_json(&path).unwrap();
+        assert_eq!(
+            mock.calls.load(Ordering::SeqCst),
+            2,
+            "never sent to nRevoked"
+        );
+        assert_eq!(stored.devices.len(), 2);
+        assert_eq!(stored.devices[0].stable_id, "nA");
+
+        push.forget("nA").unwrap();
+        push.forget("nRevoked").unwrap();
+        assert!(push.devices().is_empty());
+        let reopened = Push::open(path, None, Arc::new(|_| true)).unwrap();
+        assert!(reopened.devices().is_empty());
+        reopened.notify(test_alert());
+    }
+
+    fn cfg(dir: &Path, key_id: &str) -> ApnsConfig {
+        ApnsConfig {
+            key: ApnsKey::File(dir.join("AuthKey.p8")),
+            key_id: key_id.into(),
+            team_id: "RM3UT3MMSR".into(),
+            bundle_id: "dev.rbstp.collie".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn key_checks_and_signing_dry_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = cfg(dir.path(), "ABCDE12345");
+        let key_path = dir.path().join("AuthKey.p8");
+        assert!(Apns::new(&c).is_err(), "missing key");
+        std::fs::write(&key_path, TEST_KEY).unwrap();
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let open = Apns::new(&c).err().unwrap().to_string();
+        assert!(open.contains("0600"), "{open}");
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        Apns::new(&c).unwrap();
+
+        let link_path = dir.path().join("link.p8");
+        std::os::unix::fs::symlink(&key_path, &link_path).unwrap();
+        let link = ApnsConfig {
+            key: ApnsKey::File(link_path.clone()),
+            ..cfg(dir.path(), "ABCDE12345")
+        };
+        assert!(Apns::new(&link).is_err());
+        assert!(read_key(&link_path).is_err());
+
+        assert!(Apns::new(&cfg(dir.path(), "abc")).is_err());
+        std::fs::write(&key_path, "not a key").unwrap();
+        assert!(Apns::new(&c).is_err());
+    }
+
+    // Throwaway P-384 key: valid PKCS#8 EC, but not ES256.
+    const P384_KEY: &str = "-----BEGIN PRIVATE KEY-----
+MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDB2RWjt6bEXQbKDKF/q
+cHU8Ul36wIKK68CJhNr/S14zBjOLhQnb7Qoa1fS6WDi7c2mhZANiAASZnXAvFQVb
+AfHxp1leBwH54XlAR82ZGMu6rWJnHsx53+w8ivHKMALwn0xoPEnfh7bSvrVmcJXz
+BDSKTTpvY6ZTNJ2aRaGwPfVBlnky7dc62au34JD4PDc7wpwLOJUSinI=
+-----END PRIVATE KEY-----
+";
+
+    #[test]
+    fn only_es256_keys_sign() {
+        let c = cfg(Path::new("/nonexistent"), "ABCDE12345");
+        Apns::with_key(&c, TEST_KEY.as_bytes()).unwrap();
+        assert!(Apns::with_key(&c, P384_KEY.as_bytes()).is_err());
+        assert!(Apns::with_key(&c, b"").is_err());
+    }
+
+    #[test]
+    fn import_refuses_links_and_foreign_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("collied.toml");
+        let key_path = dir.path().join("AuthKey_ABCDE12345.p8");
+        std::fs::write(
+            &config_path,
+            format!(
+                "[apns]\nkey_path = \"{}\"\nkey_id = \"ABCDE12345\"\nteam_id = \"RM3UT3MMSR\"\nbundle_id = \"dev.rbstp.collie\"\n",
+                key_path.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(&key_path, TEST_KEY).unwrap();
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let link = dir.path().join("link.p8");
+        std::os::unix::fs::symlink(&key_path, &link).unwrap();
+        let err = import(&config_path, true, &link).unwrap_err();
+        assert!(format!("{err:#}").contains("open"), "{err:#}");
+
+        // Owned by root: refused before anything reaches the Keychain.
+        let err = import(&config_path, true, Path::new("/etc/hosts")).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("owned by the current user"),
+            "{err:#}"
+        );
+
+        let err = import(
+            &config_path,
+            true,
+            &dir.path().join("AuthKey_ZZZZZ99999.p8"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("key_id is ABCDE12345"), "{err}");
+
+        let not_es256 = dir.path().join("p384.p8");
+        std::fs::write(&not_es256, P384_KEY).unwrap();
+        std::fs::set_permissions(&not_es256, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let err = import(&config_path, true, &not_es256).unwrap_err();
+        assert!(err.to_string().contains("not an APNs ES256 key"), "{err}");
+
+        assert!(key_path.exists());
+        assert!(
+            std::fs::read_to_string(&config_path)
+                .unwrap()
+                .contains("key_path")
+        );
+    }
+}

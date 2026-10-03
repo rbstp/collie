@@ -65,7 +65,7 @@ fn end_to_end() {
     });
 
     let t0 = Instant::now();
-    let auth_key = format!("tskey-auth-collieit{}", std::process::id());
+    let auth_key = format!("test-authkey-collieit{}", std::process::id());
     let control = TestControl::start(&auth_key);
     println!("testcontrol up in {:?} at {}", t0.elapsed(), control.url);
 

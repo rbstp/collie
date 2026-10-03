@@ -278,7 +278,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         task[2],
         &(
             "agent.prompt".to_owned(),
-            json!({"target": "w9:p1", "text": "Write the tests"})
+            json!({"target": task[1].1["name"], "text": "Write the tests"})
         )
     );
     println!("  task.new in {:?}", t.elapsed());
@@ -558,6 +558,7 @@ async fn start_collied(
             owner_user_id: None,
             herdr_session: session.into(),
             machine_name: "e2e-mac".into(),
+            approval_ttl: collied::approvals::TTL,
         },
         socket,
         &TasksConfig {

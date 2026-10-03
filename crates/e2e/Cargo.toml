@@ -10,10 +10,12 @@ publish = false
 [dev-dependencies]
 collie-core = { path = "../collie-core" }
 collied = { path = "../collied" }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 protocol = { path = "../protocol" }
 serde_json.workspace = true
 tailnet = { path = "../tailnet" }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 zeroize = "1.9.0"
 
 [lints]

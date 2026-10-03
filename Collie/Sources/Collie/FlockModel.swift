@@ -16,13 +16,43 @@ struct MachineFlockEntry: Identifiable, Equatable {
     }
 }
 
+/// The slice of CollieCore the Agents list uses, so it can run against a fake.
+protocol FlockCore: AgentCore {
+    func machines() -> [Machine]
+    func cachedFlock(machineId: String) -> MachineFlock?
+}
+
+extension CollieCore: FlockCore {}
+
 @MainActor
 @Observable
 final class FlockModel {
     private(set) var entries: [MachineFlockEntry] = []
     private(set) var refreshing = false
 
-    func refresh(core: CollieCore?) async {
+    var close = CloseConfirmation()
+    private(set) var closing: AgentRoute?
+    private(set) var closeNotice: String?
+
+    func beginClose(_ target: CloseTarget, route: AgentRoute) {
+        closing = route
+        close.begin(target)
+    }
+
+    /// Only reachable after both confirmation steps, as on the agent screen.
+    func performClose(core: any AgentCore) async -> Bool {
+        guard let route = closing, let target = close.confirm() else { return false }
+        do {
+            try await core.closeConfirmed(target, route: route)
+            closeNotice = nil
+            return true
+        } catch {
+            closeNotice = AgentModel.message(for: error)
+            return false
+        }
+    }
+
+    func refresh(core: (any FlockCore)?) async {
         guard let core, !refreshing else { return }
         refreshing = true
         defer { refreshing = false }

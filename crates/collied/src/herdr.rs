@@ -287,6 +287,23 @@ enum ProcessInfoResult {
     PaneProcessInfo { process_info: ProcessInfo },
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MatchedRule {
+    pub id: String,
+}
+
+/// Only these fields are kept: the rest of `agent.explain` carries raw pane text.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Explain {
+    pub matched_rule: Option<MatchedRule>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ExplainResult {
+    AgentExplain { explain: Explain },
+}
+
 #[derive(Deserialize)]
 struct AgentManifest {
     agent: String,
@@ -373,6 +390,22 @@ pub async fn pane_read(
     )
     .await?;
     Ok(read)
+}
+
+pub async fn agent_explain(socket: &Path, target: &str) -> Result<Explain, Error> {
+    let ExplainResult::AgentExplain { explain } =
+        call(socket, "agent.explain", json!({ "target": target })).await?;
+    Ok(explain)
+}
+
+pub async fn detection_text(socket: &Path, pane_id: &str) -> Result<String, Error> {
+    let PaneReadResult::PaneRead { read } = call(
+        socket,
+        "pane.read",
+        json!({ "pane_id": pane_id, "source": "detection", "format": "text" }),
+    )
+    .await?;
+    Ok(read.text)
 }
 
 pub async fn agent_prompt(socket: &Path, pane_id: &str, text: &str) -> Result<(), Error> {

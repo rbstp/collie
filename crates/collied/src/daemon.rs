@@ -1,5 +1,6 @@
 use std::os::fd::OwnedFd;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -8,8 +9,8 @@ use zeroize::Zeroizing;
 
 use crate::config::{self, Config};
 use crate::control;
-use crate::herdr;
 use crate::server::{self, ServerConfig};
+use crate::{approvals, herdr, push};
 
 pub const MAC_TAG: &str = "tag:collie-mac";
 const POLL: Duration = Duration::from_millis(250);
@@ -127,7 +128,11 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
     }
     let env = herdr::SocketEnv::from_process();
     let herdr_socket = herdr::resolve_socket_path(config.herdr.session.as_deref(), &env)?;
-    let mut handle = server::start_with_tasks(
+    let apns: Option<Arc<dyn push::Sender>> = match &config.apns {
+        Some(apns) => Some(Arc::new(push::Apns::new(apns).context("[apns]")?)),
+        None => None,
+    };
+    let mut handle = server::start_with(
         node,
         ServerConfig {
             data_dir: data_dir.to_owned(),
@@ -135,9 +140,11 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
             owner_user_id: config.tailnet.owner_user_id,
             herdr_session: herdr::session_label(config.herdr.session.as_deref(), &env),
             machine_name: config::machine_name(),
+            approval_ttl: approvals::TTL,
         },
         herdr_socket,
         &config.tasks,
+        apns,
     )
     .await?;
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())

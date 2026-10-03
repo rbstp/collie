@@ -20,7 +20,14 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
 const PHONE_TAG: &str = "tag:collie-phone";
-const READ_ONLY_HERDR: [&str; 4] = ["ping", "session.snapshot", "agent.list", "workspace.list"];
+const READ_ONLY_HERDR: [&str; 6] = [
+    "ping",
+    "session.snapshot",
+    "agent.list",
+    "workspace.list",
+    "agent.explain",
+    "pane.read",
+];
 
 #[test]
 fn phase1_end_to_end() {
@@ -87,6 +94,7 @@ async fn scenario(
             owner_user_id: None,
             herdr_session: "e2e".into(),
             machine_name: "e2e-mac".into(),
+            approval_ttl: collied::approvals::TTL,
         },
         herdr_socket,
     )
@@ -329,6 +337,7 @@ fn live_herdr_session() {
                 owner_user_id: None,
                 herdr_session: herdr.name.clone(),
                 machine_name: "e2e-mac".into(),
+                approval_ttl: collied::approvals::TTL,
             },
             herdr.socket.clone(),
         )

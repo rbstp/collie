@@ -14,6 +14,7 @@ final class FakeCore: AgentCore {
         var held: [CheckedContinuation<Void, Never>] = []
         var error: CoreError?
         var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"])
+        var started: TaskStarted?
     }
 
     let state = Mutex(State())
@@ -76,14 +77,24 @@ final class FakeCore: AgentCore {
     }
     func taskOptions(machineId: String) async throws -> TaskOptions { state.withLock { $0.options } }
     func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
-        throw CoreError.NotImplemented
+        try await call { _ in }
+        guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
+        return started
     }
-    func flock(machineId: String) async throws -> MachineFlock { throw CoreError.MachineNotFound }
+    func flock(machineId: String) async throws -> MachineFlock {
+        guard let started = state.withLock({ $0.started }) else { throw CoreError.MachineNotFound }
+        let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1")
+        let agent = AgentSummary(
+            terminalId: started.terminalId, workspaceId: started.workspaceId, kind: "claude", name: nil, title: nil,
+            status: .working, statusSinceMs: 0, cwd: nil, lastLine: nil
+        )
+        return MachineFlock(machine: machine, link: .connected, lastError: nil, details: nil, workspaces: [], agents: [agent], approvalsCount: 0)
+    }
 }
 
 @MainActor
 private func agentModel(_ core: FakeCore) -> AgentModel {
-    AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "term_1"))
+    AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil)
 }
 
 @MainActor
@@ -110,6 +121,30 @@ private func agentModel(_ core: FakeCore) -> AgentModel {
 }
 
 @MainActor
+@Test func textTypedWhileSendingIsKept() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    model.draft = "one"
+    core.set(hold: true)
+    let send = Task { await model.sendPrompt() }
+    await core.waitHeld(1)
+    model.draft = "one and two"
+    core.release()
+    await send.value
+    #expect(core.snapshot.prompts == ["one"])
+    #expect(model.draft == "and two")
+
+    model.draft = "three"
+    core.set(hold: true)
+    let replaced = Task { await model.sendPrompt() }
+    await core.waitHeld(1)
+    model.draft = "four"
+    core.release()
+    await replaced.value
+    #expect(model.draft == "four")
+}
+
+@MainActor
 @Test func secondSendWhileSendingIsIgnored() async {
     let core = FakeCore()
     let model = agentModel(core)
@@ -132,7 +167,8 @@ private func agentModel(_ core: FakeCore) -> AgentModel {
     await model.sendPrompt()
     #expect(model.draft == "continue")
     #expect(!model.sendingPrompt)
-    #expect(model.promptError?.contains("Phase 3") == true)
+    #expect(model.promptError?.contains("Approvals") == true)
+    #expect(model.promptError?.contains("Phase") == false)
 
     core.set(error: .AgentNotReady)
     await model.sendPrompt()
@@ -231,6 +267,37 @@ private func agentModel(_ core: FakeCore) -> AgentModel {
 }
 
 @MainActor
+@Test func listCloseGoesThroughBothConfirmationSteps() async {
+    let core = FakeCore()
+    let model = FlockModel()
+    let route = AgentRoute(machineId: "m1", terminalId: "term_2")
+    #expect(await model.performClose(core: core) == false)
+
+    model.beginClose(.pane, route: route)
+    #expect(model.close.step == .first(.pane))
+    #expect(await model.performClose(core: core) == false)
+    #expect(core.snapshot.closes.isEmpty)
+    model.close.advance()
+    #expect(await model.performClose(core: core))
+    #expect(core.snapshot.closes == ["pane term_2 confirm=true"])
+    #expect(model.close.step == .idle)
+    #expect(await model.performClose(core: core) == false)
+
+    model.beginClose(.workspace(id: "w7"), route: route)
+    model.close.cancel()
+    model.close.advance()
+    #expect(await model.performClose(core: core) == false)
+    #expect(core.snapshot.closes.count == 1)
+
+    core.set(error: .AgentBlocked)
+    model.beginClose(.workspace(id: "w7"), route: route)
+    model.close.advance()
+    #expect(await model.performClose(core: core) == false)
+    #expect(core.snapshot.closes.last == "workspace w7 confirm=true")
+    #expect(model.closeNotice?.contains("approval") == true)
+}
+
+@MainActor
 @Test func newTaskUsesTheDefaultAgentAndNeedsAnAbsoluteFolder() async {
     let core = FakeCore()
     let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1")
@@ -245,4 +312,46 @@ private func agentModel(_ core: FakeCore) -> AgentModel {
     #expect(await model.start() == nil)
     #expect(model.phase == .editing)
     #expect(model.error == CoreError.NotImplemented.description)
+}
+
+@MainActor
+@Test func cancelledNewTaskNeverNavigates() async {
+    let core = FakeCore()
+    core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1")
+
+    let model = NewTaskModel(core: core, machines: [machine])
+    await model.loadOptions()
+    model.cwd = "/Users/me/app"
+    model.prompt = "add tests"
+    #expect(await model.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
+
+    let cancelled = NewTaskModel(core: core, machines: [machine])
+    await cancelled.loadOptions()
+    cancelled.cwd = "/Users/me/app"
+    cancelled.prompt = "add tests"
+    core.set(hold: true)
+    let start = Task { await cancelled.start() }
+    await core.waitHeld(1)
+    cancelled.cancel()
+    core.release()
+    #expect(await start.value == nil)
+    #expect(await cancelled.start() == nil)
+}
+
+@MainActor
+@Test func wrapLinesIsOnByDefaultAndRememberedOnThisDevice() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appending(path: "prefs.json")
+    let route = AgentRoute(machineId: "m1", terminalId: "term_1")
+
+    let model = AgentModel(core: FakeCore(), route: route, prefsFile: file)
+    #expect(model.wrapLines)
+    model.wrapLines = false
+    #expect(!AgentModel(core: FakeCore(), route: route, prefsFile: file).wrapLines)
+
+    try Data("not json".utf8).write(to: file)
+    #expect(AgentModel(core: FakeCore(), route: route, prefsFile: file).wrapLines)
 }

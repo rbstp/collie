@@ -2,9 +2,12 @@ use std::fs::Metadata;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
-use crate::config::{self, Config};
+use security_framework::os::macos::code_signing::{Flags, SecCode, SecRequirement};
+use security_framework::os::macos::keychain::SecKeychain;
+
+use crate::config::{self, ApnsConfig, ApnsKey, Config};
 use crate::control::{self, Reply, Request};
-use crate::herdr;
+use crate::{herdr, keychain, push};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Status {
@@ -75,20 +78,12 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     let (s, d) = check_private(&audit, Kind::File, (Status::Warn, "no audit log yet"));
     r.line(s, "audit", d);
     match config.as_ref().map(|c| &c.apns) {
-        Some(Some(apns)) => {
-            let (s, d) = check_private(&apns.key_path, Kind::File, (Status::Fail, "key missing"));
-            r.line(
-                s,
-                "apns",
-                format!(
-                    "{d} (key {}, team {}, bundle {})",
-                    apns.key_id, apns.team_id, apns.bundle_id
-                ),
-            );
-        }
+        Some(Some(apns)) => check_apns(&mut r, apns, &data_dir.join(APNS_DIR)),
         Some(None) => r.line(Status::Warn, "apns", "not configured"),
         None => {}
     }
+    let (s, d) = check_signature();
+    r.line(s, "codesign", d);
     r.line(
         Status::Warn,
         "hooks",
@@ -96,6 +91,121 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     );
 
     Ok(!r.failed)
+}
+
+const APNS_DIR: &str = "apns";
+const SIGNING_ID: &str = "dev.rbstp.collied";
+// Apple's Developer ID Application requirement: the Developer ID CA intermediate and the
+// Developer ID Application leaf marker.
+const DEVELOPER_ID: &str = "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists";
+
+// Interaction is disabled so a Keychain that would prompt fails instead: no dialog, and
+// what this binary can read is what the daemon (same binary) can read unattended.
+fn check_apns(r: &mut Report, apns: &ApnsConfig, apns_dir: &Path) {
+    let ids = format!(
+        "key {}, team {}, bundle {}",
+        apns.key_id, apns.team_id, apns.bundle_id
+    );
+    let key = match &apns.key {
+        ApnsKey::Keychain => {
+            let item = push::keychain_item(&apns.key_id);
+            let read = SecKeychain::disable_user_interaction()
+                .map_err(anyhow::Error::from)
+                .and_then(|_lock| Ok(keychain::read(None, &apns.key_id)?));
+            match read {
+                Ok(Some(key)) => {
+                    r.line(
+                        Status::Ok,
+                        "apns",
+                        format!("{item} readable by collied ({ids})"),
+                    );
+                    Some(key)
+                }
+                Ok(None) => {
+                    r.line(
+                        Status::Fail,
+                        "apns",
+                        format!("{item} missing: run `collied apns import <AuthKey.p8>`"),
+                    );
+                    None
+                }
+                Err(e) => {
+                    r.line(
+                        Status::Fail,
+                        "apns",
+                        format!("{item} not readable by this binary without a prompt: {e}"),
+                    );
+                    None
+                }
+            }
+        }
+        ApnsKey::File(path) => {
+            let (s, d) = check_private(path, Kind::File, (Status::Fail, "key missing"));
+            r.line(s, "apns", format!("{d} ({ids})"));
+            r.line(
+                Status::Warn,
+                "apns",
+                format!(
+                    "key_path is set: move the key to the Keychain with `collied apns import '{}'`",
+                    path.display()
+                ),
+            );
+            if s == Status::Fail {
+                None
+            } else {
+                match push::read_key(path) {
+                    Ok((key, _)) => Some(key),
+                    Err(e) => {
+                        r.line(Status::Fail, "apns", format!("{e:#}"));
+                        None
+                    }
+                }
+            }
+        }
+    };
+    if let Some(key) = key {
+        match push::check_ids(apns).and_then(|()| push::Apns::with_key(apns, &key)) {
+            Ok(_) => r.line(Status::Ok, "apns", "provider token signed (dry run)"),
+            Err(e) => r.line(Status::Fail, "apns", format!("{e:#}")),
+        }
+    }
+    let configured = match &apns.key {
+        ApnsKey::File(p) => Some(p.as_path()),
+        ApnsKey::Keychain => None,
+    };
+    if let Ok(entries) = std::fs::read_dir(apns_dir) {
+        for path in entries.flatten().map(|e| e.path()) {
+            if path.extension().is_some_and(|x| x == "p8") && Some(path.as_path()) != configured {
+                r.line(
+                    Status::Warn,
+                    "apns",
+                    format!("{} still on disk", path.display()),
+                );
+            }
+        }
+    }
+}
+
+/// Whether the running binary is Developer ID signed with collied's identifier.
+pub fn signed_as_collied() -> Result<(), String> {
+    let check = |requirement: &str| -> Result<(), security_framework::base::Error> {
+        let requirement: SecRequirement = requirement.parse()?;
+        SecCode::for_self(Flags::NONE)?.check_validity(Flags::NONE, &requirement)
+    };
+    check(DEVELOPER_ID)
+        .map_err(|e| format!("not signed with a Developer ID Application identity ({e})"))?;
+    check(&format!("identifier \"{SIGNING_ID}\""))
+        .map_err(|_| format!("Developer ID, but the identifier is not {SIGNING_ID}"))
+}
+
+fn check_signature() -> (Status, String) {
+    match signed_as_collied() {
+        Ok(()) => (Status::Ok, format!("Developer ID, identifier {SIGNING_ID}")),
+        Err(e) => (
+            Status::Warn,
+            format!("{e}: install with `just collied-install`"),
+        ),
+    }
 }
 
 async fn check_daemon(r: &mut Report, data_dir: &Path) {

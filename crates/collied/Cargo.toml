@@ -9,15 +9,20 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.104"
+apns-h2 = "0.11.0"
 base64 = "0.23.1"
 clap = { version = "4.6.7", features = ["derive"] }
+core-foundation = "0.10.1"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 getrandom = "0.4.3"
 protocol = { path = "../protocol" }
 qrcode = { version = "0.14.1", default-features = false }
 rustix = { version = "1.1.5", features = ["fs", "process", "system", "termios"] }
+security-framework = "3.7.0"
+security-framework-sys = "2.17.0"
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.11.0"
 subtle = "2.6.1"
 tailnet = { path = "../tailnet" }
 thiserror.workspace = true

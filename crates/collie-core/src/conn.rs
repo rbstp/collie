@@ -2,13 +2,14 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use protocol::{Empty, HelloResult, Request, Response};
+use protocol::{Empty, HelloResult, PushRegisterParams, Request, Response};
 use tailnet::{BackendState, Node};
 use tokio::net::UnixStream;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::pin::{self, PinError};
+use crate::reach::Reachability;
 use crate::session::{FlockState, Reply, Session, SessionError, lock};
 use crate::store::Machine;
 
@@ -30,6 +31,8 @@ const MUTATION_ATTEMPTS: usize = 3;
 /// Every holder clones the outer Arc, never the inner Node, so the strong count says
 /// whether a replaced node is still open on the shared tsnet state dir.
 pub type NodeSlot = Arc<Mutex<Option<Arc<Node>>>>;
+
+pub type PushSlot = Arc<Mutex<Option<PushRegisterParams>>>;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ConnectError {
@@ -174,7 +177,13 @@ pub enum RequestError {
 }
 
 impl Conn {
-    pub fn spawn(runtime: &tokio::runtime::Handle, machine: Machine, node: NodeSlot) -> Self {
+    pub fn spawn(
+        runtime: &tokio::runtime::Handle,
+        machine: Machine,
+        node: NodeSlot,
+        push: PushSlot,
+        reach: Arc<Reachability>,
+    ) -> Self {
         let shared = Arc::new(Shared {
             flock: Mutex::default(),
             link: Mutex::new(Link {
@@ -188,6 +197,8 @@ impl Conn {
         let task = runtime.spawn(supervise(
             machine.clone(),
             node,
+            push,
+            reach,
             shared.clone(),
             rx,
             reconnect_rx,
@@ -285,9 +296,12 @@ async fn send_mutation(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn supervise(
     machine: Machine,
     node: NodeSlot,
+    push: PushSlot,
+    reach: Arc<Reachability>,
     shared: Arc<Shared>,
     mut requests: mpsc::Receiver<(Request, Reply)>,
     mut reconnect: watch::Receiver<u64>,
@@ -302,15 +316,23 @@ async fn supervise(
             continue;
         };
         shared.set(LinkPhase::Connecting, None);
-        let err = match open(node, &machine.host, machine.port, &machine.node_id).await {
+        let opened = open(node, &machine.host, machine.port, &machine.node_id).await;
+        if !matches!(opened, Err(ConnectError::Offline)) {
+            reach.record(
+                &machine.node_id,
+                matches!(&opened, Ok((_, hello)) if hello.paired),
+            );
+        }
+        let err = match opened {
             Ok((_, hello)) if !hello.paired => ConnectError::Session(SessionError::NotPaired),
             Ok((session, _)) => {
                 lock(&shared.flock).new_connection();
                 shared.set(LinkPhase::Connected, None);
                 let since = Instant::now();
                 reconnect.borrow_and_update();
+                let push = lock(&push).clone();
                 let end = session
-                    .run(&mut requests, &shared.flock, async {
+                    .run(&mut requests, &shared.flock, push, async {
                         let _ = reconnect.changed().await;
                     })
                     .await;

@@ -22,6 +22,7 @@ final class NewTaskModel {
     var label = ""
     private(set) var phase = Phase.editing
     private(set) var error: String?
+    private(set) var cancelled = false
 
     init(core: any AgentCore, machines: [Machine]) {
         self.core = core
@@ -48,9 +49,10 @@ final class NewTaskModel {
     }
 
     /// Starts the task, then waits for its agent to show in the flock so the agent screen
-    /// can watch it. A started task is never offered again from this sheet.
+    /// can watch it. A started task is never offered again from this sheet. Returns nil once
+    /// cancelled, even if the task started.
     func start() async -> AgentRoute? {
-        guard canStart, let machineId else { return nil }
+        guard canStart, !cancelled, let machineId else { return nil }
         phase = .starting
         error = nil
         let started: TaskStarted
@@ -66,17 +68,21 @@ final class NewTaskModel {
         }
         phase = .waitingForAgent
         let route = AgentRoute(machineId: machineId, terminalId: started.terminalId)
-        for _ in 0..<30 where !Task.isCancelled {
+        for _ in 0..<30 where !cancelled {
             if let flock = try? await core.flock(machineId: machineId),
                 flock.agents.contains(where: { $0.terminalId == route.terminalId })
             {
-                return route
+                return cancelled ? nil : route
             }
             try? await Task.sleep(for: .seconds(1))
         }
         phase = .startedNotVisible
         error = "The task started, but its agent has not appeared yet. It will show in the flock."
         return nil
+    }
+
+    func cancel() {
+        cancelled = true
     }
 
     private func trimmed(_ s: String) -> String {

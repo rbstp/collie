@@ -1,8 +1,9 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use protocol::PushRegisterParams;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -19,8 +20,10 @@ pub struct MachineStore {
 }
 
 const FILE: &str = "machines.json";
+#[cfg(test)]
 const TMP: &str = ".machines.json.tmp";
 const CORRUPT: &str = "machines.json.corrupt";
+const PUSH_FILE: &str = "push.json";
 
 impl MachineStore {
     pub fn new(dir: PathBuf) -> Self {
@@ -44,25 +47,41 @@ impl MachineStore {
         }
     }
 
-    /// Written to a fresh 0600 file, fsynced, then renamed over the old one, so a
-    /// crash leaves either the previous list or the new one.
     pub fn save(&self, machines: &[Machine]) -> std::io::Result<()> {
-        let tmp = self.dir.join(TMP);
-        match fs::remove_file(&tmp) {
-            Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
-            _ => {}
-        }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        file.write_all(&serde_json::to_vec_pretty(machines).map_err(std::io::Error::other)?)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&tmp, self.dir.join(FILE))?;
-        File::open(&self.dir)?.sync_all()
+        let bytes = serde_json::to_vec_pretty(machines).map_err(std::io::Error::other)?;
+        write_atomic(&self.dir, FILE, &bytes)
     }
+
+    /// The APNs token is kept so every reconnect, including one from a background
+    /// launch, re-registers it.
+    pub fn load_push(&self) -> Option<PushRegisterParams> {
+        serde_json::from_slice(&fs::read(self.dir.join(PUSH_FILE)).ok()?).ok()
+    }
+
+    pub fn save_push(&self, push: &PushRegisterParams) -> std::io::Result<()> {
+        let bytes = serde_json::to_vec(push).map_err(std::io::Error::other)?;
+        write_atomic(&self.dir, PUSH_FILE, &bytes)
+    }
+}
+
+/// Written to a fresh 0600 file, fsynced, then renamed over the old one, so a crash
+/// leaves either the previous content or the new one.
+pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = dir.join(format!(".{name}.tmp"));
+    match fs::remove_file(&tmp) {
+        Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp, dir.join(name))?;
+    File::open(dir)?.sync_all()
 }
 
 pub fn random_id() -> String {
@@ -129,6 +148,27 @@ mod tests {
         assert_eq!(fs::read(dir.path().join(CORRUPT)).unwrap(), b"{not json");
         store.save(&[machine("a")]).unwrap();
         assert_eq!(store.load().unwrap(), vec![machine("a")]);
+    }
+
+    #[test]
+    fn push_token_round_trips_0600() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MachineStore::new(dir.path().to_owned());
+        assert!(store.load_push().is_none());
+        let push = PushRegisterParams {
+            apns_token: protocol::PushToken::new("ab".repeat(32)).unwrap(),
+            live_activity_push_to_start_token: None,
+            environment: protocol::ApnsEnvironment::Sandbox,
+        };
+        store.save_push(&push).unwrap();
+        let mode = fs::metadata(dir.path().join(PUSH_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(store.load_push(), Some(push));
+        fs::write(dir.path().join(PUSH_FILE), b"{").unwrap();
+        assert!(store.load_push().is_none());
     }
 
     #[test]
