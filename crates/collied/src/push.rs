@@ -10,8 +10,12 @@ use apns_h2::{
     Client, ClientConfig, CollapseId, Endpoint, ErrorReason, NotificationOptions, Priority,
     PushType,
 };
+use base64::Engine;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use chacha20poly1305::aead::{Aead, Payload};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use futures_util::future::BoxFuture;
-use protocol::{ApnsEnvironment, Approval, Decision, PushToken};
+use protocol::{ApnsEnvironment, Approval, Decision, NotificationKey, PushToken};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -31,6 +35,9 @@ pub struct Device {
     pub stable_id: String,
     pub token: PushToken,
     pub environment: ApnsEnvironment,
+    // Absent from stores written before the alert context was encrypted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_key: Option<NotificationKey>,
     pub registered_at: u64,
 }
 
@@ -45,6 +52,61 @@ pub struct Alert {
     pub payload: Value,
     pub collapse_id: Option<String>,
     pub expiration: Option<u64>,
+    /// Sealed per device into `enc`, never sent in clear: `(approval_id, context)`.
+    pub context: Option<(String, String)>,
+}
+
+#[derive(Serialize)]
+struct Sealed<'a> {
+    v: u32,
+    body: &'a str,
+}
+
+/// `nonce || ChaCha20-Poly1305(key, nonce, aad = approval_id, {"v":1,"body":...}) || tag`,
+/// base64 with padding, as ColliePush expects it.
+pub fn seal(
+    key: &NotificationKey,
+    nonce: [u8; 12],
+    approval_id: &str,
+    body: &str,
+) -> Option<String> {
+    let key = Zeroizing::new(URL_SAFE_NO_PAD.decode(key.as_str()).ok()?);
+    let cipher = ChaCha20Poly1305::new_from_slice(&key).ok()?;
+    let plaintext = Zeroizing::new(serde_json::to_vec(&Sealed { v: 1, body }).ok()?);
+    let sealed = cipher
+        .encrypt(
+            &nonce.into(),
+            Payload {
+                msg: &plaintext,
+                aad: approval_id.as_bytes(),
+            },
+        )
+        .ok()?;
+    Some(STANDARD.encode([nonce.as_slice(), &sealed].concat()))
+}
+
+impl Alert {
+    /// The alert as one device receives it: the context sealed with that device's key
+    /// under a fresh nonce, or the plaintext fallback alone.
+    pub fn for_device(&self, device: &Device) -> Alert {
+        let mut alert = Alert {
+            context: None,
+            ..self.clone()
+        };
+        if let (Some((approval_id, body)), Some(key)) = (&self.context, &device.notification_key) {
+            let mut nonce = [0u8; 12];
+            match getrandom::fill(&mut nonce)
+                .ok()
+                .and_then(|()| seal(key, nonce, approval_id, body))
+            {
+                Some(enc) => alert.payload["enc"] = json!(enc),
+                None => {
+                    tracing::warn!(peer = %device.stable_id, "could not seal the alert context")
+                }
+            }
+        }
+        alert
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -67,9 +129,10 @@ pub trait Sender: Send + Sync {
     ) -> BoxFuture<'a, Result<(), Rejection>>;
 }
 
-/// Carries labels only: never the snippet, the nonce or any terminal text, since the
-/// payload transits Apple. `title` must not come from a terminal title either.
-pub fn approval_alert(a: &Approval, title: &str, node_id: &str) -> Alert {
+/// Carries labels only in clear: never the snippet, the nonce or any terminal text, since
+/// the payload transits Apple. `title` must not come from a terminal title either.
+/// `context` only leaves sealed to each device's notification key.
+pub fn approval_alert(a: &Approval, title: &str, node_id: &str, context: &str) -> Alert {
     let mut aps = json!({
         "alert": {
             "title": title,
@@ -90,6 +153,8 @@ pub fn approval_alert(a: &Approval, title: &str, node_id: &str) -> Alert {
         // One alert per terminal: a reissued approval replaces the dead one.
         collapse_id: Some(a.terminal_id.as_str().to_owned()),
         expiration: Some(a.expires_at_ms / 1000),
+        context: (!context.is_empty())
+            .then(|| (a.approval_id.as_str().to_owned(), context.to_owned())),
     }
 }
 
@@ -103,6 +168,7 @@ pub fn test_alert() -> Alert {
         }),
         collapse_id: None,
         expiration: None,
+        context: None,
     }
 }
 
@@ -110,6 +176,7 @@ pub struct Push {
     path: PathBuf,
     devices: Mutex<Devices>,
     queue: Option<mpsc::Sender<Alert>>,
+    paired: Paired,
 }
 
 impl Push {
@@ -130,6 +197,7 @@ impl Push {
             path,
             devices: Mutex::new(devices),
             queue,
+            paired: paired.clone(),
         });
         if let Some((rx, sender)) = worker {
             tokio::spawn(deliver(Arc::downgrade(&push), rx, sender, paired));
@@ -146,14 +214,21 @@ impl Push {
         stable_id: &str,
         token: PushToken,
         environment: ApnsEnvironment,
+        notification_key: NotificationKey,
     ) -> Result<(), peers::Error> {
+        // Checked under the devices lock: revoke removes the peer before its `forget`
+        // takes this lock, so a racing registration is either skipped here or forgotten.
         self.update(|d| {
+            if !(self.paired)(stable_id) {
+                return;
+            }
             d.devices
                 .retain(|x| x.stable_id != stable_id && x.token != token);
             d.devices.push(Device {
                 stable_id: stable_id.to_owned(),
                 token,
                 environment,
+                notification_key: Some(notification_key),
                 registered_at: crate::now_ms(),
             });
         })
@@ -213,7 +288,7 @@ async fn deliver(
             if !paired(&device.stable_id) {
                 continue;
             }
-            match sender.send(&device, &alert).await {
+            match sender.send(&device, &alert.for_device(&device)).await {
                 Ok(()) => {}
                 Err(e @ (Rejection::Unregistered | Rejection::BadDeviceToken)) => {
                     tracing::info!(peer = %device.stable_id, reason = %e, "removing APNs token");
@@ -521,7 +596,7 @@ pub async fn send_test(data_dir: &Path, cfg: &ApnsConfig) -> anyhow::Result<bool
 #[cfg(test)]
 pub mod tests {
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use protocol::{ApprovalId, Nonce, TerminalId};
 
@@ -561,7 +636,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             Decision::ApproveAlways,
             Decision::Deny,
         ]);
-        let alert = approval_alert(&a, "api-fixer", "nMAC");
+        let alert = approval_alert(&a, "api-fixer", "nMAC", "Bash: rm -rf build CONTEXT");
         assert_eq!(
             alert.payload,
             json!({
@@ -583,13 +658,104 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             "{text}"
         );
 
-        let deny_only = approval_alert(&approval(vec![Decision::Deny]), "t", "nMAC");
+        let sealed = alert.for_device(&device(Some(key())));
+        let enc = sealed.payload["enc"].as_str().unwrap();
+        let text = sealed.payload.to_string();
+        assert!(
+            !text.contains("CONTEXT") && !text.contains("rm -rf") && !text.contains("SNIPPET"),
+            "{text}"
+        );
+        assert_eq!(sealed.context, None);
+        assert_eq!(
+            open(&key(), enc, a.approval_id.as_str()).unwrap(),
+            json!({"v": 1, "body": "Bash: rm -rf build CONTEXT"})
+        );
+        assert!(
+            open(&key(), enc, "another_approval").is_none(),
+            "AAD binds the approval"
+        );
+        let again = alert.for_device(&device(Some(key())));
+        assert_ne!(
+            again.payload["enc"], sealed.payload["enc"],
+            "fresh nonce per send"
+        );
+        let mut no_enc = sealed.payload.clone();
+        no_enc.as_object_mut().unwrap().remove("enc");
+        assert_eq!(no_enc, alert.payload);
+        assert_eq!(alert.for_device(&device(None)).payload, alert.payload);
+
+        let deny_only = approval_alert(&approval(vec![Decision::Deny]), "t", "nMAC", "");
         assert!(deny_only.payload["aps"].get("category").is_none());
         assert!(
-            approval_alert(&approval(vec![]), "t", "nMAC").payload["aps"]
+            approval_alert(&approval(vec![]), "t", "nMAC", "").payload["aps"]
                 .get("category")
                 .is_none()
         );
+    }
+
+    pub fn key() -> NotificationKey {
+        NotificationKey::new(URL_SAFE_NO_PAD.encode((1..=32).collect::<Vec<u8>>())).unwrap()
+    }
+
+    fn device(notification_key: Option<NotificationKey>) -> Device {
+        Device {
+            stable_id: "nA".into(),
+            token: token('a'),
+            environment: ApnsEnvironment::Sandbox,
+            notification_key,
+            registered_at: 0,
+        }
+    }
+
+    /// What ColliePush does: CryptoKit `ChaChaPoly.SealedBox(combined:)`, AAD = approval_id.
+    pub fn open(key: &NotificationKey, enc: &str, approval_id: &str) -> Option<Value> {
+        let key = URL_SAFE_NO_PAD.decode(key.as_str()).ok()?;
+        let combined = STANDARD.decode(enc).ok()?;
+        let (nonce, sealed) = combined.split_at_checked(12)?;
+        let plain = ChaCha20Poly1305::new_from_slice(&key)
+            .ok()?
+            .decrypt(
+                nonce.try_into().ok()?,
+                Payload {
+                    msg: sealed,
+                    aad: approval_id.as_bytes(),
+                },
+            )
+            .ok()?;
+        serde_json::from_slice(&plain).ok()
+    }
+
+    #[test]
+    fn shared_test_vector() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/protocol/notification-vector.json"
+        );
+        let vector: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let nonce: [u8; 12] = std::array::from_fn(|i| 0xA0 + i as u8);
+        let enc = seal(&key(), nonce, "apr_test", "Bash: echo hi").unwrap();
+        assert_eq!(
+            vector["key_hex"],
+            "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+        );
+        assert_eq!(vector["nonce_hex"], "a0a1a2a3a4a5a6a7a8a9aaab");
+        assert_eq!(vector["approval_id"], "apr_test");
+        assert_eq!(vector["plaintext"], r#"{"v":1,"body":"Bash: echo hi"}"#);
+        assert_eq!(vector["enc"], enc.as_str(), "{path} is stale");
+        assert_eq!(
+            open(&key(), &enc, "apr_test").unwrap(),
+            json!({"v": 1, "body": "Bash: echo hi"})
+        );
+        let mut tampered = STANDARD.decode(&enc).unwrap();
+        tampered[20] ^= 1;
+        assert!(open(&key(), &STANDARD.encode(tampered), "apr_test").is_none());
+    }
+
+    #[test]
+    fn device_debug_hides_the_key() {
+        let text = format!("{:?}", device(Some(key())));
+        assert!(text.contains("NotificationKey(<redacted>)"), "{text}");
+        assert!(!text.contains(key().as_str()), "{text}");
     }
 
     struct Mock {
@@ -627,15 +793,22 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             sent: Mutex::new(Vec::new()),
             calls: AtomicUsize::new(0),
         });
-        let paired: Paired = Arc::new(|id| id != "nRevoked");
+        let revoked = Arc::new(AtomicBool::new(false));
+        let paired: Paired = {
+            let revoked = revoked.clone();
+            Arc::new(move |id| id != "nRevoked" || !revoked.load(Ordering::SeqCst))
+        };
         let push = Push::open(path.clone(), Some(mock.clone()), paired).unwrap();
-        push.register("nA", token('a'), ApnsEnvironment::Sandbox)
+        push.register("nA", token('a'), ApnsEnvironment::Sandbox, key())
             .unwrap();
-        push.register("nB", token('b'), ApnsEnvironment::Production)
+        push.register("nB", token('b'), ApnsEnvironment::Production, key())
             .unwrap();
-        push.register("nA", token('c'), ApnsEnvironment::Sandbox)
+        push.register("nA", token('c'), ApnsEnvironment::Sandbox, key())
             .unwrap();
-        push.register("nRevoked", token('d'), ApnsEnvironment::Sandbox)
+        push.register("nRevoked", token('d'), ApnsEnvironment::Sandbox, key())
+            .unwrap();
+        revoked.store(true, Ordering::SeqCst);
+        push.register("nRevoked", token('e'), ApnsEnvironment::Sandbox, key())
             .unwrap();
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,

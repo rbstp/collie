@@ -8,6 +8,10 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use base64::Engine;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use chacha20poly1305::aead::{Aead, Payload};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use collie_core::{
     ApprovalDecision, ApprovalEvent, ApprovalFeed, BackgroundOutcome, CollieCore, CoreError,
     DecisionOutcome, PendingApproval, PushEnvironment,
@@ -37,6 +41,11 @@ const TERMINAL: &str = "term_0a1b2c3d4e5f60";
 const PANE: &str = "w7:p1";
 const TOKEN: &str = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00";
 const BUDGET_MS: u64 = 20_000;
+// The shared test vector's key (docs/protocol/notification-vector.json).
+const NOTIFY_KEY: [u8; 32] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+    27, 28, 29, 30, 31, 32,
+];
 const PROBE: &str = "E2E probe";
 const SNIPPET: &str =
     "Bash command\nrm -rf build\nRemove the build directory\nDo you want to proceed?";
@@ -212,8 +221,13 @@ fn phase3_expired_approvals() {
         let (machine, _) = pair(&handle.control_path(), &core, LABEL).await;
         let m = machine.id.clone();
         connected_flock(&core, &m).await;
-        core.register_push(TOKEN.into(), PushEnvironment::Sandbox)
-            .unwrap();
+        core.register_push(
+            machine.id.clone(),
+            TOKEN.into(),
+            PushEnvironment::Sandbox,
+            NOTIFY_KEY.to_vec(),
+        )
+        .unwrap();
         let rev = core.approval_feed(m.clone(), 0).unwrap().revision;
 
         println!("in-app decide on an expired approval");
@@ -321,23 +335,30 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
     let phone_id = peers[0].stable_id.clone();
     rig.probe.pair(&rig.control).await;
 
-    println!("register_push is stored per peer on both sides");
-    core.register_push(TOKEN.into(), PushEnvironment::Sandbox)
-        .unwrap();
+    println!("register_push is stored per peer by collied, never on the phone's disk");
+    core.register_push(
+        m.clone(),
+        TOKEN.into(),
+        PushEnvironment::Sandbox,
+        NOTIFY_KEY.to_vec(),
+    )
+    .unwrap();
     wait_for("push.register", || rig.registrations() == 1).await;
     let devices = rig.devices();
     assert_eq!(devices.len(), 1, "{devices:?}");
     assert_eq!(devices[0].stable_id, phone_id);
     assert_eq!(devices[0].token.as_str(), TOKEN);
     assert_eq!(devices[0].environment, ApnsEnvironment::Sandbox);
-    assert_private(&rig.data_dir.join(PUSH_FILE));
-    let phone_push = rig.data_dir.parent().unwrap().join("phone/push.json");
-    assert!(
-        std::fs::read_to_string(&phone_push)
-            .unwrap()
-            .contains(TOKEN)
+    assert_eq!(
+        devices[0].notification_key.as_ref().map(|k| k.as_str()),
+        Some(encoded_key().as_str())
     );
-    assert_private(&phone_push);
+    assert_private(&rig.data_dir.join(PUSH_FILE));
+    let phone_dir = rig.data_dir.parent().unwrap().join("phone");
+    assert_eq!(
+        files_containing(&phone_dir, &encoded_key()),
+        Vec::<PathBuf>::new()
+    );
 
     println!("register_push is sent again after a reconnect");
     let first = devices[0].registered_at;
@@ -346,7 +367,7 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
     assert!(rig.devices()[0].registered_at > first);
     connected_flock(core, &m).await;
 
-    println!("a blocked agent raises approval.needed and one label-only APNs alert");
+    println!("a blocked agent raises approval.needed and one APNs alert, its context sealed");
     let t = Instant::now();
     let rev = core.approval_feed(m.clone(), 0).unwrap().revision;
     rig.herdr.set_status("blocked");
@@ -369,7 +390,13 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
     assert_eq!(device.token.as_str(), TOKEN);
     assert_eq!(device.environment, ApnsEnvironment::Sandbox);
     assert_eq!(
-        alert.payload,
+        phone_opens(&alert.payload),
+        json!({"v": 1, "body": "Bash: rm -rf build\nRemove the build directory"})
+    );
+    let mut clear = alert.payload.clone();
+    clear.as_object_mut().unwrap().remove("enc");
+    assert_eq!(
+        clear,
         json!({
             "aps": {
                 "alert": {"title": "api-fixer", "body": "Blocked in api"},
@@ -386,6 +413,7 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
     for line in SNIPPET.lines() {
         assert!(!wire.contains(line), "snippet in the APNs payload: {wire}");
     }
+    assert!(!wire.contains(&encoded_key()));
     let nonce = rig.probe.nonce(&a.approval_id).await;
     let feed = core.approval_feed(m.clone(), 0).unwrap();
     assert!(!format!("{feed:?}").contains(&nonce));
@@ -491,9 +519,16 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
 }
 
 async fn after_restart(rig: &Rig, core: &Arc<CollieCore>, m: &str, phone_id: &str, node: &str) {
-    println!("the restarted phone registers its stored token again");
+    println!("the restarted app registers again from its Keychain key");
     let before = rig.registrations();
     connected_flock(core, m).await;
+    core.register_push(
+        m.into(),
+        TOKEN.into(),
+        PushEnvironment::Sandbox,
+        NOTIFY_KEY.to_vec(),
+    )
+    .unwrap();
     wait_for("push.register from the new process", || {
         rig.registrations() == before + 1
     })
@@ -556,6 +591,11 @@ async fn after_restart(rig: &Rig, core: &Arc<CollieCore>, m: &str, phone_id: &st
         "{revoked:?}"
     );
     assert!(rig.devices().is_empty(), "the token outlived the revoke");
+    assert_eq!(
+        files_containing(&rig.data_dir, &encoded_key()),
+        Vec::<PathBuf>::new(),
+        "the notification key outlived the revoke"
+    );
     let keys = rig.herdr.params("agent.send_keys").len();
     let err = core
         .decide(m.into(), d.approval_id.clone(), ApprovalDecision::Approve)
@@ -631,6 +671,28 @@ async fn start_collied(
     )
     .await
     .unwrap()
+}
+
+fn encoded_key() -> String {
+    URL_SAFE_NO_PAD.encode(NOTIFY_KEY)
+}
+
+/// What ColliePush does with `enc`: CryptoKit `ChaChaPoly.SealedBox(combined:)`, AAD =
+/// approval_id.
+fn phone_opens(payload: &Value) -> Value {
+    let combined = STANDARD.decode(payload["enc"].as_str().unwrap()).unwrap();
+    let (nonce, sealed) = combined.split_at(12);
+    let plain = ChaCha20Poly1305::new_from_slice(&NOTIFY_KEY)
+        .unwrap()
+        .decrypt(
+            nonce.try_into().unwrap(),
+            Payload {
+                msg: sealed,
+                aad: payload["approval_id"].as_str().unwrap().as_bytes(),
+            },
+        )
+        .unwrap();
+    serde_json::from_slice(&plain).unwrap()
 }
 
 fn reachability(group: &Path, node: &str) -> Value {

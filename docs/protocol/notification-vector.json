@@ -1,0 +1,8 @@
+{
+  "algorithm": "ChaCha20-Poly1305",
+  "key_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaab",
+  "approval_id": "apr_test",
+  "plaintext": "{\"v\":1,\"body\":\"Bash: echo hi\"}",
+  "enc": "oKGio6Slpqeoqaqr7QAv18tqJkZ41BDjm3Mz/9NV7Tim7Fe0ZJoerlF+PbZlhhy7Ws9jjgfEGOzE+w=="
+}

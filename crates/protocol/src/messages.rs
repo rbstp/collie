@@ -309,6 +309,7 @@ pub struct PushRegisterParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_activity_push_to_start_token: Option<PushToken>,
     pub environment: ApnsEnvironment,
+    pub notification_key: NotificationKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

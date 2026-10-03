@@ -960,7 +960,7 @@ impl Session<'_> {
             Request::PushRegister(p) => (
                 self.state
                     .push
-                    .register(&peer, p.apns_token, p.environment)
+                    .register(&peer, p.apns_token, p.environment, p.notification_key)
                     .map(|()| Response::Ok)
                     .map_err(|e| {
                         tracing::error!(error = %e, "push.register");

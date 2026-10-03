@@ -36,7 +36,8 @@ const DECIDE_BUDGET: Duration = Duration::from_secs(6);
 // bad attempts cannot flood the phone; the reissued approval still reaches live sessions.
 const ALERT_GAP: Duration = Duration::from_secs(30);
 
-/// What collied saw on an agent's screen. Never leaves collied except as the snippet.
+/// What collied saw on an agent's screen. Never leaves collied except as the snippet and
+/// the sealed alert context.
 #[derive(Clone)]
 struct Screen {
     pane_id: String,
@@ -48,6 +49,7 @@ struct Screen {
     /// The fingerprint with the menu cursor on each option in turn.
     cursor_at: Vec<[u8; 32]>,
     snippet: String,
+    context: String,
 }
 
 struct Pending {
@@ -323,6 +325,7 @@ impl Approvals {
             menu,
             offered,
             snippet,
+            context: prompt::context(&text),
         })
     }
 
@@ -351,6 +354,7 @@ impl Approvals {
             created_at_ms: now,
             expires_at_ms: now + self.ttl.as_millis() as u64,
         };
+        let context = screen.context.clone();
         let alert = {
             let mut inner = self.lock();
             if inner.pending.contains_key(&a.terminal_id) {
@@ -369,7 +373,12 @@ impl Approvals {
         };
         // A reissued alert replaces the dead one, whose approval_id no longer works.
         if let Some(push) = self.push.as_ref().filter(|_| alert) {
-            push.notify(push::approval_alert(&approval, &title, &self.node_id));
+            push.notify(push::approval_alert(
+                &approval,
+                &title,
+                &self.node_id,
+                &context,
+            ));
         }
         let _ = self.events.send(Event::ApprovalNeeded { approval });
         Ok(())

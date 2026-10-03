@@ -16,9 +16,9 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTarget, AgentWatchParams, ApprovalId,
-    Cwd, Empty, ErrorCode, Key, Label, OpId, PairCompleteParams, PairingInvite, PaneCloseParams,
-    PromptText, PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response,
-    TaskNewParams, TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId, limits,
+    Cwd, Empty, ErrorCode, Key, Label, NotificationKey, OpId, PairCompleteParams, PairingInvite,
+    PaneCloseParams, PromptText, PushRegisterParams, PushToken, ReadParams, ReadSource, Request,
+    Response, TaskNewParams, TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use zeroize::Zeroizing;
@@ -805,34 +805,45 @@ impl CollieCore {
         }
     }
 
-    /// Stores the token (0600, state dir) and sends `push.register` to every paired
-    /// machine that is connected; every later connection registers it again.
+    /// Sends `push.register` to that machine if it is connected; every later connection
+    /// of this process registers it again. Kept in memory only: the notification key's
+    /// one store is the iOS Keychain, so the app registers each machine on launch.
     pub fn register_push(
         &self,
+        machine_id: String,
         apns_token_hex: String,
         environment: PushEnvironment,
+        notification_key: Vec<u8>,
     ) -> Result<(), CoreError> {
+        let notification_key = Zeroizing::new(notification_key);
+        if notification_key.len() != 32 {
+            return Err(invalid(
+                "notification_key",
+                "notification key must be 32 bytes",
+            ));
+        }
         let push = PushRegisterParams {
             apns_token: PushToken::new(apns_token_hex.trim()).map_err(|_| {
                 invalid("apns_token", "APNs token must be 64 to 256 hex characters")
             })?,
             live_activity_push_to_start_token: None,
             environment: environment.into(),
+            notification_key: NotificationKey::new(URL_SAFE_NO_PAD.encode(&*notification_key))
+                .expect("32 bytes encode to a canonical 43-char base64url key"),
         };
-        self.inner.store.save_push(&push)?;
-        *lock(&self.inner.push) = Some(push.clone());
-        let ids: Vec<String> = lock(&self.inner.machines)
-            .iter()
-            .map(|m| m.id.clone())
-            .collect();
-        for id in ids {
-            let Ok(conn) = self.conn(&id) else { continue };
-            if lock(&conn.shared.link).phase != LinkPhase::Connected {
-                continue;
+        {
+            let machines = lock(&self.inner.machines);
+            if !machines.iter().any(|m| m.id == machine_id) {
+                return Err(CoreError::MachineNotFound);
             }
-            let request = Request::PushRegister(push.clone());
+            lock(&self.inner.push).insert(machine_id.clone(), push.clone());
+        }
+        let conn = self.conn(&machine_id)?;
+        if lock(&conn.shared.link).phase == LinkPhase::Connected {
             self.runtime.spawn(async move {
-                let _ = conn.request(request, CALL_TIMEOUT).await;
+                let _ = conn
+                    .request(Request::PushRegister(push), CALL_TIMEOUT)
+                    .await;
             });
         }
         Ok(())
@@ -873,7 +884,6 @@ impl CollieCore {
             })?;
         let store = MachineStore::new(state_dir.clone());
         let machines = store.load()?;
-        let push = store.load_push();
         Ok(Arc::new(Self {
             runtime,
             inner: Arc::new(Inner {
@@ -887,7 +897,7 @@ impl CollieCore {
                 cold_start: Mutex::default(),
                 measured: Default::default(),
                 login_name: Mutex::default(),
-                push: Arc::new(Mutex::new(push)),
+                push: Arc::default(),
                 reach: Arc::default(),
                 ops: Mutex::default(),
             }),
@@ -1128,8 +1138,10 @@ impl Inner {
         self.store.save(&kept)?;
         *machines = kept;
         let mut conns = lock(&self.conns);
+        let mut push = lock(&self.push);
         for m in gone {
             conns.remove(&m.id);
+            push.remove(&m.id);
         }
         Ok(())
     }
@@ -1258,6 +1270,7 @@ fn invalid_field(message: &str) -> Option<String> {
             "Nonce" => "nonce",
             "OpId" => "op_id",
             "PushToken" => "apns_token",
+            "NotificationKey" => "notification_key",
             _ => return None,
         };
         return Some(field.into());
@@ -1462,24 +1475,90 @@ mod tests {
     }
 
     #[test]
-    fn push_token_is_validated_and_stored() {
+    fn push_registration_is_per_machine_and_kept_in_memory() {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("s");
+        ensure_private_dir(&state).unwrap();
+        let mac = |id: &str| Machine {
+            id: id.into(),
+            label: "mac".into(),
+            host: format!("{id}.tail1234.ts.net"),
+            port: 8457,
+            node_id: format!("n{id}"),
+        };
+        MachineStore::new(state.clone())
+            .save(&[mac("m1"), mac("m2")])
+            .unwrap();
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        let key: Vec<u8> = (1..=32).collect();
+        let token = "ab".repeat(32);
         assert!(matches!(
-            core.register_push("not hex".into(), PushEnvironment::Sandbox),
+            core.register_push("m1".into(), "not hex".into(), PushEnvironment::Sandbox, key.clone()),
             Err(CoreError::InvalidInput { field: Some(f), .. }) if f == "apns_token"
         ));
+        assert!(matches!(
+            core.register_push("m1".into(), token.clone(), PushEnvironment::Sandbox, vec![1; 31]),
+            Err(CoreError::InvalidInput { field: Some(f), .. }) if f == "notification_key"
+        ));
+        assert!(matches!(
+            core.register_push(
+                "nope".into(),
+                token.clone(),
+                PushEnvironment::Sandbox,
+                key.clone()
+            ),
+            Err(CoreError::MachineNotFound)
+        ));
         core.register_push(
-            format!(" {} ", "ab".repeat(32)),
+            "m1".into(),
+            format!(" {token} "),
             PushEnvironment::Production,
+            key.clone(),
         )
         .unwrap();
+        core.register_push(
+            "m2".into(),
+            token.clone(),
+            PushEnvironment::Production,
+            vec![9; 32],
+        )
+        .unwrap();
+        let push = lock(&core.inner.push).clone();
+        assert_eq!(push.keys().collect::<Vec<_>>(), ["m1", "m2"]);
+        assert_eq!(push["m1"].apns_token.as_str(), token);
+        assert_eq!(
+            push["m1"].environment,
+            protocol::ApnsEnvironment::Production
+        );
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode(push["m1"].notification_key.as_str())
+                .unwrap(),
+            key
+        );
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode(push["m2"].notification_key.as_str())
+                .unwrap(),
+            [9; 32]
+        );
+        core.remove_machine("m2".into()).unwrap();
+        assert_eq!(
+            lock(&core.inner.push).keys().collect::<Vec<_>>(),
+            ["m1"],
+            "unpairing drops the machine's registration"
+        );
+        let encoded = push["m1"].notification_key.as_str().to_owned();
         drop(core);
+        for entry in std::fs::read_dir(&state).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
+                assert!(!text.contains(&encoded), "{}", path.display());
+            }
+        }
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
-        let push = lock(&core.inner.push).clone().unwrap();
-        assert_eq!(push.apns_token.as_str(), "ab".repeat(32));
-        assert_eq!(push.environment, protocol::ApnsEnvironment::Production);
+        assert!(lock(&core.inner.push).is_empty());
     }
 
     #[test]
@@ -2257,7 +2336,7 @@ mod tailnet_tests {
             .unwrap_err();
         assert!(matches!(err, CoreError::ApprovalNotFound), "{err:?}");
 
-        core.register_push(TOKEN.into(), PushEnvironment::Sandbox)
+        core.register_push(id(), TOKEN.into(), PushEnvironment::Sandbox, vec![7; 32])
             .unwrap();
         poll("push.register", || {
             (lock(&seen).pushes.len() == 1).then_some(())
@@ -2346,7 +2425,9 @@ mod tailnet_tests {
             let f = rt.block_on(core.flock(id())).unwrap();
             (f.link == LinkPhase::Connected).then_some(())
         });
-        poll("stored token registered by the new process", || {
+        core.register_push(id(), TOKEN.into(), PushEnvironment::Sandbox, vec![7; 32])
+            .unwrap();
+        poll("token registered again by the new process", || {
             (lock(&seen).pushes.len() == 3).then_some(())
         });
         assert!(lock(&seen).pushes.iter().all(|t| t == TOKEN));

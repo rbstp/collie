@@ -8,5 +8,9 @@
 	<array>
 		<string>group.dev.rbstp.collie</string>
 	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)dev.rbstp.collie.shared</string>
+	</array>
 </dict>
 </plist>

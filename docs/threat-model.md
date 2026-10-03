@@ -13,6 +13,7 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 | Pairing code | the QR and the invite URI that `collied pair` prints as text in the terminal; 16 random bytes, one window at a time, 120 s, burned by the first attempt, redacted in `Debug` |
 | Approval nonces | collied memory and the phone session (collie-core only, never handed to Swift); 32 random bytes, single use |
 | APNs `.p8` key | login Keychain item `dev.rbstp.collied.apns`/`<key ID>`, ACL trusting only the Developer ID signed collied (legacy: 0600 file named by `key_path`); a backup in the user's password manager |
+| Notification keys (32 bytes, one per paired Mac) | iOS Keychain (`dev.rbstp.collie.notify`/`<Mac node ID>`, `AfterFirstUnlockThisDeviceOnly`, shared with ColliePush); collied's `push.json` (0600) next to the device token; collie-core memory. Never logged, audited or written elsewhere; redacted in `Debug` |
 | Terminal content, agent and workspace names | herdr, the tailnet session, the phone |
 
 ## Trust boundaries
@@ -20,7 +21,7 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 - **Tailnet to collied.** The only network entry point is the tsnet listener on TCP 8457. Every connection passes the whois gate (untagged, not shared in, owned by the owner once one is known, paired `StableID` with its paired user) before the WebSocket upgrade, then a fail-closed method allowlist (`parse_client_frame`: unknown methods rejected before params are decoded, unknown fields denied, herdr privileged methods unreachable).
 - **collied to herdr.** Same UID. Nothing on the Mac running as the user is a boundary.
 - **Tailscale control plane.** Trusted for node identity: whois and the phone's netmap check both come from it.
-- **Apple.** APNs sees what collied pushes.
+- **Apple.** APNs sees what collied pushes: labels and ids in clear, the pending action only as ciphertext.
 
 ## Status legend
 
@@ -87,7 +88,7 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 | Assets | `.p8` key (team wide), device tokens |
 | Attack | With the key and a device token, an attacker sends arbitrary pushes to Collie (or, the key being team wide, to any app of the team) to phish the user. |
 | Mitigations | Dedicated, revocable key, never in GitHub ([release.md](release.md)). Stored in the login Keychain by `collied apns import`, which deletes the file after confirmation; the item's ACL lets only collied signed with the team's Developer ID (`just collied-install`) read it without a prompt; `collied doctor` warns about a `key_path` config or a `.p8` left on disk (built). Pushes carry no nonce and cannot create or decide an approval: `approval_id` and `node_id` are validated lookup keys, and a lock-screen action decides only what the pinned, paired Mac returns over the tailnet (built). |
-| Residual | A leaked key sends fake notifications to Collie (and to every app of the team) until revoked in the portal: a phishing alert with Approve/Deny buttons whose `approval_id` matches nothing ends as "no longer pending, nothing was sent", but its text is the attacker's. Copies outside the Keychain (the downloaded file before import, the password manager backup) are protected only by where they sit. |
+| Residual | A leaked key sends fake notifications to Collie (and to every app of the team) until revoked in the portal: a phishing alert with Approve/Deny buttons whose `approval_id` matches nothing ends as "no longer pending, nothing was sent", but its text is the attacker's (as a plaintext body only: without the notification key it cannot produce an `enc` the NSE opens). Copies outside the Keychain (the downloaded file before import, the password manager backup) are protected only by where they sit. |
 | Phase | Built |
 
 ### Phone node key extraction
@@ -158,6 +159,6 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 |---|---|
 | Assets | Project and agent names, activity timing |
 | Attack | Apple (or anyone with APNs access) reads payloads and metadata. |
-| Mitigations | Alert title is the herdr agent name or the agent kind, never the terminal title or a title the pane's program sets; body is `Blocked in <workspace label>`; plus `approval_id`, `node_id` and `terminal_id` (thread and collapse id). Never terminal text, snippet or nonce; details are fetched over the tailnet (built). |
-| Residual | Agent and workspace names, opaque ids, timing, frequency and the device token are visible to Apple. Encrypting the payload for the NSE would hide labels but not timing; not designed. |
-| Phase | Built. Encrypted payload: not planned. |
+| Mitigations | Alert title is the herdr agent name or the agent kind, never the terminal title or a title the pane's program sets; body is `Blocked in <workspace label>`; plus `approval_id`, `node_id` and `terminal_id` (thread and collapse id). The pending action (up to 600 chars of the command or question) travels only in `enc`: ChaCha20-Poly1305 under the phone's per-Mac notification key, fresh random nonce per send, bound to the `approval_id` as AAD, opened by ColliePush on the phone. The key is generated on the phone and reaches collied only inside the authenticated tailnet session. Never the snippet or nonce; details are fetched over the tailnet (built). |
+| Residual | Agent and workspace names, opaque ids, the ciphertext's length (so roughly the command's length), timing, frequency and the device token are visible to Apple. A leaked notification key (from `push.json` or a Mac compromise, which already exposes far more; from the phone's Keychain) lets whoever also has the APNs payloads read past and future alert contexts for that Mac until the phone pairs again; it grants no decision, since the nonce never travels in a push. With a leaked APNs key as well, it also lets an attacker forge an alert whose body the NSE shows as genuine context. |
+| Phase | Built. |

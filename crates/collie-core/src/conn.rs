@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -32,7 +33,8 @@ const MUTATION_ATTEMPTS: usize = 3;
 /// whether a replaced node is still open on the shared tsnet state dir.
 pub type NodeSlot = Arc<Mutex<Option<Arc<Node>>>>;
 
-pub type PushSlot = Arc<Mutex<Option<PushRegisterParams>>>;
+/// Keyed by machine id: each Mac gets its own notification key.
+pub type PushSlot = Arc<Mutex<BTreeMap<String, PushRegisterParams>>>;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ConnectError {
@@ -330,7 +332,7 @@ async fn supervise(
                 shared.set(LinkPhase::Connected, None);
                 let since = Instant::now();
                 reconnect.borrow_and_update();
-                let push = lock(&push).clone();
+                let push = lock(&push).get(&machine.id).cloned();
                 let end = session
                     .run(&mut requests, &shared.flock, push, async {
                         let _ = reconnect.changed().await;

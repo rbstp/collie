@@ -109,7 +109,7 @@ public final class TerminalScreen {
             // Wrapped height is unknown before writing; rows past the content are dropped by
             // readFrame, and content beyond maxRows scrolls the oldest rows off the top.
             wantedRows = Self.maxRows
-            bytes = Array("\u{1B}[?7h".utf8) + Array(Self.trimmingTrailingBlanks(snapshot).utf8)
+            bytes = Array("\u{1B}[?7h".utf8) + Array(Self.preparedForWrapping(snapshot).utf8)
         } else {
             bytes = Array(snapshot.utf8)
             let lines = bytes.reduce(1) { $1 == UInt8(ascii: "\n") ? $0 + 1 : $0 }
@@ -138,8 +138,10 @@ public final class TerminalScreen {
 
     /// Drops spaces and tabs at the end of every row, also when SGR sequences sit between them,
     /// so padding to the Mac pane width does not wrap into blank rows. Those SGR sequences are
-    /// kept so the style state for later rows is unchanged.
-    static func trimmingTrailingBlanks(_ snapshot: String) -> String {
+    /// kept so the style state for later rows is unchanged. Rows drawn only with box-drawing
+    /// characters (rules, borders) get autowrap turned off around them, so they clip at the
+    /// wrap width with their last character kept instead of wrapping into several rows.
+    static func preparedForWrapping(_ snapshot: String) -> String {
         let scalars = Array(snapshot.unicodeScalars)
         var out = String.UnicodeScalarView()
         out.reserveCapacity(scalars.count)
@@ -150,6 +152,8 @@ public final class TerminalScreen {
             if rowEnd > rowStart && scalars[rowEnd - 1] == "\r" { rowEnd -= 1 }
             var contentEnd = rowStart
             var trailingSGR: [Range<Int>] = []
+            var boxOnly = true
+            var sawBox = false
             var i = rowStart
             while i < rowEnd {
                 if scalars[i] == "\u{1B}", i + 1 < rowEnd, scalars[i + 1] == "[" {
@@ -164,10 +168,18 @@ public final class TerminalScreen {
                 if scalars[i] != " " && scalars[i] != "\t" {
                     contentEnd = i + 1
                     trailingSGR.removeAll()
+                    if (0x2500...0x257F).contains(scalars[i].value) {
+                        sawBox = true
+                    } else {
+                        boxOnly = false
+                    }
                 }
                 i += 1
             }
+            let clip = boxOnly && sawBox
+            if clip { out.append(contentsOf: "\u{1B}[?7l".unicodeScalars) }
             out.append(contentsOf: scalars[rowStart..<contentEnd])
+            if clip { out.append(contentsOf: "\u{1B}[?7h".unicodeScalars) }
             for range in trailingSGR { out.append(contentsOf: scalars[range]) }
             out.append(contentsOf: scalars[rowEnd..<min(newline + 1, scalars.count)])
             rowStart = newline + 1

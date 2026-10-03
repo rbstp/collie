@@ -3,6 +3,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use chacha20poly1305::aead::{Aead, Payload};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use collied::approvals::Approvals;
 use collied::audit::Audit;
 use collied::drive::{Authorized, Reply};
@@ -10,7 +14,7 @@ use collied::push::{Alert, Device, Push, Rejection, Sender};
 use futures_util::future::BoxFuture;
 use protocol::{
     ApnsEnvironment, Approval, ApprovalDecideParams, ApprovalOutcome, Decision, ErrorCode, Event,
-    Nonce, PushToken, Response,
+    Nonce, NotificationKey, PushToken, Response,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -230,7 +234,7 @@ impl Rig {
             Arc::new(|_| true),
         )
         .unwrap();
-        push.register(PHONE, token(), ApnsEnvironment::Sandbox)
+        push.register(PHONE, token(), ApnsEnvironment::Sandbox, key())
             .unwrap();
         let audit = dir.path().join("audit.log");
         let (tx, events) = broadcast::channel(64);
@@ -359,6 +363,27 @@ fn resolved(reply: Reply) -> ApprovalOutcome {
     }
 }
 
+fn key() -> NotificationKey {
+    NotificationKey::new(URL_SAFE_NO_PAD.encode([7u8; 32])).unwrap()
+}
+
+/// The phone's side: `enc` opened with the device key, AAD = approval_id.
+fn open_context(payload: &Value) -> Value {
+    let combined = STANDARD.decode(payload["enc"].as_str().unwrap()).unwrap();
+    let (nonce, sealed) = combined.split_at(12);
+    let plain = ChaCha20Poly1305::new_from_slice(&[7u8; 32])
+        .unwrap()
+        .decrypt(
+            nonce.try_into().unwrap(),
+            Payload {
+                msg: sealed,
+                aad: payload["approval_id"].as_str().unwrap().as_bytes(),
+            },
+        )
+        .unwrap();
+    serde_json::from_slice(&plain).unwrap()
+}
+
 fn code(reply: Reply) -> ErrorCode {
     reply.expect_err("expected an error").0
 }
@@ -387,7 +412,13 @@ async fn blocked_agent_gets_one_approval_and_one_alert() {
     let (to, alert) = &alerts[0];
     assert_eq!(to, token().as_str());
     assert_eq!(
-        alert.payload,
+        open_context(&alert.payload),
+        json!({"v": 1, "body": "Bash: rm -rf build\nRemove the build directory"})
+    );
+    let mut clear = alert.payload.clone();
+    clear.as_object_mut().unwrap().remove("enc");
+    assert_eq!(
+        clear,
         json!({
             "aps": {
                 "alert": {"title": "api-fixer", "body": "Blocked in api"},

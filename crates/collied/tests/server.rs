@@ -21,6 +21,7 @@ use zeroize::Zeroizing;
 
 const KNOBS: [(&str, &str); 1] = [("TS_DISABLE_PORTMAPPER", "1")];
 const PORT: u16 = 8457;
+const NOTIFY_KEY: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
 const WATCHDOG: Duration = Duration::from_secs(300);
 const HERDR_CALLED: [&str; 9] = [
     "ping",
@@ -353,7 +354,8 @@ async fn scenario(
     send(
         &mut ws,
         json!({"id": 56, "method": "push.register", "params": {
-            "apns_token": "ab".repeat(32), "environment": "sandbox"}}),
+            "apns_token": "ab".repeat(32), "environment": "sandbox",
+            "notification_key": NOTIFY_KEY}}),
     )
     .await;
     assert_eq!(result(recv(&mut ws).await), Response::Ok);
@@ -531,6 +533,10 @@ async fn scenario(
     ] {
         assert!(audit.contains(needle), "audit log lacks {needle}:\n{audit}");
     }
+    assert!(
+        !audit.contains(NOTIFY_KEY),
+        "notification key in the audit log"
+    );
     for line in audit.lines() {
         let entry: Value = serde_json::from_str(line).unwrap();
         assert!(

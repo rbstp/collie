@@ -81,6 +81,20 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
     #expect(screen.render(ansiSnapshot: "\(padded)\r\ncd").columns == 192)
 }
 
+@Test func boxDrawingRowsClipAtTheWrapWidth() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let border = "\u{256D}" + String(repeating: "\u{2500}", count: 120) + "\u{256E}"
+    let rule = "\u{1B}[38;5;8m" + String(repeating: "\u{2500}", count: 120) + "\u{1B}[0m"
+    let text = "\u{2502} " + String(repeating: "z", count: 60)
+    let frame = screen.render(ansiSnapshot: "\(border)\r\n\(rule)\r\n\(text)\r\nend", wrapColumns: 40)
+    #expect(frame.rows == 5)
+    #expect(frame.columns == 40)
+    let rows = Dictionary(grouping: frame.runs, by: \.row).mapValues { $0.map(\.text).joined() }
+    #expect(rows[0] == "\u{256D}" + String(repeating: "\u{2500}", count: 38) + "\u{256E}")
+    #expect(rows[1] == String(repeating: "\u{2500}", count: 40))
+    #expect(rows[4] == "end")
+}
+
 @Test func wrapModeCanBeTurnedOffAgain() throws {
     let screen = try #require(TerminalScreen(background: bg, foreground: fg))
     let long = String(repeating: "y", count: 200)
@@ -100,9 +114,12 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
         ("\u{1B}[1m a \u{1B}[22m b\u{1B}[0m ", "\u{1B}[1m a \u{1B}[22m b\u{1B}[0m"),
         ("   \u{1B}[0m\n\n x", "\u{1B}[0m\n\n x"),
         ("\u{4E2D}\u{00A0}", "\u{4E2D}\u{00A0}"),
+        ("\u{1B}[2m\u{2500}\u{2500} \u{1B}[0m  \r\nx", "\u{1B}[?7l\u{1B}[2m\u{2500}\u{2500}\u{1B}[?7h\u{1B}[0m\r\nx"),
+        ("\u{2502} a \u{2502}", "\u{2502} a \u{2502}"),
+        ("\u{2580}\u{2580}", "\u{2580}\u{2580}"),
     ]
     for (input, trimmed) in cases {
-        #expect(TerminalScreen.trimmingTrailingBlanks(input) == trimmed, "\(input.debugDescription)")
+        #expect(TerminalScreen.preparedForWrapping(input) == trimmed, "\(input.debugDescription)")
     }
 }
 

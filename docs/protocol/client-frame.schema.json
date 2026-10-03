@@ -171,6 +171,10 @@
       "pattern": "^[A-Za-z0-9_-]{43}$",
       "type": "string"
     },
+    "NotificationKey": {
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
+      "type": "string"
+    },
     "OpId": {
       "pattern": "^[A-Za-z0-9_-]{22}$",
       "type": "string"
@@ -254,11 +258,15 @@
               "type": "null"
             }
           ]
+        },
+        "notification_key": {
+          "$ref": "#/$defs/NotificationKey"
         }
       },
       "required": [
         "apns_token",
-        "environment"
+        "environment",
+        "notification_key"
       ],
       "type": "object"
     },

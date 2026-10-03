@@ -3,7 +3,6 @@ use std::io::{ErrorKind, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use protocol::PushRegisterParams;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -23,7 +22,6 @@ const FILE: &str = "machines.json";
 #[cfg(test)]
 const TMP: &str = ".machines.json.tmp";
 const CORRUPT: &str = "machines.json.corrupt";
-const PUSH_FILE: &str = "push.json";
 
 impl MachineStore {
     pub fn new(dir: PathBuf) -> Self {
@@ -50,17 +48,6 @@ impl MachineStore {
     pub fn save(&self, machines: &[Machine]) -> std::io::Result<()> {
         let bytes = serde_json::to_vec_pretty(machines).map_err(std::io::Error::other)?;
         write_atomic(&self.dir, FILE, &bytes)
-    }
-
-    /// The APNs token is kept so every reconnect, including one from a background
-    /// launch, re-registers it.
-    pub fn load_push(&self) -> Option<PushRegisterParams> {
-        serde_json::from_slice(&fs::read(self.dir.join(PUSH_FILE)).ok()?).ok()
-    }
-
-    pub fn save_push(&self, push: &PushRegisterParams) -> std::io::Result<()> {
-        let bytes = serde_json::to_vec(push).map_err(std::io::Error::other)?;
-        write_atomic(&self.dir, PUSH_FILE, &bytes)
     }
 }
 
@@ -148,27 +135,6 @@ mod tests {
         assert_eq!(fs::read(dir.path().join(CORRUPT)).unwrap(), b"{not json");
         store.save(&[machine("a")]).unwrap();
         assert_eq!(store.load().unwrap(), vec![machine("a")]);
-    }
-
-    #[test]
-    fn push_token_round_trips_0600() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = MachineStore::new(dir.path().to_owned());
-        assert!(store.load_push().is_none());
-        let push = PushRegisterParams {
-            apns_token: protocol::PushToken::new("ab".repeat(32)).unwrap(),
-            live_activity_push_to_start_token: None,
-            environment: protocol::ApnsEnvironment::Sandbox,
-        };
-        store.save_push(&push).unwrap();
-        let mode = fs::metadata(dir.path().join(PUSH_FILE))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600);
-        assert_eq!(store.load_push(), Some(push));
-        fs::write(dir.path().join(PUSH_FILE), b"{").unwrap();
-        assert!(store.load_push().is_none());
     }
 
     #[test]

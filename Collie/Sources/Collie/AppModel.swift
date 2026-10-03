@@ -21,6 +21,7 @@ final class AppModel {
     private(set) var machines: [Machine] = []
     private(set) var signingIn = false
     private(set) var pushStatus = "not registered"
+    private var pushToken: Data?
     let approvals: ApprovalsModel
     var tab = AppTab.agents
     private var backgroundedAt: Date?
@@ -122,7 +123,17 @@ final class AppModel {
 
     func removeMachine(_ machine: Machine) throws {
         try core?.removeMachine(id: machine.id)
+        if !(core?.machines() ?? []).contains(where: { $0.nodeId == machine.nodeId }) {
+            NotificationKey.delete(nodeId: machine.nodeId)
+        }
         reloadMachines()
+    }
+
+    /// A pairing or re-pairing rotates that Mac's notification key.
+    func machinePaired(_ machine: Machine) {
+        NotificationKey.delete(nodeId: machine.nodeId)
+        reloadMachines()
+        if let pushToken { registerPush(token: pushToken) }
     }
 
     func scenePhaseChanged(to phase: ScenePhase) {
@@ -149,13 +160,28 @@ final class AppModel {
         }
     }
 
+    /// One notification key per Mac, keyed by its node id: the NSE only sees `node_id` in the alert.
     func registerPush(token: Data) {
+        pushToken = token
+        guard let core else { return }
         let environment = PushEnvironment.current
-        do {
-            try core?.registerPush(apnsTokenHex: token.map { String(format: "%02x", $0) }.joined(), environment: environment)
+        let hex = token.map { String(format: "%02x", $0) }.joined()
+        var failure: (any Error)?
+        for machine in core.machines() {
+            do {
+                let key = try NotificationKey.loadOrCreate(nodeId: machine.nodeId)
+                try core.registerPush(
+                    machineId: machine.id, apnsTokenHex: hex, environment: environment,
+                    notificationKey: key.withUnsafeBytes { Data($0) }
+                )
+            } catch {
+                failure = failure ?? error
+            }
+        }
+        if let failure {
+            pushStatus = describe(failure)
+        } else {
             pushStatus = environment == .production ? "registered" : "registered (sandbox)"
-        } catch {
-            pushStatus = describe(error)
         }
     }
 

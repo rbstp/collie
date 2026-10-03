@@ -173,6 +173,15 @@ validated_string!(
 );
 
 validated_string!(
+    /// 32 random bytes, base64url without padding (canonical: the last character
+    /// carries 4 bits): the phone's key for one Mac's encrypted alert context.
+    NotificationKey,
+    debug = redacted,
+    check = |s| base64url_len(s, 43) && b"AEIMQUYcgkosw048".contains(&s.as_bytes()[42]),
+    schema = { "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$" }
+);
+
+validated_string!(
     /// 16 random bytes, base64url without padding. Lets collied replay the stored
     /// outcome instead of re-running a mutation the client retried after a drop.
     OpId,
@@ -240,6 +249,8 @@ mod tests {
         assert_eq!(format!("{nonce:?}"), "Nonce(<redacted>)");
         let code = PairingCode::new("B".repeat(22)).unwrap();
         assert!(!format!("{code:?}").contains('B'));
+        let key = NotificationKey::new(format!("{}A", "C".repeat(42))).unwrap();
+        assert_eq!(format!("{key:?}"), "NotificationKey(<redacted>)");
     }
 
     #[test]
@@ -261,5 +272,9 @@ mod tests {
     fn deserialization_validates() {
         assert!(serde_json::from_str::<Nonce>("\"short\"").is_err());
         assert!(serde_json::from_str::<PushToken>(&format!("\"{}\"", "ab".repeat(32))).is_ok());
+        assert!(NotificationKey::new("A".repeat(43)).is_ok());
+        assert!(NotificationKey::new("A".repeat(42)).is_err());
+        assert!(NotificationKey::new(format!("{}B", "A".repeat(42))).is_err());
+        assert!(NotificationKey::new(format!("{}=", "A".repeat(42))).is_err());
     }
 }
