@@ -240,7 +240,7 @@ private struct PromptBar: View {
     @Bindable var model: AgentModel
     @FocusState private var editing: Bool
     @State private var pickingPhoto = false
-    @State private var photo: PhotosPickerItem?
+    @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
 
     var body: some View {
@@ -260,7 +260,7 @@ private struct PromptBar: View {
                         .font(.system(size: 20))
                         .frame(width: 32, height: 36)
                 }
-                .disabled(model.upload != nil)
+                .disabled(model.upload != nil || model.attachmentSlots <= 0)
                 .accessibilityLabel("Attach")
                 TextField("Prompt the agent", text: $model.draft, axis: .vertical)
                     .lineLimit(1...6)
@@ -284,27 +284,31 @@ private struct PromptBar: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
-        .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .images)
-        .onChange(of: photo) { _, item in
-            guard let item else { return }
-            photo = nil
-            model.attach(name: Attachment.photoName(at: .now)) { _ in
-                guard let data = try await item.loadTransferable(type: Data.self) else { throw AttachmentError.unreadablePhoto }
-                return try Attachment.jpeg(from: data)
-            }
+        .photosPicker(
+            isPresented: $pickingPhoto, selection: $photos, maxSelectionCount: max(model.attachmentSlots, 1),
+            matching: .images
+        )
+        .onChange(of: photos) { _, items in
+            guard !items.isEmpty else { return }
+            photos = []
+            let now = Date.now
+            model.attach(items.enumerated().map { offset, item in
+                PendingAttachment(name: Attachment.photoName(at: now, index: offset + 1)) { _ in
+                    guard let data = try await item.loadTransferable(type: Data.self) else { throw AttachmentError.unreadablePhoto }
+                    return try Attachment.jpeg(from: data)
+                }
+            })
         }
-        .fileImporter(isPresented: $pickingFile, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
-            let url: URL
+        .fileImporter(isPresented: $pickingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls):
-                guard let first = urls.first else { return }
-                url = first
+                model.attach(urls.map { url in
+                    PendingAttachment(name: Attachment.suggestedName(url.lastPathComponent)) { limit in
+                        try Attachment.read(url, limit: limit)
+                    }
+                })
             case .failure(let error):
                 model.attachFailed(error)
-                return
-            }
-            model.attach(name: Attachment.suggestedName(url.lastPathComponent)) { limit in
-                try Attachment.read(url, limit: limit)
             }
         }
     }
@@ -317,7 +321,7 @@ private struct UploadChip: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "paperclip").font(.caption).foregroundStyle(.secondary)
-            Text(upload.name)
+            Text(upload.count > 1 ? "\(upload.name) (\(upload.index) of \(upload.count))" : upload.name)
                 .font(.caption)
                 .lineLimit(1)
                 .truncationMode(.middle)

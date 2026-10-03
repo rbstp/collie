@@ -1068,6 +1068,8 @@ mod tests {
             (Key::Enter, "enter"),
             (Key::Up, "up"),
             (Key::Down, "down"),
+            (Key::Left, "left"),
+            (Key::Right, "right"),
             (Key::Tab, "tab"),
             (Key::ShiftTab, "shift+tab"),
             (Key::CtrlC, "ctrl+c"),

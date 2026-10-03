@@ -121,6 +121,23 @@ func pathIsAppendedToTheDraftWithSpaces(draft: String, expected: String) {
     #expect(core.snapshot.uploads == ["notes.txt 1"])
 }
 
+@MainActor
+@Test func batchesUploadInOrderUpToTenPerPrompt() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    let items = (1...12).map { i in PendingAttachment(name: "f\(i).txt") { _ in i == 2 ? Data() : Data([1]) } }
+    await model.attach(items)?.value
+    #expect(core.snapshot.uploads == ["f1.txt 1"] + (3...10).map { "f\($0).txt 1" })
+    #expect(model.promptError == AttachmentError.tooMany(limit: 10).errorDescription)
+    #expect(model.attachmentSlots == 1)
+    #expect(model.upload == nil)
+    await model.attach(items.suffix(2))?.value
+    #expect(model.attachmentSlots == 0)
+    #expect(model.attach(items) == nil)
+    model.draft = ""
+    #expect(model.attachmentSlots == 10)
+}
+
 @Test func filesOverTheLimitAreRefusedBeforeReading() throws {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

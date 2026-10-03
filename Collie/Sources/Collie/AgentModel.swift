@@ -20,6 +20,7 @@ final class AgentModel {
     private(set) var promptError: String?
     private(set) var upload: AttachmentUpload?
     private var uploadTask: Task<Void, Never>?
+    private var attachedPaths: [String] = []
 
     private(set) var notice: String?
     private(set) var keyTaps = 0
@@ -98,43 +99,69 @@ final class AgentModel {
         }
     }
 
-    /// One upload at a time; `load` gets the size limit and runs off the main actor. On success the path
-    /// on the Mac is appended to the current draft.
+    /// Attachments still in the draft count against the per-prompt limit; each path is unique.
+    var attachmentSlots: Int {
+        Attachment.maxPerPrompt - attachedPaths.filter { draft.contains($0) }.count
+    }
+
     @discardableResult
     func attach(name: String, load: @escaping @Sendable (UInt64) async throws -> Data) -> Task<Void, Never>? {
-        guard upload == nil else { return nil }
-        let id = UUID()
+        attach([PendingAttachment(name: name, load: load)])
+    }
+
+    /// One batch at a time, uploaded in order; each path on the Mac is appended to the current draft.
+    /// A file that fails is reported and the rest still go.
+    @discardableResult
+    func attach(_ items: [PendingAttachment]) -> Task<Void, Never>? {
+        guard upload == nil, !items.isEmpty else { return nil }
+        attachedPaths.removeAll { !draft.contains($0) }
+        promptError = nil
+        let slots = max(attachmentSlots, 0)
+        var firstError: (any Error)? = items.count > slots ? AttachmentError.tooMany(limit: Attachment.maxPerPrompt) : nil
+        let batch = Array(items.prefix(slots))
+        guard !batch.isEmpty else {
+            promptError = firstError.map(Self.message(for:))
+            return nil
+        }
         let core = core
         let machineId = route.machineId
         let limit = core.maxAttachmentBytes()
-        upload = AttachmentUpload(id: id, name: name)
-        promptError = nil
+        let first = UUID()
+        upload = AttachmentUpload(id: first, name: batch[0].name, count: batch.count)
         let task = Task {
-            do {
-                let data = try await load(limit)
-                try Attachment.check(data, limit: limit)
-                try Task.checkCancellation()
-                if upload?.id == id { upload?.total = UInt64(data.count) }
-                let progress = UploadProgressRelay { [weak self] sent, total in
-                    Task { @MainActor in self?.uploaded(id, sent: sent, total: total) }
+            for (offset, item) in batch.enumerated() {
+                if Task.isCancelled { break }
+                let id = offset == 0 ? first : UUID()
+                upload = AttachmentUpload(id: id, name: item.name, index: offset + 1, count: batch.count)
+                do {
+                    let data = try await item.load(limit)
+                    try Attachment.check(data, limit: limit)
+                    try Task.checkCancellation()
+                    if upload?.id == id { upload?.total = UInt64(data.count) }
+                    let progress = UploadProgressRelay { [weak self] sent, total in
+                        Task { @MainActor in self?.uploaded(id, sent: sent, total: total) }
+                    }
+                    let path = try await core.uploadAttachment(machineId: machineId, name: item.name, data: data, progress: progress)
+                    try Task.checkCancellation()
+                    draft = Attachment.appending(path, to: draft)
+                    attachedPaths.append(path)
+                } catch {
+                    if Task.isCancelled || error is CancellationError { break }
+                    firstError = firstError ?? error
                 }
-                let path = try await core.uploadAttachment(machineId: machineId, name: name, data: data, progress: progress)
-                try Task.checkCancellation()
-                draft = Attachment.appending(path, to: draft)
-            } catch {
-                if !Task.isCancelled, !(error is CancellationError) { promptError = Self.message(for: error) }
             }
-            if upload?.id == id { upload = nil }
+            if !Task.isCancelled, let firstError { promptError = Self.message(for: firstError) }
+            if !Task.isCancelled { upload = nil }
         }
         uploadTask = task
         return task
     }
 
-    /// Swift task cancellation does not reach Rust, so the core is told to abort the upload on the Mac.
     func attachFailed(_ error: any Error) {
         promptError = Self.message(for: error)
     }
 
+    /// Swift task cancellation does not reach Rust, so the core is told to abort the upload on the Mac.
     func cancelUpload() {
         guard upload != nil else { return }
         core.cancelUploads(machineId: route.machineId)
@@ -266,7 +293,7 @@ struct CloseConfirmation: Equatable {
 }
 
 extension AgentKey {
-    static let strip: [AgentKey] = [.esc, .enter, .up, .down, .tab, .shiftTab, .ctrlC, .y, .n]
+    static let strip: [AgentKey] = [.esc, .enter, .left, .up, .down, .right, .tab, .shiftTab, .ctrlC]
 
     var symbol: String {
         switch self {
@@ -274,6 +301,8 @@ extension AgentKey {
         case .enter: "⏎"
         case .up: "↑"
         case .down: "↓"
+        case .left: "←"
+        case .right: "→"
         case .tab: "⇥"
         case .shiftTab: "⇧⇥"
         case .ctrlC: "^C"
@@ -288,6 +317,8 @@ extension AgentKey {
         case .enter: "Return"
         case .up: "Up arrow"
         case .down: "Down arrow"
+        case .left: "Left arrow"
+        case .right: "Right arrow"
         case .tab: "Tab"
         case .shiftTab: "Shift Tab"
         case .ctrlC: "Control C"

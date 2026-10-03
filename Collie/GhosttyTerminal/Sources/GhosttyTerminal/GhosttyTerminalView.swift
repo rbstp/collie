@@ -127,6 +127,30 @@ public final class GhosttyTerminalUIView: UIScrollView {
     }
 }
 
+/// MesloLGS NF, as the user's Ghostty uses: Nerd Font glyphs in prompts and status lines.
+/// Loaded from the package bundle once, without registering it for other apps.
+// CTFontDescriptor is immutable and documented thread-safe; CoreText does not mark it Sendable.
+struct TerminalFont: @unchecked Sendable {
+    let regular: CTFontDescriptor?
+    let bold: CTFontDescriptor?
+    let italic: CTFontDescriptor?
+    let boldItalic: CTFontDescriptor?
+
+    static let meslo = TerminalFont(
+        regular: load("MesloLGS-NF-Regular"),
+        bold: load("MesloLGS-NF-Bold"),
+        italic: load("MesloLGS-NF-Italic"),
+        boldItalic: load("MesloLGS-NF-BoldItalic")
+    )
+
+    private static func load(_ name: String) -> CTFontDescriptor? {
+        guard let url = Bundle.module.url(forResource: name, withExtension: "ttf", subdirectory: "Fonts"),
+            let data = try? Data(contentsOf: url)
+        else { return nil }
+        return CTFontManagerCreateFontDescriptorFromData(data as CFData)
+    }
+}
+
 struct CellMetrics {
     let regular: CTFont
     let bold: CTFont
@@ -143,10 +167,14 @@ struct CellMetrics {
         func slanted(_ font: UIFont) -> UIFont {
             font.fontDescriptor.withSymbolicTraits(.traitItalic).map { UIFont(descriptor: $0, size: size) } ?? font
         }
-        regular = base as CTFont
-        bold = heavy as CTFont
-        italic = slanted(base) as CTFont
-        boldItalic = slanted(heavy) as CTFont
+        let meslo = TerminalFont.meslo
+        func make(_ descriptor: CTFontDescriptor?, _ fallback: UIFont) -> CTFont {
+            descriptor.map { CTFontCreateWithFontDescriptor($0, size, nil) } ?? fallback as CTFont
+        }
+        regular = make(meslo.regular, base)
+        bold = make(meslo.bold, heavy)
+        italic = make(meslo.italic, slanted(base))
+        boldItalic = make(meslo.boldItalic, slanted(heavy))
         var glyph = CGGlyph()
         var advance = CGSize.zero
         var m: UniChar = 0x4D

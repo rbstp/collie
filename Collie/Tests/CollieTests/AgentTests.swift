@@ -188,8 +188,8 @@ private func agentModel(_ core: FakeCore) -> AgentModel {
 }
 
 @Test func keyStripIsTheAllowlistInOrder() {
-    #expect(AgentKey.strip == [.esc, .enter, .up, .down, .tab, .shiftTab, .ctrlC, .y, .n])
-    #expect(AgentKey.strip.map(\.symbol) == ["esc", "⏎", "↑", "↓", "⇥", "⇧⇥", "^C", "y", "n"])
+    #expect(AgentKey.strip == [.esc, .enter, .left, .up, .down, .right, .tab, .shiftTab, .ctrlC])
+    #expect(AgentKey.strip.map(\.symbol) == ["esc", "⏎", "←", "↑", "↓", "→", "⇥", "⇧⇥", "^C"])
     let names = AgentKey.strip.map(\.accessibilityName)
     #expect(Set(names).count == names.count)
     #expect(names.allSatisfy { !$0.isEmpty })

@@ -244,6 +244,8 @@
         "esc",
         "up",
         "down",
+        "left",
+        "right",
         "tab",
         "shift+tab",
         "ctrl+c",

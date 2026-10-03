@@ -2,9 +2,17 @@ import CollieCore
 import Foundation
 import UIKit
 
+struct PendingAttachment: Sendable {
+    let name: String
+    /// Gets the size limit; runs off the main actor.
+    let load: @Sendable (UInt64) async throws -> Data
+}
+
 struct AttachmentUpload: Equatable {
     let id: UUID
     let name: String
+    var index = 1
+    var count = 1
     var sent: UInt64 = 0
     var total: UInt64 = 0
 
@@ -13,6 +21,7 @@ struct AttachmentUpload: Equatable {
 
 enum AttachmentError: LocalizedError, Equatable {
     case tooLarge(limit: UInt64)
+    case tooMany(limit: Int)
     case empty
     case unreadablePhoto
 
@@ -20,6 +29,7 @@ enum AttachmentError: LocalizedError, Equatable {
         switch self {
         case .tooLarge(let limit):
             "Attachments are limited to \(ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .memory))."
+        case .tooMany(let limit): "Up to \(limit) attachments per prompt."
         case .empty: "The file is empty."
         case .unreadablePhoto: "The photo could not be read."
         }
@@ -29,6 +39,7 @@ enum AttachmentError: LocalizedError, Equatable {
 enum Attachment {
     /// Mirrors the protocol's MAX_ATTACHMENT_NAME_CHARS; the Mac sanitizes the name again.
     static let maxNameChars = 64
+    static let maxPerPrompt = 10
     static let photoMaxSide: CGFloat = 2048
     static let photoQuality: CGFloat = 0.85
 
@@ -38,13 +49,14 @@ enum Attachment {
         return draft + separator + path + " "
     }
 
-    static func photoName(at date: Date, timeZone: TimeZone = .current) -> String {
+    static func photoName(at date: Date, index: Int = 1, timeZone: TimeZone = .current) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.timeZone = timeZone
         formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return "photo-\(formatter.string(from: date)).jpg"
+        let suffix = index > 1 ? "-\(index)" : ""
+        return "photo-\(formatter.string(from: date))\(suffix).jpg"
     }
 
     /// Counts Unicode scalars like Rust's `chars()`, keeping the extension when it has to cut.
