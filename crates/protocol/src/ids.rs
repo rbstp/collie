@@ -116,6 +116,36 @@ fn is_format(c: char) -> bool {
     )
 }
 
+fn lower_hex(s: &str, len: usize) -> bool {
+    s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Standard alphabet with padding, decoding to 1..=`max_bytes` bytes.
+fn base64_padded(s: &str, max_bytes: usize) -> bool {
+    let b = s.as_bytes();
+    let body = b
+        .strip_suffix(b"==")
+        .or_else(|| b.strip_suffix(b"="))
+        .unwrap_or(b);
+    !b.is_empty()
+        && b.len().is_multiple_of(4)
+        && b.len() / 4 * 3 - (b.len() - body.len()) <= max_bytes
+        && body
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || *c == b'+' || *c == b'/')
+}
+
+fn attachment_name(s: &str) -> bool {
+    let n = s.chars().count();
+    (1..=limits::MAX_ATTACHMENT_NAME_CHARS).contains(&n)
+        && !s
+            .chars()
+            .any(|c| c.is_control() || is_format(c) || c == '/' || c == '\\')
+        && s.trim() == s
+        && s != "."
+        && s != ".."
+}
+
 fn label(s: &str) -> bool {
     let n = s.chars().count();
     (1..=limits::MAX_LABEL_CHARS).contains(&n)
@@ -173,6 +203,15 @@ validated_string!(
 );
 
 validated_string!(
+    /// 32 random bytes, base64url without padding (canonical: the last character
+    /// carries 4 bits): the phone's key for one Mac's encrypted alert context.
+    NotificationKey,
+    debug = redacted,
+    check = |s| base64url_len(s, 43) && b"AEIMQUYcgkosw048".contains(&s.as_bytes()[42]),
+    schema = { "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$" }
+);
+
+validated_string!(
     /// 16 random bytes, base64url without padding. Lets collied replay the stored
     /// outcome instead of re-running a mutation the client retried after a drop.
     OpId,
@@ -221,6 +260,37 @@ validated_string!(
     schema = { "minLength": 1, "maxLength": 32768 }
 );
 
+validated_string!(
+    /// 16 random bytes, lowercase hex. Bound to the session that began the upload.
+    UploadId,
+    debug = plain,
+    check = |s| lower_hex(s, 32),
+    schema = { "pattern": "^[0-9a-f]{32}$" }
+);
+
+validated_string!(
+    Sha256Hex,
+    debug = plain,
+    check = |s| lower_hex(s, 64),
+    schema = { "pattern": "^[0-9a-f]{64}$" }
+);
+
+validated_string!(
+    /// The phone's suggested file name. Only a hint: collied sanitizes it again.
+    AttachmentName,
+    debug = plain,
+    check = attachment_name,
+    schema = { "minLength": 1, "maxLength": 64 }
+);
+
+validated_string!(
+    /// File content, base64 (standard, padded).
+    ChunkData,
+    debug = redacted,
+    check = |s| base64_padded(s, limits::MAX_ATTACHMENT_CHUNK_BYTES),
+    schema = { "pattern": "^[A-Za-z0-9+/]*={0,2}$", "minLength": 4, "maxLength": 43692 }
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +310,8 @@ mod tests {
         assert_eq!(format!("{nonce:?}"), "Nonce(<redacted>)");
         let code = PairingCode::new("B".repeat(22)).unwrap();
         assert!(!format!("{code:?}").contains('B'));
+        let key = NotificationKey::new(format!("{}A", "C".repeat(42))).unwrap();
+        assert_eq!(format!("{key:?}"), "NotificationKey(<redacted>)");
     }
 
     #[test]
@@ -258,8 +330,65 @@ mod tests {
     }
 
     #[test]
+    fn attachment_names() {
+        assert!(AttachmentName::new("photo-20261003-101500.jpg").is_ok());
+        assert!(AttachmentName::new("Rapport final.pdf").is_ok());
+        assert!(AttachmentName::new(".env").is_ok());
+        for bad in [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "a\0b",
+            "a\nb",
+            " x",
+            "evil\u{202E}gpj.exe",
+            "x\u{200B}y",
+        ] {
+            assert!(AttachmentName::new(bad).is_err(), "{bad:?}");
+        }
+        let max = "a".repeat(limits::MAX_ATTACHMENT_NAME_CHARS);
+        assert!(AttachmentName::new(max.clone()).is_ok());
+        assert!(AttachmentName::new(max + "a").is_err());
+    }
+
+    #[test]
+    fn upload_ids_and_digests_are_lowercase_hex() {
+        assert!(UploadId::new("0123456789abcdef0123456789abcdef").is_ok());
+        assert!(UploadId::new("0123456789ABCDEF0123456789abcdef").is_err());
+        assert!(UploadId::new("0123456789abcdef").is_err());
+        assert!(
+            Sha256Hex::new("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+                .is_ok()
+        );
+        assert!(Sha256Hex::new("g".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn chunk_data_is_bounded_padded_base64() {
+        assert!(ChunkData::new("AA==").is_ok());
+        assert!(ChunkData::new("AAA=").is_ok());
+        assert!(ChunkData::new("AAAA").is_ok());
+        assert!(ChunkData::new("").is_err());
+        assert!(ChunkData::new("AA").is_err());
+        assert!(ChunkData::new("A===").is_err());
+        assert!(ChunkData::new("AA-_").is_err());
+        assert!(ChunkData::new("A=AA").is_err());
+        let full = "A".repeat(43691) + "=";
+        assert!(ChunkData::new(full).is_ok(), "32768 bytes");
+        assert!(ChunkData::new("A".repeat(43692)).is_err(), "32769 bytes");
+        let data = ChunkData::new("c2VjcmV0").unwrap();
+        assert_eq!(format!("{data:?}"), "ChunkData(<redacted>)");
+    }
+
+    #[test]
     fn deserialization_validates() {
         assert!(serde_json::from_str::<Nonce>("\"short\"").is_err());
         assert!(serde_json::from_str::<PushToken>(&format!("\"{}\"", "ab".repeat(32))).is_ok());
+        assert!(NotificationKey::new("A".repeat(43)).is_ok());
+        assert!(NotificationKey::new("A".repeat(42)).is_err());
+        assert!(NotificationKey::new(format!("{}B", "A".repeat(42))).is_err());
+        assert!(NotificationKey::new(format!("{}=", "A".repeat(42))).is_err());
     }
 }

@@ -2,7 +2,13 @@ import CollieCore
 import Foundation
 import Observation
 import SwiftUI
+import UIKit
+import UserNotifications
 import os
+
+enum AppTab: Hashable {
+    case agents, approvals, machines, settings
+}
 
 @MainActor
 @Observable
@@ -14,6 +20,10 @@ final class AppModel {
     private(set) var signInError: String?
     private(set) var machines: [Machine] = []
     private(set) var signingIn = false
+    private(set) var pushStatus = "not registered"
+    private var pushToken: Data?
+    let approvals: ApprovalsModel
+    var tab = AppTab.agents
     private var backgroundedAt: Date?
 
     private let log = Logger(subsystem: "dev.rbstp.collie", category: "app")
@@ -25,10 +35,29 @@ final class AppModel {
             core = nil
             startupError = describe(error)
         }
+        approvals = ApprovalsModel(core: core)
         machines = core?.machines() ?? []
+        if let core, let group = AppGroup.container {
+            do {
+                try core.setAppGroupDir(path: group.path)
+            } catch {
+                log.error("app group: \(describe(error), privacy: .public)")
+            }
+        }
     }
 
     var isRunning: Bool { node?.backendState == .running }
+
+    /// A phone that joined the tailnet before goes straight to the tabs while its node starts;
+    /// onboarding only comes back when Tailscale asks for a sign-in again.
+    var showsMain: Bool {
+        if isRunning { return true }
+        guard core?.tailnetConfigured() == true else { return false }
+        switch node?.backendState {
+        case .needsLogin, .needsMachineAuth: return false
+        default: return true
+        }
+    }
 
     func launch() async {
         guard let core else { return }
@@ -105,7 +134,17 @@ final class AppModel {
 
     func removeMachine(_ machine: Machine) throws {
         try core?.removeMachine(id: machine.id)
+        if !(core?.machines() ?? []).contains(where: { $0.nodeId == machine.nodeId }) {
+            NotificationKey.delete(nodeId: machine.nodeId)
+        }
         reloadMachines()
+    }
+
+    /// A pairing or re-pairing rotates that Mac's notification key.
+    func machinePaired(_ machine: Machine) {
+        NotificationKey.delete(nodeId: machine.nodeId)
+        reloadMachines()
+        if let pushToken { registerPush(token: pushToken) }
     }
 
     func scenePhaseChanged(to phase: ScenePhase) {
@@ -122,6 +161,84 @@ final class AppModel {
         }
     }
 
+    /// Asks once, after onboarding; later launches only refresh the APNs token.
+    func enableNotifications() async {
+        let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+        if granted {
+            UIApplication.shared.registerForRemoteNotifications()
+        } else {
+            pushStatus = "notifications are off for collie"
+        }
+    }
+
+    /// One notification key per Mac, keyed by its node id: the NSE only sees `node_id` in the alert.
+    func registerPush(token: Data) {
+        pushToken = token
+        guard let core else { return }
+        let environment = PushEnvironment.current
+        let hex = token.map { String(format: "%02x", $0) }.joined()
+        var failure: (any Error)?
+        for machine in core.machines() {
+            do {
+                let key = try NotificationKey.loadOrCreate(nodeId: machine.nodeId)
+                try core.registerPush(
+                    machineId: machine.id, apnsTokenHex: hex, environment: environment,
+                    notificationKey: key.withUnsafeBytes { Data($0) }
+                )
+            } catch {
+                failure = failure ?? error
+            }
+        }
+        if let failure {
+            pushStatus = describe(failure)
+        } else {
+            pushStatus = environment == .production ? "registered" : "registered (sandbox)"
+        }
+    }
+
+    func pushRegistrationFailed(_ error: any Error) {
+        pushStatus = describe(error)
+    }
+
+    func open(_ link: ApprovalLink) {
+        tab = .approvals
+        approvals.open(link)
+    }
+
+    /// Lock-screen Approve/Deny. iOS has already required the device owner to unlock
+    /// (the actions are `authenticationRequired`); the app may have been launched in the
+    /// background for this alone.
+    func decideFromNotification(_ link: ApprovalLink, _ decision: ApprovalDecision, agent: String, thread: String) async {
+        let assertion = BackgroundAssertion(name: "approval.decide")
+        defer { assertion.end() }
+        let followUp: FollowUp
+        if let core {
+            let report = await core.decideFromNotification(
+                machineNodeId: link.nodeId, approvalId: link.approvalId, decision: decision, budgetMs: 20_000
+            )
+            log.notice(
+                "lock-screen decide: outcome=\(String(describing: report.outcome), privacy: .public) nodeWasRunning=\(report.nodeWasRunning, privacy: .public) nodeUp=\(report.nodeUpMs.map(String.init) ?? "-", privacy: .public)ms connect=\(report.connectMs.map(String.init) ?? "-", privacy: .public)ms lookup=\(report.lookupMs.map(String.init) ?? "-", privacy: .public)ms decide=\(report.decideMs.map(String.init) ?? "-", privacy: .public)ms total=\(report.totalMs, privacy: .public)ms"
+            )
+            followUp = FollowUp.after(report.outcome, decision: decision, agent: agent)
+        } else {
+            followUp = FollowUp(title: agent, body: FollowUp.unreachable, opensApproval: true)
+        }
+        let content = UNMutableNotificationContent()
+        content.title = followUp.title
+        content.body = followUp.body
+        content.threadIdentifier = thread
+        if followUp.opensApproval {
+            content.userInfo = link.userInfo
+            content.sound = .default
+        }
+        let request = UNNotificationRequest(identifier: "followup-\(link.approvalId)", content: content, trigger: nil)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+        } catch {
+            log.error("follow-up notification: \(describe(error), privacy: .public)")
+        }
+    }
+
     private func logColdStart() async {
         for _ in 0..<40 {
             if let report = core?.coldStartReport() {
@@ -132,6 +249,21 @@ final class AppModel {
             }
             try? await Task.sleep(for: .milliseconds(500))
         }
+    }
+}
+
+@MainActor
+private final class BackgroundAssertion {
+    private var id = UIBackgroundTaskIdentifier.invalid
+
+    init(name: String) {
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in self?.end() }
+    }
+
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
     }
 }
 

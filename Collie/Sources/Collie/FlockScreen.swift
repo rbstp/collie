@@ -2,7 +2,9 @@ import CollieCore
 import SwiftUI
 
 struct FlockScreen: View {
-    let app: AppModel
+    let core: (any FlockCore)?
+    let machines: [Machine]
+    let approvals: ApprovalsModel?
     @State private var model = FlockModel()
     @State private var path: [AgentRoute] = []
     @State private var newTask = false
@@ -10,6 +12,11 @@ struct FlockScreen: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
+                if let notice = model.closeNotice {
+                    Label(notice, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
                 if model.entries.isEmpty {
                     ContentUnavailableView(
                         "No machines yet",
@@ -28,8 +35,17 @@ struct FlockScreen: View {
                             Text("No agents running").foregroundStyle(.secondary)
                         }
                         ForEach(entry.agents, id: \.terminalId) { agent in
-                            NavigationLink(value: AgentRoute(machineId: entry.id, terminalId: agent.terminalId)) {
+                            let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
+                            NavigationLink(value: route) {
                                 AgentRow(agent: agent, workspace: entry.workspaceLabel(for: agent))
+                            }
+                            .contextMenu {
+                                Button("Close pane", systemImage: "xmark.square", role: .destructive) {
+                                    model.beginClose(.pane, route: route)
+                                }
+                                Button("Close workspace", systemImage: "xmark.rectangle.portrait", role: .destructive) {
+                                    model.beginClose(.workspace(id: agent.workspaceId), route: route)
+                                }
                             }
                         }
                     } header: {
@@ -39,24 +55,29 @@ struct FlockScreen: View {
             }
             .navigationTitle("Agents")
             .navigationBarTitleDisplayMode(.inline)
-            .refreshable { await model.refresh(core: app.core) }
+            .refreshable { await model.refresh(core: core) }
             .toolbar {
                 Button("New task", systemImage: "plus") { newTask = true }
-                    .disabled(app.core == nil || app.machines.isEmpty)
+                    .disabled(core == nil || machines.isEmpty)
+            }
+            .closeConfirmation($model.close) {
+                if let core, await model.performClose(core: core) {
+                    await model.refresh(core: core)
+                }
             }
             .navigationDestination(for: AgentRoute.self) { route in
-                if let core = app.core {
-                    AgentScreen(core: core, route: route)
+                if let core {
+                    AgentScreen(core: core, route: route, approvals: approvals)
                 }
             }
             .sheet(isPresented: $newTask) {
-                if let core = app.core {
-                    NewTaskSheet(core: core, machines: app.machines) { path.append($0) }
+                if let core {
+                    NewTaskSheet(core: core, machines: machines) { path.append($0) }
                 }
             }
             .task {
                 while !Task.isCancelled {
-                    await model.refresh(core: app.core)
+                    await model.refresh(core: core)
                     try? await Task.sleep(for: .seconds(3))
                 }
             }

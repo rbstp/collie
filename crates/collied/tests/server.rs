@@ -21,8 +21,9 @@ use zeroize::Zeroizing;
 
 const KNOBS: [(&str, &str); 1] = [("TS_DISABLE_PORTMAPPER", "1")];
 const PORT: u16 = 8457;
+const NOTIFY_KEY: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
 const WATCHDOG: Duration = Duration::from_secs(300);
-const HERDR_CALLED: [&str; 7] = [
+const HERDR_CALLED: [&str; 9] = [
     "ping",
     "session.snapshot",
     "agent.list",
@@ -30,6 +31,8 @@ const HERDR_CALLED: [&str; 7] = [
     "agent.read",
     "agent.focus",
     "agent.get",
+    "agent.explain",
+    "pane.read",
 ];
 
 type Ws = WebSocketStream<UnixStream>;
@@ -60,7 +63,7 @@ fn server_end_to_end() {
         std::process::exit(101);
     });
 
-    let auth_key = format!("tskey-auth-colliedit{}", std::process::id());
+    let auth_key = format!("test-authkey-colliedit{}", std::process::id());
     let control = TestControl::start(&auth_key);
     let root = TempDir(
         PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
@@ -124,6 +127,8 @@ async fn scenario(
             owner_user_id: None,
             herdr_session: "default".into(),
             machine_name: "it-mac".into(),
+            approval_ttl: collied::approvals::TTL,
+            attachments_dir: data_dir.join("attachments"),
         },
         herdr_socket,
     )
@@ -290,6 +295,11 @@ async fn scenario(
     drop(cli);
 
     println!("full session");
+    // The first reconcile, about a second after start, creates the blocked agent's approval.
+    while !herdr.methods().iter().any(|m| m == "pane.read") {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
     let mut ws = open(&phone, &target).await;
     send(&mut ws, hello_frame(protocol::PROTOCOL_VERSION)).await;
     let Response::Hello(hello) = result(recv(&mut ws).await) else {
@@ -308,6 +318,11 @@ async fn scenario(
     assert_eq!(flock.seq, 0);
     assert_eq!(flock.agents.len(), 2);
     assert_eq!(flock.workspaces.len(), 2);
+    assert_eq!(
+        flock.approvals.len(),
+        1,
+        "the blocked agent has an approval"
+    );
     assert_eq!(flock.machine.node_id, mac_self.stable_id);
     send(
         &mut ws,
@@ -329,7 +344,23 @@ async fn scenario(
         json!({"id": 50, "method": "approval.list", "params": {}}),
     )
     .await;
-    assert_error(&recv(&mut ws).await, ErrorCode::NotImplemented);
+    let Response::Approvals { approvals } = result(recv(&mut ws).await) else {
+        panic!("no approvals");
+    };
+    assert_eq!(approvals, flock.approvals);
+    let approval = &approvals[0];
+    assert_eq!(approval.terminal_id.as_str(), "term_0a1b2c3d4e5f60");
+    assert!(approval.options.is_empty(), "no mapping for this agent");
+    assert_eq!(approval.snippet, "Allow command?\nrm -rf build");
+    send(
+        &mut ws,
+        json!({"id": 56, "method": "push.register", "params": {
+            "apns_token": "ab".repeat(32), "environment": "sandbox",
+            "notification_key": NOTIFY_KEY}}),
+    )
+    .await;
+    assert_eq!(result(recv(&mut ws).await), Response::Ok);
+    assert_eq!(mode(&data_dir.join("push.json")), 0o600);
 
     println!("drive refusals go through the op cache and the task runner");
     let blocked = json!({"id": 53, "method": "agent.prompt", "params": {
@@ -499,9 +530,14 @@ async fn scenario(
         "\"result\":\"hello_required\"",
         "\"result\":\"unsupported_protocol\"",
         "\"result\":\"not_paired\"",
+        "\"method\":\"push.register\"",
     ] {
         assert!(audit.contains(needle), "audit log lacks {needle}:\n{audit}");
     }
+    assert!(
+        !audit.contains(NOTIFY_KEY),
+        "notification key in the audit log"
+    );
     for line in audit.lines() {
         let entry: Value = serde_json::from_str(line).unwrap();
         assert!(
@@ -712,6 +748,15 @@ impl MockHerdr {
                             .iter()
                             .find(|a| a["pane_id"] == req["params"]["target"])
                             .unwrap()}),
+                        "agent.explain" => json!({"type": "agent_explain", "explain": {
+                            "agent": "codex", "state": "blocked",
+                            "matched_rule": {"id": "live_strong_blocker"},
+                        }}),
+                        "pane.read" => json!({"type": "pane_read", "read": {
+                            "pane_id": req["params"]["pane_id"], "workspace_id": "w7", "tab_id": "w7:t1",
+                            "source": "detection", "format": "text", "revision": 0, "truncated": false,
+                            "text": "› run it\n────────\nAllow command?\nrm -rf build\n",
+                        }}),
                         "agent.read" => json!({"type": "pane_read", "read": {
                             "pane_id": req["params"]["target"], "workspace_id": "w6", "tab_id": "w6:t1",
                             "source": "recent", "format": "ansi", "revision": 0, "truncated": false,

@@ -59,18 +59,62 @@ impl Default for TasksConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApnsKey {
+    Keychain,
+    /// Legacy: the `.p8` file named by `key_path`.
+    File(PathBuf),
+}
+
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawApnsConfig")]
 pub struct ApnsConfig {
-    pub key_path: PathBuf,
+    pub key: ApnsKey,
     pub key_id: String,
     pub team_id: String,
     pub bundle_id: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum KeyStore {
+    Keychain,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawApnsConfig {
+    key: Option<KeyStore>,
+    key_path: Option<PathBuf>,
+    key_id: String,
+    team_id: String,
+    bundle_id: String,
+}
+
+impl TryFrom<RawApnsConfig> for ApnsConfig {
+    type Error = &'static str;
+
+    fn try_from(r: RawApnsConfig) -> Result<Self, Self::Error> {
+        let key = match (r.key, r.key_path) {
+            (Some(KeyStore::Keychain), Some(_)) => {
+                return Err("set either key = \"keychain\" or key_path, not both");
+            }
+            (_, Some(path)) => ApnsKey::File(path),
+            (_, None) => ApnsKey::Keychain,
+        };
+        Ok(Self {
+            key,
+            key_id: r.key_id,
+            team_id: r.team_id,
+            bundle_id: r.bundle_id,
+        })
+    }
+}
+
 pub const CONFIG_FILE: &str = "collied.toml";
 pub const TSNET_DIR: &str = "tsnet";
 pub const PEERS_FILE: &str = "peers.json";
+pub const PUSH_FILE: &str = "push.json";
 pub const NODE_LOCK: &str = "node.lock";
 pub const PEERS_LOCK: &str = "peers.lock";
 pub const AUDIT_FILE: &str = "audit.log";
@@ -84,6 +128,11 @@ pub fn home_dir() -> Result<PathBuf> {
 
 pub fn data_dir() -> Result<PathBuf> {
     Ok(home_dir()?.join("Library/Application Support/collie"))
+}
+
+/// No spaces in the path, so an agent reads it back cleanly from a prompt.
+pub fn attachments_dir() -> Result<PathBuf> {
+    Ok(home_dir()?.join("Library/Caches/dev.rbstp.collied/attachments"))
 }
 
 pub fn parse(text: &str) -> Result<Config, toml::de::Error> {
@@ -104,6 +153,64 @@ pub fn load(path: &Path, explicit: bool) -> Result<Option<Config>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => Ok(None),
         Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
     }
+}
+
+/// `text` with the `[apns]` `key_path` line replaced by `key = "keychain"`, or None
+/// unless there is exactly one such line and the result parses to the same `[apns]` with
+/// the key in the Keychain.
+pub fn use_keychain(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut table = "";
+    let mut hits = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            table = t.split('#').next().unwrap_or_default().trim();
+        } else if table == "[apns]"
+            && t.strip_prefix("key_path")
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+        {
+            hits.push(i);
+        }
+    }
+    let [i] = hits[..] else { return None };
+    let line = lines[i];
+    let indent = &line[..line.len() - line.trim_start().len()];
+    let eol = &line[line.trim_end().len()..];
+    let replaced = format!("{indent}key = \"keychain\"{eol}");
+    let out: String = lines
+        .iter()
+        .enumerate()
+        .map(|(j, l)| if j == i { replaced.as_str() } else { l })
+        .collect();
+    let before = parse(text).ok()?.apns?;
+    let after = parse(&out).ok()?.apns?;
+    (after.key == ApnsKey::Keychain
+        && after.key_id == before.key_id
+        && after.team_id == before.team_id
+        && after.bundle_id == before.bundle_id)
+        .then_some(out)
+}
+
+/// Atomic replace keeping the file's mode; refuses a symlink.
+pub fn rewrite(path: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let meta = std::fs::symlink_metadata(path)?;
+    anyhow::ensure!(meta.is_file(), "{} is not a regular file", path.display());
+    let tmp = path.with_extension("toml.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    file.write_all(text.as_bytes())?;
+    file.set_permissions(std::fs::Permissions::from_mode(
+        meta.permissions().mode() & 0o777,
+    ))?;
+    file.sync_all()?;
+    std::fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))
 }
 
 impl TailnetConfig {
@@ -193,7 +300,7 @@ mod tests {
         assert_eq!(c.tailnet.owner_user_id, Some(123456789012));
         assert_eq!(c.tasks.agents.len(), 2);
         assert_eq!(c.tasks.roots, Some(vec![PathBuf::from("/Users/me/src")]));
-        assert_eq!(c.apns.unwrap().key_path, PathBuf::from("/k.p8"));
+        assert_eq!(c.apns.unwrap().key, ApnsKey::File(PathBuf::from("/k.p8")));
     }
 
     #[test]
@@ -215,6 +322,75 @@ mod tests {
     #[test]
     fn rejects_incomplete_apns() {
         assert!(parse("[apns]\nkey_path = \"/k\"").is_err());
+    }
+
+    const IDS: &str =
+        "key_id = \"6Y7FRZ845U\"\nteam_id = \"RM3UT3MMSR\"\nbundle_id = \"dev.rbstp.collie\"\n";
+
+    #[test]
+    fn apns_key_modes() {
+        let key =
+            |extra: &str| parse(&format!("[apns]\n{extra}{IDS}")).map(|c| c.apns.unwrap().key);
+        assert_eq!(key("").unwrap(), ApnsKey::Keychain);
+        assert_eq!(key("key = \"keychain\"\n").unwrap(), ApnsKey::Keychain);
+        assert_eq!(
+            key("key_path = \"/k.p8\"\n").unwrap(),
+            ApnsKey::File(PathBuf::from("/k.p8"))
+        );
+        let both = key("key = \"keychain\"\nkey_path = \"/k.p8\"\n").unwrap_err();
+        assert!(both.message().contains("not both"), "{both}");
+        assert!(key("key = \"file\"\n").is_err());
+        assert!(key("key = \"/k.p8\"\n").is_err());
+    }
+
+    #[test]
+    fn switches_to_keychain() {
+        let text = format!(
+            "# mine\n[tailnet]\nport = 9000\n\n[apns]\n  key_path = \"/k.p8\" # old\r\n{IDS}"
+        );
+        let out = use_keychain(&text).unwrap();
+        assert_eq!(
+            out,
+            format!("# mine\n[tailnet]\nport = 9000\n\n[apns]\n  key = \"keychain\"\r\n{IDS}")
+        );
+        let c = parse(&out).unwrap();
+        assert_eq!(c.tailnet.port, 9000);
+        assert_eq!(c.apns.unwrap().key, ApnsKey::Keychain);
+
+        assert_eq!(
+            use_keychain(&format!("[apns]\n{IDS}")),
+            None,
+            "already keychain"
+        );
+        assert_eq!(
+            use_keychain(&format!("[other]\nkey_path = 1\n[apns]\n{IDS}")),
+            None
+        );
+        assert_eq!(
+            use_keychain(
+                "apns = { key_path = \"/k\", key_id = \"6Y7FRZ845U\", team_id = \"RM3UT3MMSR\", bundle_id = \"b\" }\n"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn rewrite_keeps_mode_and_refuses_links() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("collied.toml");
+        std::fs::write(&path, "a").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        rewrite(&path, "b").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "b");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        let link = dir.path().join("link.toml");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert!(rewrite(&link, "c").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "b");
     }
 
     #[test]

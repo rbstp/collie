@@ -11,16 +11,18 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 | Phone node keys | app container `Application Support/collie/tsnet` (0700, `completeUntilFirstUserAuthentication`), not excluded from backups yet |
 | Pairings (`StableID` list) and the owner user ID | `peers.json` in collied's data dir (0600); optional `owner_user_id` in `collied.toml` |
 | Pairing code | the QR and the invite URI that `collied pair` prints as text in the terminal; 16 random bytes, one window at a time, 120 s, burned by the first attempt, redacted in `Debug` |
-| Approval nonces | collied memory and the phone session; 32 random bytes, single use |
-| APNs `.p8` key | file named in `collied.toml` (0600) |
+| Approval nonces | collied memory and the phone session (collie-core only, never handed to Swift); 32 random bytes, single use |
+| APNs `.p8` key | login Keychain item `dev.rbstp.collied.apns`/`<key ID>`, ACL trusting only the Developer ID signed collied (legacy: 0600 file named by `key_path`); a backup in the user's password manager |
+| Notification keys (32 bytes, one per paired Mac) | iOS Keychain (`dev.rbstp.collie.notify`/`<Mac node ID>`, `AfterFirstUnlockThisDeviceOnly`, shared with ColliePush); collied's `push.json` (0600) next to the device token; collie-core memory. Never logged, audited or written elsewhere; redacted in `Debug` |
 | Terminal content, agent and workspace names | herdr, the tailnet session, the phone |
+| Attachments (photos and files sent from the phone) | the phone; collied's attachments dir (`~/Library/Caches/dev.rbstp.collied/attachments`, 0700 dirs, 0600 files) for up to 24 h; the tailnet session |
 
 ## Trust boundaries
 
 - **Tailnet to collied.** The only network entry point is the tsnet listener on TCP 8457. Every connection passes the whois gate (untagged, not shared in, owned by the owner once one is known, paired `StableID` with its paired user) before the WebSocket upgrade, then a fail-closed method allowlist (`parse_client_frame`: unknown methods rejected before params are decoded, unknown fields denied, herdr privileged methods unreachable).
 - **collied to herdr.** Same UID. Nothing on the Mac running as the user is a boundary.
 - **Tailscale control plane.** Trusted for node identity: whois and the phone's netmap check both come from it.
-- **Apple.** APNs sees what collied pushes.
+- **Apple.** APNs sees what collied pushes: labels and ids in clear, the pending action only as ciphertext.
 
 ## Status legend
 
@@ -36,9 +38,9 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 |---|---|
 | Assets | Paired session (read and, once drive methods exist, control of agents); phone node keys |
 | Attack | Thief opens the unlocked app, or unlocks the phone, and drives agents or answers approvals. |
-| Mitigations | iOS passcode and data protection on the node state (built). Revocation: `collied peers revoke` plus removing the node in the admin console (P1, [tailnet.md](tailnet.md#revocation)). Phone node key expiry (Tailscale default 180 days) bounds a forgotten revocation. Destructive calls need `confirm: true` (field built in the protocol, enforcement design). Every frame is rate limited per paired `StableID` (20/s, burst 40) and every method other than `hello`, `flock.snapshot` and `workspace.list` is written to the audit log (P1). Approval-specific limits and audit (design). |
-| Residual | Until revoked, an unlocked phone has full collie access. No app-level biometric gate exists or is designed. Lock-screen approve/deny would widen this; its authentication is undesigned. |
-| Phase | Revocation P1. Lock-screen approval authentication: Phase 3 spike. App-level biometric gate: not planned. |
+| Mitigations | iOS passcode and data protection on the node state (built). Revocation: `collied peers revoke` plus removing the node in the admin console (P1, [tailnet.md](tailnet.md#revocation)). Phone node key expiry (Tailscale default 180 days) bounds a forgotten revocation. Destructive calls need `confirm: true` (field built in the protocol, enforcement design). Every frame is rate limited per paired `StableID` (20/s, burst 40) and every method other than `hello`, `flock.snapshot` and `workspace.list` is written to the audit log (P1). Approvals: in-app decisions need LocalAuthentication (`deviceOwnerAuthentication`, fresh context per decision), lock-screen actions need an iOS unlock (`authenticationRequired`), `approval.decide` is limited to 1/s, burst 5, per `StableID`, and every attempt is audited (built). |
+| Residual | Until revoked, an unlocked phone drives agents (prompts, keys, new tasks, closes) without any per-action check; only approval decisions ask for Face ID or the passcode. A thief who knows the passcode passes both approval gates. |
+| Phase | Revocation P1. Approval authentication built. App-level gate for the other drive methods: not planned. |
 
 ### Leaked pairing QR
 
@@ -56,9 +58,9 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 |---|---|
 | Assets | Everything on the Mac; the phone's view of agents and approvals |
 | Attack | herdr plugins are unsandboxed code running as the user with the full herdr CLI. A plugin can drive every pane directly, read collied's data dir (node keys, `peers.json`, `.p8`), drive collied's control socket, and write pane text that collied turns into approval snippets to mislead the phone. |
-| Mitigations | None against the Mac side: same UID is out of scope for file modes. Snippets are capped at 200 chars with controls stripped (design), so a plugin cannot inject escapes into the phone UI through them. Approval decisions only send keystrokes from collied's fixed per-rule keystroke map, never text from the pane (design). |
-| Residual | Full Mac compromise. A plugin can show the phone fake but well-formed approvals. It also controls the gate's inputs: it can rewrite `collied.toml` and `peers.json` (owner and paired `StableID`s), answer y/N over the control socket, and run the Mac node keys elsewhere. Other users' devices are then kept out only by the tailnet policy, whose `src` names the owner alone and which only the admin account can change. |
-| Phase | APNs key moved to a Keychain item bound to collied's signing identity: Phase 3. Otherwise not planned (install only trusted plugins). |
+| Mitigations | None against the Mac side: same UID is out of scope for file modes. Snippets are capped at 200 chars with controls, bidi and format characters stripped (built), so a plugin cannot inject escapes into the phone UI through them. Approval decisions only send `up`, `down`, `enter` or `esc`, never text from the pane (built). |
+| Residual | Full Mac compromise. A plugin can draw a fake but well-formed Claude Code menu in a pane and so show the phone a fake approval. It also controls the gate's inputs: it can rewrite `collied.toml` and `peers.json` (owner and paired `StableID`s), answer y/N over the control socket, and run the Mac node keys elsewhere. Other users' devices are then kept out only by the tailnet policy, whose `src` names the owner alone and which only the admin account can change. |
+| Phase | Built as far as it goes (see same-UID malware for the Keychain item's limits). Otherwise not planned (install only trusted plugins). |
 
 ### Compromised Tailscale coordination plane
 
@@ -76,9 +78,9 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 |---|---|
 | Assets | Approval decisions |
 | Attack | An old push (or a captured approval decision) is replayed to approve something again or something else. |
-| Mitigations | The push payload never carries the nonce; it is a hint, and the approval is fetched and decided over the tailnet session (design). Nonce: 32 random bytes, single use, constant-time compare, expires after 10 minutes; every attempt, including replays and expired ones, is audited (design). Decisions are bound to a fingerprint and fail as `superseded` if the prompt changed (design). The `Nonce` type rejects malformed values and is redacted in `Debug` (built). |
-| Residual | A replayed push can show a stale notification; tapping it shows the current approvals only. |
-| Phase | Phase 3 (approvals and APNs) |
+| Mitigations | The push payload never carries the nonce, only `approval_id` and `node_id` as lookup keys (built). A lock-screen action fetches the nonce over the tailnet (`approval.list`) from the pinned, paired Mac and decides there; the app validates both keys and trusts nothing else in the payload (built). Nonce: 32 random bytes, constant-time compare, burned by the first attempt past the rate limit, whatever its result, `approval_ttl` 10 minutes; a burned id answers `approval_already_resolved` (built). Every attempt, including replays and expired ones, is audited (built). Decisions are bound to a fingerprint and fail as `superseded` if the prompt changed (built). APNs `apns-expiration` is the approval's expiry, and the `terminal_id` collapse id makes a reissued alert replace the dead one (built). The `Nonce` type rejects malformed values and is redacted in `Debug` (built). |
+| Residual | A replayed or stale push shows a notification whose `approval_id` no longer resolves: acting on it answers "no longer pending, nothing was sent". A fresh alert for the same terminal can follow each reissue while the agent stays blocked. |
+| Phase | Built |
 
 ### Leaked APNs key
 
@@ -86,9 +88,9 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 |---|---|
 | Assets | `.p8` key (team wide), device tokens |
 | Attack | With the key and a device token, an attacker sends arbitrary pushes to Collie (or, the key being team wide, to any app of the team) to phish the user. |
-| Mitigations | Dedicated, revocable key, never in GitHub ([release.md](release.md)). `collied doctor` fails unless the key file is 0600 and owned by the user (built). Pushes carry no nonce and cannot create an approval; the app trusts only what the tailnet session returns (design). |
-| Residual | Fake notifications until the key is revoked. 0600 does not stop same-UID processes. |
-| Phase | Keychain item bound to collied's signing identity: Phase 3 |
+| Mitigations | Dedicated, revocable key, never in GitHub ([release.md](release.md)). Stored in the login Keychain by `collied apns import`, which deletes the file after confirmation; the item's ACL lets only collied signed with the team's Developer ID (`just collied-install`) read it without a prompt; `collied doctor` warns about a `key_path` config or a `.p8` left on disk (built). Pushes carry no nonce and cannot create or decide an approval: `approval_id` and `node_id` are validated lookup keys, and a lock-screen action decides only what the pinned, paired Mac returns over the tailnet (built). |
+| Residual | A leaked key sends fake notifications to Collie (and to every app of the team) until revoked in the portal: a phishing alert with Approve/Deny buttons whose `approval_id` matches nothing ends as "no longer pending, nothing was sent", but its text is the attacker's (as a plaintext body only: without the notification key it cannot produce an `enc` the NSE opens). Copies outside the Keychain (the downloaded file before import, the password manager backup) are protected only by where they sit. |
+| Phase | Built |
 
 ### Phone node key extraction
 
@@ -108,9 +110,19 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 |---|---|
 | Assets | herdr, collied's data dir, the APNs key, the control socket |
 | Attack | Any process running as the user controls herdr directly, reads node keys and `peers.json`, uses the 0600 control socket. |
-| Mitigations | None by design: same UID already owns every shell. Data dir 0700, files and control socket 0600, control socket peer UID checked: these stop other local users only (built for tsnet state and doctor checks; peers store and control socket P1). |
-| Residual | Full compromise of the Mac side. Stolen Mac node keys let the malware impersonate the Mac to the phone and show fake state or fake approvals. It controls the gate's configuration (`collied.toml`, `peers.json`) and can answer the y/N prompt, so the gate no longer protects anything; other users' devices are kept out only by the tailnet policy, which needs the admin account to change. |
-| Phase | APNs key in Keychain: Phase 3. Otherwise out of scope. |
+| Mitigations | None by design for herdr and collied's files: same UID already owns every shell. Data dir 0700, files and control socket 0600, control socket peer UID checked: these stop other local users only (built for tsnet state and doctor checks; peers store and control socket P1). The APNs key is the exception: it is a Keychain item whose ACL trusts only collied's designated requirement (Developer ID Application, team `RM3UT3MMSR`, identifier `dev.rbstp.collied`), and the binary is signed with the hardened runtime, so other programs cannot read the key bytes without a Keychain prompt (built). |
+| Residual | Full compromise of the Mac side. Stolen Mac node keys let the malware impersonate the Mac to the phone and show fake state or fake approvals. It controls the gate's configuration (`collied.toml`, `peers.json`) and can answer the y/N prompt, so the gate no longer protects anything; other users' devices are kept out only by the tailnet policy, which needs the admin account to change. Keychain ACL limits: malware can raise a prompt that the user may accept; anyone with the login password can change the ACL or export the item; it can run the signed collied itself (its own `--config` or `HOME`) to make it send pushes with the key, so it can push through collied without holding the key; a `key_path` config or an un-deleted `.p8` gets none of this protection. |
+| Phase | Built (Keychain item). Otherwise out of scope. |
+
+### Lock-screen and in-app approval
+
+| | |
+|---|---|
+| Assets | The decision on a blocked agent |
+| Attack | Someone holding the phone approves or denies from a notification or from the app, or a fake alert tricks the owner into an action. |
+| Mitigations | Lock-screen Approve and Deny are `authenticationRequired`: iOS asks for Face ID or the passcode before the app runs; collie adds no check of its own there (built). "Approve always" is not offered on the lock screen. In the app, each decision first passes LocalAuthentication `deviceOwnerAuthentication` with a fresh `LAContext`, so one unlock never covers a later approval (built). The background decision runs a 20 s capped one-shot session: never a Tailscale login (`NeedsLogin` fails at once as `Unauthorized`), pinned Mac `StableID`, paired `hello`, then the nonce from the Mac; the follow-up notification claims success only on `applied` (built). |
+| Residual | The lock-screen gate is iOS's unlock and nothing more: a device unlocked recently enough for iOS to skip the prompt, or a known passcode, passes it. The alert title and body come through Apple and are shown before any check. |
+| Phase | Built; timings to be measured on device. |
 
 ### LAN attacker
 
@@ -128,9 +140,9 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 |---|---|
 | Assets | The shells behind herdr panes |
 | Attack | A prompt or key sequence sent from the phone, or a compromised phone session, escapes the agent and runs commands in the shell. |
-| Mitigations | `PromptText` rejects ESC and every C0/C1 control except newline and tab, since herdr sends prompts as bracketed paste and an embedded `ESC[201~` would end the paste (built, tested). `Key` is a closed list of nine keys (built). herdr privileged methods (`pane.send_text`, `pane.send_input`, `agent.start`, `plugin.*`, `server.*`) are not in the allowlist (built, tested). collied refuses `agent.prompt` and `agent.send_keys` while an agent is `blocked`, re-checked with `agent.get` just before the call, so blocked prompts are answered only through approvals (design). Foreground agent check before sending (design). |
+| Mitigations | `PromptText` rejects ESC and every C0/C1 control except newline and tab, since herdr sends prompts as bracketed paste and an embedded `ESC[201~` would end the paste (built, tested). `Key` is a closed list of nine keys (built). herdr privileged methods (`pane.send_text`, `pane.send_input`, `agent.start`, `plugin.*`, `server.*`) are not in the allowlist (built, tested). collied refuses `agent.prompt` and `agent.send_keys` while an agent is `blocked`, re-checked with `agent.get` just before the call, so blocked prompts are answered only through approvals (built). Foreground agent check before sending (built). |
 | Residual | herdr checks the foreground agent before queuing the text and the delayed Enter: if the agent exits in between, the shell receives the prompt. Closing it needs conditional input in herdr upstream. Text an agent reads from a repository can still steer the agent itself; that is outside collie. |
-| Phase | Validation built; refusal and foreground check with the drive methods (after Phase 1); herdr conditional input: upstream proposal. |
+| Phase | Built; herdr conditional input: upstream proposal. |
 
 ### Approval TOCTOU
 
@@ -138,9 +150,19 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 |---|---|
 | Assets | The decision the user meant to make |
 | Attack | The question under a still-`blocked` agent changes (new tool call, different command) between display and decision, so "approve" answers a different question. |
-| Mitigations | Approval bound to a fingerprint: hash of the detection-region text, matched rule id, `terminal_id`, agent session id. Re-read immediately before the keystroke; any change marks it `superseded` (design). Outcome is `applied` only if the agent leaves `blocked`, otherwise `unconfirmed`; the lock screen never claims success on a queued write (design). 10 minute expiry (design). |
-| Residual | The read-then-send gap remains until herdr offers conditional input. |
-| Phase | Phase 3 |
+| Mitigations | Approval bound to a SHA-256 fingerprint of agent kind, matched rule id, `terminal_id`, agent session id and the dialog region with its cursor. Re-read before any key (same `state_change_seq` and fingerprint, else `superseded`). Arrows and Enter are separate calls: after the arrows collied re-reads and sends Enter only if the screen matches the target option's cursor fingerprint. Deny uses `esc` where the menu labels it `(esc)` and on the trust prompt, so it does not depend on the cursor. No key after the 6 s budget. Outcome is `applied` only if the agent leaves `blocked` within 3 s, otherwise `unconfirmed`; neither the app nor the lock-screen follow-up claims success otherwise. 10 minute expiry (all built). |
+| Residual | The gap between the last re-read and the final key remains until herdr offers conditional input: a question that replaces the dialog inside it, with the same option layout, gets that key. |
+| Phase | Built; herdr conditional input: upstream proposal. |
+
+### Attachment uploads
+
+| | |
+|---|---|
+| Assets | The Mac's disk; files an agent may read; the contents of attached files |
+| Attack | A paired phone (or a stolen, unlocked one) can now write files on the Mac. It tries to fill the disk, to write outside the attachments dir or over an existing file (a crafted name, `..`, a symlink), to plant an executable or a hidden dotfile, to tamper with or hijack another session's upload, or to get file content into the logs. |
+| Mitigations | Same gate as `agent.prompt`: paired full session, re-checked on every frame and before `begin`, each chunk and the commit (built). Caps: 20 MiB per file (phone, decoder and collied), 32 KiB chunks in order and never past the declared size, 2 uploads in flight per session, idle uploads dropped after 60 s, 200 MiB stored (each file counted at least at its allocated blocks) including what is reserved by uploads in flight, at most 1000 entries under the root so a flood of one-byte uploads cannot use more disk than the byte cap suggests nor make the per-`begin` scan unbounded, chunk frames rate limited per `StableID` (128/s) and the other frames by the shared 20/s bucket (built). The phone's name is a hint only: `AttachmentName` rejects separators, `.`, `..`, controls, bidi and format characters, then collied keeps `[A-Za-z0-9._-]`, drops leading dots and dashes and caps the length. Each upload writes into a fresh random 0700 directory created with `create_dir` under a root that must be a 0700 directory owned by the user, not a symlink; the partial file is opened `create_new` with `O_NOFOLLOW`, mode 0600, and renamed inside that directory only, so no existing file is ever overwritten and nothing is executable. The SHA-256 and size are checked before the rename; a mismatch deletes the partial file. An upload id is 16 random bytes bound to the session and `StableID` that began it. Files expire after 24 h; partials of a previous run are removed at start. The audit log gets the sanitized name, size and a SHA-256 prefix, never content or base64; `ChunkData` is redacted in `Debug` (built). |
+| Residual | Up to 200 MiB of phone-chosen bytes sit on the Mac for 24 h, and the path is put into a prompt: a file is as trusted as the phone that sent it, and an agent told to read it may follow instructions inside it (prompt injection through the file, as with any repository content). Contents are readable by anything running as the user and are not encrypted at rest beyond FileVault. The name, while sanitized, is still the phone's choice and shows up in the prompt and in the audit log. |
+| Phase | Built |
 
 ### Apple sees push payload metadata
 
@@ -148,6 +170,6 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 |---|---|
 | Assets | Project and agent names, activity timing |
 | Attack | Apple (or anyone with APNs access) reads payloads and metadata. |
-| Mitigations | Alert carries agent name, status and workspace label only, never terminal text, snippet or nonce; details are fetched over the tailnet (design). |
-| Residual | Labels, timing, frequency and the device token are visible to Apple. Encrypting the payload for the NSE would hide labels but not timing; not designed. |
-| Phase | Phase 3 (APNs). Encrypted payload: not planned. |
+| Mitigations | Alert title is the herdr agent name or the agent kind, never the terminal title or a title the pane's program sets; body is `Blocked in <workspace label>`; plus `approval_id`, `node_id` and `terminal_id` (thread and collapse id). The pending action (up to 600 chars of the command or question) travels only in `enc`: ChaCha20-Poly1305 under the phone's per-Mac notification key, fresh random nonce per send, bound to the `approval_id` as AAD, opened by ColliePush on the phone. The key is generated on the phone and reaches collied only inside the authenticated tailnet session. Never the snippet or nonce; details are fetched over the tailnet (built). |
+| Residual | Agent and workspace names, opaque ids, the ciphertext's length (so roughly the command's length), timing, frequency and the device token are visible to Apple. A leaked notification key (from `push.json` or a Mac compromise, which already exposes far more; from the phone's Keychain) lets whoever also has the APNs payloads read past and future alert contexts for that Mac until the phone pairs again; it grants no decision, since the nonce never travels in a push. With a leaked APNs key as well, it also lets an attacker forge an alert whose body the NSE shows as genuine context. |
+| Phase | Built. |

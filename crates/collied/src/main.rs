@@ -6,7 +6,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use collied::config::{self, Config};
 use collied::control::{self, Client, Reply, Request};
-use collied::{daemon, doctor, service};
+use collied::{daemon, doctor, push, service};
 use tracing_subscriber::EnvFilter;
 use zeroize::Zeroizing;
 
@@ -47,6 +47,19 @@ enum Command {
     },
     /// Check configuration, permissions and herdr reachability.
     Doctor,
+    /// Apple push notifications.
+    Apns {
+        #[command(subcommand)]
+        command: ApnsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ApnsCommand {
+    /// Send a test alert to every registered device of a paired phone.
+    Test,
+    /// Move a .p8 key into the login Keychain, then offer to delete the file.
+    Import { path: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -103,6 +116,25 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
     let control_path = data_dir.join(config::CONTROL_SOCKET);
     match cli.command {
         Command::Doctor => return doctor::run(cli.config).await,
+        Command::Apns {
+            command: ApnsCommand::Test,
+        } => {
+            let config = load_config(cli.config.as_deref(), &data_dir)?;
+            let apns = config
+                .apns
+                .as_ref()
+                .context("no [apns] section in collied.toml")?;
+            return push::send_test(&data_dir, apns).await;
+        }
+        Command::Apns {
+            command: ApnsCommand::Import { path },
+        } => {
+            let explicit = cli.config.is_some();
+            let config_path = cli
+                .config
+                .unwrap_or_else(|| data_dir.join(config::CONFIG_FILE));
+            return push::import(&config_path, explicit, &path);
+        }
         Command::Login => {
             let config = load_config(cli.config.as_deref(), &data_dir)?;
             daemon::login(&data_dir, &config, auth_key).await?;

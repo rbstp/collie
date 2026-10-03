@@ -265,6 +265,8 @@
         "rate_limited",
         "herdr_unavailable",
         "not_implemented",
+        "too_large",
+        "checksum_mismatch",
         "internal",
         "unrecognized"
       ],
@@ -629,6 +631,39 @@
         {
           "properties": {
             "type": {
+              "const": "attachment_started",
+              "type": "string"
+            },
+            "upload_id": {
+              "$ref": "#/$defs/UploadId"
+            }
+          },
+          "required": [
+            "type",
+            "upload_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Absolute path of the stored file on the Mac.",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "const": "attachment_stored",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
               "const": "ok",
               "type": "string"
             }
@@ -691,6 +726,10 @@
         "truncated"
       ],
       "type": "object"
+    },
+    "UploadId": {
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
     },
     "Workspace": {
       "properties": {

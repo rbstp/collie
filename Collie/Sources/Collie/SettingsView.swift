@@ -18,6 +18,9 @@ struct SettingsView: View {
                         Text(error).foregroundStyle(.red)
                     }
                 }
+                Section("Notifications") {
+                    LabeledContent("Push", value: app.pushStatus)
+                }
                 Section("Machines") {
                     NavigationLink("Paired machines (\(app.machines.count))") {
                         MachinesList(app: app, removeError: $removeError)

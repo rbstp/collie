@@ -4,6 +4,7 @@ use std::os::fd::OwnedFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
@@ -118,26 +119,7 @@ pub fn lock(path: &Path) -> Result<OwnedFd, Error> {
 }
 
 pub fn load(path: &Path) -> Result<Store, Error> {
-    let io = |source| Error::Io {
-        path: path.to_owned(),
-        source,
-    };
-    let meta = match std::fs::symlink_metadata(path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Store::default()),
-        Err(e) => return Err(io(e)),
-    };
-    if !meta.is_file()
-        || meta.mode() & 0o077 != 0
-        || meta.uid() != rustix::process::geteuid().as_raw()
-    {
-        return Err(Error::Insecure(path.to_owned()));
-    }
-    let text = std::fs::read(path).map_err(io)?;
-    let store: Store = serde_json::from_slice(&text).map_err(|source| Error::Json {
-        path: path.to_owned(),
-        source,
-    })?;
+    let store: Store = load_json(path)?;
     // The owner rule in `add` only holds if every stored peer already belongs to the owner.
     if store
         .peers
@@ -150,12 +132,41 @@ pub fn load(path: &Path) -> Result<Store, Error> {
 }
 
 pub fn save(path: &Path, store: &Store) -> Result<(), Error> {
+    save_json(path, store)
+}
+
+/// A missing file is the default value; anything but a 0600 regular file owned by the
+/// current user is refused.
+pub fn load_json<T: DeserializeOwned + Default>(path: &Path) -> Result<T, Error> {
+    let io = |source| Error::Io {
+        path: path.to_owned(),
+        source,
+    };
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
+        Err(e) => return Err(io(e)),
+    };
+    if !meta.is_file()
+        || meta.mode() & 0o077 != 0
+        || meta.uid() != rustix::process::geteuid().as_raw()
+    {
+        return Err(Error::Insecure(path.to_owned()));
+    }
+    let text = std::fs::read(path).map_err(io)?;
+    serde_json::from_slice(&text).map_err(|source| Error::Json {
+        path: path.to_owned(),
+        source,
+    })
+}
+
+pub fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
     let tmp = path.with_extension("json.tmp");
     let io = |source| Error::Io {
         path: tmp.clone(),
         source,
     };
-    let json = serde_json::to_vec_pretty(store).map_err(|source| Error::Json {
+    let json = serde_json::to_vec_pretty(value).map_err(|source| Error::Json {
         path: path.to_owned(),
         source,
     })?;

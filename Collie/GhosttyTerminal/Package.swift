@@ -12,7 +12,7 @@ let package = Package(
     targets: [
         // Built by `just ios-ghostty` (scripts/ghostty/build-xcframework.sh).
         .binaryTarget(name: "GhosttyVt", path: "GhosttyVt.xcframework"),
-        .target(name: "GhosttyTerminal", dependencies: ["GhosttyVt"]),
+        .target(name: "GhosttyTerminal", dependencies: ["GhosttyVt"], resources: [.copy("Fonts")]),
         .testTarget(name: "GhosttyTerminalTests", dependencies: ["GhosttyTerminal"]),
     ]
 )

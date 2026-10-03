@@ -113,6 +113,96 @@
       "pattern": "^[A-Za-z0-9_-]{1,64}$",
       "type": "string"
     },
+    "AttachmentAbortParams": {
+      "additionalProperties": false,
+      "properties": {
+        "upload_id": {
+          "$ref": "#/$defs/UploadId"
+        }
+      },
+      "required": [
+        "upload_id"
+      ],
+      "type": "object"
+    },
+    "AttachmentBeginParams": {
+      "additionalProperties": false,
+      "description": "`sha256` covers the whole file; collied checks it and the size before keeping it.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/AttachmentName"
+        },
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Sha256Hex"
+        },
+        "size": {
+          "format": "uint64",
+          "maximum": 20971520,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "op_id",
+        "name",
+        "size",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "AttachmentChunkParams": {
+      "additionalProperties": false,
+      "description": "Chunks arrive in order: `offset` is the number of bytes already received.",
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/ChunkData"
+        },
+        "offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "upload_id": {
+          "$ref": "#/$defs/UploadId"
+        }
+      },
+      "required": [
+        "upload_id",
+        "offset",
+        "data"
+      ],
+      "type": "object"
+    },
+    "AttachmentCommitParams": {
+      "additionalProperties": false,
+      "properties": {
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "upload_id": {
+          "$ref": "#/$defs/UploadId"
+        }
+      },
+      "required": [
+        "op_id",
+        "upload_id"
+      ],
+      "type": "object"
+    },
+    "AttachmentName": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ChunkData": {
+      "maxLength": 43692,
+      "minLength": 4,
+      "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+      "type": "string"
+    },
     "Cwd": {
       "maxLength": 1024,
       "pattern": "^/",
@@ -154,6 +244,8 @@
         "esc",
         "up",
         "down",
+        "left",
+        "right",
         "tab",
         "shift+tab",
         "ctrl+c",
@@ -169,6 +261,10 @@
     },
     "Nonce": {
       "pattern": "^[A-Za-z0-9_-]{43}$",
+      "type": "string"
+    },
+    "NotificationKey": {
+      "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
       "type": "string"
     },
     "OpId": {
@@ -254,11 +350,15 @@
               "type": "null"
             }
           ]
+        },
+        "notification_key": {
+          "$ref": "#/$defs/NotificationKey"
         }
       },
       "required": [
         "apns_token",
-        "environment"
+        "environment",
+        "notification_key"
       ],
       "type": "object"
     },
@@ -298,6 +398,10 @@
       ],
       "type": "string"
     },
+    "Sha256Hex": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
     "TaskNewParams": {
       "additionalProperties": false,
       "properties": {
@@ -334,6 +438,10 @@
     },
     "TerminalId": {
       "pattern": "^[A-Za-z0-9_:.-]{1,64}$",
+      "type": "string"
+    },
+    "UploadId": {
+      "pattern": "^[0-9a-f]{32}$",
       "type": "string"
     },
     "WorkspaceCloseParams": {
@@ -640,6 +748,70 @@
         },
         "params": {
           "$ref": "#/$defs/PushActivityTokenParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "attachment.begin",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AttachmentBeginParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "attachment.chunk",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AttachmentChunkParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "attachment.commit",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AttachmentCommitParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "attachment.abort",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AttachmentAbortParams"
         }
       },
       "required": [

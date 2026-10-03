@@ -6,10 +6,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
-    ErrorBody, ErrorCode, Event, HelloResult, MachineInfo, PairCompleteParams, PairingCode,
-    PairingInvite, Request, Response, ServerFrame, TerminalId,
+    AttachmentChunkParams, ErrorBody, ErrorCode, Event, HelloResult, MachineInfo,
+    PairCompleteParams, PairingCode, PairingInvite, Request, Response, ServerFrame, TerminalId,
 };
 use tailnet::{Accepted, BackendState, Node, WhoIs};
 use tokio::io::AsyncWriteExt;
@@ -24,6 +26,8 @@ use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode, header};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Bytes, Error as WsError, Message};
 
+use crate::approvals::{self, Approvals};
+use crate::attachments::{self, Attachments};
 use crate::audit::Audit;
 use crate::control::{self, Candidate, PairAttempt, StatusInfo};
 use crate::drive::{self, Authorized, Driver, Origin, Reply, Watched, Watcher};
@@ -31,6 +35,7 @@ use crate::flock::{self, Baseline, StatusTracker};
 use crate::gate::{self, Decision};
 use crate::pairing::{Attempt, Pairing};
 use crate::peers::{self, Peer, Store};
+use crate::push::{self, Push};
 use crate::{config, herdr};
 
 const MAX_CONNECTIONS: usize = 64;
@@ -41,12 +46,16 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const PING_EVERY: Duration = Duration::from_secs(15);
 const SILENCE_LIMIT: Duration = Duration::from_secs(45);
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
-const RECONCILE_EVERY: Duration = Duration::from_secs(2);
+const RECONCILE_EVERY: Duration = Duration::from_secs(1);
 const RECONCILE_MAX_BACKOFF: Duration = Duration::from_secs(30);
 const RATE_PER_SEC: f64 = 20.0;
 const RATE_BURST: f64 = 40.0;
 const REJECT_AUDIT_PER_SEC: f64 = 1.0;
 const REJECT_AUDIT_BURST: f64 = 10.0;
+/// Chunks have their own bucket: 128 chunks of 32 KiB is 4 MiB/s per peer.
+const CHUNK_RATE_PER_SEC: f64 = 128.0;
+const CHUNK_RATE_BURST: f64 = 128.0;
+const UPKEEP_EVERY: Duration = Duration::from_secs(10);
 
 pub struct ServerConfig {
     pub data_dir: PathBuf,
@@ -54,6 +63,8 @@ pub struct ServerConfig {
     pub owner_user_id: Option<i64>,
     pub herdr_session: String,
     pub machine_name: String,
+    pub approval_ttl: Duration,
+    pub attachments_dir: PathBuf,
 }
 
 pub struct ServerHandle {
@@ -145,14 +156,18 @@ pub struct State {
     machine: MachineInfo,
     dns_name: String,
     herdr: PathBuf,
-    peers: Mutex<Store>,
+    peers: Arc<Mutex<Store>>,
     pairing: Mutex<Pairing<mpsc::Sender<PairAttempt>>>,
     sessions: Mutex<Sessions>,
     buckets: Mutex<HashMap<String, TokenBucket>>,
+    chunk_buckets: Mutex<HashMap<String, TokenBucket>>,
     reject_buckets: Mutex<HashMap<IpAddr, TokenBucket>>,
     tracker: Mutex<StatusTracker>,
     events: broadcast::Sender<Event>,
     drive: Arc<Driver>,
+    approvals: Arc<Approvals>,
+    push: Arc<Push>,
+    attachments: Arc<Attachments>,
     pub(crate) audit: Arc<Audit>,
 }
 
@@ -218,6 +233,9 @@ impl State {
             }
         }
         drop(store);
+        if let Err(e) = self.push.forget(&peer.stable_id) {
+            tracing::error!(error = %e, "could not drop the revoked phone's APNs token");
+        }
         self.audit.log(
             &peer.label,
             "peers.revoke",
@@ -268,8 +286,17 @@ impl State {
             .is_some_and(|p| p.user_id == user)
     }
 
-    fn rate(&self, key: &str) -> Rate {
-        take_token(&self.buckets, key.to_owned(), RATE_PER_SEC, RATE_BURST)
+    fn rate(&self, key: &str, chunk: bool) -> Rate {
+        if chunk {
+            take_token(
+                &self.chunk_buckets,
+                key.to_owned(),
+                CHUNK_RATE_PER_SEC,
+                CHUNK_RATE_BURST,
+            )
+        } else {
+            take_token(&self.buckets, key.to_owned(), RATE_PER_SEC, RATE_BURST)
+        }
     }
 
     /// Rejections happen before any rate limit tied to an identity, so their audit lines
@@ -312,6 +339,16 @@ pub async fn start_with_tasks(
     herdr_socket: PathBuf,
     tasks: &config::TasksConfig,
 ) -> anyhow::Result<ServerHandle> {
+    start_with(node, cfg, herdr_socket, tasks, None).await
+}
+
+pub async fn start_with(
+    node: Node,
+    cfg: ServerConfig,
+    herdr_socket: PathBuf,
+    tasks: &config::TasksConfig,
+    apns: Option<Arc<dyn push::Sender>>,
+) -> anyhow::Result<ServerHandle> {
     crate::ensure_private_dir(&cfg.data_dir)?;
     let roots = match &tasks.roots {
         Some(roots) => roots.clone(),
@@ -347,7 +384,32 @@ pub async fn start_with_tasks(
             "owner_user_id {configured} in the config differs from {stored} in peers.json"
         );
     }
+    let peers = Arc::new(Mutex::new(store));
     let audit = Arc::new(Audit::open(&cfg.data_dir.join(config::AUDIT_FILE))?);
+    let push = {
+        let peers = peers.clone();
+        Push::open(
+            cfg.data_dir.join(config::PUSH_FILE),
+            apns,
+            Arc::new(move |id| lock(&peers).get(id).is_some()),
+        )?
+    };
+    push.retain_paired(&lock(&peers))?;
+    let events = broadcast::channel(256).0;
+    let approvals = Arc::new(
+        Approvals::new(
+            herdr_socket.clone(),
+            me.stable_id.clone(),
+            events.clone(),
+            audit.clone(),
+            Some(push.clone()),
+        )
+        .with_timing(cfg.approval_ttl, approvals::SETTLE),
+    );
+    let attachments = {
+        let dir = cfg.attachments_dir.clone();
+        Arc::new(tokio::task::spawn_blocking(move || Attachments::open(dir)).await??)
+    };
     let control = control::bind(&cfg.data_dir.join(config::CONTROL_SOCKET)).await?;
     let listener = node.listen("tcp", &format!(":{}", cfg.port))?;
 
@@ -361,17 +423,21 @@ pub async fn start_with_tasks(
         cfg,
         dns_name,
         herdr: herdr_socket,
-        peers: Mutex::new(store),
+        peers,
         pairing: Mutex::new(Pairing::default()),
         sessions: Mutex::new(Sessions {
             next: 1,
             live: HashMap::new(),
         }),
         buckets: Mutex::new(HashMap::new()),
+        chunk_buckets: Mutex::new(HashMap::new()),
         reject_buckets: Mutex::new(HashMap::new()),
         tracker: Mutex::new(StatusTracker::default()),
-        events: broadcast::channel(256).0,
+        events,
         drive,
+        approvals,
+        push,
+        attachments,
         audit,
     });
     let (shutdown, rx) = watch::channel(false);
@@ -379,6 +445,7 @@ pub async fn start_with_tasks(
     let tasks = vec![
         tokio::spawn(accept_loop(listener, state.clone(), rx.clone(), dead_tx)),
         tokio::spawn(control::serve(control, state.clone(), rx.clone())),
+        tokio::spawn(upkeep(state.attachments.clone(), rx.clone())),
         tokio::spawn(reconcile(state.clone(), rx)),
     ];
     tracing::info!(host = %state.dns_name, port = state.cfg.port, "listening on the tailnet");
@@ -439,6 +506,7 @@ struct Registration {
 impl Drop for Registration {
     fn drop(&mut self) {
         self.state.lock_sessions().live.remove(&self.id);
+        self.state.attachments.end_session(self.id);
     }
 }
 
@@ -767,10 +835,11 @@ impl Session<'_> {
         greeted: &mut bool,
         events: &mut Option<broadcast::Receiver<Event>>,
     ) -> Flow {
-        // Every frame, parseable or not, takes a token first so that neither replies nor
-        // audit lines can outrun the per-peer limit.
-        let rate = self.state.rate(&self.peer.who.node.stable_id);
+        // Every frame, parseable or not, takes a token before any reply or audit line so
+        // that neither can outrun the per-peer limit. Chunks draw from their own bucket.
         let parsed = protocol::parse_client_frame(bytes);
+        let chunk = matches!(&parsed, Ok(f) if matches!(f.request, Request::AttachmentChunk(_)));
+        let rate = self.state.rate(&self.peer.who.node.stable_id, chunk);
         let keep_open = *greeted && self.peer.pairing_window.is_none();
         if rate != Rate::Ok {
             let (id, method) = match &parsed {
@@ -896,11 +965,84 @@ impl Session<'_> {
             }
             Request::WorkspaceClose(p) => (drive.workspace_close(p, &auth).await, None),
             Request::PaneClose(p) => (drive.pane_close(p, &auth).await, None),
-            Request::ApprovalList(_)
-            | Request::ApprovalDecide(_)
-            | Request::PushRegister(_)
-            | Request::PushActivityToken(_) => {
+            Request::ApprovalList(_) => (
+                Ok(Response::Approvals {
+                    approvals: self.state.approvals.pending(),
+                }),
+                None,
+            ),
+            // Detached so a session dropped mid-decision still resolves the approval; it
+            // audits every attempt itself.
+            Request::ApprovalDecide(p) => {
+                let (approvals, name) = (self.state.approvals.clone(), self.peer.name.clone());
+                let reply =
+                    tokio::spawn(async move { approvals.decide(&name, &peer, p, &auth).await })
+                        .await
+                        .unwrap_or_else(|_| err(ErrorCode::Internal, "decision failed"));
+                (reply, Some(Origin::Ran))
+            }
+            Request::PushRegister(_) if !auth() => (
+                err(ErrorCode::NotPaired, "peer is no longer authorized"),
+                None,
+            ),
+            Request::PushRegister(p) => (
+                self.state
+                    .push
+                    .register(&peer, p.apns_token, p.environment, p.notification_key)
+                    .map(|()| Response::Ok)
+                    .map_err(|e| {
+                        tracing::error!(error = %e, "push.register");
+                        (ErrorCode::Internal, "could not store the token".to_owned())
+                    }),
+                None,
+            ),
+            Request::PushActivityToken(_) => {
                 (err(ErrorCode::NotImplemented, "not implemented"), None)
+            }
+            Request::AttachmentBegin(p) => {
+                let (op_id, store, session) =
+                    (p.op_id.clone(), self.state.attachments.clone(), self.id);
+                let owner = peer.clone();
+                let op = self.audited(method, target.clone(), async move {
+                    if !auth() {
+                        return (
+                            err(ErrorCode::NotPaired, "peer is no longer authorized"),
+                            None,
+                        );
+                    }
+                    let begun = tokio::task::spawn_blocking(move || {
+                        store.begin(session, &owner, &p.name, p.size, &p.sha256)
+                    })
+                    .await
+                    .unwrap_or_else(|_| Err((ErrorCode::Internal, "upload failed".to_owned())));
+                    (
+                        begun.map(|upload_id| Response::AttachmentStarted { upload_id }),
+                        None,
+                    )
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
+            Request::AttachmentChunk(_) if !auth() => (
+                err(ErrorCode::NotPaired, "peer is no longer authorized"),
+                None,
+            ),
+            Request::AttachmentChunk(p) => (self.chunk(p).await, None),
+            Request::AttachmentCommit(p) => {
+                let upload = self.state.attachments.take(self.id, &peer, &p.upload_id);
+                let op = commit(
+                    self.state.audit.clone(),
+                    self.peer.name.clone(),
+                    upload,
+                    auth,
+                );
+                let (reply, origin) = drive.once(&peer, &p.op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
+            Request::AttachmentAbort(p) => {
+                let upload = self.state.attachments.take(self.id, &peer, &p.upload_id);
+                let _ = tokio::task::spawn_blocking(move || drop(upload)).await;
+                (Ok(Response::Ok), None)
             }
         };
         self.finish(
@@ -917,7 +1059,15 @@ impl Session<'_> {
 
     /// A mutation that ran in this call was already audited by the detached operation.
     async fn finish(&mut self, method: &str, done: Finished) -> Flow {
-        let quiet = matches!(method, "hello" | "flock.snapshot" | "workspace.list");
+        let quiet = matches!(
+            method,
+            "hello"
+                | "flock.snapshot"
+                | "workspace.list"
+                | "approval.list"
+                | "attachment.chunk"
+                | "attachment.abort"
+        );
         if !quiet && done.origin != Some(Origin::Ran) {
             let mut result = outcome(&done.reply);
             if done.origin == Some(Origin::Replayed) {
@@ -944,6 +1094,20 @@ impl Session<'_> {
             },
         )
         .await
+    }
+
+    async fn chunk(&self, p: AttachmentChunkParams) -> Reply {
+        let data = STANDARD
+            .decode(p.data.as_str())
+            .map_err(|_| (ErrorCode::InvalidParams, "invalid base64".to_owned()))?;
+        let (store, session) = (self.state.attachments.clone(), self.id);
+        let peer = self.peer.who.node.stable_id.clone();
+        tokio::task::spawn_blocking(move || {
+            store.chunk(session, &peer, &p.upload_id, p.offset, &data)
+        })
+        .await
+        .unwrap_or_else(|_| Err((ErrorCode::Internal, "upload failed".to_owned())))?;
+        Ok(Response::Ok)
     }
 
     async fn watch(&mut self, terminal_id: Option<TerminalId>) -> Reply {
@@ -1005,13 +1169,15 @@ impl Session<'_> {
     async fn flock(&self) -> Reply {
         let snap = herdr_result(herdr::session_snapshot(&self.state.herdr).await)?;
         let mut tracker = lock(&self.state.tracker);
-        Ok(Response::Flock(flock::map_flock(
+        let mut flock = flock::map_flock(
             &snap,
             &mut tracker,
             crate::now_ms(),
             self.state.machine.clone(),
             self.seq,
-        )))
+        );
+        flock.approvals = self.state.approvals.pending();
+        Ok(Response::Flock(flock))
     }
 
     async fn workspaces(&self) -> Reply {
@@ -1166,6 +1332,7 @@ async fn next_watch(watch: &mut Option<Watcher>) -> Option<Watched> {
 
 fn audit_target(request: &Request) -> Option<String> {
     let target = match request {
+        Request::AttachmentBegin(p) => return Some(attachments::sanitize(p.name.as_str())),
         Request::AgentRead(p) | Request::PaneRead(p) => p.terminal_id.as_str(),
         Request::AgentWatch(p) => p.terminal_id.as_ref().map_or("none", |t| t.as_str()),
         Request::AgentPrompt(p) => p.terminal_id.as_str(),
@@ -1201,6 +1368,75 @@ where
         &outcome(&reply),
     );
     reply
+}
+
+/// Runs detached like the other cached mutations and writes one audit line per commit:
+/// name, size and a SHA-256 prefix, never content.
+async fn commit(
+    audit: Arc<Audit>,
+    peer: String,
+    upload: Option<Arc<Mutex<attachments::Upload>>>,
+    auth: Authorized,
+) -> Reply {
+    let Some(upload) = upload else {
+        let reply = err(ErrorCode::NotFound, "no such upload");
+        audit.log(&peer, "attachment.commit", None, &outcome(&reply));
+        return reply;
+    };
+    let done = tokio::task::spawn_blocking(move || {
+        if !auth() {
+            return Err((
+                ErrorCode::NotPaired,
+                "peer is no longer authorized".to_owned(),
+            ));
+        }
+        let committed = lock(&upload).commit();
+        committed.and_then(|c| {
+            let path = c.path.to_str().map(str::to_owned).ok_or_else(|| {
+                (
+                    ErrorCode::Internal,
+                    "attachment path is not UTF-8".to_owned(),
+                )
+            })?;
+            Ok((c, path))
+        })
+    })
+    .await
+    .unwrap_or_else(|_| Err((ErrorCode::Internal, "upload failed".to_owned())));
+    match done {
+        Ok((c, path)) => {
+            let result = format!("ok size={} sha256={}", c.size, &c.sha256[..12]);
+            audit.log(&peer, "attachment.commit", Some(&c.name), &result);
+            Ok(Response::AttachmentStored { path })
+        }
+        Err(e) => {
+            let reply = Err(e);
+            audit.log(&peer, "attachment.commit", None, &outcome(&reply));
+            reply
+        }
+    }
+}
+
+async fn upkeep(store: Arc<Attachments>, mut shutdown: watch::Receiver<bool>) {
+    let mut swept = Instant::now();
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(UPKEEP_EVERY) => {}
+            _ = shutdown.changed() => return,
+        }
+        let sweep = swept.elapsed() >= attachments::SWEEP_EVERY;
+        if sweep {
+            swept = Instant::now();
+        }
+        let store = store.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            store.reap(Instant::now());
+            if sweep {
+                store.sweep(std::time::SystemTime::now(), false);
+            }
+        })
+        .await;
+    }
 }
 
 fn outcome(reply: &Reply) -> String {
@@ -1283,6 +1519,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         }
         base = Some(next);
         outage = false;
+        state.approvals.observe(&agents, &workspaces).await;
     }
 }
 

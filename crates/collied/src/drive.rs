@@ -16,8 +16,8 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use crate::flock;
 use crate::herdr::{self, AgentInfo, PaneInfo};
+use crate::{flock, prompt};
 
 pub type Fail = (ErrorCode, String);
 pub type Reply = Result<Response, Fail>;
@@ -26,7 +26,7 @@ pub type Reply = Result<Response, Fail>;
 pub type Authorized = Arc<dyn Fn() -> bool + Send + Sync>;
 
 const WATCH_EVERY: Duration = Duration::from_millis(250);
-const WATCH_LINES: u32 = 120;
+const WATCH_LINES: u32 = 240;
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const START_POLL: Duration = Duration::from_millis(250);
 pub const OP_TTL: Duration = Duration::from_secs(600);
@@ -51,7 +51,15 @@ pub fn herdr_fail(e: herdr::Error) -> Fail {
             (ErrorCode::AgentNotReady, "agent is not ready")
         }
         "empty_agent_prompt" => (ErrorCode::InvalidParams, "empty prompt"),
-        "timeout" => (ErrorCode::HerdrUnavailable, "herdr timed out"),
+        "timeout" => (
+            ErrorCode::AgentNotReady,
+            "the agent did not take the input in time",
+        ),
+        "agent_pane_busy" => (ErrorCode::AgentNotReady, "the pane is busy"),
+        "workspace_group_close_required" => (
+            ErrorCode::NotImplemented,
+            "the workspace has linked worktree workspaces; close the group on the Mac",
+        ),
         "agent_not_found" | "pane_not_found" | "workspace_not_found" | "target_pane_not_found" => {
             (ErrorCode::NotFound, "not found")
         }
@@ -199,9 +207,13 @@ impl Driver {
                 Err((ErrorCode::NotFound, _)) => Watched::Gone,
                 Err(_) => continue,
                 Ok(a) => {
-                    let Ok(read) =
-                        herdr::agent_read(&self.herdr, &a.pane_id, "recent", Some(WATCH_LINES))
-                            .await
+                    let Ok(read) = herdr::agent_read(
+                        &self.herdr,
+                        &a.pane_id,
+                        source_name(ReadSource::Recent),
+                        Some(WATCH_LINES),
+                    )
+                    .await
                     else {
                         continue;
                     };
@@ -339,11 +351,18 @@ impl Driver {
                 ),
             )
         };
-        self.start_agent(&pane, &p.agent, auth)
+        let name = self
+            .start_agent(&pane, &p.agent, auth)
+            .await
+            .map_err(left_open)?;
+        let current = herdr::agent_get(&self.herdr, &name)
+            .await
+            .map_err(|e| left_open(herdr_fail(e)))?;
+        self.started_check(&current, &pane, &name, &p.agent)
             .await
             .map_err(left_open)?;
         authorized(auth).map_err(left_open)?;
-        herdr::agent_prompt(&self.herdr, &pane.pane_id, p.prompt.as_str())
+        herdr::agent_prompt(&self.herdr, &name, p.prompt.as_str())
             .await
             .map_err(|e| left_open(herdr_fail(e)))?;
         Ok(Response::TaskStarted {
@@ -359,7 +378,7 @@ impl Driver {
         pane: &PaneInfo,
         kind: &AgentKind,
         auth: &Authorized,
-    ) -> Result<(), Fail> {
+    ) -> Result<String, Fail> {
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         let name = agent_name()?;
         let started = loop {
@@ -393,21 +412,10 @@ impl Driver {
                     Err(_) => continue,
                 },
             };
-            if a.terminal_id != pane.terminal_id
-                || a.name.as_deref() != Some(name.as_str())
-                || a.agent.as_deref().is_some_and(|k| k != kind.as_str())
-            {
-                return fail(
-                    ErrorCode::AgentNotReady,
-                    "the new pane no longer hosts the started agent",
-                );
-            }
+            self.started_check(&a, pane, &name, kind).await?;
             match (flock::status(&a.agent_status), a.interactive_ready) {
-                (AgentStatus::Blocked, _) => {
-                    return fail(ErrorCode::AgentNotReady, "agent is blocked during startup");
-                }
-                (AgentStatus::Idle | AgentStatus::Done, true) => return Ok(()),
-                (AgentStatus::Unknown, true) if kind.as_str() == "codex" => return Ok(()),
+                (AgentStatus::Idle | AgentStatus::Done, true) => return Ok(name),
+                (AgentStatus::Unknown, true) if kind.as_str() == "codex" => return Ok(name),
                 (AgentStatus::Idle | AgentStatus::Done, false) if !a.launch_pending => {
                     return fail(
                         ErrorCode::AgentNotReady,
@@ -420,6 +428,41 @@ impl Driver {
         fail(
             ErrorCode::AgentNotReady,
             "agent did not become ready within 30 s",
+        )
+    }
+
+    /// The started agent must still be the one in the new pane, and is never answered on
+    /// the user's behalf: a startup question such as Claude Code's folder trust prompt
+    /// is left to its approval.
+    async fn started_check(
+        &self,
+        a: &AgentInfo,
+        pane: &PaneInfo,
+        name: &str,
+        kind: &AgentKind,
+    ) -> Result<(), Fail> {
+        if a.terminal_id != pane.terminal_id
+            || a.name.as_deref() != Some(name)
+            || a.agent.as_deref().is_some_and(|k| k != kind.as_str())
+        {
+            return fail(
+                ErrorCode::AgentNotReady,
+                "the new pane no longer hosts the started agent",
+            );
+        }
+        if flock::status(&a.agent_status) != AgentStatus::Blocked {
+            return Ok(());
+        }
+        let trust = herdr::detection_text(&self.herdr, &pane.pane_id)
+            .await
+            .is_ok_and(|t| prompt::Menu::parse(&t).is_some_and(|m| m.is_trust_prompt()));
+        fail(
+            ErrorCode::AgentBlocked,
+            if trust {
+                "the agent asks whether to trust this folder; answer it through its approval"
+            } else {
+                "the agent is blocked on a startup prompt; answer it through its approval"
+            },
         )
     }
 
@@ -535,7 +578,9 @@ fn agent_name() -> Result<String, Fail> {
 fn source_name(source: ReadSource) -> &'static str {
     match source {
         ReadSource::Visible => "visible",
-        ReadSource::Recent => "recent",
+        // Logical lines: a row soft-wrapped at the Mac pane width arrives whole, so the
+        // phone can wrap it at its own width. `lines` still counts rendered rows.
+        ReadSource::Recent => "recent_unwrapped",
     }
 }
 
@@ -693,7 +738,7 @@ impl OpCache {
             let mut peers = self.peers.lock().unwrap_or_else(|e| e.into_inner());
             let ops = peers.entry(peer.to_owned()).or_default();
             let now = Instant::now();
-            ops.retain(|e| now.duration_since(e.at) < self.ttl);
+            ops.retain(|e| e.outcome.borrow().is_none() || now.duration_since(e.at) < self.ttl);
             match ops.iter().find(|e| e.op_id == *op_id) {
                 Some(e) if e.fingerprint != fingerprint => {
                     return (
@@ -706,10 +751,18 @@ impl OpCache {
                 }
                 Some(e) => (e.outcome.clone(), Origin::Replayed),
                 None => {
-                    let (tx, rx) = watch::channel(None);
                     if ops.len() >= self.cap {
-                        ops.pop_front();
+                        // An in-flight entry is never evicted: its retry must replay it.
+                        let Some(done) = ops.iter().position(|e| e.outcome.borrow().is_some())
+                        else {
+                            return (
+                                fail(ErrorCode::RateLimited, "too many operations in flight"),
+                                Origin::Refused,
+                            );
+                        };
+                        ops.remove(done);
                     }
+                    let (tx, rx) = watch::channel(None);
                     ops.push_back(OpEntry {
                         op_id: op_id.clone(),
                         fingerprint,
@@ -758,6 +811,12 @@ mod tests {
         }
         !s.chars()
             .any(|c| c.is_control() && !matches!(c, '\u{1b}' | '\r' | '\n' | '\t'))
+    }
+
+    #[test]
+    fn recent_reads_logical_lines() {
+        assert_eq!(source_name(ReadSource::Recent), "recent_unwrapped");
+        assert_eq!(source_name(ReadSource::Visible), "visible");
     }
 
     #[test]
@@ -936,6 +995,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn op_cache_never_evicts_in_flight() {
+        let cache = Arc::new(OpCache::new(1, OP_TTL));
+        let (release, held) = tokio::sync::oneshot::channel::<()>();
+        let slow = tokio::spawn({
+            let cache = cache.clone();
+            async move {
+                cache
+                    .once("p", &op(b'A'), 1, async move {
+                        let _ = held.await;
+                        Ok(Response::Ok)
+                    })
+                    .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let busy = cache
+            .once("p", &op(b'B'), 1, async { Ok(Response::Ok) })
+            .await;
+        assert_eq!(busy.0.unwrap_err().0, ErrorCode::RateLimited);
+        assert_eq!(busy.1, Origin::Refused);
+        assert_eq!(
+            cache
+                .once("other", &op(b'B'), 1, async { Ok(Response::Ok) })
+                .await
+                .1,
+            Origin::Ran
+        );
+        release.send(()).unwrap();
+        assert_eq!(slow.await.unwrap(), (Ok(Response::Ok), Origin::Ran));
+        let ran = cache
+            .once("p", &op(b'B'), 1, async { Ok(Response::Ok) })
+            .await;
+        assert_eq!(ran, (Ok(Response::Ok), Origin::Ran));
+        let evicted = cache
+            .once("p", &op(b'A'), 1, async { Ok(Response::Ok) })
+            .await;
+        assert_eq!(evicted.1, Origin::Ran, "completed entries are evicted");
+    }
+
+    #[tokio::test]
     async fn op_cache_survives_a_dropped_caller() {
         let cache = OpCache::new(8, OP_TTL);
         let runs = Arc::new(AtomicUsize::new(0));
@@ -969,6 +1068,8 @@ mod tests {
             (Key::Enter, "enter"),
             (Key::Up, "up"),
             (Key::Down, "down"),
+            (Key::Left, "left"),
+            (Key::Right, "right"),
             (Key::Tab, "tab"),
             (Key::ShiftTab, "shift+tab"),
             (Key::CtrlC, "ctrl+c"),
@@ -1063,9 +1164,14 @@ mod tests {
         assert_eq!(e("agent_blocked"), ErrorCode::AgentBlocked);
         assert_eq!(e("agent_not_ready"), ErrorCode::AgentNotReady);
         assert_eq!(e("empty_agent_prompt"), ErrorCode::InvalidParams);
-        assert_eq!(e("timeout"), ErrorCode::HerdrUnavailable);
+        assert_eq!(e("timeout"), ErrorCode::AgentNotReady);
+        assert_eq!(e("agent_pane_busy"), ErrorCode::AgentNotReady);
         assert_eq!(e("pane_not_found"), ErrorCode::NotFound);
-        assert_eq!(e("workspace_group_close_required"), ErrorCode::Internal);
+        assert_eq!(
+            e("workspace_group_close_required"),
+            ErrorCode::NotImplemented
+        );
+        assert_eq!(e("agent_prompt_failed"), ErrorCode::Internal);
         assert_eq!(
             herdr_fail(herdr::Error::Timeout).0,
             ErrorCode::HerdrUnavailable

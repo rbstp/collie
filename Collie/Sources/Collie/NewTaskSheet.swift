@@ -14,6 +14,11 @@ struct NewTaskSheet: View {
         _model = State(initialValue: NewTaskModel(core: core, machines: machines))
     }
 
+    private func cancel() {
+        model.cancel()
+        startTask?.cancel()
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -76,7 +81,7 @@ struct NewTaskSheet: View {
                 Section {
                     Button {
                         startTask = Task {
-                            if let route = await model.start(), !Task.isCancelled {
+                            if let route = await model.start() {
                                 dismiss()
                                 onStarted(route)
                             }
@@ -101,11 +106,14 @@ struct NewTaskSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(model.phase == .startedNotVisible ? "Done" : "Cancel") { dismiss() }
+                    Button(model.phase == .startedNotVisible ? "Done" : "Cancel") {
+                        cancel()
+                        dismiss()
+                    }
                 }
             }
             .task(id: model.machineId) { await model.loadOptions() }
-            .onDisappear { startTask?.cancel() }
+            .onDisappear(perform: cancel)
         }
     }
 }

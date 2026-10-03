@@ -56,6 +56,15 @@ pub enum Request {
     PushRegister(PushRegisterParams),
     #[serde(rename = "push.activity_token")]
     PushActivityToken(PushActivityTokenParams),
+
+    #[serde(rename = "attachment.begin")]
+    AttachmentBegin(AttachmentBeginParams),
+    #[serde(rename = "attachment.chunk")]
+    AttachmentChunk(AttachmentChunkParams),
+    #[serde(rename = "attachment.commit")]
+    AttachmentCommit(AttachmentCommitParams),
+    #[serde(rename = "attachment.abort")]
+    AttachmentAbort(AttachmentAbortParams),
 }
 
 impl Request {
@@ -78,6 +87,10 @@ impl Request {
         "approval.decide",
         "push.register",
         "push.activity_token",
+        "attachment.begin",
+        "attachment.chunk",
+        "attachment.commit",
+        "attachment.abort",
     ];
 
     pub fn method(&self) -> &'static str {
@@ -100,6 +113,10 @@ impl Request {
             Self::ApprovalDecide(_) => "approval.decide",
             Self::PushRegister(_) => "push.register",
             Self::PushActivityToken(_) => "push.activity_token",
+            Self::AttachmentBegin(_) => "attachment.begin",
+            Self::AttachmentChunk(_) => "attachment.chunk",
+            Self::AttachmentCommit(_) => "attachment.commit",
+            Self::AttachmentAbort(_) => "attachment.abort",
         }
     }
 
@@ -118,7 +135,11 @@ impl Request {
             | Self::AgentFocus(_)
             | Self::TaskNew(_)
             | Self::WorkspaceClose(_)
-            | Self::PaneClose(_) => MethodClass::Drive,
+            | Self::PaneClose(_)
+            | Self::AttachmentBegin(_)
+            | Self::AttachmentChunk(_)
+            | Self::AttachmentCommit(_)
+            | Self::AttachmentAbort(_) => MethodClass::Drive,
             Self::ApprovalDecide(_) => MethodClass::Approval,
             Self::PushRegister(_) | Self::PushActivityToken(_) => MethodClass::Push,
         }
@@ -208,6 +229,10 @@ pub enum Key {
     Up,
     #[serde(rename = "down")]
     Down,
+    #[serde(rename = "left")]
+    Left,
+    #[serde(rename = "right")]
+    Right,
     #[serde(rename = "tab")]
     Tab,
     #[serde(rename = "shift+tab")]
@@ -227,6 +252,8 @@ impl Key {
             Self::Esc => "esc",
             Self::Up => "up",
             Self::Down => "down",
+            Self::Left => "left",
+            Self::Right => "right",
             Self::Tab => "tab",
             Self::ShiftTab => "shift+tab",
             Self::CtrlC => "ctrl+c",
@@ -309,6 +336,7 @@ pub struct PushRegisterParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_activity_push_to_start_token: Option<PushToken>,
     pub environment: ApnsEnvironment,
+    pub notification_key: NotificationKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -317,6 +345,45 @@ pub struct PushActivityTokenParams {
     pub activity_id: ActivityId,
     pub terminal_id: TerminalId,
     pub token: PushToken,
+}
+
+/// `sha256` covers the whole file; collied checks it and the size before keeping it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AttachmentBeginParams {
+    pub op_id: OpId,
+    pub name: AttachmentName,
+    #[schemars(range(min = 1, max = 20971520))]
+    pub size: u64,
+    pub sha256: Sha256Hex,
+}
+
+impl AttachmentBeginParams {
+    pub fn is_valid(&self) -> bool {
+        (1..=limits::MAX_ATTACHMENT_BYTES).contains(&self.size)
+    }
+}
+
+/// Chunks arrive in order: `offset` is the number of bytes already received.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AttachmentChunkParams {
+    pub upload_id: UploadId,
+    pub offset: u64,
+    pub data: ChunkData,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AttachmentCommitParams {
+    pub op_id: OpId,
+    pub upload_id: UploadId,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AttachmentAbortParams {
+    pub upload_id: UploadId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -361,6 +428,13 @@ pub enum Response {
     ApprovalResolved {
         approval_id: ApprovalId,
         outcome: ApprovalOutcome,
+    },
+    AttachmentStarted {
+        upload_id: UploadId,
+    },
+    /// Absolute path of the stored file on the Mac.
+    AttachmentStored {
+        path: String,
     },
     Ok,
 }
@@ -521,6 +595,8 @@ pub enum ErrorCode {
     RateLimited,
     HerdrUnavailable,
     NotImplemented,
+    TooLarge,
+    ChecksumMismatch,
     Internal,
     #[serde(other)]
     Unrecognized,
@@ -593,6 +669,7 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
     let valid = match &request {
         Request::AgentRead(p) | Request::PaneRead(p) => p.is_valid(),
         Request::AgentSendKeys(p) => p.is_valid(),
+        Request::AttachmentBegin(p) => p.is_valid(),
         _ => true,
     };
     if !valid {
@@ -688,6 +765,40 @@ mod tests {
             "a".repeat(limits::MAX_FRAME_BYTES)
         );
         assert_eq!(parse(&big).unwrap_err().code, ErrorCode::FrameTooLarge);
+    }
+
+    #[test]
+    fn attachment_begin_size_is_bounded() {
+        let begin = |size: u64| {
+            format!(
+                r#"{{"id":1,"method":"attachment.begin","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","name":"a.png","size":{size},"sha256":"{}"}}}}"#,
+                "0".repeat(64)
+            )
+        };
+        assert!(parse(&begin(1)).is_ok());
+        assert!(parse(&begin(limits::MAX_ATTACHMENT_BYTES)).is_ok());
+        for size in [0, limits::MAX_ATTACHMENT_BYTES + 1] {
+            assert_eq!(
+                parse(&begin(size)).unwrap_err().code,
+                ErrorCode::InvalidParams
+            );
+        }
+    }
+
+    #[test]
+    fn largest_chunk_fits_a_frame() {
+        let frame = ClientFrame {
+            id: RequestId::MAX,
+            request: Request::AttachmentChunk(AttachmentChunkParams {
+                upload_id: UploadId::new("f".repeat(32)).unwrap(),
+                offset: limits::MAX_ATTACHMENT_BYTES,
+                data: ChunkData::new("A".repeat(43691) + "=").unwrap(),
+            }),
+        };
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.len() < limits::MAX_FRAME_BYTES, "{}", json.len());
+        assert_eq!(parse(&json).unwrap(), frame);
+        assert!(!format!("{frame:?}").contains("AAAA"));
     }
 
     #[test]

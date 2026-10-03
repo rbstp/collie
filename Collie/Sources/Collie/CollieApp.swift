@@ -2,7 +2,7 @@ import SwiftUI
 
 @main
 struct CollieApp: App {
-    @State private var app = AppModel()
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -10,37 +10,62 @@ struct CollieApp: App {
             #if DEBUG
             if let demo = AgentDemo(arguments: CommandLine.arguments) {
                 demo
+            } else if let demo = ApprovalsDemo(arguments: CommandLine.arguments) {
+                demo
             } else {
-                RootView(app: app)
-                    .task { await app.launch() }
+                RootView(app: delegate.app)
+                    .task { await delegate.app.launch() }
             }
             #else
-            RootView(app: app)
-                .task { await app.launch() }
+            RootView(app: delegate.app)
+                .task { await delegate.app.launch() }
             #endif
         }
         .onChange(of: scenePhase) { _, phase in
-            app.scenePhaseChanged(to: phase)
+            delegate.app.scenePhaseChanged(to: phase)
         }
     }
 }
 
 struct RootView: View {
-    let app: AppModel
+    @Bindable var app: AppModel
 
     var body: some View {
         if let error = app.startupError {
             ContentUnavailableView("collie could not start", systemImage: "exclamationmark.triangle", description: Text(error))
-        } else if app.isRunning {
-            TabView {
-                Tab("Agents", systemImage: "square.grid.2x2") { FlockScreen(app: app) }
-                Tab("Machines", systemImage: "desktopcomputer") { MachinesView(app: app) }
-                Tab("Settings", systemImage: "gearshape") { SettingsView(app: app) }
+        } else if app.showsMain {
+            TabView(selection: $app.tab) {
+                Tab("Agents", systemImage: "square.grid.2x2", value: AppTab.agents) {
+                    FlockScreen(core: app.core, machines: app.machines, approvals: app.approvals)
+                }
+                Tab("Approvals", systemImage: "checkmark.shield", value: AppTab.approvals) {
+                    ApprovalsScreen(model: app.approvals)
+                }
+                .badge(app.approvals.items.count)
+                Tab("Machines", systemImage: "desktopcomputer", value: AppTab.machines) { MachinesView(app: app) }
+                Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView(app: app) }
+            }
+            .task { await app.enableNotifications() }
+            .task {
+                while !Task.isCancelled {
+                    app.approvals.poll()
+                    try? await Task.sleep(for: .seconds(1))
+                }
             }
             .task {
-                while !Task.isCancelled && app.isRunning {
-                    try? await Task.sleep(for: .seconds(5))
+                while !Task.isCancelled && app.showsMain {
+                    try? await Task.sleep(for: .seconds(app.isRunning ? 5 : 1))
                     await app.refreshNode()
+                }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if !app.isRunning {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Connecting…").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
                 }
             }
         } else {

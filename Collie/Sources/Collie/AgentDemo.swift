@@ -2,9 +2,10 @@
 import CollieCore
 import Foundation
 import SwiftUI
+import UserNotifications
 
-/// `--terminal-demo <file>`: the agent screen over the first "text" string of a herdr JSON
-/// response (or the raw file), with no Mac. Debug builds only.
+/// `--terminal-demo <file>`: the Agents list over fake agents, each agent screen showing the
+/// first "text" string of a herdr JSON response (or the raw file), with no Mac. Debug builds only.
 struct AgentDemo: View {
     let core: DemoAgentCore
 
@@ -17,8 +18,13 @@ struct AgentDemo: View {
     }
 
     var body: some View {
-        NavigationStack {
-            AgentScreen(core: core, route: DemoAgentCore.route)
+        TabView {
+            Tab("Agents", systemImage: "square.grid.2x2") {
+                FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: nil)
+            }
+            Tab("Approvals", systemImage: "checkmark.shield") { Color.clear }
+            Tab("Machines", systemImage: "desktopcomputer") { Color.clear }
+            Tab("Settings", systemImage: "gearshape") { Color.clear }
         }
     }
 
@@ -34,23 +40,39 @@ struct AgentDemo: View {
     }
 }
 
-final class DemoAgentCore: AgentCore {
-    static let route = AgentRoute(machineId: "demo", terminalId: "term_demo")
+final class DemoAgentCore: FlockCore {
+    static let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO")
 
     let snapshot: String
-    private let since = UInt64(Date.now.timeIntervalSince1970 * 1000) - 135_000
+    private let agents: [AgentSummary]
 
     init(snapshot: String) {
         self.snapshot = snapshot
+        let now = UInt64(Date.now.timeIntervalSince1970 * 1000)
+        agents = [
+            AgentSummary(
+                terminalId: "term_demo", workspaceId: "ws_collie", kind: "claude", name: nil, title: "fix the build",
+                status: .working, statusSinceMs: now - 135_000, cwd: "/Users/demo/collie", lastLine: nil
+            ),
+            AgentSummary(
+                terminalId: "term_2", workspaceId: "ws_collie", kind: "codex", name: nil, title: "add approval tests",
+                status: .blocked, statusSinceMs: now - 42_000, cwd: "/Users/demo/collie", lastLine: nil
+            ),
+            AgentSummary(
+                terminalId: "term_3", workspaceId: "ws_site", kind: "claude", name: nil, title: "update the docs",
+                status: .idle, statusSinceMs: now - 900_000, cwd: "/Users/demo/website", lastLine: nil
+            ),
+        ]
     }
+
+    func machines() -> [Machine] { [Self.machine] }
+
+    func cachedFlock(machineId: String) -> MachineFlock? { demoFlock }
 
     func agentView(machineId: String, terminalId: String, afterRevision: UInt64) -> AgentView? {
         AgentView(
             link: .connected, lastError: nil,
-            agent: AgentSummary(
-                terminalId: terminalId, workspaceId: "ws_demo", kind: "claude", name: nil, title: "fix the build",
-                status: .working, statusSinceMs: since, cwd: "/Users/demo/project", lastLine: nil
-            ),
+            agent: agents.first { $0.terminalId == terminalId },
             output: afterRevision < 1 ? read(terminalId) : nil,
             outputRevision: 1
         )
@@ -86,12 +108,103 @@ final class DemoAgentCore: AgentCore {
         throw CoreError.NotImplemented
     }
 
-    func flock(machineId: String) async throws -> MachineFlock {
-        throw CoreError.MachineNotFound
+    func flock(machineId: String) async throws -> MachineFlock { demoFlock }
+
+    func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String {
+        let total = UInt64(data.count)
+        for step in 1...10 {
+            try await Task.sleep(for: .milliseconds(150))
+            progress.onProgress(sent: total * UInt64(step) / 10, total: total)
+        }
+        return "/Users/demo/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/\(name)"
+    }
+
+    func maxAttachmentBytes() -> UInt64 { 20 * 1024 * 1024 }
+
+    func cancelUploads(machineId: String) {}
+
+    private var demoFlock: MachineFlock {
+        MachineFlock(
+            machine: Self.machine, link: .connected, lastError: nil,
+            details: MachineDetails(name: "MacBook Pro", nodeId: "nDEMO", herdrSession: "default"),
+            workspaces: [
+                WorkspaceSummary(workspaceId: "ws_collie", label: "collie", number: 1, status: .blocked, cwd: "/Users/demo/collie"),
+                WorkspaceSummary(workspaceId: "ws_site", label: "website", number: 2, status: .idle, cwd: "/Users/demo/website"),
+            ],
+            agents: agents, approvalsCount: 1
+        )
     }
 
     private func read(_ terminalId: String) -> TerminalSnapshot {
         TerminalSnapshot(terminalId: terminalId, source: .recent, ansi: snapshot, truncated: false)
+    }
+}
+
+/// `--approvals-demo`: the Approvals tab over fake approvals, with no Mac. Debug builds only.
+struct ApprovalsDemo: View {
+    @State private var model = ApprovalsModel(core: DemoApprovalCore(), auth: DemoAuthenticator())
+    @State private var tab = AppTab.approvals
+
+    init?(arguments: [String]) {
+        guard arguments.contains("--approvals-demo") else { return nil }
+    }
+
+    var body: some View {
+        TabView(selection: $tab) {
+            Tab("Agents", systemImage: "square.grid.2x2", value: AppTab.agents) { Color.clear }
+            Tab("Approvals", systemImage: "checkmark.shield", value: AppTab.approvals) { ApprovalsScreen(model: model) }
+                .badge(model.items.count)
+            Tab("Machines", systemImage: "desktopcomputer", value: AppTab.machines) { Color.clear }
+            Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { Color.clear }
+        }
+        .task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) }
+    }
+}
+
+struct DemoAuthenticator: Authenticator {
+    func authenticate(reason: String) async -> Bool { true }
+}
+
+final class DemoApprovalCore: ApprovalCore {
+    private let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO")
+    private let pending: [PendingApproval]
+
+    init() {
+        let now = UInt64(Date.now.timeIntervalSince1970 * 1000)
+        pending = [
+            PendingApproval(
+                approvalId: "ap_demo1", terminalId: "term_1", agentLabel: "fix the flaky test", workspaceLabel: "collie",
+                snippet: """
+                Bash command
+                  cargo test -p collied --test approvals
+                Do you want to proceed?
+                > 1. Yes
+                  2. Yes, and don't ask again for cargo test commands
+                  3. No, and tell Claude what to do differently (esc)
+                """,
+                toolName: "Bash", toolSummary: "cargo test -p collied --test approvals",
+                options: [.approve, .approveAlways, .deny], createdAtMs: now - 45_000, expiresAtMs: now + 555_000
+            ),
+            PendingApproval(
+                approvalId: "ap_demo2", terminalId: "term_2", agentLabel: "claude", workspaceLabel: "website",
+                snippet: "Do you trust the files in this folder?\n> 1. Yes, proceed\n  2. No, exit",
+                toolName: nil, toolSummary: nil,
+                options: [.approve, .deny], createdAtMs: now - 10_000, expiresAtMs: now + 190_000
+            ),
+        ]
+    }
+
+    func machines() -> [Machine] { [machine] }
+
+    func approvalFeed(machineId: String, afterRevision: UInt64) -> ApprovalFeed? {
+        ApprovalFeed(link: .connected, revision: 1, missed: false, events: [], pending: pending)
+    }
+
+    func flock(machineId: String) async throws -> MachineFlock { throw CoreError.MachineNotFound }
+
+    func decide(machineId: String, approvalId: String, decision: ApprovalDecision) async throws -> DecisionOutcome {
+        try await Task.sleep(for: .milliseconds(500))
+        return .applied(decision: decision, by: "demo")
     }
 }
 #endif

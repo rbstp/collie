@@ -12,11 +12,15 @@ final class AgentModel {
     private(set) var link: LinkPhase?
     private(set) var linkError: String?
     private(set) var ansi = ""
+    private(set) var refreshing = false
     private var revision: UInt64 = 0
 
     var draft = ""
     private(set) var sendingPrompt = false
     private(set) var promptError: String?
+    private(set) var upload: AttachmentUpload?
+    private var uploadTask: Task<Void, Never>?
+    private(set) var attachments: [AttachedFile] = []
 
     private(set) var notice: String?
     private(set) var keyTaps = 0
@@ -26,16 +30,25 @@ final class AgentModel {
     var close = CloseConfirmation()
     private(set) var closed = false
 
+    private let prefsFile: URL?
+    var wrapLines: Bool {
+        didSet { DevicePrefs(wrapLines: wrapLines).save(to: prefsFile) }
+    }
+
     // One chain for every screen: a late unwatch from a popped screen must not land after
     // the next screen's watch.
     private static var watchChain: Task<Void, Never>?
 
-    init(core: any AgentCore, route: AgentRoute) {
+    init(core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file) {
         self.core = core
         self.route = route
+        self.prefsFile = prefsFile
+        wrapLines = DevicePrefs.load(from: prefsFile).wrapLines
     }
 
-    var canSendPrompt: Bool { !sendingPrompt && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var canSendPrompt: Bool {
+        !sendingPrompt && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+    }
 
     /// Runs while the screen is visible: watch, poll the core at 10 Hz, unwatch on cancel.
     func run() async {
@@ -59,6 +72,9 @@ final class AgentModel {
     }
 
     func refresh() async {
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
         do {
             ansi = try await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent).ansi
             notice = nil
@@ -67,18 +83,105 @@ final class AgentModel {
         }
     }
 
+    /// Text typed and files attached while the send is in flight stay for the next prompt.
+    /// Paths on the Mac never have spaces, so they are set apart by single spaces.
     func sendPrompt() async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sendingPrompt, !text.isEmpty else { return }
+        let sent = draft
+        let files = attachments
+        let typed = sent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sendingPrompt, !typed.isEmpty || !files.isEmpty else { return }
+        let text = (files.map(\.path) + [typed].filter { !$0.isEmpty }).joined(separator: " ")
         sendingPrompt = true
         promptError = nil
         defer { sendingPrompt = false }
         do {
             try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text)
-            draft = ""
+            let sentIds = Set(files.map(\.id))
+            attachments.removeAll { sentIds.contains($0.id) }
+            if draft.hasPrefix(sent) {
+                draft = String(draft.dropFirst(sent.count).drop(while: \.isWhitespace))
+            }
         } catch {
             promptError = Self.message(for: error)
         }
+    }
+
+    var attachmentSlots: Int { Attachment.maxPerPrompt - attachments.count }
+
+    func remove(_ file: AttachedFile) {
+        attachments.removeAll { $0.id == file.id }
+    }
+
+    @discardableResult
+    func attach(name: String, load: @escaping @Sendable (UInt64) async throws -> Data) -> Task<Void, Never>? {
+        attach([PendingAttachment(name: name, load: load)])
+    }
+
+    /// One batch at a time, uploaded in order; each uploaded file joins `attachments`.
+    /// A file that fails is reported and the rest still go.
+    @discardableResult
+    func attach(_ items: [PendingAttachment]) -> Task<Void, Never>? {
+        guard upload == nil, !items.isEmpty else { return nil }
+        promptError = nil
+        let slots = max(attachmentSlots, 0)
+        var firstError: (any Error)? = items.count > slots ? AttachmentError.tooMany(limit: Attachment.maxPerPrompt) : nil
+        let batch = Array(items.prefix(slots))
+        guard !batch.isEmpty else {
+            promptError = firstError.map(Self.message(for:))
+            return nil
+        }
+        let core = core
+        let machineId = route.machineId
+        let limit = core.maxAttachmentBytes()
+        let first = UUID()
+        upload = AttachmentUpload(id: first, name: batch[0].name, count: batch.count)
+        let task = Task {
+            for (offset, item) in batch.enumerated() {
+                if Task.isCancelled { break }
+                let id = offset == 0 ? first : UUID()
+                upload = AttachmentUpload(id: id, name: item.name, index: offset + 1, count: batch.count)
+                do {
+                    let data = try await item.load(limit)
+                    try Attachment.check(data, limit: limit)
+                    try Task.checkCancellation()
+                    if upload?.id == id { upload?.total = UInt64(data.count) }
+                    let progress = UploadProgressRelay { [weak self] sent, total in
+                        Task { @MainActor in self?.uploaded(id, sent: sent, total: total) }
+                    }
+                    let path = try await core.uploadAttachment(machineId: machineId, name: item.name, data: data, progress: progress)
+                    var file = AttachedFile(path: path, name: item.name)
+                    if file.kind == .image { file.thumbnail = await Attachment.thumbnail(from: data) }
+                    try Task.checkCancellation()
+                    attachments.append(file)
+                } catch {
+                    if Task.isCancelled || error is CancellationError { break }
+                    firstError = firstError ?? error
+                }
+            }
+            if !Task.isCancelled, let firstError { promptError = Self.message(for: firstError) }
+            if !Task.isCancelled { upload = nil }
+        }
+        uploadTask = task
+        return task
+    }
+
+    func attachFailed(_ error: any Error) {
+        promptError = Self.message(for: error)
+    }
+
+    /// Swift task cancellation does not reach Rust, so the core is told to abort the upload on the Mac.
+    func cancelUpload() {
+        guard upload != nil else { return }
+        core.cancelUploads(machineId: route.machineId)
+        uploadTask?.cancel()
+        uploadTask = nil
+        upload = nil
+    }
+
+    private func uploaded(_ id: UUID, sent: UInt64, total: UInt64) {
+        guard upload?.id == id, let current = upload, sent >= current.sent else { return }
+        upload?.sent = sent
+        upload?.total = total
     }
 
     /// Keys go out in tap order: taps made while a send is in flight are batched into the next call.
@@ -119,12 +222,7 @@ final class AgentModel {
     func performClose() async {
         guard let target = close.confirm() else { return }
         do {
-            switch target {
-            case .pane:
-                try await core.closePane(machineId: route.machineId, terminalId: route.terminalId, confirm: true)
-            case .workspace(let workspaceId):
-                try await core.closeWorkspace(machineId: route.machineId, workspaceId: workspaceId, confirm: true)
-            }
+            try await core.closeConfirmed(target, route: route)
             closed = true
         } catch {
             notice = Self.message(for: error)
@@ -143,9 +241,21 @@ final class AgentModel {
 
     static func message(for error: any Error) -> String {
         if let error = error as? CoreError, error == .AgentBlocked {
-            return "The agent is waiting for an approval. Approvals from the phone come in Phase 3; answer it on the Mac for now."
+            return "The agent is waiting for an approval. Answer it above or in the Approvals tab."
         }
         return describe(error)
+    }
+}
+
+extension AgentCore {
+    /// Only for a target that `CloseConfirmation.confirm()` returned.
+    func closeConfirmed(_ target: CloseTarget, route: AgentRoute) async throws {
+        switch target {
+        case .pane:
+            try await closePane(machineId: route.machineId, terminalId: route.terminalId, confirm: true)
+        case .workspace(let workspaceId):
+            try await closeWorkspace(machineId: route.machineId, workspaceId: workspaceId, confirm: true)
+        }
     }
 }
 
@@ -191,7 +301,7 @@ struct CloseConfirmation: Equatable {
 }
 
 extension AgentKey {
-    static let strip: [AgentKey] = [.esc, .enter, .up, .down, .tab, .shiftTab, .ctrlC, .y, .n]
+    static let strip: [AgentKey] = [.esc, .enter, .left, .up, .down, .right, .tab, .shiftTab, .ctrlC]
 
     var symbol: String {
         switch self {
@@ -199,6 +309,8 @@ extension AgentKey {
         case .enter: "⏎"
         case .up: "↑"
         case .down: "↓"
+        case .left: "←"
+        case .right: "→"
         case .tab: "⇥"
         case .shiftTab: "⇧⇥"
         case .ctrlC: "^C"
@@ -213,6 +325,8 @@ extension AgentKey {
         case .enter: "Return"
         case .up: "Up arrow"
         case .down: "Down arrow"
+        case .left: "Left arrow"
+        case .right: "Right arrow"
         case .tab: "Tab"
         case .shiftTab: "Shift Tab"
         case .ctrlC: "Control C"

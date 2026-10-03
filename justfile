@@ -20,6 +20,33 @@ lint:
 test:
     cargo test --workspace
 
+# Release build of collied signed with the team RM3UT3MMSR Developer ID, installed to ~/.cargo/bin.
+collied-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    identity="$(security find-identity -v -p codesigning \
+        | sed -n 's/^ *[0-9][0-9]*) [0-9A-F]\{40\} "\(Developer ID Application: .* (RM3UT3MMSR)\)"$/\1/p' | head -n 1)"
+    [ -n "$identity" ] || { echo "no valid \"Developer ID Application: ... (RM3UT3MMSR)\" identity in the keychain"; exit 1; }
+    cargo build --release -p collied
+    bin=target/release/collied
+    codesign --force --sign "$identity" --identifier dev.rbstp.collied --options runtime --timestamp "$bin"
+    codesign --verify --strict --verbose=2 "$bin"
+    dest="$HOME/.cargo/bin/collied"
+    mkdir -p "$(dirname "$dest")"
+    # A fresh inode: rewriting a signed binary in place can get the running copy killed.
+    tmp="$(mktemp "$(dirname "$dest")/.collied.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
+    cp "$bin" "$tmp"
+    chmod 0755 "$tmp"
+    mv -f "$tmp" "$dest"
+    codesign --verify --strict --verbose=2 "$dest"
+    echo "installed $dest, signed by $identity"
+    agent="gui/$(id -u)/dev.rbstp.collied"
+    if launchctl print "$agent" >/dev/null 2>&1; then
+        launchctl kickstart -k "$agent"
+        echo "restarted $agent"
+    fi
+
 ios_deployment_target := "26.0"
 sim := "iPhone 18 Pro"
 xcodebuild := "xcodebuild -project Collie/Collie.xcodeproj -scheme Collie -derivedDataPath target/ios/DerivedData"

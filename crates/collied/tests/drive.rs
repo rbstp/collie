@@ -16,6 +16,19 @@ use tokio::net::UnixListener;
 const CLAUDE: &str = "term_65ce7ae4fd5731";
 const CODEX_BLOCKED: &str = "term_0a1b2c3d4e5f60";
 const SHELL: &str = "term_ffffffffffff01";
+const TRUST: &str = "\
+────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /Users/me/src/new-project
+
+ Quick safety check: Is this a project you created or one you trust?
+
+ ❯ 1. Yes, I trust this folder
+   2. No, exit
+
+ Enter to confirm · Esc to cancel
+";
 const MUTATING: [&str; 9] = [
     "agent.prompt",
     "agent.send_keys",
@@ -306,7 +319,9 @@ async fn reads_resolve_the_pane_and_sanitize() {
     assert_eq!(read.terminal_id.as_str(), CLAUDE);
     assert_eq!(
         herdr.params("agent.read"),
-        vec![json!({"target": "w6:p1", "source": "recent", "lines": 50, "format": "ansi"})]
+        vec![
+            json!({"target": "w6:p1", "source": "recent_unwrapped", "lines": 50, "format": "ansi"})
+        ]
     );
 
     let reply = drive
@@ -400,7 +415,7 @@ async fn prompt_rechecks_the_agent_before_writing() {
         ("agent_blocked", ErrorCode::AgentBlocked),
         ("agent_not_ready", ErrorCode::AgentNotReady),
         ("empty_agent_prompt", ErrorCode::InvalidParams),
-        ("timeout", ErrorCode::HerdrUnavailable),
+        ("timeout", ErrorCode::AgentNotReady),
     ] {
         herdr.fail_next("agent.prompt", &[herdr_code]);
         assert_eq!(
@@ -537,6 +552,7 @@ async fn task_new_starts_waits_and_prompts() {
         h.gets.extend([
             started_agent("unknown", false, true),
             started_agent("idle", true, false),
+            started_agent("idle", true, false),
         ])
     });
     let (reply, cwd) = drive
@@ -560,6 +576,7 @@ async fn task_new_starts_waits_and_prompts() {
             "agent.start",
             "agent.get",
             "agent.get",
+            "agent.get",
             "agent.prompt"
         ]
     );
@@ -573,9 +590,10 @@ async fn task_new_starts_waits_and_prompts() {
     assert_eq!(start["kind"], "claude");
     assert_eq!(start["pane_id"], "w9:p1");
     assert_eq!(herdr.params("agent.get")[0], json!({"target": name}));
+    assert_eq!(herdr.params("agent.get")[2], json!({"target": name}));
     assert_eq!(
         herdr.params("agent.prompt"),
-        vec![json!({"target": "w9:p1", "text": "write the tests"})]
+        vec![json!({"target": name, "text": "write the tests"})]
     );
 }
 
@@ -605,12 +623,36 @@ async fn task_new_refusals() {
         .await
         .0
         .unwrap_err();
-    assert_eq!(code, ErrorCode::AgentNotReady);
+    assert_eq!(code, ErrorCode::AgentBlocked);
     assert!(
-        message.contains("workspace w9 was created and left open"),
+        message.contains("workspace w9 was created and left open")
+            && message.contains("startup prompt"),
         "{message}"
     );
     assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
+
+    // Claude Code's folder trust question is never answered for the user, even when it
+    // only shows up after the agent looked ready.
+    herdr.with(|h| {
+        h.calls.clear();
+        h.text = TRUST.into();
+        h.gets.extend([
+            started_agent("idle", true, false),
+            started_agent("blocked", true, false),
+        ]);
+    });
+    let (code, message) = drive
+        .task_new(task(&base.join("root/a"), "claude"), &yes())
+        .await
+        .0
+        .unwrap_err();
+    assert_eq!(code, ErrorCode::AgentBlocked);
+    assert!(message.contains("trust this folder"), "{message}");
+    assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
+    assert_eq!(
+        herdr.params("pane.read"),
+        vec![json!({"pane_id": "w9:p1", "source": "detection", "format": "text"})]
+    );
 
     herdr.with(|h| h.calls.clear());
     herdr.with(|h| h.gets.push_back(started_agent("idle", false, false)));
@@ -640,7 +682,12 @@ async fn task_new_refusals() {
     // Allows workspace.create and agent.start, then revokes before the prompt.
     let auth: Authorized =
         Arc::new(move || seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2);
-    herdr.with(|h| h.gets.push_back(started_agent("idle", true, false)));
+    herdr.with(|h| {
+        h.gets.extend([
+            started_agent("idle", true, false),
+            started_agent("idle", true, false),
+        ])
+    });
     let (code, _) = drive
         .task_new(task(&base.join("root/a"), "claude"), &auth)
         .await
@@ -663,8 +710,8 @@ async fn task_new_refusals() {
             .await
             .0
             .unwrap_err();
-        assert_eq!(code, ErrorCode::Internal);
-        assert!(message.contains("agent_pane_busy"), "{message}");
+        assert_eq!(code, ErrorCode::AgentNotReady);
+        assert!(message.contains("the pane is busy"), "{message}");
         assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
     }
 }
@@ -741,7 +788,7 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
     let reads = herdr.params("agent.read");
     assert_eq!(
         reads[0],
-        json!({"target": "w6:p1", "source": "recent", "lines": 120, "format": "ansi"})
+        json!({"target": "w6:p1", "source": "recent_unwrapped", "lines": 240, "format": "ansi"})
     );
 
     assert!(

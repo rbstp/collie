@@ -157,8 +157,8 @@ struct PairView: View {
 
     private func pair() async {
         await model.pair(core: app.core)
-        if model.paired != nil {
-            app.reloadMachines()
+        if let machine = model.paired {
+            app.machinePaired(machine)
             dismiss()
         }
     }

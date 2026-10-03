@@ -1,7 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +19,7 @@ pub struct MachineStore {
 }
 
 const FILE: &str = "machines.json";
+#[cfg(test)]
 const TMP: &str = ".machines.json.tmp";
 const CORRUPT: &str = "machines.json.corrupt";
 
@@ -44,25 +45,30 @@ impl MachineStore {
         }
     }
 
-    /// Written to a fresh 0600 file, fsynced, then renamed over the old one, so a
-    /// crash leaves either the previous list or the new one.
     pub fn save(&self, machines: &[Machine]) -> std::io::Result<()> {
-        let tmp = self.dir.join(TMP);
-        match fs::remove_file(&tmp) {
-            Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
-            _ => {}
-        }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        file.write_all(&serde_json::to_vec_pretty(machines).map_err(std::io::Error::other)?)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&tmp, self.dir.join(FILE))?;
-        File::open(&self.dir)?.sync_all()
+        let bytes = serde_json::to_vec_pretty(machines).map_err(std::io::Error::other)?;
+        write_atomic(&self.dir, FILE, &bytes)
     }
+}
+
+/// Written to a fresh 0600 file, fsynced, then renamed over the old one, so a crash
+/// leaves either the previous content or the new one.
+pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = dir.join(format!(".{name}.tmp"));
+    match fs::remove_file(&tmp) {
+        Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp, dir.join(name))?;
+    File::open(dir)?.sync_all()
 }
 
 pub fn random_id() -> String {

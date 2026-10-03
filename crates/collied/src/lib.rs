@@ -1,3 +1,5 @@
+pub mod approvals;
+pub mod attachments;
 pub mod audit;
 pub mod config;
 pub mod control;
@@ -7,8 +9,11 @@ pub mod drive;
 pub mod flock;
 pub mod gate;
 pub mod herdr;
+pub mod keychain;
 pub mod pairing;
 pub mod peers;
+pub mod prompt;
+pub mod push;
 pub mod server;
 pub mod service;
 
