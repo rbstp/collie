@@ -22,7 +22,15 @@ use zeroize::Zeroizing;
 const KNOBS: [(&str, &str); 1] = [("TS_DISABLE_PORTMAPPER", "1")];
 const PORT: u16 = 8457;
 const WATCHDOG: Duration = Duration::from_secs(300);
-const READ_ONLY_HERDR: [&str; 4] = ["ping", "session.snapshot", "agent.list", "workspace.list"];
+const HERDR_CALLED: [&str; 7] = [
+    "ping",
+    "session.snapshot",
+    "agent.list",
+    "workspace.list",
+    "agent.read",
+    "agent.focus",
+    "agent.get",
+];
 
 type Ws = WebSocketStream<UnixStream>;
 
@@ -315,17 +323,64 @@ async fn scenario(
         json!({"id": 5, "method": "agent.focus", "params": {"terminal_id": "term_65ce7ae4fd5731"}}),
     )
     .await;
+    assert_eq!(result(recv(&mut ws).await), Response::Ok);
+    send(
+        &mut ws,
+        json!({"id": 50, "method": "approval.list", "params": {}}),
+    )
+    .await;
     assert_error(&recv(&mut ws).await, ErrorCode::NotImplemented);
 
+    println!("drive refusals go through the op cache and the task runner");
+    let blocked = json!({"id": 53, "method": "agent.prompt", "params": {
+        "op_id": "AAAAAAAAAAAAAAAAAAAAAA", "terminal_id": "term_0a1b2c3d4e5f60", "text": "go"}});
+    send(&mut ws, blocked.clone()).await;
+    assert_error(&recv(&mut ws).await, ErrorCode::AgentBlocked);
+    send(&mut ws, blocked).await;
+    assert_error(&recv(&mut ws).await, ErrorCode::AgentBlocked);
+    send(
+        &mut ws,
+        json!({"id": 54, "method": "task.new", "params": {
+            "op_id": "BBBBBBBBBBBBBBBBBBBBBB", "cwd": "/", "agent": "claude", "prompt": "go"}}),
+    )
+    .await;
+    let frame = recv(&mut ws).await;
+    assert!(
+        matches!(&frame, ServerFrame::Error { id: Some(54), error } if error.code == ErrorCode::InvalidParams),
+        "{frame:?}"
+    );
+
+    println!("agent.watch pushes sanitized output as events");
+    send(
+        &mut ws,
+        json!({"id": 51, "method": "agent.watch", "params": {"terminal_id": "term_65ce7ae4fd5731"}}),
+    )
+    .await;
+    assert_eq!(result(recv(&mut ws).await), Response::Ok);
+    let ServerFrame::Event { seq, event } = recv(&mut ws).await else {
+        panic!("expected an event");
+    };
+    assert_eq!(seq, 1);
+    assert!(
+        matches!(&event, Event::AgentOutput(read) if read.ansi == "\u{1b}[1mhi\u{1b}[0m\r\n"),
+        "{event:?}"
+    );
+    send(
+        &mut ws,
+        json!({"id": 52, "method": "agent.watch", "params": {"terminal_id": null}}),
+    )
+    .await;
+    assert_eq!(result(recv(&mut ws).await), Response::Ok);
+
     // The change must land after the reconcile task has taken its first baseline.
-    while !herdr.methods().iter().any(|m| m == "agent.list") {
+    while !herdr.methods().iter().any(|m| m == "workspace.list") {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     herdr.set_status(0, "idle");
     let ServerFrame::Event { seq, event } = recv(&mut ws).await else {
         panic!("expected an event");
     };
-    assert_eq!(seq, 1);
+    assert_eq!(seq, 2);
     assert!(matches!(
         event,
         Event::AgentStatus { agent } if agent.terminal_id.as_str() == "term_65ce7ae4fd5731" && agent.status == AgentStatus::Idle
@@ -335,7 +390,7 @@ async fn scenario(
         json!({"id": 6, "method": "flock.snapshot", "params": {}}),
     )
     .await;
-    assert!(matches!(result(recv(&mut ws).await), Response::Flock(f) if f.seq == 1));
+    assert!(matches!(result(recv(&mut ws).await), Response::Flock(f) if f.seq == 2));
 
     println!("a fifth session from one node evicts its oldest");
     let mut extra = Vec::new();
@@ -437,6 +492,10 @@ async fn scenario(
         "\"result\":\"wrong code\"",
         "\"method\":\"peers.revoke\"",
         "\"method\":\"agent.focus\"",
+        "\"target\":\"term_65ce7ae4fd5731\"",
+        "\"method\":\"agent.watch\"",
+        "\"result\":\"agent_blocked: agent is blocked; answer it through an approval (replayed)\"",
+        "\"result\":\"invalid_params: cwd is outside the allowed roots\"",
         "\"result\":\"hello_required\"",
         "\"result\":\"unsupported_protocol\"",
         "\"result\":\"not_paired\"",
@@ -455,7 +514,7 @@ async fn scenario(
     }
     let called = herdr.methods();
     assert!(
-        called.iter().all(|m| READ_ONLY_HERDR.contains(&m.as_str())),
+        called.iter().all(|m| HERDR_CALLED.contains(&m.as_str())),
         "{called:?}"
     );
     handle.shutdown().await;
@@ -646,6 +705,18 @@ impl MockHerdr {
                         "workspace.list" => {
                             json!({"type": "workspace_list", "workspaces": snap["workspaces"]})
                         }
+                        "agent.focus" => json!({"type": "agent_info", "agent": snap["agents"][0]}),
+                        "agent.get" => json!({"type": "agent_info", "agent": snap["agents"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|a| a["pane_id"] == req["params"]["target"])
+                            .unwrap()}),
+                        "agent.read" => json!({"type": "pane_read", "read": {
+                            "pane_id": req["params"]["target"], "workspace_id": "w6", "tab_id": "w6:t1",
+                            "source": "recent", "format": "ansi", "revision": 0, "truncated": false,
+                            "text": "\u{1b}[1mhi\u{1b}[0m\u{1b}]52;c;cm0gLXJmIH4=\u{7}\u{1b}[2J\r\n",
+                        }}),
                         _ => Value::Null,
                     };
                     let resp = if result.is_null() {

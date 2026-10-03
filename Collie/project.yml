@@ -11,6 +11,8 @@ options:
 packages:
   CollieCore:
     path: CollieCore
+  GhosttyTerminal:
+    path: GhosttyTerminal
 
 settings:
   base:
@@ -31,6 +33,7 @@ targets:
       - path: Resources/PrivacyInfo.xcprivacy
     dependencies:
       - package: CollieCore
+      - package: GhosttyTerminal
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie

@@ -127,7 +127,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
     }
     let env = herdr::SocketEnv::from_process();
     let herdr_socket = herdr::resolve_socket_path(config.herdr.session.as_deref(), &env)?;
-    let mut handle = server::start(
+    let mut handle = server::start_with_tasks(
         node,
         ServerConfig {
             data_dir: data_dir.to_owned(),
@@ -137,6 +137,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
             machine_name: config::machine_name(),
         },
         herdr_socket,
+        &config.tasks,
     )
     .await?;
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())

@@ -10,12 +10,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use protocol::{Empty, Label, PairCompleteParams, PairingInvite, Request};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use protocol::{
+    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTarget, AgentWatchParams, Cwd, Empty,
+    ErrorCode, Key, Label, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
+    ReadParams, ReadSource, Request, Response, TaskNewParams, TerminalId, TerminalRead,
+    WorkspaceCloseParams, WorkspaceId, limits,
+};
 use tailnet::{BackendState, Config, Node};
 use zeroize::Zeroizing;
 
 use conn::{Conn, ConnectError, LinkPhase, NodeSlot, RequestError, blocking};
-use session::{CALL_TIMEOUT, SessionError, expect_flock, expect_paired, lock};
+use session::{CALL_TIMEOUT, SessionError, expect_flock, expect_paired, lock, unexpected};
 pub use store::Machine;
 use store::{MachineStore, random_id};
 
@@ -28,6 +35,10 @@ const SETTLE_TIMEOUT: Duration = Duration::from_secs(15);
 const RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
 /// collied holds `pair.complete` until the user confirms on the Mac (up to 65 s).
 const PAIR_CONFIRM_TIMEOUT: Duration = Duration::from_secs(75);
+/// Covers a reconnect (backoff up to 16 s plus the dial) before the retried send.
+const DRIVE_TIMEOUT: Duration = Duration::from_secs(30);
+/// herdr's `agent.start` waits up to 30 s for the agent before collied prompts it.
+const TASK_NEW_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 #[uniffi::export(Display)]
@@ -48,6 +59,25 @@ pub enum CoreError {
     Unreachable { message: String },
     #[error("the Mac rejected the request: {message}")]
     Rejected { message: String },
+    #[error("{message}")]
+    InvalidInput {
+        field: Option<String>,
+        message: String,
+    },
+    #[error("the agent is waiting for an approval")]
+    AgentBlocked,
+    #[error("the agent is not ready for input")]
+    AgentNotReady,
+    #[error("this needs confirmation")]
+    ConfirmRequired,
+    #[error("the agent or workspace no longer exists")]
+    NotFound,
+    #[error("herdr is not running on the Mac")]
+    HerdrUnavailable,
+    #[error("too many requests, try again in a moment")]
+    RateLimited,
+    #[error("the Mac does not support this yet, update collied")]
+    NotImplemented,
     #[error("stopped retrying: {message}. Pair this Mac again.")]
     Unauthorized { message: String },
     #[error("tailnet: {message}")]
@@ -94,7 +124,20 @@ impl From<SessionError> for CoreError {
         let message = e.to_string();
         match e {
             _ if e.is_auth() => Self::Unauthorized { message },
-            SessionError::Server { .. } => Self::Rejected { message },
+            SessionError::Server { code, .. } => match code {
+                ErrorCode::InvalidParams => Self::InvalidInput {
+                    field: None,
+                    message,
+                },
+                ErrorCode::AgentBlocked => Self::AgentBlocked,
+                ErrorCode::AgentNotReady => Self::AgentNotReady,
+                ErrorCode::ConfirmRequired => Self::ConfirmRequired,
+                ErrorCode::NotFound => Self::NotFound,
+                ErrorCode::HerdrUnavailable => Self::HerdrUnavailable,
+                ErrorCode::RateLimited => Self::RateLimited,
+                ErrorCode::NotImplemented => Self::NotImplemented,
+                _ => Self::Rejected { message },
+            },
             _ => Self::Unreachable { message },
         }
     }
@@ -194,6 +237,102 @@ pub struct MachineFlock {
     pub workspaces: Vec<WorkspaceSummary>,
     pub agents: Vec<AgentSummary>,
     pub approvals_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum TerminalSource {
+    Visible,
+    Recent,
+}
+
+impl From<TerminalSource> for ReadSource {
+    fn from(s: TerminalSource) -> Self {
+        match s {
+            TerminalSource::Visible => Self::Visible,
+            TerminalSource::Recent => Self::Recent,
+        }
+    }
+}
+
+impl From<ReadSource> for TerminalSource {
+    fn from(s: ReadSource) -> Self {
+        match s {
+            ReadSource::Visible => Self::Visible,
+            ReadSource::Recent => Self::Recent,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TerminalSnapshot {
+    pub terminal_id: String,
+    pub source: TerminalSource,
+    pub ansi: String,
+    pub truncated: bool,
+}
+
+impl From<TerminalRead> for TerminalSnapshot {
+    fn from(r: TerminalRead) -> Self {
+        Self {
+            terminal_id: r.terminal_id.into(),
+            source: r.source.into(),
+            ansi: r.ansi,
+            truncated: r.truncated,
+        }
+    }
+}
+
+/// `output` is set only when it is newer than the caller's `after_revision`;
+/// `output_revision` never decreases, across reconnects and watch changes.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AgentView {
+    pub link: LinkPhase,
+    pub last_error: Option<String>,
+    pub agent: Option<AgentSummary>,
+    pub output: Option<TerminalSnapshot>,
+    pub output_revision: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum AgentKey {
+    Enter,
+    Esc,
+    Up,
+    Down,
+    Tab,
+    ShiftTab,
+    CtrlC,
+    Y,
+    N,
+}
+
+impl From<AgentKey> for Key {
+    fn from(k: AgentKey) -> Self {
+        match k {
+            AgentKey::Enter => Self::Enter,
+            AgentKey::Esc => Self::Esc,
+            AgentKey::Up => Self::Up,
+            AgentKey::Down => Self::Down,
+            AgentKey::Tab => Self::Tab,
+            AgentKey::ShiftTab => Self::ShiftTab,
+            AgentKey::CtrlC => Self::CtrlC,
+            AgentKey::Y => Self::Y,
+            AgentKey::N => Self::N,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TaskOptions {
+    pub agents: Vec<String>,
+    pub default_agent: String,
+    pub recent_cwds: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TaskStarted {
+    pub workspace_id: String,
+    pub terminal_id: String,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -333,6 +472,221 @@ impl CollieCore {
             conn.resume(Duration::from_secs(background_secs));
         }
     }
+
+    pub async fn agent_read(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        source: TerminalSource,
+    ) -> Result<TerminalSnapshot, CoreError> {
+        let request = Request::AgentRead(ReadParams {
+            terminal_id: terminal(terminal_id)?,
+            source: source.into(),
+            lines: None,
+        });
+        match self.call(&machine_id, request, CALL_TIMEOUT).await? {
+            Response::Terminal(read) => Ok(read.into()),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
+    /// One watched agent per machine; `None` stops the watch. The choice outlives the
+    /// connection: every new session re-issues `agent.watch` and a `recent` read, so
+    /// while the link is down this only records it. Poll [`Self::agent_view`] for output.
+    pub async fn watch_agent(
+        &self,
+        machine_id: String,
+        terminal_id: Option<String>,
+    ) -> Result<(), CoreError> {
+        let terminal_id = terminal_id.map(terminal).transpose()?;
+        let conn = self.conn(&machine_id)?;
+        lock(&conn.shared.flock).watch(terminal_id.clone());
+        if lock(&conn.shared.link).phase != LinkPhase::Connected {
+            return Ok(());
+        }
+        self.run(async move {
+            let watch = Request::AgentWatch(AgentWatchParams {
+                terminal_id: terminal_id.clone(),
+            });
+            let response = conn
+                .request(watch, CALL_TIMEOUT)
+                .await
+                .map_err(|e| request_error(&conn, e))?;
+            expect_ok(response)?;
+            if let Some(terminal_id) = terminal_id {
+                let read = Request::AgentRead(ReadParams {
+                    terminal_id,
+                    source: ReadSource::Recent,
+                    lines: None,
+                });
+                conn.request(read, CALL_TIMEOUT)
+                    .await
+                    .map_err(|e| request_error(&conn, e))?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    /// Local and cheap, meant to be polled while the agent screen is visible. `None`
+    /// when the machine has no connection yet.
+    pub fn agent_view(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        after_revision: u64,
+    ) -> Option<AgentView> {
+        let conn = lock(&self.inner.conns).get(&machine_id).cloned()?;
+        let (link, last_error) = {
+            let link = lock(&conn.shared.link);
+            (link.phase, link.last_error.clone())
+        };
+        let state = lock(&conn.shared.flock);
+        Some(AgentView {
+            link,
+            last_error,
+            agent: state
+                .flock
+                .iter()
+                .flat_map(|f| &f.agents)
+                .find(|a| a.terminal_id.as_str() == terminal_id)
+                .map(agent_summary),
+            output: state
+                .output
+                .as_ref()
+                .filter(|o| {
+                    o.terminal_id.as_str() == terminal_id && state.output_revision > after_revision
+                })
+                .map(|o| o.clone().into()),
+            output_revision: state.output_revision,
+        })
+    }
+
+    pub async fn prompt(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        text: String,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentPrompt(AgentPromptParams {
+            op_id: new_op_id(),
+            terminal_id: terminal(terminal_id)?,
+            text: prompt_text(text)?,
+        });
+        expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
+    }
+
+    pub async fn send_keys(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        keys: Vec<AgentKey>,
+    ) -> Result<(), CoreError> {
+        if !(1..=limits::MAX_KEYS_PER_CALL).contains(&keys.len()) {
+            return Err(invalid("keys", "send 1 to 16 keys at a time"));
+        }
+        let request = Request::AgentSendKeys(AgentSendKeysParams {
+            op_id: new_op_id(),
+            terminal_id: terminal(terminal_id)?,
+            keys: keys.into_iter().map(Key::from).collect(),
+        });
+        expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
+    }
+
+    /// Brings the agent's pane to the front in herdr on the Mac.
+    pub async fn focus(&self, machine_id: String, terminal_id: String) -> Result<(), CoreError> {
+        let request = Request::AgentFocus(AgentTarget {
+            terminal_id: terminal(terminal_id)?,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    pub async fn task_options(&self, machine_id: String) -> Result<TaskOptions, CoreError> {
+        match self
+            .call(&machine_id, Request::TaskOptions(Empty {}), CALL_TIMEOUT)
+            .await?
+        {
+            Response::TaskOptions(o) => Ok(TaskOptions {
+                agents: o.agents.into_iter().map(String::from).collect(),
+                default_agent: o.default_agent.into(),
+                recent_cwds: o.recent_cwds.into_iter().map(String::from).collect(),
+            }),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
+    pub async fn task_new(
+        &self,
+        machine_id: String,
+        cwd: String,
+        agent: String,
+        prompt: String,
+        label: Option<String>,
+    ) -> Result<TaskStarted, CoreError> {
+        let label = label
+            .map(|l| l.trim().to_owned())
+            .filter(|l| !l.is_empty())
+            .map(|l| {
+                Label::new(l).map_err(|_| {
+                    invalid(
+                        "label",
+                        "label must be 1 to 64 characters without control characters",
+                    )
+                })
+            })
+            .transpose()?;
+        let request = Request::TaskNew(TaskNewParams {
+            op_id: new_op_id(),
+            cwd: Cwd::new(cwd).map_err(|_| {
+                invalid(
+                    "cwd",
+                    "folder must be an absolute path of at most 1024 bytes",
+                )
+            })?,
+            agent: AgentKind::new(agent).map_err(|_| invalid("agent", "unknown agent kind"))?,
+            prompt: prompt_text(prompt)?,
+            label,
+        });
+        match self.mutate(&machine_id, request, TASK_NEW_TIMEOUT).await? {
+            Response::TaskStarted {
+                workspace_id,
+                terminal_id,
+            } => Ok(TaskStarted {
+                workspace_id: workspace_id.into(),
+                terminal_id: terminal_id.into(),
+            }),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
+    /// Fails with `ConfirmRequired` unless `confirm` is true.
+    pub async fn close_workspace(
+        &self,
+        machine_id: String,
+        workspace_id: String,
+        confirm: bool,
+    ) -> Result<(), CoreError> {
+        let request = Request::WorkspaceClose(WorkspaceCloseParams {
+            workspace_id: WorkspaceId::new(workspace_id)
+                .map_err(|_| invalid("workspace_id", "invalid workspace id"))?,
+            confirm,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    /// Fails with `ConfirmRequired` unless `confirm` is true.
+    pub async fn close_pane(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        confirm: bool,
+    ) -> Result<(), CoreError> {
+        let request = Request::PaneClose(PaneCloseParams {
+            terminal_id: terminal(terminal_id)?,
+            confirm,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
 }
 
 impl CollieCore {
@@ -383,6 +737,38 @@ impl CollieCore {
             .map_err(|e| CoreError::Internal {
                 message: e.to_string(),
             })?
+    }
+
+    async fn call(
+        &self,
+        machine_id: &str,
+        request: Request,
+        timeout: Duration,
+    ) -> Result<Response, CoreError> {
+        let conn = self.conn(machine_id)?;
+        self.run(async move {
+            conn.request(request, timeout)
+                .await
+                .map_err(|e| request_error(&conn, e))
+        })
+        .await
+    }
+
+    /// For requests carrying an `op_id`: the same request, op_id included, is resent
+    /// after a dropped connection.
+    async fn mutate(
+        &self,
+        machine_id: &str,
+        request: Request,
+        timeout: Duration,
+    ) -> Result<Response, CoreError> {
+        let conn = self.conn(machine_id)?;
+        self.run(async move {
+            conn.mutate(request, timeout)
+                .await
+                .map_err(|e| request_error(&conn, e))
+        })
+        .await
     }
 
     /// Holds the machines lock until the conn is inserted so a concurrent removal
@@ -623,19 +1009,56 @@ fn view(conn: &Conn) -> MachineFlock {
         agents: flock
             .into_iter()
             .flat_map(|f| &f.agents)
-            .map(|a| AgentSummary {
-                terminal_id: a.terminal_id.as_str().into(),
-                workspace_id: a.workspace_id.as_str().into(),
-                kind: a.kind.clone(),
-                name: a.name.clone(),
-                title: a.title.clone(),
-                status: a.status.into(),
-                status_since_ms: a.status_since_ms,
-                cwd: a.cwd.clone(),
-                last_line: a.last_line.clone(),
-            })
+            .map(agent_summary)
             .collect(),
         approvals_count: flock.map_or(0, |f| f.approvals.len() as u32),
+    }
+}
+
+fn agent_summary(a: &protocol::Agent) -> AgentSummary {
+    AgentSummary {
+        terminal_id: a.terminal_id.as_str().into(),
+        workspace_id: a.workspace_id.as_str().into(),
+        kind: a.kind.clone(),
+        name: a.name.clone(),
+        title: a.title.clone(),
+        status: a.status.into(),
+        status_since_ms: a.status_since_ms,
+        cwd: a.cwd.clone(),
+        last_line: a.last_line.clone(),
+    }
+}
+
+fn new_op_id() -> OpId {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("system RNG");
+    OpId::new(URL_SAFE_NO_PAD.encode(bytes)).expect("16 bytes encode to 22 base64url chars")
+}
+
+fn invalid(field: &str, message: &str) -> CoreError {
+    CoreError::InvalidInput {
+        field: Some(field.into()),
+        message: message.into(),
+    }
+}
+
+fn terminal(id: String) -> Result<TerminalId, CoreError> {
+    TerminalId::new(id).map_err(|_| invalid("terminal_id", "invalid agent id"))
+}
+
+fn prompt_text(text: String) -> Result<PromptText, CoreError> {
+    PromptText::new(text).map_err(|_| {
+        invalid(
+            "prompt",
+            "prompt must be non-empty, at most 32 KiB, without control characters other than newline and tab",
+        )
+    })
+}
+
+fn expect_ok(response: Response) -> Result<(), CoreError> {
+    match response {
+        Response::Ok => Ok(()),
+        other => Err(unexpected(&other).into()),
     }
 }
 
@@ -661,6 +1084,124 @@ fn ms(d: Duration) -> u64 {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server(code: ErrorCode, message: &str) -> CoreError {
+        SessionError::Server {
+            code,
+            message: message.into(),
+        }
+        .into()
+    }
+
+    #[test]
+    fn server_errors_map_to_readable_variants() {
+        let e = server(ErrorCode::AgentBlocked, "agent is blocked");
+        assert!(matches!(e, CoreError::AgentBlocked));
+        assert_eq!(e.to_string(), "the agent is waiting for an approval");
+        assert!(matches!(
+            server(ErrorCode::AgentNotReady, ""),
+            CoreError::AgentNotReady
+        ));
+        assert!(matches!(
+            server(ErrorCode::ConfirmRequired, ""),
+            CoreError::ConfirmRequired
+        ));
+        assert!(matches!(
+            server(ErrorCode::NotImplemented, ""),
+            CoreError::NotImplemented
+        ));
+        assert!(matches!(
+            server(ErrorCode::RateLimited, ""),
+            CoreError::RateLimited
+        ));
+        assert!(matches!(
+            server(ErrorCode::NotFound, ""),
+            CoreError::NotFound
+        ));
+        let e = server(ErrorCode::InvalidParams, "invalid Cwd");
+        assert!(
+            matches!(&e, CoreError::InvalidInput { field: None, message } if message == "invalid Cwd")
+        );
+        assert!(matches!(
+            server(ErrorCode::NotPaired, ""),
+            CoreError::Unauthorized { .. }
+        ));
+        assert!(matches!(
+            server(ErrorCode::Unrecognized, "quota"),
+            CoreError::Rejected { .. }
+        ));
+        assert!(matches!(
+            CoreError::from(SessionError::Closed),
+            CoreError::Unreachable { .. }
+        ));
+    }
+
+    #[test]
+    fn op_ids_are_fresh_and_valid() {
+        let (a, b) = (new_op_id(), new_op_id());
+        assert_eq!(a.as_str().len(), 22);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn inputs_are_validated_before_anything_is_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = CollieCore::new(dir.path().join("s").to_string_lossy().into()).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let field = |r: Result<(), CoreError>| match r {
+            Err(CoreError::InvalidInput { field, .. }) => field,
+            other => panic!("{other:?}"),
+        };
+        let m = || "unknown".to_owned();
+        let t = || "term_1".to_owned();
+        assert_eq!(
+            field(rt.block_on(core.prompt(m(), t(), "x\u{1b}[201~rm -rf ~\r".into()))),
+            Some("prompt".into())
+        );
+        assert_eq!(
+            field(rt.block_on(core.prompt(m(), "a b".into(), "hi".into()))),
+            Some("terminal_id".into())
+        );
+        assert_eq!(
+            field(rt.block_on(core.send_keys(m(), t(), Vec::new()))),
+            Some("keys".into())
+        );
+        assert_eq!(
+            field(rt.block_on(core.send_keys(m(), t(), vec![AgentKey::Y; 17]))),
+            Some("keys".into())
+        );
+        let task = |cwd: &str, agent: &str, label: Option<&str>| {
+            rt.block_on(core.task_new(
+                m(),
+                cwd.into(),
+                agent.into(),
+                "go".into(),
+                label.map(Into::into),
+            ))
+            .map(|_| ())
+        };
+        assert_eq!(field(task("src", "claude", None)), Some("cwd".into()));
+        assert_eq!(field(task("/src", "Claude", None)), Some("agent".into()));
+        assert_eq!(
+            field(task("/src", "claude", Some("a\u{202E}b"))),
+            Some("label".into())
+        );
+        assert!(matches!(
+            task("/src", "claude", Some("  ")),
+            Err(CoreError::MachineNotFound)
+        ));
+        assert!(matches!(
+            rt.block_on(core.prompt(m(), t(), "fix it\nthen test".into())),
+            Err(CoreError::MachineNotFound)
+        ));
+    }
+}
+
+#[cfg(test)]
 mod tailnet_tests {
     use std::io::{BufRead, BufReader};
     use std::process::{Child, Command, Stdio};
@@ -668,8 +1209,7 @@ mod tailnet_tests {
     use futures_util::{SinkExt, StreamExt};
     use protocol::{
         Agent, AgentStatus, DEFAULT_PORT, Flock, HelloResult, MachineInfo, PROTOCOL_VERSION,
-        PairingCode, Response, ServerFrame, TerminalId, WS_SUBPROTOCOL, WorkspaceId,
-        parse_client_frame,
+        PairingCode, ServerFrame, WS_SUBPROTOCOL, parse_client_frame,
     };
     use tokio_tungstenite::tungstenite::Message;
     use tokio_tungstenite::tungstenite::handshake::server::{
@@ -749,16 +1289,38 @@ mod tailnet_tests {
         }
     }
 
-    /// Stand-in for collied: whois-checks the peer, then answers hello, pair.complete
-    /// and flock.snapshot. The handshake callback's error type is fixed by tungstenite.
+    /// What the fake collied saw, shared across connections.
+    #[derive(Default)]
+    struct Seen {
+        watches: Vec<Option<String>>,
+        prompt_ops: Vec<String>,
+        executed: HashMap<String, Response>,
+        task_ops: Vec<String>,
+    }
+
+    fn terminal_read(ansi: &str) -> TerminalRead {
+        TerminalRead {
+            terminal_id: TerminalId::new("term_1").unwrap(),
+            source: ReadSource::Recent,
+            ansi: ansi.into(),
+            truncated: false,
+        }
+    }
+
+    /// Stand-in for collied: whois-checks the peer, then answers hello, pair.complete,
+    /// flock.snapshot and the Phase 2 methods. The first prompt of an op_id is
+    /// "executed" and its connection dropped before the reply, like a phone losing its
+    /// socket mid-call; a resend gets the stored outcome, as collied's op_id cache does.
+    /// The handshake callback's error type is fixed by tungstenite.
     #[allow(clippy::result_large_err)]
-    async fn serve(mac: Node, phone_id: String, mac_id: String) {
+    async fn serve(mac: Node, phone_id: String, mac_id: String, seen: Arc<Mutex<Seen>>) {
         let listener = mac.listen("tcp", &format!(":{DEFAULT_PORT}")).unwrap();
         loop {
             let accepted = listener.accept().await.unwrap();
             let who = mac.whois(&accepted.peer.to_string()).unwrap();
             assert_eq!(who.node.stable_id, phone_id);
             let mac_id = mac_id.clone();
+            let seen = seen.clone();
             tokio::spawn(async move {
                 let mut ws = tokio_tungstenite::accept_hdr_async(
                     accepted.stream,
@@ -772,33 +1334,103 @@ mod tailnet_tests {
                 )
                 .await
                 .unwrap();
+                let mut seq = flock().seq;
                 while let Some(Ok(Message::Text(text))) = ws.next().await {
                     let frame = parse_client_frame(text.as_bytes()).unwrap();
                     let machine = MachineInfo {
                         node_id: mac_id.clone(),
                         ..info()
                     };
+                    let mut events = Vec::new();
                     let result = match frame.request {
-                        Request::Hello(_) => Response::Hello(HelloResult {
+                        Request::Hello(_) => Ok(Response::Hello(HelloResult {
                             protocol_version: PROTOCOL_VERSION,
                             collied_version: "test".into(),
                             machine,
                             herdr_version: None,
                             paired: true,
-                        }),
+                        })),
                         Request::PairComplete(p) => {
                             assert_eq!(p.pairing_code.as_str(), CODE);
-                            Response::Paired { machine }
+                            Ok(Response::Paired { machine })
                         }
-                        Request::FlockSnapshot(_) => Response::Flock(Flock { machine, ..flock() }),
+                        Request::FlockSnapshot(_) => {
+                            Ok(Response::Flock(Flock { machine, ..flock() }))
+                        }
+                        Request::AgentWatch(p) => {
+                            lock(&seen).watches.push(p.terminal_id.map(String::from));
+                            Ok(Response::Ok)
+                        }
+                        Request::AgentRead(p) => {
+                            assert_eq!(p.terminal_id.as_str(), "term_1");
+                            events = vec![
+                                (seq + 1, terminal_read("live")),
+                                (seq + 1, terminal_read("replayed")),
+                            ];
+                            Ok(Response::Terminal(terminal_read("read")))
+                        }
+                        Request::AgentPrompt(p) => {
+                            let op = p.op_id.as_str().to_owned();
+                            let mut seen = lock(&seen);
+                            seen.prompt_ops.push(op.clone());
+                            match seen.executed.get(&op) {
+                                Some(stored) => Ok(stored.clone()),
+                                None => {
+                                    seen.executed.insert(op, Response::Ok);
+                                    return;
+                                }
+                            }
+                        }
+                        Request::AgentSendKeys(p) => {
+                            assert_eq!(p.keys, vec![protocol::Key::ShiftTab, protocol::Key::Y]);
+                            Err(ErrorCode::AgentBlocked)
+                        }
+                        Request::TaskOptions(_) => {
+                            Ok(Response::TaskOptions(protocol::TaskOptions {
+                                agents: vec![AgentKind::new("claude").unwrap()],
+                                default_agent: AgentKind::new("claude").unwrap(),
+                                recent_cwds: vec![Cwd::new("/src/collie").unwrap()],
+                            }))
+                        }
+                        Request::TaskNew(p) => {
+                            assert_eq!(
+                                (p.cwd.as_str(), p.agent.as_str(), p.prompt.as_str()),
+                                ("/src/collie", "claude", "add tests")
+                            );
+                            assert_eq!(p.label.unwrap().as_str(), "tests");
+                            lock(&seen).task_ops.push(p.op_id.as_str().into());
+                            Ok(Response::TaskStarted {
+                                workspace_id: WorkspaceId::new("w2").unwrap(),
+                                terminal_id: TerminalId::new("term_2").unwrap(),
+                            })
+                        }
+                        Request::PaneClose(p) if !p.confirm => Err(ErrorCode::ConfirmRequired),
                         other => panic!("unexpected {}", other.method()),
                     };
-                    let reply = ServerFrame::Result {
-                        id: frame.id,
-                        result,
+                    let reply = match result {
+                        Ok(result) => ServerFrame::Result {
+                            id: frame.id,
+                            result,
+                        },
+                        Err(code) => ServerFrame::Error {
+                            id: Some(frame.id),
+                            error: protocol::ErrorBody {
+                                code,
+                                message: "fake".into(),
+                            },
+                        },
                     };
                     let text = serde_json::to_string(&reply).unwrap();
                     ws.send(Message::text(text)).await.unwrap();
+                    for (s, read) in events {
+                        seq = s;
+                        let event = ServerFrame::Event {
+                            seq,
+                            event: protocol::Event::AgentOutput(read),
+                        };
+                        let text = serde_json::to_string(&event).unwrap();
+                        ws.send(Message::text(text)).await.unwrap();
+                    }
                 }
             });
         }
@@ -900,8 +1532,13 @@ mod tailnet_tests {
         assert_eq!(report.backend_state, TailnetState::Running);
         assert!(report.settled_ms.is_some());
 
-        core.runtime
-            .spawn(serve(mac.clone(), phone_id, mac_self.stable_id.clone()));
+        let seen = Arc::new(Mutex::new(Seen::default()));
+        core.runtime.spawn(serve(
+            mac.clone(),
+            phone_id,
+            mac_self.stable_id.clone(),
+            seen.clone(),
+        ));
 
         let host = mac_self.dns_name.trim_end_matches('.').to_owned();
         let mac_ip = mac_self.tailscale_ips.clone().unwrap()[0];
@@ -958,6 +1595,87 @@ mod tailnet_tests {
             2,
             "a live session must not hold the node"
         );
+
+        let id = || machine.id.clone();
+        let t1 = || "term_1".to_owned();
+        let poll = |after: u64, want: &str| {
+            (0..200)
+                .find_map(|_| {
+                    let view = core.agent_view(id(), t1(), after).unwrap();
+                    if view.output.as_ref().is_some_and(|o| o.ansi == want) {
+                        return Some(view);
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                    None
+                })
+                .unwrap_or_else(|| panic!("no output {want:?}"))
+        };
+        rt.block_on(core.watch_agent(id(), Some(t1()))).unwrap();
+        let view = poll(0, "live");
+        assert_eq!(view.agent.unwrap().status, AgentState::Blocked);
+        assert_eq!(
+            view.output_revision, 2,
+            "read, then the event; the replay is dropped"
+        );
+        assert!(core.agent_view(id(), t1(), 2).unwrap().output.is_none());
+        let snap = rt
+            .block_on(core.agent_read(id(), t1(), TerminalSource::Recent))
+            .unwrap();
+        assert_eq!((snap.ansi.as_str(), snap.truncated), ("read", false));
+
+        rt.block_on(core.prompt(id(), t1(), "fix the build".into()))
+            .unwrap();
+        {
+            let seen = lock(&seen);
+            assert_eq!(seen.prompt_ops.len(), 2, "sent, dropped, resent");
+            assert_eq!(seen.prompt_ops[0], seen.prompt_ops[1]);
+            assert_eq!(seen.executed.len(), 1);
+            assert_eq!(
+                seen.watches,
+                vec![Some(t1()), Some(t1())],
+                "the watch is re-issued on the new connection"
+            );
+        }
+        poll(view.output_revision, "live");
+        rt.block_on(core.prompt(id(), t1(), "again".into()))
+            .unwrap();
+        {
+            let seen = lock(&seen);
+            assert_eq!(seen.executed.len(), 2);
+            assert_ne!(
+                seen.prompt_ops[0], seen.prompt_ops[2],
+                "fresh op_id per action"
+            );
+        }
+
+        let err = rt
+            .block_on(core.send_keys(id(), t1(), vec![AgentKey::ShiftTab, AgentKey::Y]))
+            .unwrap_err();
+        assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
+        let options = rt.block_on(core.task_options(id())).unwrap();
+        assert_eq!(options.default_agent, "claude");
+        assert_eq!(options.recent_cwds, vec!["/src/collie".to_owned()]);
+        let started = rt
+            .block_on(core.task_new(
+                id(),
+                "/src/collie".into(),
+                "claude".into(),
+                "add tests".into(),
+                Some(" tests ".into()),
+            ))
+            .unwrap();
+        assert_eq!(
+            (started.workspace_id.as_str(), started.terminal_id.as_str()),
+            ("w2", "term_2")
+        );
+        assert_eq!(lock(&seen).task_ops.len(), 1);
+        let err = rt
+            .block_on(core.close_pane(id(), "term_2".into(), false))
+            .unwrap_err();
+        assert!(matches!(err, CoreError::ConfirmRequired), "{err:?}");
+        rt.block_on(core.watch_agent(id(), None)).unwrap();
+        assert_eq!(lock(&seen).watches.last(), Some(&None));
+        assert!(core.agent_view(id(), t1(), 0).unwrap().output.is_none());
 
         let again = rt
             .block_on(core.pair(invite(&mac_self.stable_id), "iPhone".into()))

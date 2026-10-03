@@ -4,9 +4,11 @@ import SwiftUI
 struct FlockScreen: View {
     let app: AppModel
     @State private var model = FlockModel()
+    @State private var path: [AgentRoute] = []
+    @State private var newTask = false
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 if model.entries.isEmpty {
                     ContentUnavailableView(
@@ -26,15 +28,32 @@ struct FlockScreen: View {
                             Text("No agents running").foregroundStyle(.secondary)
                         }
                         ForEach(entry.agents, id: \.terminalId) { agent in
-                            AgentRow(agent: agent, workspace: entry.workspaceLabel(for: agent))
+                            NavigationLink(value: AgentRoute(machineId: entry.id, terminalId: agent.terminalId)) {
+                                AgentRow(agent: agent, workspace: entry.workspaceLabel(for: agent))
+                            }
                         }
                     } header: {
                         MachineHeader(entry: entry)
                     }
                 }
             }
-            .navigationTitle("Flock 🐑")
+            .navigationTitle("Agents")
+            .navigationBarTitleDisplayMode(.inline)
             .refreshable { await model.refresh(core: app.core) }
+            .toolbar {
+                Button("New task", systemImage: "plus") { newTask = true }
+                    .disabled(app.core == nil || app.machines.isEmpty)
+            }
+            .navigationDestination(for: AgentRoute.self) { route in
+                if let core = app.core {
+                    AgentScreen(core: core, route: route)
+                }
+            }
+            .sheet(isPresented: $newTask) {
+                if let core = app.core {
+                    NewTaskSheet(core: core, machines: app.machines) { path.append($0) }
+                }
+            }
             .task {
                 while !Task.isCancelled {
                     await model.refresh(core: app.core)
@@ -90,7 +109,12 @@ struct StatusPill: View {
     let state: AgentState
 
     var body: some View {
-        Text(state.label)
+        ZStack {
+            // The widest labels size every pill, so titles line up across rows.
+            Text("working").hidden()
+            Text("unknown").hidden()
+            Text(state.label)
+        }
             .font(.caption.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 3)

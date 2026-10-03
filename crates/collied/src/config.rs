@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use protocol::AgentKind;
 use serde::Deserialize;
 
 pub use protocol::DEFAULT_PORT;
@@ -12,6 +13,8 @@ pub struct Config {
     pub herdr: HerdrConfig,
     #[serde(default)]
     pub tailnet: TailnetConfig,
+    #[serde(default)]
+    pub tasks: TasksConfig,
     pub apns: Option<ApnsConfig>,
 }
 
@@ -39,6 +42,23 @@ impl Default for TailnetConfig {
     }
 }
 
+/// `roots` defaults to the user's home directory.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TasksConfig {
+    pub agents: Vec<AgentKind>,
+    pub roots: Option<Vec<PathBuf>>,
+}
+
+impl Default for TasksConfig {
+    fn default() -> Self {
+        Self {
+            agents: vec![AgentKind::new("claude").expect("valid agent kind")],
+            roots: None,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApnsConfig {
@@ -56,9 +76,14 @@ pub const PEERS_LOCK: &str = "peers.lock";
 pub const AUDIT_FILE: &str = "audit.log";
 pub const CONTROL_SOCKET: &str = "control.sock";
 
+pub fn home_dir() -> Result<PathBuf> {
+    Ok(PathBuf::from(
+        std::env::var_os("HOME").context("HOME is not set")?,
+    ))
+}
+
 pub fn data_dir() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join("Library/Application Support/collie"))
+    Ok(home_dir()?.join("Library/Application Support/collie"))
 }
 
 pub fn parse(text: &str) -> Result<Config, toml::de::Error> {
@@ -136,6 +161,8 @@ mod tests {
         assert_eq!(c.tailnet.port, DEFAULT_PORT);
         assert_eq!(c.tailnet.hostname, None);
         assert_eq!(c.tailnet.owner_user_id, None);
+        assert_eq!(c.tasks.agents, vec![AgentKind::new("claude").unwrap()]);
+        assert_eq!(c.tasks.roots, None);
         assert!(c.apns.is_none());
     }
 
@@ -149,6 +176,9 @@ mod tests {
             hostname = "mac"
             port = 9000
             owner_user_id = 123456789012
+            [tasks]
+            agents = ["claude", "codex"]
+            roots = ["/Users/me/src"]
             [apns]
             key_path = "/k.p8"
             key_id = "ABC"
@@ -161,6 +191,8 @@ mod tests {
         assert_eq!(c.tailnet.hostname(), "mac");
         assert_eq!(c.tailnet.port, 9000);
         assert_eq!(c.tailnet.owner_user_id, Some(123456789012));
+        assert_eq!(c.tasks.agents.len(), 2);
+        assert_eq!(c.tasks.roots, Some(vec![PathBuf::from("/Users/me/src")]));
         assert_eq!(c.apns.unwrap().key_path, PathBuf::from("/k.p8"));
     }
 
@@ -175,6 +207,8 @@ mod tests {
         assert!(parse("bogus = 1").is_err());
         assert!(parse("[herdr]\nsocket = \"/x\"").is_err());
         assert!(parse("[tailnet]\nprt = 1").is_err());
+        assert!(parse("[tasks]\nagent = []").is_err());
+        assert!(parse("[tasks]\nagents = [\"Claude\"]").is_err());
         assert!(parse("[apns]\nkey_path = \"/k\"\nkey_id = \"a\"\nteam_id = \"b\"\nbundle_id = \"c\"\nx = 1").is_err());
     }
 

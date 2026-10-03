@@ -3,6 +3,7 @@ pub mod config;
 pub mod control;
 pub mod daemon;
 pub mod doctor;
+pub mod drive;
 pub mod flock;
 pub mod gate;
 pub mod herdr;

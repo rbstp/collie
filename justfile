@@ -43,7 +43,11 @@ ios-framework:
         -library target/aarch64-apple-ios-sim/release/libcollie_core.a -headers "$headers" \
         -output "$pkg/CollieCore.xcframework"
 
-ios-project:
+# libghostty-vt from a pinned Ghostty commit; skipped when already built for that pin.
+ios-ghostty:
+    scripts/ghostty/build-xcframework.sh
+
+ios-project: ios-ghostty
     xcodegen generate --spec Collie/project.yml
 
 ios-build-sim: ios-framework ios-project

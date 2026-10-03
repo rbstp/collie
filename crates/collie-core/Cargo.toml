@@ -12,6 +12,7 @@ crate-type = ["staticlib", "lib"]
 
 [dependencies]
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+base64 = "0.23.1"
 getrandom = "0.4.3"
 libc = "0.2.190"
 protocol = { path = "../protocol" }

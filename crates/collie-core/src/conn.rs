@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use protocol::{Empty, HelloResult, Request};
+use protocol::{Empty, HelloResult, Request, Response};
 use tailnet::{BackendState, Node};
 use tokio::net::UnixStream;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
@@ -25,6 +25,7 @@ const DIAL_BUDGET: Duration = Duration::from_secs(20);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const FOREGROUND_RECONNECT: Duration = Duration::from_secs(10);
 const QUEUE: usize = 8;
+const MUTATION_ATTEMPTS: usize = 3;
 
 /// Every holder clones the outer Arc, never the inner Node, so the strong count says
 /// whether a replaced node is still open on the shared tsnet state dir.
@@ -207,18 +208,16 @@ impl Conn {
         &self,
         request: Request,
         timeout: Duration,
-    ) -> Result<protocol::Response, RequestError> {
-        let (tx, rx) = oneshot::channel();
-        self.requests.try_send((request, tx)).map_err(|e| match e {
-            mpsc::error::TrySendError::Closed(_) => RequestError::Stopped,
-            mpsc::error::TrySendError::Full(_) => RequestError::Busy,
-        })?;
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(Ok(response))) => Ok(response),
-            Ok(Ok(Err(e))) => Err(RequestError::Failed(e)),
-            Ok(Err(_)) => Err(RequestError::Stopped),
-            Err(_) => Err(RequestError::Timeout),
-        }
+    ) -> Result<Response, RequestError> {
+        send(&self.requests, request, timeout).await
+    }
+
+    pub async fn mutate(
+        &self,
+        request: Request,
+        timeout: Duration,
+    ) -> Result<Response, RequestError> {
+        send_mutation(&self.requests, request, timeout).await
     }
 
     pub fn reconnect_now(&self) {
@@ -243,6 +242,46 @@ impl Conn {
                 conn.reconnect_now();
             }
         });
+    }
+}
+
+async fn send(
+    requests: &mpsc::Sender<(Request, Reply)>,
+    request: Request,
+    timeout: Duration,
+) -> Result<Response, RequestError> {
+    let (tx, rx) = oneshot::channel();
+    requests.try_send((request, tx)).map_err(|e| match e {
+        mpsc::error::TrySendError::Closed(_) => RequestError::Stopped,
+        mpsc::error::TrySendError::Full(_) => RequestError::Busy,
+    })?;
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(Ok(response))) => Ok(response),
+        Ok(Ok(Err(e))) => Err(RequestError::Failed(e)),
+        Ok(Err(_)) => Err(RequestError::Stopped),
+        Err(_) => Err(RequestError::Timeout),
+    }
+}
+
+/// The request carries an `op_id`, so resending it after the connection dropped gets
+/// collied's stored outcome instead of running the mutation twice. The resend waits in
+/// the queue for the next session. Any answer from collied is final; a local timeout is
+/// not retried because the first send may still be in flight.
+async fn send_mutation(
+    requests: &mpsc::Sender<(Request, Reply)>,
+    request: Request,
+    timeout: Duration,
+) -> Result<Response, RequestError> {
+    let deadline = Instant::now() + timeout;
+    let mut attempt = 1;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match send(requests, request.clone(), remaining).await {
+            Err(RequestError::Failed(e)) if e.is_transport() && attempt < MUTATION_ATTEMPTS => {
+                attempt += 1;
+            }
+            other => return other,
+        }
     }
 }
 
@@ -301,5 +340,103 @@ async fn wait(wake: &Notify, delay: Duration) {
     tokio::select! {
         () = tokio::time::sleep(delay) => {}
         () = wake.notified() => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use protocol::{AgentPromptParams, ErrorCode, OpId, PromptText, TerminalId};
+
+    use super::*;
+
+    fn prompt() -> Request {
+        Request::AgentPrompt(AgentPromptParams {
+            op_id: OpId::new("Zm9vYmFyYmF6cXV4cXV1dQ").unwrap(),
+            terminal_id: TerminalId::new("term_1").unwrap(),
+            text: PromptText::new("run the tests").unwrap(),
+        })
+    }
+
+    /// Answers each queued request with the next scripted reply, recording what it got.
+    fn fake(
+        replies: Vec<Result<Response, SessionError>>,
+    ) -> (mpsc::Sender<(Request, Reply)>, JoinHandle<Vec<Request>>) {
+        let (tx, mut rx) = mpsc::channel::<(Request, Reply)>(QUEUE);
+        let task = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            for reply in replies {
+                let Some((request, tx)) = rx.recv().await else {
+                    break;
+                };
+                seen.push(request);
+                let _ = tx.send(reply);
+            }
+            seen
+        });
+        (tx, task)
+    }
+
+    #[tokio::test]
+    async fn dropped_mutation_is_resent_with_the_same_op_id() {
+        let (tx, task) = fake(vec![
+            Err(SessionError::Closed),
+            Err(SessionError::WebSocket("reset".into())),
+            Ok(Response::Ok),
+        ]);
+        let res = send_mutation(&tx, prompt(), Duration::from_secs(5)).await;
+        assert_eq!(res.unwrap(), Response::Ok);
+        let seen = task.await.unwrap();
+        assert_eq!(seen, vec![prompt(), prompt(), prompt()]);
+    }
+
+    #[tokio::test]
+    async fn answers_from_collied_are_never_retried() {
+        let (tx, task) = fake(vec![
+            Err(SessionError::Server {
+                code: ErrorCode::AgentBlocked,
+                message: "blocked".into(),
+            }),
+            Ok(Response::Ok),
+        ]);
+        let res = send_mutation(&tx, prompt(), Duration::from_secs(5)).await;
+        assert!(matches!(
+            res,
+            Err(RequestError::Failed(SessionError::Server {
+                code: ErrorCode::AgentBlocked,
+                ..
+            }))
+        ));
+        drop(tx);
+        assert_eq!(task.await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn retries_are_bounded() {
+        let (tx, task) = fake(vec![
+            Err(SessionError::Closed),
+            Err(SessionError::Closed),
+            Err(SessionError::Closed),
+            Ok(Response::Ok),
+        ]);
+        let res = send_mutation(&tx, prompt(), Duration::from_secs(5)).await;
+        assert!(matches!(
+            res,
+            Err(RequestError::Failed(SessionError::Closed))
+        ));
+        drop(tx);
+        assert_eq!(task.await.unwrap().len(), MUTATION_ATTEMPTS);
+    }
+
+    #[tokio::test]
+    async fn local_timeout_is_not_retried() {
+        let (tx, mut rx) = mpsc::channel::<(Request, Reply)>(QUEUE);
+        let res = send_mutation(&tx, prompt(), Duration::from_millis(50)).await;
+        assert!(matches!(res, Err(RequestError::Timeout)));
+        let (_, reply) = rx.recv().await.unwrap();
+        assert!(
+            reply.is_closed(),
+            "the session skips a request nobody waits for"
+        );
+        assert!(rx.try_recv().is_err());
     }
 }

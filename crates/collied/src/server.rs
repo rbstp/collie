@@ -9,13 +9,13 @@ use std::time::{Duration, Instant};
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
     ErrorBody, ErrorCode, Event, HelloResult, MachineInfo, PairCompleteParams, PairingCode,
-    PairingInvite, Request, Response, ServerFrame,
+    PairingInvite, Request, Response, ServerFrame, TerminalId,
 };
 use tailnet::{Accepted, BackendState, Node, WhoIs};
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::handshake::server::{
     ErrorResponse, Request as HttpRequest, Response as HttpResponse,
@@ -26,6 +26,7 @@ use tokio_tungstenite::tungstenite::{Bytes, Error as WsError, Message};
 
 use crate::audit::Audit;
 use crate::control::{self, Candidate, PairAttempt, StatusInfo};
+use crate::drive::{self, Authorized, Driver, Origin, Reply, Watched, Watcher};
 use crate::flock::{self, Baseline, StatusTracker};
 use crate::gate::{self, Decision};
 use crate::pairing::{Attempt, Pairing};
@@ -151,7 +152,8 @@ pub struct State {
     reject_buckets: Mutex<HashMap<IpAddr, TokenBucket>>,
     tracker: Mutex<StatusTracker>,
     events: broadcast::Sender<Event>,
-    pub(crate) audit: Audit,
+    drive: Arc<Driver>,
+    pub(crate) audit: Arc<Audit>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -260,6 +262,12 @@ impl State {
         drop(pairing);
     }
 
+    fn peer_authorized(&self, stable_id: &str, user: i64) -> bool {
+        lock(&self.peers)
+            .get(stable_id)
+            .is_some_and(|p| p.user_id == user)
+    }
+
     fn rate(&self, key: &str) -> Rate {
         take_token(&self.buckets, key.to_owned(), RATE_PER_SEC, RATE_BURST)
     }
@@ -288,14 +296,32 @@ impl State {
     }
 }
 
-/// Fails closed: the node must already be Running, and the only TCP listener is the
-/// tailnet one.
 pub async fn start(
     node: Node,
     cfg: ServerConfig,
     herdr_socket: PathBuf,
 ) -> anyhow::Result<ServerHandle> {
+    start_with_tasks(node, cfg, herdr_socket, &config::TasksConfig::default()).await
+}
+
+/// Fails closed: the node must already be Running, and the only TCP listener is the
+/// tailnet one.
+pub async fn start_with_tasks(
+    node: Node,
+    cfg: ServerConfig,
+    herdr_socket: PathBuf,
+    tasks: &config::TasksConfig,
+) -> anyhow::Result<ServerHandle> {
     crate::ensure_private_dir(&cfg.data_dir)?;
+    let roots = match &tasks.roots {
+        Some(roots) => roots.clone(),
+        None => vec![config::home_dir()?],
+    };
+    let drive = Arc::new(Driver::new(
+        herdr_socket.clone(),
+        tasks.agents.clone(),
+        &roots,
+    )?);
     let st = {
         let node = node.clone();
         tokio::task::spawn_blocking(move || node.status()).await??
@@ -321,7 +347,7 @@ pub async fn start(
             "owner_user_id {configured} in the config differs from {stored} in peers.json"
         );
     }
-    let audit = Audit::open(&cfg.data_dir.join(config::AUDIT_FILE))?;
+    let audit = Arc::new(Audit::open(&cfg.data_dir.join(config::AUDIT_FILE))?);
     let control = control::bind(&cfg.data_dir.join(config::CONTROL_SOCKET)).await?;
     let listener = node.listen("tcp", &format!(":{}", cfg.port))?;
 
@@ -345,6 +371,7 @@ pub async fn start(
         reject_buckets: Mutex::new(HashMap::new()),
         tracker: Mutex::new(StatusTracker::default()),
         events: broadcast::channel(256).0,
+        drive,
         audit,
     });
     let (shutdown, rx) = watch::channel(false);
@@ -571,6 +598,9 @@ async fn connection(
         ws,
         peer: &peer,
         seq: 0,
+        watch: None,
+        tasks: JoinSet::new(),
+        starting: None,
     }
     .run(kill)
     .await;
@@ -611,6 +641,18 @@ struct Session<'a> {
     ws: WebSocketStream<UnixStream>,
     peer: &'a Remote,
     seq: u64,
+    watch: Option<Watcher>,
+    // Dropping the set only stops waiting: the operations run detached in the op cache
+    // and audit their own outcome.
+    tasks: JoinSet<Finished>,
+    starting: Option<(u32, Option<String>)>,
+}
+
+struct Finished {
+    id: u32,
+    target: Option<String>,
+    reply: Reply,
+    origin: Option<Origin>,
 }
 
 enum Flow {
@@ -623,10 +665,10 @@ enum Step {
     HelloTimeout,
     Ping { idle: bool },
     Event(Result<Event, broadcast::error::RecvError>),
+    Watch(Option<Watched>),
+    Finished(Option<Result<Finished, tokio::task::JoinError>>),
     Message(Option<Result<Message, WsError>>),
 }
-
-type Reply = Result<Response, (ErrorCode, String)>;
 
 fn err(code: ErrorCode, message: &str) -> Reply {
     Err((code, message.to_owned()))
@@ -650,6 +692,8 @@ impl Session<'_> {
                     idle: last_seen.elapsed() > SILENCE_LIMIT,
                 },
                 ev = next_event(&mut events) => Step::Event(ev),
+                out = next_watch(&mut self.watch) => Step::Watch(out),
+                done = self.tasks.join_next(), if !self.tasks.is_empty() => Step::Finished(done),
                 msg = self.ws.next() => {
                     last_seen = Instant::now();
                     Step::Message(msg)
@@ -694,6 +738,16 @@ impl Session<'_> {
                 self.push(Event::FlockChanged {}).await
             }
             Step::Event(Err(broadcast::error::RecvError::Closed)) => Flow::Close,
+            Step::Watch(Some(Watched::Output(read))) => self.push(Event::AgentOutput(read)).await,
+            Step::Watch(Some(Watched::Gone) | None) => {
+                self.watch = None;
+                self.push(Event::FlockChanged {}).await
+            }
+            Step::Finished(Some(Ok(done))) => {
+                self.starting = None;
+                self.finish("task.new", done).await
+            }
+            Step::Finished(_) => self.task_lost().await,
             Step::Message(Some(Ok(Message::Text(text)))) => {
                 self.frame(text.as_bytes(), greeted, events).await
             }
@@ -783,34 +837,148 @@ impl Session<'_> {
             self.reply(id, reply).await;
             return Flow::Close;
         }
-        let reply = match frame.request {
-            Request::Hello(_) => err(ErrorCode::InvalidParams, "hello already received"),
-            Request::PairComplete(_) => err(ErrorCode::PairingFailed, "already paired"),
-            Request::FlockSnapshot(_) => self.flock().await,
-            Request::WorkspaceList(_) => self.workspaces().await,
-            Request::AgentRead(_)
-            | Request::PaneRead(_)
-            | Request::AgentWatch(_)
-            | Request::TaskOptions(_)
-            | Request::AgentPrompt(_)
-            | Request::AgentSendKeys(_)
-            | Request::AgentFocus(_)
-            | Request::TaskNew(_)
-            | Request::WorkspaceClose(_)
-            | Request::PaneClose(_)
-            | Request::ApprovalList(_)
+        let target = audit_target(&frame.request);
+        let fingerprint = drive::fingerprint(&frame.request);
+        let drive = self.state.drive.clone();
+        let peer = self.peer.who.node.stable_id.clone();
+        let auth = self.authorizer();
+        let (reply, origin) = match frame.request {
+            Request::Hello(_) => (
+                err(ErrorCode::InvalidParams, "hello already received"),
+                None,
+            ),
+            Request::PairComplete(_) => (err(ErrorCode::PairingFailed, "already paired"), None),
+            Request::FlockSnapshot(_) => (self.flock().await, None),
+            Request::WorkspaceList(_) => (self.workspaces().await, None),
+            Request::AgentRead(p) => (drive.read(p, true).await, None),
+            Request::PaneRead(p) => (drive.read(p, false).await, None),
+            Request::AgentWatch(p) => (self.watch(p.terminal_id).await, None),
+            Request::TaskOptions(_) => (drive.task_options().await, None),
+            Request::AgentPrompt(p) => {
+                let (op_id, d) = (p.op_id.clone(), drive.clone());
+                let op = self.audited(method, target.clone(), async move {
+                    (d.prompt(p, &auth).await, None)
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
+            Request::AgentSendKeys(p) => {
+                let (op_id, d) = (p.op_id.clone(), drive.clone());
+                let op = self.audited(method, target.clone(), async move {
+                    (d.send_keys(p, &auth).await, None)
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
+            Request::AgentFocus(p) => (drive.focus(&p.terminal_id, &auth).await, None),
+            // Starting an agent takes up to 30 s; the session keeps serving meanwhile.
+            Request::TaskNew(_) if !self.tasks.is_empty() => (
+                err(ErrorCode::RateLimited, "a task is already starting"),
+                None,
+            ),
+            Request::TaskNew(p) => {
+                let (op_id, d) = (p.op_id.clone(), drive.clone());
+                let op = self.audited(method, target.clone(), async move {
+                    let (reply, cwd) = d.task_new(p, &auth).await;
+                    (reply, cwd.map(|c| c.as_str().to_owned()))
+                });
+                self.starting = Some((id, target.clone()));
+                self.tasks.spawn(async move {
+                    let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                    Finished {
+                        id,
+                        target,
+                        reply,
+                        origin: Some(origin),
+                    }
+                });
+                return Flow::Continue;
+            }
+            Request::WorkspaceClose(p) => (drive.workspace_close(p, &auth).await, None),
+            Request::PaneClose(p) => (drive.pane_close(p, &auth).await, None),
+            Request::ApprovalList(_)
             | Request::ApprovalDecide(_)
             | Request::PushRegister(_)
-            | Request::PushActivityToken(_) => err(ErrorCode::NotImplemented, "not implemented"),
+            | Request::PushActivityToken(_) => {
+                (err(ErrorCode::NotImplemented, "not implemented"), None)
+            }
         };
-        if !matches!(method, "hello" | "flock.snapshot" | "workspace.list") {
-            let result = match &reply {
-                Ok(_) => "ok".to_owned(),
-                Err((code, _)) => code_name(*code),
-            };
-            self.audit(method, &result);
+        self.finish(
+            method,
+            Finished {
+                id,
+                target,
+                reply,
+                origin,
+            },
+        )
+        .await
+    }
+
+    /// A mutation that ran in this call was already audited by the detached operation.
+    async fn finish(&mut self, method: &str, done: Finished) -> Flow {
+        let quiet = matches!(method, "hello" | "flock.snapshot" | "workspace.list");
+        if !quiet && done.origin != Some(Origin::Ran) {
+            let mut result = outcome(&done.reply);
+            if done.origin == Some(Origin::Replayed) {
+                result.push_str(" (replayed)");
+            }
+            self.state
+                .audit
+                .log(&self.peer.name, method, done.target.as_deref(), &result);
         }
-        self.reply(id, reply).await
+        self.reply(done.id, done.reply).await
+    }
+
+    async fn task_lost(&mut self) -> Flow {
+        let Some((id, target)) = self.starting.take() else {
+            return Flow::Continue;
+        };
+        self.finish(
+            "task.new",
+            Finished {
+                id,
+                target,
+                reply: err(ErrorCode::Internal, "task.new failed"),
+                origin: None,
+            },
+        )
+        .await
+    }
+
+    async fn watch(&mut self, terminal_id: Option<TerminalId>) -> Reply {
+        self.watch = None;
+        if let Some(t) = terminal_id {
+            self.watch = Some(self.state.drive.watch(t).await?);
+        }
+        Ok(Response::Ok)
+    }
+
+    fn audited<F>(
+        &self,
+        method: &'static str,
+        target: Option<String>,
+        op: F,
+    ) -> impl Future<Output = Reply> + Send + 'static
+    where
+        F: Future<Output = (Reply, Option<String>)> + Send + 'static,
+    {
+        audited(
+            self.state.audit.clone(),
+            self.peer.name.clone(),
+            method,
+            target,
+            op,
+        )
+    }
+
+    fn authorizer(&self) -> Authorized {
+        let state = self.state.clone();
+        let (stable_id, user) = (
+            self.peer.who.node.stable_id.clone(),
+            self.peer.who.node.user,
+        );
+        Arc::new(move || state.peer_authorized(&stable_id, user))
     }
 
     fn audit(&self, method: &str, result: &str) {
@@ -969,9 +1137,7 @@ impl Session<'_> {
             return true;
         }
         let node = &self.peer.who.node;
-        lock(&self.state.peers)
-            .get(&node.stable_id)
-            .is_some_and(|p| p.user_id == node.user)
+        self.state.peer_authorized(&node.stable_id, node.user)
     }
 
     async fn send(&mut self, msg: Message) -> Flow {
@@ -988,6 +1154,67 @@ async fn next_event(
     match rx {
         Some(rx) => rx.recv().await,
         None => std::future::pending().await,
+    }
+}
+
+async fn next_watch(watch: &mut Option<Watcher>) -> Option<Watched> {
+    match watch {
+        Some(w) => w.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+fn audit_target(request: &Request) -> Option<String> {
+    let target = match request {
+        Request::AgentRead(p) | Request::PaneRead(p) => p.terminal_id.as_str(),
+        Request::AgentWatch(p) => p.terminal_id.as_ref().map_or("none", |t| t.as_str()),
+        Request::AgentPrompt(p) => p.terminal_id.as_str(),
+        Request::AgentSendKeys(p) => p.terminal_id.as_str(),
+        Request::AgentFocus(p) => p.terminal_id.as_str(),
+        Request::PaneClose(p) => p.terminal_id.as_str(),
+        Request::WorkspaceClose(p) => p.workspace_id.as_str(),
+        Request::TaskNew(p) => p.cwd.as_str(),
+        _ => return None,
+    };
+    Some(target.to_owned())
+}
+
+/// Runs a cached mutation and writes its audit line itself, so the outcome is audited even
+/// when the session that asked for it has ended. The op may name a more precise target.
+async fn audited<F>(
+    audit: Arc<Audit>,
+    peer: String,
+    method: &'static str,
+    target: Option<String>,
+    op: F,
+) -> Reply
+where
+    F: Future<Output = (Reply, Option<String>)> + Send + 'static,
+{
+    let (reply, resolved) = tokio::spawn(op)
+        .await
+        .unwrap_or_else(|_| (err(ErrorCode::Internal, "operation failed"), None));
+    audit.log(
+        &peer,
+        method,
+        resolved.or(target).as_deref(),
+        &outcome(&reply),
+    );
+    reply
+}
+
+fn outcome(reply: &Reply) -> String {
+    match reply {
+        Ok(Response::TaskStarted {
+            workspace_id,
+            terminal_id,
+        }) => format!(
+            "ok workspace={} terminal={}",
+            workspace_id.as_str(),
+            terminal_id.as_str()
+        ),
+        Ok(_) => "ok".to_owned(),
+        Err((code, message)) => format!("{}: {message}", code_name(*code)),
     }
 }
 
@@ -1056,5 +1283,63 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         }
         base = Some(next);
         outage = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn detached_mutations_audit_themselves() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.log");
+        let audit = Arc::new(Audit::open(&path).unwrap());
+        let lines = || -> Vec<serde_json::Value> {
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        };
+
+        let op = audited(
+            audit.clone(),
+            "phone".into(),
+            "task.new",
+            Some("/req/../cwd".into()),
+            async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                (
+                    Ok(Response::TaskStarted {
+                        workspace_id: protocol::WorkspaceId::new("w9").unwrap(),
+                        terminal_id: TerminalId::new("term_new").unwrap(),
+                    }),
+                    Some("/cwd".to_owned()),
+                )
+            },
+        );
+        // Nobody waits for the outcome, as when the phone disconnects mid-operation.
+        drop(tokio::spawn(op));
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(lines().is_empty());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let first = &lines()[0];
+        assert_eq!(first["method"], "task.new");
+        assert_eq!(first["target"], "/cwd");
+        assert_eq!(first["result"], "ok workspace=w9 terminal=term_new");
+
+        let panicked = audited(
+            audit.clone(),
+            "phone".into(),
+            "agent.prompt",
+            Some("term_1".into()),
+            async { panic!("boom") },
+        )
+        .await;
+        assert_eq!(panicked.unwrap_err().0, ErrorCode::Internal);
+        let second = &lines()[1];
+        assert_eq!(second["target"], "term_1");
+        assert_eq!(second["result"], "internal: operation failed");
     }
 }

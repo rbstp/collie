@@ -12,7 +12,7 @@ struct OnboardingView: View {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("collie 🐑").font(.largeTitle.bold())
+                        Text("collie").font(.largeTitle.bold())
                         Text("Watch and steer the coding agents on your Macs. collie joins your tailnet on its own; the Tailscale app is not needed.")
                             .foregroundStyle(.secondary)
                     }

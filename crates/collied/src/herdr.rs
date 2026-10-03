@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
@@ -16,7 +17,7 @@ const DEFAULT_SESSION_NAME: &str = "default";
 pub enum Error {
     #[error("{0}")]
     Io(#[from] std::io::Error),
-    #[error("timed out after 5 s")]
+    #[error("timed out")]
     Timeout,
     #[error("response line exceeds 1 MiB")]
     LineTooLong,
@@ -151,16 +152,24 @@ pub struct WorkspaceInfo {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PaneInfo {
+    pub pane_id: String,
+    pub terminal_id: String,
     pub workspace_id: String,
     pub tab_id: String,
     pub cwd: Option<String>,
     pub foreground_cwd: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct AgentSession {
+    pub value: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AgentInfo {
     pub terminal_id: String,
     pub workspace_id: String,
+    pub pane_id: String,
     pub agent: Option<String>,
     pub name: Option<String>,
     pub title: Option<String>,
@@ -170,6 +179,11 @@ pub struct AgentInfo {
     pub state_change_seq: u64,
     pub cwd: Option<String>,
     pub foreground_cwd: Option<String>,
+    pub agent_session: Option<AgentSession>,
+    #[serde(default)]
+    pub interactive_ready: bool,
+    #[serde(default)]
+    pub launch_pending: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -197,34 +211,256 @@ enum WorkspaceListResult {
     WorkspaceList { workspaces: Vec<WorkspaceInfo> },
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct PaneRead {
+    pub text: String,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PaneReadResult {
+    PaneRead { read: PaneRead },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AgentInfoResult {
+    AgentInfo { agent: AgentInfo },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AgentPromptedResult {
+    AgentPrompted {},
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AgentStartedResult {
+    AgentStarted { agent: AgentInfo },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OkResult {
+    Ok {},
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkspaceCreated {
+    pub workspace: WorkspaceInfo,
+    pub root_pane: PaneInfo,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WorkspaceCreatedResult {
+    WorkspaceCreated(WorkspaceCreated),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PaneInfoResult {
+    PaneInfo { pane: PaneInfo },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProcessInfo {
+    pub shell_pid: Option<u32>,
+    pub foreground_process_group_id: Option<u32>,
+    #[serde(default)]
+    pub foreground_processes: Vec<Process>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Process {
+    pub pid: u32,
+    pub name: String,
+    pub argv: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ProcessInfoResult {
+    PaneProcessInfo { process_info: ProcessInfo },
+}
+
+#[derive(Deserialize)]
+struct AgentManifest {
+    agent: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AgentManifestsResult {
+    AgentManifestStatus { manifests: Vec<AgentManifest> },
+}
+
 pub async fn ping(socket: &Path) -> Result<Pong, Error> {
-    let PingResult::Pong(pong) = call(socket, "ping").await?;
+    let PingResult::Pong(pong) = call(socket, "ping", json!({})).await?;
     Ok(pong)
 }
 
 pub async fn session_snapshot(socket: &Path) -> Result<SessionSnapshot, Error> {
-    let SnapshotResult::SessionSnapshot { snapshot } = call(socket, "session.snapshot").await?;
+    let SnapshotResult::SessionSnapshot { snapshot } =
+        call(socket, "session.snapshot", json!({})).await?;
     Ok(snapshot)
 }
 
 pub async fn agent_list(socket: &Path) -> Result<Vec<AgentInfo>, Error> {
-    let AgentListResult::AgentList { agents } = call(socket, "agent.list").await?;
+    let AgentListResult::AgentList { agents } = call(socket, "agent.list", json!({})).await?;
     Ok(agents)
 }
 
 pub async fn workspace_list(socket: &Path) -> Result<Vec<WorkspaceInfo>, Error> {
-    let WorkspaceListResult::WorkspaceList { workspaces } = call(socket, "workspace.list").await?;
+    let WorkspaceListResult::WorkspaceList { workspaces } =
+        call(socket, "workspace.list", json!({})).await?;
     Ok(workspaces)
 }
 
-// Only parameterless read-only methods go through here.
-async fn call<R: DeserializeOwned>(socket: &Path, method: &str) -> Result<R, Error> {
+pub async fn agent_manifests(socket: &Path) -> Result<Vec<String>, Error> {
+    let AgentManifestsResult::AgentManifestStatus { manifests } =
+        call(socket, "server.agent_manifests", json!({})).await?;
+    Ok(manifests.into_iter().map(|m| m.agent).collect())
+}
+
+/// herdr agent targets are a pane id or an agent name, never a terminal id.
+pub async fn agent_get(socket: &Path, target: &str) -> Result<AgentInfo, Error> {
+    let AgentInfoResult::AgentInfo { agent } =
+        call(socket, "agent.get", json!({ "target": target })).await?;
+    Ok(agent)
+}
+
+pub async fn pane_get(socket: &Path, pane_id: &str) -> Result<PaneInfo, Error> {
+    let PaneInfoResult::PaneInfo { pane } =
+        call(socket, "pane.get", json!({ "pane_id": pane_id })).await?;
+    Ok(pane)
+}
+
+pub async fn pane_process_info(socket: &Path, pane_id: &str) -> Result<ProcessInfo, Error> {
+    let ProcessInfoResult::PaneProcessInfo { process_info } =
+        call(socket, "pane.process_info", json!({ "pane_id": pane_id })).await?;
+    Ok(process_info)
+}
+
+pub async fn agent_read(
+    socket: &Path,
+    pane_id: &str,
+    source: &str,
+    lines: Option<u32>,
+) -> Result<PaneRead, Error> {
+    let PaneReadResult::PaneRead { read } = call(
+        socket,
+        "agent.read",
+        json!({ "target": pane_id, "source": source, "lines": lines, "format": "ansi" }),
+    )
+    .await?;
+    Ok(read)
+}
+
+pub async fn pane_read(
+    socket: &Path,
+    pane_id: &str,
+    source: &str,
+    lines: Option<u32>,
+) -> Result<PaneRead, Error> {
+    let PaneReadResult::PaneRead { read } = call(
+        socket,
+        "pane.read",
+        json!({ "pane_id": pane_id, "source": source, "lines": lines, "format": "ansi" }),
+    )
+    .await?;
+    Ok(read)
+}
+
+pub async fn agent_prompt(socket: &Path, pane_id: &str, text: &str) -> Result<(), Error> {
+    let AgentPromptedResult::AgentPrompted {} = call(
+        socket,
+        "agent.prompt",
+        json!({ "target": pane_id, "text": text }),
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn agent_send_keys(socket: &Path, pane_id: &str, keys: &[&str]) -> Result<(), Error> {
+    let OkResult::Ok {} = call(
+        socket,
+        "agent.send_keys",
+        json!({ "target": pane_id, "keys": keys }),
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn agent_focus(socket: &Path, pane_id: &str) -> Result<(), Error> {
+    let AgentInfoResult::AgentInfo { .. } =
+        call(socket, "agent.focus", json!({ "target": pane_id })).await?;
+    Ok(())
+}
+
+pub async fn agent_start(
+    socket: &Path,
+    name: &str,
+    kind: &str,
+    pane_id: &str,
+) -> Result<AgentInfo, Error> {
+    let AgentStartedResult::AgentStarted { agent } = call(
+        socket,
+        "agent.start",
+        json!({ "name": name, "kind": kind, "pane_id": pane_id }),
+    )
+    .await?;
+    Ok(agent)
+}
+
+pub async fn workspace_create(
+    socket: &Path,
+    cwd: &str,
+    label: Option<&str>,
+) -> Result<WorkspaceCreated, Error> {
+    let WorkspaceCreatedResult::WorkspaceCreated(created) = call(
+        socket,
+        "workspace.create",
+        json!({ "cwd": cwd, "label": label, "focus": false }),
+    )
+    .await?;
+    Ok(created)
+}
+
+pub async fn workspace_close(socket: &Path, workspace_id: &str) -> Result<(), Error> {
+    let OkResult::Ok {} = call(
+        socket,
+        "workspace.close",
+        json!({ "workspace_id": workspace_id }),
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn pane_close(socket: &Path, pane_id: &str) -> Result<(), Error> {
+    let OkResult::Ok {} = call(socket, "pane.close", json!({ "pane_id": pane_id })).await?;
+    Ok(())
+}
+
+fn without_nulls(params: Value) -> Value {
+    match params {
+        Value::Object(map) => {
+            Value::Object(map.into_iter().filter(|(_, v)| !v.is_null()).collect())
+        }
+        other => other,
+    }
+}
+
+async fn call<R: DeserializeOwned>(socket: &Path, method: &str, params: Value) -> Result<R, Error> {
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
     let id = format!("collied-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
-    let mut line = serde_json::to_vec(&serde_json::json!({
+    let mut line = serde_json::to_vec(&json!({
         "id": id,
         "method": method,
-        "params": {},
+        "params": without_nulls(params),
     }))?;
     line.push(b'\n');
     tracing::debug!(socket = %socket.display(), method, id, "herdr request");
