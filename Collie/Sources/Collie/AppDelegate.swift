@@ -25,22 +25,29 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         app.pushRegistrationFailed(error)
     }
 
+    // The completion handlers must run on the main thread: with the async variants the
+    // system calls them from the cooperative pool and UIKit aborts (state restoration assert).
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
+    ) {
+        Task { @MainActor in completionHandler([.banner, .list, .sound]) }
     }
 
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse
-    ) async {
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
+    ) {
         let content = response.notification.request.content
         let action = NotificationResponse(actionIdentifier: response.actionIdentifier, userInfo: content.userInfo)
         let agent = content.title
         let thread = content.threadIdentifier
-        await handle(action, agent: agent, thread: thread)
+        Task { @MainActor in
+            await self.handle(action, agent: agent, thread: thread)
+            completionHandler()
+        }
     }
 
     private func handle(_ action: NotificationResponse, agent: String, thread: String) async {
