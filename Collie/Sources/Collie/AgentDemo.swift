@@ -110,6 +110,19 @@ final class DemoAgentCore: FlockCore {
 
     func flock(machineId: String) async throws -> MachineFlock { demoFlock }
 
+    func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String {
+        let total = UInt64(data.count)
+        for step in 1...10 {
+            try await Task.sleep(for: .milliseconds(150))
+            progress.onProgress(sent: total * UInt64(step) / 10, total: total)
+        }
+        return "/Users/demo/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/\(name)"
+    }
+
+    func maxAttachmentBytes() -> UInt64 { 20 * 1024 * 1024 }
+
+    func cancelUploads(machineId: String) {}
+
     private var demoFlock: MachineFlock {
         MachineFlock(
             machine: Self.machine, link: .connected, lastError: nil,

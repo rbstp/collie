@@ -95,6 +95,7 @@ async fn scenario(
             herdr_session: "e2e".into(),
             machine_name: "e2e-mac".into(),
             approval_ttl: collied::approvals::TTL,
+            attachments_dir: data_dir.join("attachments"),
         },
         herdr_socket,
     )
@@ -332,6 +333,7 @@ fn live_herdr_session() {
         let handle = server::start(
             net.mac.clone(),
             ServerConfig {
+                attachments_dir: data_dir.join("attachments"),
                 data_dir,
                 port: PORT,
                 owner_user_id: None,

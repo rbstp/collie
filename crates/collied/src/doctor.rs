@@ -28,7 +28,7 @@ impl Report {
             Status::Fail => "fail",
         };
         self.failed |= status == Status::Fail;
-        println!("{label:<4}  {check:<8}  {}", detail.as_ref());
+        println!("{label:<4}  {check:<11}  {}", detail.as_ref());
     }
 }
 
@@ -77,6 +77,10 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     let audit = data_dir.join(config::AUDIT_FILE);
     let (s, d) = check_private(&audit, Kind::File, (Status::Warn, "no audit log yet"));
     r.line(s, "audit", d);
+    let attachments = config::attachments_dir()?;
+    let (s, d) = check_private(&attachments, Kind::Dir, (Status::Warn, "not created yet"));
+    let stored = crate::attachments::stored_bytes(&attachments);
+    r.line(s, "attachments", format!("{d}, {stored} bytes stored"));
     match config.as_ref().map(|c| &c.apns) {
         Some(Some(apns)) => check_apns(&mut r, apns, &data_dir.join(APNS_DIR)),
         Some(None) => r.line(Status::Warn, "apns", "not configured"),

@@ -1,4 +1,5 @@
 import CollieCore
+import Foundation
 
 /// The slice of CollieCore the agent screens use, so view models can run against a fake.
 protocol AgentCore: AnyObject, Sendable {
@@ -13,6 +14,9 @@ protocol AgentCore: AnyObject, Sendable {
     func taskOptions(machineId: String) async throws -> TaskOptions
     func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted
     func flock(machineId: String) async throws -> MachineFlock
+    func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String
+    func maxAttachmentBytes() -> UInt64
+    func cancelUploads(machineId: String)
 }
 
 extension CollieCore: AgentCore {}

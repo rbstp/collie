@@ -15,6 +15,7 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 | APNs `.p8` key | login Keychain item `dev.rbstp.collied.apns`/`<key ID>`, ACL trusting only the Developer ID signed collied (legacy: 0600 file named by `key_path`); a backup in the user's password manager |
 | Notification keys (32 bytes, one per paired Mac) | iOS Keychain (`dev.rbstp.collie.notify`/`<Mac node ID>`, `AfterFirstUnlockThisDeviceOnly`, shared with ColliePush); collied's `push.json` (0600) next to the device token; collie-core memory. Never logged, audited or written elsewhere; redacted in `Debug` |
 | Terminal content, agent and workspace names | herdr, the tailnet session, the phone |
+| Attachments (photos and files sent from the phone) | the phone; collied's attachments dir (`~/Library/Caches/dev.rbstp.collied/attachments`, 0700 dirs, 0600 files) for up to 24 h; the tailnet session |
 
 ## Trust boundaries
 
@@ -152,6 +153,16 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 | Mitigations | Approval bound to a SHA-256 fingerprint of agent kind, matched rule id, `terminal_id`, agent session id and the dialog region with its cursor. Re-read before any key (same `state_change_seq` and fingerprint, else `superseded`). Arrows and Enter are separate calls: after the arrows collied re-reads and sends Enter only if the screen matches the target option's cursor fingerprint. Deny uses `esc` where the menu labels it `(esc)` and on the trust prompt, so it does not depend on the cursor. No key after the 6 s budget. Outcome is `applied` only if the agent leaves `blocked` within 3 s, otherwise `unconfirmed`; neither the app nor the lock-screen follow-up claims success otherwise. 10 minute expiry (all built). |
 | Residual | The gap between the last re-read and the final key remains until herdr offers conditional input: a question that replaces the dialog inside it, with the same option layout, gets that key. |
 | Phase | Built; herdr conditional input: upstream proposal. |
+
+### Attachment uploads
+
+| | |
+|---|---|
+| Assets | The Mac's disk; files an agent may read; the contents of attached files |
+| Attack | A paired phone (or a stolen, unlocked one) can now write files on the Mac. It tries to fill the disk, to write outside the attachments dir or over an existing file (a crafted name, `..`, a symlink), to plant an executable or a hidden dotfile, to tamper with or hijack another session's upload, or to get file content into the logs. |
+| Mitigations | Same gate as `agent.prompt`: paired full session, re-checked on every frame and before `begin`, each chunk and the commit (built). Caps: 20 MiB per file (phone, decoder and collied), 32 KiB chunks in order and never past the declared size, 2 uploads in flight per session, idle uploads dropped after 60 s, 200 MiB stored (each file counted at least at its allocated blocks) including what is reserved by uploads in flight, at most 1000 entries under the root so a flood of one-byte uploads cannot use more disk than the byte cap suggests nor make the per-`begin` scan unbounded, chunk frames rate limited per `StableID` (128/s) and the other frames by the shared 20/s bucket (built). The phone's name is a hint only: `AttachmentName` rejects separators, `.`, `..`, controls, bidi and format characters, then collied keeps `[A-Za-z0-9._-]`, drops leading dots and dashes and caps the length. Each upload writes into a fresh random 0700 directory created with `create_dir` under a root that must be a 0700 directory owned by the user, not a symlink; the partial file is opened `create_new` with `O_NOFOLLOW`, mode 0600, and renamed inside that directory only, so no existing file is ever overwritten and nothing is executable. The SHA-256 and size are checked before the rename; a mismatch deletes the partial file. An upload id is 16 random bytes bound to the session and `StableID` that began it. Files expire after 24 h; partials of a previous run are removed at start. The audit log gets the sanitized name, size and a SHA-256 prefix, never content or base64; `ChunkData` is redacted in `Debug` (built). |
+| Residual | Up to 200 MiB of phone-chosen bytes sit on the Mac for 24 h, and the path is put into a prompt: a file is as trusted as the phone that sent it, and an agent told to read it may follow instructions inside it (prompt injection through the file, as with any repository content). Contents are readable by anything running as the user and are not encrypted at rest beyond FileVault. The name, while sanitized, is still the phone's choice and shows up in the prompt and in the audit log. |
+| Phase | Built |
 
 ### Apple sees push payload metadata
 

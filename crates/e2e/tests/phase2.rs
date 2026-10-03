@@ -559,6 +559,7 @@ async fn start_collied(
             herdr_session: session.into(),
             machine_name: "e2e-mac".into(),
             approval_ttl: collied::approvals::TTL,
+            attachments_dir: data_dir.join("attachments"),
         },
         socket,
         &TasksConfig {

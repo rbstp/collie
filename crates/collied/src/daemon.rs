@@ -141,6 +141,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
             herdr_session: herdr::session_label(config.herdr.session.as_deref(), &env),
             machine_name: config::machine_name(),
             approval_ttl: approvals::TTL,
+            attachments_dir: config::attachments_dir()?,
         },
         herdr_socket,
         &config.tasks,

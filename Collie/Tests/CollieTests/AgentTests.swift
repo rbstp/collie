@@ -15,6 +15,10 @@ final class FakeCore: AgentCore {
         var error: CoreError?
         var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"])
         var started: TaskStarted?
+        var uploads: [String] = []
+        var cancelledUploads: [String] = []
+        var maxAttachmentBytes: UInt64 = 20 * 1024 * 1024
+        var uploadPath = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/notes.txt"
     }
 
     let state = Mutex(State())
@@ -81,6 +85,14 @@ final class FakeCore: AgentCore {
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
+    func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String {
+        progress.onProgress(sent: UInt64(data.count / 2), total: UInt64(data.count))
+        try await call { $0.uploads.append("\(name) \(data.count)") }
+        progress.onProgress(sent: UInt64(data.count), total: UInt64(data.count))
+        return state.withLock { $0.uploadPath }
+    }
+    func maxAttachmentBytes() -> UInt64 { state.withLock { $0.maxAttachmentBytes } }
+    func cancelUploads(machineId: String) { state.withLock { $0.cancelledUploads.append(machineId) } }
     func flock(machineId: String) async throws -> MachineFlock {
         guard let started = state.withLock({ $0.started }) else { throw CoreError.MachineNotFound }
         let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1")

@@ -1,4 +1,5 @@
 mod approvals;
+mod attachments;
 mod conn;
 mod pin;
 mod reach;
@@ -8,7 +9,7 @@ mod store;
 use std::collections::HashMap;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,12 +22,14 @@ use protocol::{
     Response, TaskNewParams, TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
+use tokio::sync::watch;
 use zeroize::Zeroizing;
 
 pub use approvals::{
     ApprovalDecision, ApprovalEvent, ApprovalFeed, BackgroundDecideReport, BackgroundOutcome,
     DecideStage, DecisionOutcome, PendingApproval,
 };
+pub use attachments::UploadProgress;
 use conn::{Conn, ConnectError, LinkPhase, NodeSlot, PushSlot, RequestError, blocking};
 use reach::Reachability;
 use session::{CALL_TIMEOUT, SessionError, expect_flock, expect_paired, lock, unexpected};
@@ -98,6 +101,12 @@ pub enum CoreError {
     ApprovalAlreadyResolved,
     #[error("the Mac does not support this yet, update collied")]
     NotImplemented,
+    #[error("{message}")]
+    TooLarge { message: String },
+    #[error("the file did not arrive intact, try again")]
+    ChecksumMismatch,
+    #[error("upload cancelled")]
+    Cancelled,
     #[error("stopped retrying: {message}. Pair this Mac again.")]
     Unauthorized { message: String },
     #[error("tailnet: {message}")]
@@ -158,7 +167,9 @@ impl From<SessionError> for CoreError {
                 ErrorCode::NotFound => Self::NotFound,
                 ErrorCode::HerdrUnavailable => Self::HerdrUnavailable,
                 ErrorCode::RateLimited => Self::RateLimited,
-                ErrorCode::NotImplemented => Self::NotImplemented,
+                ErrorCode::NotImplemented | ErrorCode::UnknownMethod => Self::NotImplemented,
+                ErrorCode::TooLarge => Self::TooLarge { message },
+                ErrorCode::ChecksumMismatch => Self::ChecksumMismatch,
                 _ => Self::Rejected { message },
             },
             _ => Self::Unreachable { message },
@@ -434,6 +445,8 @@ struct Inner {
     push: PushSlot,
     reach: Arc<Reachability>,
     ops: Mutex<HashMap<String, (OpId, Instant)>>,
+    uploads: Mutex<HashMap<u64, (String, watch::Sender<bool>)>>,
+    next_upload: AtomicU64,
 }
 
 #[uniffi::export]
@@ -849,6 +862,61 @@ impl CollieCore {
         Ok(())
     }
 
+    pub fn max_attachment_bytes(&self) -> u64 {
+        limits::MAX_ATTACHMENT_BYTES
+    }
+
+    /// Stores `data` in collied's private attachments dir and returns its absolute path
+    /// on the Mac. `progress` is called after each acknowledged chunk. A dropped
+    /// connection fails the upload; nothing resumes. UniFFI does not forward Swift task
+    /// cancellation to Rust, so cancel with [`Self::cancel_uploads`].
+    pub async fn upload_attachment(
+        &self,
+        machine_id: String,
+        name: String,
+        data: Vec<u8>,
+        progress: Box<dyn UploadProgress>,
+    ) -> Result<String, CoreError> {
+        let name = attachments::check(&name, &data)?;
+        let conn = self.conn(&machine_id)?;
+        let (cancel, mut cancelled) = watch::channel(false);
+        let key = self.inner.next_upload.fetch_add(1, Ordering::Relaxed);
+        lock(&self.inner.uploads).insert(key, (machine_id, cancel));
+        let result = self
+            .run(async move {
+                let call = |request: Request| {
+                    let conn = conn.clone();
+                    async move {
+                        let result = if matches!(request, Request::AttachmentCommit(_)) {
+                            conn.mutate(request, DRIVE_TIMEOUT).await
+                        } else {
+                            conn.request(request, CALL_TIMEOUT).await
+                        };
+                        result.map_err(|e| request_error(&conn, e))
+                    }
+                };
+                let cancel = async move {
+                    if cancelled.wait_for(|c| *c).await.is_err() {
+                        std::future::pending::<()>().await;
+                    }
+                };
+                attachments::upload(call, name, data, progress, cancel).await
+            })
+            .await;
+        lock(&self.inner.uploads).remove(&key);
+        result
+    }
+
+    /// Cancels every upload in progress to that machine; each fails with `Cancelled`
+    /// and is aborted on the Mac.
+    pub fn cancel_uploads(&self, machine_id: String) {
+        for (machine, cancel) in lock(&self.inner.uploads).values() {
+            if *machine == machine_id {
+                let _ = cancel.send(true);
+            }
+        }
+    }
+
     /// Fails with `ConfirmRequired` unless `confirm` is true.
     pub async fn close_pane(
         &self,
@@ -900,6 +968,8 @@ impl CollieCore {
                 push: Arc::default(),
                 reach: Arc::default(),
                 ops: Mutex::default(),
+                uploads: Mutex::default(),
+                next_upload: AtomicU64::default(),
             }),
         }))
     }
@@ -1271,6 +1341,10 @@ fn invalid_field(message: &str) -> Option<String> {
             "OpId" => "op_id",
             "PushToken" => "apns_token",
             "NotificationKey" => "notification_key",
+            "AttachmentName" => "name",
+            "UploadId" => "upload_id",
+            "Sha256Hex" => "sha256",
+            "ChunkData" => "data",
             _ => return None,
         };
         return Some(field.into());
@@ -1382,6 +1456,17 @@ mod tests {
         assert!(matches!(
             server(ErrorCode::Unrecognized, "quota"),
             CoreError::Rejected { .. }
+        ));
+        assert!(matches!(
+            server(ErrorCode::UnknownMethod, "unknown method"),
+            CoreError::NotImplemented
+        ));
+        let e = server(ErrorCode::TooLarge, "attachment storage on the Mac is full");
+        assert!(matches!(&e, CoreError::TooLarge { .. }));
+        assert_eq!(e.to_string(), "attachment storage on the Mac is full");
+        assert!(matches!(
+            server(ErrorCode::ChecksumMismatch, ""),
+            CoreError::ChecksumMismatch
         ));
         assert!(matches!(
             CoreError::from(SessionError::Closed),

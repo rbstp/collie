@@ -128,6 +128,7 @@ async fn scenario(
             herdr_session: "default".into(),
             machine_name: "it-mac".into(),
             approval_ttl: collied::approvals::TTL,
+            attachments_dir: data_dir.join("attachments"),
         },
         herdr_socket,
     )

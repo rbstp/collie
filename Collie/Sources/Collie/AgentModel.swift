@@ -18,6 +18,8 @@ final class AgentModel {
     var draft = ""
     private(set) var sendingPrompt = false
     private(set) var promptError: String?
+    private(set) var upload: AttachmentUpload?
+    private var uploadTask: Task<Void, Never>?
 
     private(set) var notice: String?
     private(set) var keyTaps = 0
@@ -94,6 +96,57 @@ final class AgentModel {
         } catch {
             promptError = Self.message(for: error)
         }
+    }
+
+    /// One upload at a time; `load` gets the size limit and runs off the main actor. On success the path
+    /// on the Mac is appended to the current draft.
+    @discardableResult
+    func attach(name: String, load: @escaping @Sendable (UInt64) async throws -> Data) -> Task<Void, Never>? {
+        guard upload == nil else { return nil }
+        let id = UUID()
+        let core = core
+        let machineId = route.machineId
+        let limit = core.maxAttachmentBytes()
+        upload = AttachmentUpload(id: id, name: name)
+        promptError = nil
+        let task = Task {
+            do {
+                let data = try await load(limit)
+                try Attachment.check(data, limit: limit)
+                try Task.checkCancellation()
+                if upload?.id == id { upload?.total = UInt64(data.count) }
+                let progress = UploadProgressRelay { [weak self] sent, total in
+                    Task { @MainActor in self?.uploaded(id, sent: sent, total: total) }
+                }
+                let path = try await core.uploadAttachment(machineId: machineId, name: name, data: data, progress: progress)
+                try Task.checkCancellation()
+                draft = Attachment.appending(path, to: draft)
+            } catch {
+                if !Task.isCancelled, !(error is CancellationError) { promptError = Self.message(for: error) }
+            }
+            if upload?.id == id { upload = nil }
+        }
+        uploadTask = task
+        return task
+    }
+
+    /// Swift task cancellation does not reach Rust, so the core is told to abort the upload on the Mac.
+    func attachFailed(_ error: any Error) {
+        promptError = Self.message(for: error)
+    }
+
+    func cancelUpload() {
+        guard upload != nil else { return }
+        core.cancelUploads(machineId: route.machineId)
+        uploadTask?.cancel()
+        uploadTask = nil
+        upload = nil
+    }
+
+    private func uploaded(_ id: UUID, sent: UInt64, total: UInt64) {
+        guard upload?.id == id, let current = upload, sent >= current.sent else { return }
+        upload?.sent = sent
+        upload?.total = total
     }
 
     /// Keys go out in tap order: taps made while a send is in flight are batched into the next call.

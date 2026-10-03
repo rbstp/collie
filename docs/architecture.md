@@ -142,6 +142,49 @@ The payload never carries the snippet, terminal text or the nonce in clear: it i
 
 - Tapping the alert itself opens the Approvals tab on that approval. In the app, every decision first passes LocalAuthentication (`deviceOwnerAuthentication`, a fresh `LAContext` each time, so one unlock never covers a later approval); nothing reaches collie-core otherwise.
 
+## Attachments
+
+The Agent screen attaches a photo or a file to a prompt: the phone uploads it over the tailnet session, collied stores a private copy on the Mac and returns its absolute path, and the app inserts that path into the prompt draft. Claude Code then reads the file from disk like any path in a prompt. Nothing is sent to herdr.
+
+### Flow
+
+1. `attachment.begin {op_id, name, size, sha256}` answers `{upload_id}` (16 random bytes, hex). `name` (`AttachmentName`: 1 to 64 characters, no control, bidi or format characters, no `/`, `\`, `.` or `..`) is only a hint; `size` is 1 byte to 20 MiB; `sha256` is lowercase hex of the whole file.
+2. `attachment.chunk {upload_id, offset, data}` in order: `offset` must equal the bytes received so far, `data` is base64 (standard, padded) of 1 byte to 32 KiB, so a chunk frame stays under the 64 KiB frame cap. collie-core sends one chunk at a time and awaits each reply.
+3. `attachment.commit {op_id, upload_id}` answers `{path}` once the received size equals `size` and the SHA-256 matches; otherwise the partial file is deleted and the error is `invalid_params` (size) or `checksum_mismatch`.
+4. `attachment.abort {upload_id}` is best effort and always answers `ok`.
+
+An upload is bound to the session (and peer `StableID`) that began it: another session, even of the same phone, gets `not_found`. Nothing resumes across connections: closing the session drops its uploads, and collie-core reports the upload as interrupted. `begin` and `commit` go through the `op_id` outcome cache like the other mutations, so a commit retried after a dropped reply returns the stored path. Authorization is the `agent.prompt` gate: a paired, full session, re-checked on every frame and again before `begin`, each chunk and the commit.
+
+collie-core: `upload_attachment(machine_id, name, data, progress)` checks the name and size locally, computes the SHA-256, then runs begin, chunks and commit, calling `progress.on_progress(sent, total)` after each acknowledged chunk; any failure sends `attachment.abort`. `max_attachment_bytes()` returns the 20 MiB limit. UniFFI 0.32 does not forward Swift task cancellation to Rust, so the app cancels with `cancel_uploads(machine_id)`, which fails the upload with `Cancelled` and aborts it on the Mac.
+
+The protocol version stays 2: the methods, responses and error codes (`too_large`, `checksum_mismatch`) are additive. An older collied answers `unknown_method`, which collie-core reports as "update collied".
+
+### Limits
+
+| Limit | Value |
+|---|---|
+| File size | 20 MiB (`limits::MAX_ATTACHMENT_BYTES`), checked by the phone, the protocol decoder and collied |
+| Chunk | 32 KiB decoded, in order, never past the declared size |
+| Uploads in flight | 2 per session (`rate_limited` beyond) |
+| Idle upload | dropped, with its directory, after 60 s without a chunk |
+| Stored bytes | 200 MiB: committed files (the larger of length and allocated blocks) plus the declared size of every upload in flight; `begin` answers `too_large` beyond |
+| Stored entries | 1000 entries under the root, uploads in flight included, so many tiny files cannot exhaust the disk or slow the scan `begin` runs; `begin` answers `too_large` beyond |
+| Chunk rate | own bucket per paired `StableID`, 128/s, burst 128 (4 MiB/s); collie-core backs off and retries a rate limited chunk up to 8 times. Other attachment frames use the shared 20/s bucket |
+
+### Storage
+
+- Root: `ServerConfig::attachments_dir`, by default `~/Library/Caches/dev.rbstp.collied/attachments` (no spaces, so the path reads cleanly in a prompt). Created 0700; an existing root that is a symlink, owned by someone else or not exactly 0700 stops collied at start.
+- Each upload gets a fresh `<root>/<16 hex>/` (0700, `create_dir`, fails if it exists). Data goes to `.part` opened `create_new` with `O_NOFOLLOW`, mode 0600; the commit fsyncs it and renames it, inside that directory, to the sanitized name. Files are never executable.
+- Sanitized name: `[A-Za-z0-9._-]` kept, each run of anything else becomes `-`, leading dots and dashes dropped, at most 64 characters keeping an extension of up to 16 alphanumerics, `attachment` when nothing is left (`.env` becomes `attachment.env`).
+- One audit line per committed upload: `attachment.commit`, target = sanitized name, result `ok size=<bytes> sha256=<first 12 hex>`. `attachment.begin` is audited with the sanitized name; chunks and aborts are not. Content and base64 are never logged.
+- `collied doctor` prints an `attachments` line: root, mode, bytes stored.
+
+### Cleanup
+
+- Session close: its uploads in flight are dropped and their directories removed.
+- Every 10 s: uploads idle for 60 s are dropped.
+- At start and every hour: entries of the root older than 24 h are removed (symlinks are removed as links, never followed). At start, directories still holding a `.part` from a previous run are removed too.
+
 ## ColliePush (notification service extension)
 
 - Pure Swift, never links CollieCore; shares only `Sources/Shared`, the App Group `group.dev.rbstp.collie` and the notification keys' Keychain access group with the app. No network.
@@ -178,4 +221,5 @@ The payload never carries the snippet, terminal text or the nonce in clear: it i
 | Answering a blocked prompt outside approvals | bypasses nonce/expiry/audit | collied refuses prompt/keys while `blocked` |
 | Prompt delivered after agent exit | prompt runs as a shell command | foreground check before send; conditional input in herdr upstream |
 | Retried mutations | duplicate prompts/tasks | `op_id` outcome cache |
+| A paired phone writes files on the Mac | disk use, files an agent may read | size, rate, in-flight, 200 MiB and 1000 entry caps; private 0600 non-executable files in a 0700 cache dir; 24 h retention; [threat-model.md](threat-model.md#attachment-uploads) |
 | Older app vs newer collied | decode failures | additive events/errors/statuses decode to `Unrecognized`; anything else bumps `PROTOCOL_VERSION` |

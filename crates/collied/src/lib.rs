@@ -1,4 +1,5 @@
 pub mod approvals;
+pub mod attachments;
 pub mod audit;
 pub mod config;
 pub mod control;

@@ -1,5 +1,6 @@
 import CollieCore
 import GhosttyTerminal
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -78,6 +79,7 @@ struct AgentScreen: View {
             if closed { dismiss() }
         }
         .task { await model.run() }
+        .onDisappear { model.cancelUpload() }
     }
 }
 
@@ -237,13 +239,29 @@ private struct KeyStrip: View {
 private struct PromptBar: View {
     @Bindable var model: AgentModel
     @FocusState private var editing: Bool
+    @State private var pickingPhoto = false
+    @State private var photo: PhotosPickerItem?
+    @State private var pickingFile = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let error = model.promptError {
                 Text(error).font(.footnote).foregroundStyle(.red)
             }
+            if let upload = model.upload {
+                UploadChip(upload: upload) { model.cancelUpload() }
+            }
             HStack(alignment: .bottom, spacing: 8) {
+                Menu {
+                    Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
+                    Button("Files", systemImage: "folder") { pickingFile = true }
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 20))
+                        .frame(width: 32, height: 36)
+                }
+                .disabled(model.upload != nil)
+                .accessibilityLabel("Attach")
                 TextField("Prompt the agent", text: $model.draft, axis: .vertical)
                     .lineLimit(1...6)
                     .padding(.horizontal, 12)
@@ -266,5 +284,52 @@ private struct PromptBar: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
+        .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .images)
+        .onChange(of: photo) { _, item in
+            guard let item else { return }
+            photo = nil
+            model.attach(name: Attachment.photoName(at: .now)) { _ in
+                guard let data = try await item.loadTransferable(type: Data.self) else { throw AttachmentError.unreadablePhoto }
+                return try Attachment.jpeg(from: data)
+            }
+        }
+        .fileImporter(isPresented: $pickingFile, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+            let url: URL
+            switch result {
+            case .success(let urls):
+                guard let first = urls.first else { return }
+                url = first
+            case .failure(let error):
+                model.attachFailed(error)
+                return
+            }
+            model.attach(name: Attachment.suggestedName(url.lastPathComponent)) { limit in
+                try Attachment.read(url, limit: limit)
+            }
+        }
+    }
+}
+
+private struct UploadChip: View {
+    let upload: AttachmentUpload
+    let cancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "paperclip").font(.caption).foregroundStyle(.secondary)
+            Text(upload.name)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            ProgressView(value: upload.fraction ?? 0).frame(width: 72)
+            Button(action: cancel) {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel upload")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.fill.tertiary, in: Capsule())
     }
 }

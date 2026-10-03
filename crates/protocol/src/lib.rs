@@ -20,4 +20,7 @@ pub mod limits {
     pub const MAX_CWD_BYTES: usize = 1024;
     pub const NONCE_BYTES: usize = 32;
     pub const PAIRING_CODE_BYTES: usize = 16;
+    pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
+    pub const MAX_ATTACHMENT_CHUNK_BYTES: usize = 32 * 1024;
+    pub const MAX_ATTACHMENT_NAME_CHARS: usize = 64;
 }

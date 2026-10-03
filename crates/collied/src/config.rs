@@ -130,6 +130,11 @@ pub fn data_dir() -> Result<PathBuf> {
     Ok(home_dir()?.join("Library/Application Support/collie"))
 }
 
+/// No spaces in the path, so an agent reads it back cleanly from a prompt.
+pub fn attachments_dir() -> Result<PathBuf> {
+    Ok(home_dir()?.join("Library/Caches/dev.rbstp.collied/attachments"))
+}
+
 pub fn parse(text: &str) -> Result<Config, toml::de::Error> {
     toml::from_str(text)
 }
