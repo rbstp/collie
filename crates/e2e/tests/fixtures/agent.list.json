@@ -1,0 +1,45 @@
+{
+  "id": "fixture",
+  "result": {
+    "type": "agent_list",
+    "agents": [
+      {
+        "terminal_id": "term_65ce7ae4fd5731",
+        "agent": "claude",
+        "terminal_title": "◐ Collie iOS remote control",
+        "terminal_title_stripped": "Collie iOS remote control",
+        "agent_status": "working",
+        "agent_session": {
+          "source": "herdr:claude",
+          "agent": "claude",
+          "kind": "id",
+          "value": "00000000-0000-4000-8000-000000000000"
+        },
+        "workspace_id": "w6",
+        "tab_id": "w6:t1",
+        "pane_id": "w6:p1",
+        "focused": true,
+        "state_change_seq": 5,
+        "cwd": "/Users/me/src/collie",
+        "foreground_cwd": "/Users/me/src/collie",
+        "revision": 2
+      },
+      {
+        "terminal_id": "term_0a1b2c3d4e5f60",
+        "agent": "codex",
+        "terminal_title": "codex",
+        "agent_status": "blocked",
+        "workspace_id": "w7",
+        "tab_id": "w7:t1",
+        "pane_id": "w7:p1",
+        "focused": false,
+        "state_change_seq": 12,
+        "cwd": "/Users/me/src/api",
+        "foreground_cwd": "/Users/me/src/api/server",
+        "revision": 2,
+        "name": "api-fixer",
+        "title": "Fix flaky test"
+      }
+    ]
+  }
+}

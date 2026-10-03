@@ -1,0 +1,93 @@
+import CollieCore
+import Foundation
+import Observation
+
+struct MachineFlockEntry: Identifiable, Equatable {
+    let machine: Machine
+    var flock: MachineFlock?
+    var error: String?
+
+    var id: String { machine.id }
+
+    var agents: [AgentSummary] { FlockOrder.sorted(flock?.agents ?? []) }
+
+    func workspaceLabel(for agent: AgentSummary) -> String? {
+        flock?.workspaces.first { $0.workspaceId == agent.workspaceId }?.label
+    }
+}
+
+@MainActor
+@Observable
+final class FlockModel {
+    private(set) var entries: [MachineFlockEntry] = []
+    private(set) var refreshing = false
+
+    func refresh(core: CollieCore?) async {
+        guard let core, !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
+        let machines = core.machines()
+        entries = machines.map { machine in
+            entries.first { $0.id == machine.id }.map { MachineFlockEntry(machine: machine, flock: $0.flock, error: $0.error) }
+                ?? MachineFlockEntry(machine: machine)
+        }
+        await withTaskGroup(of: MachineFlockEntry.self) { group in
+            for machine in machines {
+                group.addTask {
+                    do {
+                        let flock = try await core.flock(machineId: machine.id)
+                        return MachineFlockEntry(machine: machine, flock: flock, error: flock.link == .connected ? nil : flock.lastError)
+                    } catch {
+                        return MachineFlockEntry(
+                            machine: machine,
+                            flock: core.cachedFlock(machineId: machine.id),
+                            error: describe(error)
+                        )
+                    }
+                }
+            }
+            for await entry in group {
+                if let index = entries.firstIndex(where: { $0.id == entry.id }) {
+                    entries[index] = entry
+                }
+            }
+        }
+    }
+}
+
+enum FlockOrder {
+    static func rank(_ state: AgentState) -> Int {
+        switch state {
+        case .blocked: 0
+        case .working: 1
+        case .idle: 2
+        case .done: 3
+        case .unknown: 4
+        }
+    }
+
+    static func sorted(_ agents: [AgentSummary]) -> [AgentSummary] {
+        agents.sorted {
+            (rank($0.status), $0.statusSinceMs, $0.terminalId) < (rank($1.status), $1.statusSinceMs, $1.terminalId)
+        }
+    }
+}
+
+enum Elapsed {
+    static func string(sinceMs: UInt64, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince1970) - Int(sinceMs / 1000))
+        switch seconds {
+        case ..<60: return "\(seconds)s"
+        case ..<3600: return "\(seconds / 60)m"
+        case ..<86400: return "\(seconds / 3600)h \(seconds % 3600 / 60)m"
+        default: return "\(seconds / 86400)d"
+        }
+    }
+}
+
+extension AgentSummary {
+    var displayTitle: String {
+        [title, name, kind].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
+            ?? terminalId
+    }
+}

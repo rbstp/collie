@@ -1,0 +1,15 @@
+--- netstack.orig.go
++++ netstack.go
+@@ -447,6 +447,12 @@
+ 	// Cancel the injection goroutines before ipstack.Wait closes linkEP's
+ 	// outbound queues. A nil queue read is expected only after cancellation.
+ 	ns.ctxCancel()
++	// collie: ipstack.Close aborts every endpoint, TIME-WAIT included, and
++	// each abort queues a RST that nothing reads any more. With more than
++	// the 512-packet queue's worth of endpoints that write blocked forever
++	// and tsnet.Server.Close never returned. Those packets could not be
++	// sent anyway, so close the queues first and let the writes fail.
++	ns.linkEP.Close()
+ 	ns.ipstack.Close()
+ 	ns.ipstack.Wait()
+ 	ns.injectWG.Wait()

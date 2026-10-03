@@ -1,0 +1,664 @@
+{
+  "$defs": {
+    "ActivityId": {
+      "pattern": "^[A-Za-z0-9-]{1,64}$",
+      "type": "string"
+    },
+    "AgentKind": {
+      "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+      "type": "string"
+    },
+    "AgentPromptParams": {
+      "additionalProperties": false,
+      "properties": {
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "text": {
+          "$ref": "#/$defs/PromptText"
+        }
+      },
+      "required": [
+        "op_id",
+        "terminal_id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "AgentSendKeysParams": {
+      "additionalProperties": false,
+      "properties": {
+        "keys": {
+          "items": {
+            "$ref": "#/$defs/Key"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "op_id",
+        "terminal_id",
+        "keys"
+      ],
+      "type": "object"
+    },
+    "AgentTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id"
+      ],
+      "type": "object"
+    },
+    "AgentWatchParams": {
+      "additionalProperties": false,
+      "description": "One watched agent per connection; `None` stops `agent.output` events.",
+      "properties": {
+        "terminal_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ApnsEnvironment": {
+      "enum": [
+        "sandbox",
+        "production"
+      ],
+      "type": "string"
+    },
+    "ApprovalDecideParams": {
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "$ref": "#/$defs/ApprovalId"
+        },
+        "decision": {
+          "$ref": "#/$defs/Decision"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        }
+      },
+      "required": [
+        "approval_id",
+        "decision",
+        "nonce"
+      ],
+      "type": "object"
+    },
+    "ApprovalId": {
+      "pattern": "^[A-Za-z0-9_-]{1,64}$",
+      "type": "string"
+    },
+    "Cwd": {
+      "maxLength": 1024,
+      "pattern": "^/",
+      "type": "string"
+    },
+    "Decision": {
+      "enum": [
+        "approve",
+        "approve_always",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "Empty": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "HelloParams": {
+      "additionalProperties": false,
+      "properties": {
+        "app_version": {
+          "$ref": "#/$defs/Label"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "app_version"
+      ],
+      "type": "object"
+    },
+    "Key": {
+      "enum": [
+        "enter",
+        "esc",
+        "up",
+        "down",
+        "tab",
+        "shift+tab",
+        "ctrl+c",
+        "y",
+        "n"
+      ],
+      "type": "string"
+    },
+    "Label": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    },
+    "Nonce": {
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "type": "string"
+    },
+    "OpId": {
+      "pattern": "^[A-Za-z0-9_-]{22}$",
+      "type": "string"
+    },
+    "PairCompleteParams": {
+      "additionalProperties": false,
+      "properties": {
+        "device_label": {
+          "$ref": "#/$defs/Label"
+        },
+        "pairing_code": {
+          "$ref": "#/$defs/PairingCode"
+        }
+      },
+      "required": [
+        "pairing_code",
+        "device_label"
+      ],
+      "type": "object"
+    },
+    "PairingCode": {
+      "pattern": "^[A-Za-z0-9_-]{22}$",
+      "type": "string"
+    },
+    "PaneCloseParams": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "type": "boolean"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id"
+      ],
+      "type": "object"
+    },
+    "PromptText": {
+      "maxLength": 32768,
+      "minLength": 1,
+      "type": "string"
+    },
+    "PushActivityTokenParams": {
+      "additionalProperties": false,
+      "properties": {
+        "activity_id": {
+          "$ref": "#/$defs/ActivityId"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "token": {
+          "$ref": "#/$defs/PushToken"
+        }
+      },
+      "required": [
+        "activity_id",
+        "terminal_id",
+        "token"
+      ],
+      "type": "object"
+    },
+    "PushRegisterParams": {
+      "additionalProperties": false,
+      "properties": {
+        "apns_token": {
+          "$ref": "#/$defs/PushToken"
+        },
+        "environment": {
+          "$ref": "#/$defs/ApnsEnvironment"
+        },
+        "live_activity_push_to_start_token": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PushToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "apns_token",
+        "environment"
+      ],
+      "type": "object"
+    },
+    "PushToken": {
+      "pattern": "^[0-9A-Fa-f]{64,256}$",
+      "type": "string"
+    },
+    "ReadParams": {
+      "additionalProperties": false,
+      "properties": {
+        "lines": {
+          "format": "uint16",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/ReadSource"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ReadSource": {
+      "enum": [
+        "visible",
+        "recent"
+      ],
+      "type": "string"
+    },
+    "TaskNewParams": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "cwd": {
+          "$ref": "#/$defs/Cwd"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "prompt": {
+          "$ref": "#/$defs/PromptText"
+        }
+      },
+      "required": [
+        "op_id",
+        "cwd",
+        "agent",
+        "prompt"
+      ],
+      "type": "object"
+    },
+    "TerminalId": {
+      "pattern": "^[A-Za-z0-9_:.-]{1,64}$",
+      "type": "string"
+    },
+    "WorkspaceCloseParams": {
+      "additionalProperties": false,
+      "description": "`confirm` must be `true`; anything else yields `confirm_required`.",
+      "properties": {
+        "confirm": {
+          "default": false,
+          "type": "boolean"
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/WorkspaceId"
+        }
+      },
+      "required": [
+        "workspace_id"
+      ],
+      "type": "object"
+    },
+    "WorkspaceId": {
+      "pattern": "^[A-Za-z0-9_:.-]{1,64}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "properties": {
+        "method": {
+          "const": "hello",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/HelloParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "pair.complete",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/PairCompleteParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "flock.snapshot",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Empty"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "workspace.list",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Empty"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.read",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/ReadParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "pane.read",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/ReadParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.watch",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentWatchParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.options",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Empty"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.prompt",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentPromptParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.send_keys",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentSendKeysParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.focus",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentTarget"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.new",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TaskNewParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "workspace.close",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/WorkspaceCloseParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "pane.close",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/PaneCloseParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "approval.list",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Empty"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "approval.decide",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/ApprovalDecideParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "push.register",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/PushRegisterParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "push.activity_token",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/PushActivityTokenParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    }
+  ],
+  "properties": {
+    "id": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "title": "ClientFrame",
+  "type": "object"
+}

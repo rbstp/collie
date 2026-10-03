@@ -1,0 +1,20 @@
+[package]
+name = "e2e"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dev-dependencies]
+collie-core = { path = "../collie-core" }
+collied = { path = "../collied" }
+protocol = { path = "../protocol" }
+serde_json.workspace = true
+tailnet = { path = "../tailnet" }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+zeroize = "1.9.0"
+
+[lints]
+workspace = true

@@ -1,0 +1,804 @@
+{
+  "$defs": {
+    "Agent": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_line": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/AgentStatus"
+        },
+        "status_since_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/WorkspaceId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "workspace_id",
+        "status",
+        "status_since_ms"
+      ],
+      "type": "object"
+    },
+    "AgentKind": {
+      "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+      "type": "string"
+    },
+    "AgentStatus": {
+      "enum": [
+        "idle",
+        "working",
+        "blocked",
+        "done",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "Approval": {
+      "properties": {
+        "agent_label": {
+          "type": "string"
+        },
+        "approval_id": {
+          "$ref": "#/$defs/ApprovalId"
+        },
+        "created_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "expires_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/Decision"
+          },
+          "type": "array"
+        },
+        "snippet": {
+          "type": "string"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PendingTool"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace_label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "terminal_id",
+        "agent_label",
+        "workspace_label",
+        "snippet",
+        "options",
+        "nonce",
+        "created_at_ms",
+        "expires_at_ms"
+      ],
+      "type": "object"
+    },
+    "ApprovalId": {
+      "pattern": "^[A-Za-z0-9_-]{1,64}$",
+      "type": "string"
+    },
+    "ApprovalOutcome": {
+      "oneOf": [
+        {
+          "description": "Keys were sent and the agent then left `blocked`.",
+          "properties": {
+            "by": {
+              "type": "string"
+            },
+            "decision": {
+              "$ref": "#/$defs/Decision"
+            },
+            "outcome": {
+              "const": "applied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "decision",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Keys were sent but the agent was still `blocked` when collied stopped waiting.",
+          "properties": {
+            "by": {
+              "type": "string"
+            },
+            "decision": {
+              "$ref": "#/$defs/Decision"
+            },
+            "outcome": {
+              "const": "unconfirmed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "decision",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "outcome": {
+              "const": "expired",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The prompt changed, or was answered on the Mac, before a decision was applied.",
+          "properties": {
+            "outcome": {
+              "const": "superseded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "outcome": {
+              "const": "other",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Cwd": {
+      "maxLength": 1024,
+      "pattern": "^/",
+      "type": "string"
+    },
+    "Decision": {
+      "enum": [
+        "approve",
+        "approve_always",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "ErrorBody": {
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ErrorCode": {
+      "enum": [
+        "malformed_frame",
+        "frame_too_large",
+        "unknown_method",
+        "invalid_params",
+        "unsupported_protocol",
+        "hello_required",
+        "not_paired",
+        "pairing_failed",
+        "not_found",
+        "confirm_required",
+        "agent_blocked",
+        "agent_not_ready",
+        "approval_not_found",
+        "approval_expired",
+        "approval_nonce_mismatch",
+        "approval_already_resolved",
+        "rate_limited",
+        "herdr_unavailable",
+        "not_implemented",
+        "internal",
+        "unrecognized"
+      ],
+      "type": "string"
+    },
+    "Event": {
+      "oneOf": [
+        {
+          "properties": {
+            "agent": {
+              "$ref": "#/$defs/Agent"
+            },
+            "name": {
+              "const": "agent.status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "agent"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TerminalRead",
+          "properties": {
+            "name": {
+              "const": "agent.output",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "approval": {
+              "$ref": "#/$defs/Approval"
+            },
+            "name": {
+              "const": "approval.needed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "approval"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "approval_id": {
+              "$ref": "#/$defs/ApprovalId"
+            },
+            "name": {
+              "const": "approval.resolved",
+              "type": "string"
+            },
+            "outcome": {
+              "$ref": "#/$defs/ApprovalOutcome"
+            }
+          },
+          "required": [
+            "name",
+            "approval_id",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "flock.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "const": "Unrecognized",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Flock": {
+      "properties": {
+        "agents": {
+          "items": {
+            "$ref": "#/$defs/Agent"
+          },
+          "type": "array"
+        },
+        "approvals": {
+          "items": {
+            "$ref": "#/$defs/Approval"
+          },
+          "type": "array"
+        },
+        "machine": {
+          "$ref": "#/$defs/MachineInfo"
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workspaces": {
+          "items": {
+            "$ref": "#/$defs/Workspace"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "seq",
+        "machine",
+        "workspaces",
+        "agents",
+        "approvals"
+      ],
+      "type": "object"
+    },
+    "HelloResult": {
+      "properties": {
+        "collied_version": {
+          "type": "string"
+        },
+        "herdr_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "machine": {
+          "$ref": "#/$defs/MachineInfo"
+        },
+        "paired": {
+          "type": "boolean"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "collied_version",
+        "machine",
+        "paired"
+      ],
+      "type": "object"
+    },
+    "MachineInfo": {
+      "description": "`node_id` is the Tailscale stable node ID; the phone pins it at pairing time.",
+      "properties": {
+        "herdr_session": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "node_id",
+        "herdr_session"
+      ],
+      "type": "object"
+    },
+    "Nonce": {
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "type": "string"
+    },
+    "PendingTool": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "ReadSource": {
+      "enum": [
+        "visible",
+        "recent"
+      ],
+      "type": "string"
+    },
+    "Response": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/HelloResult",
+          "properties": {
+            "type": {
+              "const": "hello",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "machine": {
+              "$ref": "#/$defs/MachineInfo"
+            },
+            "type": {
+              "const": "paired",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "machine"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Flock",
+          "properties": {
+            "type": {
+              "const": "flock",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "workspaces",
+              "type": "string"
+            },
+            "workspaces": {
+              "items": {
+                "$ref": "#/$defs/Workspace"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "workspaces"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TerminalRead",
+          "properties": {
+            "type": {
+              "const": "terminal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TaskOptions",
+          "properties": {
+            "type": {
+              "const": "task_options",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "terminal_id": {
+              "$ref": "#/$defs/TerminalId"
+            },
+            "type": {
+              "const": "task_started",
+              "type": "string"
+            },
+            "workspace_id": {
+              "$ref": "#/$defs/WorkspaceId"
+            }
+          },
+          "required": [
+            "type",
+            "workspace_id",
+            "terminal_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "approvals": {
+              "items": {
+                "$ref": "#/$defs/Approval"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "approvals",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "approvals"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "approval_id": {
+              "$ref": "#/$defs/ApprovalId"
+            },
+            "outcome": {
+              "$ref": "#/$defs/ApprovalOutcome"
+            },
+            "type": {
+              "const": "approval_resolved",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "approval_id",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "ok",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TaskOptions": {
+      "properties": {
+        "agents": {
+          "items": {
+            "$ref": "#/$defs/AgentKind"
+          },
+          "type": "array"
+        },
+        "default_agent": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "recent_cwds": {
+          "items": {
+            "$ref": "#/$defs/Cwd"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "agents",
+        "default_agent",
+        "recent_cwds"
+      ],
+      "type": "object"
+    },
+    "TerminalId": {
+      "pattern": "^[A-Za-z0-9_:.-]{1,64}$",
+      "type": "string"
+    },
+    "TerminalRead": {
+      "properties": {
+        "ansi": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ReadSource"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "source",
+        "ansi",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "Workspace": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "number": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/AgentStatus"
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/WorkspaceId"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "label",
+        "number",
+        "status"
+      ],
+      "type": "object"
+    },
+    "WorkspaceId": {
+      "pattern": "^[A-Za-z0-9_:.-]{1,64}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "properties": {
+        "id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "const": "result",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/Response"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "result"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorBody"
+        },
+        "id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "error"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "`seq` increases by one per event on a connection; a snapshot carries the `seq`\nit reflects, so the client drops events with `seq <= snapshot.seq`.",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/Event"
+        },
+        "kind": {
+          "const": "event",
+          "type": "string"
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "seq",
+        "event"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "ServerFrame"
+}

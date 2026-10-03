@@ -1,0 +1,105 @@
+--- a/tailscale.go
++++ b/tailscale.go
+@@ -76,18 +76,6 @@
+ 	closed   bool
+ }
+ 
+-// conns tracks all the pipe(2)s allocated via tsnet_dial.
+-var conns struct {
+-	mu sync.Mutex
+-	m  map[C.int]*conn // keyed by the FD given to C (w)
+-}
+-
+-type conn struct {
+-	s *tsnet.Server
+-	c net.Conn
+-	r *os.File // r is the local socket to the C client
+-}
+-
+ func (s *server) recErr(err error) C.int {
+ 	s.mu.Lock()
+ 	defer s.mu.Unlock()
+@@ -451,40 +439,42 @@
+ func newConn(s *server, netConn net.Conn, connOut *C.int) error {
+ 	fds, err := syscall.Socketpair(syscall.AF_LOCAL, syscall.SOCK_STREAM, 0)
+ 	if err != nil {
++		return err
++	}
++	// Non-blocking so r is pollable: Close then wakes a pending read and
++	// closes the fd at once, which the C side sees as EOF. A blocking r kept
++	// the fd open behind a read(2) until C closed its end, leaving the
++	// SHUT_WR below as the only EOF signal, and on macOS a C reader that
++	// entered read(2) just before it sometimes slept until SO_RCVTIMEO.
++	if err := syscall.SetNonblock(fds[1], true); err != nil {
++		syscall.Close(fds[0])
++		syscall.Close(fds[1])
+ 		return err
+ 	}
+ 	r := os.NewFile(uintptr(fds[1]), "socketpair-r")
+-	c := &conn{s: s.s, c: netConn, r: r}
+-	fdC := C.int(fds[0])
+-
+-	conns.mu.Lock()
+-	if conns.m == nil {
+-		conns.m = make(map[C.int]*conn)
+-	}
+-	conns.m[fdC] = c
+-	conns.mu.Unlock()
+-
+-	connCleanup := func() {
+-		var inCleanup bool
+-		conns.mu.Lock()
+-		if tsConn, ok := conns.m[fdC]; ok && tsConn.c == netConn {
+-			delete(conns.m, fdC)
+-			inCleanup = true
+-		}
+-		conns.mu.Unlock()
+-
+-		if !inCleanup {
+-			return
+-		}
+-
++	rc, err := r.SyscallConn()
++	if err != nil {
++		syscall.Close(fds[0])
+ 		r.Close()
+-		netConn.Close()
++		return err
+ 	}
++	// Control holds a reference on r's fd, so a shutdown can never reach a
++	// reused fd number after r is closed.
++	shutdown := func(how int) {
++		rc.Control(func(fd uintptr) { syscall.Shutdown(int(fd), how) })
++	}
++	var once sync.Once
++	connCleanup := func() {
++		once.Do(func() {
++			r.Close()
++			netConn.Close()
++		})
++	}
+ 	go func() {
+ 		defer connCleanup()
+ 		var b [1 << 16]byte
+ 		io.CopyBuffer(r, netConn, b[:])
+-		syscall.Shutdown(int(r.Fd()), syscall.SHUT_WR)
++		shutdown(syscall.SHUT_WR)
+ 		if cr, ok := netConn.(interface{ CloseRead() error }); ok {
+ 			cr.CloseRead()
+ 		}
+@@ -493,13 +483,13 @@
+ 		defer connCleanup()
+ 		var b [1 << 16]byte
+ 		io.CopyBuffer(netConn, r, b[:])
+-		syscall.Shutdown(int(r.Fd()), syscall.SHUT_RD)
++		shutdown(syscall.SHUT_RD)
+ 		if cw, ok := netConn.(interface{ CloseWrite() error }); ok {
+ 			cw.CloseWrite()
+ 		}
+ 	}()
+ 
+-	*connOut = fdC
++	*connOut = C.int(fds[0])
+ 	return nil
+ }
+ 

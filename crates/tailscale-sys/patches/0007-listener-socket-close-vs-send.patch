@@ -1,0 +1,59 @@
+diff --git a/tailscale.go b/tailscale.go
+index 15576d6..e9ca43c 100644
+--- a/tailscale.go
++++ b/tailscale.go
+@@ -74,6 +74,10 @@ type listener struct {
+ 	// cleanup can never free the number while sendmsg may still pass it.
+ 	inflight []*os.File
+ 	closed   bool
++	// spMu keeps sp open while a Sendmsg uses it: cleanup sets closed, then
++	// takes the write lock before closing sp, so the number cannot be reused
++	// under an in-flight send.
++	spMu sync.RWMutex
+ }
+ 
+ func (s *server) recErr(err error) C.int {
+@@ -252,15 +256,21 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+ 	listeners.mu.Unlock()
+ 
+ 	cleanup := func() {
++		listener.mu.Lock()
++		listener.closed = true
++		listener.mu.Unlock()
++
+ 		// If fdC is closed on the C side, then we end up calling
+ 		// into cleanup twice. Be careful to avoid syscall.Close
+ 		// twice as the FD may have been reallocated.
++		listener.spMu.Lock()
+ 		listeners.mu.Lock()
+ 		if tsLn, ok := listeners.m[fdC]; ok && tsLn.ln == ln {
+ 			delete(listeners.m, fdC)
+ 			syscall.Close(sp)
+ 		}
+ 		listeners.mu.Unlock()
++		listener.spMu.Unlock()
+ 
+ 		ln.Close()
+ 
+@@ -318,9 +328,18 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+ 			listener.inflight = append(listener.inflight, f)
+ 			listener.mu.Unlock()
+ 			var sendErr error
+-			err = rc.Control(func(fd uintptr) {
+-				sendErr = syscall.Sendmsg(sp, rec[:], syscall.UnixRights(int(fd)), nil, 0)
+-			})
++			listener.spMu.RLock()
++			listener.mu.Lock()
++			closing := listener.closed
++			listener.mu.Unlock()
++			if closing {
++				sendErr = syscall.EBADF
++			} else {
++				err = rc.Control(func(fd uintptr) {
++					sendErr = syscall.Sendmsg(sp, rec[:], syscall.UnixRights(int(fd)), nil, 0)
++				})
++			}
++			listener.spMu.RUnlock()
+ 			if err == nil {
+ 				err = sendErr
+ 			}

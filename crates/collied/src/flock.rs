@@ -1,0 +1,254 @@
+use std::collections::{BTreeMap, HashMap};
+
+use protocol::{Agent, AgentStatus, Flock, MachineInfo, TerminalId, Workspace, WorkspaceId};
+
+use crate::herdr::{AgentInfo, PaneInfo, SessionSnapshot, WorkspaceInfo};
+
+/// herdr reports no timestamp for a status, so collied records when it first saw each one.
+#[derive(Default)]
+pub struct StatusTracker {
+    seen: HashMap<String, (AgentStatus, u64)>,
+}
+
+impl StatusTracker {
+    fn observe(&mut self, terminal_id: &str, status: AgentStatus, now_ms: u64) -> u64 {
+        match self.seen.get(terminal_id) {
+            Some((s, since)) if *s == status => *since,
+            _ => {
+                self.seen.insert(terminal_id.to_owned(), (status, now_ms));
+                now_ms
+            }
+        }
+    }
+
+    fn retain<'a>(&mut self, live: impl Iterator<Item = &'a str>) {
+        let live: std::collections::HashSet<&str> = live.collect();
+        self.seen.retain(|id, _| live.contains(id.as_str()));
+    }
+}
+
+pub fn status(s: &str) -> AgentStatus {
+    serde_json::from_value(serde_json::Value::String(s.to_owned())).unwrap_or(AgentStatus::Unknown)
+}
+
+fn non_empty(s: &Option<String>) -> Option<String> {
+    s.as_deref().filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
+/// `pane_id` is deliberately dropped: it changes on moves and is never sent to the phone.
+pub fn map_agent(a: &AgentInfo, tracker: &mut StatusTracker, now_ms: u64) -> Option<Agent> {
+    let (Ok(terminal_id), Ok(workspace_id)) = (
+        TerminalId::new(a.terminal_id.clone()),
+        WorkspaceId::new(a.workspace_id.clone()),
+    ) else {
+        tracing::warn!(terminal_id = %a.terminal_id, "skipping agent with an invalid id");
+        return None;
+    };
+    let status = status(&a.agent_status);
+    Some(Agent {
+        status_since_ms: tracker.observe(&a.terminal_id, status, now_ms),
+        terminal_id,
+        workspace_id,
+        kind: non_empty(&a.agent),
+        name: non_empty(&a.name),
+        title: non_empty(&a.terminal_title_stripped).or_else(|| non_empty(&a.title)),
+        status,
+        cwd: non_empty(&a.foreground_cwd).or_else(|| non_empty(&a.cwd)),
+        last_line: None,
+    })
+}
+
+pub fn map_agents(agents: &[AgentInfo], tracker: &mut StatusTracker, now_ms: u64) -> Vec<Agent> {
+    tracker.retain(agents.iter().map(|a| a.terminal_id.as_str()));
+    agents
+        .iter()
+        .filter_map(|a| map_agent(a, tracker, now_ms))
+        .collect()
+}
+
+pub fn map_workspace(w: &WorkspaceInfo, panes: &[PaneInfo]) -> Option<Workspace> {
+    let workspace_id = WorkspaceId::new(w.workspace_id.clone()).ok()?;
+    let cwd = panes
+        .iter()
+        .find(|p| p.workspace_id == w.workspace_id && Some(&p.tab_id) == w.active_tab_id.as_ref())
+        .and_then(|p| non_empty(&p.cwd));
+    Some(Workspace {
+        workspace_id,
+        label: w.label.clone(),
+        number: w.number,
+        status: status(&w.agent_status),
+        cwd,
+    })
+}
+
+pub fn map_workspaces(snap: &SessionSnapshot) -> Vec<Workspace> {
+    snap.workspaces
+        .iter()
+        .filter_map(|w| map_workspace(w, &snap.panes))
+        .collect()
+}
+
+pub fn map_flock(
+    snap: &SessionSnapshot,
+    tracker: &mut StatusTracker,
+    now_ms: u64,
+    machine: MachineInfo,
+    seq: u64,
+) -> Flock {
+    Flock {
+        seq,
+        machine,
+        workspaces: map_workspaces(snap),
+        agents: map_agents(&snap.agents, tracker, now_ms),
+        approvals: Vec::new(),
+    }
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct Baseline {
+    agents: BTreeMap<String, (u64, AgentStatus, String)>,
+    workspaces: Vec<(String, String, u32)>,
+}
+
+impl Baseline {
+    pub fn new(agents: &[AgentInfo], workspaces: &[WorkspaceInfo]) -> Self {
+        Self {
+            agents: agents
+                .iter()
+                .map(|a| {
+                    (
+                        a.terminal_id.clone(),
+                        (
+                            a.state_change_seq,
+                            status(&a.agent_status),
+                            a.workspace_id.clone(),
+                        ),
+                    )
+                })
+                .collect(),
+            workspaces: workspaces
+                .iter()
+                .map(|w| (w.workspace_id.clone(), w.label.clone(), w.number))
+                .collect(),
+        }
+    }
+
+    pub fn diff(&self, next: &Self) -> (Vec<String>, bool) {
+        let changed = next
+            .agents
+            .iter()
+            .filter(|(id, (seq, st, _))| {
+                self.agents
+                    .get(*id)
+                    .is_some_and(|(s, t, _)| s != seq || t != st)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        let shape = |b: &Self| -> Vec<(String, String)> {
+            b.agents
+                .iter()
+                .map(|(id, (_, _, ws))| (id.clone(), ws.clone()))
+                .collect()
+        };
+        let flock_changed = shape(self) != shape(next) || self.workspaces != next.workspaces;
+        (changed, flock_changed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> SessionSnapshot {
+        let v: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/session.snapshot.json")).unwrap();
+        serde_json::from_value(v["result"]["snapshot"].clone()).unwrap()
+    }
+
+    fn machine() -> MachineInfo {
+        MachineInfo {
+            name: "Mac".into(),
+            node_id: "nMAC".into(),
+            herdr_session: "default".into(),
+        }
+    }
+
+    #[test]
+    fn maps_session_snapshot() {
+        let snap = fixture();
+        let mut tracker = StatusTracker::default();
+        let flock = map_flock(&snap, &mut tracker, 1000, machine(), 3);
+        assert_eq!(flock.seq, 3);
+        assert!(flock.approvals.is_empty());
+        assert_eq!(flock.workspaces.len(), 2);
+        let w = &flock.workspaces[0];
+        assert_eq!(w.workspace_id.as_str(), "w6");
+        assert_eq!((w.label.as_str(), w.number), ("collie", 1));
+        assert_eq!(w.status, AgentStatus::Working);
+        assert_eq!(w.cwd.as_deref(), Some("/Users/me/src/collie"));
+        assert_eq!(flock.workspaces[1].status, AgentStatus::Blocked);
+
+        assert_eq!(flock.agents.len(), 2);
+        let a = &flock.agents[0];
+        assert_eq!(a.terminal_id.as_str(), "term_65ce7ae4fd5731");
+        assert_eq!(a.kind.as_deref(), Some("claude"));
+        assert_eq!(a.name, None);
+        assert_eq!(a.title.as_deref(), Some("Collie iOS remote control"));
+        assert_eq!(a.status, AgentStatus::Working);
+        assert_eq!(a.status_since_ms, 1000);
+        assert_eq!(a.last_line, None);
+        let b = &flock.agents[1];
+        assert_eq!(b.name.as_deref(), Some("api-fixer"));
+        assert_eq!(b.title.as_deref(), Some("Fix flaky test"));
+        assert_eq!(b.cwd.as_deref(), Some("/Users/me/src/api/server"));
+        assert_eq!(b.workspace_id.as_str(), "w7");
+
+        let json = serde_json::to_string(&flock).unwrap();
+        assert!(!json.contains("w6:p1") && !json.contains("pane_id"));
+    }
+
+    #[test]
+    fn status_since_moves_only_on_change() {
+        let mut snap = fixture();
+        let mut tracker = StatusTracker::default();
+        map_flock(&snap, &mut tracker, 1000, machine(), 0);
+        let again = map_flock(&snap, &mut tracker, 2000, machine(), 0);
+        assert_eq!(again.agents[0].status_since_ms, 1000);
+        snap.agents[0].agent_status = "idle".into();
+        let changed = map_flock(&snap, &mut tracker, 3000, machine(), 0);
+        assert_eq!(changed.agents[0].status_since_ms, 3000);
+        assert_eq!(changed.agents[1].status_since_ms, 1000);
+        snap.agents.remove(1);
+        map_flock(&snap, &mut tracker, 4000, machine(), 0);
+        assert_eq!(tracker.seen.len(), 1);
+    }
+
+    #[test]
+    fn unknown_status_and_bad_ids() {
+        assert_eq!(status("sleeping"), AgentStatus::Unknown);
+        let mut snap = fixture();
+        snap.agents[0].terminal_id = "bad id".into();
+        let flock = map_flock(&snap, &mut StatusTracker::default(), 0, machine(), 0);
+        assert_eq!(flock.agents.len(), 1);
+    }
+
+    #[test]
+    fn reconcile_diff() {
+        let snap = fixture();
+        let base = Baseline::new(&snap.agents, &snap.workspaces);
+        assert_eq!(base.diff(&base), (vec![], false));
+
+        let mut agents = snap.agents.clone();
+        agents[1].state_change_seq += 1;
+        let (changed, shape) = base.diff(&Baseline::new(&agents, &snap.workspaces));
+        assert_eq!(changed, vec!["term_0a1b2c3d4e5f60".to_owned()]);
+        assert!(!shape);
+
+        let (changed, shape) = base.diff(&Baseline::new(&agents[..1], &snap.workspaces));
+        assert!(changed.is_empty() && shape);
+
+        let mut ws = snap.workspaces.clone();
+        ws[0].label = "renamed".into();
+        assert_eq!(base.diff(&Baseline::new(&snap.agents, &ws)), (vec![], true));
+    }
+}
