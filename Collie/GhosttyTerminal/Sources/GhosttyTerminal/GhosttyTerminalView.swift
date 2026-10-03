@@ -209,8 +209,10 @@ private final class TerminalCanvas: UIView {
         frameData = frame
         prepared = frame.runs.map { run in
             guard !run.text.isEmpty, !run.style.invisible else { return Prepared(run: run, line: nil) }
+            // Claude Code's ⏺ is in no bundled or system text font, so CoreText falls back to the color
+            // emoji; ● is the same dot in Meslo and the same UTF-16 length, so `utf16Columns` still lines up.
             let attributed = NSAttributedString(
-                string: run.text,
+                string: run.text.replacingOccurrences(of: "\u{23FA}", with: "\u{25CF}"),
                 attributes: [NSAttributedString.Key(kCTFontAttributeName as String): metrics.font(run.style)]
             )
             return Prepared(run: run, line: CTLineCreateWithAttributedString(attributed))
