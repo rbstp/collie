@@ -788,7 +788,7 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
     let reads = herdr.params("agent.read");
     assert_eq!(
         reads[0],
-        json!({"target": "w6:p1", "source": "recent_unwrapped", "lines": 120, "format": "ansi"})
+        json!({"target": "w6:p1", "source": "recent_unwrapped", "lines": 240, "format": "ansi"})
     );
 
     assert!(

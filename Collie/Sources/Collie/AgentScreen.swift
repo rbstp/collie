@@ -251,6 +251,17 @@ private struct PromptBar: View {
             if let upload = model.upload {
                 UploadChip(upload: upload) { model.cancelUpload() }
             }
+            if !model.attachments.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        ForEach(model.attachments) { file in
+                            AttachmentPill(file: file) { model.remove(file) }
+                        }
+                    }
+                }
+                .disabled(model.sendingPrompt)
+                .scrollIndicators(.hidden)
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 Menu {
                     Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
@@ -311,6 +322,43 @@ private struct PromptBar: View {
                 model.attachFailed(error)
             }
         }
+    }
+}
+
+private struct AttachmentPill: View {
+    let file: AttachedFile
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let thumbnail = file.thumbnail {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 22, height: 22)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+            } else {
+                Image(systemName: file.symbol).font(.caption).foregroundStyle(.secondary).frame(width: 22, height: 22)
+            }
+            Text(shortName)
+                .font(.caption)
+                .lineLimit(1)
+                .accessibilityLabel(file.name)
+            Button(action: remove) {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(file.name)")
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 8)
+        .padding(.vertical, 4)
+        .background(.fill.tertiary, in: Capsule())
+    }
+
+    /// A horizontal ScrollView proposes no width, so `truncationMode` would never kick in.
+    private var shortName: String {
+        file.name.count <= 22 ? file.name : "\(file.name.prefix(10))…\(file.name.suffix(10))"
     }
 }
 

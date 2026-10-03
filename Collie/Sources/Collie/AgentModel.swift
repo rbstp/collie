@@ -20,7 +20,7 @@ final class AgentModel {
     private(set) var promptError: String?
     private(set) var upload: AttachmentUpload?
     private var uploadTask: Task<Void, Never>?
-    private var attachedPaths: [String] = []
+    private(set) var attachments: [AttachedFile] = []
 
     private(set) var notice: String?
     private(set) var keyTaps = 0
@@ -46,7 +46,9 @@ final class AgentModel {
         wrapLines = DevicePrefs.load(from: prefsFile).wrapLines
     }
 
-    var canSendPrompt: Bool { !sendingPrompt && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var canSendPrompt: Bool {
+        !sendingPrompt && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+    }
 
     /// Runs while the screen is visible: watch, poll the core at 10 Hz, unwatch on cancel.
     func run() async {
@@ -81,16 +83,21 @@ final class AgentModel {
         }
     }
 
-    /// Text typed while the send is in flight stays in the draft.
+    /// Text typed and files attached while the send is in flight stay for the next prompt.
+    /// Paths on the Mac never have spaces, so they are set apart by single spaces.
     func sendPrompt() async {
         let sent = draft
-        let text = sent.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sendingPrompt, !text.isEmpty else { return }
+        let files = attachments
+        let typed = sent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sendingPrompt, !typed.isEmpty || !files.isEmpty else { return }
+        let text = (files.map(\.path) + [typed].filter { !$0.isEmpty }).joined(separator: " ")
         sendingPrompt = true
         promptError = nil
         defer { sendingPrompt = false }
         do {
             try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text)
+            let sentIds = Set(files.map(\.id))
+            attachments.removeAll { sentIds.contains($0.id) }
             if draft.hasPrefix(sent) {
                 draft = String(draft.dropFirst(sent.count).drop(while: \.isWhitespace))
             }
@@ -99,9 +106,10 @@ final class AgentModel {
         }
     }
 
-    /// Attachments still in the draft count against the per-prompt limit; each path is unique.
-    var attachmentSlots: Int {
-        Attachment.maxPerPrompt - attachedPaths.filter { draft.contains($0) }.count
+    var attachmentSlots: Int { Attachment.maxPerPrompt - attachments.count }
+
+    func remove(_ file: AttachedFile) {
+        attachments.removeAll { $0.id == file.id }
     }
 
     @discardableResult
@@ -109,12 +117,11 @@ final class AgentModel {
         attach([PendingAttachment(name: name, load: load)])
     }
 
-    /// One batch at a time, uploaded in order; each path on the Mac is appended to the current draft.
+    /// One batch at a time, uploaded in order; each uploaded file joins `attachments`.
     /// A file that fails is reported and the rest still go.
     @discardableResult
     func attach(_ items: [PendingAttachment]) -> Task<Void, Never>? {
         guard upload == nil, !items.isEmpty else { return nil }
-        attachedPaths.removeAll { !draft.contains($0) }
         promptError = nil
         let slots = max(attachmentSlots, 0)
         var firstError: (any Error)? = items.count > slots ? AttachmentError.tooMany(limit: Attachment.maxPerPrompt) : nil
@@ -142,9 +149,10 @@ final class AgentModel {
                         Task { @MainActor in self?.uploaded(id, sent: sent, total: total) }
                     }
                     let path = try await core.uploadAttachment(machineId: machineId, name: item.name, data: data, progress: progress)
+                    var file = AttachedFile(path: path, name: item.name)
+                    if file.kind == .image { file.thumbnail = await Attachment.thumbnail(from: data) }
                     try Task.checkCancellation()
-                    draft = Attachment.appending(path, to: draft)
-                    attachedPaths.append(path)
+                    attachments.append(file)
                 } catch {
                     if Task.isCancelled || error is CancellationError { break }
                     firstError = firstError ?? error

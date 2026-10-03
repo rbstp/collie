@@ -1,11 +1,40 @@
 import CollieCore
 import Foundation
+import ImageIO
 import UIKit
+import UniformTypeIdentifiers
 
 struct PendingAttachment: Sendable {
     let name: String
     /// Gets the size limit; runs off the main actor.
     let load: @Sendable (UInt64) async throws -> Data
+}
+
+struct AttachedFile: Identifiable {
+    enum Kind { case image, file }
+
+    let id = UUID()
+    let path: String
+    let name: String
+    let kind: Kind
+    var thumbnail: UIImage?
+
+    init(path: String, name: String) {
+        self.path = path
+        self.name = name
+        kind = Self.type(of: name)?.conforms(to: .image) == true ? .image : .file
+    }
+
+    var symbol: String {
+        switch kind {
+        case .image: "photo"
+        case .file: Self.type(of: name)?.conforms(to: .text) == true ? "doc.text" : "doc"
+        }
+    }
+
+    private static func type(of name: String) -> UTType? {
+        UTType(filenameExtension: (name as NSString).pathExtension)
+    }
 }
 
 struct AttachmentUpload: Equatable {
@@ -42,12 +71,7 @@ enum Attachment {
     static let maxPerPrompt = 10
     static let photoMaxSide: CGFloat = 2048
     static let photoQuality: CGFloat = 0.85
-
-    /// The returned path never has spaces, so it is set apart by single spaces.
-    static func appending(_ path: String, to draft: String) -> String {
-        let separator = draft.isEmpty || draft.last?.isWhitespace == true ? "" : " "
-        return draft + separator + path + " "
-    }
+    static let thumbnailMaxSide: CGFloat = 120
 
     static func photoName(at date: Date, index: Int = 1, timeZone: TimeZone = .current) -> String {
         let formatter = DateFormatter()
@@ -95,6 +119,17 @@ enum Attachment {
         }
         guard !jpeg.isEmpty else { throw AttachmentError.unreadablePhoto }
         return jpeg
+    }
+
+    /// ImageIO decodes straight to the thumbnail size, so a huge image never needs a full-size buffer.
+    static func thumbnail(from data: Data) async -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: thumbnailMaxSide,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary).map { UIImage(cgImage: $0) }
     }
 
     /// The size is checked before reading so a huge file is never loaded.

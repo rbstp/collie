@@ -157,6 +157,75 @@ private func agentModel(_ core: FakeCore) -> AgentModel {
 }
 
 @MainActor
+private func attach(_ model: AgentModel, _ core: FakeCore, _ names: String...) async {
+    for name in names {
+        core.state.withLock { $0.uploadPath = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/\(name)/\(name)" }
+        await model.attach(name: name) { _ in Data([1]) }?.value
+    }
+}
+
+@MainActor
+@Test func attachmentPathsLeadThePromptAndAreClearedOnSuccess() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    await attach(model, core, "a.png", "b.txt")
+    model.draft = "  compare these\n"
+    #expect(model.canSendPrompt)
+    await model.sendPrompt()
+    let a = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/a.png/a.png"
+    let b = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/b.txt/b.txt"
+    #expect(core.snapshot.prompts == ["\(a) \(b) compare these"])
+    #expect(model.attachments.isEmpty)
+    #expect(model.draft.isEmpty)
+    #expect(!model.canSendPrompt)
+}
+
+@MainActor
+@Test func attachmentsAloneCanBeSent() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    await attach(model, core, "a.png")
+    model.draft = " \n"
+    #expect(model.canSendPrompt)
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["/Users/me/Library/Caches/dev.rbstp.collied/attachments/a.png/a.png"])
+    #expect(model.attachments.isEmpty)
+}
+
+@MainActor
+@Test func failedSendKeepsTheAttachmentsAndDraft() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    await attach(model, core, "a.png")
+    model.draft = "look"
+    core.set(error: .AgentBlocked)
+    await model.sendPrompt()
+    #expect(model.attachments.map(\.name) == ["a.png"])
+    #expect(model.draft == "look")
+    #expect(model.attachmentSlots == 9)
+}
+
+@MainActor
+@Test func filesAttachedWhileSendingAreKept() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    await attach(model, core, "a.png")
+    core.set(hold: true)
+    let send = Task { await model.sendPrompt() }
+    await core.waitHeld(1)
+    #expect(!model.canSendPrompt)
+    let upload = model.attach(name: "b.txt") { _ in Data([1]) }
+    await core.waitHeld(2)
+    model.draft = "next"
+    core.release()
+    await send.value
+    await upload?.value
+    #expect(core.snapshot.prompts == ["/Users/me/Library/Caches/dev.rbstp.collied/attachments/a.png/a.png"])
+    #expect(model.draft == "next")
+    #expect(model.attachments.map(\.name) == ["b.txt"])
+}
+
+@MainActor
 @Test func secondSendWhileSendingIsIgnored() async {
     let core = FakeCore()
     let model = agentModel(core)

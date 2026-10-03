@@ -33,7 +33,7 @@ struct RootView: View {
     var body: some View {
         if let error = app.startupError {
             ContentUnavailableView("collie could not start", systemImage: "exclamationmark.triangle", description: Text(error))
-        } else if app.isRunning {
+        } else if app.showsMain {
             TabView(selection: $app.tab) {
                 Tab("Agents", systemImage: "square.grid.2x2", value: AppTab.agents) {
                     FlockScreen(core: app.core, machines: app.machines, approvals: app.approvals)
@@ -53,9 +53,19 @@ struct RootView: View {
                 }
             }
             .task {
-                while !Task.isCancelled && app.isRunning {
-                    try? await Task.sleep(for: .seconds(5))
+                while !Task.isCancelled && app.showsMain {
+                    try? await Task.sleep(for: .seconds(app.isRunning ? 5 : 1))
                     await app.refreshNode()
+                }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if !app.isRunning {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Connecting…").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
                 }
             }
         } else {

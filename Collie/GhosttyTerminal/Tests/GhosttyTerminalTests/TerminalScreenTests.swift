@@ -119,8 +119,61 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
         ("\u{2580}\u{2580}", "\u{2580}\u{2580}"),
     ]
     for (input, trimmed) in cases {
-        #expect(TerminalScreen.preparedForWrapping(input) == trimmed, "\(input.debugDescription)")
+        #expect(TerminalScreen.preparedForWrapping(input, columns: Int(TerminalScreen.maxColumns)) == trimmed, "\(input.debugDescription)")
     }
+}
+
+@Test func labeledRulesShrinkToTheWrapWidth() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let purple = TerminalRGB(177, 185, 249)
+    let rule = "\u{1B}[0m\u{1B}[38;2;136;136;136m" + String(repeating: "\u{2500}", count: 178)
+        + " \u{1B}[38;2;177;185;249multracode\u{1B}[0m \u{2500}"
+    let frame = screen.render(ansiSnapshot: "\(rule)\r\nnext", wrapColumns: 50)
+    #expect(frame.rows == 2)
+    #expect(frame.columns == 50)
+    let rows = Dictionary(grouping: frame.runs, by: \.row).mapValues { $0.map(\.text).joined() }
+    #expect(rows[0] == String(repeating: "\u{2500}", count: 38) + " ultracode \u{2500}")
+    #expect(rows[1] == "next")
+    let label = try #require(frame.runs.first { $0.text == "ultracode" })
+    #expect(label.style.foreground == purple && label.startColumn == 39)
+}
+
+@Test func labeledRuleShrinkingKeepsTextAndEscapes() {
+    let line = { (count: Int) in String(repeating: "\u{2500}", count: count) }
+    let cases = [
+        (
+            "\u{256D}" + line(3) + " \u{1B}[1mTitle\u{1B}[22m " + line(100) + "\u{256E}",
+            "\u{256D}" + line(3) + " \u{1B}[1mTitle\u{1B}[22m " + line(28) + "\u{256E}"
+        ),
+        (line(30) + " fits " + line(4), line(30) + " fits " + line(4)),
+        (line(25) + " " + String(repeating: "x", count: 39), line(25) + " " + String(repeating: "x", count: 39)),
+        (line(26) + " " + String(repeating: "x", count: 38) + "   \r\nb", line(1) + " " + String(repeating: "x", count: 38) + "\r\nb"),
+        (line(100) + " \u{26A1} ultracode " + line(1), line(25) + " \u{26A1} ultracode " + line(1)),
+        (line(100) + " \u{65E5}\u{672C} " + line(1), line(33) + " \u{65E5}\u{672C} " + line(1)),
+        (line(100) + " e\u{301}\u{FE0F} x " + line(1), line(34) + " e\u{301}\u{FE0F} x " + line(1)),
+        ("a\t" + line(100) + "b", "a\t" + line(31) + "b"),
+        (line(100) + "\tb", line(31) + "\tb"),
+    ]
+    for (input, prepared) in cases {
+        #expect(TerminalScreen.preparedForWrapping(input, columns: 40) == prepared, "\(input.debugDescription)")
+    }
+}
+
+@Test func cellWidthsMatchGhostty() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let samples: [Unicode.Scalar] = [
+        "a", "\u{E9}", "\u{2500}", "\u{2764}", "\u{301}", "\u{FE0F}", "\u{200D}", "\u{26A1}", "\u{65E5}",
+        "\u{AC00}", "\u{FF21}", "\u{1F600}", "\u{1F680}", "\u{3000}",
+    ]
+    for scalar in samples {
+        let frame = screen.render(ansiSnapshot: "x\(scalar)|")
+        let run = try #require(frame.runs.first { $0.text.contains("|") })
+        let index = try #require(run.text.utf16.firstIndex(of: UInt16(UInt8(ascii: "|"))))
+        let column = run.utf16Columns[run.text.utf16.distance(from: run.text.utf16.startIndex, to: index)]
+        #expect(column == 1 + TerminalScreen.cellWidth(scalar, column: 1), "\(scalar.escaped(asASCII: true))")
+    }
+    #expect(TerminalScreen.cellWidth("\t", column: 0) == 8)
+    #expect(TerminalScreen.cellWidth("\t", column: 13) == 3)
 }
 
 @Test func wrapColumnsFitTheWidth() {

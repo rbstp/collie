@@ -12,14 +12,13 @@ private func agentModel(_ core: FakeCore) -> AgentModel {
 
 private let path = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/notes.txt"
 
-@Test(arguments: [
-    ("", "\(path) "),
-    ("look at", "look at \(path) "),
-    ("look at ", "look at \(path) "),
-    ("look at\n", "look at\n\(path) "),
-])
-func pathIsAppendedToTheDraftWithSpaces(draft: String, expected: String) {
-    #expect(Attachment.appending(path, to: draft) == expected)
+private func png(width: CGFloat, height: CGFloat) -> Data {
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    return UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).pngData { context in
+        UIColor.systemTeal.setFill()
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    }
 }
 
 @Test func photoNameUsesTheLocalTimestamp() throws {
@@ -47,11 +46,7 @@ func pathIsAppendedToTheDraftWithSpaces(draft: String, expected: String) {
 @Test func photosAreExportedAsJpegCappedAt2048() throws {
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
-    let png = UIGraphicsImageRenderer(size: CGSize(width: 4000, height: 1000), format: format).pngData { context in
-        UIColor.systemTeal.setFill()
-        context.fill(CGRect(x: 0, y: 0, width: 4000, height: 1000))
-    }
-    let jpeg = try Attachment.jpeg(from: png)
+    let jpeg = try Attachment.jpeg(from: png(width: 4000, height: 1000))
     #expect(jpeg.prefix(2) == Data([0xFF, 0xD8]))
     let image = try #require(UIImage(data: jpeg))
     #expect(image.size == CGSize(width: 2048, height: 512))
@@ -62,7 +57,7 @@ func pathIsAppendedToTheDraftWithSpaces(draft: String, expected: String) {
 }
 
 @MainActor
-@Test func uploadShowsProgressThenAppendsThePath() async {
+@Test func uploadShowsProgressThenAddsAPill() async {
     let core = FakeCore()
     let model = agentModel(core)
     model.draft = "summarize"
@@ -78,8 +73,44 @@ func pathIsAppendedToTheDraftWithSpaces(draft: String, expected: String) {
     await upload?.value
     #expect(model.upload == nil)
     #expect(model.promptError == nil)
-    #expect(model.draft == "summarize \(path) ")
+    #expect(model.draft == "summarize")
+    #expect(model.attachments.map(\.path) == [path])
+    #expect(model.attachments.map(\.name) == ["notes.txt"])
+    #expect(model.attachments.first?.kind == .file)
+    #expect(model.attachments.first?.symbol == "doc.text")
+    #expect(model.attachments.first?.thumbnail == nil)
     #expect(core.snapshot.uploads == ["notes.txt 100000"])
+}
+
+@MainActor
+@Test func imagesGetASmallThumbnailAndOtherFilesASymbol() async throws {
+    let core = FakeCore()
+    let model = agentModel(core)
+    let image = png(width: 3000, height: 1500)
+    await model.attach([
+        PendingAttachment(name: "photo-20261003-040045.jpg") { _ in image },
+        PendingAttachment(name: "archive.zip") { _ in Data([1]) },
+    ])?.value
+    #expect(model.attachments.map(\.kind) == [.image, .file])
+    let thumbnail = try #require(model.attachments.first?.thumbnail)
+    #expect(max(thumbnail.size.width, thumbnail.size.height) * thumbnail.scale <= Attachment.thumbnailMaxSide)
+    #expect(model.attachments.last?.thumbnail == nil)
+    #expect(model.attachments.last?.symbol == "doc")
+}
+
+@MainActor
+@Test func removingAPillFreesItsSlot() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    await model.attach((1...3).map { i in PendingAttachment(name: "f\(i).txt") { _ in Data([1]) } })?.value
+    #expect(model.attachmentSlots == 7)
+    let second = model.attachments[1]
+    model.remove(second)
+    #expect(model.attachments.map(\.name) == ["f1.txt", "f3.txt"])
+    #expect(model.attachmentSlots == 8)
+    model.remove(second)
+    #expect(model.attachments.count == 2)
+    #expect(model.draft.isEmpty)
 }
 
 @MainActor
@@ -98,6 +129,7 @@ func pathIsAppendedToTheDraftWithSpaces(draft: String, expected: String) {
     core.release()
     await upload?.value
     #expect(model.draft == "keep")
+    #expect(model.attachments.isEmpty)
     #expect(model.promptError == nil)
     #expect(model.upload == nil)
 }
@@ -111,6 +143,7 @@ func pathIsAppendedToTheDraftWithSpaces(draft: String, expected: String) {
     #expect(model.promptError == CoreError.MachineNotFound.description)
     #expect(model.upload == nil)
     #expect(model.draft.isEmpty)
+    #expect(model.attachments.isEmpty)
 
     core.set()
     core.state.withLock { $0.maxAttachmentBytes = 4 }
@@ -118,6 +151,7 @@ func pathIsAppendedToTheDraftWithSpaces(draft: String, expected: String) {
     #expect(model.promptError == AttachmentError.tooLarge(limit: 4).errorDescription)
     await model.attach(name: "empty.txt") { _ in Data() }?.value
     #expect(model.promptError == AttachmentError.empty.errorDescription)
+    #expect(model.attachments.isEmpty)
     #expect(core.snapshot.uploads == ["notes.txt 1"])
 }
 
@@ -129,13 +163,17 @@ func pathIsAppendedToTheDraftWithSpaces(draft: String, expected: String) {
     await model.attach(items)?.value
     #expect(core.snapshot.uploads == ["f1.txt 1"] + (3...10).map { "f\($0).txt 1" })
     #expect(model.promptError == AttachmentError.tooMany(limit: 10).errorDescription)
+    #expect(model.attachments.map(\.name) == ["f1.txt"] + (3...10).map { "f\($0).txt" })
     #expect(model.attachmentSlots == 1)
     #expect(model.upload == nil)
     await model.attach(items.suffix(2))?.value
+    #expect(model.attachments.count == 10)
+    #expect(model.attachments.last?.name == "f11.txt")
     #expect(model.attachmentSlots == 0)
     #expect(model.attach(items) == nil)
-    model.draft = ""
-    #expect(model.attachmentSlots == 10)
+    #expect(model.promptError == AttachmentError.tooMany(limit: 10).errorDescription)
+    model.remove(model.attachments[0])
+    #expect(model.attachmentSlots == 1)
 }
 
 @Test func filesOverTheLimitAreRefusedBeforeReading() throws {

@@ -48,6 +48,17 @@ final class AppModel {
 
     var isRunning: Bool { node?.backendState == .running }
 
+    /// A phone that joined the tailnet before goes straight to the tabs while its node starts;
+    /// onboarding only comes back when Tailscale asks for a sign-in again.
+    var showsMain: Bool {
+        if isRunning { return true }
+        guard core?.tailnetConfigured() == true else { return false }
+        switch node?.backendState {
+        case .needsLogin, .needsMachineAuth: return false
+        default: return true
+        }
+    }
+
     func launch() async {
         guard let core else { return }
         if core.tailnetConfigured() || ProcessInfo.processInfo.arguments.contains("--measure-cold-start") {

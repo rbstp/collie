@@ -54,6 +54,22 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private var renderedColumns: Int?
     private var followsBottom = true
     private var laidOutSize = CGSize.zero
+    private var selection: TerminalSelection? {
+        didSet { selectionChanged() }
+    }
+    private var pressedWord: TerminalSelection?
+    private var draggedEdge: TerminalSelection.Edge?
+    private var dragOffset = CGPoint.zero
+    private var loupe: UITextLoupeSession?
+    private let startHandle = SelectionHandle(edge: .start)
+    private let endHandle = SelectionHandle(edge: .end)
+    private let copyButton = UIButton(configuration: .filled())
+    /// Where the Copy button points, relative to the visible area so it stays put while the
+    /// content decelerates.
+    private var copyAnchor: CGPoint?
+    private let press = UILongPressGestureRecognizer()
+    private let tap = UITapGestureRecognizer()
+    private let tapFilter = FlingTapFilter()
 
     public init(fontSize: CGFloat = 12) {
         self.fontSize = fontSize
@@ -65,6 +81,35 @@ public final class GhosttyTerminalUIView: UIScrollView {
         canvas.backgroundColor = UIColor(Self.background)
         canvas.isUserInteractionEnabled = false
         addSubview(canvas)
+
+        press.minimumPressDuration = 0.45
+        press.addTarget(self, action: #selector(pressed(_:)))
+        addGestureRecognizer(press)
+        tap.addTarget(self, action: #selector(tapped))
+        tapFilter.scrollView = self
+        tap.delegate = tapFilter
+        addGestureRecognizer(tap)
+        panGestureRecognizer.addTarget(self, action: #selector(panned(_:)))
+        for handle in [startHandle, endHandle] {
+            let drag = UILongPressGestureRecognizer(target: self, action: #selector(draggedHandle(_:)))
+            // Begins on touch down, so it wins over the scroll view's pan and moves by one cell.
+            drag.minimumPressDuration = 0
+            drag.allowableMovement = .greatestFiniteMagnitude
+            handle.addGestureRecognizer(drag)
+            handle.isHidden = true
+            addSubview(handle)
+        }
+        copyButton.configuration?.cornerStyle = .capsule
+        copyButton.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14)
+        copyButton.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
+            var attributes = $0
+            attributes.font = UIFont.preferredFont(forTextStyle: .subheadline)
+            return attributes
+        }
+        copyButton.accessibilityLabel = "Copy"
+        copyButton.addAction(UIAction { [weak self] _ in self?.copySelection() }, for: .primaryActionTriggered)
+        copyButton.isHidden = true
+        addSubview(copyButton)
     }
 
     required init?(coder: NSCoder) {
@@ -104,6 +149,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
             width: CGFloat(frameData.columns) * m.width + 2 * m.inset,
             height: CGFloat(frameData.rows) * m.height + 2 * m.inset
         )
+        selection = selection?.clamped(to: frameData)
         if followsBottom { scrollToBottom() }
         setNeedsLayout()
         canvas.setNeedsDisplay()
@@ -119,6 +165,176 @@ public final class GhosttyTerminalUIView: UIScrollView {
         if canvas.frame != bounds {
             canvas.frame = bounds
             canvas.setNeedsDisplay()
+        }
+        if let copyAnchor, !copyButton.isHidden {
+            let size = copyButton.intrinsicContentSize
+            let visible = bounds.inset(by: safeAreaInsets).insetBy(dx: 8, dy: 8)
+            let point = CGPoint(x: bounds.minX + copyAnchor.x, y: bounds.minY + copyAnchor.y)
+            var y = point.y - 16 - size.height
+            if y < visible.minY { y = point.y + 16 }
+            copyButton.frame = CGRect(
+                x: min(max(point.x - size.width / 2, visible.minX), visible.maxX - size.width),
+                y: min(max(y, visible.minY), visible.maxY - size.height),
+                width: size.width,
+                height: size.height
+            )
+        }
+    }
+
+    public override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+        if recognizer === panGestureRecognizer || recognizer === press || recognizer === tap {
+            if draggedEdge != nil { return false }
+            if recognizer !== panGestureRecognizer && !copyButton.isHidden
+                && copyButton.frame.contains(recognizer.location(in: self))
+            {
+                return false
+            }
+        }
+        return super.gestureRecognizerShouldBegin(recognizer)
+    }
+
+    @objc private func pressed(_ recognizer: UILongPressGestureRecognizer) {
+        let point = recognizer.location(in: self)
+        switch recognizer.state {
+        case .began:
+            let m = canvas.metrics
+            guard let frameData, point.y >= m.inset, point.y < m.inset + CGFloat(frameData.rows) * m.height,
+                let cell = cell(at: point)
+            else { return }
+            let word = TerminalSelection.word(at: cell, in: frameData)
+            hideCopy()
+            pressedWord = word
+            selection = word
+            isScrollEnabled = false
+            UIImpactFeedbackGenerator(style: .light, view: self).impactOccurred(at: point)
+            loupe = UITextLoupeSession.begin(at: point, fromSelectionWidgetView: nil, in: self)
+        case .changed:
+            guard let pressedWord, let cell = cell(at: point) else { return }
+            selection = pressedWord.extended(to: cell)
+            loupe?.move(to: point, withCaretRect: .null, trackingCaret: false)
+        default:
+            let selecting = pressedWord != nil
+            pressedWord = nil
+            isScrollEnabled = true
+            endLoupe()
+            selectionChanged()
+            if selecting && recognizer.state == .ended { showCopy(at: point) }
+        }
+    }
+
+    @objc private func draggedHandle(_ recognizer: UILongPressGestureRecognizer) {
+        let point = recognizer.location(in: self)
+        switch recognizer.state {
+        case .began:
+            guard let handle = recognizer.view as? SelectionHandle, let selection else { return }
+            draggedEdge = handle.edge
+            let center = cellCenter(handle.edge == .start ? selection.start : selection.end)
+            dragOffset = CGPoint(x: center.x - point.x, y: center.y - point.y)
+            hideCopy()
+            loupe = UITextLoupeSession.begin(at: point, fromSelectionWidgetView: handle, in: self)
+        case .changed:
+            guard let edge = draggedEdge, let selection,
+                let cell = cell(at: CGPoint(x: point.x + dragOffset.x, y: point.y + dragOffset.y))
+            else { return }
+            let moved = selection.moving(edge, to: cell)
+            draggedEdge = moved.edge
+            if moved.selection != selection { self.selection = moved.selection }
+            let handle = moved.edge == .start ? startHandle : endHandle
+            loupe?.move(to: point, withCaretRect: handle.barFrame(in: self), trackingCaret: false)
+        default:
+            let dragging = draggedEdge != nil
+            draggedEdge = nil
+            endLoupe()
+            if dragging && selection != nil { showCopy(at: point) }
+        }
+    }
+
+    @objc private func panned(_ recognizer: UIPanGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            hideCopy()
+        case .ended, .cancelled:
+            if selection != nil && pressedWord == nil && draggedEdge == nil {
+                showCopy(at: recognizer.location(in: self))
+            }
+        default:
+            break
+        }
+    }
+
+    @objc private func tapped() {
+        if selection != nil { selection = nil }
+    }
+
+    private func cell(at point: CGPoint) -> TerminalCell? {
+        guard let frameData else { return nil }
+        let m = canvas.metrics
+        return TerminalCell.at(
+            x: point.x, y: point.y, cellWidth: m.width, cellHeight: m.height, inset: m.inset, in: frameData
+        )
+    }
+
+    private func cellCenter(_ cell: TerminalCell) -> CGPoint {
+        let m = canvas.metrics
+        return CGPoint(x: m.inset + (CGFloat(cell.column) + 0.5) * m.width, y: m.inset + (CGFloat(cell.row) + 0.5) * m.height)
+    }
+
+    private func selectionChanged() {
+        canvas.selection = selection
+        canvas.setNeedsDisplay()
+        guard let selection else {
+            startHandle.isHidden = true
+            endHandle.isHidden = true
+            hideCopy()
+            return
+        }
+        let m = canvas.metrics
+        let content = CGRect(origin: .zero, size: contentSize)
+        startHandle.place(
+            x: m.inset + CGFloat(selection.start.column) * m.width,
+            rowTop: m.inset + CGFloat(selection.start.row) * m.height,
+            rowHeight: m.height,
+            within: content
+        )
+        endHandle.place(
+            x: m.inset + CGFloat(selection.end.column + 1) * m.width,
+            rowTop: m.inset + CGFloat(selection.end.row) * m.height,
+            rowHeight: m.height,
+            within: content
+        )
+        startHandle.isHidden = pressedWord != nil
+        endHandle.isHidden = pressedWord != nil
+    }
+
+    private func showCopy(at point: CGPoint) {
+        copyAnchor = CGPoint(x: point.x - bounds.minX, y: point.y - bounds.minY)
+        copyButton.configuration?.title = "Copy"
+        copyButton.isUserInteractionEnabled = true
+        copyButton.isHidden = false
+        setNeedsLayout()
+    }
+
+    private func hideCopy() {
+        copyButton.isHidden = true
+        copyAnchor = nil
+    }
+
+    private func endLoupe() {
+        loupe?.invalidate()
+        loupe = nil
+    }
+
+    private func copySelection() {
+        guard let selection, let frameData else { return }
+        // Universal Clipboard stays on so a selection can be pasted on the Mac.
+        UIPasteboard.general.string = selection.text(in: frameData)
+        UINotificationFeedbackGenerator(view: self).notificationOccurred(.success, at: copyButton.center)
+        copyButton.configuration?.title = "Copied"
+        copyButton.isUserInteractionEnabled = false
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard let self, self.selection == selection else { return }
+            self.selection = nil
         }
     }
 
@@ -148,6 +364,17 @@ struct TerminalFont: @unchecked Sendable {
             let data = try? Data(contentsOf: url)
         else { return nil }
         return CTFontManagerCreateFontDescriptorFromData(data as CFData)
+    }
+}
+
+/// A tap that only stops a fling must not clear the selection; touch-down is the last moment
+/// `isDecelerating` still tells them apart.
+@MainActor
+private final class FlingTapFilter: NSObject, UIGestureRecognizerDelegate {
+    weak var scrollView: UIScrollView?
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        scrollView?.isDecelerating != true
     }
 }
 
@@ -202,8 +429,14 @@ private final class TerminalCanvas: UIView {
     }
 
     var metrics = CellMetrics(size: 12)
+    var selection: TerminalSelection?
     private var frameData: TerminalFrame?
     private var prepared: [Prepared] = []
+
+    override func tintColorDidChange() {
+        super.tintColorDidChange()
+        setNeedsDisplay()
+    }
 
     func prepare(_ frame: TerminalFrame) {
         frameData = frame
@@ -238,6 +471,21 @@ private final class TerminalCanvas: UIView {
             guard let bg = item.run.style.background, bg != frameData.background else { continue }
             ctx.setFillColor(UIColor(bg).cgColor)
             ctx.fill(cellRect(item.run, m))
+        }
+
+        if let selection {
+            ctx.setFillColor(tintColor.withAlphaComponent(0.35).cgColor)
+            for row in stride(from: max(selection.start.row, firstRow), through: min(selection.end.row, lastRow), by: 1) {
+                guard let columns = selection.columns(inRow: row, columns: frameData.columns) else { continue }
+                ctx.fill(
+                    CGRect(
+                        x: CGFloat(columns.lowerBound) * m.width,
+                        y: CGFloat(row) * m.height,
+                        width: CGFloat(columns.count) * m.width,
+                        height: m.height
+                    )
+                )
+            }
         }
 
         for item in visible {
@@ -305,6 +553,62 @@ private final class TerminalCanvas: UIView {
             }
             CTFontDrawGlyphs(font, glyphs, positions, count, ctx)
         }
+    }
+}
+
+/// An iOS selection handle: a bar the height of the row with a dot above it at the start and
+/// below it at the end. The view is the 44 pt hit area on the dot's side of the row.
+private final class SelectionHandle: UIView {
+    let edge: TerminalSelection.Edge
+    private let bar = UIView()
+    private let dot = UIView()
+
+    init(edge: TerminalSelection.Edge) {
+        self.edge = edge
+        super.init(frame: .zero)
+        dot.layer.cornerRadius = 5
+        for part in [bar, dot] {
+            part.isUserInteractionEnabled = false
+            addSubview(part)
+        }
+        tintColorDidChange()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func tintColorDidChange() {
+        super.tintColorDidChange()
+        bar.backgroundColor = tintColor
+        dot.backgroundColor = tintColor
+    }
+
+    /// Puts the bar at `x` in the superview, along the row starting at `rowTop`.
+    func place(x: CGFloat, rowTop: CGFloat, rowHeight: CGFloat, within content: CGRect) {
+        let size: CGFloat = 44
+        let middle = rowTop + rowHeight / 2
+        // A scroll view only hit-tests inside its bounds, which end at the content's edges when
+        // scrolled to them: slide the hit area over the row rather than lose part of it there.
+        frame = CGRect(
+            x: max(content.minX, min(x - size / 2, content.maxX - size)),
+            y: max(content.minY, min(edge == .start ? middle - size : middle, content.maxY - size)),
+            width: size,
+            height: size
+        )
+        let barX = x - frame.minX
+        let barTop = rowTop - frame.minY
+        bar.frame = CGRect(x: barX - 1, y: barTop, width: 2, height: rowHeight)
+        dot.frame = CGRect(x: barX - 5, y: edge == .start ? barTop - 9 : barTop + rowHeight - 1, width: 10, height: 10)
+    }
+
+    /// Only the handle's own drag starts from a touch on it, like UISlider does for scroll views.
+    override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+        recognizer.view === self
+    }
+
+    func barFrame(in view: UIView) -> CGRect {
+        convert(bar.frame, to: view)
     }
 }
 

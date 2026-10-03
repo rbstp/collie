@@ -26,7 +26,7 @@ pub type Reply = Result<Response, Fail>;
 pub type Authorized = Arc<dyn Fn() -> bool + Send + Sync>;
 
 const WATCH_EVERY: Duration = Duration::from_millis(250);
-const WATCH_LINES: u32 = 120;
+const WATCH_LINES: u32 = 240;
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const START_POLL: Duration = Duration::from_millis(250);
 pub const OP_TTL: Duration = Duration::from_secs(600);
