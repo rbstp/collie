@@ -58,16 +58,54 @@ git -C "$src" clean -qfdx -e .zig-cache
 [ "$(git -C "$src" rev-parse HEAD)" = "$GHOSTTY_COMMIT" ]
 echo "ghostty: $GHOSTTY_COMMIT"
 
-rm -rf "$work/out"
-(
-    cd "$src"
-    ZIG_GLOBAL_CACHE_DIR="$work/zig-global-cache" "$zig" build \
-        -Demit-lib-vt=true \
-        -Demit-xcframework=true \
-        -Doptimize=ReleaseFast \
-        -Dvt-features="$VT_FEATURES" \
-        --prefix "$work/out"
+cache="$work/zig-global-cache"
+build() {
+    rm -rf "$work/out"
+    (
+        cd "$src"
+        ZIG_GLOBAL_CACHE_DIR="$cache" "$zig" build \
+            -Demit-lib-vt=true \
+            -Demit-xcframework=true \
+            -Doptimize=ReleaseFast \
+            -Dvt-features="$VT_FEATURES" \
+            --prefix "$work/out"
+    )
+}
+
+# Fallback for when an upstream package host (codeberg.org, GitHub) is down: the same packages,
+# published on this repo's ghostty-deps-<commit> release. `zig fetch` recomputes each package hash,
+# which ghostty's build.zig.zon files pin, so the mirror cannot substitute content.
+# Regenerate the release from target/ghostty/zig-global-cache/p when GHOSTTY_COMMIT changes.
+MIRROR="https://github.com/rbstp/collie/releases/download/ghostty-deps-${GHOSTTY_COMMIT:0:8}"
+MIRRORED_PACKAGES=(
+    aro-0.0.0-JSD1Qk6lNgDdcDV4Vh7Sfy-34m2TluIVOdPzMmj_0BjX
+    N-V-__8AAB0eQwD-0MdOEBmz7intriBReIsIDNlukNVoNu6o
+    N-V-__8AAGmZhABbsPJLfbqrh6JTHsXhY6qCaLAQyx25e0XE
+    N-V-__8AAM94BAAFk_hn4UW0x_OBD2g0vOwexeAAyWNNo4eB
+    translate_c-0.0.0-Q_BUWhVNBwDOEcIqub4VFPJPB6D9dgwzUMHTX5KWr8Xr
+    uucode-0.2.0-ZZjBPuuFVgC8YZ8eld4fOKsZANLIhTFMzULQxhkLi1C7
 )
+seed_from_mirror() {
+    mkdir -p "$work/mirror"
+    for pkg in "${MIRRORED_PACKAGES[@]}"; do
+        [ -f "$cache/p/$pkg.tar.gz" ] && continue
+        file="$work/mirror/$pkg.tar.gz"
+        curl -fsSL --retry 3 -o "$file" "$MIRROR/$pkg.tar.gz"
+        got="$(cd "$src" && "$zig" fetch --global-cache-dir "$cache" "$file" | tail -n 1)"
+        rm -f "$file"
+        if [ "$got" != "$pkg" ]; then
+            echo "mirrored package $pkg hashes to $got" >&2
+            exit 1
+        fi
+        echo "seeded $pkg from the mirror"
+    done
+}
+
+if ! build; then
+    echo "zig build failed; seeding missing packages from $MIRROR and retrying" >&2
+    seed_from_mirror
+    build
+fi
 
 built="$work/out/lib/ghostty-vt.xcframework"
 headers="$work/headers"
