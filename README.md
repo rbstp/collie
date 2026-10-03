@@ -53,6 +53,7 @@ Details, including what is not covered: [docs/threat-model.md](docs/threat-model
 | 4 | Live Activities and Dynamic Island for agents you follow | next |
 | 5 | Claude Code hooks enrichment, audit viewer, multiple computers (macOS and Linux) | planned |
 | 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | planned |
+| 7 | Improvements: a Mac menu bar icon (on/off, pairing, pending approvals, quit) | planned |
 
 ## Requirements
 
@@ -84,6 +85,8 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
 5. **Push notifications** (optional): add an `[apns]` section to `~/Library/Application Support/collie/collied.toml`, import the key with `collied apns import AuthKey_<KEY_ID>.p8`, then check with `collied apns test`. The full steps are in [docs/release.md](docs/release.md).
 
 List paired phones with `collied peers list`, revoke one with `collied peers revoke <label or StableID>`, and inspect the daemon with `collied status`.
+
+`collied stop` turns collied off and keeps it off, across reboots, until `collied start`.
 
 ## Development
 
