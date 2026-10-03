@@ -5,6 +5,7 @@ struct FlockScreen: View {
     let core: (any FlockCore)?
     let machines: [Machine]
     let approvals: ApprovalsModel?
+    var tailnetStarting = false
     @State private var model = FlockModel()
     @State private var path: [AgentRoute] = []
     @State private var newTask = false
@@ -49,7 +50,7 @@ struct FlockScreen: View {
                             }
                         }
                     } header: {
-                        MachineHeader(entry: entry)
+                        MachineHeader(entry: entry, showsLink: !tailnetStarting)
                     }
                 }
             }
@@ -57,8 +58,18 @@ struct FlockScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .refreshable { await model.refresh(core: core) }
             .toolbar {
-                Button("New task", systemImage: "plus") { newTask = true }
-                    .disabled(core == nil || machines.isEmpty)
+                if tailnetStarting {
+                    ToolbarItem(placement: .principal) {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Connecting…").font(.headline)
+                        }
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("New task", systemImage: "plus") { newTask = true }
+                        .disabled(core == nil || machines.isEmpty)
+                }
             }
             .closeConfirmation($model.close) {
                 if let core, await model.performClose(core: core) {
@@ -87,6 +98,7 @@ struct FlockScreen: View {
 
 private struct MachineHeader: View {
     let entry: MachineFlockEntry
+    let showsLink: Bool
 
     var body: some View {
         HStack {
@@ -96,7 +108,7 @@ private struct MachineHeader: View {
                 Text("\(count) approval\(count == 1 ? "" : "s")")
                     .foregroundStyle(.red)
             }
-            if let link = entry.flock?.link {
+            if showsLink, let link = entry.flock?.link {
                 if link == .connecting {
                     ProgressView().controlSize(.mini)
                     Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
