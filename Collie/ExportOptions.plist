@@ -16,6 +16,8 @@
 	<dict>
 		<key>dev.rbstp.collie</key>
 		<string>Collie App Store</string>
+		<key>dev.rbstp.collie.push</key>
+		<string>Collie Push App Store</string>
 	</dict>
 	<key>uploadSymbols</key>
 	<true/>

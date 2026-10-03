@@ -7,10 +7,32 @@
 Team `RM3UT3MMSR`, in the Apple Developer portal and App Store Connect:
 
 1. **App Group**: register `group.dev.rbstp.collie`.
-2. **App ID** `dev.rbstp.collie` (explicit): enable **Push Notifications** and **App Groups** (assign `group.dev.rbstp.collie`).
-3. **Provisioning profile**: App Store Connect distribution, App ID `dev.rbstp.collie`, the team's Apple Distribution certificate, named exactly **`Collie App Store`** (the name `Collie/project.yml` and `Collie/ExportOptions.plist` refer to). Regenerate it, and update its secret, after any capability change on the App ID.
+2. **App IDs** (explicit), each with **Push Notifications** and **App Groups** (assign `group.dev.rbstp.collie`) enabled:
+   - `dev.rbstp.collie`, the app;
+   - `dev.rbstp.collie.push`, the ColliePush notification service extension.
+3. **Provisioning profiles**: App Store Connect distribution, the team's Apple Distribution certificate, named exactly as `Collie/project.yml` and `Collie/ExportOptions.plist` refer to them:
+   - **`Collie App Store`** for `dev.rbstp.collie`;
+   - **`Collie Push App Store`** for `dev.rbstp.collie.push`.
+
+   A profile is a snapshot of its App ID's capabilities: after any capability change, regenerate the profile (Edit, Save) and update its secret.
 4. **App Store Connect app record** for `dev.rbstp.collie`, with an internal TestFlight group.
-5. **APNs key**: create a dedicated APNs auth key (`.p8`) for collied. It is a runtime secret of the Mac daemon, separate from the App Store Connect API key below, and is never stored in GitHub. TestFlight builds register with the production APNs environment.
+5. **APNs key for collied**: Certificates, Identifiers & Profiles, Keys, add a key with **Apple Push Notifications service (APNs)**, environment **Sandbox & Production**. Debug builds installed with `just ios-run-device` register sandbox tokens, TestFlight builds production tokens, and one collied serves both. Download the `.p8` (offered once) and note the Key ID. It is a runtime secret of the Mac daemon, separate from the App Store Connect API key below, and is never stored in GitHub. On the Mac:
+
+   ```sh
+   install -m 0600 AuthKey_<KEY_ID>.p8 "$HOME/Library/Application Support/collie/apns.p8"
+   rm AuthKey_<KEY_ID>.p8
+   ```
+
+   ```toml
+   # ~/Library/Application Support/collie/collied.toml
+   [apns]
+   key_path = "/Users/<you>/Library/Application Support/collie/apns.p8"
+   key_id = "<KEY_ID>"
+   team_id = "RM3UT3MMSR"
+   bundle_id = "dev.rbstp.collie"
+   ```
+
+   `collied doctor` checks that the key file is 0600 and owned by you. Revoke the key in the portal if the Mac is compromised.
 
 ## Repository secrets
 
@@ -21,11 +43,12 @@ All repository-level, base64 values encoded with `base64 -i <file> | gh secret s
 | `APPLE_DIST_CERT_P12` | Apple Distribution certificate and key, `.p12`, base64 |
 | `APPLE_DIST_CERT_PASSWORD` | password of that `.p12` |
 | `APPLE_PROVISIONING_PROFILE` | `Collie App Store` profile, `.mobileprovision`, base64 |
+| `APPLE_PROVISIONING_PROFILE_PUSH` | `Collie Push App Store` profile, `.mobileprovision`, base64 |
 | `APPLE_KEY_P8` | App Store Connect API key (Developer role), `.p8`, base64 |
 | `APPLE_KEY_ID` | that key's ID |
 | `APPLE_ISSUER_ID` | App Store Connect issuer ID |
 
-The certificate and the profile expire after a year; renew both and update their secrets.
+The certificate and the profiles expire after a year; renew them and update their secrets.
 
 ## Cutting a release
 
