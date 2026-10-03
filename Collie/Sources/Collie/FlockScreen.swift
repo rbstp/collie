@@ -97,7 +97,12 @@ private struct MachineHeader: View {
                     .foregroundStyle(.red)
             }
             if let link = entry.flock?.link {
-                Text(link.label).foregroundStyle(link == .connected ? .green : .secondary)
+                if link == .connecting {
+                    ProgressView().controlSize(.mini)
+                    Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
+                } else {
+                    Text(link.label).foregroundStyle(link == .connected ? .green : .secondary)
+                }
             }
         }
     }
