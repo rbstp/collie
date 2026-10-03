@@ -66,7 +66,7 @@ ios-run-device: ios-framework ios-project
             and .connectionProperties.tunnelState != "unavailable")
         | .hardwareProperties.udid][0] // empty' "$devices")"
     [ -n "$udid" ] || { echo "no connected, paired iOS device (see xcrun devicectl list devices)"; exit 1; }
-    {{ xcodebuild }} -configuration Debug -destination "id=$udid" -allowProvisioningUpdates \
+    {{ xcodebuild }} -configuration Debug -destination "id=$udid" -allowProvisioningUpdates -allowProvisioningDeviceRegistration \
         CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=RM3UT3MMSR build
     xcrun devicectl device install app --device "$udid" target/ios/DerivedData/Build/Products/Debug-iphoneos/Collie.app
     xcrun devicectl device process launch --device "$udid" dev.rbstp.collie
