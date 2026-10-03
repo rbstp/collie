@@ -1,0 +1,16 @@
+--- stack.orig.go
++++ stack.go
+@@ -581,6 +581,13 @@
+ 	}
+ }
+ 
++func (s *Stack) TransportProtocolHandler(p tcpip.TransportProtocolNumber) func(TransportEndpointID, *PacketBuffer) bool {
++	if state := s.transportProtocols[p]; state != nil {
++		return state.defaultHandler
++	}
++	return nil
++}
++
+ // Clock returns the Stack's clock for retrieving the current time and
+ // scheduling work.
+ func (s *Stack) Clock() tcpip.Clock {

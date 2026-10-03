@@ -1,0 +1,23 @@
+--- connect.orig.go
++++ connect.go
+@@ -1538,6 +1538,20 @@
+ 						// being reflected to a listening endpoint.
+ 						return false, reuseTW
+ 					}
++				}
++			}
++			// collie: a stack that accepts connections through a default
++			// handler (tcp.Forwarder, as tailscale's netstack does) has no
++			// listening endpoint, so the SYN used to be dropped here and the
++			// peer stalled in SYN retransmits until TIME-WAIT expired (63 s).
++			// Hand it to that handler once this endpoint is unregistered.
++			// As upstream does for listeners, a segment queued behind this
++			// SYN is answered with RST before the new endpoint registers.
++			if h := e.stack.TransportProtocolHandler(info.TransProto); h != nil {
++				id := info.ID
++				return false, func() {
++					h(id, s.pkt)
++					s.DecRef()
+ 				}
+ 			}
+ 		}

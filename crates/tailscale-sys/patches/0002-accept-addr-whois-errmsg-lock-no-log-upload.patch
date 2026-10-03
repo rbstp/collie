@@ -1,0 +1,247 @@
+diff --git a/tailscale.c b/tailscale.c
+index 420d67e..11fa7d8 100644
+--- a/tailscale.c
++++ b/tailscale.c
+@@ -23,6 +23,8 @@ extern int TsnetGetIps(int sd, char *buf, size_t buflen);
+ extern int TsnetGetRemoteAddr(int listener, int conn, char *buf, size_t buflen);
+ extern int TsnetListen(int sd, char* net, char* addr, int* listenerOut);
+ extern int TsnetAccept(int ld, int* connOut);
++extern int TsnetAcceptWithAddr(int ld, int* connOut, char *buf, size_t buflen);
++extern int TsnetWhoIsJSON(int sd, char* addr, char** jsonOut);
+ extern int TsnetLoopback(int sd, char* addrOut, size_t addrLen, char* proxyOut, char* localOut);
+ extern int TsnetStatusJSON(int sd, char** jsonOut);
+ extern int TsnetEnableFunnelToLocalhostPlaintextHttp1(int sd, int localhostPort);
+@@ -55,6 +57,14 @@ int tailscale_accept(tailscale_listener ld, tailscale_conn* conn_out) {
+ 	return TsnetAccept(ld, (int*)conn_out);
+ }
+ 
++int tailscale_accept_with_addr(tailscale_listener ld, tailscale_conn* conn_out, char* addr_out, size_t addrlen) {
++	return TsnetAcceptWithAddr(ld, (int*)conn_out, addr_out, addrlen);
++}
++
++int tailscale_whois_json(tailscale sd, const char* addr, char** json_out) {
++	return TsnetWhoIsJSON(sd, (char*)addr, json_out);
++}
++
+ int tailscale_getremoteaddr(tailscale_listener l, tailscale_conn conn, char* buf, size_t buflen) {
+ 	return TsnetGetRemoteAddr(l, conn, buf, buflen);
+ }
+diff --git a/tailscale.go b/tailscale.go
+index 316efdd..27fe218 100644
+--- a/tailscale.go
++++ b/tailscale.go
+@@ -23,6 +23,7 @@ import (
+ 	"unsafe"
+ 
+ 	"golang.org/x/sys/unix"
++	"tailscale.com/envknob"
+ 	"tailscale.com/hostinfo"
+ 	"tailscale.com/ipn"
+ 	"tailscale.com/tsnet"
+@@ -40,6 +41,7 @@ var servers struct {
+ 
+ type server struct {
+ 	s       *tsnet.Server
++	mu      sync.Mutex // guards lastErr; C callers use one handle from many threads
+ 	lastErr string
+ 	started bool
+ }
+@@ -77,6 +79,8 @@ type conn struct {
+ }
+ 
+ func (s *server) recErr(err error) C.int {
++	s.mu.Lock()
++	defer s.mu.Unlock()
+ 	if err == nil {
+ 		s.lastErr = ""
+ 		return 0
+@@ -93,6 +97,7 @@ func TsnetNewServer() C.int {
+ 	if servers.m == nil {
+ 		servers.m = map[C.int]*server{}
+ 		hostinfo.SetApp("libtailscale")
++		envknob.SetNoLogsNoSupport()
+ 	}
+ 	if servers.next == 0 {
+ 		servers.next = 42<<16 + 1
+@@ -204,7 +209,9 @@ func TsnetErrmsg(sd C.int, buf *C.char, buflen C.size_t) C.int {
+ 		out[0] = '\x00'
+ 		return C.EBADF
+ 	}
++	s.mu.Lock()
+ 	n := copy(out, s.lastErr)
++	s.mu.Unlock()
+ 	if n >= len(out) {
+ 		out[len(out)-1] = '\x00' // always NUL-terminate
+ 		return C.ERANGE
+@@ -284,8 +291,12 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+ 				netConn.Close()
+ 				continue
+ 			}
++			// The peer address travels in the same message as the fd so the
++			// C side can never pair a connection with another peer's address.
++			var rec [acceptRecordLen]byte
++			copy(rec[:], netConn.RemoteAddr().String())
+ 			rights := syscall.UnixRights(int(connFd))
+-			err = syscall.Sendmsg(sp, nil, rights, nil, 0)
++			err = syscall.Sendmsg(sp, rec[:], rights, nil, 0)
+ 			if err != nil {
+ 				// We handle sp being closed in the read goroutine above.
+ 				if s.s.Logf != nil {
+@@ -295,11 +306,6 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+ 				// fallthrough to close connFd, then continue Accept()ing
+ 			}
+ 
+-			// map the connection to the remote address
+-			listener.mu.Lock()
+-			listener.m[connFd] = netConn.RemoteAddr()
+-			listener.mu.Unlock()
+-
+ 			syscall.Close(int(connFd)) // now owned by recvmsg
+ 		}
+ 	}()
+@@ -308,8 +314,40 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+ 	return 0
+ }
+ 
++const acceptRecordLen = 64
++
+ //export TsnetAccept
+ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
++	var rec [acceptRecordLen]byte
++	return tsnetAccept(listenerFd, connOut, &rec)
++}
++
++//export TsnetAcceptWithAddr
++func TsnetAcceptWithAddr(listenerFd C.int, connOut *C.int, buf *C.char, buflen C.size_t) C.int {
++	if buf == nil || buflen == 0 {
++		panic("accept_with_addr passed nil buf or buflen of 0")
++	}
++	out := unsafe.Slice((*byte)(unsafe.Pointer(buf)), buflen)
++	out[0] = '\x00'
++	var rec [acceptRecordLen]byte
++	if rc := tsnetAccept(listenerFd, connOut, &rec); rc != 0 {
++		return rc
++	}
++	addr := rec[:]
++	if i := strings.IndexByte(string(addr), 0); i >= 0 {
++		addr = addr[:i]
++	}
++	if len(addr) >= len(out) {
++		syscall.Close(int(*connOut))
++		*connOut = -1
++		return C.ERANGE
++	}
++	n := copy(out, addr)
++	out[n] = '\x00'
++	return 0
++}
++
++func tsnetAccept(listenerFd C.int, connOut *C.int, rec *[acceptRecordLen]byte) C.int {
+ 	listeners.mu.Lock()
+ 	ln := listeners.m[listenerFd]
+ 	listeners.mu.Unlock()
+@@ -319,10 +357,13 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+ 	}
+ 
+ 	buf := make([]byte, unix.CmsgLen(int(unsafe.Sizeof((C.int)(0)))))
+-	_, oobn, _, _, err := syscall.Recvmsg(int(listenerFd), nil, buf, 0)
++	n, oobn, _, _, err := syscall.Recvmsg(int(listenerFd), rec[:], buf, 0)
+ 	if err != nil {
+ 		return ln.s.recErr(err)
+ 	}
++	if n == 0 {
++		return ln.s.recErr(io.EOF)
++	}
+ 
+ 	scms, err := syscall.ParseSocketControlMessage(buf[:oobn])
+ 	if err != nil {
+@@ -336,8 +377,22 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+ 		return ln.s.recErr(err)
+ 	}
+ 	if len(fds) != 1 {
++		for _, fd := range fds {
++			syscall.Close(fd)
++		}
+ 		return ln.s.recErr(fmt.Errorf("libtailscale: got %d FDs, want 1", len(fds)))
+ 	}
++	for n < acceptRecordLen {
++		m, err := syscall.Read(int(listenerFd), rec[n:])
++		if err == syscall.EAGAIN || err == syscall.EINTR {
++			continue
++		}
++		if err != nil || m == 0 {
++			syscall.Close(fds[0])
++			return ln.s.recErr(fmt.Errorf("libtailscale: short accept record: %v", err))
++		}
++		n += m
++	}
+ 	*connOut = (C.int)(fds[0])
+ 
+ 	return 0
+@@ -615,6 +670,34 @@ func TsnetStatusJSON(sd C.int, jsonOut **C.char) C.int {
+ 	return 0
+ }
+ 
++//export TsnetWhoIsJSON
++func TsnetWhoIsJSON(sd C.int, addr *C.char, jsonOut **C.char) C.int {
++	if jsonOut == nil {
++		panic("whois_json passed nil json_out")
++	}
++	*jsonOut = nil
++	s := getServer(sd)
++	if s == nil {
++		return C.EBADF
++	}
++	lc, err := s.s.LocalClient()
++	if err != nil {
++		return s.recErr(err)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	who, err := lc.WhoIs(ctx, C.GoString(addr))
++	if err != nil {
++		return s.recErr(err)
++	}
++	b, err := json.Marshal(who)
++	if err != nil {
++		return s.recErr(err)
++	}
++	*jsonOut = C.CString(string(b))
++	return 0
++}
++
+ //export TsnetEnableFunnelToLocalhostPlaintextHttp1
+ func TsnetEnableFunnelToLocalhostPlaintextHttp1(sd C.int, localhostPort C.int) C.int {
+ 	s := getServer(sd)
+diff --git a/tailscale.h b/tailscale.h
+index 9bc8e7c..f4c3f27 100644
+--- a/tailscale.h
++++ b/tailscale.h
+@@ -152,6 +152,27 @@ extern int tailscale_getremoteaddr(tailscale_listener l, tailscale_conn conn, ch
+ // 	-1    - call tailscale_errmsg for details
+ extern int tailscale_accept(tailscale_listener listener, tailscale_conn* conn_out);
+ 
++// tailscale_accept_with_addr is tailscale_accept that also writes the remote
++// "ip:port" of the accepted connection to addr_out, NUL-terminated. The address
++// is delivered in the same message as the connection fd.
++//
++// Returns:
++// 	0      - success
++// 	EBADF  - listener is not a valid tailscale
++// 	ERANGE - insufficient storage for addr_out (the connection is closed)
++// 	-1     - call tailscale_errmsg for details
++extern int tailscale_accept_with_addr(tailscale_listener listener, tailscale_conn* conn_out, char* addr_out, size_t addrlen);
++
++// tailscale_whois_json writes the JSON encoding of apitype.WhoIsResponse for
++// addr ("ip" or "ip:port") to *json_out as a NUL-terminated, malloc'd string,
++// using tsnet's in-memory LocalAPI. The caller must free() it.
++//
++// Returns:
++// 	0     - success, *json_out is set
++// 	EBADF - sd is not a valid tailscale
++// 	-1    - call tailscale_errmsg for details (*json_out is NULL)
++extern int tailscale_whois_json(tailscale sd, const char* addr, char** json_out);
++
+ // tailscale_loopback starts a loopback address server.
+ //
+ // The server has multiple functions.

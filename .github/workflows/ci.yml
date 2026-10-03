@@ -1,0 +1,128 @@
+name: ci
+run-name: "[ci] - testing ${{ github.ref_name }}"
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '.github/**'
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: xcode-27
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: set up go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.x
+          cache: false
+
+      - name: install the rust toolchain
+        run: rustup toolchain install
+
+      - name: cache cargo and go builds
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+            target
+          key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/*.patch', 'crates/tailnet/testcontrol/go.sum') }}
+          restore-keys: rust-
+
+      - name: install just and cargo-deny
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -sSfL -o "$RUNNER_TEMP/just.tar.gz" \
+            https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-aarch64-apple-darwin.tar.gz
+          echo "50ae3e996c974a0bf32ea7d10f495070df33f1b43e0616b2769e3d4821ed8f48  $RUNNER_TEMP/just.tar.gz" | shasum -a 256 -c
+          tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$bin" just
+          curl -sSfL -o "$RUNNER_TEMP/cargo-deny.tar.gz" \
+            https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-aarch64-apple-darwin.tar.gz
+          echo "fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3  $RUNNER_TEMP/cargo-deny.tar.gz" | shasum -a 256 -c
+          tar -xzf "$RUNNER_TEMP/cargo-deny.tar.gz" -C "$bin" --strip-components 1 cargo-deny-0.20.2-aarch64-apple-darwin/cargo-deny
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: lint
+        run: just lint
+
+      - name: test
+        run: just test
+
+  ios:
+    runs-on: xcode-27
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: set up go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.x
+          cache: false
+
+      - name: install the rust toolchain
+        run: rustup toolchain install
+
+      - name: cache cargo and go builds
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+            target
+          key: ios-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/*.patch') }}
+          restore-keys: ios-
+
+      - name: install just and xcodegen
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -sSfL -o "$RUNNER_TEMP/just.tar.gz" \
+            https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-aarch64-apple-darwin.tar.gz
+          echo "50ae3e996c974a0bf32ea7d10f495070df33f1b43e0616b2769e3d4821ed8f48  $RUNNER_TEMP/just.tar.gz" | shasum -a 256 -c
+          tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$bin" just
+          curl -sSfL -o "$RUNNER_TEMP/xcodegen.zip" \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
+          echo "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          {
+            echo "$bin"
+            echo "$RUNNER_TEMP/xcodegen/bin"
+          } >> "$GITHUB_PATH"
+
+      - name: build the xcframework
+        run: just ios-framework
+
+      - name: generate the project
+        run: just ios-project
+
+      - name: test
+        run: just --no-deps ios-test

@@ -1,0 +1,28 @@
+{
+  "id": "fixture",
+  "result": {
+    "type": "workspace_list",
+    "workspaces": [
+      {
+        "workspace_id": "w6",
+        "number": 1,
+        "label": "collie",
+        "focused": true,
+        "pane_count": 1,
+        "tab_count": 1,
+        "active_tab_id": "w6:t1",
+        "agent_status": "working"
+      },
+      {
+        "workspace_id": "w7",
+        "number": 2,
+        "label": "api",
+        "focused": false,
+        "pane_count": 2,
+        "tab_count": 1,
+        "active_tab_id": "w7:t1",
+        "agent_status": "blocked"
+      }
+    ]
+  }
+}

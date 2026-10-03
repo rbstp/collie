@@ -1,0 +1,15 @@
+--- peerapi.orig.go	2026-10-03 02:33:30
++++ peerapi.go	2026-10-03 02:33:30
+@@ -66,6 +66,12 @@
+ // kernel-level listener at all and instead rely on netstack intercepting
+ // connections to the peerapi port. See [fakePeerAPIListener].
+ func (s *peerAPIServer) skipKernelListener() bool {
++	// collie: tsnet runs on netstack, which already serves peerapi to tailnet
++	// peers. The kernel listener would bind every interface (ipStr is cleared
++	// in netstack mode), exposing a TCP port to the LAN.
++	if _, hasNetstack := s.b.sys.Netstack.GetOK(); hasNetstack {
++		return true
++	}
+ 	switch runtime.GOOS {
+ 	case "android":
+ 		// Android for whatever reason often has problems creating the

@@ -1,0 +1,35 @@
+[package]
+name = "collied"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+clap = { version = "4.6.7", features = ["derive"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+getrandom = "0.4.3"
+protocol = { path = "../protocol" }
+qrcode = { version = "0.14.1", default-features = false }
+rustix = { version = "1.1.5", features = ["fs", "process", "system", "termios"] }
+serde.workspace = true
+serde_json.workspace = true
+subtle = "2.6.1"
+tailnet = { path = "../tailnet" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+toml = "1.1.6"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zeroize = "1.9.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

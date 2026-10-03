@@ -1,0 +1,211 @@
+name: testflight
+run-name: "[testflight] - shipping ${{ github.event.pull_request.merge_commit_sha || github.ref_name }}"
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - master
+    paths-ignore:
+      - '.github/**'
+      - 'docs/**'
+      - 'README.md'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: version to ship, without the leading v (e.g. 0.3.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-ship:
+    concurrency: testflight
+    environment:
+      name: testflight
+      url: https://appstoreconnect.apple.com/apps
+    if: >-
+      ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master')
+          || (github.event.pull_request.merged
+              && !contains(github.event.pull_request.title, '[skip-release]')) }}
+    runs-on: xcode-27
+    permissions:
+      contents: write
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.ref }}
+          submodules: true
+
+      - name: work out the version
+        id: version
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            [[ $INPUT_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must be MAJOR.MINOR.PATCH"; exit 1; }
+            version="$INPUT_VERSION"
+          else
+            latest="$(git tag --list 'v*' --sort=-v:refname | head -1)"
+            IFS=. read -r major minor patch <<< "${latest:-v0.0.0}"
+            major="${major#v}"
+            # Every commit since the last tag counts, so a cancelled pending run cannot lose a feat bump.
+            range="${latest:+$latest..}HEAD"
+            if { git log --format='%s%n%b' "$range"; printf '%s\n' "$TITLE"; } | grep -qiE '^(\[[A-Z]+-[0-9]+\] )?feat[(!:]'; then
+              minor=$((minor + 1)); patch=0
+            else
+              patch=$((patch + 1))
+            fi
+            version="$major.$minor.$patch"
+          fi
+          echo "shipping $version build $GITHUB_RUN_NUMBER (previous tag: ${latest:-none})"
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          TITLE: ${{ github.event.pull_request.title }}
+
+      - name: check for the signing secrets
+        run: |
+          missing=
+          for name in APPLE_DIST_CERT_P12 APPLE_DIST_CERT_PASSWORD APPLE_KEY_P8 APPLE_KEY_ID APPLE_ISSUER_ID ${!APPLE_PROVISIONING_PROFILE@}; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          [ -z "$missing" ] || {
+            echo "unset repository secrets:$missing"
+            echo "See docs/release.md."
+            exit 1
+          }
+        env:
+          APPLE_DIST_CERT_P12: ${{ secrets.APPLE_DIST_CERT_P12 }}
+          APPLE_DIST_CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+          APPLE_KEY_P8: ${{ secrets.APPLE_KEY_P8 }}
+          APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
+          APPLE_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
+
+      - name: set up go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.x
+          cache: false
+
+      - name: install the rust toolchain
+        run: rustup toolchain install
+
+      - name: install just and xcodegen
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -sSfL -o "$RUNNER_TEMP/just.tar.gz" \
+            https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-aarch64-apple-darwin.tar.gz
+          echo "50ae3e996c974a0bf32ea7d10f495070df33f1b43e0616b2769e3d4821ed8f48  $RUNNER_TEMP/just.tar.gz" | shasum -a 256 -c
+          tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$bin" just
+          curl -sSfL -o "$RUNNER_TEMP/xcodegen.zip" \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
+          echo "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          {
+            echo "$bin"
+            echo "$RUNNER_TEMP/xcodegen/bin"
+          } >> "$GITHUB_PATH"
+
+      - name: build the xcframework
+        run: just ios-framework
+
+      - name: generate the project
+        run: just ios-project
+
+      # ci.yml tests the pull request, not the revision shipped, and a manual dispatch skips it.
+      - name: test the revision being shipped
+        run: just --no-deps ios-test
+
+      - name: import the signing certificate and profiles
+        run: |
+          decode() {
+            printf '%s' "$2" | tr -d '\n\r\t ' | base64 --decode > "$3" || {
+              echo "$1 is not valid base64; set it with: base64 -i <file> | gh secret set $1"; exit 1; }
+            [ -s "$3" ] || { echo "$1 is empty; set it with: base64 -i <file> | gh secret set $1"; exit 1; }
+          }
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          decode APPLE_DIST_CERT_P12 "$APPLE_DIST_CERT_P12" "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$APPLE_DIST_CERT_PASSWORD" \
+            -T /usr/bin/codesign -f pkcs12
+          # Without a partition list, codesign's first use of the key blocks on a UI prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" \
+            "$keychain" > /dev/null
+          security list-keychains -d user | tr -d '"' \
+            | xargs security list-keychains -d user -s "$keychain"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$keychain"
+
+          profiles="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$profiles"
+          # Installs every APPLE_PROVISIONING_PROFILE* variable: a new signed target adds its secret here and to the check above.
+          for name in ${!APPLE_PROVISIONING_PROFILE@}; do
+            decode "$name" "${!name}" "$RUNNER_TEMP/profile.mobileprovision"
+            plist="$(security cms -D -i "$RUNNER_TEMP/profile.mobileprovision")" || {
+              echo "$name is not a .mobileprovision file"; exit 1; }
+            uuid="$(printf '%s' "$plist" | /usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin)"
+            printf '%s' "$plist" | /usr/libexec/PlistBuddy -c 'Print Name' \
+              -c 'Print Entitlements:application-identifier' -c 'Print ExpirationDate' /dev/stdin
+            mv "$RUNNER_TEMP/profile.mobileprovision" "$profiles/$uuid.mobileprovision"
+          done
+          decode APPLE_KEY_P8 "$APPLE_KEY_P8" "$RUNNER_TEMP/AuthKey.p8"
+        env:
+          APPLE_DIST_CERT_P12: ${{ secrets.APPLE_DIST_CERT_P12 }}
+          APPLE_DIST_CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+          APPLE_KEY_P8: ${{ secrets.APPLE_KEY_P8 }}
+
+      # No PROVISIONING_PROFILE_SPECIFIER here: a command-line setting applies to every target, so each target names its profile in project.yml.
+      - name: archive
+        run: |
+          xcodebuild archive -project Collie/Collie.xcodeproj -scheme Collie -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath .build/DerivedData \
+            -archivePath .build/Collie.xcarchive \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+
+      - name: upload to testflight
+        run: |
+          xcodebuild -exportArchive -archivePath .build/Collie.xcarchive \
+            -exportOptionsPlist Collie/ExportOptions.plist -exportPath .build/export \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$APPLE_KEY_ID" -authenticationKeyIssuerID "$APPLE_ISSUER_ID"
+        env:
+          APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
+          APPLE_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
+
+      - name: tag the release
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "$TAG already exists"
+            exit 0
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+
+      - name: forget the signing material
+        if: ${{ !cancelled() }}
+        run: |
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+          if [ -f "$RUNNER_TEMP/signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
+          fi
+          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision

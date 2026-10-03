@@ -1,0 +1,108 @@
+diff --git a/tailscale.c b/tailscale.c
+index 11fa7d8..0caaa26 100644
+--- a/tailscale.c
++++ b/tailscale.c
+@@ -18,6 +18,8 @@ extern int TsnetSetHostname(int sd, char* str);
+ extern int TsnetSetAuthKey(int sd, char* str);
+ extern int TsnetSetControlURL(int sd, char* str);
+ extern int TsnetSetEphemeral(int sd, int ephemeral);
++extern int TsnetSetAdvertiseTags(int sd, char* str);
++extern int TsnetDialTimeout(int sd, char* net, char* addr, int timeoutMs, int* connOut);
+ extern int TsnetSetLogFD(int sd, int fd);
+ extern int TsnetGetIps(int sd, char *buf, size_t buflen);
+ extern int TsnetGetRemoteAddr(int listener, int conn, char *buf, size_t buflen);
+@@ -85,6 +87,14 @@ int tailscale_set_authkey(tailscale sd, const char* authkey) {
+ int tailscale_set_control_url(tailscale sd, const char* control_url) {
+ 	return TsnetSetControlURL(sd, (char*)control_url);
+ }
++int tailscale_set_advertise_tags(tailscale sd, const char* tags) {
++	return TsnetSetAdvertiseTags(sd, (char*)tags);
++}
++
++int tailscale_dial_timeout(tailscale sd, const char* network, const char* addr, int timeout_ms, tailscale_conn* conn_out) {
++	return TsnetDialTimeout(sd, (char*)network, (char*)addr, timeout_ms, (int*)conn_out);
++}
++
+ int tailscale_set_ephemeral(tailscale sd, int ephemeral) {
+ 	return TsnetSetEphemeral(sd, ephemeral);
+ }
+diff --git a/tailscale.go b/tailscale.go
+index c840065..6a2dd24 100644
+--- a/tailscale.go
++++ b/tailscale.go
+@@ -548,11 +548,29 @@ func extractIP(ipWithPort string) string {
+ 
+ //export TsnetDial
+ func TsnetDial(sd C.int, network, addr *C.char, connOut *C.int) C.int {
++	return tsnetDial(sd, network, addr, 0, connOut)
++}
++
++//export TsnetDialTimeout
++func TsnetDialTimeout(sd C.int, network, addr *C.char, timeoutMs C.int, connOut *C.int) C.int {
++	if timeoutMs <= 0 {
++		return C.EINVAL
++	}
++	return tsnetDial(sd, network, addr, time.Duration(timeoutMs)*time.Millisecond, connOut)
++}
++
++func tsnetDial(sd C.int, network, addr *C.char, timeout time.Duration, connOut *C.int) C.int {
+ 	s := getServer(sd)
+ 	if s == nil {
+ 		return C.EBADF
+ 	}
+-	netConn, err := s.s.Dial(context.Background(), C.GoString(network), C.GoString(addr))
++	ctx := context.Background()
++	if timeout > 0 {
++		var cancel context.CancelFunc
++		ctx, cancel = context.WithTimeout(ctx, timeout)
++		defer cancel()
++	}
++	netConn, err := s.s.Dial(ctx, C.GoString(network), C.GoString(addr))
+ 	if err != nil {
+ 		return s.recErr(err)
+ 	}
+@@ -603,6 +621,21 @@ func TsnetSetControlURL(sd C.int, str *C.char) C.int {
+ 	return 0
+ }
+ 
++//export TsnetSetAdvertiseTags
++func TsnetSetAdvertiseTags(sd C.int, str *C.char) C.int {
++	s := getServer(sd)
++	if s == nil {
++		return C.EBADF
++	}
++	tags := C.GoString(str)
++	if tags == "" {
++		s.s.AdvertiseTags = nil
++	} else {
++		s.s.AdvertiseTags = strings.Split(tags, ",")
++	}
++	return 0
++}
++
+ //export TsnetSetEphemeral
+ func TsnetSetEphemeral(sd C.int, e int) C.int {
+ 	s := getServer(sd)
+diff --git a/tailscale.h b/tailscale.h
+index f4c3f27..d0aa9a2 100644
+--- a/tailscale.h
++++ b/tailscale.h
+@@ -107,6 +107,18 @@ extern int tailscale_getips(tailscale sd, char* buf, size_t buflen);
+ // Returns zero on success or -1 on error, call tailscale_errmsg for details.
+ extern int tailscale_dial(tailscale sd, const char* network, const char* addr, tailscale_conn* conn_out);
+ 
++// tailscale_dial_timeout is tailscale_dial that gives up after timeout_ms
++// milliseconds (must be > 0).
++//
++// Returns zero on success, EINVAL for a bad timeout, or -1 on error, call
++// tailscale_errmsg for details.
++extern int tailscale_dial_timeout(tailscale sd, const char* network, const char* addr, int timeout_ms, tailscale_conn* conn_out);
++
++// tailscale_set_advertise_tags sets the comma-separated ACL tags (e.g.
++// "tag:a,tag:b") the node requests at login. Empty clears them. Must be
++// called before the node starts.
++extern int tailscale_set_advertise_tags(tailscale sd, const char* tags);
++
+ // A tailscale_listener is a socket on the tailnet listening for connections.
+ //
+ // It is much like allocating a system socket(2) and calling listen(2).

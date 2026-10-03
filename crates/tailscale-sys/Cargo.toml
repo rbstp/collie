@@ -1,0 +1,16 @@
+[package]
+name = "tailscale-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "Apache-2.0 AND BSD-3-Clause"
+repository.workspace = true
+publish = false
+links = "tailscale"
+build = "build.rs"
+
+[build-dependencies]
+bindgen = "0.73.2"
+
+[lints]
+workspace = true

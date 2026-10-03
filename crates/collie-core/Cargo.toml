@@ -1,0 +1,31 @@
+[package]
+name = "collie-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["staticlib", "lib"]
+
+[dependencies]
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+getrandom = "0.4.3"
+libc = "0.2.190"
+protocol = { path = "../protocol" }
+serde.workspace = true
+serde_json.workspace = true
+tailnet = { path = "../tailnet" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+uniffi = "0.32.2"
+zeroize = "1.9.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

@@ -1,0 +1,33 @@
+diff --git a/tailscale.go b/tailscale.go
+index 06755dd..3b1dd96 100644
+--- a/tailscale.go
++++ b/tailscale.go
+@@ -102,7 +102,7 @@ func TsnetNewServer() C.int {
+ 	}
+ 	sd := servers.next
+ 	servers.next++
+-	s := &server{s: &tsnet.Server{}}
++	s := &server{s: &tsnet.Server{UserLogf: logger.Discard}}
+ 	servers.m[sd] = s
+ 	return (C.int)(sd)
+ }
+@@ -646,8 +646,11 @@ func TsnetSetLogFD(sd, fd C.int) C.int {
+ 	if s == nil {
+ 		return C.EBADF
+ 	}
++	// UserLogf must be set too: when nil, tsnet falls back to log.Printf on
++	// stderr, which repeats the interactive login URL every few seconds.
+ 	if fd == -1 {
+ 		s.s.Logf = logger.Discard
++		s.s.UserLogf = logger.Discard
+ 		return 0
+ 	}
+ 	f := os.NewFile(uintptr(fd), "logfd")
+@@ -655,6 +658,7 @@ func TsnetSetLogFD(sd, fd C.int) C.int {
+ 		fmt.Fprintf(f, format, args...)
+ 		fmt.Fprintf(f, "\n")
+ 	}
++	s.s.UserLogf = logger.Discard
+ 	return 0
+ }
+ 
