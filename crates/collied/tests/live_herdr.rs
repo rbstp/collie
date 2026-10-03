@@ -296,6 +296,7 @@ async fn scenario(session: &HerdrSession) {
         op_id: OpId::new("P".repeat(22)).unwrap(),
         terminal_id: terminal.clone(),
         text: PromptText::new("echo should-not-run").unwrap(),
+        expected_draft: None,
     };
     assert_eq!(
         drive.prompt(prompt, &yes).await.unwrap_err().0,

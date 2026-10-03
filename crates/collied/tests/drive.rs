@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
 use protocol::{
-    AgentKind, AgentPromptParams, AgentSendKeysParams, Cwd, ErrorCode, Key, Label, OpId,
+    AgentKind, AgentPromptParams, AgentSendKeysParams, Cwd, DraftText, ErrorCode, Key, Label, OpId,
     PaneCloseParams, PromptText, ReadParams, ReadSource, Request, Response, TaskNewParams,
     TerminalId, WorkspaceCloseParams, WorkspaceId,
 };
@@ -46,6 +46,7 @@ struct Herdr {
     snapshot: Value,
     calls: Vec<(String, Value)>,
     text: String,
+    screens: VecDeque<String>,
     manifests: Vec<String>,
     errors: HashMap<String, VecDeque<String>>,
     gets: VecDeque<Value>,
@@ -165,10 +166,15 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
             .cloned()
             .ok_or_else(|| "agent_not_found".to_owned())
     };
-    let read = |h: &Herdr, pane: &Value| {
+    let read = |h: &mut Herdr, pane: &Value| {
+        let text = match h.screens.len() {
+            0 => h.text.clone(),
+            1 => h.screens[0].clone(),
+            _ => h.screens.pop_front().unwrap(),
+        };
         json!({"type": "pane_read", "read": {
             "pane_id": pane, "workspace_id": "w6", "tab_id": "w6:t1", "source": p["source"],
-            "format": "ansi", "text": h.text, "revision": 0, "truncated": true,
+            "format": "ansi", "text": text, "revision": 0, "truncated": true,
         }})
     };
     Ok(match method.as_str() {
@@ -272,6 +278,22 @@ fn prompt(terminal: &str) -> AgentPromptParams {
         op_id: op('P'),
         terminal_id: tid(terminal),
         text: PromptText::new("fix the build").unwrap(),
+        expected_draft: None,
+    }
+}
+
+const RULE: &str = "\u{1b}[38;2;136;136;136m────────────────────────────────────────\u{1b}[39m";
+const PLACEHOLDER: &str = "❯ \u{1b}[0m\u{1b}[2mTry \"create a util logging.py that...\"\u{1b}[0m";
+
+/// Claude Code's screen with `rows` in its input box.
+fn screen(rows: &str) -> String {
+    format!("⏺ Done.\r\n\r\n{RULE}\r\n{rows}\r\n{RULE}\r\n  Opus 5.5 high\r\n  ⏵⏵ auto mode on\r\n")
+}
+
+fn expecting(draft: &str) -> AgentPromptParams {
+    AgentPromptParams {
+        expected_draft: Some(DraftText::new(draft).unwrap()),
+        ..prompt(CLAUDE)
     }
 }
 
@@ -360,11 +382,16 @@ async fn prompt_rechecks_the_agent_before_writing() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.text = screen(PLACEHOLDER));
 
     assert_eq!(drive.prompt(prompt(CLAUDE), &yes()).await, Ok(Response::Ok));
     assert_eq!(
         herdr.methods(),
-        vec!["agent.list", "agent.get", "agent.prompt"]
+        vec!["agent.list", "agent.get", "pane.read", "agent.prompt"]
+    );
+    assert_eq!(
+        herdr.params("pane.read"),
+        vec![json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"})]
     );
     assert_eq!(
         herdr.params("agent.prompt"),
@@ -427,10 +454,239 @@ async fn prompt_rechecks_the_agent_before_writing() {
 }
 
 #[tokio::test]
+async fn draft_reads_the_input_box_of_claude_only() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let draft = |t: &str| {
+        let drive = drive.clone();
+        let t = tid(t);
+        async move { drive.draft(&t).await }
+    };
+    herdr.with(|h| h.text = screen("❯ one\n  two"));
+    assert_eq!(
+        draft(CLAUDE).await,
+        Ok(Response::Draft {
+            text: Some("one\ntwo".into())
+        })
+    );
+    herdr.with(|h| h.text = screen(PLACEHOLDER));
+    assert_eq!(
+        draft(CLAUDE).await,
+        Ok(Response::Draft {
+            text: Some(String::new())
+        })
+    );
+    herdr.with(|h| h.text = TRUST.into());
+    assert_eq!(draft(CLAUDE).await, Ok(Response::Draft { text: None }));
+    assert_eq!(
+        draft(CODEX_BLOCKED).await,
+        Ok(Response::Draft { text: None })
+    );
+    assert_eq!(code(draft(SHELL).await), ErrorCode::NotFound);
+    assert_eq!(
+        herdr.params("pane.read").len(),
+        3,
+        "codex's screen is not read"
+    );
+    assert!(herdr.mutations().is_empty());
+}
+
+#[tokio::test]
+async fn prompt_replaces_the_draft_the_phone_saw() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| {
+        h.screens = [screen("❯ one  \n  two\n  three"), screen(PLACEHOLDER)].into();
+    });
+    assert_eq!(
+        drive.prompt(expecting("one\ntwo\nthree\n"), &yes()).await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.methods(),
+        vec![
+            "agent.list",
+            "agent.get",
+            "pane.read",
+            "agent.send_keys",
+            "pane.read",
+            "agent.prompt"
+        ]
+    );
+    assert_eq!(
+        herdr.params("agent.send_keys"),
+        vec![json!({"target": "w6:p1", "keys": [
+            "down", "down",
+            "ctrl+e", "ctrl+u", "backspace",
+            "ctrl+e", "ctrl+u", "backspace",
+            "ctrl+e", "ctrl+u", "backspace",
+        ]})]
+    );
+    assert_eq!(
+        herdr.params("agent.prompt"),
+        vec![json!({"target": "w6:p1", "text": "fix the build"})]
+    );
+}
+
+#[tokio::test]
+async fn prompt_refuses_a_draft_it_was_not_told_about() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.text = screen("❯\u{a0}typed on the Mac"));
+    for p in [prompt(CLAUDE), expecting(""), expecting("typed on the")] {
+        assert_eq!(
+            drive.prompt(p, &yes()).await,
+            Err((ErrorCode::DraftChanged, "typed on the Mac".to_owned()))
+        );
+    }
+    assert!(herdr.mutations().is_empty(), "{:?}", herdr.methods());
+
+    herdr.with(|h| h.text = screen(PLACEHOLDER));
+    assert_eq!(
+        drive.prompt(expecting("stale"), &yes()).await,
+        Ok(Response::Ok),
+        "an empty box takes the prompt whatever the phone saw"
+    );
+    assert_eq!(herdr.mutations(), vec!["agent.prompt"]);
+}
+
+#[tokio::test]
+async fn prompt_refuses_a_box_it_cannot_replace() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let tall: Vec<String> = (0..30).map(|i| format!("  row {i}")).collect();
+    for (shown, why) in [
+        (screen("! git push"), "bash mode"),
+        (
+            screen("❯ fix this [Pasted text #1 +40 lines]"),
+            "collapsed paste",
+        ),
+        (screen("❯ [Image #1]"), "image"),
+        (TRUST.to_owned(), "no input box"),
+        (
+            format!("{}\r\n{RULE}\r\n  ⏵⏵ auto mode on\r\n", tall.join("\r\n")),
+            "top rule scrolled off",
+        ),
+    ] {
+        herdr.with(|h| h.text = shown.clone());
+        for p in [
+            prompt(CLAUDE),
+            expecting("git push"),
+            expecting("fix this [Pasted text #1 +40 lines]"),
+            expecting("[Image #1]"),
+        ] {
+            assert_eq!(
+                code(drive.prompt(p, &yes()).await),
+                ErrorCode::DraftNotCleared,
+                "{why}"
+            );
+        }
+        let t = tid(CLAUDE);
+        assert_eq!(
+            drive.draft(&t).await,
+            Ok(Response::Draft { text: None }),
+            "{why}"
+        );
+    }
+    assert!(herdr.mutations().is_empty(), "{:?}", herdr.methods());
+}
+
+#[tokio::test]
+async fn prompt_is_not_sent_when_the_draft_does_not_clear() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.text = screen("❯ one\n  two"));
+    let (err, message) = drive
+        .prompt(expecting("one\ntwo"), &yes())
+        .await
+        .unwrap_err();
+    assert_eq!(err, ErrorCode::DraftNotCleared);
+    assert!(message.contains("nothing was sent"), "{message}");
+    assert_eq!(herdr.mutations(), vec!["agent.send_keys"]);
+    assert!(
+        herdr.params("pane.read").len() > 2,
+        "re-read until the deadline"
+    );
+
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = [screen("❯ one"), TRUST.to_owned()].into();
+    });
+    assert_eq!(
+        code(drive.prompt(expecting("one"), &yes()).await),
+        ErrorCode::DraftNotCleared,
+        "a dialog instead of an empty box is not cleared"
+    );
+    assert_eq!(herdr.mutations(), vec!["agent.send_keys"]);
+
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = [screen("❯ one"), screen(PLACEHOLDER)].into();
+    });
+    assert_eq!(
+        code(drive.prompt(expecting("one"), &no()).await),
+        ErrorCode::NotPaired
+    );
+    assert!(herdr.mutations().is_empty());
+
+    let long: Vec<String> = (0..20).map(|i| format!("  line {i}")).collect();
+    let rows = format!("❯ first\n{}", long.join("\n"));
+    let expected = format!(
+        "first\n{}",
+        long.iter().map(|l| l.trim()).collect::<Vec<_>>().join("\n")
+    );
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = [screen(&rows), screen(PLACEHOLDER)].into();
+    });
+    let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = checks.clone();
+    let revoked_after_first: Authorized =
+        Arc::new(move || seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 1);
+    assert_eq!(
+        code(
+            drive
+                .prompt(expecting(&expected), &revoked_after_first)
+                .await
+        ),
+        ErrorCode::NotPaired,
+        "authorization is checked before every batch of keys"
+    );
+    let sent = herdr.params("agent.send_keys");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["keys"].as_array().unwrap().len(), 16);
+    assert!(herdr.params("agent.prompt").is_empty());
+}
+
+#[tokio::test]
+async fn other_kinds_never_read_the_screen() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| {
+        h.text = screen("❯ typed");
+        h.snapshot["agents"][0]["agent"] = json!("pi");
+    });
+    let mut p = expecting("something else");
+    p.op_id = op('Q');
+    assert_eq!(drive.prompt(p, &yes()).await, Ok(Response::Ok));
+    assert_eq!(
+        herdr.methods(),
+        vec!["agent.list", "agent.get", "agent.prompt"]
+    );
+}
+
+#[tokio::test]
 async fn op_id_replays_the_first_outcome() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.text = screen(PLACEHOLDER));
     let p = prompt(CLAUDE);
     let fp = collied::drive::fingerprint(&Request::AgentPrompt(p.clone()));
     let attempt = || {

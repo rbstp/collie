@@ -1,5 +1,6 @@
 mod common;
 
+use std::collections::VecDeque;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -21,6 +22,8 @@ const CLAUDE: &str = "term_65ce7ae4fd5731";
 const CODEX_BLOCKED: &str = "term_0a1b2c3d4e5f60";
 const NEW_TERMINAL: &str = "term_e2e00000000009";
 const HELD_PROMPT: &str = "held until the phone has reconnected";
+const RULE: &str = "\u{1b}[38;2;136;136;136m────────────────────────────────────────\u{1b}[39m";
+const PLACEHOLDER: &str = "❯ \u{1b}[0m\u{1b}[2mTry \"create a util logging.py that...\"\u{1b}[0m";
 const MUTATING: [&str; 10] = [
     "agent.prompt",
     "agent.send_keys",
@@ -151,7 +154,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
 
     println!("agent.prompt reaches herdr with the exact text");
     let text = "Fix the flaky test\nthen run `cargo test` \"quoted\"\tand say ✓ é";
-    core.prompt(m.clone(), CLAUDE.into(), text.into())
+    core.prompt(m.clone(), CLAUDE.into(), text.into(), None)
         .await
         .unwrap();
     assert_eq!(
@@ -165,7 +168,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         // CLAUDE is listed as working, but agent.get just before the write says blocked.
         herdr.with(|h| h.claude_blocked = terminal == CLAUDE);
         let err = core
-            .prompt(m.clone(), terminal.into(), "yes".into())
+            .prompt(m.clone(), terminal.into(), "yes".into(), None)
             .await
             .unwrap_err();
         assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
@@ -283,12 +286,75 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     );
     println!("  task.new in {:?}", t.elapsed());
 
+    println!("a draft typed on the Mac is shown, then replaced, never appended to");
+    let input_box =
+        |rows: &str| format!("⏺ Done.\r\n{RULE}\r\n{rows}\r\n{RULE}\r\n  ⏵⏵ auto mode on\r\n");
+    let typed = input_box("❯\u{a0}half a thought\n  on two lines");
+    herdr.with(|h| h.screens = [typed.clone()].into());
+    let draft = core.agent_draft(m.clone(), CLAUDE.into()).await.unwrap();
+    assert_eq!(draft.as_deref(), Some("half a thought\non two lines"));
+    assert_eq!(
+        core.agent_draft(m.clone(), CODEX_BLOCKED.into())
+            .await
+            .unwrap(),
+        None
+    );
+    let before = herdr.mutations();
+    let err = core
+        .prompt(m.clone(), CLAUDE.into(), "replace it".into(), None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, CoreError::DraftChanged { current } if Some(current) == draft.as_ref()),
+        "{err:?}"
+    );
+    assert_eq!(herdr.mutations(), before, "a changed draft got input");
+    herdr.with(|h| h.screens = [typed, input_box(PLACEHOLDER)].into());
+    core.prompt(m.clone(), CLAUDE.into(), "replace it".into(), draft)
+        .await
+        .unwrap();
+    assert_eq!(
+        herdr.mutation_calls()[before.len()..],
+        [
+            (
+                "agent.send_keys".to_owned(),
+                json!({"target": "w6:p1", "keys": [
+                    "down", "ctrl+e", "ctrl+u", "backspace", "ctrl+e", "ctrl+u", "backspace"
+                ]})
+            ),
+            (
+                "agent.prompt".to_owned(),
+                json!({"target": "w6:p1", "text": "replace it"})
+            ),
+        ]
+    );
+    assert_eq!(
+        core.agent_draft(m.clone(), CLAUDE.into()).await.unwrap(),
+        Some(String::new())
+    );
+    herdr.with(|h| h.screens.clear());
+    let results: Vec<Value> = audit_lines(&audit)
+        .into_iter()
+        .filter(|l| l["method"] == "agent.prompt")
+        .map(|l| l["result"].clone())
+        .collect();
+    assert!(results.contains(&json!("draft_changed")), "{results:?}");
+    assert!(
+        !std::fs::read_to_string(&audit)
+            .unwrap()
+            .contains("half a thought"),
+        "the draft reached the audit log"
+    );
+
     println!("a prompt retried after a dropped connection runs once");
     let t = Instant::now();
     assert_eq!(sessions(&control).await, 1);
     let pending = tokio::spawn({
         let (core, m) = (core.clone(), m.clone());
-        async move { core.prompt(m, CLAUDE.into(), HELD_PROMPT.into()).await }
+        async move {
+            core.prompt(m, CLAUDE.into(), HELD_PROMPT.into(), None)
+                .await
+        }
     });
     wait_for("herdr to accept the held prompt", || {
         herdr.prompts(HELD_PROMPT) == 1
@@ -352,6 +418,8 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             "agent.send_keys",
             "workspace.create",
             "agent.start",
+            "agent.prompt",
+            "agent.send_keys",
             "agent.prompt",
             "agent.prompt",
             "workspace.close",
@@ -504,7 +572,7 @@ async fn live_scenario(
         .await
         .unwrap();
     wait_output(core, &m, &term, "pi got: hello from collie").await;
-    core.prompt(m.clone(), term.clone(), "second prompt".into())
+    core.prompt(m.clone(), term.clone(), "second prompt".into(), None)
         .await
         .unwrap();
     wait_output(core, &m, &term, "pi got: second prompt").await;
@@ -638,6 +706,7 @@ struct Herdr {
     snapshot: Value,
     calls: Vec<(String, Value)>,
     recent: String,
+    screens: VecDeque<String>,
     claude_blocked: bool,
     started: Option<String>,
 }
@@ -794,6 +863,18 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
                 "pane_id": p["target"], "workspace_id": "w6", "tab_id": "w6:t1",
                 "source": p["source"], "format": "ansi", "text": text, "revision": 0,
                 "truncated": true,
+            }})
+        }
+        "pane.read" => {
+            let text = match h.screens.len() {
+                0 => format!("{RULE}\r\n{PLACEHOLDER}\r\n{RULE}\r\n"),
+                1 => h.screens[0].clone(),
+                _ => h.screens.pop_front().unwrap(),
+            };
+            json!({"type": "pane_read", "read": {
+                "pane_id": p["pane_id"], "workspace_id": "w6", "tab_id": "w6:t1",
+                "source": p["source"], "format": "ansi", "text": text, "revision": 0,
+                "truncated": false,
             }})
         }
         "agent.prompt" => {

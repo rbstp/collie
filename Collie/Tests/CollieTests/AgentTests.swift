@@ -8,6 +8,10 @@ import Testing
 final class FakeCore: AgentCore {
     struct State {
         var prompts: [String] = []
+        var expectedDrafts: [String?] = []
+        var kind: String?
+        var macDraft: String?
+        var draftReads = 0
         var keys: [[AgentKey]] = []
         var closes: [String] = []
         var hold = false
@@ -61,13 +65,29 @@ final class FakeCore: AgentCore {
         if let error = state.withLock({ $0.error }) { throw error }
     }
 
-    func agentView(machineId: String, terminalId: String, afterRevision: UInt64) -> AgentView? { nil }
+    func agentView(machineId: String, terminalId: String, afterRevision: UInt64) -> AgentView? {
+        guard let kind = state.withLock({ $0.kind }) else { return nil }
+        let agent = AgentSummary(
+            terminalId: terminalId, workspaceId: "w1", kind: kind, name: nil, title: nil,
+            status: .idle, statusSinceMs: 0, cwd: nil, lastLine: nil
+        )
+        return AgentView(link: .connected, lastError: nil, agent: agent, output: nil, outputRevision: 0)
+    }
     func watchAgent(machineId: String, terminalId: String?) async throws {}
     func agentRead(machineId: String, terminalId: String, source: TerminalSource) async throws -> TerminalSnapshot {
         TerminalSnapshot(terminalId: terminalId, source: source, ansi: "", truncated: false)
     }
-    func prompt(machineId: String, terminalId: String, text: String) async throws {
-        try await call { $0.prompts.append(text) }
+    func agentDraft(machineId: String, terminalId: String) async throws -> String? {
+        state.withLock { s in
+            s.draftReads += 1
+            return s.macDraft
+        }
+    }
+    func prompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws {
+        try await call {
+            $0.prompts.append(text)
+            $0.expectedDrafts.append(expectedDraft)
+        }
     }
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {
         try await call { $0.keys.append(keys) }
@@ -254,6 +274,109 @@ private func attach(_ model: AgentModel, _ core: FakeCore, _ names: String...) a
     core.set(error: .AgentNotReady)
     await model.sendPrompt()
     #expect(model.promptError == CoreError.AgentNotReady.description)
+}
+
+@MainActor
+private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: String?) -> AgentModel {
+    core.state.withLock {
+        $0.kind = kind
+        $0.macDraft = macDraft
+    }
+    let model = agentModel(core)
+    model.poll()
+    return model
+}
+
+@MainActor
+@Test func macDraftFillsAnEmptyPromptFieldOnOpen() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "one\ntwo")
+    await model.loadMacDraft()
+    #expect(model.draft == "one\ntwo")
+    #expect(model.macDraft == "one\ntwo")
+
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["one\ntwo"])
+    #expect(core.snapshot.expectedDrafts == ["one\ntwo"])
+    #expect(model.macDraft == "")
+    #expect(model.draft.isEmpty)
+}
+
+@MainActor
+@Test func macDraftNeverOverwritesThePhoneDraft() async {
+    let core = FakeCore()
+    let typed = openedAgent(core, macDraft: "from the mac")
+    typed.draft = "from the phone"
+    await typed.loadMacDraft()
+    #expect(typed.draft == "from the phone")
+    #expect(typed.macDraft == nil)
+
+    let attached = openedAgent(core, macDraft: "from the mac")
+    await attach(attached, core, "a.png")
+    await attached.loadMacDraft()
+    #expect(attached.draft.isEmpty)
+    #expect(attached.macDraft == nil)
+}
+
+@MainActor
+@Test func macDraftIsOnlyReadForClaude() async {
+    let core = FakeCore()
+    let codex = openedAgent(core, kind: "codex", macDraft: "typed")
+    await codex.loadMacDraft()
+    #expect(codex.draft.isEmpty)
+    #expect(core.snapshot.draftReads == 0)
+
+    let empty = openedAgent(core, macDraft: "")
+    await empty.loadMacDraft()
+    #expect(empty.macDraft == "")
+    #expect(empty.draft.isEmpty)
+
+    let unknown = openedAgent(core, macDraft: nil)
+    await unknown.loadMacDraft()
+    #expect(unknown.macDraft == nil)
+    unknown.draft = "go"
+    await unknown.sendPrompt()
+    unknown.draft = "again"
+    await unknown.sendPrompt()
+    #expect(unknown.macDraft == nil)
+    #expect(core.snapshot.expectedDrafts == [nil, nil])
+}
+
+@MainActor
+@Test func changedMacDraftIsShownThenReplacedOnTheNextSend() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "")
+    await model.loadMacDraft()
+    model.draft = "phone text"
+    let long = String(repeating: "x", count: 100)
+    core.set(error: .DraftChanged(current: long))
+    await model.sendPrompt()
+    #expect(model.draft == "phone text")
+    #expect(model.macDraft == long)
+    let shown = String(repeating: "x", count: 80) + "…"
+    #expect(model.promptError == "The Mac's input box has unsent text: “\(shown)”. Send again to replace it.")
+
+    core.set(error: nil)
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["phone text", "phone text"])
+    #expect(core.snapshot.expectedDrafts == ["", long])
+    #expect(model.promptError == nil)
+    #expect(model.macDraft == "")
+    #expect(model.draft.isEmpty)
+}
+
+@MainActor
+@Test func uncleanedMacDraftKeepsTheDraftAndAttachments() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "mac text")
+    await model.loadMacDraft()
+    await attach(model, core, "a.png")
+    core.set(error: .DraftNotCleared)
+    await model.sendPrompt()
+    #expect(model.draft == "mac text")
+    #expect(model.attachments.map(\.name) == ["a.png"])
+    #expect(model.macDraft == "mac text")
+    #expect(model.promptError == CoreError.DraftNotCleared.description)
 }
 
 @Test func keyStripIsTheAllowlistInOrder() {

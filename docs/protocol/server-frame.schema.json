@@ -234,6 +234,13 @@
         "code": {
           "$ref": "#/$defs/ErrorCode"
         },
+        "draft": {
+          "description": "With `draft_changed`: the text now in the Mac's input box.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "message": {
           "type": "string"
         }
@@ -267,6 +274,8 @@
         "not_implemented",
         "too_large",
         "checksum_mismatch",
+        "draft_changed",
+        "draft_not_cleared",
         "internal",
         "unrecognized"
       ],
@@ -658,6 +667,25 @@
           "required": [
             "type",
             "path"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`None` when there is no input box to read: not a Claude Code agent, or a dialog.",
+          "properties": {
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "draft",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
           "type": "object"
         },

@@ -33,6 +33,8 @@ pub enum Request {
     AgentWatch(AgentWatchParams),
     #[serde(rename = "task.options")]
     TaskOptions(Empty),
+    #[serde(rename = "agent.draft")]
+    AgentDraft(AgentTarget),
 
     #[serde(rename = "agent.prompt")]
     AgentPrompt(AgentPromptParams),
@@ -77,6 +79,7 @@ impl Request {
         "pane.read",
         "agent.watch",
         "task.options",
+        "agent.draft",
         "agent.prompt",
         "agent.send_keys",
         "agent.focus",
@@ -103,6 +106,7 @@ impl Request {
             Self::PaneRead(_) => "pane.read",
             Self::AgentWatch(_) => "agent.watch",
             Self::TaskOptions(_) => "task.options",
+            Self::AgentDraft(_) => "agent.draft",
             Self::AgentPrompt(_) => "agent.prompt",
             Self::AgentSendKeys(_) => "agent.send_keys",
             Self::AgentFocus(_) => "agent.focus",
@@ -129,6 +133,7 @@ impl Request {
             | Self::PaneRead(_)
             | Self::AgentWatch(_)
             | Self::TaskOptions(_)
+            | Self::AgentDraft(_)
             | Self::ApprovalList(_) => MethodClass::Read,
             Self::AgentPrompt(_)
             | Self::AgentSendKeys(_)
@@ -211,12 +216,16 @@ pub struct AgentTarget {
     pub terminal_id: TerminalId,
 }
 
+/// For a Claude Code agent, collied replaces an unsent draft in the Mac's input box only
+/// when it equals `expected_draft`; any other draft fails with `draft_changed`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentPromptParams {
     pub op_id: OpId,
     pub terminal_id: TerminalId,
     pub text: PromptText,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_draft: Option<DraftText>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -436,6 +445,10 @@ pub enum Response {
     AttachmentStored {
         path: String,
     },
+    /// `None` when there is no input box to read: not a Claude Code agent, or a dialog.
+    Draft {
+        text: Option<String>,
+    },
     Ok,
 }
 
@@ -597,6 +610,8 @@ pub enum ErrorCode {
     NotImplemented,
     TooLarge,
     ChecksumMismatch,
+    DraftChanged,
+    DraftNotCleared,
     Internal,
     #[serde(other)]
     Unrecognized,
@@ -606,6 +621,9 @@ pub enum ErrorCode {
 pub struct ErrorBody {
     pub code: ErrorCode,
     pub message: String,
+    /// With `draft_changed`: the text now in the Mac's input box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -630,6 +648,7 @@ impl FrameError {
             error: ErrorBody {
                 code: self.code,
                 message: self.message,
+                draft: None,
             },
         }
     }
@@ -756,6 +775,54 @@ mod tests {
         assert_eq!(parse(top).unwrap_err().code, ErrorCode::MalformedFrame);
         let no_keys = r#"{"id":1,"method":"agent.send_keys","params":{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"t","keys":[]}}"#;
         assert_eq!(parse(no_keys).unwrap_err().code, ErrorCode::InvalidParams);
+    }
+
+    #[test]
+    fn prompt_expected_draft_is_optional() {
+        let base = r#"{"id":1,"method":"agent.prompt","params":{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"t","text":"hi""#;
+        let Request::AgentPrompt(p) = parse(&format!("{base}}}}}")).unwrap().request else {
+            panic!("not a prompt");
+        };
+        assert_eq!(p.expected_draft, None);
+        assert!(
+            !serde_json::to_string(&p)
+                .unwrap()
+                .contains("expected_draft")
+        );
+        let Request::AgentPrompt(p) =
+            parse(&format!(r#"{base},"expected_draft":"one\n  two"}}}}"#))
+                .unwrap()
+                .request
+        else {
+            panic!("not a prompt");
+        };
+        assert_eq!(p.expected_draft.unwrap().as_str(), "one\n  two");
+        let hostile = format!(r#"{base},"expected_draft":"\u001b[2J"}}}}"#);
+        assert_eq!(parse(&hostile).unwrap_err().code, ErrorCode::InvalidParams);
+        let draft =
+            parse(r#"{"id":2,"method":"agent.draft","params":{"terminal_id":"t"}}"#).unwrap();
+        assert_eq!(draft.request.class(), MethodClass::Read);
+    }
+
+    #[test]
+    fn draft_changed_carries_the_current_draft() {
+        let frame = ServerFrame::Error {
+            id: Some(4),
+            error: ErrorBody {
+                code: ErrorCode::DraftChanged,
+                message: "m".into(),
+                draft: Some("typed on the Mac".into()),
+            },
+        };
+        let json = serde_json::to_string(&frame).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"error","id":4,"error":{"code":"draft_changed","message":"m","draft":"typed on the Mac"}}"#
+        );
+        assert_eq!(serde_json::from_str::<ServerFrame>(&json).unwrap(), frame);
+        let older: ErrorBody =
+            serde_json::from_str(r#"{"code":"not_found","message":"m"}"#).unwrap();
+        assert_eq!(older.draft, None);
     }
 
     #[test]
