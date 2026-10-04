@@ -17,7 +17,9 @@ Team `RM3UT3MMSR`, in the Apple Developer portal and App Store Connect:
 
    A profile is a snapshot of its App ID's capabilities: after any capability change, regenerate the profile (Edit, Save) and update its secret.
 4. **App Store Connect app record** for `dev.rbstp.collie`, with an internal TestFlight group.
-5. **APNs key for collied**: Certificates, Identifiers & Profiles, Keys, add a key with **Apple Push Notifications service (APNs)**, environment **Sandbox & Production**. Debug builds installed with `just ios-run-device` register sandbox tokens, TestFlight builds production tokens, and one collied serves both. Download the `.p8` (offered once) and note the Key ID. It is a runtime secret of the Mac daemon, separate from the App Store Connect API key below, and is never stored in GitHub. It lives in the login Keychain, readable only by collied signed with your Developer ID Application identity. On the Mac:
+5. **APNs key for collied, one per machine**: Certificates, Identifiers & Profiles, Keys, add a key with **Apple Push Notifications service (APNs)**, environment **Sandbox & Production**. Debug builds installed with `just ios-run-device` register sandbox tokens, TestFlight builds production tokens, and one collied serves both. Download the `.p8` (offered once) and note the Key ID. Each machine that runs collied gets its own key, with its own Key ID: it pushes on its own and is revoked on its own. The key is a runtime secret of the daemon on that machine, separate from the App Store Connect API key below, and is never stored in GitHub.
+
+   On the Mac, it lives in the login Keychain, readable only by collied signed with your Developer ID Application identity:
 
    ```toml
    # ~/Library/Application Support/collie/collied.toml
@@ -37,6 +39,40 @@ Team `RM3UT3MMSR`, in the Apple Developer portal and App Store Connect:
    ```
 
    Import with the signed binary: the Keychain item trusts the program that created it. Re-run `just collied-install` (never `cargo install`) after every change to collied, or the daemon cannot read the key without a prompt. A config still using `key_path` is moved over by the same `collied apns import <key_path file>`, which rewrites that line to `key = "keychain"`. Revoke the key in the portal if the Mac is compromised.
+
+   On Linux, it is a systemd user credential, encrypted with the host key (and the TPM2 when one is usable). There is no code signing:
+
+   ```toml
+   # ~/.local/share/collie/collied.toml ($XDG_DATA_HOME/collie/collied.toml when absolute)
+   [apns]
+   key = "systemd-creds"                     # the default on Linux, may be omitted
+   key_id = "<KEY_ID>"
+   team_id = "RM3UT3MMSR"
+   bundle_id = "dev.rbstp.collie"
+   ```
+
+   ```sh
+   just collied-install                      # release build to ~/.cargo/bin/collied, restarts the unit if active
+   chmod 0600 AuthKey_<KEY_ID>.p8
+   collied apns import AuthKey_<KEY_ID>.p8   # encrypts, decrypts back, offers to delete the file
+   collied doctor                            # apns line must be ok and shows the seal
+   collied apns test                         # needs a paired phone (see collied on Linux)
+   ```
+
+   Import writes the credential to `apns/<KEY_ID>.cred` in the data directory. systemd picks the seal, not collied: host key and TPM2 when a TPM2 is usable, host key only otherwise. Doctor's apns line says which, and warns when a TPM2 becomes usable after a host-only import. Import keeps an existing credential that decrypts to the same key, so to bind it to the TPM2, delete `apns/<KEY_ID>.cred` and import the `.p8` again. Where systemd-creds cannot encrypt (for example no `systemd-creds.socket`, systemd older than 256, a container), import falls back to a 0600 copy at `apns/AuthKey_<KEY_ID>.p8` in the data directory, sets `key_path` to it and says so. Doctor reports the fallback, and warns once systemd-creds works: import that file to encrypt it. The credential stops decrypting after an OS reinstall, a machine-id change, a uid or user name change, or a move to another machine: keep a copy of the `.p8` offline and import it again. Revoke the key in the portal if the machine is compromised.
+
+## collied on Linux
+
+There is no package. Install from a checkout, with the prerequisites in the README:
+
+```sh
+just setup                # submodules
+just collied-install      # release build to ~/.cargo/bin/collied as a fresh inode
+collied login             # advertises tag:collie-linux, refuses until the node has it
+collied service install   # systemd user unit, ~/.config/systemd/user/collied.service
+```
+
+Update: `git pull`, `just setup`, `just collied-install`, which restarts the user unit if it is active. The phone still pins `tag:collie-mac`, so it does not pair with a Linux collied (`tag:collie-linux`) until the app accepts that tag.
 
 ## Repository secrets
 

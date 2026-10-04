@@ -5,6 +5,7 @@ collie runs two Tailscale nodes of its own, both embedded through libtailscale (
 | Node | Runs in | Identity | Login |
 |---|---|---|---|
 | Mac | collied | `tag:collie-mac` (tag-owned, no user) | `collied login`: interactive by a tag owner, or a `tag:collie-mac` auth key |
+| Linux machine | collied | `tag:collie-linux` (tag-owned, no user) | `collied login`: interactive by a tag owner, or a `tag:collie-linux` auth key |
 | Phone | Collie.app (CollieCore) | user-owned by you | interactive login inside the app, or an auth key for your own user |
 
 No Tailscale app is needed or used on either device. Neither node installs a VPN profile, a Network Extension or a system `tailscaled`; each is a separate device in the admin console. A Tailscale app already installed on the Mac or the iPhone is a different node and plays no part in collie.
@@ -19,6 +20,13 @@ The phone only dials (TCP to the Mac on port 8457). The Mac only listens through
 - Node state (machine and node keys) lives in `~/Library/Application Support/collie/tsnet`, a 0700 directory owned by your user. `tailnet::Node::new` refuses a directory that is group or world accessible.
 - The pairing QR carries the Mac's tailnet node name (its netmap DNS name) and `StableID`. The phone matches them in its own netmap and dials the node's IP directly, so no DNS lookup is involved (see [Phone side](#phone-side)). MagicDNS should therefore not be required; this is not yet verified on a tailnet with MagicDNS off.
 - The port is `[tailnet] port` in `collied.toml` (default 8457). If you change it, change the grant and the `tests` below to match.
+
+## Linux node
+
+- Same as the Mac node, with `tag:collie-linux` instead of `tag:collie-mac`, hostname `collie-<hostname>`, and node state in `$XDG_DATA_HOME/collie/tsnet` (else `~/.local/share/collie/tsnet`), 0700.
+- `collied login` and `collied run` refuse a node whose own tags do not include `tag:collie-linux`. Logging in again does not change the tags of a node that is already registered: remove it in the admin console (Machines), delete the `tsnet` directory, check that your user is a tag owner of `tag:collie-linux`, then run `collied login` again (phones pair again).
+- A system Tailscale (`tailscaled`, the `tailscale` CLI) on the same machine is a different node and plays no part in collie. The two run side by side: the embedded node has its own state and keys, uses a userspace netstack (no TUN device, no routes) and its own WireGuard UDP port.
+- The phone pins `tag:collie-mac` today, so it refuses a Linux node until the app accepts `tag:collie-linux` too.
 
 ## Phone node
 
@@ -36,6 +44,7 @@ Replace `you@example.com` with your login. HuJSON, current grants syntax:
 {
   "tagOwners": {
     "tag:collie-mac": ["you@example.com"],
+    "tag:collie-linux": ["you@example.com"],
   },
 
   "grants": [
@@ -44,6 +53,12 @@ Replace `you@example.com` with your login. HuJSON, current grants syntax:
     {
       "src": ["you@example.com"],
       "dst": ["tag:collie-mac"],
+      "ip": ["tcp:8457"],
+    },
+    // The same for a Linux machine running collied.
+    {
+      "src": ["you@example.com"],
+      "dst": ["tag:collie-linux"],
       "ip": ["tcp:8457"],
     },
   ],
@@ -64,6 +79,16 @@ Replace `you@example.com` with your login. HuJSON, current grants syntax:
       "src": "tag:collie-mac",
       "deny": ["you@example.com:8457", "you@example.com:22", "you@example.com:443"],
     },
+    {
+      "src": "you@example.com",
+      "proto": "tcp",
+      "accept": ["tag:collie-linux:8457"],
+      "deny": ["tag:collie-linux:22", "tag:collie-linux:8458"],
+    },
+    {
+      "src": "tag:collie-linux",
+      "deny": ["you@example.com:8457", "you@example.com:22", "you@example.com:443", "tag:collie-mac:8457"],
+    },
   ],
 }
 ```
@@ -71,15 +96,15 @@ Replace `you@example.com` with your login. HuJSON, current grants syntax:
 Grants only add access, so this snippet is only tight if nothing else in the policy reaches `tag:collie-mac` or lets it reach anything:
 
 - Remove the default allow-all grant (`{"src": ["*"], "dst": ["*"], "ip": ["*"]}`) or its legacy `acls` form (`"src": ["*"], "dst": ["*:*"]`). Both include tagged nodes in both directions. If you want your own devices to keep reaching each other, `{"src": ["autogroup:member"], "dst": ["autogroup:self"], "ip": ["*"]}` does that without touching tagged nodes.
-- No other grant may use `*`, `autogroup:tagged` or `tag:collie-mac` in `src` or `dst`, nor anything that covers the Mac node's tailnet addresses: a CIDR such as `100.64.0.0/10` or `fd7a:115c:a1e0::/48`, a `hosts` alias, or an `ipsets` entry.
+- No other grant may use `*`, `autogroup:tagged`, `tag:collie-mac` or `tag:collie-linux` in `src` or `dst`, nor anything that covers the Mac node's tailnet addresses: a CIDR such as `100.64.0.0/10` or `fd7a:115c:a1e0::/48`, a `hosts` alias, or an `ipsets` entry.
 - The phone node is user-owned, so any rule whose `dst` covers your devices (for example `autogroup:self`) also reaches it. It opens no listener of its own; see the threat model for what remains reachable.
 - To add another user, give them their own collie Mac tag and grant; do not widen `src`. Each collied serves one owner.
 
 ### Checking it in the admin console
 
 1. Access controls: paste the snippet, save. The `tests` block runs on every save and rejects a policy that breaks it.
-2. Access controls, **Preview rules** tab: select your user. For collie the only entry involving `tag:collie-mac` must be `tag:collie-mac:8457` over TCP. Any broader entry (`*`, other ports) means another rule still matches.
-3. Select another user, if the tailnet has one: `tag:collie-mac` must not appear. This matters most before the first pairing, when collied has no owner yet (see below).
+2. Access controls, **Preview rules** tab: select your user. For collie the only entries involving the collie tags must be `tag:collie-mac:8457` and `tag:collie-linux:8457` over TCP. Any broader entry (`*`, other ports) means another rule still matches.
+3. Select another user, if the tailnet has one: neither collie tag may appear. This matters most before the first pairing, when collied has no owner yet (see below).
 4. Machines: the Mac node shows the `collie-mac` tag and no owner; the phone node shows your user and no tag.
 
 ## What collied enforces anyway
@@ -121,7 +146,7 @@ The phone checks the other direction (`crates/collie-core/src/pin.rs`). It does 
 
 | Node | Recommendation | On expiry |
 |---|---|---|
-| Mac (`tag:collie-mac`) | Expiry disabled. Tailscale disables it by default for a device tagged at first authentication; confirm "Expiry disabled" on the Machines page. | collied's node goes to `NeedsLogin`, the phone cannot connect, `collied login` re-authenticates. |
+| Mac or Linux machine (`tag:collie-mac`, `tag:collie-linux`) | Expiry disabled. Tailscale disables it by default for a device tagged at first authentication; confirm "Expiry disabled" on the Machines page. | collied's node goes to `NeedsLogin`, the phone cannot connect, `collied login` re-authenticates. |
 | Phone (user-owned) | Keep the tailnet's expiry (default 180 days). It bounds how long a lost phone's node key works if revocation is forgotten. | The app's node goes to `NeedsLogin` and shows the login URL. Re-authenticating the same node should keep its `StableID`, so the pairing stays valid (not yet verified on a device). Signing in as another user changes the node's user and collied refuses it. |
 
 Deleting and reinstalling the app creates a new node with a new `StableID`: pair again and remove the old device in the admin console.
@@ -133,4 +158,4 @@ Do both steps; each covers what the other cannot.
 1. `collied peers revoke <label or StableID>` removes the phone from `peers.json`. With the daemon running, it saves first and then closes every live session of that node; with the daemon stopped, it edits `peers.json` directly. It stops collie access immediately, even if the node stays in the tailnet.
 2. Admin console, Machines, the phone node: **Remove**. This deletes its node key from the tailnet, so it can no longer reach anything, collie or not. **Expire key** alone only forces a re-login, which a thief could complete if the phone still holds a signed-in session with your identity provider.
 
-For a compromised Mac: remove the Mac node in the admin console, delete `~/Library/Application Support/collie/tsnet`, and revoke the APNs key in the Apple Developer portal.
+For a compromised Mac: remove the Mac node in the admin console, delete `~/Library/Application Support/collie/tsnet`, and revoke the APNs key in the Apple Developer portal. For a compromised Linux machine: the same with its own node, `~/.local/share/collie/tsnet` (or `$XDG_DATA_HOME/collie/tsnet`) and its own APNs key; each machine's key is revoked on its own.
