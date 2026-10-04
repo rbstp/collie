@@ -6,8 +6,12 @@ import UserNotifications
 
 /// `--terminal-demo <file>`: the Agents list over fake agents, each agent screen showing the
 /// first "text" string of a herdr JSON response (or the raw file), with no Mac. Debug builds only.
+/// `--follow-demo <terminal id>` also follows that agent, which starts its Live Activity.
 struct AgentDemo: View {
     let core: DemoAgentCore
+    private let followed: String?
+    @State private var follows: FollowModel
+    @State private var opening: AgentRoute?
 
     init?(arguments: [String]) {
         guard let flag = arguments.firstIndex(of: "--terminal-demo"), flag + 1 < arguments.count,
@@ -15,17 +19,26 @@ struct AgentDemo: View {
         else { return nil }
         let json = try? JSONSerialization.jsonObject(with: data)
         core = DemoAgentCore(snapshot: json.flatMap(Self.firstText) ?? String(decoding: data, as: UTF8.self))
+        _follows = State(initialValue: FollowModel(core: core, approvals: nil, file: nil))
+        followed = arguments.firstIndex(of: "--follow-demo").flatMap { $0 + 1 < arguments.count ? arguments[$0 + 1] : nil }
     }
 
     var body: some View {
         TabView {
             Tab("Agents", systemImage: "square.grid.2x2") {
-                FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: nil)
+                FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: nil, follows: follows, opening: $opening)
             }
             Tab("Approvals", systemImage: "checkmark.shield") { Color.clear }
             Tab("Machines", systemImage: "desktopcomputer") { Color.clear }
             Tab("Settings", systemImage: "gearshape") { Color.clear }
         }
+        .task {
+            follows.foreground()
+            if let followed {
+                follows.follow(AgentRoute(machineId: DemoAgentCore.machine.id, terminalId: followed))
+            }
+        }
+        .onOpenURL { opening = AppModel.route(for: $0, machines: [DemoAgentCore.machine]) }
     }
 
     private static func firstText(_ value: Any) -> String? {
@@ -40,7 +53,7 @@ struct AgentDemo: View {
     }
 }
 
-final class DemoAgentCore: FlockCore {
+final class DemoAgentCore: ActivityCore {
     static let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO")
 
     let snapshot: String
@@ -124,6 +137,12 @@ final class DemoAgentCore: FlockCore {
     func maxAttachmentBytes() -> UInt64 { 20 * 1024 * 1024 }
 
     func cancelUploads(machineId: String) {}
+
+    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String) throws {
+        print("demo: activity \(activityId) token \(tokenHex.prefix(8))… for \(terminalId)")
+    }
+
+    func endActivity(machineId: String, activityId: String) throws {}
 
     private var demoFlock: MachineFlock {
         MachineFlock(

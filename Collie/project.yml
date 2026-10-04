@@ -37,6 +37,7 @@ targets:
       - package: CollieCore
       - package: GhosttyTerminal
       - target: ColliePush
+      - target: CollieWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie
@@ -67,6 +68,8 @@ targets:
     sources:
       - path: ColliePush
       - path: Sources/Shared
+        excludes:
+          - AgentActivity.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie.push
@@ -86,6 +89,32 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
           PROVISIONING_PROFILE_SPECIFIER: "Collie Push App Store"
+
+  # Live Activity UI. Pure Swift: must never link CollieCore, like ColliePush.
+  CollieWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: CollieWidgets
+      - path: Sources/Shared/AgentActivity.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie.widgets
+        PRODUCT_NAME: CollieWidgets
+        INFOPLIST_FILE: CollieWidgets/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "Apple Development"
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "Collie Widgets App Store"
 
   CollieTests:
     type: bundle.unit-test

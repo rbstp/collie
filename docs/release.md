@@ -7,12 +7,13 @@
 Team `RM3UT3MMSR`, in the Apple Developer portal and App Store Connect:
 
 1. **App Group**: register `group.dev.rbstp.collie`.
-2. **App IDs** (explicit), each with **Push Notifications** and **App Groups** (assign `group.dev.rbstp.collie`) enabled:
-   - `dev.rbstp.collie`, the app;
-   - `dev.rbstp.collie.push`, the ColliePush notification service extension.
+2. **App IDs** (explicit):
+   - `dev.rbstp.collie`, the app, and `dev.rbstp.collie.push`, the ColliePush notification service extension, each with **Push Notifications** and **App Groups** (assign `group.dev.rbstp.collie`) enabled;
+   - `dev.rbstp.collie.widgets`, the CollieWidgets extension (Live Activities), with no capability: Live Activity pushes are addressed to the app's topic and use the same APNs key.
 3. **Provisioning profiles**: App Store Connect distribution, the team's Apple Distribution certificate, named exactly as `Collie/project.yml` and `Collie/ExportOptions.plist` refer to them:
    - **`Collie App Store`** for `dev.rbstp.collie`;
-   - **`Collie Push App Store`** for `dev.rbstp.collie.push`.
+   - **`Collie Push App Store`** for `dev.rbstp.collie.push`;
+   - **`Collie Widgets App Store`** for `dev.rbstp.collie.widgets`.
 
    A profile is a snapshot of its App ID's capabilities: after any capability change, regenerate the profile (Edit, Save) and update its secret.
 4. **App Store Connect app record** for `dev.rbstp.collie`, with an internal TestFlight group.
@@ -47,6 +48,7 @@ All repository-level, base64 values encoded with `base64 -i <file> | gh secret s
 | `APPLE_DIST_CERT_PASSWORD` | password of that `.p12` |
 | `APPLE_PROVISIONING_PROFILE` | `Collie App Store` profile, `.mobileprovision`, base64 |
 | `APPLE_PROVISIONING_PROFILE_PUSH` | `Collie Push App Store` profile, `.mobileprovision`, base64 |
+| `APPLE_PROVISIONING_PROFILE_WIDGETS` | `Collie Widgets App Store` profile, `.mobileprovision`, base64 |
 | `APPLE_KEY_P8` | App Store Connect API key (Developer role), `.p8`, base64 |
 | `APPLE_KEY_ID` | that key's ID |
 | `APPLE_ISSUER_ID` | App Store Connect issuer ID |
@@ -67,6 +69,8 @@ The certificate and the profiles expire after a year; renew them and update thei
 
 ## Adding a signed extension target
 
-1. Register its App ID (App Groups enabled) and an App Store profile for it.
-2. Add its secret, for example `APPLE_PROVISIONING_PROFILE_WIDGETS`, to the `env` of the "check for the signing secrets" and "import the signing certificate and profiles" steps; every `APPLE_PROVISIONING_PROFILE*` variable is checked and installed.
+CollieWidgets went in this way. `Collie/ExportOptions.plist` maps each bundle ID to its profile name under `provisioningProfiles` (`dev.rbstp.collie.widgets` to `Collie Widgets App Store`), and the workflow installs `APPLE_PROVISIONING_PROFILE_WIDGETS` with the others.
+
+1. Register its App ID (with the capabilities its entitlements use) and an App Store profile for it.
+2. Add its secret, for example `APPLE_PROVISIONING_PROFILE_<NAME>`, to the `env` of the "check for the signing secrets" and "import the signing certificate and profiles" steps; every `APPLE_PROVISIONING_PROFILE*` variable is checked and installed.
 3. Map its bundle ID to the profile name in `Collie/ExportOptions.plist` and set `PROVISIONING_PROFILE_SPECIFIER` in its Release settings in `Collie/project.yml`.

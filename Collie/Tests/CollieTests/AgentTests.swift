@@ -23,6 +23,7 @@ final class FakeCore: AgentCore {
         var cancelledUploads: [String] = []
         var maxAttachmentBytes: UInt64 = 20 * 1024 * 1024
         var uploadPath = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/notes.txt"
+        var endedActivities: [String] = []
     }
 
     let state = Mutex(State())

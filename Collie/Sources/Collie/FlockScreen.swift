@@ -5,6 +5,8 @@ struct FlockScreen: View {
     let core: (any FlockCore)?
     let machines: [Machine]
     let approvals: ApprovalsModel?
+    let follows: FollowModel?
+    @Binding var opening: AgentRoute?
     @State private var model = FlockModel()
     @State private var path: [AgentRoute] = []
     @State private var newTask = false
@@ -40,6 +42,10 @@ struct FlockScreen: View {
                                 AgentRow(agent: agent, workspace: entry.workspaceLabel(for: agent))
                             }
                             .contextMenu {
+                                if let follows {
+                                    FollowMenuItem(follows: follows, route: route)
+                                    Divider()
+                                }
                                 Button("Close pane", systemImage: "xmark.square", role: .destructive) {
                                     model.beginClose(.pane, route: route)
                                 }
@@ -67,7 +73,7 @@ struct FlockScreen: View {
             }
             .navigationDestination(for: AgentRoute.self) { route in
                 if let core {
-                    AgentScreen(core: core, route: route, approvals: approvals)
+                    AgentScreen(core: core, route: route, approvals: approvals, follows: follows)
                 }
             }
             .sheet(isPresented: $newTask) {
@@ -78,10 +84,17 @@ struct FlockScreen: View {
             .task {
                 while !Task.isCancelled {
                     await model.refresh(core: core)
+                    follows?.sync()
                     try? await Task.sleep(for: .seconds(3))
                 }
             }
+            .onChange(of: opening, initial: true) { _, route in
+                guard let route else { return }
+                path = [route]
+                opening = nil
+            }
         }
+        .followNotice(follows)
     }
 }
 

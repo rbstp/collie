@@ -22,8 +22,11 @@ final class AppModel {
     private(set) var signingIn = false
     private(set) var pushStatus = "not registered"
     private var pushToken: Data?
+    private var alertsOff = false
     let approvals: ApprovalsModel
+    let follows: FollowModel
     var tab = AppTab.agents
+    var openingAgent: AgentRoute?
     private var backgroundedAt: Date?
 
     private let log = Logger(subsystem: "dev.rbstp.collie", category: "app")
@@ -36,6 +39,7 @@ final class AppModel {
             startupError = describe(error)
         }
         approvals = ApprovalsModel(core: core)
+        follows = FollowModel(core: core, approvals: approvals)
         machines = core?.machines() ?? []
         if let core, let group = AppGroup.container {
             do {
@@ -156,19 +160,19 @@ final class AppModel {
                 core?.resume(backgroundSecs: UInt64(max(0, Date.now.timeIntervalSince(since))))
             }
             backgroundedAt = nil
+            follows.foreground()
         default:
             break
         }
     }
 
-    /// Asks once, after onboarding; later launches only refresh the APNs token.
+    /// Asks once, after onboarding; later launches only refresh the APNs token. Registers even
+    /// when alerts are denied: collied refuses Live Activity tokens from a device without `push.register`.
     func enableNotifications() async {
         let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
-        if granted {
-            UIApplication.shared.registerForRemoteNotifications()
-        } else {
-            pushStatus = "notifications are off for collie"
-        }
+        alertsOff = !granted
+        if alertsOff { pushStatus = "notifications are off for collie" }
+        UIApplication.shared.registerForRemoteNotifications()
     }
 
     /// One notification key per Mac, keyed by its node id: the NSE only sees `node_id` in the alert.
@@ -191,6 +195,8 @@ final class AppModel {
         }
         if let failure {
             pushStatus = describe(failure)
+        } else if alertsOff {
+            pushStatus = "registered, notifications are off for collie"
         } else {
             pushStatus = environment == .production ? "registered" : "registered (sandbox)"
         }
@@ -203,6 +209,18 @@ final class AppModel {
     func open(_ link: ApprovalLink) {
         tab = .approvals
         approvals.open(link)
+    }
+
+    /// A Live Activity tap: the Agents tab, on that agent. Links to a Mac that is not paired are ignored.
+    func open(_ url: URL) {
+        guard let route = Self.route(for: url, machines: machines) else { return }
+        tab = .agents
+        openingAgent = route
+    }
+
+    nonisolated static func route(for url: URL, machines: [Machine]) -> AgentRoute? {
+        guard let link = AgentLink(url: url), machines.contains(where: { $0.id == link.machineId }) else { return nil }
+        return AgentRoute(machineId: link.machineId, terminalId: link.terminalId)
     }
 
     /// Lock-screen Approve/Deny. iOS has already required the device owner to unlock

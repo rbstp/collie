@@ -13,6 +13,7 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 | Pairing code | the QR and the invite URI that `collied pair` prints as text in the terminal; 16 random bytes, one window at a time, 120 s, burned by the first attempt, redacted in `Debug` |
 | Approval nonces | collied memory and the phone session (collie-core only, never handed to Swift); 32 random bytes, single use |
 | APNs `.p8` key | login Keychain item `dev.rbstp.collied.apns`/`<key ID>`, ACL trusting only the Developer ID signed collied (legacy: 0600 file named by `key_path`); a backup in the user's password manager |
+| Live Activity update tokens | collied's `push.json` (0600) next to the device token, bound to the device's `StableID`; collie-core memory. Never logged, audited or written to disk on the phone; redacted in `Debug` |
 | Notification keys (32 bytes, one per paired Mac) | iOS Keychain (`dev.rbstp.collie.notify`/`<Mac node ID>`, `AfterFirstUnlockThisDeviceOnly`, shared with ColliePush); collied's `push.json` (0600) next to the device token; collie-core memory. Never logged, audited or written elsewhere; redacted in `Debug` |
 | Terminal content, agent and workspace names | herdr, the tailnet session, the phone |
 | Attachments (photos and files sent from the phone) | the phone; collied's attachments dir (`~/Library/Caches/dev.rbstp.collied/attachments`, 0700 dirs, 0600 files) for up to 24 h; the tailnet session |
@@ -22,7 +23,7 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 - **Tailnet to collied.** The only network entry point is the tsnet listener on TCP 8457. Every connection passes the whois gate (untagged, not shared in, owned by the owner once one is known, paired `StableID` with its paired user) before the WebSocket upgrade, then a fail-closed method allowlist (`parse_client_frame`: unknown methods rejected before params are decoded, unknown fields denied, herdr privileged methods unreachable).
 - **collied to herdr.** Same UID. Nothing on the Mac running as the user is a boundary.
 - **Tailscale control plane.** Trusted for node identity: whois and the phone's netmap check both come from it.
-- **Apple.** APNs sees what collied pushes: labels and ids in clear, the pending action only as ciphertext.
+- **Apple.** APNs sees what collied pushes: labels and ids in clear, the pending action only as ciphertext, and the Live Activity content of followed agents.
 
 ## Status legend
 
@@ -114,6 +115,16 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 | Residual | Full compromise of the Mac side. Stolen Mac node keys let the malware impersonate the Mac to the phone and show fake state or fake approvals. It controls the gate's configuration (`collied.toml`, `peers.json`) and can answer the y/N prompt, so the gate no longer protects anything; other users' devices are kept out only by the tailnet policy, which needs the admin account to change. Keychain ACL limits: malware can raise a prompt that the user may accept; anyone with the login password can change the ACL or export the item; it can run the signed collied itself (its own `--config` or `HOME`) to make it send pushes with the key, so it can push through collied without holding the key; a `key_path` config or an un-deleted `.p8` gets none of this protection. |
 | Phase | Built (Keychain item). Otherwise out of scope. |
 
+### Live Activity on the lock screen
+
+| | |
+|---|---|
+| Assets | Followed agents' status and labels; the update tokens |
+| Attack | Someone looks at the locked phone, or a party holding the APNs key and a token pushes fake content. |
+| Mitigations | Nothing is shown unless the user follows the agent, which is off by default. The activity shows status, labels, elapsed time and the approvals count, and offers no action: tapping it only opens the app on that agent, which validates both ids and decides nothing. Tokens live only in collied's `push.json` (0600) and collie-core memory, are never logged or audited, are bound to the registering device's `StableID` (another paired device can neither replace nor end them) and are dropped on revoke, on `Unregistered`/`BadDeviceToken`, on end, when the terminal is gone and 8 h after their last registration (ActivityKit's activity lifetime), so a dead activity stops receiving plaintext; at most 8 per device, one per terminal (built). The alert that expands the Dynamic Island goes out at most once per 30 s per activity, so a flapping agent cannot turn it into an alert stream (built). |
+| Residual | Anyone who sees the locked phone sees the followed agents' names, workspaces and whether they wait for approval. With the APNs key and a token, an attacker can make an activity show any status or text until it ends, including a fake "Approval needed"; acting on it still goes through the app and the tailnet. |
+| Phase | Built; to be verified on device. |
+
 ### Lock-screen and in-app approval
 
 | | |
@@ -170,6 +181,6 @@ Scope: collied on the Mac, Collie.app on the iPhone, the tailnet between them, h
 |---|---|
 | Assets | Project and agent names, activity timing |
 | Attack | Apple (or anyone with APNs access) reads payloads and metadata. |
-| Mitigations | Alert title is the herdr agent name or the agent kind, never the terminal title or a title the pane's program sets; body is `Blocked in <workspace label>`; plus `approval_id`, `node_id` and `terminal_id` (thread and collapse id). The pending action (up to 600 chars of the command or question) travels only in `enc`: ChaCha20-Poly1305 under the phone's per-Mac notification key, fresh random nonce per send, bound to the `approval_id` as AAD, opened by ColliePush on the phone. The key is generated on the phone and reaches collied only inside the authenticated tailnet session. Never the snippet or nonce; details are fetched over the tailnet (built). |
-| Residual | Agent and workspace names, opaque ids, the ciphertext's length (so roughly the command's length), timing, frequency and the device token are visible to Apple. A leaked notification key (from `push.json` or a Mac compromise, which already exposes far more; from the phone's Keychain) lets whoever also has the APNs payloads read past and future alert contexts for that Mac until the phone pairs again; it grants no decision, since the nonce never travels in a push. With a leaked APNs key as well, it also lets an attacker forge an alert whose body the NSE shows as genuine context. |
+| Mitigations | Alert title is the herdr agent name or the agent kind, never the terminal title or a title the pane's program sets; body is `Blocked in <workspace label>`; plus `approval_id`, `node_id` and `terminal_id` (thread and collapse id). The pending action (up to 600 chars of the command or question) travels only in `enc`: ChaCha20-Poly1305 under the phone's per-Mac notification key, fresh random nonce per send, bound to the `approval_id` as AAD, opened by ColliePush on the phone. The key is generated on the phone and reaches collied only inside the authenticated tailnet session. Never the snippet or nonce; details are fetched over the tailnet (built). Live Activity pushes go only to agents the user follows (off by default) and carry the status, when it started, the same title and workspace label as the alert and the pending approvals count, in clear: ActivityKit cannot decrypt a content state. No terminal text, terminal title, context, ids of approvals or nonce (built). |
+| Residual | Agent and workspace names, opaque ids, the ciphertext's length (so roughly the command's length), timing, frequency and the device token are visible to Apple. For a followed agent Apple also sees every status change (idle, working, blocked, done) with its time, and the activity's update token. A leaked notification key (from `push.json` or a Mac compromise, which already exposes far more; from the phone's Keychain) lets whoever also has the APNs payloads read past and future alert contexts for that Mac until the phone pairs again; it grants no decision, since the nonce never travels in a push. With a leaked APNs key as well, it also lets an attacker forge an alert whose body the NSE shows as genuine context. |
 | Phase | Built. |
