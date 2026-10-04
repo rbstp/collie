@@ -194,6 +194,7 @@ async fn approval_scenario(session: &HerdrSession) {
                 decision: Decision::Approve,
                 choice: None,
                 nonce: approval.nonce.clone(),
+                note: None,
             },
             &yes,
         )

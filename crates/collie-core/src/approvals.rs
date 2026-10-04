@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use protocol::{
     Approval, ApprovalDecideParams, ApprovalId, ApprovalOutcome, Decision, Empty, ErrorCode, Event,
-    Nonce, Request, Response,
+    Nonce, PromptText, Request, Response,
 };
 use tailnet::{BackendState, Node};
 use tokio::net::UnixStream;
@@ -48,6 +48,7 @@ pub(crate) fn decide_params(
     approval_id: ApprovalId,
     decision: ApprovalDecision,
     nonce: Nonce,
+    note: Option<PromptText>,
 ) -> ApprovalDecideParams {
     let (decision, choice) = decision.wire();
     ApprovalDecideParams {
@@ -55,6 +56,7 @@ pub(crate) fn decide_params(
         decision,
         choice,
         nonce,
+        note,
     }
 }
 
@@ -81,8 +83,11 @@ pub struct PendingApproval {
     pub choices: Vec<ApprovalChoice>,
     /// collied takes keys and typed text on this prompt; false from an older collied.
     pub accepts_input: bool,
-    /// The menu's free-text option can be filled with `type_text`.
+    /// The menu's free-text option can be filled with `type_text`: a question's, or a
+    /// plan's "Tell Claude what to change" (then without `accepts_input`).
     pub has_text_field: bool,
+    /// `decide` takes a note with Approve and Deny; false from an older collied.
+    pub supports_note: bool,
     pub created_at_ms: u64,
     pub expires_at_ms: u64,
 }
@@ -113,6 +118,7 @@ impl From<&Approval> for PendingApproval {
                 .collect(),
             accepts_input: a.accepts_input,
             has_text_field: a.has_text_field,
+            supports_note: a.supports_note,
             created_at_ms: a.created_at_ms,
             expires_at_ms: a.expires_at_ms,
         }
@@ -425,7 +431,7 @@ async fn attempt(
     report.lookup_ms = Some(ms(step.elapsed()));
 
     let step = Instant::now();
-    let request = Request::ApprovalDecide(decide_params(approval_id, decision, nonce));
+    let request = Request::ApprovalDecide(decide_params(approval_id, decision, nonce, None));
     let response = call(&mut session, request, deadline, DecideStage::Decide).await?;
     report.decide_ms = Some(ms(step.elapsed()));
     tokio::spawn(session.close());
@@ -590,9 +596,9 @@ mod tests {
     fn choices_map_both_ways() {
         let id = || ApprovalId::new("a1").unwrap();
         let nonce = || Nonce::new(NONCE).unwrap();
-        let p = decide_params(id(), ApprovalDecision::Choose { choice: 2 }, nonce());
+        let p = decide_params(id(), ApprovalDecision::Choose { choice: 2 }, nonce(), None);
         assert_eq!((p.decision, p.choice), (Decision::Choose, Some(2)));
-        let p = decide_params(id(), ApprovalDecision::Deny, nonce());
+        let p = decide_params(id(), ApprovalDecision::Deny, nonce(), None);
         assert_eq!((p.decision, p.choice), (Decision::Deny, None));
         assert_eq!(
             DecisionOutcome::from(ApprovalOutcome::ChosenUnconfirmed {

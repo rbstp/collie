@@ -840,6 +840,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             }],
             accepts_input: false,
             has_text_field: false,
+            supports_note: false,
             nonce: Nonce::new("N".repeat(43)).unwrap(),
             created_at_ms: 1_000_000,
             expires_at_ms: 1_600_000,

@@ -18,6 +18,9 @@ pub mod limits {
     pub const MAX_SNIPPET_CHARS: usize = 200;
     pub const MAX_LABEL_CHARS: usize = 64;
     pub const MAX_CHOICE_LABEL_CHARS: usize = 120;
+    /// The amend field must still parse after the note: Menu::parse takes an option
+    /// wrapped onto at most 4 rows, about 300 columns at an 80 column pane.
+    pub const MAX_NOTE_CHARS: usize = 200;
     pub const MAX_CWD_BYTES: usize = 1024;
     pub const NONCE_BYTES: usize = 32;
     pub const PAIRING_CODE_BYTES: usize = 16;

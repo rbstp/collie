@@ -14,7 +14,7 @@ use collied::push::{Alert, Device, Push, Rejection, Sender};
 use futures_util::future::BoxFuture;
 use protocol::{
     ApnsEnvironment, Approval, ApprovalDecideParams, ApprovalOutcome, Decision, ErrorCode, Event,
-    Nonce, NotificationKey, PushToken, Response,
+    Nonce, NotificationKey, PromptText, PushToken, Response,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -105,6 +105,10 @@ const TRUST_LIVE: &str = "\
  Enter to confirm · Esc to cancel
 ";
 
+// Claude Code 2.1.289 in herdr 0.9.3, the working directory renamed.
+const BASH_LIVE: &str = include_str!("fixtures/claude-2.1.289/bash.detection.txt");
+const PLAN_LIVE: &str = include_str!("fixtures/claude-2.1.289/plan.detection.txt");
+
 const MUTATING: [&str; 6] = [
     "agent.prompt",
     "agent.send_keys",
@@ -121,6 +125,9 @@ struct Herdr {
     calls: Vec<(String, Value)>,
     unblock_on_keys: bool,
     arrows_move: bool,
+    tab_amends: bool,
+    text_lands: bool,
+    tab_moves_on: bool,
 }
 
 struct Mock {
@@ -144,6 +151,9 @@ impl Mock {
             calls: Vec::new(),
             unblock_on_keys: true,
             arrows_move: true,
+            tab_amends: true,
+            text_lands: true,
+            tab_moves_on: false,
         }));
         let listener = UnixListener::bind(&socket).unwrap();
         let shared = state.clone();
@@ -218,8 +228,39 @@ fn answer(h: &mut Herdr, req: &Value) -> Value {
                     "down" if h.arrows_move => h.text = move_cursor(&h.text, 1),
                     "up" if h.arrows_move => h.text = move_cursor(&h.text, -1),
                     "enter" | "esc" if h.unblock_on_keys => set_status(h, "working"),
+                    "tab" if h.tab_moves_on => {
+                        let seq = h.agent["state_change_seq"].as_u64().unwrap();
+                        h.agent["state_change_seq"] = json!(seq + 1);
+                    }
+                    "tab" if h.tab_amends => {
+                        h.text = relabel(&h.text, |l| {
+                            if l == "Yes" {
+                                "Yes, and tell Claude what to do next".into()
+                            } else if l == "No" {
+                                "No, and tell Claude what to do differently".into()
+                            } else {
+                                l.into()
+                            }
+                        })
+                        .replace(" · Tab to amend", "");
+                    }
                     _ => {}
                 }
+            }
+            json!({"type": "ok"})
+        }
+        "pane.send_text" => {
+            let typed = p["text"].as_str().unwrap().to_owned();
+            if h.text_lands {
+                h.text = relabel(&h.text, |l| {
+                    if l.starts_with("Yes, and tell") {
+                        format!("Yes, {typed}")
+                    } else if l.starts_with("No, and tell") {
+                        format!("No, {typed}")
+                    } else {
+                        format!("{l}{typed}")
+                    }
+                });
             }
             json!({"type": "ok"})
         }
@@ -242,6 +283,19 @@ fn move_cursor(text: &str, by: isize) -> String {
     let to = at.saturating_add_signed(by).min(options.len() - 1);
     lines[options[at]] = lines[options[at]].replacen('❯', " ", 1);
     lines[options[to]] = lines[options[to]].replacen("   ", " ❯ ", 1);
+    lines.join("\n") + "\n"
+}
+
+/// Replaces the label of the option under the cursor.
+fn relabel(text: &str, f: impl Fn(&str) -> String) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let line = lines
+        .iter_mut()
+        .rev()
+        .find(|l| l.trim_start().starts_with('❯') && l.contains(". "))
+        .unwrap();
+    let at = line.find(". ").unwrap() + 2;
+    *line = format!("{}{}", &line[..at], f(&line[at..]));
     lines.join("\n") + "\n"
 }
 
@@ -374,6 +428,24 @@ impl Rig {
             decision,
             choice: None,
             nonce: nonce.clone(),
+            note: None,
+        };
+        self.approvals.decide(LABEL, PHONE, p, &auth).await
+    }
+
+    async fn decide_with_note(
+        &self,
+        a: &Approval,
+        decision: Decision,
+        note: &str,
+        auth: Authorized,
+    ) -> Reply {
+        let p = ApprovalDecideParams {
+            approval_id: a.approval_id.clone(),
+            decision,
+            choice: None,
+            nonce: a.nonce.clone(),
+            note: Some(PromptText::new(note).unwrap()),
         };
         self.approvals.decide(LABEL, PHONE, p, &auth).await
     }
@@ -384,6 +456,7 @@ impl Rig {
             decision: Decision::Choose,
             choice: Some(choice),
             nonce: nonce.clone(),
+            note: None,
         };
         let auth: Authorized = Arc::new(|| true);
         self.approvals.decide(LABEL, PHONE, p, &auth).await
@@ -1010,17 +1083,28 @@ async fn a_plan_is_chosen_with_arrows_never_esc() {
 #[tokio::test]
 async fn approvals_say_whether_keys_and_text_are_taken() {
     let mut rig = Rig::start(TTL).await;
-    for (rule, text, input, field) in [
-        ("live_blocked_form", QUESTION_LIVE, true, true),
-        ("live_blocked_form", QUESTION, true, true),
-        ("live_blocked_form", PLAN, false, false),
-        ("live_blocked_form", TRUST_LIVE, false, false),
-        ("bash_permission_prompt", BASH, false, false),
-        ("live_blocked_form", BASH, false, false),
+    let two = BASH.replace(
+        "   2. Yes, and don't ask again for rm commands in /Users/me/src/app\n",
+        "",
+    );
+    let two = two.replace("3. No", "2. No").replace(" · Tab to amend", "");
+    for (rule, text, input, field, note) in [
+        ("live_blocked_form", QUESTION_LIVE, true, true, false),
+        ("live_blocked_form", QUESTION, true, true, false),
+        ("live_blocked_form", PLAN, false, false, false),
+        ("live_blocked_form", TRUST_LIVE, false, false, false),
+        ("bash_permission_prompt", BASH, false, false, true),
+        ("bash_permission_prompt", &two, false, false, false),
+        ("live_blocked_form", BASH, false, false, true),
+        ("bash_permission_prompt", BASH_LIVE, false, false, true),
+        ("legacy_no_prompt_blocker", PLAN_LIVE, false, true, false),
+        ("live_blocked_form", PLAN_LIVE, false, false, false),
+        ("mcp_elicitation_prompt", BASH_LIVE, false, false, false),
         (
             "live_blocked_form",
             &QUESTION.replace("   3. Type something.\n", ""),
             true,
+            false,
             false,
         ),
     ] {
@@ -1031,8 +1115,8 @@ async fn approvals_say_whether_keys_and_text_are_taken() {
         });
         let a = rig.needed().await;
         assert_eq!(
-            (a.accepts_input, a.has_text_field),
-            (input, field),
+            (a.accepts_input, a.has_text_field, a.supports_note),
+            (input, field, note),
             "{rule} {text}"
         );
     }
@@ -1158,4 +1242,280 @@ async fn a_screen_that_drifts_under_a_blocked_agent_reissues_quietly() {
     rig.needed().await;
     assert_eq!(rig.alerts(2).await.len(), 2, "a new episode alerts");
     assert!(rig.mutations().is_empty());
+}
+
+fn yes() -> Authorized {
+    Arc::new(|| true)
+}
+
+fn live(rig: &Rig) {
+    rig.herdr.with(|h| h.text = BASH_LIVE.into());
+}
+
+#[tokio::test]
+async fn a_note_is_typed_into_the_amend_field_then_enter() {
+    let mut rig = Rig::start(TTL).await;
+    live(&rig);
+    let a = rig.needed().await;
+    assert!(a.supports_note);
+    assert_eq!(
+        a.options,
+        [Decision::Approve, Decision::ApproveAlways, Decision::Deny]
+    );
+    let alerts = rig.alerts(1).await;
+    assert_eq!(
+        open_context(&alerts[0].1.payload),
+        json!({"v": 1, "body": "Bash: Create empty probe2.txt file\ntouch probe2.txt"})
+    );
+    let note = "use a .tmp extension";
+    let outcome = resolved(
+        rig.decide_with_note(&a, Decision::Approve, note, yes())
+            .await,
+    );
+    assert_eq!(
+        outcome,
+        ApprovalOutcome::Applied {
+            decision: Decision::Approve,
+            by: LABEL.into()
+        }
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["tab"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ]
+    );
+    assert_eq!(
+        rig.herdr.params("pane.send_text"),
+        [json!({"pane_id": "w7:p1", "text": note})]
+    );
+    let audit = rig.audit();
+    assert_eq!(
+        audit[0]["result"],
+        format!("approve with note: applied terminal={TERMINAL} keys=tab,enter")
+    );
+    assert!(
+        !audit[0].to_string().contains(".tmp"),
+        "the note is never logged"
+    );
+
+    rig.herdr.with(|h| {
+        h.text = BASH_LIVE.into();
+        set_status(h, "blocked");
+    });
+    let b = rig.needed().await;
+    let outcome = resolved(
+        rig.decide_with_note(&b, Decision::Deny, "run the tests first", yes())
+            .await,
+    );
+    assert!(matches!(
+        outcome,
+        ApprovalOutcome::Applied {
+            decision: Decision::Deny,
+            ..
+        }
+    ));
+    assert_eq!(
+        rig.herdr.params("agent.send_keys")[2..],
+        [
+            json!({"target": "w7:p1", "keys": ["down", "down", "down"]}),
+            json!({"target": "w7:p1", "keys": ["tab"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ],
+        "Deny with a note goes by arrows, never Esc"
+    );
+    assert_eq!(
+        rig.audit()[1]["result"],
+        format!("deny with note: applied terminal={TERMINAL} keys=down,down,down,tab,enter")
+    );
+}
+
+#[tokio::test]
+async fn a_note_that_does_not_land_is_never_confirmed() {
+    let mut rig = Rig::start(TTL).await;
+    live(&rig);
+    rig.herdr.with(|h| h.tab_amends = false);
+    let a = rig.needed().await;
+    assert_eq!(
+        resolved(
+            rig.decide_with_note(&a, Decision::Approve, "use a .tmp extension", yes())
+                .await
+        ),
+        ApprovalOutcome::Superseded
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [json!({"target": "w7:p1", "keys": ["tab"]})],
+        "no text, no Enter, no Esc"
+    );
+    assert!(rig.herdr.params("pane.send_text").is_empty());
+    assert_eq!(
+        rig.audit()[0]["result"],
+        format!(
+            "approve with note: superseded: amend field not shown terminal={TERMINAL} keys=tab"
+        )
+    );
+
+    rig.herdr.with(|h| {
+        h.text = BASH_LIVE.into();
+        h.tab_amends = true;
+        h.text_lands = false;
+    });
+    let b = rig.needed().await;
+    assert_eq!(
+        resolved(
+            rig.decide_with_note(&b, Decision::Approve, "use a .tmp extension", yes())
+                .await
+        ),
+        ApprovalOutcome::Superseded
+    );
+    assert_eq!(rig.herdr.params("pane.send_text").len(), 1);
+    assert_eq!(
+        rig.herdr.params("agent.send_keys")[1..],
+        [json!({"target": "w7:p1", "keys": ["tab"]})],
+        "no Enter, no Esc"
+    );
+    assert_eq!(
+        rig.audit()[1]["result"],
+        format!("approve with note: superseded: note not shown terminal={TERMINAL} keys=tab")
+    );
+
+    rig.herdr.with(|h| {
+        h.text = BASH_LIVE.into();
+        h.text_lands = true;
+        h.tab_moves_on = true;
+    });
+    let c = rig.needed().await;
+    assert_eq!(
+        resolved(
+            rig.decide_with_note(&c, Decision::Approve, "use a .tmp extension", yes())
+                .await
+        ),
+        ApprovalOutcome::Superseded,
+        "a new prompt under the field"
+    );
+    assert_eq!(rig.herdr.params("pane.send_text").len(), 1);
+    assert_eq!(rig.herdr.params("agent.send_keys").len(), 3);
+    assert_eq!(
+        rig.herdr.with(|h| h.agent["agent_status"].clone()),
+        "blocked"
+    );
+}
+
+#[tokio::test]
+async fn a_note_needs_authorization_before_every_write() {
+    let mut rig = Rig::start(TTL).await;
+    live(&rig);
+    for (allowed, tabs, texts) in [(1, 0, 0), (2, 1, 0), (3, 1, 1)] {
+        rig.herdr.with(|h| {
+            h.text = BASH_LIVE.into();
+            set_status(h, "blocked");
+        });
+        let a = rig.needed().await;
+        let before = (
+            rig.herdr.params("agent.send_keys").len(),
+            rig.herdr.params("pane.send_text").len(),
+        );
+        let checks = Arc::new(AtomicUsize::new(0));
+        let seen = checks.clone();
+        let auth: Authorized = Arc::new(move || seen.fetch_add(1, Ordering::SeqCst) < allowed);
+        assert_eq!(
+            code(
+                rig.decide_with_note(&a, Decision::Approve, "use a .tmp extension", auth)
+                    .await
+            ),
+            ErrorCode::NotPaired,
+            "{allowed}"
+        );
+        assert_eq!(
+            (
+                rig.herdr.params("agent.send_keys").len() - before.0,
+                rig.herdr.params("pane.send_text").len() - before.1,
+            ),
+            (tabs, texts),
+            "{allowed}: never Enter"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_note_is_refused_where_it_is_not_offered() {
+    let mut rig = Rig::start(TTL).await;
+    live(&rig);
+    let a = rig.needed().await;
+    assert_eq!(
+        code(
+            rig.decide_with_note(&a, Decision::ApproveAlways, "x", yes())
+                .await
+        ),
+        ErrorCode::InvalidParams
+    );
+    rig.herdr.with(|h| {
+        h.text = BASH_LIVE.replace(" · Tab to amend", "");
+        set_status(h, "blocked");
+    });
+    let b = rig.needed().await;
+    assert!(!b.supports_note);
+    assert_eq!(
+        code(
+            rig.decide_with_note(&b, Decision::Approve, "x", yes())
+                .await
+        ),
+        ErrorCode::InvalidParams
+    );
+    rig.herdr.with(|h| {
+        h.rule = "live_blocked_form".into();
+        h.text = QUESTION.into();
+        set_status(h, "blocked");
+    });
+    let c = rig.needed().await;
+    assert_eq!(
+        code(rig.decide_with_note(&c, Decision::Deny, "x", yes()).await),
+        ErrorCode::InvalidParams
+    );
+    assert!(rig.mutations().is_empty());
+    let results: Vec<Value> = rig.audit().iter().map(|e| e["result"].clone()).collect();
+    assert_eq!(
+        results,
+        [
+            "approve_always with note: rejected: note not offered",
+            "approve with note: rejected: note not offered",
+            "deny with note: rejected: decision not offered",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_plan_is_chosen_but_takes_no_note() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| {
+        h.rule = "legacy_no_prompt_blocker".into();
+        h.text = PLAN_LIVE.into();
+    });
+    let a = rig.needed().await;
+    assert!(a.options.is_empty());
+    assert_eq!(
+        (a.accepts_input, a.has_text_field, a.supports_note),
+        (false, true, false)
+    );
+    assert_eq!(
+        choice_labels(&a),
+        [
+            (0, "Yes, and use auto mode".to_owned(), true),
+            (1, "Yes, manually approve edits".to_owned(), false),
+            (2, "Tell Claude what to change".to_owned(), false),
+        ]
+    );
+    assert!(matches!(
+        resolved(rig.choose(&a, 1, &a.nonce).await),
+        ApprovalOutcome::Chosen { choice: 1, .. }
+    ));
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ]
+    );
 }

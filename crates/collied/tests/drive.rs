@@ -79,6 +79,10 @@ const PLAN: &str = "\
    2. Yes, and manually approve edits
    3. No, keep planning
 ";
+// Claude Code 2.1.289 in herdr 0.9.3 (rule legacy_no_prompt_blocker).
+const PLAN_LIVE: &str = include_str!("fixtures/claude-2.1.289/plan.detection.txt");
+const PLAN_TYPED_LIVE: &str =
+    include_str!("fixtures/claude-2.1.289/plan-feedback-typed.detection.txt");
 const MUTATING: [&str; 9] = [
     "agent.prompt",
     "agent.send_keys",
@@ -1379,5 +1383,97 @@ async fn typed_text_goes_into_the_question_field_then_enter() {
         "not blocked: a prompt is the way"
     );
     assert_eq!(herdr.params("pane.send_text").len(), 4);
+    assert_eq!(herdr.params("agent.send_keys").len(), 3);
+}
+
+#[tokio::test]
+async fn plan_feedback_is_typed_but_keys_are_refused() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let on_field = PLAN_LIVE
+        .replace(
+            "   ❯ 1. Yes, and use auto mode",
+            "     1. Yes, and use auto mode",
+        )
+        .replace(
+            "     3. Tell Claude what to change",
+            "   ❯ 3. Tell Claude what to change",
+        );
+    let plan = |rule: &str| {
+        block(&herdr, PLAN_LIVE);
+        herdr.with(|h| h.rule = Some(rule.into()));
+    };
+
+    plan("legacy_no_prompt_blocker");
+    assert_eq!(
+        code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
+        ErrorCode::AgentBlocked,
+        "a plan takes no keys"
+    );
+    herdr.with(|h| {
+        h.screens = [
+            PLAN_LIVE.to_owned(),
+            on_field.clone(),
+            PLAN_TYPED_LIVE.to_owned(),
+        ]
+        .into()
+    });
+    assert_eq!(
+        drive
+            .type_text(typed(CLAUDE, "use echo instead"), &yes())
+            .await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w6:p1", "keys": ["down", "down"]}),
+            json!({"target": "w6:p1", "keys": ["enter"]})
+        ],
+        "never shift+tab"
+    );
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        [json!({"pane_id": "w6:p1", "text": "use echo instead"})]
+    );
+
+    herdr.with(|h| h.screens = [PLAN_LIVE.to_owned(), on_field.clone(), on_field.clone()].into());
+    assert_eq!(
+        code(
+            drive
+                .type_text(typed(CLAUDE, "use echo instead"), &yes())
+                .await
+        ),
+        ErrorCode::AgentNotReady,
+        "the field never showed the text"
+    );
+    assert_eq!(herdr.params("agent.send_keys").len(), 3, "no Enter");
+
+    herdr.with(|h| h.screens.clear());
+    for rule in ["live_blocked_form", "bash_permission_prompt"] {
+        plan(rule);
+        assert_eq!(
+            code(
+                drive
+                    .type_text(typed(CLAUDE, "use echo instead"), &yes())
+                    .await
+            ),
+            ErrorCode::AgentBlocked,
+            "{rule}"
+        );
+    }
+    plan("legacy_no_prompt_blocker");
+    herdr.with(|h| h.text = PLAN_LIVE.replace("2. Yes, manually approve edits", "2. Yes"));
+    assert_eq!(
+        code(
+            drive
+                .type_text(typed(CLAUDE, "use echo instead"), &yes())
+                .await
+        ),
+        ErrorCode::AgentBlocked,
+        "a menu with a decision is a permission prompt"
+    );
+    assert_eq!(herdr.params("pane.send_text").len(), 2);
     assert_eq!(herdr.params("agent.send_keys").len(), 3);
 }

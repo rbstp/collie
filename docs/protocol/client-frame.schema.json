@@ -78,7 +78,7 @@
     },
     "AgentTypeTextParams": {
       "additionalProperties": false,
-      "description": "Typed into a blocked Claude Code question's free-text field, then Enter. One line:\nEnter is what submits it.",
+      "description": "Typed into the free-text field of a blocked Claude Code question or plan, then Enter.\nOne line: Enter is what submits it.",
       "properties": {
         "op_id": {
           "$ref": "#/$defs/OpId"
@@ -123,7 +123,7 @@
     },
     "ApprovalDecideParams": {
       "additionalProperties": false,
-      "description": "`choice` is set exactly when `decision` is `choose`.",
+      "description": "`choice` is set exactly when `decision` is `choose`. `note`, one line of at most 200\ncharacters, goes with `approve` or `deny` on an approval with `supports_note`: collied\ntypes it into the option's amend field before Enter.",
       "properties": {
         "approval_id": {
           "$ref": "#/$defs/ApprovalId"
@@ -142,6 +142,16 @@
         },
         "nonce": {
           "$ref": "#/$defs/Nonce"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptText"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

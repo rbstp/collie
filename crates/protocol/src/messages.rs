@@ -298,8 +298,8 @@ impl AgentSendKeysParams {
     }
 }
 
-/// Typed into a blocked Claude Code question's free-text field, then Enter. One line:
-/// Enter is what submits it.
+/// Typed into the free-text field of a blocked Claude Code question or plan, then Enter.
+/// One line: Enter is what submits it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentTypeTextParams {
@@ -352,7 +352,9 @@ pub enum Decision {
     Choose,
 }
 
-/// `choice` is set exactly when `decision` is `choose`.
+/// `choice` is set exactly when `decision` is `choose`. `note`, one line of at most 200
+/// characters, goes with `approve` or `deny` on an approval with `supports_note`: collied
+/// types it into the option's amend field before Enter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ApprovalDecideParams {
@@ -361,11 +363,18 @@ pub struct ApprovalDecideParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choice: Option<u8>,
     pub nonce: Nonce,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<PromptText>,
 }
 
 impl ApprovalDecideParams {
     pub fn is_valid(&self) -> bool {
         (self.decision == Decision::Choose) == self.choice.is_some()
+            && self.note.as_ref().is_none_or(|n| {
+                matches!(self.decision, Decision::Approve | Decision::Deny)
+                    && !n.as_str().contains(['\n', '\t'])
+                    && n.as_str().chars().count() <= limits::MAX_NOTE_CHARS
+            })
     }
 }
 
@@ -594,10 +603,15 @@ pub struct Approval {
     /// any prompt that grants a permission, and from a collied that predates the field.
     #[serde(default)]
     pub accepts_input: bool,
-    /// The menu has its free-text option, which `agent.type_text` fills; never true
-    /// without `accepts_input`.
+    /// The menu has a free-text option that `agent.type_text` fills: a question's "Type
+    /// something." (with `accepts_input`), or a plan's "Tell Claude what to change", which
+    /// takes text but no keys (`accepts_input` false).
     #[serde(default)]
     pub has_text_field: bool,
+    /// `approval.decide` takes a `note` with `approve` and `deny`: the prompt shows "Tab
+    /// to amend".
+    #[serde(default)]
+    pub supports_note: bool,
     pub nonce: Nonce,
     pub created_at_ms: u64,
     pub expires_at_ms: u64,
@@ -966,6 +980,47 @@ mod tests {
     }
 
     #[test]
+    fn a_note_is_one_line_with_approve_or_deny() {
+        let decide = |rest: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"approval.decide","params":{{"approval_id":"a1","nonce":"{}"{rest}}}}}"#,
+                "A".repeat(43)
+            ))
+        };
+        for ok in [
+            r#","decision":"approve","note":"use a .tmp extension""#,
+            r#","decision":"deny","note":"run the tests first""#,
+            &format!(
+                r#","decision":"deny","note":"{}""#,
+                "é".repeat(limits::MAX_NOTE_CHARS)
+            ),
+        ] {
+            let Request::ApprovalDecide(p) = decide(ok).unwrap().request else {
+                panic!("not a decision");
+            };
+            assert!(p.note.is_some(), "{ok}");
+        }
+        for bad in [
+            r#","decision":"approve_always","note":"x""#,
+            r#","decision":"choose","choice":0,"note":"x""#,
+            r#","decision":"approve","note":"a\nb""#,
+            r#","decision":"approve","note":"a\tb""#,
+            r#","decision":"approve","note":"a\u001b[Z""#,
+            r#","decision":"deny","note":"  ""#,
+            &format!(
+                r#","decision":"approve","note":"{}""#,
+                "a".repeat(limits::MAX_NOTE_CHARS + 1)
+            ),
+        ] {
+            assert_eq!(
+                decide(bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
     fn typed_text_is_one_line() {
         let typed = |text: &str| {
             parse(&format!(
@@ -1033,7 +1088,7 @@ mod tests {
             "an older collied sends no choices"
         );
         assert!(
-            !approval.accepts_input && !approval.has_text_field,
+            !approval.accepts_input && !approval.has_text_field && !approval.supports_note,
             "an older collied takes no input the phone can count on"
         );
     }

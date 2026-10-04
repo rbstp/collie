@@ -241,7 +241,12 @@ fn phase3_expired_approvals() {
         herdr.with(|h| h.down = true);
         tokio::time::sleep(ttl + Duration::from_millis(200)).await;
         let err = core
-            .decide(m.clone(), a.approval_id.clone(), ApprovalDecision::Approve)
+            .decide(
+                m.clone(),
+                a.approval_id.clone(),
+                ApprovalDecision::Approve,
+                None,
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, CoreError::ApprovalExpired), "{err:?}");
@@ -604,7 +609,12 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
     let t = Instant::now();
     rig.herdr.hold(true);
     let (applied, (raced, keys_while_held)) = tokio::join!(
-        core.decide(m.clone(), a.approval_id.clone(), ApprovalDecision::Approve),
+        core.decide(
+            m.clone(),
+            a.approval_id.clone(),
+            ApprovalDecision::Approve,
+            None
+        ),
         async {
             wait_for("the first decide to reach herdr", || rig.herdr.held() == 1).await;
             let raced = core
@@ -650,7 +660,12 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
     let replay = rig.probe.decide(&a.approval_id, &nonce).await;
     assert_eq!(replay, Err(ErrorCode::ApprovalAlreadyResolved));
     let err = core
-        .decide(m.clone(), a.approval_id.clone(), ApprovalDecision::Approve)
+        .decide(
+            m.clone(),
+            a.approval_id.clone(),
+            ApprovalDecision::Approve,
+            None,
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::ApprovalNotFound), "{err:?}");
@@ -676,7 +691,12 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
     rig.herdr
         .with(|h| h.text = BASH.replace("rm -rf build", "rm -rf ~"));
     let outcome = core
-        .decide(m.clone(), b.approval_id.clone(), ApprovalDecision::Approve)
+        .decide(
+            m.clone(),
+            b.approval_id.clone(),
+            ApprovalDecision::Approve,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(outcome, DecisionOutcome::Superseded);
@@ -728,7 +748,12 @@ async fn after_restart(rig: &Rig, core: &Arc<CollieCore>, m: &str, phone_id: &st
     rig.herdr.set_status("blocked");
     let (e, rev) = needed(core, m, rev).await;
     let outcome = core
-        .decide(m.into(), e.approval_id.clone(), ApprovalDecision::Deny)
+        .decide(
+            m.into(),
+            e.approval_id.clone(),
+            ApprovalDecision::Deny,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -776,7 +801,12 @@ async fn after_restart(rig: &Rig, core: &Arc<CollieCore>, m: &str, phone_id: &st
     );
     let keys = rig.herdr.params("agent.send_keys").len();
     let err = core
-        .decide(m.into(), d.approval_id.clone(), ApprovalDecision::Approve)
+        .decide(
+            m.into(),
+            d.approval_id.clone(),
+            ApprovalDecision::Approve,
+            None,
+        )
         .await
         .unwrap_err();
     println!("  in-app decide: {err:?}");
