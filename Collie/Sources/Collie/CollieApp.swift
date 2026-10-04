@@ -36,7 +36,7 @@ struct RootView: View {
         } else if app.showsMain {
             TabView(selection: $app.tab) {
                 Tab("Agents", systemImage: "square.grid.2x2", value: AppTab.agents) {
-                    FlockScreen(core: app.core, machines: app.machines, approvals: app.approvals)
+                    FlockScreen(core: app.core, machines: app.machines, approvals: app.approvals, tailnetStarting: !app.isRunning)
                 }
                 Tab("Approvals", systemImage: "checkmark.shield", value: AppTab.approvals) {
                     ApprovalsScreen(model: app.approvals)
@@ -58,16 +58,7 @@ struct RootView: View {
                     await app.refreshNode()
                 }
             }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if !app.isRunning {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text("Connecting…").font(.footnote).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
-                }
-            }
+
         } else {
             OnboardingView(app: app)
         }
