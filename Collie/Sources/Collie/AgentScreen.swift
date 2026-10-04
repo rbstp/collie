@@ -7,11 +7,13 @@ import UIKit
 struct AgentScreen: View {
     @State private var model: AgentModel
     let approvals: ApprovalsModel?
+    let follows: FollowModel?
     @Environment(\.dismiss) private var dismiss
 
-    init(core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel? = nil) {
+    init(core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel? = nil, follows: FollowModel? = nil) {
         _model = State(initialValue: AgentModel(core: core, route: route))
         self.approvals = approvals
+        self.follows = follows
     }
 
     var body: some View {
@@ -60,6 +62,9 @@ struct AgentScreen: View {
                     .disabled(model.refreshing)
                     Button("Focus on Mac", systemImage: "macwindow") {
                         Task { await model.focus() }
+                    }
+                    if let follows {
+                        FollowMenuItem(follows: follows, route: model.route)
                     }
                     Divider()
                     Button("Close pane", systemImage: "xmark.square", role: .destructive) {

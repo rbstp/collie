@@ -22,6 +22,9 @@ use zeroize::Zeroizing;
 const KNOBS: [(&str, &str); 1] = [("TS_DISABLE_PORTMAPPER", "1")];
 const PORT: u16 = 8457;
 const NOTIFY_KEY: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+const ACTIVITY: &str = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
+const ACTIVITY_TOKEN: &str =
+    "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
 const WATCHDOG: Duration = Duration::from_secs(300);
 const HERDR_CALLED: [&str; 9] = [
     "ping",
@@ -361,6 +364,24 @@ async fn scenario(
     .await;
     assert_eq!(result(recv(&mut ws).await), Response::Ok);
     assert_eq!(mode(&data_dir.join("push.json")), 0o600);
+    send(
+        &mut ws,
+        json!({"id": 57, "method": "push.activity_token", "params": {
+            "activity_id": ACTIVITY, "terminal_id": "term_0a1b2c3d4e5f60",
+            "token": ACTIVITY_TOKEN}}),
+    )
+    .await;
+    assert_eq!(result(recv(&mut ws).await), Response::Ok);
+    let stored = std::fs::read_to_string(data_dir.join("push.json")).unwrap();
+    assert!(stored.contains(ACTIVITY_TOKEN), "{stored}");
+    send(
+        &mut ws,
+        json!({"id": 58, "method": "push.activity_end", "params": {"activity_id": ACTIVITY}}),
+    )
+    .await;
+    assert_eq!(result(recv(&mut ws).await), Response::Ok);
+    let stored = std::fs::read_to_string(data_dir.join("push.json")).unwrap();
+    assert!(!stored.contains(ACTIVITY_TOKEN), "{stored}");
 
     println!("drive refusals go through the op cache and the task runner");
     let blocked = json!({"id": 53, "method": "agent.prompt", "params": {
@@ -531,12 +552,19 @@ async fn scenario(
         "\"result\":\"unsupported_protocol\"",
         "\"result\":\"not_paired\"",
         "\"method\":\"push.register\"",
+        "\"method\":\"push.activity_token\"",
+        "\"target\":\"term_0a1b2c3d4e5f60 activity=3F2504E0-4F89-11D3-9A0C-0305E82C3301\"",
+        "\"method\":\"push.activity_end\"",
     ] {
         assert!(audit.contains(needle), "audit log lacks {needle}:\n{audit}");
     }
     assert!(
         !audit.contains(NOTIFY_KEY),
         "notification key in the audit log"
+    );
+    assert!(
+        !audit.contains(ACTIVITY_TOKEN),
+        "activity token in the audit log"
     );
     for line in audit.lines() {
         let entry: Value = serde_json::from_str(line).unwrap();

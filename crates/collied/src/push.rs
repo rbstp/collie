@@ -15,7 +15,9 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use futures_util::future::BoxFuture;
-use protocol::{ApnsEnvironment, Approval, Decision, NotificationKey, PushToken};
+use protocol::{
+    ActivityId, ApnsEnvironment, Approval, Decision, NotificationKey, PushToken, TerminalId,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -28,6 +30,7 @@ use crate::peers::{self, Store};
 const QUEUE: usize = 64;
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 pub const CATEGORY: &str = "APPROVAL";
+pub const MAX_ACTIVITIES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,10 +44,43 @@ pub struct Device {
     pub registered_at: u64,
 }
 
+/// A Live Activity update token, bound to the paired device that registered it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Activity {
+    pub stable_id: String,
+    pub activity_id: ActivityId,
+    pub terminal_id: TerminalId,
+    pub token: PushToken,
+    pub environment: ApnsEnvironment,
+    pub registered_at: u64,
+}
+
+impl Activity {
+    /// The token as a delivery target, with no notification key.
+    pub fn target(&self) -> Device {
+        Device {
+            stable_id: self.stable_id.clone(),
+            token: self.token.clone(),
+            environment: self.environment,
+            notification_key: None,
+            registered_at: self.registered_at,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Devices {
     pub devices: Vec<Device>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activities: Vec<Activity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    Alert,
+    LiveActivity { urgent: bool },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +90,33 @@ pub struct Alert {
     pub expiration: Option<u64>,
     /// Sealed per device into `enc`, never sent in clear: `(approval_id, context)`.
     pub context: Option<(String, String)>,
+    pub delivery: Delivery,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Headers {
+    pub push_type: PushType,
+    pub topic: String,
+    pub priority: u8,
+    pub expiration: Option<u64>,
+    pub collapse_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum ActivityError {
+    #[error("peer is no longer authorized")]
+    NotPaired,
+    #[error("no push registration for this device")]
+    NoDevice,
+    #[error("at most {MAX_ACTIVITIES} Live Activities per device")]
+    TooMany,
+    #[error("could not store the token")]
+    Store,
+}
+
+enum Job {
+    Broadcast(Alert),
+    Activity(Activity, Alert),
 }
 
 #[derive(Serialize)]
@@ -86,6 +149,24 @@ pub fn seal(
 }
 
 impl Alert {
+    pub fn headers(&self, bundle_id: &str) -> Headers {
+        let (push_type, topic, priority) = match self.delivery {
+            Delivery::Alert => (PushType::Alert, bundle_id.to_owned(), 10),
+            Delivery::LiveActivity { urgent } => (
+                PushType::LiveActivity,
+                format!("{bundle_id}.push-type.liveactivity"),
+                if urgent { 10 } else { 5 },
+            ),
+        };
+        Headers {
+            push_type,
+            topic,
+            priority,
+            expiration: self.expiration,
+            collapse_id: self.collapse_id.clone(),
+        }
+    }
+
     /// The alert as one device receives it: the context sealed with that device's key
     /// under a fresh nonce, or the plaintext fallback alone.
     pub fn for_device(&self, device: &Device) -> Alert {
@@ -155,6 +236,7 @@ pub fn approval_alert(a: &Approval, title: &str, node_id: &str, context: &str) -
         expiration: Some(a.expires_at_ms / 1000),
         context: (!context.is_empty())
             .then(|| (a.approval_id.as_str().to_owned(), context.to_owned())),
+        delivery: Delivery::Alert,
     }
 }
 
@@ -169,13 +251,14 @@ pub fn test_alert() -> Alert {
         collapse_id: None,
         expiration: None,
         context: None,
+        delivery: Delivery::Alert,
     }
 }
 
 pub struct Push {
     path: PathBuf,
     devices: Mutex<Devices>,
-    queue: Option<mpsc::Sender<Alert>>,
+    queue: Option<mpsc::Sender<Job>>,
     paired: Paired,
 }
 
@@ -234,24 +317,135 @@ impl Push {
         })
     }
 
+    pub fn activities(&self) -> Vec<Activity> {
+        self.lock().activities.clone()
+    }
+
+    /// Replaces the device's activity with the same id or terminal: the phone keeps one
+    /// activity per followed agent, and an old one it never ended must not hold a slot.
+    /// The environment is the one the device registered with `push.register`.
+    pub fn register_activity(
+        &self,
+        stable_id: &str,
+        activity_id: ActivityId,
+        terminal_id: TerminalId,
+        token: PushToken,
+    ) -> Result<(), ActivityError> {
+        let mut outcome = Ok(());
+        // Checked under the devices lock, as in `register`.
+        self.update(|d| {
+            if !(self.paired)(stable_id) {
+                outcome = Err(ActivityError::NotPaired);
+                return;
+            }
+            let Some(environment) = d
+                .devices
+                .iter()
+                .find(|x| x.stable_id == stable_id)
+                .map(|x| x.environment)
+            else {
+                outcome = Err(ActivityError::NoDevice);
+                return;
+            };
+            d.activities.retain(|x| {
+                !(x.stable_id == stable_id
+                    && (x.activity_id == activity_id || x.terminal_id == terminal_id))
+                    && x.token != token
+            });
+            if d.activities
+                .iter()
+                .filter(|x| x.stable_id == stable_id)
+                .count()
+                >= MAX_ACTIVITIES
+            {
+                outcome = Err(ActivityError::TooMany);
+                return;
+            }
+            d.activities.push(Activity {
+                stable_id: stable_id.to_owned(),
+                activity_id,
+                terminal_id,
+                token,
+                environment,
+                registered_at: crate::now_ms(),
+            });
+        })
+        .map_err(|e| {
+            tracing::error!(error = %e, "push.activity_token");
+            ActivityError::Store
+        })?;
+        outcome
+    }
+
+    /// Only the device that registered an activity can end it. Returns the removed one.
+    pub fn end_activity(
+        &self,
+        stable_id: &str,
+        activity_id: &ActivityId,
+    ) -> Result<Option<Activity>, peers::Error> {
+        let mut ended = None;
+        self.update(|d| {
+            if let Some(i) = d
+                .activities
+                .iter()
+                .position(|x| x.stable_id == stable_id && x.activity_id == *activity_id)
+            {
+                ended = Some(d.activities.remove(i));
+            }
+        })?;
+        Ok(ended)
+    }
+
+    /// Removes the activities registered before `cutoff_ms` and returns them.
+    pub fn expire_activities(&self, cutoff_ms: u64) -> Result<Vec<Activity>, peers::Error> {
+        let mut expired = Vec::new();
+        self.update(|d| {
+            d.activities.retain(|x| {
+                let keep = x.registered_at >= cutoff_ms;
+                if !keep {
+                    expired.push(x.clone());
+                }
+                keep
+            });
+        })?;
+        Ok(expired)
+    }
+
     pub fn forget(&self, stable_id: &str) -> Result<(), peers::Error> {
-        self.update(|d| d.devices.retain(|x| x.stable_id != stable_id))
+        self.update(|d| {
+            d.devices.retain(|x| x.stable_id != stable_id);
+            d.activities.retain(|x| x.stable_id != stable_id);
+        })
     }
 
     pub fn retain_paired(&self, store: &Store) -> Result<(), peers::Error> {
-        self.update(|d| d.devices.retain(|x| store.get(&x.stable_id).is_some()))
+        self.update(|d| {
+            d.devices.retain(|x| store.get(&x.stable_id).is_some());
+            d.activities.retain(|x| store.get(&x.stable_id).is_some());
+        })
     }
 
     pub fn notify(&self, alert: Alert) {
+        self.enqueue(Job::Broadcast(alert));
+    }
+
+    pub fn notify_activity(&self, activity: Activity, alert: Alert) {
+        self.enqueue(Job::Activity(activity, alert));
+    }
+
+    fn enqueue(&self, job: Job) {
         if let Some(q) = &self.queue
-            && q.try_send(alert).is_err()
+            && q.try_send(job).is_err()
         {
             tracing::warn!("APNs queue full or closed; alert dropped");
         }
     }
 
     fn drop_token(&self, token: &PushToken) {
-        if let Err(e) = self.update(|d| d.devices.retain(|x| x.token != *token)) {
+        if let Err(e) = self.update(|d| {
+            d.devices.retain(|x| x.token != *token);
+            d.activities.retain(|x| x.token != *token);
+        }) {
             tracing::error!(error = %e, "could not remove a dead APNs token");
         }
     }
@@ -276,19 +470,30 @@ impl Push {
 // must never receive an alert.
 async fn deliver(
     push: Weak<Push>,
-    mut rx: mpsc::Receiver<Alert>,
+    mut rx: mpsc::Receiver<Job>,
     sender: Arc<dyn Sender>,
     paired: Paired,
 ) {
-    while let Some(alert) = rx.recv().await {
+    while let Some(job) = rx.recv().await {
         let Some(push) = push.upgrade() else {
             return;
         };
-        for device in push.devices() {
+        let sends = match job {
+            Job::Broadcast(alert) => push
+                .devices()
+                .into_iter()
+                .map(|device| {
+                    let alert = alert.for_device(&device);
+                    (device, alert)
+                })
+                .collect(),
+            Job::Activity(activity, alert) => vec![(activity.target(), alert)],
+        };
+        for (device, alert) in sends {
             if !paired(&device.stable_id) {
                 continue;
             }
-            match sender.send(&device, &alert.for_device(&device)).await {
+            match sender.send(&device, &alert).await {
                 Ok(()) => {}
                 Err(e @ (Rejection::Unregistered | Rejection::BadDeviceToken)) => {
                     tracing::info!(peer = %device.stable_id, reason = %e, "removing APNs token");
@@ -303,7 +508,7 @@ async fn deliver(
 pub struct Apns {
     sandbox: Client,
     production: Client,
-    topic: String,
+    bundle_id: String,
 }
 
 impl Apns {
@@ -331,7 +536,7 @@ impl Apns {
         Ok(Self {
             sandbox: client(Endpoint::Sandbox)?,
             production: client(Endpoint::Production)?,
-            topic: cfg.bundle_id.clone(),
+            bundle_id: cfg.bundle_id.clone(),
         })
     }
 }
@@ -371,7 +576,8 @@ impl Sender for Apns {
         alert: &'a Alert,
     ) -> BoxFuture<'a, Result<(), Rejection>> {
         Box::pin(async move {
-            let collapse_id = match alert.collapse_id.as_deref().map(CollapseId::new) {
+            let headers = alert.headers(&self.bundle_id);
+            let collapse_id = match headers.collapse_id.as_deref().map(CollapseId::new) {
                 Some(Ok(c)) => Some(c),
                 Some(Err(e)) => return Err(Rejection::Other(e.to_string())),
                 None => None,
@@ -380,11 +586,15 @@ impl Sender for Apns {
                 body: &alert.payload,
                 token: device.token.as_str(),
                 options: NotificationOptions {
-                    apns_push_type: Some(PushType::Alert),
-                    apns_priority: Some(Priority::High),
-                    apns_expiration: alert.expiration,
+                    apns_push_type: Some(headers.push_type),
+                    apns_priority: Some(if headers.priority == 10 {
+                        Priority::High
+                    } else {
+                        Priority::Normal
+                    }),
+                    apns_expiration: headers.expiration,
                     apns_collapse_id: collapse_id,
-                    apns_topic: Some(&self.topic),
+                    apns_topic: Some(&headers.topic),
                     ..Default::default()
                 },
             };
@@ -846,6 +1056,173 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         let reopened = Push::open(path, None, Arc::new(|_| true)).unwrap();
         assert!(reopened.devices().is_empty());
         reopened.notify(test_alert());
+    }
+
+    fn aid(i: usize) -> ActivityId {
+        ActivityId::new(format!("ACT-{i}")).unwrap()
+    }
+
+    fn term(i: usize) -> TerminalId {
+        TerminalId::new(format!("term_{i}")).unwrap()
+    }
+
+    fn long_token(i: usize) -> PushToken {
+        PushToken::new(format!("{i:0>160x}")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn activity_tokens_are_bound_capped_and_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("push.json");
+        let mock = Arc::new(Mock {
+            dead: long_token(3),
+            sent: Mutex::new(Vec::new()),
+            calls: AtomicUsize::new(0),
+        });
+        let revoked = Arc::new(AtomicBool::new(false));
+        let paired: Paired = {
+            let revoked = revoked.clone();
+            Arc::new(move |id| id != "nB" || !revoked.load(Ordering::SeqCst))
+        };
+        let push = Push::open(path.clone(), Some(mock.clone()), paired).unwrap();
+        assert_eq!(
+            push.register_activity("nA", aid(0), term(0), long_token(0)),
+            Err(ActivityError::NoDevice),
+            "push.register comes first"
+        );
+        push.register("nA", token('a'), ApnsEnvironment::Sandbox, key())
+            .unwrap();
+        push.register("nB", token('b'), ApnsEnvironment::Production, key())
+            .unwrap();
+        for i in 0..MAX_ACTIVITIES {
+            push.register_activity("nA", aid(i), term(i), long_token(i))
+                .unwrap();
+        }
+        assert_eq!(
+            push.register_activity("nA", aid(99), term(99), long_token(99)),
+            Err(ActivityError::TooMany)
+        );
+        push.register_activity("nA", aid(1), term(1), long_token(100))
+            .unwrap();
+        push.register_activity("nA", aid(50), term(6), long_token(150))
+            .unwrap();
+        push.register_activity("nB", aid(0), term(0), long_token(200))
+            .unwrap();
+        let stored: Devices = peers::load_json(&path).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let mine: Vec<&Activity> = stored
+            .activities
+            .iter()
+            .filter(|a| a.stable_id == "nA")
+            .collect();
+        assert_eq!(mine.len(), MAX_ACTIVITIES, "same id or terminal replaces");
+        assert!(!mine.iter().any(|a| a.activity_id == aid(6)));
+        assert!(mine.iter().any(|a| a.activity_id == aid(50)));
+        assert!(
+            mine.iter()
+                .all(|a| a.environment == ApnsEnvironment::Sandbox)
+        );
+        assert_eq!(
+            stored.activities.last().unwrap().environment,
+            ApnsEnvironment::Production
+        );
+        assert!(!mine.iter().any(|a| a.token == long_token(1)));
+
+        assert_eq!(
+            push.end_activity("nB", &aid(2)).unwrap(),
+            None,
+            "another device cannot end it"
+        );
+        let ended = push.end_activity("nA", &aid(2)).unwrap().unwrap();
+        assert_eq!(ended.token, long_token(2));
+        assert_eq!(push.end_activity("nA", &aid(2)).unwrap(), None);
+        assert_eq!(push.activities().len(), MAX_ACTIVITIES);
+
+        let find = |id: &str, i: usize| {
+            push.activities()
+                .into_iter()
+                .find(|a| a.stable_id == id && a.activity_id == aid(i))
+                .unwrap()
+        };
+        let alert = crate::activity::end(None, 0);
+        push.notify_activity(find("nA", 3), alert.clone());
+        revoked.store(true, Ordering::SeqCst);
+        push.notify_activity(find("nB", 0), alert.clone());
+        push.notify_activity(find("nA", 4), alert.clone());
+        while mock.calls.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 2, "never sent to nB");
+        assert_eq!(
+            *mock.sent.lock().unwrap(),
+            [(long_token(4).as_str().to_owned(), alert)]
+        );
+        assert!(
+            !push.activities().iter().any(|a| a.token == long_token(3)),
+            "Unregistered drops the activity token"
+        );
+        assert_eq!(push.devices().len(), 2);
+        assert_eq!(
+            push.register_activity("nB", aid(5), term(5), long_token(5)),
+            Err(ActivityError::NotPaired)
+        );
+
+        let mut store = Store::default();
+        store
+            .add(peers::Peer {
+                stable_id: "nA".into(),
+                user_id: 1,
+                login: "me@example.com".into(),
+                label: "phone".into(),
+                paired_at: 0,
+            })
+            .unwrap();
+        push.retain_paired(&store).unwrap();
+        assert!(push.activities().iter().all(|a| a.stable_id == "nA"));
+        assert!(push.expire_activities(0).unwrap().is_empty());
+        let left = push.activities();
+        assert_eq!(
+            push.expire_activities(crate::now_ms() + 1).unwrap(),
+            left,
+            "registered before the cutoff"
+        );
+        assert!(push.activities().is_empty());
+        assert!(
+            peers::load_json::<Devices>(&path)
+                .unwrap()
+                .activities
+                .is_empty()
+        );
+        push.forget("nA").unwrap();
+        let stored: Devices = peers::load_json(&path).unwrap();
+        assert_eq!(stored, Devices::default());
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("activities"),
+            "an empty list is not written"
+        );
+    }
+
+    #[test]
+    fn stores_without_activities_still_load() {
+        let old = r#"{"devices":[{"stable_id":"nA","token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","environment":"sandbox","registered_at":1}]}"#;
+        let d: Devices = serde_json::from_str(old).unwrap();
+        assert!(d.activities.is_empty());
+        let a = Activity {
+            stable_id: "nA".into(),
+            activity_id: aid(0),
+            terminal_id: term(0),
+            token: long_token(0),
+            environment: ApnsEnvironment::Sandbox,
+            registered_at: 0,
+        };
+        assert!(!format!("{a:?}").contains(long_token(0).as_str()));
+        assert_eq!(a.target().notification_key, None);
     }
 
     fn cfg(dir: &Path, key_id: &str) -> ApnsConfig {

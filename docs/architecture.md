@@ -103,6 +103,7 @@ Every attempt is audited with its decision and result, including replays, rate-l
 - `collied doctor` checks the signature (Developer ID requirement and identifier, `codesign` line), reads the item with user interaction disabled (what it reads is what the daemon reads unattended), signs a provider token as a dry run, and warns about any `.p8` left in `<data dir>/apns`.
 - Tokens arrive by `push.register` and are stored per `StableID` in `push.json` (0600, atomic), with the device's notification key (below). Each token carries its environment (Debug builds: sandbox, TestFlight: production); one collied keeps a client for each. Every send re-checks the pairing (a registration racing a revoke never gets an alert); `Unregistered` and `BadDeviceToken` drop the token; revoking a peer forgets its tokens. Queue of 64 alerts, dropped when full; 10 s per send.
 - Approval alert: push type `alert`, priority 10, `apns-expiration` = approval expiry, `apns-collapse-id` = `terminal_id`.
+- Live Activity update tokens are stored next to the device's token and pushed to with their own headers: [Live Activities](#live-activities).
 
 | Field | Value |
 |---|---|
@@ -205,6 +206,55 @@ Claude Code keeps unsent text in its input box, and herdr's `agent.prompt` paste
 - With an `enc` it reads the key for the alert's `node_id` and opens it; on success the body becomes the context (the title is kept), on any failure the plaintext fallback stays.
 - collie-core mirrors the last connection result per Mac node ID (`last_ok_ms`, `last_fail_ms`, nothing else) to `reachability.json` in the App Group. If the alert's `node_id` last failed, the NSE appends " (Mac may be unreachable, open collie to check)" to the body. Everything else passes through unchanged.
 
+## Live Activities
+
+The lock screen and the Dynamic Island show an agent only while the user follows it: off by default for every agent, at most 5 at once on the phone. The phone starts each activity itself, from the foreground; collied only updates and ends it. Push-to-start is not used (`live_activity_push_to_start_token` in `push.register` stays unused).
+
+### Phone and collie-core
+
+- Following starts an `Activity` (`pushType: .token`) with the agent's current state. Each token from `pushTokenUpdates` goes to that agent's Mac with `register_activity_token(machine_id, activity_id, terminal_id, token_hex)`; every foreground registers the tokens of all running activities again. Unfollowing ends the activity at once and calls `end_activity(machine_id, activity_id)`.
+- collie-core keeps the registrations per machine in memory only (never on disk) and sends them on every connection, after `push.register`, since collied takes the APNs environment from it. Calls are queued in call order, so the app registers push before its activities. An end the Mac has not acknowledged is sent once more with the next connection (at most 16 kept per machine).
+
+### Protocol
+
+- `push.activity_token {activity_id, terminal_id, token}` and `push.activity_end {activity_id}`, both `MethodClass::Push`. `activity_id` is ActivityKit's `Activity.id` (`[A-Za-z0-9-]`, at most 64), `token` is the update token in hex (64 to 256 characters, redacted in `Debug`).
+- Additive: the protocol version stays 2. An older collied answers `not_implemented` or `unknown_method`, which the phone ignores.
+
+### collied
+
+- Stored in `push.json` (0600, atomic) under `activities`: `{stable_id, activity_id, terminal_id, token, environment, registered_at}`. A file without `activities` loads as before; an empty list is not written.
+- Bound to the session's `StableID`: a device registers, replaces and ends only its own activities. The same `activity_id` or the same `terminal_id` from the same device replaces the old entry (the phone keeps one activity per followed agent, so an activity it never ended cannot hold a slot); a token is stored once. The environment is the device's own from `push.register` (`not_found` without one). At most 8 per device (`too_large` beyond). `push.activity_end` for an id the device does not have answers `ok`.
+- Dropped on `push.activity_end`, on revoke, at start for peers no longer paired, on `Unregistered` or `BadDeviceToken` for that token, when the terminal is gone, and quietly (no push, audited as `ended: expired`) 8 h after `registered_at`: ActivityKit ends an activity 8 h after it starts, and the phone registers after the start and again on every foreground, which refreshes `registered_at`.
+- Updates come from the 1 s agent reconcile, after the approvals pass, never from terminal output. Per activity:
+  - first sight (a new activity, a new token, or a collied restart): one update without alert, so the activity shows what the Mac sees;
+  - content changed: an update, at most one per 2 s per activity (a change inside the gap goes out on the first reconcile after it); an update that enters `blocked` is urgent (priority 10 and an alert) at most once per 30 s per activity, so a status flapping on the same prompt alerts once and then sends plain updates;
+  - nothing changed: the same content again every 10 min, to move the stale date while the Mac is up;
+  - the terminal missing from two reconciles in a row: `end` with `dismissal-date` = now + 60 s, then the token is dropped. A missed `agent.list` (herdr down) changes nothing.
+- Every send re-checks the pairing, like alerts. One audit line per register (`push.activity_token`, target `<terminal_id> activity=<activity_id>`) and per end (`push.activity_end`, from the phone, or `ended: agent gone` and `ended: expired` from collied); tokens are never logged or audited.
+
+| Header | Value |
+|---|---|
+| `apns-push-type` | `liveactivity` |
+| `apns-topic` | `<bundle_id>.push-type.liveactivity` |
+| `apns-priority` | 10 for the update that enters `blocked` (it carries the alert, at most once per 30 s per activity), 5 for every other update, refresh and end |
+| `apns-expiration` | now + 5 min |
+| `apns-collapse-id` | none |
+
+```json
+{"aps": {
+  "timestamp": 1791028800,
+  "event": "update",
+  "content-state": {"status": "blocked", "statusSince": 812721600, "title": "api-fixer", "workspace": "api", "approvals": 1},
+  "stale-date": 1791029700,
+  "relevance-score": 100,
+  "alert": {"title": "api-fixer", "body": "Blocked in api"}
+}}
+```
+
+- `timestamp`, `stale-date` (now + 15 min) and `dismissal-date` are Unix seconds. `relevance-score` is 100 while `blocked`, else 50. `alert` only on the update that enters `blocked`, so the Dynamic Island expands; its text is the approval alert's.
+- `content-state` decodes into `AgentActivityAttributes.ContentState` with ActivityKit's default decoder: `status` is `idle | working | blocked | done | unknown`; `statusSince` is whole seconds since 2001-01-01T00:00:00Z (Unix seconds − 978307200), Swift's default `Date` Codable value, with no custom date strategy on either side; `title` is the alert title (herdr agent name, else agent kind, else `agent`); `workspace` is the workspace label; `approvals` counts the agent's pending approvals (0 or 1). The fixture [protocol/live-activity-content-state.json](protocol/live-activity-content-state.json) is checked by collied's and the app's tests.
+- The content state is plaintext to Apple: status, its start, the agent and workspace labels and a count. Never the terminal title, snippet, context or nonce ([threat-model.md](threat-model.md#apple-sees-push-payload-metadata)).
+
 ## iOS
 
 - Only the app target links CollieCore (Rust + Go). The Go runtime starts at image load through a `__mod_init_func` initializer, so the widget extension and the NSE stay pure Swift and share an App Group container (reachability hint, Live Activity state).
@@ -217,7 +267,7 @@ Claude Code keeps unsent text in its input box, and herdr's `agent.prompt` paste
 - One connection supervisor in collie-core: backoff 3, 4, 8, 16 s; reset after 30 s connected; wait while offline; stop on auth failures. On foreground after 10 s or more in background, reconnect immediately (iOS suspends sockets without a close); shorter gaps get a 3 s probe. For 10 s after a foreground resume, failures (the old session's close, a node still rebuilding its paths after the suspend, the node not yet running) retry after 0.5, 1, then 2 s and keep the link Connecting without surfacing the error; a failure the app saw just before the resume is cleared and retried at once, the resume restarts the normal backoff, auth failures still stop at once, and later failures fall back to the normal backoff. A snapshot request cut off by the reconnect answers from the cache.
 - Snapshot plus sequence: `flock.snapshot` returns the `seq` it reflects; every event frame carries `seq`; the client drops `seq <= last applied`; unknown events still advance the cursor.
 - Mutations are never replayed automatically; a retry reuses its `op_id`.
-- Live Activities: t3code abandoned push-to-start as unreliable from background wakes. Start activities from the foreground, register update tokens on every foreground, priority 5 for routine updates and 10 for alerting ones, always set a stale date. Push-to-start stays a Phase 4 experiment, not a dependency.
+- Live Activities: t3code abandoned push-to-start as unreliable from background wakes. Start activities from the foreground, register update tokens on every foreground, priority 5 for routine updates and 10 for alerting ones, always set a stale date. Push-to-start is not used ([Live Activities](#live-activities)).
 - No prior art for authenticated lock-screen approve/deny (t3code only deep-links). collie's flow is described under [Lock-screen approval](#lock-screen-approval); its timings still need measuring on device.
 
 ## Risks
@@ -232,7 +282,7 @@ Claude Code keeps unsent text in its input box, and herdr's `agent.prompt` paste
 | herdr server load (status entry polls `pane.get` every 100 ms) | CPU with many panes | measure; fall back to `agent.list` polling if needed |
 | UniFFI + Swift 6 | build friction | Swift 5 mode bindings target; no async foreign traits on hot paths |
 | APNs `.p8` is team wide | leak allows pushes to every app on the team | dedicated revocable key; Keychain item whose ACL trusts only the Developer ID signed collied; payload never carries the nonce; limits in [threat-model.md](threat-model.md#same-uid-malware-on-the-mac) |
-| APNs payload transits Apple | project names exposed | alert carries agent and workspace labels in clear; the pending action only sealed to the phone's notification key; never the nonce; detail fetched over the tailnet |
+| APNs payload transits Apple | project names exposed | alert carries agent and workspace labels in clear; the pending action only sealed to the phone's notification key; never the nonce; detail fetched over the tailnet. Live Activity content (status, labels, a count) only for followed agents |
 | Answering a blocked prompt outside approvals | bypasses nonce/expiry/audit | collied refuses prompt/keys while `blocked` |
 | Prompt delivered after agent exit | prompt runs as a shell command | foreground check before send; conditional input in herdr upstream |
 | Retried mutations | duplicate prompts/tasks | `op_id` outcome cache |

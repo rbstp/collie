@@ -16,11 +16,11 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
-    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTarget, AgentWatchParams, ApprovalId,
-    Cwd, DraftText, Empty, ErrorCode, Key, Label, NotificationKey, OpId, PairCompleteParams,
-    PairingInvite, PaneCloseParams, PromptText, PushRegisterParams, PushToken, ReadParams,
-    ReadSource, Request, Response, TaskNewParams, TerminalId, TerminalRead, WorkspaceCloseParams,
-    WorkspaceId, limits,
+    ActivityId, AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTarget, AgentWatchParams,
+    ApprovalId, Cwd, DraftText, Empty, ErrorCode, Key, Label, NotificationKey, OpId,
+    PairCompleteParams, PairingInvite, PaneCloseParams, PromptText, PushActivityEndParams,
+    PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams, ReadSource, Request,
+    Response, TaskNewParams, TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -892,17 +892,63 @@ impl CollieCore {
             if !machines.iter().any(|m| m.id == machine_id) {
                 return Err(CoreError::MachineNotFound);
             }
-            lock(&self.inner.push).insert(machine_id.clone(), push.clone());
+            lock(&self.inner.push)
+                .entry(machine_id.clone())
+                .or_default()
+                .push = Some(push.clone());
         }
-        let conn = self.conn(&machine_id)?;
-        if lock(&conn.shared.link).phase == LinkPhase::Connected {
-            self.runtime.spawn(async move {
-                let _ = conn
-                    .request(Request::PushRegister(push), CALL_TIMEOUT)
-                    .await;
-            });
+        self.send_if_connected(&machine_id, Request::PushRegister(push), None)
+    }
+
+    /// Sends a Live Activity's update token to the Mac that runs `terminal_id`, now if
+    /// connected and again on every later connection of this process. collied takes the
+    /// APNs environment from `push.register`, so call [`Self::register_push`] first.
+    /// Kept in memory only.
+    pub fn register_activity_token(
+        &self,
+        machine_id: String,
+        activity_id: String,
+        terminal_id: String,
+        token_hex: String,
+    ) -> Result<(), CoreError> {
+        let params = PushActivityTokenParams {
+            activity_id: activity(activity_id)?,
+            terminal_id: terminal(terminal_id)?,
+            token: PushToken::new(token_hex.trim())
+                .map_err(|_| invalid("token", "activity token must be 64 to 256 hex characters"))?,
+        };
+        {
+            let machines = lock(&self.inner.machines);
+            if !machines.iter().any(|m| m.id == machine_id) {
+                return Err(CoreError::MachineNotFound);
+            }
+            let mut push = lock(&self.inner.push);
+            let reg = push.entry(machine_id.clone()).or_default();
+            reg.unsent_ends.retain(|a| *a != params.activity_id);
+            reg.activities
+                .insert(params.activity_id.as_str().to_owned(), params.clone());
         }
-        Ok(())
+        self.send_if_connected(&machine_id, Request::PushActivityToken(params), None)
+    }
+
+    /// Stops the Mac pushing to that activity. Sent now if connected, else with the next
+    /// connection.
+    pub fn end_activity(&self, machine_id: String, activity_id: String) -> Result<(), CoreError> {
+        let activity_id = activity(activity_id)?;
+        {
+            let machines = lock(&self.inner.machines);
+            if !machines.iter().any(|m| m.id == machine_id) {
+                return Err(CoreError::MachineNotFound);
+            }
+            lock(&self.inner.push)
+                .entry(machine_id.clone())
+                .or_default()
+                .end(&activity_id);
+        }
+        let request = Request::PushActivityEnd(PushActivityEndParams {
+            activity_id: activity_id.clone(),
+        });
+        self.send_if_connected(&machine_id, request, Some(activity_id))
     }
 
     pub fn max_attachment_bytes(&self) -> u64 {
@@ -1075,6 +1121,31 @@ impl CollieCore {
 
     /// Holds the machines lock until the conn is inserted so a concurrent removal
     /// cannot leave a supervisor for a removed machine.
+    /// An end the Mac acknowledged is no longer sent with the next connection.
+    fn send_if_connected(
+        &self,
+        machine_id: &str,
+        request: Request,
+        ends: Option<ActivityId>,
+    ) -> Result<(), CoreError> {
+        let conn = self.conn(machine_id)?;
+        if lock(&conn.shared.link).phase != LinkPhase::Connected {
+            return Ok(());
+        }
+        let push = self.inner.push.clone();
+        let machine_id = machine_id.to_owned();
+        let sent = conn.request_in_order(request, CALL_TIMEOUT);
+        self.runtime.spawn(async move {
+            let sent = sent.await;
+            if let (Ok(_), Some(ended)) = (sent, ends)
+                && let Some(reg) = lock(&push).get_mut(&machine_id)
+            {
+                reg.unsent_ends.retain(|a| *a != ended);
+            }
+        });
+        Ok(())
+    }
+
     fn conn(&self, machine_id: &str) -> Result<Arc<Conn>, CoreError> {
         let machines = lock(&self.inner.machines);
         let machine = machines
@@ -1410,6 +1481,10 @@ fn invalid(field: &str, message: &str) -> CoreError {
     }
 }
 
+fn activity(id: String) -> Result<ActivityId, CoreError> {
+    ActivityId::new(id).map_err(|_| invalid("activity_id", "invalid activity id"))
+}
+
 fn terminal(id: String) -> Result<TerminalId, CoreError> {
     TerminalId::new(id).map_err(|_| invalid("terminal_id", "invalid agent id"))
 }
@@ -1453,6 +1528,8 @@ fn ms(d: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     fn server(code: ErrorCode, message: &str) -> CoreError {
@@ -1676,7 +1753,10 @@ mod tests {
             vec![9; 32],
         )
         .unwrap();
-        let push = lock(&core.inner.push).clone();
+        let push: BTreeMap<String, PushRegisterParams> = lock(&core.inner.push)
+            .iter()
+            .map(|(m, r)| (m.clone(), r.push.clone().unwrap()))
+            .collect();
         assert_eq!(push.keys().collect::<Vec<_>>(), ["m1", "m2"]);
         assert_eq!(push["m1"].apns_token.as_str(), token);
         assert_eq!(
@@ -1712,6 +1792,121 @@ mod tests {
         }
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
         assert!(lock(&core.inner.push).is_empty());
+    }
+
+    #[test]
+    fn activity_tokens_are_validated_and_kept_in_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("s");
+        ensure_private_dir(&state).unwrap();
+        MachineStore::new(state.clone())
+            .save(&[Machine {
+                id: "m1".into(),
+                label: "mac".into(),
+                host: "m1.tail1234.ts.net".into(),
+                port: 8457,
+                node_id: "nm1".into(),
+            }])
+            .unwrap();
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        let token = "cd".repeat(80);
+        let act = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
+        let field = |r: Result<(), CoreError>| match r {
+            Err(CoreError::InvalidInput { field, .. }) => field,
+            other => panic!("{other:?}"),
+        };
+        let register = |m: &str, a: &str, t: &str, tok: &str| {
+            core.register_activity_token(m.into(), a.into(), t.into(), tok.into())
+        };
+        assert_eq!(
+            field(register("m1", "a/b", "term_1", &token)).as_deref(),
+            Some("activity_id")
+        );
+        assert_eq!(
+            field(register("m1", act, "term 1", &token)).as_deref(),
+            Some("terminal_id")
+        );
+        assert_eq!(
+            field(register("m1", act, "term_1", "abc")).as_deref(),
+            Some("token")
+        );
+        assert!(matches!(
+            register("nope", act, "term_1", &token),
+            Err(CoreError::MachineNotFound)
+        ));
+        assert_eq!(
+            field(core.end_activity("m1".into(), "".into())).as_deref(),
+            Some("activity_id")
+        );
+        assert!(matches!(
+            core.end_activity("nope".into(), act.into()),
+            Err(CoreError::MachineNotFound)
+        ));
+
+        register("m1", act, "term_1", &format!(" {token}\n")).unwrap();
+        register("m1", "B", "term_2", &token).unwrap();
+        core.register_push(
+            "m1".into(),
+            "ab".repeat(32),
+            PushEnvironment::Sandbox,
+            vec![3; 32],
+        )
+        .unwrap();
+        let methods = |reg: &mut conn::Registrations| -> Vec<String> {
+            reg.take_requests()
+                .iter()
+                .map(|r| match r {
+                    Request::PushActivityToken(p) => format!("token {}", p.activity_id.as_str()),
+                    Request::PushActivityEnd(p) => format!("end {}", p.activity_id.as_str()),
+                    other => other.method().to_owned(),
+                })
+                .collect()
+        };
+        let mut reg = lock(&core.inner.push)["m1"].clone();
+        assert_eq!(
+            methods(&mut reg),
+            [
+                "push.register",
+                "token 3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+                "token B"
+            ]
+        );
+        assert_eq!(
+            reg.activities[act].token.as_str(),
+            token,
+            "trimmed, and kept for the next session"
+        );
+
+        core.end_activity("m1".into(), act.into()).unwrap();
+        let mut reg = lock(&core.inner.push)["m1"].clone();
+        assert_eq!(
+            methods(&mut reg),
+            [
+                "push.register",
+                "end 3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+                "token B"
+            ]
+        );
+        assert_eq!(
+            methods(&mut reg),
+            ["push.register", "token B"],
+            "ends go once"
+        );
+        register("m1", act, "term_1", &token).unwrap();
+        assert!(lock(&core.inner.push)["m1"].unsent_ends.is_empty());
+        for i in 0..40 {
+            core.end_activity("m1".into(), format!("E{i}")).unwrap();
+        }
+        assert_eq!(lock(&core.inner.push)["m1"].unsent_ends.len(), 16);
+
+        drop(core);
+        for entry in std::fs::read_dir(&state).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() {
+                let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
+                assert!(!text.contains(&token), "{}", path.display());
+            }
+        }
     }
 
     #[test]
@@ -1881,9 +2076,11 @@ mod tailnet_tests {
         lists: usize,
         decisions: Vec<(String, protocol::Decision)>,
         pushes: Vec<String>,
+        activities: Vec<String>,
     }
 
     const NONCE: &str = "Tm9uY2VOb25jZU5vbmNlTm9uY2VOb25jZU5vbmNlTm9";
+    const ACTIVITY: &str = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
     const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     fn approval(id: &str) -> protocol::Approval {
@@ -2063,7 +2260,24 @@ mod tailnet_tests {
                             }
                         }
                         Request::PushRegister(p) => {
-                            lock(&seen).pushes.push(p.apns_token.as_str().into());
+                            let mut seen = lock(&seen);
+                            seen.pushes.push(p.apns_token.as_str().into());
+                            seen.activities.push("register".into());
+                            Ok(Response::Ok)
+                        }
+                        Request::PushActivityToken(p) => {
+                            lock(&seen).activities.push(format!(
+                                "token {} {} {}",
+                                p.activity_id.as_str(),
+                                p.terminal_id.as_str(),
+                                p.token.as_str()
+                            ));
+                            Ok(Response::Ok)
+                        }
+                        Request::PushActivityEnd(p) => {
+                            lock(&seen)
+                                .activities
+                                .push(format!("end {}", p.activity_id.as_str()));
                             Ok(Response::Ok)
                         }
                         other => panic!("unexpected {}", other.method()),
@@ -2499,10 +2713,46 @@ mod tailnet_tests {
         poll("push.register", || {
             (lock(&seen).pushes.len() == 1).then_some(())
         });
+        let token = "ab".repeat(80);
+        core.register_activity_token(id(), ACTIVITY.into(), "term_1".into(), token.clone())
+            .unwrap();
+        let registered = format!("token {ACTIVITY} term_1 {token}");
+        poll("push.activity_token", || {
+            (lock(&seen).activities.last() == Some(&registered)).then_some(())
+        });
         core.resume(60);
         poll("push.register after reconnect", || {
             (lock(&seen).pushes.len() == 2).then_some(())
         });
+        poll("activity token after reconnect", || {
+            (lock(&seen).activities.len() == 4).then_some(())
+        });
+        assert_eq!(
+            lock(&seen).activities,
+            ["register", &registered, "register", &registered],
+            "push.register first: collied takes the environment from it"
+        );
+        core.end_activity(id(), ACTIVITY.into()).unwrap();
+        let ended = format!("end {ACTIVITY}");
+        poll("push.activity_end", || {
+            (lock(&seen).activities.last() == Some(&ended)).then_some(())
+        });
+        poll("acknowledged end", || {
+            lock(&core.inner.push)[&id()]
+                .unsent_ends
+                .is_empty()
+                .then_some(())
+        });
+        core.resume(60);
+        poll("push.register after the end", || {
+            (lock(&seen).pushes.len() == 3).then_some(())
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            lock(&seen).activities[5..],
+            ["register"],
+            "an acknowledged end and an ended activity are not sent again"
+        );
 
         // Cold start: a new process on the same state dir, node not started, no conns.
         lock(&seen).approvals.push(approval("a2"));
@@ -2586,7 +2836,7 @@ mod tailnet_tests {
         core.register_push(id(), TOKEN.into(), PushEnvironment::Sandbox, vec![7; 32])
             .unwrap();
         poll("token registered again by the new process", || {
-            (lock(&seen).pushes.len() == 3).then_some(())
+            (lock(&seen).pushes.len() == 4).then_some(())
         });
         assert!(lock(&seen).pushes.iter().all(|t| t == TOKEN));
         drop(core);

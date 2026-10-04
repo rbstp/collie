@@ -18,6 +18,8 @@
 		<string>Collie App Store</string>
 		<key>dev.rbstp.collie.push</key>
 		<string>Collie Push App Store</string>
+		<key>dev.rbstp.collie.widgets</key>
+		<string>Collie Widgets App Store</string>
 	</dict>
 	<key>uploadSymbols</key>
 	<true/>

@@ -3,7 +3,10 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use protocol::{Empty, HelloResult, PushRegisterParams, Request, Response};
+use protocol::{
+    ActivityId, Empty, HelloResult, PushActivityEndParams, PushActivityTokenParams,
+    PushRegisterParams, Request, Response,
+};
 use tailnet::{BackendState, Node};
 use tokio::net::UnixStream;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
@@ -33,6 +36,7 @@ const GRACE_BACKOFF: [Duration; 3] = [
     Duration::from_secs(2),
 ];
 const QUEUE: usize = 8;
+const MAX_UNSENT_ENDS: usize = 16;
 const MUTATION_ATTEMPTS: usize = 3;
 
 /// Every holder clones the outer Arc, never the inner Node, so the strong count says
@@ -40,7 +44,46 @@ const MUTATION_ATTEMPTS: usize = 3;
 pub type NodeSlot = Arc<Mutex<Option<Arc<Node>>>>;
 
 /// Keyed by machine id: each Mac gets its own notification key.
-pub type PushSlot = Arc<Mutex<BTreeMap<String, PushRegisterParams>>>;
+pub type PushSlot = Arc<Mutex<BTreeMap<String, Registrations>>>;
+
+/// Memory only, never written to disk. Every session of the machine sends them again.
+#[derive(Debug, Clone, Default)]
+pub struct Registrations {
+    pub push: Option<PushRegisterParams>,
+    pub activities: BTreeMap<String, PushActivityTokenParams>,
+    /// Ends the Mac may not have received yet: sent once with the next session.
+    pub unsent_ends: Vec<ActivityId>,
+}
+
+impl Registrations {
+    pub fn end(&mut self, activity_id: &ActivityId) {
+        self.activities.remove(activity_id.as_str());
+        self.unsent_ends.retain(|a| a != activity_id);
+        if self.unsent_ends.len() == MAX_UNSENT_ENDS {
+            self.unsent_ends.remove(0);
+        }
+        self.unsent_ends.push(activity_id.clone());
+    }
+
+    /// `push.register` first: collied takes an activity's APNs environment from it.
+    pub fn take_requests(&mut self) -> Vec<Request> {
+        let ends = std::mem::take(&mut self.unsent_ends)
+            .into_iter()
+            .map(|activity_id| Request::PushActivityEnd(PushActivityEndParams { activity_id }));
+        self.push
+            .clone()
+            .map(Request::PushRegister)
+            .into_iter()
+            .chain(ends)
+            .chain(
+                self.activities
+                    .values()
+                    .cloned()
+                    .map(Request::PushActivityToken),
+            )
+            .collect()
+    }
+}
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ConnectError {
@@ -251,6 +294,16 @@ impl Conn {
         send(&self.requests, request, timeout).await
     }
 
+    /// Queued before this returns, so calls keep their order on the connection.
+    pub fn request_in_order(
+        &self,
+        request: Request,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Response, RequestError>> + Send + 'static {
+        let queued = enqueue(&self.requests, request);
+        async move { answer(queued?, timeout).await }
+    }
+
     pub async fn mutate(
         &self,
         request: Request,
@@ -290,11 +343,24 @@ async fn send(
     request: Request,
     timeout: Duration,
 ) -> Result<Response, RequestError> {
+    answer(enqueue(requests, request)?, timeout).await
+}
+
+type Answer = oneshot::Receiver<Result<Response, SessionError>>;
+
+fn enqueue(
+    requests: &mpsc::Sender<(Request, Reply)>,
+    request: Request,
+) -> Result<Answer, RequestError> {
     let (tx, rx) = oneshot::channel();
     requests.try_send((request, tx)).map_err(|e| match e {
         mpsc::error::TrySendError::Closed(_) => RequestError::Stopped,
         mpsc::error::TrySendError::Full(_) => RequestError::Busy,
     })?;
+    Ok(rx)
+}
+
+async fn answer(rx: Answer, timeout: Duration) -> Result<Response, RequestError> {
     match tokio::time::timeout(timeout, rx).await {
         Ok(Ok(Ok(response))) => Ok(response),
         Ok(Ok(Err(e))) => Err(RequestError::Failed(e)),
@@ -359,7 +425,10 @@ async fn supervise(
                 shared.set(LinkPhase::Connected, None);
                 let since = Instant::now();
                 reconnect.borrow_and_update();
-                let push = lock(&push).get(&machine.id).cloned();
+                let push = lock(&push)
+                    .get_mut(&machine.id)
+                    .map(Registrations::take_requests)
+                    .unwrap_or_default();
                 let end = session
                     .run(&mut requests, &shared.flock, push, async {
                         let _ = reconnect.changed().await;
