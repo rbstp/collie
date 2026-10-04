@@ -100,6 +100,7 @@ targets:
       - path: Sources/Shared/AgentActivity.swift
       - path: Sources/Shared/DecideApprovalIntent.swift
       - path: Sources/Shared/NotificationKey.swift
+      - path: Sources/Shared/PushHint.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie.widgets
