@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let center = UNUserNotificationCenter.current()
         center.setNotificationCategories(ApprovalNotification.categories)
         center.delegate = self
+        DecideApprovalIntent.decide = { [app] link, decision in await app.decideFromActivity(link, decision) }
         return true
     }
 

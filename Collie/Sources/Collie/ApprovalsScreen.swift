@@ -67,10 +67,15 @@ struct ApprovalCard: View {
     var showsMachine = false
 
     private var approval: PendingApproval { item.approval }
+    private var expanded: Bool { model.expanded.contains(item.id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: approval.agentLabel).font(.headline).lineLimit(1)
                     Text(verbatim: [approval.workspaceLabel, showsMachine ? item.machine.label : nil].compactMap { $0 }.joined(separator: " · "))
@@ -85,28 +90,99 @@ struct ApprovalCard: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation { model.toggleExpanded(item) } }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint(expanded ? "Shows less of the prompt" : "Shows the whole prompt")
             if let tool = approval.toolName {
                 Text(verbatim: [tool, approval.toolSummary].compactMap { $0 }.joined(separator: ": "))
                     .font(.callout.monospaced())
-                    .lineLimit(3)
+                    .lineLimit(expanded ? nil : 3)
             }
             if !approval.snippet.isEmpty {
                 Text(verbatim: approval.snippet)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
-                    .lineLimit(8)
+                    .lineLimit(expanded ? nil : 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 8))
             }
+            if approval.supportsNote, model.noting.contains(item.id) {
+                NoteField(model: model, item: item)
+            }
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                DecisionButtons(
-                    model: model, item: item,
-                    expired: approval.expiresAtMs <= UInt64(context.date.timeIntervalSince1970 * 1000)
-                )
+                let expired = approval.expiresAtMs <= UInt64(context.date.timeIntervalSince1970 * 1000)
+                if approval.options.isEmpty {
+                    ChoiceButtons(model: model, item: item, expired: expired)
+                } else {
+                    DecisionButtons(model: model, item: item, expired: expired)
+                }
+            }
+            if approval.supportsNote, !model.noting.contains(item.id) {
+                Button("Add note", systemImage: "text.bubble") { model.toggleNote(item) }
+                    .font(.footnote)
+                    .disabled(model.steps[item.id] != nil)
+            }
+            if approval.takesFeedback {
+                FeedbackField(model: model, item: item)
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+extension ApprovalsModel {
+    func draft(_ item: ApprovalItem) -> Binding<String> {
+        // collied caps notes at 200 characters: a longer line cannot be read back once wrapped.
+        Binding(get: { self.drafts[item.id, default: ""] }, set: { self.drafts[item.id] = String($0.prefix(200)) })
+    }
+}
+
+/// Sent with Approve or Deny, typed on the Mac in place of the option's amend placeholder.
+private struct NoteField: View {
+    let model: ApprovalsModel
+    let item: ApprovalItem
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("Note for \(item.approval.agentLabel)", text: model.draft(item))
+                .textFieldStyle(.roundedBorder)
+                .submitLabel(.done)
+            Button("Remove note", systemImage: "xmark.circle.fill") { model.toggleNote(item) }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+        }
+        .disabled(model.steps[item.id] != nil)
+    }
+}
+
+/// The plan's "Tell Claude what to change", sent with `typeText`.
+private struct FeedbackField: View {
+    let model: ApprovalsModel
+    let item: ApprovalItem
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("Tell Claude what to change", text: model.draft(item))
+                .textFieldStyle(.roundedBorder)
+                .submitLabel(.send)
+                .onSubmit { Task { await model.sendFeedback(item) } }
+            Button {
+                Task { await model.sendFeedback(item) }
+            } label: {
+                if model.steps[item.id] == .typing {
+                    ProgressView().frame(width: 28, height: 28)
+                } else {
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 28))
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(model.drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel("Send feedback")
+        }
+        .disabled(model.steps[item.id] != nil)
     }
 }
 
@@ -131,6 +207,41 @@ private struct DecisionButtons: View {
                     .frame(maxWidth: .infinity)
                 }
                 .modifier(DecisionStyle(prominent: decision == .approve))
+                .disabled(model.note(for: item) != nil && !item.approval.takesNote(with: decision))
+            }
+        }
+        .disabled(expired || model.steps[item.id] != nil)
+    }
+}
+
+/// The menu on the Mac, for prompts collied offers no Approve/Deny for; each pick goes through `approval.decide`.
+private struct ChoiceButtons: View {
+    let model: ApprovalsModel
+    let item: ApprovalItem
+    let expired: Bool
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ForEach(item.approval.choices, id: \.index) { choice in
+                let decision = ApprovalDecision.choose(choice: choice.index)
+                Button {
+                    Task { await model.decide(item, decision) }
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(verbatim: "\(Int(choice.index) + 1).").monospacedDigit()
+                        Text(verbatim: choice.label).multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                        if model.steps[item.id] == .sending(decision) {
+                            ProgressView()
+                        } else if choice.current {
+                            Image(systemName: "arrowtriangle.left.fill")
+                                .font(.caption2)
+                                .accessibilityLabel("Under the cursor on the Mac")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
             }
         }
         .disabled(expired || model.steps[item.id] != nil)

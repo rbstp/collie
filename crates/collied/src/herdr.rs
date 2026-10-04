@@ -428,6 +428,17 @@ pub async fn agent_send_keys(socket: &Path, pane_id: &str, keys: &[&str]) -> Res
     Ok(())
 }
 
+/// Typed as is, without Enter and without bracketed paste (verified on herdr 0.9.3).
+pub async fn pane_send_text(socket: &Path, pane_id: &str, text: &str) -> Result<(), Error> {
+    let OkResult::Ok {} = call(
+        socket,
+        "pane.send_text",
+        json!({ "pane_id": pane_id, "text": text }),
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn agent_focus(socket: &Path, pane_id: &str) -> Result<(), Error> {
     let AgentInfoResult::AgentInfo { .. } =
         call(socket, "agent.focus", json!({ "target": pane_id })).await?;

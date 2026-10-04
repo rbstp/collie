@@ -116,6 +116,7 @@ final class FakeApprovalCore: ApprovalCore {
     struct State {
         var pending: [PendingApproval] = []
         var decisions: [String] = []
+        var typed: [String] = []
         var error: CoreError?
         var outcome = DecisionOutcome.applied(decision: .approve, by: "phone")
         var link = LinkPhase.connected
@@ -137,13 +138,20 @@ final class FakeApprovalCore: ApprovalCore {
         }
         return MachineFlock(machine: machine, link: link, lastError: nil, details: nil, workspaces: [], agents: [], approvalsCount: 0)
     }
-    func decide(machineId: String, approvalId: String, decision: ApprovalDecision) async throws -> DecisionOutcome {
+    func decide(machineId: String, approvalId: String, decision: ApprovalDecision, note: String?) async throws -> DecisionOutcome {
         let (error, outcome) = state.withLock { s in
-            s.decisions.append("\(machineId) \(approvalId) \(decision)")
+            s.decisions.append("\(machineId) \(approvalId) \(decision)" + (note.map { " note=\($0)" } ?? ""))
             return (s.error, s.outcome)
         }
         if let error { throw error }
         return outcome
+    }
+    func typeText(machineId: String, terminalId: String, text: String) async throws {
+        let error = state.withLock { s in
+            s.typed.append("\(machineId) \(terminalId) \(text)")
+            return s.error
+        }
+        if let error { throw error }
     }
 }
 
@@ -187,12 +195,28 @@ final class FakeAuthenticator: Authenticator {
     }
 }
 
-private func approval(_ id: String, options: [ApprovalDecision] = [.approve, .approveAlways, .deny]) -> PendingApproval {
+private func approval(
+    _ id: String, options: [ApprovalDecision] = [.approve, .approveAlways, .deny], choices: [ApprovalChoice] = [],
+    acceptsInput: Bool = false, hasTextField: Bool = false, supportsNote: Bool = false
+) -> PendingApproval {
     PendingApproval(
         approvalId: id, terminalId: "term_1", agentLabel: "claude", workspaceLabel: "collie", snippet: "Do you want to proceed?",
-        toolName: "Bash", toolSummary: "cargo test", options: options, createdAtMs: 1, expiresAtMs: .max
+        toolName: "Bash", toolSummary: "cargo test", options: options, choices: choices, acceptsInput: acceptsInput,
+        hasTextField: hasTextField, supportsNote: supportsNote, createdAtMs: 1, expiresAtMs: .max
     )
 }
+
+private let planChoices = [
+    ApprovalChoice(index: 0, label: "Yes, and use auto mode", current: true),
+    ApprovalChoice(index: 1, label: "Yes, manually approve edits", current: false),
+    ApprovalChoice(index: 2, label: "Tell Claude what to change", current: false),
+]
+
+private let questionChoices = [
+    ApprovalChoice(index: 0, label: "PostgreSQL", current: true),
+    ApprovalChoice(index: 1, label: "SQLite", current: false),
+    ApprovalChoice(index: 2, label: "Type something.", current: false),
+]
 
 @MainActor
 private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator) -> ApprovalsModel {
@@ -325,4 +349,201 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     let unknown = try #require(ApprovalLink(nodeId: "nOTHER", approvalId: "ap_1"))
     #expect(model.open(unknown) == nil)
     #expect(model.loading == nil)
+}
+
+@MainActor
+@Test func noticeClearsAfterItsLifetime() async throws {
+    let core = FakeApprovalCore()
+    core.state.withLock { $0.pending = [approval("ap_1")] }
+    let model = ApprovalsModel(core: core, auth: FakeAuthenticator(), noticeLifetime: .milliseconds(50))
+    model.poll()
+    let item = try #require(model.items.first)
+    core.state.withLock { $0.pending = [] }
+    await model.decide(item, .approve)
+    #expect(model.notice == "Approved: claude. The agent moved on.")
+    #expect(model.items.isEmpty)
+    while model.notice != nil {
+        try await Task.sleep(for: .milliseconds(5))
+    }
+}
+
+@MainActor
+@Test func noticeClearsWhenTheListChangesOtherThanItsApprovalLeaving() async throws {
+    let core = FakeApprovalCore()
+    let model = approvalsModel(core, FakeAuthenticator())
+    let item = try #require(model.items.first)
+    await model.decide(item, .approve)
+    #expect(model.notice != nil)
+
+    core.state.withLock { $0.pending = [approval("ap_2", options: [.approve, .deny])] }
+    model.poll()
+    #expect(model.notice == "Approved: claude. The agent moved on.")
+
+    core.state.withLock { $0.pending = [approval("ap_2", options: [.approve, .deny]), approval("ap_3")] }
+    model.poll()
+    #expect(model.notice == nil)
+}
+
+@MainActor
+@Test func headerTapTogglesTheFullPrompt() throws {
+    let core = FakeApprovalCore()
+    let model = approvalsModel(core, FakeAuthenticator())
+    let item = try #require(model.items.first)
+    #expect(model.expanded.isEmpty)
+    model.toggleExpanded(item)
+    #expect(model.expanded == ["ap_1"])
+    model.toggleExpanded(item)
+    #expect(model.expanded.isEmpty)
+
+    model.toggleExpanded(item)
+    core.state.withLock { $0.pending = [] }
+    model.poll()
+    #expect(model.expanded.isEmpty)
+}
+
+@MainActor
+@Test func menuOptionIsChosenOnlyAfterAuthenticationAndOnlyWithoutDecisions() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    core.state.withLock { s in
+        s.pending = [approval("ap_q", options: [], choices: questionChoices), approval("ap_b", choices: questionChoices)]
+        s.outcome = .applied(decision: .choose(choice: 1), by: "phone")
+    }
+    let model = ApprovalsModel(core: core, auth: auth)
+    model.poll()
+    let question = try #require(model.items.first { $0.id == "ap_q" })
+    let bash = try #require(model.items.first { $0.id == "ap_b" })
+
+    await model.decide(bash, .choose(choice: 0))
+    await model.decide(question, .choose(choice: 3))
+    await model.decide(question, .approve)
+    #expect(auth.state.withLock { $0.reasons }.isEmpty)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+
+    auth.state.withLock { $0.result = false }
+    await model.decide(question, .choose(choice: 1))
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+    #expect(model.notice?.contains("Nothing was sent") == true)
+
+    auth.state.withLock { $0.result = true }
+    await model.decide(question, .choose(choice: 1))
+    #expect(auth.state.withLock { $0.reasons } == ["Choose option 2 for claude", "Choose option 2 for claude"])
+    #expect(core.state.withLock { $0.decisions } == ["m1 ap_q choose(choice: 1)"])
+    #expect(model.notice == "Chose option 2: claude. The agent moved on.")
+
+    core.state.withLock { $0.outcome = .superseded }
+    await model.decide(question, .choose(choice: 0))
+    #expect(model.notice == "The prompt changed on the Mac. Nothing was sent.")
+}
+
+@MainActor
+@Test func keysAndTextAreOfferedOnlyWhereColliedAcceptsInput() {
+    let core = FakeApprovalCore()
+    let model = ApprovalsModel(core: core, auth: FakeAuthenticator())
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == nil)
+
+    core.state.withLock { $0.pending = [approval("ap_b", choices: questionChoices)] }
+    model.poll()
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .optionsOnly)
+
+    core.state.withLock { $0.pending = [approval("ap_plan", options: [], choices: questionChoices)] }
+    model.poll()
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .optionsOnly)
+
+    core.state.withLock {
+        $0.pending = [approval("ap_q", options: [], choices: questionChoices, acceptsInput: true, hasTextField: true)]
+    }
+    model.poll()
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .keysAndText)
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_2") == nil)
+
+    core.state.withLock { $0.pending = [approval("ap_k", options: [], choices: questionChoices, acceptsInput: true)] }
+    model.poll()
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .keys)
+}
+
+@MainActor
+@Test func noteGoesWithApproveOrDenyOnlyAfterAuthentication() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    core.state.withLock { $0.pending = [approval("ap_n", supportsNote: true), approval("ap_old")] }
+    let model = ApprovalsModel(core: core, auth: auth)
+    model.poll()
+    let item = try #require(model.items.first { $0.id == "ap_n" })
+    let old = try #require(model.items.first { $0.id == "ap_old" })
+
+    model.drafts[item.id] = "use a .tmp extension"
+    #expect(model.note(for: item) == nil)
+    model.toggleNote(item)
+    #expect(model.note(for: item) == "use a .tmp extension")
+
+    await model.decide(item, .approveAlways)
+    #expect(auth.state.withLock { $0.reasons }.isEmpty)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+
+    auth.state.withLock { $0.result = false }
+    await model.decide(item, .approve)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+    #expect(model.drafts[item.id] == "use a .tmp extension")
+
+    auth.state.withLock { $0.result = true }
+    model.drafts[item.id] = "  use a .tmp extension \n"
+    await model.decide(item, .approve)
+    core.state.withLock { $0.outcome = .applied(decision: .deny, by: "phone") }
+    await model.decide(item, .deny)
+    #expect(core.state.withLock { $0.decisions } == ["m1 ap_n approve note=use a .tmp extension", "m1 ap_n deny note=use a .tmp extension"])
+    #expect(model.notice == "Denied: claude. The agent moved on.")
+
+    model.drafts[item.id] = "   "
+    await model.decide(item, .approveAlways)
+    model.toggleNote(item)
+    model.drafts[item.id] = "hidden"
+    await model.decide(item, .approve)
+    #expect(core.state.withLock { $0.decisions }.suffix(2) == ["m1 ap_n approveAlways", "m1 ap_n approve"])
+
+    model.drafts[old.id] = "no amend"
+    model.toggleNote(old)
+    await model.decide(old, .approve)
+    #expect(core.state.withLock { $0.decisions }.count == 4)
+
+    core.state.withLock { $0.pending = [] }
+    model.poll()
+    #expect(model.drafts.isEmpty && model.noting.isEmpty)
+}
+
+@MainActor
+@Test func planFeedbackIsTypedIntoItsTextField() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    core.state.withLock {
+        $0.pending = [
+            approval("ap_plan", options: [], choices: planChoices, hasTextField: true),
+            approval("ap_q", options: [], choices: questionChoices, acceptsInput: true, hasTextField: true),
+        ]
+    }
+    let model = ApprovalsModel(core: core, auth: auth)
+    model.poll()
+    let plan = try #require(model.items.first { $0.id == "ap_plan" })
+    let question = try #require(model.items.first { $0.id == "ap_q" })
+    #expect(plan.approval.takesFeedback && !question.approval.takesFeedback)
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .optionsOnly)
+
+    await model.sendFeedback(plan)
+    model.drafts[question.id] = "MySQL"
+    await model.sendFeedback(question)
+    #expect(core.state.withLock { $0.typed }.isEmpty)
+
+    model.drafts[plan.id] = "  use echo instead \n"
+    core.state.withLock { $0.error = .AgentBlocked }
+    await model.sendFeedback(plan)
+    #expect(model.drafts[plan.id] == "  use echo instead \n")
+    #expect(model.steps.isEmpty)
+
+    core.state.withLock { $0.error = nil }
+    await model.sendFeedback(plan)
+    #expect(core.state.withLock { $0.typed } == ["m1 term_1 use echo instead", "m1 term_1 use echo instead"])
+    #expect(model.drafts[plan.id] == nil)
+    #expect(model.notice == "Sent your feedback to claude.")
+    #expect(auth.state.withLock { $0.reasons }.isEmpty)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
 }

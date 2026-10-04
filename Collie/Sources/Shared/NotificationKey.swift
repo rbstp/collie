@@ -2,8 +2,9 @@ import CryptoKit
 import Foundation
 import Security
 
-// Compiled into both the app and ColliePush: the key never leaves the shared keychain group
-// except in `push.register` over the tailnet session, and is never logged.
+// Compiled into the app, ColliePush and CollieWidgets: the key never leaves the shared keychain
+// group and its App Group mirror except in `push.register` over the tailnet session, and is
+// never logged.
 
 /// The per-Mac key collied seals the alert context with, so Apple only sees the plaintext fallback.
 enum NotificationKey {
@@ -15,7 +16,12 @@ enum NotificationKey {
         Bundle.main.object(forInfoDictionaryKey: "CollieKeychainGroup") as? String
     }
 
+    /// The Keychain copy, else the App Group mirror (the only one a Live Activity can read).
     static func load(nodeId: String) -> SymmetricKey? {
+        keychainKey(nodeId: nodeId) ?? Mirror.read(nodeId: nodeId)
+    }
+
+    private static func keychainKey(nodeId: String) -> SymmetricKey? {
         var query = baseQuery(nodeId: nodeId)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -28,7 +34,10 @@ enum NotificationKey {
 
     /// The stored key, or a new random one stored first.
     static func loadOrCreate(nodeId: String) throws -> SymmetricKey {
-        if let key = load(nodeId: nodeId) { return key }
+        if let key = keychainKey(nodeId: nodeId) {
+            if Mirror.read(nodeId: nodeId).map(bytes) != bytes(key) { try Mirror.write(key, nodeId: nodeId) }
+            return key
+        }
         try store(SymmetricKey(size: .bits256), nodeId: nodeId)
         guard let key = load(nodeId: nodeId) else { throw KeychainError(status: errSecItemNotFound) }
         return key
@@ -42,10 +51,58 @@ enum NotificationKey {
         item[kSecValueData as String] = key.withUnsafeBytes { Data($0) }
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else { throw KeychainError(status: status) }
+        try Mirror.write(key, nodeId: nodeId)
     }
 
     static func delete(nodeId: String) {
         SecItemDelete(baseQuery(nodeId: nodeId) as CFDictionary)
+        Mirror.delete(nodeId: nodeId)
+    }
+
+    private static func bytes(_ key: SymmetricKey) -> Data {
+        key.withUnsafeBytes { Data($0) }
+    }
+
+    /// A Live Activity renders in a process with no Keychain (errSecNotAvailable), so each key is
+    /// also kept in the App Group container: readable only by collie's own targets, encrypted by
+    /// iOS until the first unlock after boot, 0600, and excluded from backups like the
+    /// ThisDeviceOnly Keychain item.
+    enum Mirror {
+        static let directory = "notify-keys"
+
+        /// Node ids name files, so only Tailscale's StableID alphabet is accepted.
+        static func isValid(nodeId: String) -> Bool {
+            !nodeId.isEmpty && nodeId.count <= 64
+                && nodeId.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_") }
+        }
+
+        static func url(nodeId: String) -> URL? {
+            guard isValid(nodeId: nodeId), let base = AppGroup.container else { return nil }
+            return base.appending(path: directory, directoryHint: .isDirectory).appending(path: "\(nodeId).key")
+        }
+
+        static func read(nodeId: String) -> SymmetricKey? {
+            guard let url = url(nodeId: nodeId), let data = try? Data(contentsOf: url), data.count == 32 else { return nil }
+            return SymmetricKey(data: data)
+        }
+
+        static func write(_ key: SymmetricKey, nodeId: String) throws {
+            guard let url = url(nodeId: nodeId) else { throw CocoaError(.fileWriteInvalidFileName) }
+            var dir = url.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            var noBackup = URLResourceValues()
+            noBackup.isExcludedFromBackup = true
+            try dir.setResourceValues(noBackup)
+            try bytes(key).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            var file = url
+            try file.setResourceValues(noBackup)
+        }
+
+        static func delete(nodeId: String) {
+            guard let url = url(nodeId: nodeId) else { return }
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     private static func baseQuery(nodeId: String) -> [String: Any] {

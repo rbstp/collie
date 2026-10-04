@@ -11,9 +11,10 @@ use collied::audit::Audit;
 use collied::drive::{Authorized, Driver};
 use collied::herdr;
 use protocol::{
-    AgentKind, AgentPromptParams, ApprovalDecideParams, ApprovalOutcome, Cwd, Decision, ErrorCode,
-    Event, Label, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Response,
-    TaskNewParams, TerminalId, WorkspaceCloseParams, WorkspaceId,
+    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, ApprovalDecideParams,
+    ApprovalOutcome, Cwd, Decision, ErrorCode, Event, Key, Label, OpId, PaneCloseParams,
+    PromptText, ReadParams, ReadSource, Response, TaskNewParams, TerminalId, WorkspaceCloseParams,
+    WorkspaceId,
 };
 use tokio::sync::broadcast;
 
@@ -151,8 +152,39 @@ async fn approval_scenario(session: &HerdrSession) {
         approval.snippet,
         "Bash command\nrm -rf build\nRemove the build directory\nDo you want to proceed?"
     );
+    assert_eq!(approval.choices.len(), 3);
+    assert!(approval.choices[0].current);
 
     let yes: Authorized = Arc::new(|| true);
+    let drive = Driver::new(
+        socket.clone(),
+        vec![AgentKind::new("claude").unwrap()],
+        std::slice::from_ref(&work),
+    )
+    .unwrap();
+    let terminal_id = TerminalId::new(terminal.clone()).unwrap();
+    let (keys, _) = drive
+        .send_keys(
+            AgentSendKeysParams {
+                op_id: OpId::new("K".repeat(22)).unwrap(),
+                terminal_id: terminal_id.clone(),
+                keys: vec![Key::Enter],
+            },
+            &yes,
+        )
+        .await;
+    assert_eq!(keys.unwrap_err().0, ErrorCode::AgentBlocked);
+    let typed = drive
+        .type_text(
+            AgentTypeTextParams {
+                op_id: OpId::new("Y".repeat(22)).unwrap(),
+                terminal_id,
+                text: PromptText::new("yes").unwrap(),
+            },
+            &yes,
+        )
+        .await;
+    assert_eq!(typed.unwrap_err().0, ErrorCode::AgentBlocked);
     let reply = approvals
         .decide(
             "live",
@@ -160,7 +192,9 @@ async fn approval_scenario(session: &HerdrSession) {
             ApprovalDecideParams {
                 approval_id: approval.approval_id.clone(),
                 decision: Decision::Approve,
+                choice: None,
                 nonce: approval.nonce.clone(),
+                note: None,
             },
             &yes,
         )

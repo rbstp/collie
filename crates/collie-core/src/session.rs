@@ -5,8 +5,8 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
     AgentWatchParams, ClientFrame, Empty, ErrorBody, ErrorCode, Event, Flock, HelloParams,
-    HelloResult, Label, PROTOCOL_VERSION, PushRegisterParams, ReadParams, ReadSource, Request,
-    RequestId, Response, ServerFrame, TerminalId, TerminalRead, WS_PATH, WS_SUBPROTOCOL,
+    HelloResult, Label, PROTOCOL_VERSION, ReadParams, ReadSource, Request, RequestId, Response,
+    ServerFrame, TerminalId, TerminalRead, WS_PATH, WS_SUBPROTOCOL,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
@@ -189,17 +189,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         let _ = tokio::time::timeout(Duration::from_secs(2), self.ws.close(None)).await;
     }
 
-    /// `push` is re-registered on every session so collied always has the current token.
+    /// `push` is re-registered on every session so collied always has the current tokens.
     pub async fn run(
         mut self,
         requests: &mut tokio::sync::mpsc::Receiver<(Request, Reply)>,
         state: &Mutex<FlockState>,
-        push: Option<PushRegisterParams>,
+        push: Vec<Request>,
         stop: impl Future<Output = ()>,
     ) -> SessionError {
         let mut pending: HashMap<RequestId, Pending> = HashMap::new();
         let mut seed = vec![Request::FlockSnapshot(Empty {})];
-        seed.extend(push.map(Request::PushRegister));
+        seed.extend(push);
         if let Some(terminal_id) = lock(state).watched.clone() {
             seed.push(Request::AgentWatch(AgentWatchParams {
                 terminal_id: Some(terminal_id.clone()),
@@ -975,7 +975,7 @@ mod tests {
                 .unwrap();
         };
         let (end, ()) = tokio::join!(
-            session.run(&mut rx, &state, None, std::future::pending()),
+            session.run(&mut rx, &state, Vec::new(), std::future::pending()),
             client
         );
         assert!(end.is_auth(), "{end:?}");
@@ -1046,7 +1046,7 @@ mod tests {
             .await;
         });
         let end = session
-            .run(&mut rx, &state, None, std::future::pending())
+            .run(&mut rx, &state, Vec::new(), std::future::pending())
             .await;
         assert!(
             !end.is_auth(),
@@ -1073,7 +1073,7 @@ mod tests {
             drop(ws);
         });
         let end = session
-            .run(&mut rx, &state, None, std::future::pending())
+            .run(&mut rx, &state, Vec::new(), std::future::pending())
             .await;
         assert!(!end.is_auth());
         assert!(a_rx.await.unwrap().is_err());

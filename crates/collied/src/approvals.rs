@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -24,6 +24,8 @@ pub const TTL: Duration = Duration::from_secs(600);
 pub const SETTLE: Duration = Duration::from_secs(3);
 const SETTLE_POLL: Duration = Duration::from_millis(250);
 const NAV_PAUSE: Duration = Duration::from_millis(150);
+const NOTE_SETTLE: Duration = Duration::from_secs(1);
+const NOTE_POLL: Duration = Duration::from_millis(100);
 const RESOLVED_KEPT: usize = 256;
 const DECIDE_PER_SEC: f64 = 1.0;
 const DECIDE_BURST: f64 = 5.0;
@@ -34,7 +36,7 @@ const MAX_LABEL_CHARS: usize = 64;
 const DECIDE_BUDGET: Duration = Duration::from_secs(6);
 // Reissues of a prompt (after a burned nonce) alert at most this often per terminal, so
 // bad attempts cannot flood the phone; the reissued approval still reaches live sessions.
-const ALERT_GAP: Duration = Duration::from_secs(30);
+pub const ALERT_GAP: Duration = Duration::from_secs(30);
 
 /// What collied saw on an agent's screen. Never leaves collied except as the snippet and
 /// the sealed alert context.
@@ -45,11 +47,27 @@ struct Screen {
     blocked: bool,
     menu: Option<Menu>,
     offered: Vec<(Decision, usize)>,
+    accepts_input: bool,
+    has_text_field: bool,
+    supports_note: bool,
     fingerprint: [u8; 32],
     /// The fingerprint with the menu cursor on each option in turn.
     cursor_at: Vec<[u8; 32]>,
     snippet: String,
     context: String,
+}
+
+impl Screen {
+    /// Whether both tell the phone the same, the cursor aside: arrows alone do not
+    /// reissue an approval.
+    fn shows_same(&self, other: &Screen) -> bool {
+        self.snippet == other.snippet
+            && self.offered == other.offered
+            && self.menu.as_ref().map(|m| &m.options) == other.menu.as_ref().map(|m| &m.options)
+            && self.accepts_input == other.accepts_input
+            && self.has_text_field == other.has_text_field
+            && self.supports_note == other.supports_note
+    }
 }
 
 struct Pending {
@@ -63,6 +81,7 @@ struct Alerted {
     seq: u64,
     fingerprint: [u8; 32],
     expires_at_ms: u64,
+    drifted: bool,
 }
 
 #[derive(Default)]
@@ -82,16 +101,17 @@ impl Inner {
     }
 
     /// A new blocked episode, a changed screen or an expired previous alert always
-    /// alerts; the same prompt reissued within ALERT_GAP does not.
+    /// alerts; the same prompt reissued, or a pending one rebuilt because its screen
+    /// drifted (typing on the Mac), within ALERT_GAP does not.
     fn alert_due(&mut self, terminal: &str, screen: &Screen, a: &Approval) -> bool {
         let now = Instant::now();
         self.alerted
             .retain(|_, last| now.duration_since(last.at) < ALERT_GAP);
-        if self.alerted.get(terminal).is_some_and(|last| {
-            last.seq == screen.seq
-                && last.fingerprint == screen.fingerprint
-                && a.created_at_ms < last.expires_at_ms
-        }) {
+        if let Some(last) = self.alerted.get_mut(terminal)
+            && last.seq == screen.seq
+            && a.created_at_ms < last.expires_at_ms
+            && (last.fingerprint == screen.fingerprint || std::mem::take(&mut last.drifted))
+        {
             return false;
         }
         self.alerted.insert(
@@ -101,6 +121,7 @@ impl Inner {
                 seq: screen.seq,
                 fingerprint: screen.fingerprint,
                 expires_at_ms: a.expires_at_ms,
+                drifted: false,
             },
         );
         true
@@ -177,7 +198,7 @@ fn agent_label(a: &AgentInfo) -> String {
 
 /// The APNs title goes through Apple, so it never comes from the terminal title or any
 /// title the pane's program reports: the herdr agent name, else the agent kind.
-fn alert_title(a: &AgentInfo) -> String {
+pub(crate) fn alert_title(a: &AgentInfo) -> String {
     [&a.name, &a.agent]
         .into_iter()
         .flatten()
@@ -186,12 +207,37 @@ fn alert_title(a: &AgentInfo) -> String {
         .unwrap_or_else(|| "agent".to_owned())
 }
 
+pub(crate) fn workspace_label(workspace_id: &str, workspaces: &[WorkspaceInfo]) -> String {
+    workspaces
+        .iter()
+        .find(|w| w.workspace_id == workspace_id)
+        .map(|w| label(&w.label))
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| "workspace".to_owned())
+}
+
 fn decision_name(d: Decision) -> &'static str {
     match d {
         Decision::Approve => "approve",
         Decision::ApproveAlways => "approve_always",
         Decision::Deny => "deny",
+        Decision::Choose => "choose",
     }
+}
+
+/// The screen of the prompt `a` is blocked on, read now, when `open` lets the phone answer
+/// it with keys ([`prompt::open_to_keys`]) or text ([`prompt::open_to_text`]); a
+/// permission prompt is answered through `approval.decide` alone.
+pub async fn open_to(
+    herdr: &Path,
+    a: &AgentInfo,
+    open: fn(&str, Option<&str>, &str) -> bool,
+) -> Result<Option<String>, herdr::Error> {
+    let kind = a.agent.as_deref().unwrap_or_default();
+    let explain = herdr::agent_explain(herdr, &a.pane_id).await?;
+    let text = herdr::detection_text(herdr, &a.pane_id).await?;
+    let rule = explain.matched_rule.map(|r| r.id);
+    Ok(open(kind, rule.as_deref(), &text).then_some(text))
 }
 
 impl Approvals {
@@ -243,10 +289,14 @@ impl Approvals {
         out
     }
 
+    /// A pending approval also ends when what it tells the phone no longer matches the
+    /// screen: `state_change_seq` does not move on a new question under a still-`blocked`
+    /// agent, nor on a dialog that finishes drawing.
     pub async fn observe(&self, agents: &[AgentInfo], workspaces: &[WorkspaceInfo]) {
         let now = crate::now_ms();
         let mut ended = Vec::new();
-        let fresh: Vec<&AgentInfo> = {
+        let mut live = Vec::new();
+        {
             let mut inner = self.lock();
             let done: Vec<(String, ApprovalOutcome)> = inner
                 .pending
@@ -256,6 +306,7 @@ impl Approvals {
                     let outcome = match agents.iter().find(|a| a.terminal_id == *t) {
                         Some(a) if is_blocked(a) && a.state_change_seq == p.screen.seq => {
                             if now < p.approval.expires_at_ms {
+                                live.push((a, p.approval.approval_id.clone()));
                                 return None;
                             }
                             ApprovalOutcome::Expired
@@ -271,17 +322,40 @@ impl Approvals {
                     ended.push((p.approval.approval_id, outcome));
                 }
             }
-            agents
-                .iter()
-                .filter(|a| is_blocked(a) && !inner.pending.contains_key(&a.terminal_id))
-                .collect()
-        };
+        }
+        // Only Claude Code prompts carry choices or take keys.
+        for (a, id) in live
+            .into_iter()
+            .filter(|(a, _)| a.agent.as_deref() == Some("claude"))
+        {
+            let Ok(screen) = self.screen(a).await else {
+                continue;
+            };
+            let mut inner = self.lock();
+            if inner.pending.get(&a.terminal_id).is_some_and(|p| {
+                !p.deciding && p.approval.approval_id == id && !p.screen.shows_same(&screen)
+            }) {
+                inner.pending.remove(&a.terminal_id);
+                inner.remember(id.clone());
+                if let Some(last) = inner.alerted.get_mut(&a.terminal_id) {
+                    last.drifted = true;
+                }
+                ended.push((id, ApprovalOutcome::Superseded));
+            }
+        }
         for (approval_id, outcome) in ended {
             let _ = self.events.send(Event::ApprovalResolved {
                 approval_id,
                 outcome,
             });
         }
+        let fresh: Vec<&AgentInfo> = {
+            let inner = self.lock();
+            agents
+                .iter()
+                .filter(|a| is_blocked(a) && !inner.pending.contains_key(&a.terminal_id))
+                .collect()
+        };
         for a in fresh {
             if let Err(e) = self.create(a, workspaces).await {
                 tracing::debug!(terminal = %a.terminal_id, error = %e, "no approval yet");
@@ -309,6 +383,11 @@ impl Approvals {
                 Vec::new(),
             ),
         };
+        let accepts_input = prompt::open_to_keys(kind, rule.as_deref(), &text);
+        let has_text_field = prompt::open_to_text(kind, rule.as_deref(), &text)
+            && menu.as_ref().is_some_and(|m| m.free_text().is_some());
+        let supports_note =
+            offered.iter().any(|(d, _)| prompt::amend(*d).is_some()) && prompt::offers_note(&text);
         let session = a.agent_session.as_ref().map(|s| s.value.as_str());
         let print =
             |region: &str| fingerprint(kind, rule.as_deref(), &a.terminal_id, session, region);
@@ -322,6 +401,9 @@ impl Approvals {
                     .map(|i| print(&m.region_at(i)))
                     .collect()
             }),
+            accepts_input,
+            has_text_field,
+            supports_note,
             menu,
             offered,
             snippet,
@@ -341,15 +423,14 @@ impl Approvals {
             approval_id: ApprovalId::new(random(16)?)?,
             terminal_id,
             agent_label: agent_label(a),
-            workspace_label: workspaces
-                .iter()
-                .find(|w| w.workspace_id == a.workspace_id)
-                .map(|w| label(&w.label))
-                .filter(|l| !l.is_empty())
-                .unwrap_or_else(|| "workspace".to_owned()),
+            workspace_label: workspace_label(&a.workspace_id, workspaces),
             snippet: screen.snippet.clone(),
             tool: None,
             options: screen.offered.iter().map(|(d, _)| *d).collect(),
+            choices: screen.menu.as_ref().map_or_else(Vec::new, Menu::choices),
+            accepts_input: screen.accepts_input,
+            has_text_field: screen.has_text_field,
+            supports_note: screen.supports_note,
             nonce: Nonce::new(random(protocol::limits::NONCE_BYTES)?)?,
             created_at_ms: now,
             expires_at_ms: now + self.ttl.as_millis() as u64,
@@ -372,13 +453,12 @@ impl Approvals {
             alert
         };
         // A reissued alert replaces the dead one, whose approval_id no longer works.
-        if let Some(push) = self.push.as_ref().filter(|_| alert) {
-            push.notify(push::approval_alert(
+        if let Some(push) = &self.push {
+            push.notify_approval(
                 &approval,
-                &title,
-                &self.node_id,
-                &context,
-            ));
+                push::approval_alert(&approval, &title, &self.node_id, &context),
+                alert,
+            );
         }
         let _ = self.events.send(Event::ApprovalNeeded { approval });
         Ok(())
@@ -444,6 +524,34 @@ impl Approvals {
         tokio::time::timeout(self.settle, poll).await.is_ok()
     }
 
+    /// Polls the prompt until its menu satisfies `done`, within NOTE_SETTLE and the
+    /// budget. The agent must stay blocked on the same prompt (`state_change_seq`).
+    async fn menu_settles(
+        &self,
+        terminal: &str,
+        screen: &Screen,
+        budget: tokio::time::Instant,
+        done: impl Fn(&Menu) -> bool,
+    ) -> bool {
+        let deadline = budget.min(tokio::time::Instant::now() + NOTE_SETTLE);
+        loop {
+            tokio::time::sleep(NOTE_POLL).await;
+            match tokio::time::timeout_at(deadline, self.current(terminal)).await {
+                Ok(Ok(Some(s)))
+                    if s.blocked && s.seq == screen.seq && s.pane_id == screen.pane_id =>
+                {
+                    if s.menu.as_ref().is_some_and(&done) {
+                        return true;
+                    }
+                }
+                _ => return false,
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+        }
+    }
+
     /// Any attempt on a pending approval burns its nonce, whatever the outcome; an
     /// approval that cannot be used any more is resolved, and the next reconcile issues
     /// a fresh one if the agent is still blocked.
@@ -455,7 +563,12 @@ impl Approvals {
         auth: &Authorized,
     ) -> Reply {
         let id = p.approval_id.clone();
-        let decision = decision_name(p.decision);
+        // The note itself is never logged.
+        let decision = match (p.choice, &p.note) {
+            (Some(i), _) => format!("{} {i}", decision_name(p.decision)),
+            (None, Some(_)) => format!("{} with note", decision_name(p.decision)),
+            (None, None) => decision_name(p.decision).to_owned(),
+        };
         let audit = |result: &str| {
             self.audit.log(
                 peer,
@@ -516,13 +629,53 @@ impl Approvals {
                 "nonce mismatch",
             );
         }
-        let Some(&(_, target)) = screen.offered.iter().find(|(d, _)| *d == p.decision) else {
-            return reject(
-                ApprovalOutcome::Superseded,
-                ErrorCode::InvalidParams,
-                "rejected: decision not offered",
-                "decision not offered",
-            );
+        // A choice is only offered where no decision is: picking a permission prompt's
+        // option by index would bypass the decision it maps to (Deny sent as Esc).
+        let choice = p.choice.filter(|_| p.decision == Decision::Choose);
+        let target = match choice {
+            Some(i) => {
+                let options = screen.menu.as_ref().map_or(0, |m| m.options.len());
+                if !screen.offered.is_empty() || usize::from(i) >= options {
+                    return reject(
+                        ApprovalOutcome::Superseded,
+                        ErrorCode::InvalidParams,
+                        "rejected: choice not offered",
+                        "choice not offered",
+                    );
+                }
+                usize::from(i)
+            }
+            None => match screen.offered.iter().find(|(d, _)| *d == p.decision) {
+                Some(&(_, target)) => target,
+                None => {
+                    return reject(
+                        ApprovalOutcome::Superseded,
+                        ErrorCode::InvalidParams,
+                        "rejected: decision not offered",
+                        "decision not offered",
+                    );
+                }
+            },
+        };
+        let amend = match &p.note {
+            None => None,
+            Some(note) => match prompt::amend(p.decision)
+                .filter(|_| choice.is_none() && screen.supports_note)
+            {
+                Some((placeholder, prefix)) => Some((
+                    placeholder,
+                    format!("{prefix}{}", note.as_str()),
+                    note.as_str(),
+                )),
+                None => {
+                    return reject(
+                        ApprovalOutcome::Superseded,
+                        ErrorCode::InvalidParams,
+                        "rejected: note not offered",
+                        "note not offered",
+                    );
+                }
+            },
         };
         let superseded = |why: &str| {
             self.finish(terminal, &id, ApprovalOutcome::Superseded);
@@ -557,7 +710,11 @@ impl Approvals {
                 "peer is no longer authorized",
             );
         }
-        let (nav, confirm) = menu.keys(target);
+        // A note is typed into the option's own field: Deny goes by arrows, never Esc.
+        let (nav, confirm) = match (choice, &amend) {
+            (None, None) => menu.keys(target),
+            _ => (menu.arrows(target), "enter"),
+        };
         let pane = now.pane_id.as_str();
         let sent = |keys: &[&str]| format!("terminal={terminal} keys={}", keys.join(","));
         if !nav.is_empty() {
@@ -595,7 +752,97 @@ impl Approvals {
                 return superseded(&format!("superseded: herdr too slow {}", sent(&nav)));
             }
         }
-        let keys: Vec<&str> = nav.iter().copied().chain([confirm]).collect();
+        let mut keys = nav.clone();
+        // Tab turns the option into its amend field and the note is typed there; Enter
+        // follows only once the option reads as the note with the rest of the dialog
+        // unchanged. On a mismatch nothing more is sent: Esc in the field would cancel the
+        // whole prompt.
+        if let Some((placeholder, shown, note)) = &amend {
+            if !auth() {
+                return reject(
+                    ApprovalOutcome::Superseded,
+                    ErrorCode::NotPaired,
+                    "rejected: peer no longer authorized",
+                    "peer is no longer authorized",
+                );
+            }
+            if tokio::time::Instant::now() >= budget {
+                return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
+            }
+            keys.push("tab");
+            match tokio::time::timeout_at(
+                budget,
+                herdr::agent_send_keys(&self.herdr, pane, &["tab"]),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    self.finish(terminal, &id, ApprovalOutcome::Superseded);
+                    audit(&format!("failed: tab not sent {}", sent(&nav)));
+                    return Err(herdr_fail(e));
+                }
+                Err(_) => {
+                    return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
+                }
+            }
+            let opened = self
+                .menu_settles(terminal, &screen, budget, |m| {
+                    menu.only_changed(target, m)
+                        && m.options[target] != menu.options[target]
+                        && m.options[target].to_lowercase().starts_with(placeholder)
+                })
+                .await;
+            if !opened {
+                return superseded(&format!(
+                    "superseded: amend field not shown {}",
+                    sent(&keys)
+                ));
+            }
+            if !auth() {
+                return reject(
+                    ApprovalOutcome::Superseded,
+                    ErrorCode::NotPaired,
+                    "rejected: peer no longer authorized",
+                    "peer is no longer authorized",
+                );
+            }
+            if tokio::time::Instant::now() >= budget {
+                return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
+            }
+            match tokio::time::timeout_at(budget, herdr::pane_send_text(&self.herdr, pane, note))
+                .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    self.finish(terminal, &id, ApprovalOutcome::Superseded);
+                    audit(&format!("failed: note not sent {}", sent(&keys)));
+                    return Err(herdr_fail(e));
+                }
+                Err(_) => {
+                    return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
+                }
+            }
+            let typed = self
+                .menu_settles(terminal, &screen, budget, |m| {
+                    menu.only_changed(target, m) && m.reads(target, shown)
+                })
+                .await;
+            if !typed {
+                return superseded(&format!("superseded: note not shown {}", sent(&keys)));
+            }
+            if !auth() {
+                return reject(
+                    ApprovalOutcome::Superseded,
+                    ErrorCode::NotPaired,
+                    "rejected: peer no longer authorized",
+                    "peer is no longer authorized",
+                );
+            }
+            if tokio::time::Instant::now() >= budget {
+                return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
+            }
+        }
         let settled = match tokio::time::timeout_at(
             budget,
             herdr::agent_send_keys(&self.herdr, pane, &[confirm]),
@@ -605,24 +852,29 @@ impl Approvals {
             Ok(Ok(())) => Some(self.settled(terminal, screen.seq).await),
             Ok(Err(e)) => {
                 self.finish(terminal, &id, ApprovalOutcome::Superseded);
-                if nav.is_empty() {
+                if keys.is_empty() {
                     audit("failed: keys not sent");
                 } else {
-                    audit(&format!("failed: {confirm} not sent {}", sent(&nav)));
+                    audit(&format!("failed: {confirm} not sent {}", sent(&keys)));
                 }
                 return Err(herdr_fail(e));
             }
             // The key may still have reached the agent.
             Err(_) => None,
         };
+        keys.push(confirm);
         let (decision, by) = (p.decision, peer.to_owned());
-        let (outcome, result) = match settled {
-            Some(true) => (ApprovalOutcome::Applied { decision, by }, "applied"),
-            Some(false) => (ApprovalOutcome::Unconfirmed { decision, by }, "unconfirmed"),
-            None => (
-                ApprovalOutcome::Unconfirmed { decision, by },
-                "unconfirmed: herdr too slow",
-            ),
+        let applied = settled == Some(true);
+        let outcome = match (choice, applied) {
+            (Some(choice), true) => ApprovalOutcome::Chosen { choice, by },
+            (Some(choice), false) => ApprovalOutcome::ChosenUnconfirmed { choice, by },
+            (None, true) => ApprovalOutcome::Applied { decision, by },
+            (None, false) => ApprovalOutcome::Unconfirmed { decision, by },
+        };
+        let result = match settled {
+            Some(true) => "applied",
+            Some(false) => "unconfirmed",
+            None => "unconfirmed: herdr too slow",
         };
         self.finish(terminal, &id, outcome.clone());
         audit(&format!("{result} {}", sent(&keys)));

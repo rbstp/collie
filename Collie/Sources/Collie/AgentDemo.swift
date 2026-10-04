@@ -1,13 +1,20 @@
 #if DEBUG
+import ActivityKit
 import CollieCore
+import CryptoKit
 import Foundation
 import SwiftUI
 import UserNotifications
 
 /// `--terminal-demo <file>`: the Agents list over fake agents, each agent screen showing the
 /// first "text" string of a herdr JSON response (or the raw file), with no Mac. Debug builds only.
+/// `--follow-demo <terminal id>` also follows that agent, which starts its Live Activity, and
+/// gives a blocked one the approval fields collied would push.
 struct AgentDemo: View {
     let core: DemoAgentCore
+    private let followed: String?
+    @State private var follows: FollowModel
+    @State private var opening: AgentRoute?
 
     init?(arguments: [String]) {
         guard let flag = arguments.firstIndex(of: "--terminal-demo"), flag + 1 < arguments.count,
@@ -15,16 +22,41 @@ struct AgentDemo: View {
         else { return nil }
         let json = try? JSONSerialization.jsonObject(with: data)
         core = DemoAgentCore(snapshot: json.flatMap(Self.firstText) ?? String(decoding: data, as: UTF8.self))
+        _follows = State(initialValue: FollowModel(core: core, approvals: nil, file: nil))
+        followed = arguments.firstIndex(of: "--follow-demo").flatMap { $0 + 1 < arguments.count ? arguments[$0 + 1] : nil }
     }
 
     var body: some View {
         TabView {
             Tab("Agents", systemImage: "square.grid.2x2") {
-                FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: nil)
+                FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: nil, follows: follows, opening: $opening)
             }
             Tab("Approvals", systemImage: "checkmark.shield") { Color.clear }
             Tab("Machines", systemImage: "desktopcomputer") { Color.clear }
             Tab("Settings", systemImage: "gearshape") { Color.clear }
+        }
+        .task {
+            follows.foreground()
+            if let followed {
+                follows.follow(AgentRoute(machineId: DemoAgentCore.machine.id, terminalId: followed))
+                await Self.pushDemoApproval()
+            }
+        }
+        .onOpenURL { opening = AppModel.route(for: $0, machines: [DemoAgentCore.machine]) }
+    }
+
+    /// Sealed like collied's `enc`, with a key stored for the demo Mac as pairing would.
+    private nonisolated static func pushDemoApproval() async {
+        let approvalId = "ap_demo"
+        let plaintext = #"{"v":1,"body":"Bash: Run the approval tests\ncargo test -p collied --test approvals -- --nocapture"}"#
+        guard let key = try? NotificationKey.loadOrCreate(nodeId: DemoAgentCore.machine.nodeId),
+            let sealed = try? ChaChaPoly.seal(Data(plaintext.utf8), using: key, authenticating: Data(approvalId.utf8))
+        else { return }
+        for activity in Activity<AgentActivityAttributes>.activities where activity.content.state.status == .blocked {
+            var state = activity.content.state
+            state.approvalId = approvalId
+            state.enc = sealed.combined.base64EncodedString()
+            await activity.update(FollowModel.activityContent(state))
         }
     }
 
@@ -40,7 +72,7 @@ struct AgentDemo: View {
     }
 }
 
-final class DemoAgentCore: FlockCore {
+final class DemoAgentCore: ActivityCore {
     static let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO")
 
     let snapshot: String
@@ -92,6 +124,8 @@ final class DemoAgentCore: FlockCore {
 
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {}
 
+    func typeText(machineId: String, terminalId: String, text: String) async throws {}
+
     func focus(machineId: String, terminalId: String) async throws {}
 
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
@@ -124,6 +158,12 @@ final class DemoAgentCore: FlockCore {
     func maxAttachmentBytes() -> UInt64 { 20 * 1024 * 1024 }
 
     func cancelUploads(machineId: String) {}
+
+    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String) throws {
+        print("demo: activity \(activityId) token \(tokenHex.prefix(8))… for \(terminalId)")
+    }
+
+    func endActivity(machineId: String, activityId: String) throws {}
 
     private var demoFlock: MachineFlock {
         MachineFlock(
@@ -178,20 +218,72 @@ final class DemoApprovalCore: ApprovalCore {
                 approvalId: "ap_demo1", terminalId: "term_1", agentLabel: "fix the flaky test", workspaceLabel: "collie",
                 snippet: """
                 Bash command
+                  Run the approval tests
                   cargo test -p collied --test approvals
                 Do you want to proceed?
                 > 1. Yes
                   2. Yes, and don't ask again for cargo test commands
-                  3. No, and tell Claude what to do differently (esc)
+                  3. No
+                Esc to cancel · Tab to amend
                 """,
                 toolName: "Bash", toolSummary: "cargo test -p collied --test approvals",
-                options: [.approve, .approveAlways, .deny], createdAtMs: now - 45_000, expiresAtMs: now + 555_000
+                options: [.approve, .approveAlways, .deny],
+                choices: [
+                    ApprovalChoice(index: 0, label: "Yes", current: true),
+                    ApprovalChoice(index: 1, label: "Yes, and don't ask again for cargo test commands", current: false),
+                    ApprovalChoice(index: 2, label: "No", current: false),
+                ],
+                acceptsInput: false, hasTextField: false, supportsNote: true,
+                createdAtMs: now - 45_000, expiresAtMs: now + 555_000
             ),
             PendingApproval(
                 approvalId: "ap_demo2", terminalId: "term_2", agentLabel: "claude", workspaceLabel: "website",
                 snippet: "Do you trust the files in this folder?\n> 1. Yes, proceed\n  2. No, exit",
                 toolName: nil, toolSummary: nil,
-                options: [.approve, .deny], createdAtMs: now - 10_000, expiresAtMs: now + 190_000
+                options: [.approve, .deny],
+                choices: [
+                    ApprovalChoice(index: 0, label: "Yes, proceed", current: true),
+                    ApprovalChoice(index: 1, label: "No, exit", current: false),
+                ],
+                acceptsInput: false, hasTextField: false, supportsNote: false,
+                createdAtMs: now - 10_000, expiresAtMs: now + 190_000
+            ),
+            PendingApproval(
+                approvalId: "ap_demo3", terminalId: "term_3", agentLabel: "plan the migration", workspaceLabel: "collie",
+                snippet: """
+                Which database should the migration target?
+                > 1. PostgreSQL 17
+                  2. SQLite
+                  3. Type something.
+                """,
+                toolName: nil, toolSummary: nil,
+                options: [],
+                choices: [
+                    ApprovalChoice(index: 0, label: "PostgreSQL 17", current: true),
+                    ApprovalChoice(index: 1, label: "SQLite", current: false),
+                    ApprovalChoice(index: 2, label: "Type something.", current: false),
+                ],
+                acceptsInput: true, hasTextField: true, supportsNote: false,
+                createdAtMs: now - 60_000, expiresAtMs: now + 540_000
+            ),
+            PendingApproval(
+                approvalId: "ap_demo4", terminalId: "term_4", agentLabel: "add dark mode", workspaceLabel: "website",
+                snippet: """
+                Ready to code?
+                Would you like to proceed?
+                > 1. Yes, and use auto mode
+                  2. Yes, manually approve edits
+                  3. Tell Claude what to change
+                """,
+                toolName: nil, toolSummary: nil,
+                options: [],
+                choices: [
+                    ApprovalChoice(index: 0, label: "Yes, and use auto mode", current: true),
+                    ApprovalChoice(index: 1, label: "Yes, manually approve edits", current: false),
+                    ApprovalChoice(index: 2, label: "Tell Claude what to change", current: false),
+                ],
+                acceptsInput: false, hasTextField: true, supportsNote: false,
+                createdAtMs: now - 20_000, expiresAtMs: now + 580_000
             ),
         ]
     }
@@ -204,9 +296,13 @@ final class DemoApprovalCore: ApprovalCore {
 
     func flock(machineId: String) async throws -> MachineFlock { throw CoreError.MachineNotFound }
 
-    func decide(machineId: String, approvalId: String, decision: ApprovalDecision) async throws -> DecisionOutcome {
+    func decide(machineId: String, approvalId: String, decision: ApprovalDecision, note: String?) async throws -> DecisionOutcome {
         try await Task.sleep(for: .milliseconds(500))
         return .applied(decision: decision, by: "demo")
+    }
+
+    func typeText(machineId: String, terminalId: String, text: String) async throws {
+        try await Task.sleep(for: .milliseconds(500))
     }
 }
 #endif

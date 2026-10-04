@@ -40,6 +40,8 @@ pub enum Request {
     AgentPrompt(AgentPromptParams),
     #[serde(rename = "agent.send_keys")]
     AgentSendKeys(AgentSendKeysParams),
+    #[serde(rename = "agent.type_text")]
+    AgentTypeText(AgentTypeTextParams),
     #[serde(rename = "agent.focus")]
     AgentFocus(AgentTarget),
     #[serde(rename = "task.new")]
@@ -58,6 +60,8 @@ pub enum Request {
     PushRegister(PushRegisterParams),
     #[serde(rename = "push.activity_token")]
     PushActivityToken(PushActivityTokenParams),
+    #[serde(rename = "push.activity_end")]
+    PushActivityEnd(PushActivityEndParams),
 
     #[serde(rename = "attachment.begin")]
     AttachmentBegin(AttachmentBeginParams),
@@ -82,6 +86,7 @@ impl Request {
         "agent.draft",
         "agent.prompt",
         "agent.send_keys",
+        "agent.type_text",
         "agent.focus",
         "task.new",
         "workspace.close",
@@ -90,6 +95,7 @@ impl Request {
         "approval.decide",
         "push.register",
         "push.activity_token",
+        "push.activity_end",
         "attachment.begin",
         "attachment.chunk",
         "attachment.commit",
@@ -109,6 +115,7 @@ impl Request {
             Self::AgentDraft(_) => "agent.draft",
             Self::AgentPrompt(_) => "agent.prompt",
             Self::AgentSendKeys(_) => "agent.send_keys",
+            Self::AgentTypeText(_) => "agent.type_text",
             Self::AgentFocus(_) => "agent.focus",
             Self::TaskNew(_) => "task.new",
             Self::WorkspaceClose(_) => "workspace.close",
@@ -117,6 +124,7 @@ impl Request {
             Self::ApprovalDecide(_) => "approval.decide",
             Self::PushRegister(_) => "push.register",
             Self::PushActivityToken(_) => "push.activity_token",
+            Self::PushActivityEnd(_) => "push.activity_end",
             Self::AttachmentBegin(_) => "attachment.begin",
             Self::AttachmentChunk(_) => "attachment.chunk",
             Self::AttachmentCommit(_) => "attachment.commit",
@@ -137,6 +145,7 @@ impl Request {
             | Self::ApprovalList(_) => MethodClass::Read,
             Self::AgentPrompt(_)
             | Self::AgentSendKeys(_)
+            | Self::AgentTypeText(_)
             | Self::AgentFocus(_)
             | Self::TaskNew(_)
             | Self::WorkspaceClose(_)
@@ -146,7 +155,9 @@ impl Request {
             | Self::AttachmentCommit(_)
             | Self::AttachmentAbort(_) => MethodClass::Drive,
             Self::ApprovalDecide(_) => MethodClass::Approval,
-            Self::PushRegister(_) | Self::PushActivityToken(_) => MethodClass::Push,
+            Self::PushRegister(_) | Self::PushActivityToken(_) | Self::PushActivityEnd(_) => {
+                MethodClass::Push
+            }
         }
     }
 }
@@ -287,6 +298,22 @@ impl AgentSendKeysParams {
     }
 }
 
+/// Typed into the free-text field of a blocked Claude Code question or plan, then Enter.
+/// One line: Enter is what submits it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentTypeTextParams {
+    pub op_id: OpId,
+    pub terminal_id: TerminalId,
+    pub text: PromptText,
+}
+
+impl AgentTypeTextParams {
+    pub fn is_valid(&self) -> bool {
+        !self.text.as_str().contains(['\n', '\t'])
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TaskNewParams {
@@ -321,14 +348,34 @@ pub enum Decision {
     Approve,
     ApproveAlways,
     Deny,
+    /// Pick `Approval.choices[choice]`; only on an approval that offers no other decision.
+    Choose,
 }
 
+/// `choice` is set exactly when `decision` is `choose`. `note`, one line of at most 200
+/// characters, goes with `approve` or `deny` on an approval with `supports_note`: collied
+/// types it into the option's amend field before Enter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ApprovalDecideParams {
     pub approval_id: ApprovalId,
     pub decision: Decision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<u8>,
     pub nonce: Nonce,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<PromptText>,
+}
+
+impl ApprovalDecideParams {
+    pub fn is_valid(&self) -> bool {
+        (self.decision == Decision::Choose) == self.choice.is_some()
+            && self.note.as_ref().is_none_or(|n| {
+                matches!(self.decision, Decision::Approve | Decision::Deny)
+                    && !n.as_str().contains(['\n', '\t'])
+                    && n.as_str().chars().count() <= limits::MAX_NOTE_CHARS
+            })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -348,12 +395,24 @@ pub struct PushRegisterParams {
     pub notification_key: NotificationKey,
 }
 
+/// A Live Activity's update token. collied pushes the followed terminal's status to it,
+/// in the APNs environment of the device's own `push.register`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PushActivityTokenParams {
     pub activity_id: ActivityId,
     pub terminal_id: TerminalId,
     pub token: PushToken,
+    /// The activity shows an approval's command and its Approve and Deny buttons. Without
+    /// it collied keeps sending that device the approval alert.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shows_approvals: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PushActivityEndParams {
+    pub activity_id: ActivityId,
 }
 
 /// `sha256` covers the whole file; collied checks it and the size before keeping it.
@@ -541,9 +600,33 @@ pub struct Approval {
     pub snippet: String,
     pub tool: Option<PendingTool>,
     pub options: Vec<Decision>,
+    /// The menu on screen, in order, whenever collied could read one.
+    #[serde(default)]
+    pub choices: Vec<ApprovalChoice>,
+    /// Whether collied takes `agent.send_keys` and `agent.type_text` on this prompt: false for
+    /// any prompt that grants a permission, and from a collied that predates the field.
+    #[serde(default)]
+    pub accepts_input: bool,
+    /// The menu has a free-text option that `agent.type_text` fills: a question's "Type
+    /// something." (with `accepts_input`), or a plan's "Tell Claude what to change", which
+    /// takes text but no keys (`accepts_input` false).
+    #[serde(default)]
+    pub has_text_field: bool,
+    /// `approval.decide` takes a `note` with `approve` and `deny`: the prompt shows "Tab
+    /// to amend".
+    #[serde(default)]
+    pub supports_note: bool,
     pub nonce: Nonce,
     pub created_at_ms: u64,
     pub expires_at_ms: u64,
+}
+
+/// `index` is 0-based; `current` marks the option under the menu cursor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ApprovalChoice {
+    pub index: u8,
+    pub label: String,
+    pub current: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -557,6 +640,17 @@ pub enum ApprovalOutcome {
     /// Keys were sent but the agent was still `blocked` when collied stopped waiting.
     Unconfirmed {
         decision: Decision,
+        by: String,
+    },
+    /// `applied` for a `choose` decision. Its own outcome, so an older app decodes it as
+    /// `other` instead of failing on an unknown decision.
+    Chosen {
+        choice: u8,
+        by: String,
+    },
+    /// `unconfirmed` for a `choose` decision.
+    ChosenUnconfirmed {
+        choice: u8,
         by: String,
     },
     Expired,
@@ -688,6 +782,8 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
     let valid = match &request {
         Request::AgentRead(p) | Request::PaneRead(p) => p.is_valid(),
         Request::AgentSendKeys(p) => p.is_valid(),
+        Request::AgentTypeText(p) => p.is_valid(),
+        Request::ApprovalDecide(p) => p.is_valid(),
         Request::AttachmentBegin(p) => p.is_valid(),
         _ => true,
     };
@@ -823,6 +919,182 @@ mod tests {
         let older: ErrorBody =
             serde_json::from_str(r#"{"code":"not_found","message":"m"}"#).unwrap();
         assert_eq!(older.draft, None);
+    }
+
+    #[test]
+    fn activity_token_and_end() {
+        let activity = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
+        let token = "ab".repeat(40);
+        let register = parse(&format!(
+            r#"{{"id":1,"method":"push.activity_token","params":{{"activity_id":"{activity}","terminal_id":"term_1","token":"{token}"}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(register.request.class(), MethodClass::Push);
+        assert!(!format!("{register:?}").contains(&token));
+        let end = parse(&format!(
+            r#"{{"id":2,"method":"push.activity_end","params":{{"activity_id":"{activity}"}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(end.request.class(), MethodClass::Push);
+        assert_eq!(end.request.method(), "push.activity_end");
+        let Request::PushActivityEnd(p) = end.request else {
+            panic!("not an activity end");
+        };
+        assert_eq!(p.activity_id.as_str(), activity);
+        for bad in [
+            r#"{"activity_id":"a/b"}"#,
+            r#"{"activity_id":""}"#,
+            r#"{"activity_id":"a","terminal_id":"t"}"#,
+        ] {
+            let frame = format!(r#"{{"id":3,"method":"push.activity_end","params":{bad}}}"#);
+            assert_eq!(parse(&frame).unwrap_err().code, ErrorCode::InvalidParams);
+        }
+    }
+
+    #[test]
+    fn choose_carries_exactly_one_choice() {
+        let decide = |rest: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"approval.decide","params":{{"approval_id":"a1","nonce":"{}"{rest}}}}}"#,
+                "A".repeat(43)
+            ))
+        };
+        let Request::ApprovalDecide(p) = decide(r#","decision":"choose","choice":2"#)
+            .unwrap()
+            .request
+        else {
+            panic!("not a decision");
+        };
+        assert_eq!((p.decision, p.choice), (Decision::Choose, Some(2)));
+        let Request::ApprovalDecide(p) = decide(r#","decision":"deny""#).unwrap().request else {
+            panic!("not a decision");
+        };
+        assert!(!serde_json::to_string(&p).unwrap().contains("choice"));
+        for bad in [
+            r#","decision":"choose""#,
+            r#","decision":"approve","choice":0"#,
+            r#","decision":"choose","choice":256"#,
+        ] {
+            assert_eq!(
+                decide(bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_note_is_one_line_with_approve_or_deny() {
+        let decide = |rest: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"approval.decide","params":{{"approval_id":"a1","nonce":"{}"{rest}}}}}"#,
+                "A".repeat(43)
+            ))
+        };
+        for ok in [
+            r#","decision":"approve","note":"use a .tmp extension""#,
+            r#","decision":"deny","note":"run the tests first""#,
+            &format!(
+                r#","decision":"deny","note":"{}""#,
+                "é".repeat(limits::MAX_NOTE_CHARS)
+            ),
+        ] {
+            let Request::ApprovalDecide(p) = decide(ok).unwrap().request else {
+                panic!("not a decision");
+            };
+            assert!(p.note.is_some(), "{ok}");
+        }
+        for bad in [
+            r#","decision":"approve_always","note":"x""#,
+            r#","decision":"choose","choice":0,"note":"x""#,
+            r#","decision":"approve","note":"a\nb""#,
+            r#","decision":"approve","note":"a\tb""#,
+            r#","decision":"approve","note":"a\u001b[Z""#,
+            r#","decision":"deny","note":"  ""#,
+            &format!(
+                r#","decision":"approve","note":"{}""#,
+                "a".repeat(limits::MAX_NOTE_CHARS + 1)
+            ),
+        ] {
+            assert_eq!(
+                decide(bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_text_is_one_line() {
+        let typed = |text: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"agent.type_text","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"t","text":{}}}}}"#,
+                serde_json::to_string(text).unwrap()
+            ))
+        };
+        let ok = typed("use Redis, it is shared").unwrap();
+        assert_eq!(ok.request.class(), MethodClass::Drive);
+        assert_eq!(ok.request.method(), "agent.type_text");
+        for bad in ["a\nb", "a\tb", "a\u{1b}[2J", "  "] {
+            assert_eq!(
+                typed(bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn older_apps_tolerate_choices() {
+        let chosen: ApprovalOutcome =
+            serde_json::from_str(r#"{"outcome":"chosen","choice":1,"by":"phone"}"#).unwrap();
+        assert_eq!(
+            chosen,
+            ApprovalOutcome::Chosen {
+                choice: 1,
+                by: "phone".into()
+            }
+        );
+        #[derive(Deserialize)]
+        #[serde(tag = "outcome", rename_all = "snake_case")]
+        enum Older {
+            Applied {
+                #[allow(dead_code)]
+                decision: Decision,
+            },
+            #[serde(other)]
+            Other,
+        }
+        for outcome in [
+            ApprovalOutcome::Chosen {
+                choice: 1,
+                by: "phone".into(),
+            },
+            ApprovalOutcome::ChosenUnconfirmed {
+                choice: 1,
+                by: "phone".into(),
+            },
+        ] {
+            let json = serde_json::to_string(&outcome).unwrap();
+            assert!(matches!(
+                serde_json::from_str::<Older>(&json).unwrap(),
+                Older::Other
+            ));
+        }
+        let approval: Approval = serde_json::from_value(serde_json::json!({
+            "approval_id": "a1", "terminal_id": "t", "agent_label": "a", "workspace_label": "w",
+            "snippet": "", "tool": null, "options": [], "nonce": "A".repeat(43),
+            "created_at_ms": 1, "expires_at_ms": 2,
+        }))
+        .unwrap();
+        assert!(
+            approval.choices.is_empty(),
+            "an older collied sends no choices"
+        );
+        assert!(
+            !approval.accepts_input && !approval.has_text_field && !approval.supports_note,
+            "an older collied takes no input the phone can count on"
+        );
     }
 
     #[test]

@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod approvals;
 pub mod attachments;
 pub mod audit;

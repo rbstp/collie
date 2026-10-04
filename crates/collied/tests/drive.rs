@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
 use protocol::{
-    AgentKind, AgentPromptParams, AgentSendKeysParams, Cwd, DraftText, ErrorCode, Key, Label, OpId,
-    PaneCloseParams, PromptText, ReadParams, ReadSource, Request, Response, TaskNewParams,
-    TerminalId, WorkspaceCloseParams, WorkspaceId,
+    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, Cwd, DraftText,
+    ErrorCode, Key, Label, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request,
+    Response, TaskNewParams, TerminalId, WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -29,6 +29,60 @@ const TRUST: &str = "\
 
  Enter to confirm · Esc to cancel
 ";
+const QUESTION: &str = "\
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Storage
+
+ Which storage backend should the cache use?
+
+ ❯ 1. SQLite
+      Embedded, no server
+   2. Redis
+      Shared across processes
+   3. Type something.
+
+ Enter to select · ↑/↓ to navigate · Esc to cancel
+";
+const BASH: &str = "\
+────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   rm -rf build
+   Remove the build directory
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for rm commands in /Users/me/src/app
+   3. No, and tell Claude what to do differently (esc)
+";
+const QUESTION_LIVE: &str = "\
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Cache Backend
+
+Which storage backend should the cache use?
+
+❯ 1. SQLite
+     Embedded, no server
+  2. Redis
+     Shared across processes
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+";
+const PLAN: &str = "\
+────────────────────────────────────────────────────────────────────────────────
+ Would you like to proceed?
+
+ ❯ 1. Yes, and auto-accept edits
+   2. Yes, and manually approve edits
+   3. No, keep planning
+";
+// Claude Code 2.1.289 in herdr 0.9.3 (rule legacy_no_prompt_blocker).
+const PLAN_LIVE: &str = include_str!("fixtures/claude-2.1.289/plan.detection.txt");
+const PLAN_TYPED_LIVE: &str =
+    include_str!("fixtures/claude-2.1.289/plan-feedback-typed.detection.txt");
 const MUTATING: [&str; 9] = [
     "agent.prompt",
     "agent.send_keys",
@@ -53,6 +107,7 @@ struct Herdr {
     started: Option<String>,
     shell_busy: bool,
     new_pane_terminal: Option<String>,
+    rule: Option<String>,
 }
 
 struct Mock {
@@ -199,12 +254,17 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
         "agent.focus" => {
             json!({"type": "agent_info", "agent": agent_by_pane(h, p["target"].as_str().unwrap())?})
         }
+        "agent.explain" => json!({"type": "agent_explain", "explain": {
+            "matched_rule": h.rule.as_ref().map(|id| json!({"id": id, "priority": 980})),
+        }}),
         "agent.read" => read(h, &p["target"]),
         "pane.read" => read(h, &p["pane_id"]),
         "agent.prompt" => {
             json!({"type": "agent_prompted", "agent": agent_by_pane(h, p["target"].as_str().unwrap()).unwrap_or(json!({}))})
         }
-        "agent.send_keys" | "workspace.close" | "pane.close" => json!({"type": "ok"}),
+        "agent.send_keys" | "pane.send_text" | "workspace.close" | "pane.close" => {
+            json!({"type": "ok"})
+        }
         "pane.get" => {
             let pane = match p["pane_id"].as_str().unwrap() {
                 "w9:p1" => json!({"pane_id": "w9:p1", "workspace_id": "w9", "tab_id": "w9:t1",
@@ -742,7 +802,7 @@ async fn send_keys_and_focus() {
     };
     assert_eq!(
         drive.send_keys(keys(CLAUDE), &yes()).await,
-        Ok(Response::Ok)
+        (Ok(Response::Ok), None)
     );
     assert_eq!(
         herdr.params("agent.send_keys"),
@@ -751,8 +811,8 @@ async fn send_keys_and_focus() {
         ]
     );
     assert_eq!(
-        code(drive.send_keys(keys(CODEX_BLOCKED), &yes()).await),
-        ErrorCode::AgentBlocked
+        code(drive.send_keys(keys(CLAUDE), &no()).await.0),
+        ErrorCode::NotPaired
     );
     assert_eq!(herdr.params("agent.send_keys").len(), 1);
 
@@ -1083,4 +1143,337 @@ async fn next(
     w: &mut collied::drive::Watcher,
 ) -> Result<Option<Watched>, tokio::time::error::Elapsed> {
     tokio::time::timeout(Duration::from_secs(2), w.recv()).await
+}
+
+fn block(herdr: &Mock, text: &str) {
+    herdr.with(|h| {
+        h.snapshot["agents"][0]["agent_status"] = json!("blocked");
+        h.text = text.into();
+        h.rule = Some("live_blocked_form".into());
+    });
+}
+
+fn typed(terminal: &str, text: &str) -> AgentTypeTextParams {
+    AgentTypeTextParams {
+        op_id: op('Y'),
+        terminal_id: tid(terminal),
+        text: PromptText::new(text).unwrap(),
+    }
+}
+
+fn keys(terminal: &str) -> AgentSendKeysParams {
+    AgentSendKeysParams {
+        op_id: op('K'),
+        terminal_id: tid(terminal),
+        keys: vec![Key::Down, Key::Enter],
+    }
+}
+
+#[tokio::test]
+async fn keys_reach_a_blocked_agent_only_on_a_question() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+
+    block(&herdr, QUESTION);
+    assert_eq!(
+        drive.send_keys(keys(CLAUDE), &yes()).await,
+        (
+            Ok(Response::Ok),
+            Some(format!("{CLAUDE} blocked keys=down,enter"))
+        )
+    );
+    assert_eq!(
+        herdr.methods(),
+        [
+            "agent.list",
+            "agent.get",
+            "agent.explain",
+            "pane.read",
+            "agent.send_keys"
+        ]
+    );
+    assert_eq!(
+        herdr.params("pane.read")[0],
+        json!({"pane_id": "w6:p1", "source": "detection", "format": "text"})
+    );
+    block(&herdr, QUESTION_LIVE);
+    assert_eq!(
+        drive.send_keys(keys(CLAUDE), &yes()).await.0,
+        Ok(Response::Ok)
+    );
+
+    for screen in [BASH, PLAN, TRUST] {
+        block(&herdr, screen);
+        let (reply, target) = drive.send_keys(keys(CLAUDE), &yes()).await;
+        assert_eq!(code(reply), ErrorCode::AgentBlocked, "{screen}");
+        assert_eq!(target, None);
+    }
+    assert_eq!(
+        code(drive.send_keys(keys(CLAUDE), &no()).await.0),
+        ErrorCode::AgentBlocked,
+        "refused before authorization is even needed"
+    );
+
+    block(&herdr, QUESTION);
+    assert_eq!(
+        code(drive.send_keys(keys(CLAUDE), &no()).await.0),
+        ErrorCode::NotPaired
+    );
+
+    let wrapped = BASH.replace(
+        "   2. Yes, and don't ask again for rm commands in /Users/me/src/app\n",
+        "   2. Yes, and don't ask again for rm commands in\n      /a\n      /b\n      /c\n      /d\n",
+    );
+    for (rule, screen) in [
+        (Some("bash_permission_prompt"), QUESTION),
+        (Some("bash_permission_prompt"), "Do you want to proceed?"),
+        (Some("live_blocked_form"), wrapped.as_str()),
+        (None, QUESTION),
+    ] {
+        herdr.with(|h| {
+            h.rule = rule.map(str::to_owned);
+            h.text = screen.into();
+        });
+        assert_eq!(
+            code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
+            ErrorCode::AgentBlocked,
+            "{rule:?} {screen}"
+        );
+    }
+    herdr.with(|h| {
+        h.rule = Some("live_strong_blocker".into());
+        h.text = "Allow command `make`? [y/n]".into();
+    });
+    assert_eq!(
+        code(drive.send_keys(keys(CODEX_BLOCKED), &yes()).await.0),
+        ErrorCode::AgentBlocked,
+        "no menu on screen is no licence: only Claude Code question forms take keys"
+    );
+    assert_eq!(herdr.params("agent.send_keys").len(), 2);
+    assert!(herdr.params("agent.prompt").is_empty());
+    block(&herdr, QUESTION);
+    assert_eq!(
+        code(drive.prompt(prompt(CLAUDE), &yes()).await),
+        ErrorCode::AgentBlocked,
+        "a prompt is still refused while blocked"
+    );
+}
+
+#[tokio::test]
+async fn typed_text_goes_into_the_question_field_then_enter() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let on_field = QUESTION_LIVE
+        .replace("❯ 1. SQLite", "  1. SQLite")
+        .replace("  3. Type something.", "❯ 3. Type something.");
+    let filled = on_field.replace("❯ 3. Type something.", "❯ 3. DuckDB");
+
+    block(&herdr, QUESTION_LIVE);
+    herdr.with(|h| h.screens = [QUESTION_LIVE.to_owned(), on_field.clone(), filled.clone()].into());
+    assert_eq!(
+        drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.methods(),
+        [
+            "agent.list",
+            "agent.get",
+            "agent.explain",
+            "pane.read",
+            "agent.send_keys",
+            "agent.get",
+            "pane.read",
+            "pane.send_text",
+            "agent.get",
+            "pane.read",
+            "agent.send_keys"
+        ]
+    );
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        [json!({"pane_id": "w6:p1", "text": "DuckDB"})]
+    );
+    assert_eq!(
+        herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w6:p1", "keys": ["down", "down"]}),
+            json!({"target": "w6:p1", "keys": ["enter"]})
+        ]
+    );
+
+    herdr.with(|h| h.screens = [on_field.clone(), on_field.clone()].into());
+    assert_eq!(
+        code(drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await),
+        ErrorCode::AgentNotReady,
+        "the field never showed the text"
+    );
+    assert_eq!(herdr.params("pane.send_text").len(), 2);
+    assert_eq!(herdr.params("agent.send_keys").len(), 2, "no Enter");
+
+    herdr.with(|h| h.screens = [QUESTION_LIVE.to_owned()].into());
+    assert_eq!(
+        code(drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await),
+        ErrorCode::AgentNotReady,
+        "the cursor did not reach the field"
+    );
+    assert_eq!(
+        herdr.params("pane.send_text").len(),
+        2,
+        "nothing typed under SQLite"
+    );
+    assert_eq!(herdr.params("agent.send_keys").len(), 3);
+
+    let blocked = herdr.with(|h| h.snapshot["agents"][0].clone());
+    let mut moved_on = blocked.clone();
+    moved_on["state_change_seq"] = json!(6);
+    herdr.with(|h| {
+        h.screens = [on_field.clone(), filled.clone()].into();
+        h.gets.extend([blocked, moved_on]);
+    });
+    assert_eq!(
+        code(drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await),
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(herdr.params("pane.send_text").len(), 3);
+    assert_eq!(
+        herdr.params("agent.send_keys").len(),
+        3,
+        "no Enter once the prompt changed"
+    );
+
+    let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = checks.clone();
+    let revoked_after_typing: Authorized =
+        Arc::new(move || seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0);
+    herdr.with(|h| h.screens = [on_field.clone(), filled.clone()].into());
+    assert_eq!(
+        code(
+            drive
+                .type_text(typed(CLAUDE, "DuckDB"), &revoked_after_typing)
+                .await
+        ),
+        ErrorCode::NotPaired
+    );
+    assert_eq!(herdr.params("pane.send_text").len(), 4);
+    assert_eq!(herdr.params("agent.send_keys").len(), 3);
+
+    herdr.with(|h| h.screens.clear());
+    for screen in [BASH, PLAN, TRUST] {
+        block(&herdr, screen);
+        assert_eq!(
+            code(drive.type_text(typed(CLAUDE, "1"), &yes()).await),
+            ErrorCode::AgentBlocked,
+            "{screen}"
+        );
+    }
+    block(&herdr, "Pick a name\nEnter to confirm · Esc to cancel");
+    assert_eq!(
+        code(drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await),
+        ErrorCode::AgentBlocked,
+        "no text field to type into"
+    );
+
+    herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("working"));
+    assert_eq!(
+        code(drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await),
+        ErrorCode::AgentNotReady,
+        "not blocked: a prompt is the way"
+    );
+    assert_eq!(herdr.params("pane.send_text").len(), 4);
+    assert_eq!(herdr.params("agent.send_keys").len(), 3);
+}
+
+#[tokio::test]
+async fn plan_feedback_is_typed_but_keys_are_refused() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let on_field = PLAN_LIVE
+        .replace(
+            "   ❯ 1. Yes, and use auto mode",
+            "     1. Yes, and use auto mode",
+        )
+        .replace(
+            "     3. Tell Claude what to change",
+            "   ❯ 3. Tell Claude what to change",
+        );
+    let plan = |rule: &str| {
+        block(&herdr, PLAN_LIVE);
+        herdr.with(|h| h.rule = Some(rule.into()));
+    };
+
+    plan("legacy_no_prompt_blocker");
+    assert_eq!(
+        code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
+        ErrorCode::AgentBlocked,
+        "a plan takes no keys"
+    );
+    herdr.with(|h| {
+        h.screens = [
+            PLAN_LIVE.to_owned(),
+            on_field.clone(),
+            PLAN_TYPED_LIVE.to_owned(),
+        ]
+        .into()
+    });
+    assert_eq!(
+        drive
+            .type_text(typed(CLAUDE, "use echo instead"), &yes())
+            .await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w6:p1", "keys": ["down", "down"]}),
+            json!({"target": "w6:p1", "keys": ["enter"]})
+        ],
+        "never shift+tab"
+    );
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        [json!({"pane_id": "w6:p1", "text": "use echo instead"})]
+    );
+
+    herdr.with(|h| h.screens = [PLAN_LIVE.to_owned(), on_field.clone(), on_field.clone()].into());
+    assert_eq!(
+        code(
+            drive
+                .type_text(typed(CLAUDE, "use echo instead"), &yes())
+                .await
+        ),
+        ErrorCode::AgentNotReady,
+        "the field never showed the text"
+    );
+    assert_eq!(herdr.params("agent.send_keys").len(), 3, "no Enter");
+
+    herdr.with(|h| h.screens.clear());
+    for rule in ["live_blocked_form", "bash_permission_prompt"] {
+        plan(rule);
+        assert_eq!(
+            code(
+                drive
+                    .type_text(typed(CLAUDE, "use echo instead"), &yes())
+                    .await
+            ),
+            ErrorCode::AgentBlocked,
+            "{rule}"
+        );
+    }
+    plan("legacy_no_prompt_blocker");
+    herdr.with(|h| h.text = PLAN_LIVE.replace("2. Yes, manually approve edits", "2. Yes"));
+    assert_eq!(
+        code(
+            drive
+                .type_text(typed(CLAUDE, "use echo instead"), &yes())
+                .await
+        ),
+        ErrorCode::AgentBlocked,
+        "a menu with a decision is a permission prompt"
+    );
+    assert_eq!(herdr.params("pane.send_text").len(), 2);
+    assert_eq!(herdr.params("agent.send_keys").len(), 3);
 }

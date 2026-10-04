@@ -13,6 +13,7 @@ final class FakeCore: AgentCore {
         var macDraft: String?
         var draftReads = 0
         var keys: [[AgentKey]] = []
+        var typed: [String] = []
         var closes: [String] = []
         var hold = false
         var held: [CheckedContinuation<Void, Never>] = []
@@ -23,6 +24,7 @@ final class FakeCore: AgentCore {
         var cancelledUploads: [String] = []
         var maxAttachmentBytes: UInt64 = 20 * 1024 * 1024
         var uploadPath = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/notes.txt"
+        var endedActivities: [String] = []
     }
 
     let state = Mutex(State())
@@ -91,6 +93,9 @@ final class FakeCore: AgentCore {
     }
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {
         try await call { $0.keys.append(keys) }
+    }
+    func typeText(machineId: String, terminalId: String, text: String) async throws {
+        try await call { $0.typed.append(text) }
     }
     func focus(machineId: String, terminalId: String) async throws {}
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
@@ -558,4 +563,81 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 
     try Data("not json".utf8).write(to: file)
     #expect(AgentModel(core: FakeCore(), route: route, prefsFile: file).wrapLines)
+}
+
+@MainActor
+@Test func keepKeyboardIsOffByDefaultAndSavedBesideWrapLines() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appending(path: "prefs.json")
+    let route = AgentRoute(machineId: "m1", terminalId: "term_1")
+
+    try Data(#"{"wrapLines":false}"#.utf8).write(to: file)
+    let model = AgentModel(core: FakeCore(), route: route, prefsFile: file)
+    #expect(!model.wrapLines)
+    #expect(!model.keepsKeyboard)
+
+    var prefs = DevicePrefs.load(from: file)
+    prefs.keepKeyboard = true
+    prefs.save(to: file)
+    #expect(model.keepsKeyboard)
+
+    model.wrapLines = true
+    #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: true, keepKeyboard: true))
+}
+
+@MainActor
+@Test func blockedInputGatesKeysAndTypedAnswers() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    #expect(model.acceptsKeys && !model.answering && model.blockedHint == nil)
+
+    model.blocked = .optionsOnly
+    #expect(!model.acceptsKeys && !model.answering)
+    #expect(model.blockedHint == "Choose an option above.")
+    #expect(model.tap(.down) == nil)
+    #expect(model.keyTaps == 0)
+    model.draft = "go"
+    await model.sendPrompt()
+    #expect(core.snapshot.typed.isEmpty)
+    #expect(core.snapshot.prompts == ["go"])
+
+    model.blocked = .keys
+    #expect(model.acceptsKeys && !model.answering)
+    await model.tap(.down)?.value
+    #expect(core.snapshot.keys == [[.down]])
+
+    model.blocked = .keysAndText
+    #expect(model.acceptsKeys && model.answering)
+    #expect(model.blockedHint == "Choose an option above, use the arrow keys, or type an answer.")
+}
+
+@MainActor
+@Test func answeringTypesTheDraftInsteadOfPrompting() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    await attach(model, core, "a.png")
+    model.blocked = .keysAndText
+    #expect(model.answering)
+    #expect(!model.canSendPrompt)
+    model.draft = "  use the staging cluster \n"
+    #expect(model.canSendPrompt)
+    await model.sendPrompt()
+    #expect(core.snapshot.typed == ["use the staging cluster"])
+    #expect(core.snapshot.prompts.isEmpty)
+    #expect(model.draft.isEmpty)
+    #expect(model.attachments.map(\.name) == ["a.png"])
+
+    model.draft = "again"
+    core.set(error: .AgentBlocked)
+    await model.sendPrompt()
+    #expect(model.draft == "again")
+    #expect(model.promptError?.contains("Approvals") == true)
+
+    core.set(error: nil)
+    model.blocked = nil
+    await model.sendPrompt()
+    #expect(core.snapshot.typed == ["use the staging cluster", "again"])
+    #expect(core.snapshot.prompts == ["/Users/me/Library/Caches/dev.rbstp.collied/attachments/a.png/a.png again"])
 }

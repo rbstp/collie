@@ -71,11 +71,24 @@
     },
     "Approval": {
       "properties": {
+        "accepts_input": {
+          "default": false,
+          "description": "Whether collied takes `agent.send_keys` and `agent.type_text` on this prompt: false for\nany prompt that grants a permission, and from a collied that predates the field.",
+          "type": "boolean"
+        },
         "agent_label": {
           "type": "string"
         },
         "approval_id": {
           "$ref": "#/$defs/ApprovalId"
+        },
+        "choices": {
+          "default": [],
+          "description": "The menu on screen, in order, whenever collied could read one.",
+          "items": {
+            "$ref": "#/$defs/ApprovalChoice"
+          },
+          "type": "array"
         },
         "created_at_ms": {
           "format": "uint64",
@@ -86,6 +99,11 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "has_text_field": {
+          "default": false,
+          "description": "The menu has a free-text option that `agent.type_text` fills: a question's \"Type\nsomething.\" (with `accepts_input`), or a plan's \"Tell Claude what to change\", which\ntakes text but no keys (`accepts_input` false).",
+          "type": "boolean"
         },
         "nonce": {
           "$ref": "#/$defs/Nonce"
@@ -98,6 +116,11 @@
         },
         "snippet": {
           "type": "string"
+        },
+        "supports_note": {
+          "default": false,
+          "description": "`approval.decide` takes a `note` with `approve` and `deny`: the prompt shows \"Tab\nto amend\".",
+          "type": "boolean"
         },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"
@@ -126,6 +149,29 @@
         "nonce",
         "created_at_ms",
         "expires_at_ms"
+      ],
+      "type": "object"
+    },
+    "ApprovalChoice": {
+      "description": "`index` is 0-based; `current` marks the option under the menu cursor.",
+      "properties": {
+        "current": {
+          "type": "boolean"
+        },
+        "index": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "label",
+        "current"
       ],
       "type": "object"
     },
@@ -178,6 +224,54 @@
           "type": "object"
         },
         {
+          "description": "`applied` for a `choose` decision. Its own outcome, so an older app decodes it as\n`other` instead of failing on an unknown decision.",
+          "properties": {
+            "by": {
+              "type": "string"
+            },
+            "choice": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "outcome": {
+              "const": "chosen",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "choice",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`unconfirmed` for a `choose` decision.",
+          "properties": {
+            "by": {
+              "type": "string"
+            },
+            "choice": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "outcome": {
+              "const": "chosen_unconfirmed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "choice",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "outcome": {
               "const": "expired",
@@ -222,12 +316,21 @@
       "type": "string"
     },
     "Decision": {
-      "enum": [
-        "approve",
-        "approve_always",
-        "deny"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "approve",
+            "approve_always",
+            "deny"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "choose",
+          "description": "Pick `Approval.choices[choice]`; only on an approval that offers no other decision.",
+          "type": "string"
+        }
+      ]
     },
     "ErrorBody": {
       "properties": {

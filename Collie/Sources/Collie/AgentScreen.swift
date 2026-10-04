@@ -7,11 +7,17 @@ import UIKit
 struct AgentScreen: View {
     @State private var model: AgentModel
     let approvals: ApprovalsModel?
+    let follows: FollowModel?
     @Environment(\.dismiss) private var dismiss
 
-    init(core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel? = nil) {
+    init(core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel? = nil, follows: FollowModel? = nil) {
         _model = State(initialValue: AgentModel(core: core, route: route))
         self.approvals = approvals
+        self.follows = follows
+    }
+
+    private var blocked: BlockedInput? {
+        approvals?.blockedInput(machineId: model.route.machineId, terminalId: model.route.terminalId)
     }
 
     var body: some View {
@@ -33,7 +39,7 @@ struct AgentScreen: View {
                         ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
                     }
                 }
-            if let notice = model.notice {
+            if let notice = model.notice ?? model.blockedHint {
                 Label(notice, systemImage: "exclamationmark.triangle")
                     .font(.footnote)
                     .foregroundStyle(.orange)
@@ -49,8 +55,11 @@ struct AgentScreen: View {
         .toolbar(.hidden, for: .tabBar)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Toggle("Wrap lines", systemImage: "text.word.spacing", isOn: $model.wrapLines)
-                    .toggleStyle(.button)
+                Toggle(isOn: $model.wrapLines) {
+                    // SF Symbols has no wrap-text glyph; WrapLines is a drawn template image.
+                    Label("Wrap lines", image: "WrapLines")
+                }
+                .toggleStyle(.button)
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu("More", systemImage: "ellipsis") {
@@ -60,6 +69,9 @@ struct AgentScreen: View {
                     .disabled(model.refreshing)
                     Button("Focus on Mac", systemImage: "macwindow") {
                         Task { await model.focus() }
+                    }
+                    if let follows {
+                        FollowMenuItem(follows: follows, route: model.route)
                     }
                     Divider()
                     Button("Close pane", systemImage: "xmark.square", role: .destructive) {
@@ -74,6 +86,7 @@ struct AgentScreen: View {
                 }
             }
         }
+        .onChange(of: blocked, initial: true) { _, blocked in model.blocked = blocked }
         .closeConfirmation($model.close) { await model.performClose() }
         .onChange(of: model.closed) { _, closed in
             if closed { dismiss() }
@@ -233,6 +246,7 @@ private struct KeyStrip: View {
                 .accessibilityLabel(key.accessibilityName)
             }
         }
+        .disabled(!model.acceptsKeys)
         .padding(.horizontal)
         .padding(.top, 8)
         .sensoryFeedback(.impact(weight: .light), trigger: model.keyTaps)
@@ -266,24 +280,36 @@ private struct PromptBar: View {
                 .scrollIndicators(.hidden)
             }
             HStack(alignment: .bottom, spacing: 8) {
-                Menu {
-                    Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
-                    Button("Files", systemImage: "folder") { pickingFile = true }
-                } label: {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 20))
-                        .frame(width: 32, height: 36)
+                if !model.answering {
+                    Menu {
+                        Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
+                        Button("Files", systemImage: "folder") { pickingFile = true }
+                    } label: {
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 20))
+                            .frame(width: 32, height: 36)
+                    }
+                    .disabled(model.upload != nil || model.attachmentSlots <= 0)
+                    .accessibilityLabel("Attach")
                 }
-                .disabled(model.upload != nil || model.attachmentSlots <= 0)
-                .accessibilityLabel("Attach")
-                TextField("Prompt the agent", text: $model.draft, axis: .vertical)
+                TextField(model.answering ? "Type an answer" : "Prompt the agent", text: $model.draft, axis: .vertical)
                     .lineLimit(1...6)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
                     .focused($editing)
+                if editing {
+                    Button {
+                        editing = false
+                    } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .font(.system(size: 20))
+                            .frame(width: 32, height: 36)
+                    }
+                    .accessibilityLabel("Hide keyboard")
+                }
                 Button {
-                    editing = false
+                    if !model.keepsKeyboard { editing = false }
                     Task { await model.sendPrompt() }
                 } label: {
                     if model.sendingPrompt {
@@ -293,7 +319,7 @@ private struct PromptBar: View {
                     }
                 }
                 .disabled(!model.canSendPrompt)
-                .accessibilityLabel("Send prompt")
+                .accessibilityLabel(model.answering ? "Send answer" : "Send prompt")
             }
         }
         .padding(.horizontal)
