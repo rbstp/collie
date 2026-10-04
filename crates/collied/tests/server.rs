@@ -282,6 +282,26 @@ async fn scenario(
     assert_eq!(status.node_id, mac_self.stable_id);
     assert_eq!((status.port, status.peers), (PORT, 1));
     assert_eq!(status.herdr_version.as_deref(), Some("0.9.3"));
+    // The test node advertises no tag: reported, and empty.
+    assert_eq!(status.tags, Some(Vec::new()));
+    assert!(!status.flock_too_large);
+    let flock = status.flock.expect("status lists the herdr agents");
+    let terminals: Vec<&str> = flock
+        .agents
+        .iter()
+        .map(|a| a.terminal_id.as_str())
+        .collect();
+    assert_eq!(terminals, ["term_65ce7ae4fd5731", "term_0a1b2c3d4e5f60"]);
+    assert_eq!(flock.workspaces.len(), 2);
+    for a in &flock.agents {
+        assert!(
+            flock
+                .workspaces
+                .iter()
+                .any(|w| w.workspace_id == a.workspace_id),
+            "{a:?}"
+        );
+    }
 
     println!("another user is rejected even while a window is open");
     let (cli, _) = open_window(&control).await;
