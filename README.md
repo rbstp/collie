@@ -1,6 +1,6 @@
 # collie
 
-Watch and steer your [herdr](https://github.com/herdrdev/herdr) coding agents from your iPhone: see every agent and its status, read its terminal, prompt it, send keys, attach files, start new tasks, and approve or deny a blocked agent from the lock screen.
+Watch and steer your [herdr](https://github.com/herdrdev/herdr) coding agents from your iPhone: see every agent and its status, read its terminal, prompt it, send keys, attach files, start new tasks, follow an agent in a Live Activity, and approve or deny a blocked agent from the lock screen.
 
 collie has two parts:
 
@@ -16,17 +16,19 @@ No Tailscale app is needed on either device, and no TCP port is opened outside t
 │  └ collie-core (Rust)    │ ──────────────────────► │  ├ whois gate + pairing  │
 │     └ libtailscale node  │                         │  ├ libtailscale node     │
 │ ColliePush (NSE)         │ ◄─ APNs (encrypted ──── │  └ herdr client ─► herdr │
-└──────────────────────────┘    approval context)    └──────────────────────────┘
+│ CollieWidgets (Live Act.)│    approval context)    │                          │
+└──────────────────────────┘                         └──────────────────────────┘
 ```
 
 ## Features
 
 - **Agents**: every herdr agent with its status (`idle`, `working`, `blocked`, `done`), grouped by Mac with blocked agents first, and each agent's workspace under its title. Long-press an agent, or use the agent screen's menu, to close its pane or workspace.
-- **Terminal**: a live view of the last 240 lines of the agent's pane, rendered with libghostty-vt, with optional line wrapping and the MesloLGS NF font so Nerd Font glyphs match the Mac.
-- **Prompt and keys**: send a prompt, or keys from the key strip (`esc ⏎ ← ↑ ↓ → ⇥ ⇧⇥ ^C`). "Focus on Mac" brings the agent's pane to the front in herdr.
+- **Terminal**: a live view of the last 240 lines of the agent's pane, rendered with libghostty-vt, with optional line wrapping and the MesloLGS NF font so Nerd Font glyphs match the Mac. Long-press to select text, drag the handles to adjust, and copy (Universal Clipboard included).
+- **Prompt and keys**: send a prompt, or keys from the key strip (`esc ⏎ ← ↑ ↓ → ⇥ ⇧⇥ ^C`). A Claude Code prompt typed on the Mac but not sent shows up in the phone's prompt field, and sending from the phone replaces it. "Focus on Mac" brings the agent's pane to the front in herdr.
 - **Attachments**: up to 10 photos or files per prompt, uploaded over the tailnet and shown as pills; the agent receives their paths on the Mac.
 - **New task**: start an agent in a new workspace from the phone.
-- **Approvals**: when an agent blocks on a permission prompt, you get a push notification showing the command. Approve or deny from the lock screen (the iPhone must be unlocked first) or in the app (Face ID or the passcode for each decision).
+- **Approvals**: when an agent blocks on a permission prompt, you get a push notification showing the command. Approve or deny from the lock screen (the iPhone must be unlocked first) or in the app (Face ID or the passcode for each decision). In the app you can also add a note to an approval or a denial, send feedback on a plan, and answer Claude Code's question menus by picking an option or typing an answer.
+- **Follow**: "Follow on Lock Screen" (agent menu or long-press in the list) shows the agent (up to 5) in a Live Activity and the Dynamic Island, with its status and how long it has been in it. When a followed agent blocks, the activity shows the command with Approve and Deny buttons instead of a separate notification. Following is off by default; followed agents get a pin in the list.
 
 ## Security model
 
@@ -50,10 +52,10 @@ Details, including what is not covered: [docs/threat-model.md](docs/threat-model
 | 1 | Tailnet login, whois gate, pairing, agent list | done |
 | 2 | Terminal, prompt, keys, new task | done |
 | 3 | Lock-screen approvals with encrypted context, attachments | done |
-| 4 | Live Activities and Dynamic Island for agents you follow | next |
+| 4 | Live Activities and Dynamic Island for agents you follow, approvals on the activity, question menus | done |
 | 5 | Claude Code hooks enrichment, audit viewer, multiple computers (macOS and Linux) | planned |
 | 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | planned |
-| 7 | Improvements: a Mac menu bar icon (on/off, pairing, pending approvals, quit) | planned |
+| 7 | Improvements: a Mac menu bar icon (on/off, pairing, pending approvals, quit), compact status icons | planned |
 
 ## Requirements
 
@@ -115,7 +117,7 @@ crates/
   collie-core/     The phone's Rust core, exposed to Swift with UniFFI
   uniffi-bindgen/  UniFFI binding generator used by `just ios-framework`
   e2e/             End-to-end tests: phone core against collied over a local test tailnet
-Collie/            iOS app (XcodeGen project.yml), ColliePush extension, GhosttyTerminal package
+Collie/            iOS app (XcodeGen project.yml), ColliePush and CollieWidgets extensions, GhosttyTerminal package
 docs/              Architecture, threat model, tailnet setup, release, protocol schemas
 scripts/           libghostty-vt xcframework build
 ```
