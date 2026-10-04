@@ -78,6 +78,13 @@ pub fn content(
 /// priority 10 and an alert that expands the Dynamic Island, with the same plaintext as
 /// the approval alert.
 pub fn update(state: &ContentState, urgent: bool, now_ms: u64) -> Alert {
+    tracing::debug!(
+        status = ?state.status,
+        urgent,
+        approval = state.approval_id.is_some(),
+        enc = state.enc.is_some(),
+        "live activity update"
+    );
     let now = now_ms / 1000;
     let mut aps = json!({
         "timestamp": now,

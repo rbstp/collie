@@ -56,13 +56,8 @@ struct AgentScreen: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Toggle(isOn: $model.wrapLines) {
-                    Label {
-                        Text("Wrap lines")
-                    } icon: {
-                        WrapLinesShape()
-                            .stroke(style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
-                            .frame(width: 22, height: 22)
-                    }
+                    // SF Symbols has no wrap-text glyph; WrapLines is a drawn template image.
+                    Label("Wrap lines", image: "WrapLines")
                 }
                 .toggleStyle(.button)
             }
