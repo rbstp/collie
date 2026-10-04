@@ -385,8 +385,11 @@ fn raw_upgrade(node: &Node, target: &str, host: &str) -> Vec<u8> {
         protocol::WS_SUBPROTOCOL
     );
     let _ = conn.write_all(request.as_bytes());
-    conn.set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
+    // Darwin fails setsockopt with EINVAL once a refusing Mac has closed; the
+    // read cannot block then.
+    if let Err(e) = conn.set_read_timeout(Some(Duration::from_secs(10))) {
+        assert_eq!(e.raw_os_error(), Some(22), "set_read_timeout: {e}");
+    }
     let mut buf = Vec::new();
     match conn.read_to_end(&mut buf) {
         Ok(_) => {}

@@ -233,10 +233,14 @@ async fn tuple_reuse(
                 .map_err(|e| e.to_string())
                 .and_then(|mut conn| {
                     max = max.max(t.elapsed());
+                    // Some dials read only after the listener has written and
+                    // closed, so that path is covered on every run.
+                    if seq % 100 == 0 {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
                     let mut buf = Vec::new();
-                    conn.set_read_timeout(Some(DIAL_TIMEOUT))
-                        .and_then(|()| conn.read_to_end(&mut buf))
-                        .map_err(|e| format!("read: {e}"))
+                    read_timeout(&conn, DIAL_TIMEOUT)
+                        .and_then(|()| conn.read_to_end(&mut buf).map_err(|e| format!("read: {e}")))
                         .and_then(|_| match &buf[..] {
                             b"k" => Ok(()),
                             other => Err(format!("read {other:?}")),
@@ -511,5 +515,14 @@ impl Drop for TestControl {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// Darwin fails setsockopt with EINVAL once the socketpair peer is closed; the read
+/// cannot block then. Any other error (ENOTSOCK, EBADF) would mean a reused fd.
+fn read_timeout(conn: &std::os::unix::net::UnixStream, timeout: Duration) -> Result<(), String> {
+    match conn.set_read_timeout(Some(timeout)) {
+        Err(e) if e.raw_os_error() != Some(22) => Err(format!("set_read_timeout: {e}")),
+        _ => Ok(()),
     }
 }
