@@ -25,14 +25,22 @@ fn unit_path() -> anyhow::Result<PathBuf> {
         .join(UNIT))
 }
 
-/// One word for `ExecStart=` or one `Environment=` assignment: double quoted, C escapes
-/// for quotes and backslashes, `%` and `$` doubled so neither specifiers nor variables
-/// expand. Control characters cannot be written into a unit file safely.
-fn quote(s: &str) -> anyhow::Result<String> {
+fn utf8(p: &Path) -> anyhow::Result<&str> {
+    p.to_str()
+        .with_context(|| format!("{}: not valid UTF-8", p.display()))
+}
+
+fn no_controls(s: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         !s.chars().any(char::is_control),
         "{s:?}: control characters cannot go into a unit file"
     );
+    Ok(())
+}
+
+/// Quoted, with C escapes for `"` and `\`, and `%` doubled so no specifier expands.
+fn quoted(s: &str, dollar: bool) -> anyhow::Result<String> {
+    no_controls(s)?;
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {
@@ -40,7 +48,7 @@ fn quote(s: &str) -> anyhow::Result<String> {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '%' => out.push_str("%%"),
-            '$' => out.push_str("$$"),
+            '$' if dollar => out.push_str("$$"),
             c => out.push(c),
         }
     }
@@ -48,39 +56,77 @@ fn quote(s: &str) -> anyhow::Result<String> {
     Ok(out)
 }
 
+/// systemd refuses an executable path with quotes or backslashes and does not expand `$`
+/// in it.
+fn quote_exe(exe: &Path) -> anyhow::Result<String> {
+    let s = utf8(exe)?;
+    anyhow::ensure!(
+        exe.is_absolute() && !s.contains(['"', '\'', '\\']),
+        "{s:?}: systemd cannot run an executable at this path; install collied elsewhere"
+    );
+    quoted(s, false)
+}
+
+/// Arguments also expand `$VAR`, so `$` is doubled.
+fn quote_arg(s: &str) -> anyhow::Result<String> {
+    quoted(s, true)
+}
+
+/// `$` has no special meaning in `Environment=`.
+fn quote_env(k: &str, v: &Path) -> anyhow::Result<String> {
+    quoted(&format!("{k}={}", utf8(v)?), false)
+}
+
 pub fn unit(exe: &Path, config: Option<&Path>, env: &[(&str, PathBuf)]) -> anyhow::Result<String> {
-    let mut args = vec![exe.display().to_string()];
+    let mut exec = vec![quote_exe(exe)?];
     if let Some(c) = config {
-        args.push("--config".into());
-        args.push(c.display().to_string());
+        exec.push(quote_arg("--config")?);
+        exec.push(quote_arg(utf8(c)?)?);
     }
-    args.push("run".into());
-    let exec = args
-        .iter()
-        .map(|a| quote(a))
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .join(" ");
+    exec.push(quote_arg("run")?);
+    let exec = exec.join(" ");
     let mut environment = String::new();
     for (k, v) in env {
-        environment.push_str(&format!(
-            "Environment={}\n",
-            quote(&format!("{k}={}", v.display()))?
-        ));
+        environment.push_str(&format!("Environment={}\n", quote_env(k, v)?));
     }
-    // UMask 0077 keeps every file the daemon creates private. Restart=always with a delay
-    // matches launchd's KeepAlive without tripping the start rate limit.
+    // Units started with the user manager do not get XDG_*_HOME from the session, hence the
+    // pinned Environment= lines. Restart=always with a growing delay is launchd's KeepAlive
+    // without a hot loop. The sandboxing is best effort: in a user manager it relies on
+    // unprivileged user namespaces and is skipped where they are unavailable.
     Ok(format!(
-        "[Unit]
+        "# Written by `collied service install`; rewritten on every install.
+[Unit]
 Description=collie daemon: herdr agents over the tailnet
 Documentation=https://github.com/rbstp/collie
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec
 ExecStart={exec}
 {environment}Restart=always
-RestartSec=5
+RestartSec=2s
+RestartSteps=5
+RestartMaxDelaySec=1min
 UMask=0077
 NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=default.target
@@ -185,6 +231,7 @@ pub fn stop() -> anyhow::Result<()> {
         systemctl(&["disable", "--now", UNIT])?,
         "systemctl --user disable --now {UNIT} failed"
     );
+    let _ = quiet(&["reset-failed", UNIT]);
     println!(
         "{}; stays off until collied start",
         if was_active {
@@ -242,27 +289,72 @@ pub fn uninstall() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    const NASTY: &str = "/home/me/a b\"$HOME%h\\;.toml";
+
     #[test]
     fn unit_runs_absolute_exe_with_pinned_dirs() {
         let u = unit(
-            Path::new("/opt/collie/bin/collied"),
-            Some(Path::new("/home/me/a b\"$HOME%h\\.toml")),
-            &[("XDG_DATA_HOME", PathBuf::from("/home/me/.local/share"))],
+            Path::new("/opt/collie $x%/bin/collied"),
+            Some(Path::new(NASTY)),
+            &[("XDG_DATA_HOME", PathBuf::from("/home/me/$data%"))],
         )
         .unwrap();
         assert!(u.contains(
-            "ExecStart=\"/opt/collie/bin/collied\" \"--config\" \"/home/me/a b\\\"$$HOME%%h\\\\.toml\" \"run\"\n"
-        ));
-        assert!(u.contains("Environment=\"XDG_DATA_HOME=/home/me/.local/share\"\n"));
+            "ExecStart=\"/opt/collie $x%%/bin/collied\" \"--config\" \"/home/me/a b\\\"$$HOME%%h\\\\;.toml\" \"run\"\n"
+        ), "{u}");
+        assert!(
+            u.contains("Environment=\"XDG_DATA_HOME=/home/me/$data%%\"\n"),
+            "{u}"
+        );
         assert!(u.contains("Restart=always\n"));
         assert!(u.contains("UMask=0077\n"));
         assert!(u.contains("WantedBy=default.target\n"));
-        assert!(!u.contains("User=") && !u.contains("ListenStream"));
+        assert!(!u.contains("User=") && !u.contains("ListenStream") && !u.contains("Socket"));
     }
 
     #[test]
-    fn control_characters_are_refused() {
+    fn unsafe_paths_are_refused() {
         assert!(unit(Path::new("/x\n[Service]"), None, &[]).is_err());
-        assert!(quote("a\tb").is_err());
+        assert!(unit(Path::new("/a\"b/collied"), None, &[]).is_err());
+        assert!(unit(Path::new("/a\\b/collied"), None, &[]).is_err());
+        assert!(unit(Path::new("relative/collied"), None, &[]).is_err());
+        assert!(unit(Path::new("/c"), Some(Path::new("/a\tb")), &[]).is_err());
+        use std::os::unix::ffi::OsStrExt;
+        let latin1 = Path::new(std::ffi::OsStr::from_bytes(b"/caf\xe9.toml"));
+        assert!(unit(Path::new("/c"), Some(latin1), &[]).is_err());
+    }
+
+    // What systemd itself makes of the unit, where systemd-analyze exists.
+    #[test]
+    fn systemd_parses_the_unit() {
+        let analyze = Path::new("/usr/bin/systemd-analyze");
+        if !analyze.exists() {
+            println!("skipped: no systemd-analyze");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("collied $x%");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.path().join(UNIT);
+        let text = unit(
+            &exe,
+            Some(Path::new(NASTY)),
+            &[("XDG_DATA_HOME", PathBuf::from("/home/me/$data%"))],
+        )
+        .unwrap();
+        std::fs::write(&path, text).unwrap();
+        let out = Command::new(analyze)
+            .args(["--user", "verify"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.contains("Failed to connect") || stderr.contains("bus") {
+            println!("skipped: no user manager ({stderr})");
+            return;
+        }
+        assert!(out.status.success(), "{stderr}");
+        assert!(!stderr.contains(UNIT), "{stderr}");
     }
 }
