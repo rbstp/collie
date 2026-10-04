@@ -72,7 +72,7 @@ collied login             # advertises tag:collie-linux, refuses until the node 
 collied service install   # systemd user unit, ~/.config/systemd/user/collied.service
 ```
 
-Update: `git pull`, `just setup`, `just collied-install`, which restarts the user unit if it is active. The phone still pins `tag:collie-mac`, so it does not pair with a Linux collied (`tag:collie-linux`) until the app accepts that tag.
+Update: `git pull`, `just setup`, `just collied-install`, which restarts the user unit if it is active.
 
 ## Repository secrets
 

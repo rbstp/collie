@@ -26,7 +26,7 @@ The phone only dials (TCP to the Mac on port 8457). The Mac only listens through
 - Same as the Mac node, with `tag:collie-linux` instead of `tag:collie-mac`, hostname `collie-<hostname>`, and node state in `$XDG_DATA_HOME/collie/tsnet` (else `~/.local/share/collie/tsnet`), 0700.
 - `collied login` and `collied run` refuse a node whose own tags do not include `tag:collie-linux`. Logging in again does not change the tags of a node that is already registered: remove it in the admin console (Machines), delete the `tsnet` directory, check that your user is a tag owner of `tag:collie-linux`, then run `collied login` again (phones pair again).
 - A system Tailscale (`tailscaled`, the `tailscale` CLI) on the same machine is a different node and plays no part in collie. The two run side by side: the embedded node has its own state and keys, uses a userspace netstack (no TUN device, no routes) and its own WireGuard UDP port.
-- The phone pins `tag:collie-mac` today, so it refuses a Linux node until the app accepts `tag:collie-linux` too.
+- The phone accepts a Linux node at pairing and from then on requires `tag:collie-linux` on it.
 
 ## Phone node
 
@@ -140,7 +140,7 @@ Neither device has a Tailscale CLI, so the numeric ID is not shown anywhere else
 
 ### Phone side
 
-The phone checks the other direction (`crates/collie-core/src/pin.rs`). It does not use a DNS answer: it takes the Mac's IP from its own netmap entry whose DNS name matches and whose `StableID` is the one pinned at pairing, requires that entry to carry `tag:collie-mac`, and dials that IP. A different node under the name, or a Mac that lost its tag, is a pin violation and is not retried automatically.
+The phone checks the other direction (`crates/collie-core/src/pin.rs`). It does not use a DNS answer: it takes the machine's IP from its own netmap entry whose DNS name matches and whose `StableID` is the one pinned at pairing, requires that entry to carry the tag seen at pairing (`tag:collie-mac` or `tag:collie-linux`; pairing accepts either), and dials that IP. A different node under the name, or a machine that lost or changed its tag, is a pin violation and is not retried automatically.
 
 ## Key expiry
 
