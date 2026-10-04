@@ -45,9 +45,9 @@ final class AgentModel {
 
     var keepsKeyboard: Bool { DevicePrefs.load(from: prefsFile).keepKeyboard }
 
-    // One chain for every screen: a late unwatch from a popped screen must not land after
-    // the next screen's watch.
-    private static var watchChain: Task<Void, Never>?
+    // One chain per machine: a late unwatch from a popped screen must not land after
+    // the next screen's watch on the same machine.
+    private static var watchChains: [String: Task<Void, Never>] = [:]
 
     init(core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file) {
         self.core = core
@@ -298,10 +298,10 @@ final class AgentModel {
     }
 
     private func watch(_ terminalId: String?) {
-        let previous = Self.watchChain
-        let core = core
         let machineId = route.machineId
-        Self.watchChain = Task {
+        let previous = Self.watchChains[machineId]
+        let core = core
+        Self.watchChains[machineId] = Task {
             await previous?.value
             try? await core.watchAgent(machineId: machineId, terminalId: terminalId)
         }
@@ -313,7 +313,7 @@ final class AgentModel {
             return "The agent is waiting for an approval. Answer it above or in the Approvals tab."
         case .DraftChanged(let current):
             let shown = current.count > 80 ? String(current.prefix(80)) + "…" : current
-            return "The Mac's input box has unsent text: “\(shown)”. Send again to replace it."
+            return "The agent's input box has unsent text: “\(shown)”. Send again to replace it."
         default:
             return describe(error)
         }

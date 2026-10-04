@@ -76,7 +76,7 @@ pub enum CoreError {
     PinViolation { message: String },
     #[error("{message}")]
     Unreachable { message: String },
-    #[error("the Mac rejected the request: {message}")]
+    #[error("the machine rejected the request: {message}")]
     Rejected { message: String },
     #[error("{message}")]
     InvalidInput {
@@ -91,7 +91,7 @@ pub enum CoreError {
     ConfirmRequired,
     #[error("the agent or workspace no longer exists")]
     NotFound,
-    #[error("herdr is not running on the Mac")]
+    #[error("herdr is not running on the machine")]
     HerdrUnavailable,
     #[error("too many requests, try again in a moment")]
     RateLimited,
@@ -101,7 +101,7 @@ pub enum CoreError {
     ApprovalExpired,
     #[error("this approval was already answered")]
     ApprovalAlreadyResolved,
-    #[error("the Mac does not support this yet, update collied")]
+    #[error("the machine does not support this yet, update collied")]
     NotImplemented,
     #[error("{message}")]
     TooLarge { message: String },
@@ -109,11 +109,11 @@ pub enum CoreError {
     ChecksumMismatch,
     #[error("upload cancelled")]
     Cancelled,
-    #[error("The Mac's input box has unsent text.")]
+    #[error("The agent's input box has unsent text.")]
     DraftChanged { current: String },
-    #[error("Could not clear the Mac's input box; nothing was sent.")]
+    #[error("Could not clear the agent's input box; nothing was sent.")]
     DraftNotCleared,
-    #[error("stopped retrying: {message}. Pair this Mac again.")]
+    #[error("stopped retrying: {message}. Pair this machine again.")]
     Unauthorized { message: String },
     #[error("tailnet: {message}")]
     Tailnet { message: String },
@@ -1334,7 +1334,7 @@ impl Inner {
         let device_label = Label::new(device_label.trim()).map_err(|_| CoreError::InvalidLabel)?;
         let node = lock(&self.node).clone().ok_or(CoreError::NotRunning)?;
         let (mut session, _, kind) =
-            conn::open(node, &invite.host, invite.port, &invite.node_id, None).await?;
+            conn::open(node, &invite.host, invite.port, &invite.node_id, None, true).await?;
         let info = expect_paired(
             session
                 .call(
@@ -1428,7 +1428,7 @@ fn request_error(conn: &Conn, e: RequestError) -> CoreError {
         },
         _ if link.phase == LinkPhase::Offline => CoreError::NotRunning,
         _ => CoreError::Unreachable {
-            message: last.unwrap_or_else(|| "timed out waiting for the Mac".into()),
+            message: last.unwrap_or_else(|| "timed out waiting for the machine".into()),
         },
     }
 }
@@ -1662,13 +1662,13 @@ mod tests {
             matches!(&e, CoreError::DraftChanged { current } if current == "typed on the Mac"),
             "{e:?}"
         );
-        assert_eq!(e.to_string(), "The Mac's input box has unsent text.");
+        assert_eq!(e.to_string(), "The agent's input box has unsent text.");
         assert!(matches!(changed(None), CoreError::Rejected { .. }));
         let e = server(ErrorCode::DraftNotCleared, "m");
         assert!(matches!(e, CoreError::DraftNotCleared));
         assert_eq!(
             e.to_string(),
-            "Could not clear the Mac's input box; nothing was sent."
+            "Could not clear the agent's input box; nothing was sent."
         );
     }
 

@@ -44,9 +44,9 @@
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
 	<false/>
 	<key>NSCameraUsageDescription</key>
-	<string>collie uses the camera to scan the pairing QR code shown by collied on your Mac.</string>
+	<string>collie uses the camera to scan the pairing QR code shown by collied on your machine.</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>collie uses Face ID to confirm approvals before sending them to your Mac.</string>
+	<string>collie uses Face ID to confirm approvals before sending them to your machine.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

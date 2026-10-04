@@ -18,14 +18,19 @@ use crate::session::{FlockState, Reply, Session, SessionError, lock};
 use crate::store::Machine;
 use crate::store::MachineKind;
 
-const BACKOFF: [Duration; 4] = [
+const BACKOFF: [Duration; 6] = [
     Duration::from_secs(3),
     Duration::from_secs(4),
     Duration::from_secs(8),
     Duration::from_secs(16),
+    Duration::from_secs(30),
+    Duration::from_secs(60),
 ];
 const RESET_AFTER: Duration = Duration::from_secs(30);
 const OFFLINE_POLL: Duration = Duration::from_secs(3);
+/// A machine Tailscale reports offline is not dialed: every 20 s dial to a dead peer runs
+/// on the node all machines share. It is still tried this often, in case control is wrong.
+const OFFLINE_REDIAL: Duration = Duration::from_secs(300);
 const DIAL_ATTEMPT: Duration = Duration::from_secs(5);
 const DIAL_BUDGET: Duration = Duration::from_secs(20);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -92,8 +97,10 @@ pub enum ConnectError {
     Offline,
     #[error(transparent)]
     Pin(#[from] PinError),
-    #[error("could not reach the Mac: {0}")]
+    #[error("not reachable ({0})")]
     Dial(String),
+    #[error("not reachable, it may be off or asleep")]
+    PeerOffline,
     #[error(transparent)]
     Session(#[from] SessionError),
 }
@@ -125,6 +132,7 @@ pub async fn open(
     port: u16,
     node_id: &str,
     kind: Option<MachineKind>,
+    dial_offline: bool,
 ) -> Result<(Session<UnixStream>, HelloResult, MachineKind), ConnectError> {
     let n = node.clone();
     let status = blocking(move || n.status())
@@ -135,6 +143,14 @@ pub async fn open(
         return Err(ConnectError::Offline);
     }
     let (ip, kind) = pin::resolve(&status, host, node_id, kind)?;
+    let online = status
+        .peer
+        .iter()
+        .flat_map(|peers| peers.values())
+        .any(|p| p.stable_id == node_id && p.online);
+    if !online && !dial_offline {
+        return Err(ConnectError::PeerOffline);
+    }
     let n = node.clone();
     let who = blocking(move || n.whois(&ip.to_string()))
         .await
@@ -405,6 +421,8 @@ async fn supervise(
     wake: Arc<Notify>,
 ) {
     let mut backoff = Backoff::default();
+    let mut last_dial = Instant::now();
+    let mut peer_offline = false;
     loop {
         let running = lock(&node).clone();
         let Some(node) = running else {
@@ -412,16 +430,24 @@ async fn supervise(
             wait(&wake, OFFLINE_POLL).await;
             continue;
         };
-        shared.set(LinkPhase::Connecting, None);
+        if !peer_offline {
+            shared.set(LinkPhase::Connecting, None);
+        }
         let opened = open(
             node,
             &machine.host,
             machine.port,
             &machine.node_id,
             Some(machine.kind),
+            last_dial.elapsed() >= OFFLINE_REDIAL,
         )
         .await;
-        if !matches!(opened, Err(ConnectError::Offline)) {
+        peer_offline = matches!(opened, Err(ConnectError::PeerOffline));
+        if !matches!(
+            opened,
+            Err(ConnectError::Offline | ConnectError::PeerOffline)
+        ) {
+            last_dial = Instant::now();
             reach.record(
                 &machine.node_id,
                 matches!(&opened, Ok((_, hello, _)) if hello.paired),
@@ -481,6 +507,10 @@ impl Backoff {
             self.resumed = link.resumed;
             self.attempt = 0;
             self.grace_attempt = 0;
+        }
+        if matches!(err, ConnectError::PeerOffline) {
+            link.set(LinkPhase::Waiting, Some(err.to_string()));
+            return Some(OFFLINE_POLL);
         }
         if link
             .resumed
@@ -722,6 +752,33 @@ mod tests {
             Some(GRACE_BACKOFF[0])
         );
         assert_eq!(link(&shared), (LinkPhase::Connecting, None));
+    }
+
+    #[test]
+    fn a_machine_tailscale_reports_offline_waits_quietly() {
+        let shared = shared();
+        let mut backoff = Backoff::default();
+        let t0 = Instant::now();
+        shared.resume(t0);
+        for i in 0..3 {
+            assert_eq!(
+                backoff.failed(
+                    &shared,
+                    &ConnectError::PeerOffline,
+                    t0 + Duration::from_secs(i)
+                ),
+                Some(OFFLINE_POLL),
+                "no grace retries and no growing backoff"
+            );
+        }
+        assert_eq!(
+            link(&shared),
+            (
+                LinkPhase::Waiting,
+                Some("not reachable, it may be off or asleep".into())
+            )
+        );
+        assert_eq!(backoff.attempt, 0);
     }
 
     #[test]

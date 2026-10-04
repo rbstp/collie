@@ -8,12 +8,19 @@ struct AgentScreen: View {
     @State private var model: AgentModel
     let approvals: ApprovalsModel?
     let follows: FollowModel?
+    let machineLabel: String?
+    let showsMachine: Bool
     @Environment(\.dismiss) private var dismiss
 
-    init(core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel? = nil, follows: FollowModel? = nil) {
+    init(
+        core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel? = nil, follows: FollowModel? = nil,
+        machineLabel: String? = nil, showsMachine: Bool = false
+    ) {
         _model = State(initialValue: AgentModel(core: core, route: route))
         self.approvals = approvals
         self.follows = follows
+        self.machineLabel = machineLabel
+        self.showsMachine = showsMachine
     }
 
     private var blocked: BlockedInput? {
@@ -22,7 +29,7 @@ struct AgentScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            AgentHeader(model: model)
+            AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil)
             if let approvals {
                 ForEach(approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)) { item in
                     ApprovalCard(model: approvals, item: item)
@@ -67,7 +74,7 @@ struct AgentScreen: View {
                         Task { await model.refresh() }
                     }
                     .disabled(model.refreshing)
-                    Button("Focus on Mac", systemImage: "macwindow") {
+                    Button("Focus on \(machineLabel ?? "machine")", systemImage: "desktopcomputer") {
                         Task { await model.focus() }
                     }
                     if let follows {
@@ -146,16 +153,20 @@ private struct CloseDialogs: ViewModifier {
 
     private var message: String {
         close.target == .pane
-            ? "The agent and its shell on the Mac are ended."
-            : "Every agent and shell in the workspace on the Mac is ended."
+            ? "The agent and its shell on the machine are ended."
+            : "Every agent and shell in the workspace on the machine is ended."
     }
 }
 
 private struct AgentHeader: View {
     let model: AgentModel
+    let machineLabel: String?
 
     var body: some View {
         HStack(spacing: 8) {
+            if let machineLabel {
+                Text(verbatim: machineLabel).font(.caption.weight(.semibold)).lineLimit(1)
+            }
             if let agent = model.agent {
                 StatusPill(state: agent.status)
                 TimelineView(.periodic(from: .now, by: 1)) { context in

@@ -41,7 +41,7 @@ struct ApprovalsScreen: View {
                 .onChange(of: model.highlighted, initial: true) { _, id in
                     if let id { withAnimation { proxy.scrollTo(id, anchor: .top) } }
                 }
-                .onChange(of: model.items) { _, _ in
+                .onChange(of: model.items.map(\.id)) { _, _ in
                     if let id = model.highlighted, model.items.contains(where: { $0.id == id }) {
                         proxy.scrollTo(id, anchor: .top)
                     }
@@ -119,6 +119,11 @@ struct ApprovalCard: View {
                     DecisionButtons(model: model, item: item, expired: expired)
                 }
             }
+            if item.unreachable {
+                Label("\(item.machine.label) is unreachable", systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+            }
             if approval.supportsNote, !model.noting.contains(item.id) {
                 Button("Add note", systemImage: "text.bubble") { model.toggleNote(item) }
                     .font(.footnote)
@@ -182,7 +187,7 @@ private struct FeedbackField: View {
             .disabled(model.drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel("Send feedback")
         }
-        .disabled(model.steps[item.id] != nil)
+        .disabled(item.unreachable || model.steps[item.id] != nil)
     }
 }
 
@@ -210,7 +215,7 @@ private struct DecisionButtons: View {
                 .disabled(model.note(for: item) != nil && !item.approval.takesNote(with: decision))
             }
         }
-        .disabled(expired || model.steps[item.id] != nil)
+        .disabled(expired || item.unreachable || model.steps[item.id] != nil)
     }
 }
 
@@ -236,7 +241,7 @@ private struct ChoiceButtons: View {
                         } else if choice.current {
                             Image(systemName: "arrowtriangle.left.fill")
                                 .font(.caption2)
-                                .accessibilityLabel("Under the cursor on the Mac")
+                                .accessibilityLabel("Under the cursor on the machine")
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -244,7 +249,7 @@ private struct ChoiceButtons: View {
                 .buttonStyle(.bordered)
             }
         }
-        .disabled(expired || model.steps[item.id] != nil)
+        .disabled(expired || item.unreachable || model.steps[item.id] != nil)
     }
 }
 

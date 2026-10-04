@@ -261,13 +261,13 @@ impl Attachments {
         if stored.entries + uploads.len() >= MAX_STORED_ENTRIES {
             return fail(
                 ErrorCode::TooLarge,
-                "too many attachments on the Mac (1000); files are removed after 24 h",
+                "too many attachments on the machine (1000); files are removed after 24 h",
             );
         }
         if stored.bytes + reserved + size > MAX_STORED_BYTES {
             return fail(
                 ErrorCode::TooLarge,
-                "attachment storage on the Mac is full (200 MiB); files are removed after 24 h",
+                "attachment storage on the machine is full (200 MiB); files are removed after 24 h",
             );
         }
         let dir = self.root.join(random_hex(8));

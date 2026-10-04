@@ -126,7 +126,7 @@ final class FollowModel {
             return
         }
         guard case let (machine, state)? = content(for: agent) else {
-            notice = "This agent's status is not known yet. Try again once its Mac is connected."
+            notice = "This agent's status is not known yet. Try again once its machine is connected."
             return
         }
         do {
@@ -261,7 +261,7 @@ final class FollowModel {
     }
 
     private func content(for agent: FollowedAgent) -> (Machine, AgentActivityAttributes.ContentState)? {
-        guard let flock = core?.cachedFlock(machineId: agent.machineId),
+        guard let flock = core?.cachedFlock(machineId: agent.machineId), flock.link == .connected,
             let summary = flock.agents.first(where: { $0.terminalId == agent.terminalId })
         else { return nil }
         let workspace = flock.workspaces.first { $0.workspaceId == summary.workspaceId }?.label

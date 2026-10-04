@@ -24,7 +24,7 @@ struct FlockScreen: View {
                     ContentUnavailableView(
                         "No machines yet",
                         systemImage: "desktopcomputer",
-                        description: Text("Pair a Mac running collied from the Machines tab.")
+                        description: Text("Pair a machine running collied from the Machines tab.")
                     )
                 }
                 ForEach(model.entries) { entry in
@@ -58,8 +58,13 @@ struct FlockScreen: View {
                                 }
                             }
                         }
+                        .opacity(entry.linkDown ? 0.5 : 1)
                     } header: {
-                        MachineHeader(entry: entry, showsLink: !tailnetStarting)
+                        MachineHeader(
+                            entry: entry,
+                            approvalsCount: approvals.map { $0.items.filter { $0.machine.id == entry.id }.count } ?? Int(entry.flock?.approvalsCount ?? 0),
+                            showsLink: !tailnetStarting
+                        )
                     }
                 }
             }
@@ -87,12 +92,18 @@ struct FlockScreen: View {
             }
             .navigationDestination(for: AgentRoute.self) { route in
                 if let core {
-                    AgentScreen(core: core, route: route, approvals: approvals, follows: follows)
+                    AgentScreen(
+                        core: core, route: route, approvals: approvals, follows: follows,
+                        machineLabel: machines.first { $0.id == route.machineId }?.label, showsMachine: machines.count > 1
+                    )
                 }
             }
             .sheet(isPresented: $newTask) {
                 if let core {
-                    NewTaskSheet(core: core, machines: machines) { path.append($0) }
+                    NewTaskSheet(
+                        core: core, machines: machines,
+                        preferredMachineId: model.entries.first { $0.flock?.link == .connected }?.id
+                    ) { path.append($0) }
                 }
             }
             .task {
@@ -114,14 +125,15 @@ struct FlockScreen: View {
 
 private struct MachineHeader: View {
     let entry: MachineFlockEntry
+    let approvalsCount: Int
     let showsLink: Bool
 
     var body: some View {
         HStack {
             MachineName(machine: entry.machine)
             Spacer()
-            if let count = entry.flock?.approvalsCount, count > 0 {
-                Text("\(count) approval\(count == 1 ? "" : "s")")
+            if approvalsCount > 0 {
+                Text("\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
                     .foregroundStyle(.red)
             }
             if showsLink, let link = entry.flock?.link {

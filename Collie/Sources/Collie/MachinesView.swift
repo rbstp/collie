@@ -28,7 +28,7 @@ struct MachinesList: View {
     var body: some View {
         List {
             if app.machines.isEmpty {
-                Text("No machines paired. Run `collied pair` on your Mac, then add it here.")
+                Text("No machines paired. Run `collied pair` on the machine, then add it here.")
                     .foregroundStyle(.secondary)
             }
             ForEach(app.machines, id: \.id) { machine in
@@ -69,7 +69,7 @@ struct PairView: View {
                 } header: {
                     Text("This phone")
                 } footer: {
-                    Text("Shown on the Mac in its list of paired devices.")
+                    Text("Shown on the machine in its list of paired devices.")
                 }
 
                 Section("Pairing code") {
@@ -100,7 +100,7 @@ struct PairView: View {
                         if model.pairing {
                             HStack {
                                 ProgressView()
-                                Text("Confirm the pairing on your Mac…")
+                                Text("Confirm the pairing on the machine…")
                             }
                         } else {
                             Text("Pair")

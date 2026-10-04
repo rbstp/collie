@@ -245,7 +245,9 @@ final class AppModel {
             )
             outcome = report.outcome
             if quietWhenApplied, case .applied = report.outcome { return outcome }
-            followUp = FollowUp.after(report.outcome, decision: decision, agent: agent)
+            let machines = core.machines()
+            let machine = machines.count > 1 ? machines.first { $0.nodeId == link.nodeId }?.label : nil
+            followUp = FollowUp.after(report.outcome, decision: decision, agent: [agent, machine].compactMap { $0 }.joined(separator: " · "))
         } else {
             followUp = FollowUp(title: agent, body: FollowUp.unreachable, opensApproval: true)
         }

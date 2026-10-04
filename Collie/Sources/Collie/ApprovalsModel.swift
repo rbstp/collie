@@ -28,8 +28,12 @@ struct DeviceOwnerAuthenticator: Authenticator {
 struct ApprovalItem: Identifiable, Equatable {
     let machine: Machine
     let approval: PendingApproval
+    let link: LinkPhase
 
     var id: String { approval.approvalId }
+
+    /// Connecting stays reachable, so a decision made during the resume grace still goes out.
+    var unreachable: Bool { [.waiting, .offline, .stopped].contains(link) }
 }
 
 /// What collied takes from the phone on the prompt an agent is blocked on.
@@ -87,15 +91,18 @@ final class ApprovalsModel {
     /// Local and cheap: reads what the connections already hold.
     func poll() {
         guard let core else { return }
-        let next = core.machines().flatMap { machine in
-            (core.approvalFeed(machineId: machine.id, afterRevision: .max)?.pending ?? [])
-                .map { ApprovalItem(machine: machine, approval: $0) }
+        let nowMs = UInt64(Date.now.timeIntervalSince1970 * 1000)
+        let next = core.machines().flatMap { machine -> [ApprovalItem] in
+            guard let feed = core.approvalFeed(machineId: machine.id, afterRevision: .max) else { return [] }
+            return feed.pending.filter { $0.expiresAtMs > nowMs }
+                .map { ApprovalItem(machine: machine, approval: $0, link: feed.link) }
         }
         .sorted { ($0.approval.createdAtMs, $0.id) < ($1.approval.createdAtMs, $1.id) }
         guard next != items else { return }
-        if next == items.filter({ $0.id != noticeSubject }) {
+        let pending = next.map(\.approval)
+        if pending == items.filter({ $0.id != noticeSubject }).map(\.approval) {
             noticeSubject = nil
-        } else {
+        } else if pending != items.map(\.approval) {
             show(nil)
         }
         items = next
@@ -268,7 +275,7 @@ extension DecisionOutcome {
         case .expired:
             "This approval expired. Nothing was sent."
         case .superseded:
-            "The prompt changed on the Mac. Nothing was sent."
+            "The prompt changed on the machine. Nothing was sent."
         case .unknown:
             "collied answered with an outcome this version does not know."
         }

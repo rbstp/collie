@@ -24,9 +24,9 @@ final class NewTaskModel {
     private(set) var error: String?
     private(set) var cancelled = false
 
-    init(core: any AgentCore, machines: [Machine]) {
+    init(core: any AgentCore, machines: [Machine], preferredMachineId: String? = nil) {
         self.core = core
-        machineId = machines.first?.id
+        machineId = machines.first { $0.id == preferredMachineId }?.id ?? machines.first?.id
     }
 
     var canStart: Bool {
@@ -44,6 +44,7 @@ final class NewTaskModel {
             options = loaded
             if !loaded.agents.contains(agent) { agent = loaded.defaultAgent }
         } catch {
+            guard machineId == self.machineId else { return }
             optionsError = AgentModel.message(for: error)
         }
     }

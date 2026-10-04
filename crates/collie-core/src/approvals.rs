@@ -392,6 +392,7 @@ async fn attempt(
             machine.port,
             &machine.node_id,
             Some(machine.kind),
+            true,
         ),
     )
     .await?;
