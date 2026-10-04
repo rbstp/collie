@@ -80,7 +80,13 @@ fn machines_side_by_side() {
     // silently is the 45 s silence deadline's case, covered in collie-core.
     rt.block_on(async {
         let deadline = Instant::now() + Duration::from_secs(30);
-        while connected(&core.flock(linux_id.clone()).await.unwrap()) {
+        loop {
+            // A snapshot sent as the session dies waits out CALL_TIMEOUT and errors.
+            if let Ok(f) = core.flock(linux_id.clone()).await
+                && !connected(&f)
+            {
+                break;
+            }
             assert!(Instant::now() < deadline, "the Linux session never closed");
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
