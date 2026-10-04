@@ -888,7 +888,6 @@ async fn task_new_starts_waits_and_prompts() {
             "workspace.create",
             "agent.start",
             "pane.get",
-            "pane.process_info",
             "agent.start",
             "agent.get",
             "agent.get",
@@ -1013,23 +1012,36 @@ async fn task_new_refusals() {
     assert_eq!(checks.load(std::sync::atomic::Ordering::SeqCst), 3);
     assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
 
-    // A busy pane is retried only while it holds the new terminal and its shell is starting.
-    for (busy, moved) in [(true, false), (false, true)] {
-        herdr.with(|h| {
-            h.calls.clear();
-            h.shell_busy = busy;
-            h.new_pane_terminal = moved.then(|| "term_other".to_owned());
-        });
-        herdr.fail_next("agent.start", &["agent_pane_busy"]);
-        let (code, message) = drive
-            .task_new(task(&base.join("root/a"), "claude"), &yes())
-            .await
-            .0
-            .unwrap_err();
-        assert_eq!(code, ErrorCode::AgentNotReady);
-        assert!(message.contains("the pane is busy"), "{message}");
-        assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
-    }
+    // A busy pane is retried while it holds the new terminal, whatever runs in its
+    // foreground (rc files run helpers there while the shell starts)...
+    herdr.with(|h| {
+        h.calls.clear();
+        h.shell_busy = true;
+        h.new_pane_terminal = None;
+    });
+    herdr.fail_next("agent.start", &["agent_pane_busy"]);
+    let _ = drive
+        .task_new(task(&base.join("root/a"), "claude"), &yes())
+        .await;
+    assert_eq!(
+        herdr.mutations()[..3],
+        ["workspace.create", "agent.start", "agent.start"]
+    );
+    // ...and not once the pane holds another terminal.
+    herdr.with(|h| {
+        h.calls.clear();
+        h.shell_busy = false;
+        h.new_pane_terminal = Some("term_other".to_owned());
+    });
+    herdr.fail_next("agent.start", &["agent_pane_busy"]);
+    let (code, message) = drive
+        .task_new(task(&base.join("root/a"), "claude"), &yes())
+        .await
+        .0
+        .unwrap_err();
+    assert_eq!(code, ErrorCode::AgentNotReady);
+    assert!(message.contains("the pane is busy"), "{message}");
+    assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
 }
 
 #[tokio::test]
