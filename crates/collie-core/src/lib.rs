@@ -35,7 +35,7 @@ pub use attachments::UploadProgress;
 use conn::{Conn, ConnectError, LinkPhase, NodeSlot, PushSlot, RequestError, blocking};
 use reach::Reachability;
 use session::{CALL_TIMEOUT, SessionError, expect_flock, expect_paired, lock, unexpected};
-pub use store::Machine;
+pub use store::{Machine, MachineKind};
 use store::{MachineStore, random_id};
 
 uniffi::setup_scaffolding!();
@@ -1333,7 +1333,8 @@ impl Inner {
         let invite = PairingInvite::parse(invite_uri).map_err(|_| CoreError::InvalidInvite)?;
         let device_label = Label::new(device_label.trim()).map_err(|_| CoreError::InvalidLabel)?;
         let node = lock(&self.node).clone().ok_or(CoreError::NotRunning)?;
-        let (mut session, _) = conn::open(node, &invite.host, invite.port, &invite.node_id).await?;
+        let (mut session, _, kind) =
+            conn::open(node, &invite.host, invite.port, &invite.node_id, None).await?;
         let info = expect_paired(
             session
                 .call(
@@ -1352,6 +1353,7 @@ impl Inner {
             host: invite.host,
             port: invite.port,
             node_id: invite.node_id,
+            kind,
         };
         let node_id = machine.node_id.clone();
         self.update_machines(|m| m.node_id == node_id, Some(machine.clone()))?;
@@ -1767,6 +1769,7 @@ mod tests {
             host: format!("{id}.tail1234.ts.net"),
             port: 8457,
             node_id: format!("n{id}"),
+            kind: MachineKind::Mac,
         };
         MachineStore::new(state.clone())
             .save(&[mac("m1"), mac("m2")])
@@ -1858,6 +1861,7 @@ mod tests {
                 host: "m1.tail1234.ts.net".into(),
                 port: 8457,
                 node_id: "nm1".into(),
+                kind: MachineKind::Mac,
             }])
             .unwrap();
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
@@ -2217,6 +2221,7 @@ mod tailnet_tests {
                 .await
                 .unwrap();
                 let mut seq = flock().seq;
+                let mut announced = std::collections::HashSet::new();
                 while let Some(Ok(Message::Text(text))) = ws.next().await {
                     let frame = parse_client_frame(text.as_bytes()).unwrap();
                     let machine = MachineInfo {
@@ -2237,9 +2242,12 @@ mod tailnet_tests {
                             Ok(Response::Paired { machine })
                         }
                         Request::FlockSnapshot(_) => {
+                            // Once per connection, as collied sends approval.needed once: a
+                            // repeat on every snapshot reorders and re-counts them in the feed.
                             events = lock(&seen)
                                 .approvals
                                 .iter()
+                                .filter(|a| announced.insert(a.approval_id.clone()))
                                 .zip(seq + 1..)
                                 .map(|(a, s)| {
                                     (

@@ -235,13 +235,14 @@ async fn scenario(
     wait_audit(&audit, "control", "pair.close", "cancelled").await;
     println!("  rejected in {:?}", t.elapsed());
 
-    println!("phone refuses a Mac whose StableID differs from the invite");
+    println!("phone refuses a Mac whose StableID differs from the invite, or without a collie tag");
     let code = PairingInvite::parse(&uri).unwrap().code;
     let tagged_host = tagged_self.dns_name.trim_end_matches('.').to_owned();
     let before = audit_lines(&audit).len();
     for (host, node_id) in [
         (mac_host.clone(), tagged_self.stable_id.clone()),
-        (tagged_host, mac_self.stable_id.clone()),
+        (tagged_host.clone(), mac_self.stable_id.clone()),
+        (tagged_host, tagged_self.stable_id.clone()),
     ] {
         let forged = PairingInvite {
             host,

@@ -118,7 +118,7 @@ private struct MachineHeader: View {
 
     var body: some View {
         HStack {
-            Text(entry.machine.label)
+            MachineName(machine: entry.machine)
             Spacer()
             if let count = entry.flock?.approvalsCount, count > 0 {
                 Text("\(count) approval\(count == 1 ? "" : "s")")

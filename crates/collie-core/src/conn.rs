@@ -16,6 +16,7 @@ use crate::pin::{self, PinError};
 use crate::reach::Reachability;
 use crate::session::{FlockState, Reply, Session, SessionError, lock};
 use crate::store::Machine;
+use crate::store::MachineKind;
 
 const BACKOFF: [Duration; 4] = [
     Duration::from_secs(3),
@@ -123,7 +124,8 @@ pub async fn open(
     host: &str,
     port: u16,
     node_id: &str,
-) -> Result<(Session<UnixStream>, HelloResult), ConnectError> {
+    kind: Option<MachineKind>,
+) -> Result<(Session<UnixStream>, HelloResult, MachineKind), ConnectError> {
     let n = node.clone();
     let status = blocking(move || n.status())
         .await
@@ -132,7 +134,7 @@ pub async fn open(
     if status.backend_state != BackendState::Running {
         return Err(ConnectError::Offline);
     }
-    let ip = pin::resolve(&status, host, node_id)?;
+    let (ip, kind) = pin::resolve(&status, host, node_id, kind)?;
     let n = node.clone();
     let who = blocking(move || n.whois(&ip.to_string()))
         .await
@@ -144,7 +146,7 @@ pub async fn open(
     let mut session = Session::connect(stream, host, port).await?;
     let hello = session.hello().await?;
     pin::verify_node(&hello.machine.node_id, host, node_id)?;
-    Ok((session, hello))
+    Ok((session, hello, kind))
 }
 
 pub(crate) async fn dial(node: &Arc<Node>, addr: SocketAddr) -> Result<UnixStream, ConnectError> {
@@ -411,16 +413,23 @@ async fn supervise(
             continue;
         };
         shared.set(LinkPhase::Connecting, None);
-        let opened = open(node, &machine.host, machine.port, &machine.node_id).await;
+        let opened = open(
+            node,
+            &machine.host,
+            machine.port,
+            &machine.node_id,
+            Some(machine.kind),
+        )
+        .await;
         if !matches!(opened, Err(ConnectError::Offline)) {
             reach.record(
                 &machine.node_id,
-                matches!(&opened, Ok((_, hello)) if hello.paired),
+                matches!(&opened, Ok((_, hello, _)) if hello.paired),
             );
         }
         let err = match opened {
-            Ok((_, hello)) if !hello.paired => ConnectError::Session(SessionError::NotPaired),
-            Ok((session, _)) => {
+            Ok((_, hello, _)) if !hello.paired => ConnectError::Session(SessionError::NotPaired),
+            Ok((session, _, _)) => {
                 lock(&shared.flock).new_connection();
                 shared.set(LinkPhase::Connected, None);
                 let since = Instant::now();

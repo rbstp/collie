@@ -33,7 +33,7 @@ struct MachinesList: View {
             }
             ForEach(app.machines, id: \.id) { machine in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(machine.label)
+                    MachineName(machine: machine)
                     Text(machine.host).font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -160,6 +160,19 @@ struct PairView: View {
         if let machine = model.paired {
             app.machinePaired(machine)
             dismiss()
+        }
+    }
+}
+
+struct MachineName: View {
+    let machine: Machine
+
+    var body: some View {
+        Label {
+            Text(machine.label)
+        } icon: {
+            Image(systemName: machine.kind == .linux ? "terminal" : "apple.logo")
+                .accessibilityLabel(machine.kind == .linux ? "Linux" : "Mac")
         }
     }
 }

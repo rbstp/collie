@@ -12,6 +12,31 @@ pub struct Machine {
     pub host: String,
     pub port: u16,
     pub node_id: String,
+    /// The tag seen at pairing, required on every later connection. Entries written
+    /// before Linux support are Macs: the pin accepted only tag:collie-mac then.
+    #[serde(default)]
+    pub kind: MachineKind,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum MachineKind {
+    #[default]
+    Mac,
+    Linux,
+}
+
+impl MachineKind {
+    pub const ALL: [Self; 2] = [Self::Mac, Self::Linux];
+
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Mac => "tag:collie-mac",
+            Self::Linux => "tag:collie-linux",
+        }
+    }
 }
 
 pub struct MachineStore {
@@ -90,6 +115,7 @@ mod tests {
             host: "mac.tail1234.ts.net".into(),
             port: 8457,
             node_id: "nMAC".into(),
+            kind: MachineKind::Mac,
         }
     }
 
@@ -123,6 +149,29 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn entries_from_before_linux_support_are_macs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join(FILE),
+            br#"[{"id":"a","label":"mac","host":"mac.tail1234.ts.net","port":8457,"node_id":"nMAC"}]"#,
+        )
+        .unwrap();
+        let store = MachineStore::new(dir.path().to_owned());
+        assert_eq!(store.load().unwrap(), vec![machine("a")]);
+        let linux = Machine {
+            kind: MachineKind::Linux,
+            ..machine("b")
+        };
+        store.save(std::slice::from_ref(&linux)).unwrap();
+        assert!(
+            fs::read_to_string(dir.path().join(FILE))
+                .unwrap()
+                .contains(r#""kind": "linux""#)
+        );
+        assert_eq!(store.load().unwrap(), vec![linux]);
     }
 
     #[test]

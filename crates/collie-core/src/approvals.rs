@@ -11,6 +11,7 @@ use tokio::net::UnixStream;
 use crate::conn::{self, LinkPhase, blocking};
 use crate::pin;
 use crate::session::{FlockState, Session, SessionError, lock, unexpected};
+use crate::store::Machine;
 use crate::{Inner, POLL_INTERVAL, ms};
 
 /// `Choose` picks `PendingApproval.choices[choice]`: collied takes it only for an
@@ -378,23 +379,29 @@ async fn attempt(
 
     let step = Instant::now();
     report.node_was_running = lock(&inner.node).is_some();
-    let node = node_up(inner, &machine.host, &machine.node_id, deadline).await?;
+    let node = node_up(inner, &machine, deadline).await?;
     report.node_up_ms = Some(ms(step.elapsed()));
 
     let step = Instant::now();
     let opened = within(
         deadline,
         DecideStage::Connect,
-        conn::open(node, &machine.host, machine.port, &machine.node_id),
+        conn::open(
+            node,
+            &machine.host,
+            machine.port,
+            &machine.node_id,
+            Some(machine.kind),
+        ),
     )
     .await?;
     let mut session = match opened {
-        Ok((_, hello)) if !hello.paired => {
+        Ok((_, hello, _)) if !hello.paired => {
             return Err(BackgroundOutcome::Unauthorized {
                 message: SessionError::NotPaired.to_string(),
             });
         }
-        Ok((session, _)) => session,
+        Ok((session, _, _)) => session,
         Err(e) if e.is_auth() => {
             return Err(BackgroundOutcome::Unauthorized {
                 message: e.to_string(),
@@ -453,8 +460,7 @@ async fn attempt(
 /// Mac is in the netmap.
 async fn node_up(
     inner: &Arc<Inner>,
-    host: &str,
-    node_id: &str,
+    machine: &Machine,
     deadline: Instant,
 ) -> Result<Arc<Node>, BackgroundOutcome> {
     if lock(&inner.node).is_none() {
@@ -485,7 +491,12 @@ async fn node_up(
                 within(deadline, DecideStage::NodeUp, blocking(move || n.status())).await?
             {
                 match status.backend_state {
-                    BackendState::Running => match pin::resolve(&status, host, node_id) {
+                    BackendState::Running => match pin::resolve(
+                        &status,
+                        &machine.host,
+                        &machine.node_id,
+                        Some(machine.kind),
+                    ) {
                         Ok(_) => return Ok(node),
                         Err(e) if e.is_violation() => {
                             return Err(BackgroundOutcome::Unauthorized {

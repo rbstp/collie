@@ -182,7 +182,7 @@ func agentLinkRejects(_ string: String) throws {
 }
 
 @Test func agentLinkToAnUnpairedMacIsIgnored() throws {
-    let machines = [Machine(id: "m1", label: "Mac", host: "mac.example.ts.net", port: 8457, nodeId: "nMAC")]
+    let machines = [Machine(id: "m1", label: "Mac", host: "mac.example.ts.net", port: 8457, nodeId: "nMAC", kind: .mac)]
     let url = try #require(URL(string: "collie://agent?m=m1&t=term_1"))
     #expect(AppModel.route(for: url, machines: machines) == AgentRoute(machineId: "m1", terminalId: "term_1"))
     #expect(AppModel.route(for: try #require(URL(string: "collie://agent?m=m2&t=term_1")), machines: machines) == nil)
