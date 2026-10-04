@@ -21,6 +21,7 @@ test:
     cargo test --workspace
 
 # Release build of collied signed with the team RM3UT3MMSR Developer ID, installed to ~/.cargo/bin.
+[macos]
 collied-install:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -45,6 +46,27 @@ collied-install:
     if launchctl print "$agent" >/dev/null 2>&1; then
         launchctl kickstart -k "$agent"
         echo "restarted $agent"
+    fi
+
+# Release build of collied installed to ~/.cargo/bin; restarts the systemd user unit if it runs.
+[linux]
+collied-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release -p collied
+    bin=target/release/collied
+    dest="$HOME/.cargo/bin/collied"
+    mkdir -p "$(dirname "$dest")"
+    # A fresh inode, so the running daemon keeps its own copy until it restarts.
+    tmp="$(mktemp "$(dirname "$dest")/.collied.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
+    cp "$bin" "$tmp"
+    chmod 0755 "$tmp"
+    mv -f "$tmp" "$dest"
+    echo "installed $dest"
+    if systemctl --user --quiet is-active collied.service; then
+        systemctl --user restart collied.service
+        echo "restarted collied.service"
     fi
 
 ios_deployment_target := "26.0"
