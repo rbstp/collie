@@ -32,9 +32,15 @@ struct MachinesList: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(app.machines, id: \.id) { machine in
-                VStack(alignment: .leading, spacing: 2) {
-                    MachineName(machine: machine)
-                    Text(machine.host).font(.caption).foregroundStyle(.secondary)
+                TimelineView(.periodic(from: .now, by: 2)) { _ in
+                    let link = app.core?.cachedFlock(machineId: machine.id)?.link
+                    let reachable = link.map { [.connected, .connecting].contains($0) } ?? true
+                    VStack(alignment: .leading, spacing: 2) {
+                        MachineName(machine: machine)
+                            .foregroundStyle(reachable ? .primary : .secondary)
+                            .tint(reachable ? nil : .secondary)
+                        Text(machine.host).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             .onDelete { offsets in
@@ -166,13 +172,21 @@ struct PairView: View {
 
 struct MachineName: View {
     let machine: Machine
+    // SF Symbols has no Linux glyph; Tux is a drawn template image, sized like the symbol.
+    @ScaledMetric(relativeTo: .body) private var tuxSize: CGFloat = 18
 
     var body: some View {
         Label {
             Text(machine.label)
         } icon: {
-            Image(systemName: machine.kind == .linux ? "terminal" : "apple.logo")
-                .accessibilityLabel(machine.kind == .linux ? "Linux" : "Mac")
+            Group {
+                if machine.kind == .linux {
+                    Image("Tux").resizable().scaledToFit().frame(width: tuxSize, height: tuxSize)
+                } else {
+                    Image(systemName: "apple.logo")
+                }
+            }
+            .accessibilityLabel(machine.kind == .linux ? "Linux" : "Mac")
         }
     }
 }
