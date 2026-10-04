@@ -139,8 +139,21 @@ private struct Approval: View {
             }
         } else if state.status == .blocked {
             ApprovalNeeded()
+            #if DEBUG
+            Text(missing(state)).font(.caption2).foregroundStyle(.secondary)
+            #endif
         }
     }
+
+    #if DEBUG
+    private func missing(_ state: AgentActivityAttributes.ContentState) -> String {
+        guard state.pendingApproval != nil else { return "debug: no approval id" }
+        guard state.enc != nil else { return "debug: no enc" }
+        guard let nodeId = context.attributes.nodeId else { return "debug: no node id" }
+        guard let key = NotificationKey.load(nodeId: nodeId) else { return "debug: no key for \(nodeId)" }
+        return state.command(key: key) == nil ? "debug: enc did not open" : "debug: ok"
+    }
+    #endif
 }
 
 /// Never runs: iOS runs a LiveActivityIntent in the app, which has the real `perform`.

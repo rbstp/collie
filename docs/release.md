@@ -9,7 +9,7 @@ Team `RM3UT3MMSR`, in the Apple Developer portal and App Store Connect:
 1. **App Group**: register `group.dev.rbstp.collie`.
 2. **App IDs** (explicit):
    - `dev.rbstp.collie`, the app, and `dev.rbstp.collie.push`, the ColliePush notification service extension, each with **Push Notifications** and **App Groups** (assign `group.dev.rbstp.collie`) enabled;
-   - `dev.rbstp.collie.widgets`, the CollieWidgets extension (Live Activities), with no capability: Live Activity pushes are addressed to the app's topic and use the same APNs key.
+   - `dev.rbstp.collie.widgets`, the CollieWidgets extension (Live Activities), with **App Groups** (assign `group.dev.rbstp.collie`; the widget reads the notification key mirror there). No push capability: Live Activity pushes are addressed to the app's topic and use the same APNs key.
 3. **Provisioning profiles**: App Store Connect distribution, the team's Apple Distribution certificate, named exactly as `Collie/project.yml` and `Collie/ExportOptions.plist` refer to them:
    - **`Collie App Store`** for `dev.rbstp.collie`;
    - **`Collie Push App Store`** for `dev.rbstp.collie.push`;

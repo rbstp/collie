@@ -84,3 +84,11 @@ extension Data {
         self.init(bytes)
     }
 }
+
+@Test func mirrorAcceptsOnlyStableIdCharacters() {
+    #expect(NotificationKey.Mirror.isValid(nodeId: "n3BwZ18yBM11CNTRL"))
+    #expect(NotificationKey.Mirror.isValid(nodeId: "nMAC-1_a"))
+    for bad in ["", "../keys", "a/b", "a.key", "n\u{0}x", "é", String(repeating: "n", count: 65)] {
+        #expect(!NotificationKey.Mirror.isValid(nodeId: bad), "\(bad)")
+    }
+}
