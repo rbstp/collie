@@ -55,6 +55,9 @@ func main() {
 			},
 		},
 		RequireAuthKey: *authKey,
+		// Peers are reported online, as real control does for connected nodes; collie-core
+		// does not dial a peer reported offline.
+		AllOnline: true,
 		// Non-nil so a node registering with RequestTags gets those tags.
 		TagOwners: map[string][]string{},
 		Logf:      logger.Discard,

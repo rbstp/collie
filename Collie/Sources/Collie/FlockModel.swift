@@ -11,6 +11,8 @@ struct MachineFlockEntry: Identifiable, Equatable {
 
     var agents: [AgentSummary] { FlockOrder.sorted(flock?.agents ?? []) }
 
+    var linkDown: Bool { flock.map { ![.connected, .connecting].contains($0.link) } ?? false }
+
     func workspaceLabel(for agent: AgentSummary) -> String? {
         flock?.workspaces.first { $0.workspaceId == agent.workspaceId }?.label
     }
@@ -47,7 +49,9 @@ final class FlockModel {
             closeNotice = nil
             return true
         } catch {
-            closeNotice = AgentModel.message(for: error)
+            let message = AgentModel.message(for: error)
+            let label = entries.first { $0.id == route.machineId }?.machine.label
+            closeNotice = label.map { "\($0): \(message)" } ?? message
             return false
         }
     }

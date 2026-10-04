@@ -8,10 +8,13 @@ struct NewTaskSheet: View {
     @State private var startTask: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
 
-    init(core: any AgentCore, machines: [Machine], onStarted: @escaping (AgentRoute) -> Void) {
+    init(
+        core: any AgentCore, machines: [Machine], preferredMachineId: String?,
+        onStarted: @escaping (AgentRoute) -> Void
+    ) {
         self.machines = machines
         self.onStarted = onStarted
-        _model = State(initialValue: NewTaskModel(core: core, machines: machines))
+        _model = State(initialValue: NewTaskModel(core: core, machines: machines, preferredMachineId: preferredMachineId))
     }
 
     private func cancel() {
@@ -23,7 +26,7 @@ struct NewTaskSheet: View {
         NavigationStack {
             Form {
                 if machines.count > 1 {
-                    Picker("Mac", selection: $model.machineId) {
+                    Picker("Machine", selection: $model.machineId) {
                         ForEach(machines, id: \.id) { machine in
                             Text(machine.label).tag(Optional(machine.id))
                         }
@@ -31,7 +34,7 @@ struct NewTaskSheet: View {
                 }
 
                 Section {
-                    TextField("/Users/you/project", text: $model.cwd)
+                    TextField("/path/to/project", text: $model.cwd)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .font(.body.monospaced())

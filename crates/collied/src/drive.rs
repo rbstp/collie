@@ -38,7 +38,7 @@ pub const OPS_PER_PEER: usize = 256;
 const MAX_SGR_PARAMS: usize = 64;
 const SCREEN_SETTLE: Duration = Duration::from_secs(1);
 const SCREEN_POLL: Duration = Duration::from_millis(100);
-pub const DRAFT_CHANGED: &str = "the Mac's input box has unsent text";
+pub const DRAFT_CHANGED: &str = "the agent's input box has unsent text";
 const BLOCKED: &str = "agent is blocked; answer it through an approval";
 const TYPED_NOT_SENT: &str = "the prompt did not take the text; Enter was not sent";
 
@@ -64,7 +64,7 @@ pub fn herdr_fail(e: herdr::Error) -> Fail {
         "agent_pane_busy" => (ErrorCode::AgentNotReady, "the pane is busy"),
         "workspace_group_close_required" => (
             ErrorCode::NotImplemented,
-            "the workspace has linked worktree workspaces; close the group on the Mac",
+            "the workspace has linked worktree workspaces; close the group in herdr",
         ),
         "agent_not_found" | "pane_not_found" | "workspace_not_found" | "target_pane_not_found" => {
             (ErrorCode::NotFound, "not found")
@@ -341,13 +341,13 @@ impl Driver {
             Some(InputBox::Opaque) => {
                 return fail(
                     ErrorCode::DraftNotCleared,
-                    "the Mac's input box holds a paste, an image or another mode; nothing was sent",
+                    "the agent's input box holds a paste, an image or another mode; nothing was sent",
                 );
             }
             None => {
                 return fail(
                     ErrorCode::DraftNotCleared,
-                    "the Mac's input box could not be read; nothing was sent",
+                    "the agent's input box could not be read; nothing was sent",
                 );
             }
         };
@@ -375,7 +375,7 @@ impl Driver {
             if tokio::time::Instant::now() >= deadline {
                 return fail(
                     ErrorCode::DraftNotCleared,
-                    "could not clear the Mac's input box; nothing was sent",
+                    "could not clear the agent's input box; nothing was sent",
                 );
             }
         }

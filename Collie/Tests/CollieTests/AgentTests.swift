@@ -104,7 +104,10 @@ final class FakeCore: AgentCore {
     func closePane(machineId: String, terminalId: String, confirm: Bool) async throws {
         try await call { $0.closes.append("pane \(terminalId) confirm=\(confirm)") }
     }
-    func taskOptions(machineId: String) async throws -> TaskOptions { state.withLock { $0.options } }
+    func taskOptions(machineId: String) async throws -> TaskOptions {
+        try await call { _ in }
+        return state.withLock { $0.options }
+    }
     func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
         try await call { _ in }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
@@ -120,7 +123,7 @@ final class FakeCore: AgentCore {
     func cancelUploads(machineId: String) { state.withLock { $0.cancelledUploads.append(machineId) } }
     func flock(machineId: String) async throws -> MachineFlock {
         guard let started = state.withLock({ $0.started }) else { throw CoreError.MachineNotFound }
-        let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1")
+        let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac)
         let agent = AgentSummary(
             terminalId: started.terminalId, workspaceId: started.workspaceId, kind: "claude", name: nil, title: nil,
             status: .working, statusSinceMs: 0, cwd: nil, lastLine: nil
@@ -359,7 +362,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     #expect(model.draft == "phone text")
     #expect(model.macDraft == long)
     let shown = String(repeating: "x", count: 80) + "…"
-    #expect(model.promptError == "The Mac's input box has unsent text: “\(shown)”. Send again to replace it.")
+    #expect(model.promptError == "The agent's input box has unsent text: “\(shown)”. Send again to replace it.")
 
     core.set(error: nil)
     await model.sendPrompt()
@@ -509,7 +512,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 @MainActor
 @Test func newTaskUsesTheDefaultAgentAndNeedsAnAbsoluteFolder() async {
     let core = FakeCore()
-    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1")
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac)
     let model = NewTaskModel(core: core, machines: [machine])
     await model.loadOptions()
     #expect(model.agent == "codex")
@@ -524,10 +527,35 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 }
 
 @MainActor
+@Test func newTaskPrefersAConnectedMachineAndIgnoresALateErrorFromTheLastOne() async {
+    let core = FakeCore()
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac)
+    let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "n2", kind: .linux)
+    #expect(NewTaskModel(core: core, machines: [mac, linux], preferredMachineId: "m2").machineId == "m2")
+    #expect(NewTaskModel(core: core, machines: [mac, linux], preferredMachineId: "gone").machineId == "m1")
+    #expect(NewTaskModel(core: core, machines: [mac, linux]).machineId == "m1")
+
+    let model = NewTaskModel(core: core, machines: [mac, linux])
+    core.set(hold: true)
+    let first = Task { await model.loadOptions() }
+    await core.waitHeld(1)
+    model.machineId = "m2"
+    core.state.withLock { $0.hold = false }
+    await model.loadOptions()
+    #expect(model.options?.defaultAgent == "codex")
+
+    core.state.withLock { $0.error = .MachineNotFound }
+    core.release()
+    await first.value
+    #expect(model.optionsError == nil)
+    #expect(model.options?.defaultAgent == "codex")
+}
+
+@MainActor
 @Test func cancelledNewTaskNeverNavigates() async {
     let core = FakeCore()
     core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
-    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1")
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac)
 
     let model = NewTaskModel(core: core, machines: [machine])
     await model.loadOptions()

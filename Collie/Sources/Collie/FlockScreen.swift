@@ -24,7 +24,7 @@ struct FlockScreen: View {
                     ContentUnavailableView(
                         "No machines yet",
                         systemImage: "desktopcomputer",
-                        description: Text("Pair a Mac running collied from the Machines tab.")
+                        description: Text("Pair a machine running collied from the Machines tab.")
                     )
                 }
                 ForEach(model.entries) { entry in
@@ -58,8 +58,13 @@ struct FlockScreen: View {
                                 }
                             }
                         }
+                        .opacity(entry.linkDown ? 0.5 : 1)
                     } header: {
-                        MachineHeader(entry: entry, showsLink: !tailnetStarting)
+                        MachineHeader(
+                            entry: entry,
+                            approvalsCount: approvals.map { $0.items.filter { $0.machine.id == entry.id }.count } ?? Int(entry.flock?.approvalsCount ?? 0),
+                            showsLink: !tailnetStarting
+                        )
                     }
                 }
             }
@@ -87,12 +92,18 @@ struct FlockScreen: View {
             }
             .navigationDestination(for: AgentRoute.self) { route in
                 if let core {
-                    AgentScreen(core: core, route: route, approvals: approvals, follows: follows)
+                    AgentScreen(
+                        core: core, route: route, approvals: approvals, follows: follows,
+                        machineLabel: machines.first { $0.id == route.machineId }?.label, showsMachine: machines.count > 1
+                    )
                 }
             }
             .sheet(isPresented: $newTask) {
                 if let core {
-                    NewTaskSheet(core: core, machines: machines) { path.append($0) }
+                    NewTaskSheet(
+                        core: core, machines: machines,
+                        preferredMachineId: model.entries.first { $0.flock?.link == .connected }?.id
+                    ) { path.append($0) }
                 }
             }
             .task {
@@ -114,14 +125,15 @@ struct FlockScreen: View {
 
 private struct MachineHeader: View {
     let entry: MachineFlockEntry
+    let approvalsCount: Int
     let showsLink: Bool
 
     var body: some View {
         HStack {
-            Text(entry.machine.label)
+            MachineName(machine: entry.machine)
             Spacer()
-            if let count = entry.flock?.approvalsCount, count > 0 {
-                Text("\(count) approval\(count == 1 ? "" : "s")")
+            if approvalsCount > 0 {
+                Text("\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
                     .foregroundStyle(.red)
             }
             if showsLink, let link = entry.flock?.link {
@@ -143,7 +155,9 @@ private struct AgentRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            StatusPill(state: agent.status)
+            StatusIcon(state: agent.status)
+                // Centered on the title's first line rather than sitting on its baseline.
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if followed {
@@ -186,6 +200,43 @@ struct StatusPill: View {
     }
 }
 
+struct StatusIcon: View {
+    let state: AgentState
+
+    var body: some View {
+        Group {
+            switch state {
+            case .working: SpinningRing(color: state.color)
+            case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(state.color)
+            case .idle: Image(systemName: "circle.fill").font(.system(size: 9)).foregroundStyle(state.color)
+            case .blocked: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(state.color)
+            case .unknown: Image(systemName: "questionmark.circle").foregroundStyle(state.color)
+            }
+        }
+        .font(.system(size: 18))
+        .frame(width: 20, height: 20)
+        .accessibilityElement()
+        .accessibilityLabel(state.label)
+    }
+}
+
+/// Its own view so every switch to working starts a fresh spin.
+private struct SpinningRing: View {
+    let color: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var spinning = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.7)
+            .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            .padding(2)
+            .rotationEffect(.degrees(spinning ? 360 : 0))
+            .animation(reduceMotion ? nil : .linear(duration: 1).repeatForever(autoreverses: false), value: spinning)
+            .onAppear { spinning = true }
+    }
+}
+
 extension AgentState {
     var label: String {
         switch self {
@@ -214,6 +265,7 @@ extension LinkPhase {
         case .connecting: "connecting"
         case .connected: "connected"
         case .waiting: "retrying"
+        case .unavailable: "offline"
         case .offline: "offline"
         case .stopped: "stopped"
         }

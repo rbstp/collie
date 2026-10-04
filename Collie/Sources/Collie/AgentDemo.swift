@@ -73,7 +73,7 @@ struct AgentDemo: View {
 }
 
 final class DemoAgentCore: ActivityCore {
-    static let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO")
+    static let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO", kind: .mac)
 
     let snapshot: String
     private let agents: [AgentSummary]
@@ -208,7 +208,7 @@ struct DemoAuthenticator: Authenticator {
 }
 
 final class DemoApprovalCore: ApprovalCore {
-    private let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO")
+    private let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO", kind: .mac)
     private let pending: [PendingApproval]
 
     init() {

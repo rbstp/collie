@@ -71,7 +71,7 @@ import UserNotifications
 @Test func pushBodyRewrite() {
     let hint = Data(#"{"nDOWN":{"last_ok_ms":1,"last_fail_ms":2},"nUP":{"last_ok_ms":2,"last_fail_ms":1}}"#.utf8)
     let body = "Blocked in collie"
-    let rewritten = "Blocked in collie (Mac may be unreachable, open collie to check)"
+    let rewritten = "Blocked in collie (machine may be unreachable, open collie to check)"
     #expect(PushBody.rewrite(body, nodeId: "nDOWN", reachability: hint) == rewritten)
     #expect(PushBody.rewrite(rewritten, nodeId: "nDOWN", reachability: hint) == rewritten)
     #expect(PushBody.rewrite(body, nodeId: "nUP", reachability: hint) == body)
@@ -93,7 +93,7 @@ import UserNotifications
 
     for outcome: BackgroundOutcome in [
         .unreachable(stage: .connect, message: "timeout"), .unreachable(stage: .nodeUp, message: "x"),
-        .unauthorized(message: "x"), .failed(message: "x"), .unknownMachine,
+        .unauthorized(message: "x"), .failed(message: "x"),
     ] {
         let followUp = FollowUp.after(outcome, decision: .approve, agent: "claude")
         #expect(followUp.body == "Couldn't reach collied, open to decide")
@@ -102,6 +102,11 @@ import UserNotifications
     let unknown = FollowUp.after(.unreachable(stage: .decide, message: "x"), decision: .deny, agent: "claude")
     #expect(unknown.body.contains("denial"))
     #expect(unknown.opensApproval)
+
+    let unpaired = FollowUp.after(.unknownMachine, decision: .approve, agent: "claude · omarchy")
+    #expect(unpaired.title == "claude · omarchy")
+    #expect(unpaired.body == "This machine is no longer paired with this phone. Nothing was sent.")
+    #expect(!unpaired.opensApproval)
 }
 
 @Test func countdownFormatting() {
@@ -114,28 +119,30 @@ import UserNotifications
 
 final class FakeApprovalCore: ApprovalCore {
     struct State {
-        var pending: [PendingApproval] = []
+        var pending: [String: [PendingApproval]] = [:]
         var decisions: [String] = []
         var typed: [String] = []
         var error: CoreError?
         var outcome = DecisionOutcome.applied(decision: .approve, by: "phone")
-        var link = LinkPhase.connected
+        var link: [String: LinkPhase] = ["m1": .connected, "m2": .waiting]
         var flocks = 0
     }
 
     let state = Mutex(State())
-    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "nMAC")
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "nMAC", kind: .mac)
+    let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux)
 
-    func machines() -> [Machine] { [machine] }
+    func machines() -> [Machine] { [mac, linux] }
     func approvalFeed(machineId: String, afterRevision: UInt64) -> ApprovalFeed? {
-        let (link, pending) = state.withLock { ($0.link, $0.pending) }
+        let (link, pending) = state.withLock { ($0.link[machineId] ?? .stopped, $0.pending[machineId] ?? []) }
         return ApprovalFeed(link: link, revision: 1, missed: false, events: [], pending: pending)
     }
     func flock(machineId: String) async throws -> MachineFlock {
         let link = state.withLock { s in
             s.flocks += 1
-            return s.link
+            return s.link[machineId] ?? .stopped
         }
+        let machine = machines().first { $0.id == machineId } ?? mac
         return MachineFlock(machine: machine, link: link, lastError: nil, details: nil, workspaces: [], agents: [], approvalsCount: 0)
     }
     func decide(machineId: String, approvalId: String, decision: ApprovalDecision, note: String?) async throws -> DecisionOutcome {
@@ -220,10 +227,45 @@ private let questionChoices = [
 
 @MainActor
 private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator) -> ApprovalsModel {
-    core.state.withLock { $0.pending = [approval("ap_1"), approval("ap_2", options: [.approve, .deny])] }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_1"), approval("ap_2", options: [.approve, .deny])] }
     let model = ApprovalsModel(core: core, auth: auth)
     model.poll()
     return model
+}
+
+@MainActor
+@Test func pollKeepsEachMachinesLinkAndDropsExpiredApprovals() async throws {
+    let core = FakeApprovalCore()
+    var expired = approval("ap_old")
+    expired.expiresAtMs = UInt64(Date.now.timeIntervalSince1970 * 1000) - 1
+    var linux = approval("ap_linux")
+    linux.createdAtMs = 2
+    var linuxExpired = approval("ap_linux_old")
+    linuxExpired.expiresAtMs = 1
+    core.state.withLock { s in
+        s.pending["m1"] = [approval("ap_mac"), expired]
+        s.pending["m2"] = [linux, linuxExpired]
+    }
+    let model = ApprovalsModel(core: core, auth: FakeAuthenticator())
+    model.poll()
+    #expect(model.items.map(\.id) == ["ap_mac", "ap_linux"])
+    #expect(model.items.map(\.machine.id) == ["m1", "m2"])
+    #expect(model.items.map(\.link) == [.connected, .waiting])
+    #expect(model.items.map(\.unreachable) == [false, true])
+
+    let phases: [(LinkPhase, Bool)] = [(.connecting, false), (.connected, false), (.offline, true), (.stopped, true), (.waiting, true), (.unavailable, true)]
+    for (link, unreachable) in phases {
+        core.state.withLock { $0.link["m2"] = link }
+        model.poll()
+        #expect(model.items.last?.unreachable == unreachable)
+    }
+
+    await model.decide(try #require(model.items.first), .approve)
+    #expect(model.notice == "Approved: claude. The agent moved on.")
+    core.state.withLock { $0.link["m2"] = .connected }
+    model.poll()
+    #expect(model.items.last?.link == .connected)
+    #expect(model.notice == "Approved: claude. The agent moved on.")
 }
 
 @MainActor
@@ -303,7 +345,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     let model = ApprovalsModel(core: core, auth: FakeAuthenticator())
     var other = approval("ap_9")
     other.terminalId = "term_2"
-    core.state.withLock { $0.pending = [approval("ap_1"), other] }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_1"), other] }
     model.poll()
     #expect(model.items(machineId: "m1", terminalId: "term_1").map(\.id) == ["ap_1"])
     #expect(model.items(machineId: "m2", terminalId: "term_1").isEmpty)
@@ -315,7 +357,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
 @MainActor
 @Test func notificationTapLoadsUntilTheMacIsConnected() async throws {
     let core = FakeApprovalCore()
-    core.state.withLock { $0.link = .connecting }
+    core.state.withLock { $0.link["m1"] = .connecting }
     let model = ApprovalsModel(core: core, auth: FakeAuthenticator())
     let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
     let load = model.open(link)
@@ -328,8 +370,8 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     #expect(model.items.isEmpty)
 
     core.state.withLock { s in
-        s.link = .connected
-        s.pending = [approval("ap_1")]
+        s.link["m1"] = .connected
+        s.pending["m1"] = [approval("ap_1")]
     }
     await load?.value
     #expect(model.loading == nil)
@@ -354,11 +396,11 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
 @MainActor
 @Test func noticeClearsAfterItsLifetime() async throws {
     let core = FakeApprovalCore()
-    core.state.withLock { $0.pending = [approval("ap_1")] }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_1")] }
     let model = ApprovalsModel(core: core, auth: FakeAuthenticator(), noticeLifetime: .milliseconds(50))
     model.poll()
     let item = try #require(model.items.first)
-    core.state.withLock { $0.pending = [] }
+    core.state.withLock { $0.pending["m1"] = [] }
     await model.decide(item, .approve)
     #expect(model.notice == "Approved: claude. The agent moved on.")
     #expect(model.items.isEmpty)
@@ -375,11 +417,11 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     await model.decide(item, .approve)
     #expect(model.notice != nil)
 
-    core.state.withLock { $0.pending = [approval("ap_2", options: [.approve, .deny])] }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_2", options: [.approve, .deny])] }
     model.poll()
     #expect(model.notice == "Approved: claude. The agent moved on.")
 
-    core.state.withLock { $0.pending = [approval("ap_2", options: [.approve, .deny]), approval("ap_3")] }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_2", options: [.approve, .deny]), approval("ap_3")] }
     model.poll()
     #expect(model.notice == nil)
 }
@@ -396,7 +438,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     #expect(model.expanded.isEmpty)
 
     model.toggleExpanded(item)
-    core.state.withLock { $0.pending = [] }
+    core.state.withLock { $0.pending["m1"] = [] }
     model.poll()
     #expect(model.expanded.isEmpty)
 }
@@ -406,7 +448,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     let core = FakeApprovalCore()
     let auth = FakeAuthenticator()
     core.state.withLock { s in
-        s.pending = [approval("ap_q", options: [], choices: questionChoices), approval("ap_b", choices: questionChoices)]
+        s.pending["m1"] = [approval("ap_q", options: [], choices: questionChoices), approval("ap_b", choices: questionChoices)]
         s.outcome = .applied(decision: .choose(choice: 1), by: "phone")
     }
     let model = ApprovalsModel(core: core, auth: auth)
@@ -433,7 +475,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
 
     core.state.withLock { $0.outcome = .superseded }
     await model.decide(question, .choose(choice: 0))
-    #expect(model.notice == "The prompt changed on the Mac. Nothing was sent.")
+    #expect(model.notice == "The prompt changed on the machine. Nothing was sent.")
 }
 
 @MainActor
@@ -442,22 +484,22 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     let model = ApprovalsModel(core: core, auth: FakeAuthenticator())
     #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == nil)
 
-    core.state.withLock { $0.pending = [approval("ap_b", choices: questionChoices)] }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_b", choices: questionChoices)] }
     model.poll()
     #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .optionsOnly)
 
-    core.state.withLock { $0.pending = [approval("ap_plan", options: [], choices: questionChoices)] }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_plan", options: [], choices: questionChoices)] }
     model.poll()
     #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .optionsOnly)
 
     core.state.withLock {
-        $0.pending = [approval("ap_q", options: [], choices: questionChoices, acceptsInput: true, hasTextField: true)]
+        $0.pending["m1"] = [approval("ap_q", options: [], choices: questionChoices, acceptsInput: true, hasTextField: true)]
     }
     model.poll()
     #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .keysAndText)
     #expect(model.blockedInput(machineId: "m1", terminalId: "term_2") == nil)
 
-    core.state.withLock { $0.pending = [approval("ap_k", options: [], choices: questionChoices, acceptsInput: true)] }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_k", options: [], choices: questionChoices, acceptsInput: true)] }
     model.poll()
     #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .keys)
 }
@@ -466,7 +508,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
 @Test func noteGoesWithApproveOrDenyOnlyAfterAuthentication() async throws {
     let core = FakeApprovalCore()
     let auth = FakeAuthenticator()
-    core.state.withLock { $0.pending = [approval("ap_n", supportsNote: true), approval("ap_old")] }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_n", supportsNote: true), approval("ap_old")] }
     let model = ApprovalsModel(core: core, auth: auth)
     model.poll()
     let item = try #require(model.items.first { $0.id == "ap_n" })
@@ -506,7 +548,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     await model.decide(old, .approve)
     #expect(core.state.withLock { $0.decisions }.count == 4)
 
-    core.state.withLock { $0.pending = [] }
+    core.state.withLock { $0.pending["m1"] = [] }
     model.poll()
     #expect(model.drafts.isEmpty && model.noting.isEmpty)
 }
@@ -516,7 +558,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     let core = FakeApprovalCore()
     let auth = FakeAuthenticator()
     core.state.withLock {
-        $0.pending = [
+        $0.pending["m1"] = [
             approval("ap_plan", options: [], choices: planChoices, hasTextField: true),
             approval("ap_q", options: [], choices: questionChoices, acceptsInput: true, hasTextField: true),
         ]

@@ -350,7 +350,7 @@ async fn pair(state: &State, r: &mut BufReader<OwnedReadHalf>, w: &mut OwnedWrit
             paired_at: crate::now_ms(),
         })
     } else {
-        Err(anyhow::anyhow!("not confirmed on the Mac"))
+        Err(anyhow::anyhow!("not confirmed on the machine"))
     };
     let (paired, detail) = match outcome {
         Ok(()) => (true, format!("paired {} ({})", c.device_label, c.stable_id)),

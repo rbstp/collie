@@ -235,13 +235,14 @@ async fn scenario(
     wait_audit(&audit, "control", "pair.close", "cancelled").await;
     println!("  rejected in {:?}", t.elapsed());
 
-    println!("phone refuses a Mac whose StableID differs from the invite");
+    println!("phone refuses a Mac whose StableID differs from the invite, or without a collie tag");
     let code = PairingInvite::parse(&uri).unwrap().code;
     let tagged_host = tagged_self.dns_name.trim_end_matches('.').to_owned();
     let before = audit_lines(&audit).len();
     for (host, node_id) in [
         (mac_host.clone(), tagged_self.stable_id.clone()),
-        (tagged_host, mac_self.stable_id.clone()),
+        (tagged_host.clone(), mac_self.stable_id.clone()),
+        (tagged_host, tagged_self.stable_id.clone()),
     ] {
         let forged = PairingInvite {
             host,
@@ -260,12 +261,31 @@ async fn scenario(
         "a pinned-out Mac must never be contacted"
     );
 
+    println!("a phone the Mac still lists pairs again, as after removing the Mac on the phone");
+    let err = phone_a.pair(uri.clone(), LABEL.into()).await.unwrap_err();
+    assert!(format!("{err}").contains("already paired"), "{err}");
+    phone_a.remove_machine(machine.id.clone()).unwrap();
+    let (machine, _) = pair(&control, phone_a, "Renamed iPhone").await;
+    assert_eq!(machine.node_id, mac_self.stable_id);
+    let Some(Reply::Peers { peers, .. }) = collied::control::request(&control, &Request::PeersList)
+        .await
+        .unwrap()
+    else {
+        panic!("no peers reply");
+    };
+    assert_eq!(peers.len(), 1, "the record is replaced, not added");
+    assert_eq!(
+        (peers[0].stable_id.as_str(), peers[0].label.as_str()),
+        (phone_a_id.as_str(), "Renamed iPhone")
+    );
+    connected_flock(phone_a, &machine.id).await;
+
     println!("revoked phone is closed and then rejected");
     let t = Instant::now();
     let revoked = collied::control::request(
         &control,
         &Request::PeersRevoke {
-            target: LABEL.into(),
+            target: "Renamed iPhone".into(),
         },
     )
     .await

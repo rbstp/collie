@@ -101,7 +101,7 @@ struct FollowUp: Equatable {
         case .expired:
             FollowUp(title: agent, body: "This approval expired. Nothing was sent.", opensApproval: false)
         case .superseded:
-            FollowUp(title: agent, body: "The prompt changed on the Mac. Nothing was sent; open collie to see it.", opensApproval: true)
+            FollowUp(title: agent, body: "The prompt changed on the machine. Nothing was sent; open collie to see it.", opensApproval: true)
         case .alreadyResolved, .notFound:
             FollowUp(title: agent, body: "This approval is no longer pending. Nothing was sent.", opensApproval: false)
         case .unreachable(stage: .decide, message: _):
@@ -110,7 +110,9 @@ struct FollowUp: Equatable {
                 body: "Couldn't confirm the \(decision.noun) reached collied. Open collie to check.",
                 opensApproval: true
             )
-        case .unreachable, .unknownMachine, .unauthorized, .failed:
+        case .unknownMachine:
+            FollowUp(title: agent, body: "This machine is no longer paired with this phone. Nothing was sent.", opensApproval: false)
+        case .unreachable, .unauthorized, .failed:
             FollowUp(title: agent, body: unreachable, opensApproval: true)
         }
     }

@@ -28,13 +28,19 @@ struct MachinesList: View {
     var body: some View {
         List {
             if app.machines.isEmpty {
-                Text("No machines paired. Run `collied pair` on your Mac, then add it here.")
+                Text("No machines paired. Run `collied pair` on the machine, then add it here.")
                     .foregroundStyle(.secondary)
             }
             ForEach(app.machines, id: \.id) { machine in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(machine.label)
-                    Text(machine.host).font(.caption).foregroundStyle(.secondary)
+                TimelineView(.periodic(from: .now, by: 2)) { _ in
+                    let link = app.core?.cachedFlock(machineId: machine.id)?.link
+                    let reachable = link.map { [.connected, .connecting].contains($0) } ?? true
+                    VStack(alignment: .leading, spacing: 2) {
+                        MachineName(machine: machine)
+                            .foregroundStyle(reachable ? .primary : .secondary)
+                            .tint(reachable ? nil : .secondary)
+                        Text(machine.host).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             .onDelete { offsets in
@@ -69,7 +75,7 @@ struct PairView: View {
                 } header: {
                     Text("This phone")
                 } footer: {
-                    Text("Shown on the Mac in its list of paired devices.")
+                    Text("Shown on the machine in its list of paired devices.")
                 }
 
                 Section("Pairing code") {
@@ -100,7 +106,7 @@ struct PairView: View {
                         if model.pairing {
                             HStack {
                                 ProgressView()
-                                Text("Confirm the pairing on your Mac…")
+                                Text("Confirm the pairing on the machine…")
                             }
                         } else {
                             Text("Pair")
@@ -160,6 +166,27 @@ struct PairView: View {
         if let machine = model.paired {
             app.machinePaired(machine)
             dismiss()
+        }
+    }
+}
+
+struct MachineName: View {
+    let machine: Machine
+    // SF Symbols has no Linux glyph; Tux is a drawn template image, sized like the symbol.
+    @ScaledMetric(relativeTo: .body) private var tuxSize: CGFloat = 18
+
+    var body: some View {
+        Label {
+            Text(machine.label)
+        } icon: {
+            Group {
+                if machine.kind == .linux {
+                    Image("Tux").resizable().scaledToFit().frame(width: tuxSize, height: tuxSize)
+                } else {
+                    Image(systemName: "apple.logo")
+                }
+            }
+            .accessibilityLabel(machine.kind == .linux ? "Linux" : "Mac")
         }
     }
 }

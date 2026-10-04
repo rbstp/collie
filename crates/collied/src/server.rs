@@ -945,7 +945,15 @@ impl Session<'_> {
                 err(ErrorCode::InvalidParams, "hello already received"),
                 None,
             ),
-            Request::PairComplete(_) => (err(ErrorCode::PairingFailed, "already paired"), None),
+            // A paired phone pairs again through an open window, with the code and the local
+            // confirmation like a new one; the store replaces its record.
+            Request::PairComplete(p) => {
+                let window = self.state.lock_pairing().current(Instant::now());
+                match window {
+                    Some(window) => (self.pair_complete(window, p).await, None),
+                    None => (err(ErrorCode::PairingFailed, "already paired"), None),
+                }
+            }
             Request::FlockSnapshot(_) => (self.flock().await, None),
             Request::WorkspaceList(_) => (self.workspaces().await, None),
             Request::AgentRead(p) => (drive.read(p, true).await, None),

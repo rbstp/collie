@@ -13,7 +13,7 @@ struct OnboardingView: View {
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("collie").font(.largeTitle.bold())
-                        Text("Watch and steer the coding agents on your Macs. collie joins your tailnet on its own; the Tailscale app is not needed.")
+                        Text("Watch and steer the coding agents on your machines. collie joins your tailnet on its own; the Tailscale app is not needed.")
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 4)
@@ -27,7 +27,7 @@ struct OnboardingView: View {
                     }
                     .disabled(app.signingIn)
                 } footer: {
-                    Text("Opens the Tailscale login page. Sign in with the account that owns your Macs.")
+                    Text("Opens the Tailscale login page. Sign in with the account that owns your machines.")
                 }
 
                 Section {

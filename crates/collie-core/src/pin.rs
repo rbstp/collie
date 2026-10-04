@@ -2,6 +2,9 @@ use std::net::IpAddr;
 
 use tailnet::{PeerStatus, Status, WhoIsNode};
 
+use crate::store::MachineKind;
+
+#[cfg(test)]
 pub const MAC_TAG: &str = "tag:collie-mac";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -14,8 +17,8 @@ pub enum PinError {
         expected: String,
         found: String,
     },
-    #[error("{host} is not tagged {MAC_TAG}")]
-    Untagged { host: String },
+    #[error("{host} is not tagged {expected}")]
+    Untagged { host: String, expected: String },
     #[error("{host} has no tailnet address")]
     NoAddress { host: String },
     #[error("{host} is shared in from another tailnet")]
@@ -23,7 +26,7 @@ pub enum PinError {
 }
 
 impl PinError {
-    /// A pin violation means the name now points at another node, or the Mac lost
+    /// A pin violation means the name now points at another node, or the machine lost
     /// its tag: retrying cannot fix it and must not be automatic.
     pub fn is_violation(&self) -> bool {
         matches!(
@@ -34,8 +37,14 @@ impl PinError {
 }
 
 /// The IP is taken from the netmap entry of the pinned node itself, so the
-/// connection never depends on a DNS answer.
-pub fn resolve(status: &Status, host: &str, node_id: &str) -> Result<IpAddr, PinError> {
+/// connection never depends on a DNS answer. `kind` is None only when pairing, where
+/// either collie tag is accepted and the one found is returned to be pinned.
+pub fn resolve(
+    status: &Status,
+    host: &str,
+    node_id: &str,
+    kind: Option<MachineKind>,
+) -> Result<(IpAddr, MachineKind), PinError> {
     let named: Vec<&PeerStatus> = status
         .peer
         .iter()
@@ -55,19 +64,38 @@ pub fn resolve(status: &Status, host: &str, node_id: &str) -> Result<IpAddr, Pin
             });
         }
     };
-    if !peer.tags.iter().flatten().any(|t| t == MAC_TAG) {
-        return Err(PinError::Untagged { host: host.into() });
-    }
+    let pinned;
+    let accepted: &[MachineKind] = match kind {
+        Some(k) => {
+            pinned = [k];
+            &pinned
+        }
+        None => &MachineKind::ALL,
+    };
+    let found = accepted
+        .iter()
+        .copied()
+        .find(|k| peer.tags.iter().flatten().any(|t| t == k.tag()))
+        .ok_or_else(|| PinError::Untagged {
+            host: host.into(),
+            expected: accepted
+                .iter()
+                .map(|k| k.tag())
+                .collect::<Vec<_>>()
+                .join(" or "),
+        })?;
     let ips = peer.tailscale_ips.as_deref().unwrap_or_default();
-    ips.iter()
+    let ip = ips
+        .iter()
         .find(|ip| ip.is_ipv4())
         .or_else(|| ips.first())
         .copied()
-        .ok_or(PinError::NoAddress { host: host.into() })
+        .ok_or(PinError::NoAddress { host: host.into() })?;
+    Ok((ip, found))
 }
 
-/// Applied to whois of the resolved IP and to the node ID the Mac reports in hello, so a
-/// shared-in node or a stale netmap entry cannot stand in for the pinned Mac.
+/// Applied to whois of the resolved IP and to the node ID the machine reports in hello, so
+/// a shared-in node or a stale netmap entry cannot stand in for the pinned machine.
 pub fn verify_node(found: &str, host: &str, node_id: &str) -> Result<(), PinError> {
     if found != node_id {
         return Err(PinError::NodeIdMismatch {
@@ -128,12 +156,12 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            resolve(&st, HOST, "nMAC"),
-            Ok("100.64.0.1".parse().unwrap())
+            resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)),
+            Ok(("100.64.0.1".parse().unwrap(), MachineKind::Mac))
         );
         assert_eq!(
-            resolve(&st, "MAC.tail1234.ts.net", "nMAC"),
-            Ok("100.64.0.1".parse().unwrap())
+            resolve(&st, "MAC.tail1234.ts.net", "nMAC", Some(MachineKind::Mac)),
+            Ok(("100.64.0.1".parse().unwrap(), MachineKind::Mac))
         );
     }
 
@@ -145,7 +173,7 @@ mod tests {
             &[MAC_TAG],
             &["100.64.0.7"],
         )]);
-        let err = resolve(&st, HOST, "nMAC").unwrap_err();
+        let err = resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)).unwrap_err();
         assert_eq!(
             err,
             PinError::NodeIdMismatch {
@@ -160,8 +188,14 @@ mod tests {
     #[test]
     fn untagged_mac_is_a_violation() {
         let st = status(&[("nMAC", "mac.tail1234.ts.net.", &[], &["100.64.0.1"])]);
-        let err = resolve(&st, HOST, "nMAC").unwrap_err();
-        assert_eq!(err, PinError::Untagged { host: HOST.into() });
+        let err = resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)).unwrap_err();
+        assert_eq!(
+            err,
+            PinError::Untagged {
+                host: HOST.into(),
+                expected: MAC_TAG.into()
+            }
+        );
         assert!(err.is_violation());
         let st = status(&[(
             "nMAC",
@@ -169,19 +203,23 @@ mod tests {
             &["tag:collie-macx"],
             &["100.64.0.1"],
         )]);
-        assert!(resolve(&st, HOST, "nMAC").unwrap_err().is_violation());
+        assert!(
+            resolve(&st, HOST, "nMAC", Some(MachineKind::Mac))
+                .unwrap_err()
+                .is_violation()
+        );
     }
 
     #[test]
     fn missing_peer_is_transient() {
         let st = status(&[("nMAC", "mac2.tail1234.ts.net.", &[MAC_TAG], &["100.64.0.1"])]);
-        let err = resolve(&st, HOST, "nMAC").unwrap_err();
+        let err = resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)).unwrap_err();
         assert_eq!(err, PinError::MissingPeer { host: HOST.into() });
         assert!(!err.is_violation());
         let empty: Status =
             serde_json::from_str(r#"{"BackendState":"Running","Peer":null}"#).unwrap();
         assert!(matches!(
-            resolve(&empty, HOST, "nMAC"),
+            resolve(&empty, HOST, "nMAC", Some(MachineKind::Mac)),
             Err(PinError::MissingPeer { .. })
         ));
     }
@@ -203,7 +241,7 @@ mod tests {
             ),
         ]);
         assert!(matches!(
-            resolve(&st, HOST, "nMAC"),
+            resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)),
             Err(PinError::NodeIdMismatch { .. })
         ));
     }
@@ -212,8 +250,58 @@ mod tests {
     fn no_address() {
         let st = status(&[("nMAC", "mac.tail1234.ts.net.", &[MAC_TAG], &[])]);
         assert_eq!(
-            resolve(&st, HOST, "nMAC"),
+            resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)),
             Err(PinError::NoAddress { host: HOST.into() })
+        );
+    }
+
+    #[test]
+    fn pairing_accepts_either_tag_and_reports_which() {
+        let tagged =
+            |tags: &[&str]| status(&[("nM", "mac.tail1234.ts.net.", tags, &["100.64.0.1"])]);
+        let ip: IpAddr = "100.64.0.1".parse().unwrap();
+        for kind in MachineKind::ALL {
+            let st = tagged(&[kind.tag()]);
+            assert_eq!(resolve(&st, HOST, "nM", None), Ok((ip, kind)));
+            assert_eq!(resolve(&st, HOST, "nM", Some(kind)), Ok((ip, kind)));
+        }
+        for tags in [
+            &[][..],
+            &["tag:collie-linuxx"],
+            &["tag:collie-phone"],
+            &["tag:collie"],
+        ] {
+            let err = resolve(&tagged(tags), HOST, "nM", None).unwrap_err();
+            assert!(err.is_violation(), "{tags:?}");
+            assert_eq!(
+                err.to_string(),
+                format!("{HOST} is not tagged tag:collie-mac or tag:collie-linux")
+            );
+        }
+    }
+
+    #[test]
+    fn a_paired_machine_must_keep_its_kind() {
+        let linux = status(&[(
+            "nM",
+            "mac.tail1234.ts.net.",
+            &["tag:collie-linux"],
+            &["100.64.0.1"],
+        )]);
+        let err = resolve(&linux, HOST, "nM", Some(MachineKind::Mac)).unwrap_err();
+        assert_eq!(
+            err,
+            PinError::Untagged {
+                host: HOST.into(),
+                expected: MAC_TAG.into()
+            }
+        );
+        assert!(err.is_violation());
+        let mac = status(&[("nM", "mac.tail1234.ts.net.", &[MAC_TAG], &["100.64.0.1"])]);
+        assert!(
+            resolve(&mac, HOST, "nM", Some(MachineKind::Linux))
+                .unwrap_err()
+                .is_violation()
         );
     }
 

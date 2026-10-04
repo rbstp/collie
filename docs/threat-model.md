@@ -1,6 +1,6 @@
 # Threat model
 
-Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the tailnet between them, herdr as collied's local backend, and APNs. On Linux collied runs as a systemd user unit and advertises `tag:collie-linux`; the phone still pins `tag:collie-mac`, so a Linux collied cannot be paired until the phone side accepts the Linux tag. Tailnet configuration is in [tailnet.md](tailnet.md), design in [architecture.md](architecture.md).
+Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the tailnet between them, herdr as collied's local backend, and APNs. On Linux collied runs as a systemd user unit and advertises `tag:collie-linux`. Tailnet configuration is in [tailnet.md](tailnet.md), design in [architecture.md](architecture.md).
 
 ## Assets
 
@@ -71,7 +71,7 @@ Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the t
 |---|---|
 | Assets | Node identity, which every collie authorization decision rests on |
 | Attack | The control server (or a stolen admin account) adds a node with its own key and gives it the phone's `StableID` and the owner's user ID, or changes the tag owners and grants, or points the phone's netmap at a fake Mac. |
-| Mitigations | Admin account protection (IdP, MFA) is the user's. collied pins `StableID` + user ID + untagged, and the phone pins the Mac's `StableID` + `tag:collie-mac` (P1; a Linux collied advertises `tag:collie-linux`, which the phone does not accept yet), which stops casual misconfiguration but not a control plane that lies. The y/N prompt at pairing catches a new device only during pairing. |
+| Mitigations | Admin account protection (IdP, MFA) is the user's. collied pins `StableID` + user ID + untagged, and the phone pins the machine's `StableID` + the tag seen at pairing, `tag:collie-mac` or `tag:collie-linux` (P1; the owners of either tag are trusted for the tag half of the pin), which stops casual misconfiguration but not a control plane that lies. The y/N prompt at pairing catches a new device only during pairing. |
 | Residual | High: whois and netmap data both come from control, so a malicious control plane passes the gate on both ends. Tailnet Lock (node keys signed by trusted devices) would close the node-injection path but is not part of the design and untested with tsnet. An application-level key exchanged at pairing would also close it. |
 | Phase | Not planned; open decision. |
 

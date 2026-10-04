@@ -33,7 +33,7 @@ struct MacReachability: Decodable, Equatable {
 }
 
 enum PushBody {
-    static let unreachableSuffix = " (Mac may be unreachable, open collie to check)"
+    static let unreachableSuffix = " (machine may be unreachable, open collie to check)"
 
     static func rewrite(_ body: String, nodeId: String?, reachability: Data?) -> String {
         guard let nodeId, let reachability, !body.hasSuffix(unreachableSuffix),

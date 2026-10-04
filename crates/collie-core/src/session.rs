@@ -10,6 +10,7 @@ use protocol::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
+use tokio::time::Instant;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -17,6 +18,8 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{self, Message};
 
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(10);
+/// collied pings every 15 s: three missed pings mean the machine is gone without a FIN.
+const SILENCE_LIMIT: Duration = Duration::from_secs(45);
 const MAX_MESSAGE_BYTES: usize = 4 << 20;
 const MAX_REPLAY_EVENTS: usize = 1024;
 const MAX_APPROVAL_EVENTS: usize = 64;
@@ -25,19 +28,19 @@ const MAX_APPROVAL_EVENTS: usize = 64;
 pub enum SessionError {
     #[error("connection closed")]
     Closed,
-    #[error("timed out waiting for the Mac")]
+    #[error("timed out waiting for the machine")]
     Timeout,
     #[error("websocket: {0}")]
     WebSocket(String),
-    #[error("Mac refused the connection (HTTP {0})")]
+    #[error("the machine refused the connection (HTTP {0})")]
     Refused(u16),
     #[error("{message}")]
     Server { code: ErrorCode, message: String },
-    #[error("the Mac's input box has unsent text")]
+    #[error("the agent's input box has unsent text")]
     DraftChanged { current: String },
-    #[error("unexpected reply from the Mac: {0}")]
+    #[error("unexpected reply from the machine: {0}")]
     Protocol(String),
-    #[error("this phone is not paired with the Mac")]
+    #[error("this phone is not paired with this machine")]
     NotPaired,
 }
 
@@ -89,6 +92,7 @@ pub type Reply = oneshot::Sender<Result<Response, SessionError>>;
 pub struct Session<S> {
     ws: WebSocketStream<S>,
     next_id: RequestId,
+    last_frame: Instant,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
@@ -111,7 +115,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         )
         .await
         .map_err(|_| SessionError::Timeout)??;
-        Ok(Self { ws, next_id: 1 })
+        Ok(Self {
+            ws,
+            next_id: 1,
+            last_frame: Instant::now(),
+        })
     }
 
     pub async fn hello(&mut self) -> Result<HelloResult, SessionError> {
@@ -171,7 +179,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
 
     async fn recv(&mut self) -> Result<ServerFrame, SessionError> {
         loop {
-            match self.ws.next().await.ok_or(SessionError::Closed)?? {
+            let message = self.ws.next().await.ok_or(SessionError::Closed)??;
+            self.last_frame = Instant::now();
+            match message {
                 Message::Text(text) => {
                     return serde_json::from_str(text.as_str())
                         .map_err(|e| SessionError::Protocol(e.to_string()));
@@ -217,10 +227,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                 Err(e) => return e,
             };
         }
-        tokio::pin!(stop);
+        let silence = tokio::time::sleep_until(self.last_frame + SILENCE_LIMIT);
+        tokio::pin!(stop, silence);
         let end = loop {
             tokio::select! {
                 () = &mut stop => break SessionError::Closed,
+                () = &mut silence => {
+                    let deadline = self.last_frame + SILENCE_LIMIT;
+                    if Instant::now() >= deadline {
+                        break SessionError::Timeout;
+                    }
+                    silence.as_mut().reset(deadline);
+                }
                 req = requests.recv() => {
                     let Some((request, reply)) = req else { break SessionError::Closed };
                     if reply.is_closed() {
@@ -1078,5 +1096,48 @@ mod tests {
         assert!(!end.is_auth());
         assert!(a_rx.await.unwrap().is_err());
         server.await.unwrap();
+    }
+
+    // An in-memory stream: the paused clock auto-advances past socket readiness. The
+    // handshake callback's error type is fixed by tungstenite.
+    #[allow(clippy::result_large_err)]
+    #[tokio::test(start_paused = true)]
+    async fn run_ends_a_session_once_the_machine_goes_silent() {
+        let (client, server) = tokio::io::duplex(1 << 16);
+        let server = tokio::spawn(async move {
+            let mut ws = tokio_tungstenite::accept_hdr_async(
+                server,
+                |_: &HsRequest, mut resp: HsResponse| {
+                    resp.headers_mut().insert(
+                        "Sec-WebSocket-Protocol",
+                        HeaderValue::from_static(WS_SUBPROTOCOL),
+                    );
+                    Ok(resp)
+                },
+            )
+            .await
+            .unwrap();
+            for _ in 0..4 {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                ws.send(Message::Ping(Default::default())).await.unwrap();
+            }
+            (ws, Instant::now())
+        });
+        let session = Session::connect(client, "mac.tail1234.ts.net", 8457)
+            .await
+            .unwrap();
+        let state = Mutex::new(FlockState::default());
+        let (_tx, mut rx) = mpsc::channel(8);
+        let end = session
+            .run(&mut rx, &state, Vec::new(), std::future::pending())
+            .await;
+        let ended = Instant::now();
+        let (_ws, last_ping) = server.await.unwrap();
+        assert!(matches!(end, SessionError::Timeout), "{end:?}");
+        assert_eq!(
+            ended - last_ping,
+            SILENCE_LIMIT,
+            "pings keep the session alive"
+        );
     }
 }
