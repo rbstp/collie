@@ -47,6 +47,17 @@ mod imp {
     }
 }
 
+// The phone links this crate but never audits its own listeners.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+mod imp {
+    pub fn listeners(_: u32) -> std::io::Result<Vec<String>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "no kernel listener check on this OS",
+        ))
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod imp {
     use std::collections::BTreeSet;
