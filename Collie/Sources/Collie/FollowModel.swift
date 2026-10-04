@@ -226,6 +226,25 @@ final class FollowModel {
         ActivityContent(state: state, staleDate: .now.addingTimeInterval(staleAfter), relevanceScore: state.relevance)
     }
 
+    /// After a decision applied: drops the buttons and shows the status the agent moves to, at
+    /// once. Dated a second before the tap so any update collied pushes afterwards, whose
+    /// timestamp is whole seconds, is never older and always replaces it.
+    nonisolated static func resolve(_ link: ApprovalLink, approved: Bool, tappedAt: Date) async {
+        guard
+            let activity = Activity<AgentActivityAttributes>.activities.first(where: {
+                $0.isLive && $0.attributes.nodeId == link.nodeId && $0.content.state.approvalId == link.approvalId
+            })
+        else { return }
+        var state = activity.content.state
+        state.status = approved ? .working : .idle
+        state.statusSince = .now
+        state.approvalId = nil
+        state.enc = nil
+        state.progress = nil
+        state.approvals = max(0, state.approvals - 1)
+        await activity.update(activityContent(state), alertConfiguration: nil, timestamp: tappedAt.addingTimeInterval(-1))
+    }
+
     /// Shows `progress` instead of the buttons on the live activity holding this approval, and
     /// returns that activity's agent title and terminal id.
     @discardableResult
