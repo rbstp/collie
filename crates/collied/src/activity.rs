@@ -252,11 +252,17 @@ impl Live {
             }
             let since_sent = t.at.map(|at| now.duration_since(at));
             let urgent = route.as_ref().filter(|r| r.due);
+            // The first update after the approval left the activity: the phone shows buttons until
+            // it lands, and iOS may hold a priority 5 update while the phone is locked.
+            let resolved = state.approval_id.is_none()
+                && t.sent
+                    .as_ref()
+                    .is_some_and(|prev| prev.approval_id.is_some());
             if route.is_none() {
                 match &t.sent {
                     None => {}
                     Some(prev) if *prev != state => {
-                        if since_sent.is_some_and(|d| d < MIN_GAP) {
+                        if !resolved && since_sent.is_some_and(|d| d < MIN_GAP) {
                             continue;
                         }
                     }
@@ -268,6 +274,8 @@ impl Live {
             if let Some(r) = urgent {
                 // Kept by APNs for as long as the approval alert it replaces.
                 alert.expiration = r.alert.expiration;
+            } else if resolved {
+                alert.delivery = Delivery::LiveActivity { urgent: true };
             }
             out.push(Planned {
                 activity: activity.clone(),
@@ -811,20 +819,30 @@ mod tests {
             json!({"v": 1, "body": "Bash: SECRET context"})
         );
 
-        rig.advance(Duration::from_secs(2)).await;
+        rig.advance(Duration::from_millis(200)).await;
         let resolved = rig.plan(&rotated, &[agent("working")], &[]);
-        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved.len(), 1, "a resolution skips MIN_GAP");
         assert_eq!(
             resolved[0].alert.delivery,
-            Delivery::LiveActivity { urgent: false }
+            Delivery::LiveActivity { urgent: true },
+            "priority 10 so a locked phone drops the buttons at once"
         );
+        assert_eq!(resolved[0].alert.headers("dev.rbstp.collie").priority, 10);
+        assert!(aps(&resolved[0]).get("alert").is_none(), "no second alert");
         let state = &aps(&resolved[0])["content-state"];
         assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
+        rig.advance(Duration::from_secs(3)).await;
+        let next = rig.plan(&rotated, &[agent("done")], &[]);
+        assert_eq!(
+            next[0].alert.delivery,
+            Delivery::LiveActivity { urgent: false },
+            "only the first update after a resolution"
+        );
 
         rig.advance(Duration::from_secs(3)).await;
         let mut stale = vec![route("nPhone", true, &reissued[0])];
         assert!(
-            rig.plan_routed(&rotated, &mut stale, &[agent("working")], &[])
+            rig.plan_routed(&rotated, &mut stale, &[agent("done")], &[])
                 .is_empty()
         );
         assert!(stale.is_empty(), "a resolved approval is not alerted");

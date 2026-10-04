@@ -272,12 +272,13 @@ final class AppModel {
         // A second tap would only fail as already resolved and post a misleading follow-up.
         guard activityDecisions.insert(link.approvalId).inserted else { return }
         defer { activityDecisions.remove(link.approvalId) }
+        let tappedAt = Date.now
         let agent = await FollowModel.show(progress: decision.progressive, on: link)
         let outcome = await decideFromNotification(
             link, decision, agent: agent?.title ?? "agent", thread: agent?.terminalId ?? "", quietWhenApplied: true
         )
-        if case .applied(let applied) = outcome {
-            await FollowModel.show(progress: applied.pastTense, on: link)
+        if case .applied = outcome {
+            await FollowModel.resolve(link, approved: decision != .deny, tappedAt: tappedAt)
         } else {
             await FollowModel.show(progress: nil, on: link)
         }
