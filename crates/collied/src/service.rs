@@ -105,7 +105,17 @@ pub fn install(config: Option<&Path>, data_dir: &Path) -> anyhow::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let target = format!("{}/{LABEL}", domain());
-    let _ = launchctl(&["bootout", &target]);
+    if loaded(&target)? {
+        let _ = launchctl(&["bootout", &target]);
+        // bootout returns before launchd has torn the job down; bootstrapping before
+        // then fails with "Bad request".
+        for _ in 0..50 {
+            if !loaded(&target)? {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
     let tmp = path.with_extension("plist.tmp");
     let _ = std::fs::remove_file(&tmp);
     let mut file = OpenOptions::new()
