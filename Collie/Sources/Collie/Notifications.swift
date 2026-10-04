@@ -153,6 +153,7 @@ extension ApprovalDecision {
         case .approve: "Approving…"
         case .approveAlways: "Always approving…"
         case .deny: "Denying…"
+        case .choose: "Choosing…"
         }
     }
 }
