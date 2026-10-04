@@ -17,9 +17,10 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTarget, AgentWatchParams, ApprovalId,
-    Cwd, Empty, ErrorCode, Key, Label, NotificationKey, OpId, PairCompleteParams, PairingInvite,
-    PaneCloseParams, PromptText, PushRegisterParams, PushToken, ReadParams, ReadSource, Request,
-    Response, TaskNewParams, TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId, limits,
+    Cwd, DraftText, Empty, ErrorCode, Key, Label, NotificationKey, OpId, PairCompleteParams,
+    PairingInvite, PaneCloseParams, PromptText, PushRegisterParams, PushToken, ReadParams,
+    ReadSource, Request, Response, TaskNewParams, TerminalId, TerminalRead, WorkspaceCloseParams,
+    WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -107,6 +108,10 @@ pub enum CoreError {
     ChecksumMismatch,
     #[error("upload cancelled")]
     Cancelled,
+    #[error("The Mac's input box has unsent text.")]
+    DraftChanged { current: String },
+    #[error("Could not clear the Mac's input box; nothing was sent.")]
+    DraftNotCleared,
     #[error("stopped retrying: {message}. Pair this Mac again.")]
     Unauthorized { message: String },
     #[error("tailnet: {message}")]
@@ -170,8 +175,10 @@ impl From<SessionError> for CoreError {
                 ErrorCode::NotImplemented | ErrorCode::UnknownMethod => Self::NotImplemented,
                 ErrorCode::TooLarge => Self::TooLarge { message },
                 ErrorCode::ChecksumMismatch => Self::ChecksumMismatch,
+                ErrorCode::DraftNotCleared => Self::DraftNotCleared,
                 _ => Self::Rejected { message },
             },
+            SessionError::DraftChanged { current } => Self::DraftChanged { current },
             _ => Self::Unreachable { message },
         }
     }
@@ -633,16 +640,41 @@ impl CollieCore {
         })
     }
 
+    /// The unsent text in a Claude Code agent's input box on the Mac: `None` when it
+    /// cannot be read (another agent kind, a dialog, or an older collied).
+    pub async fn agent_draft(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+    ) -> Result<Option<String>, CoreError> {
+        let request = Request::AgentDraft(AgentTarget {
+            terminal_id: terminal(terminal_id)?,
+        });
+        match self.call(&machine_id, request, CALL_TIMEOUT).await {
+            Ok(Response::Draft { text }) => Ok(text),
+            Ok(other) => Err(unexpected(&other).into()),
+            Err(CoreError::NotImplemented) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// `expected_draft` is what the phone last saw in the Mac's input box: collied
+    /// replaces that draft, and refuses with `DraftChanged` if the box holds anything else.
     pub async fn prompt(
         &self,
         machine_id: String,
         terminal_id: String,
         text: String,
+        expected_draft: Option<String>,
     ) -> Result<(), CoreError> {
         let request = Request::AgentPrompt(AgentPromptParams {
             op_id: new_op_id(),
             terminal_id: terminal(terminal_id)?,
             text: prompt_text(text)?,
+            expected_draft: expected_draft
+                .map(DraftText::new)
+                .transpose()
+                .map_err(|_| invalid("expected_draft", "invalid draft"))?,
         });
         expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
     }
@@ -1486,6 +1518,30 @@ mod tests {
     }
 
     #[test]
+    fn draft_errors_map_to_variants() {
+        let changed = |draft: Option<&str>| {
+            CoreError::from(SessionError::from(protocol::ErrorBody {
+                code: ErrorCode::DraftChanged,
+                message: "the Mac's input box has unsent text".into(),
+                draft: draft.map(Into::into),
+            }))
+        };
+        let e = changed(Some("typed on the Mac"));
+        assert!(
+            matches!(&e, CoreError::DraftChanged { current } if current == "typed on the Mac"),
+            "{e:?}"
+        );
+        assert_eq!(e.to_string(), "The Mac's input box has unsent text.");
+        assert!(matches!(changed(None), CoreError::Rejected { .. }));
+        let e = server(ErrorCode::DraftNotCleared, "m");
+        assert!(matches!(e, CoreError::DraftNotCleared));
+        assert_eq!(
+            e.to_string(),
+            "Could not clear the Mac's input box; nothing was sent."
+        );
+    }
+
+    #[test]
     fn invalid_params_carry_the_field() {
         let field = |m: &str| match server(ErrorCode::InvalidParams, m) {
             CoreError::InvalidInput { field, .. } => field,
@@ -1531,6 +1587,7 @@ mod tests {
                 op_id: new_op_id(),
                 terminal_id: TerminalId::new("term_1").unwrap(),
                 text: PromptText::new(text).unwrap(),
+                expected_draft: None,
             })
         };
         let op = |r: &mut Request| op_id_mut(r).unwrap().clone();
@@ -1678,12 +1735,16 @@ mod tests {
         let m = || "unknown".to_owned();
         let t = || "term_1".to_owned();
         assert_eq!(
-            field(rt.block_on(core.prompt(m(), t(), "x\u{1b}[201~rm -rf ~\r".into()))),
+            field(rt.block_on(core.prompt(m(), t(), "x\u{1b}[201~rm -rf ~\r".into(), None))),
             Some("prompt".into())
         );
         assert_eq!(
-            field(rt.block_on(core.prompt(m(), "a b".into(), "hi".into()))),
+            field(rt.block_on(core.prompt(m(), "a b".into(), "hi".into(), None))),
             Some("terminal_id".into())
+        );
+        assert_eq!(
+            field(rt.block_on(core.prompt(m(), t(), "hi".into(), Some("a\u{1b}[2J".into())))),
+            Some("expected_draft".into())
         );
         assert_eq!(
             field(rt.block_on(core.send_keys(m(), t(), Vec::new()))),
@@ -1714,7 +1775,7 @@ mod tests {
             Err(CoreError::MachineNotFound)
         ));
         assert!(matches!(
-            rt.block_on(core.prompt(m(), t(), "fix it\nthen test".into())),
+            rt.block_on(core.prompt(m(), t(), "fix it\nthen test".into(), None)),
             Err(CoreError::MachineNotFound)
         ));
     }
@@ -2017,6 +2078,7 @@ mod tailnet_tests {
                             error: protocol::ErrorBody {
                                 code,
                                 message: "fake".into(),
+                                draft: None,
                             },
                         },
                     };
@@ -2245,7 +2307,7 @@ mod tailnet_tests {
             .unwrap();
         assert_eq!((snap.ansi.as_str(), snap.truncated), ("read", false));
 
-        rt.block_on(core.prompt(id(), t1(), "fix the build".into()))
+        rt.block_on(core.prompt(id(), t1(), "fix the build".into(), None))
             .unwrap();
         {
             let seen = lock(&seen);
@@ -2259,7 +2321,7 @@ mod tailnet_tests {
             );
         }
         poll(view.output_revision, "live");
-        rt.block_on(core.prompt(id(), t1(), "again".into()))
+        rt.block_on(core.prompt(id(), t1(), "again".into(), None))
             .unwrap();
         {
             let seen = lock(&seen);

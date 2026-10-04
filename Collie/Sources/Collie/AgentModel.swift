@@ -16,6 +16,8 @@ final class AgentModel {
     private var revision: UInt64 = 0
 
     var draft = ""
+    /// What the phone last saw in the Mac's input box: nil when unknown. A send replaces exactly this text.
+    private(set) var macDraft: String?
     private(set) var sendingPrompt = false
     private(set) var promptError: String?
     private(set) var upload: AttachmentUpload?
@@ -53,11 +55,30 @@ final class AgentModel {
     /// Runs while the screen is visible: watch, poll the core at 10 Hz, unwatch on cancel.
     func run() async {
         watch(route.terminalId)
+        async let loaded: Void = loadMacDraft()
         while !Task.isCancelled {
             poll()
             try? await Task.sleep(for: .milliseconds(100))
         }
         watch(nil)
+        await loaded
+    }
+
+    /// Text left unsent in the Mac's input box moves to the phone's field, unless the phone already has a draft.
+    func loadMacDraft() async {
+        while agent == nil, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard agent?.kind == "claude",
+            let text = try? await core.agentDraft(machineId: route.machineId, terminalId: route.terminalId),
+            !Task.isCancelled
+        else { return }
+        if text.isEmpty {
+            macDraft = ""
+        } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, attachments.isEmpty {
+            draft = text
+            macDraft = text
+        }
     }
 
     func poll() {
@@ -95,13 +116,15 @@ final class AgentModel {
         promptError = nil
         defer { sendingPrompt = false }
         do {
-            try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text)
+            try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: macDraft)
+            if macDraft != nil { macDraft = "" }
             let sentIds = Set(files.map(\.id))
             attachments.removeAll { sentIds.contains($0.id) }
             if draft.hasPrefix(sent) {
                 draft = String(draft.dropFirst(sent.count).drop(while: \.isWhitespace))
             }
         } catch {
+            if case .DraftChanged(let current) = error as? CoreError { macDraft = current }
             promptError = Self.message(for: error)
         }
     }
@@ -240,10 +263,15 @@ final class AgentModel {
     }
 
     static func message(for error: any Error) -> String {
-        if let error = error as? CoreError, error == .AgentBlocked {
+        switch error as? CoreError {
+        case .AgentBlocked:
             return "The agent is waiting for an approval. Answer it above or in the Approvals tab."
+        case .DraftChanged(let current):
+            let shown = current.count > 80 ? String(current.prefix(80)) + "…" : current
+            return "The Mac's input box has unsent text: “\(shown)”. Send again to replace it."
+        default:
+            return describe(error)
         }
-        return describe(error)
     }
 }
 

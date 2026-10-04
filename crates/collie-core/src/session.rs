@@ -33,6 +33,8 @@ pub enum SessionError {
     Refused(u16),
     #[error("{message}")]
     Server { code: ErrorCode, message: String },
+    #[error("the Mac's input box has unsent text")]
+    DraftChanged { current: String },
     #[error("unexpected reply from the Mac: {0}")]
     Protocol(String),
     #[error("this phone is not paired with the Mac")]
@@ -72,9 +74,12 @@ impl From<tungstenite::Error> for SessionError {
 
 impl From<ErrorBody> for SessionError {
     fn from(e: ErrorBody) -> Self {
-        Self::Server {
-            code: e.code,
-            message: e.message,
+        match (e.code, e.draft) {
+            (ErrorCode::DraftChanged, Some(current)) => Self::DraftChanged { current },
+            _ => Self::Server {
+                code: e.code,
+                message: e.message,
+            },
         }
     }
 }
@@ -816,6 +821,7 @@ mod tests {
                     error: ErrorBody {
                         code: ErrorCode::PairingFailed,
                         message: "pairing window closed".into(),
+                        draft: None,
                     },
                 },
             )
@@ -886,6 +892,7 @@ mod tests {
                     error: ErrorBody {
                         code: ErrorCode::NotFound,
                         message: "no such agent".into(),
+                        draft: None,
                     },
                 },
             )
@@ -930,6 +937,7 @@ mod tests {
                     error: ErrorBody {
                         code: ErrorCode::NotPaired,
                         message: "not paired".into(),
+                        draft: None,
                     },
                 },
             )
@@ -1015,6 +1023,7 @@ mod tests {
                     error: ErrorBody {
                         code: ErrorCode::NotImplemented,
                         message: "not implemented".into(),
+                        draft: None,
                     },
                 },
             )

@@ -6,7 +6,8 @@ protocol AgentCore: AnyObject, Sendable {
     func agentView(machineId: String, terminalId: String, afterRevision: UInt64) -> AgentView?
     func watchAgent(machineId: String, terminalId: String?) async throws
     func agentRead(machineId: String, terminalId: String, source: TerminalSource) async throws -> TerminalSnapshot
-    func prompt(machineId: String, terminalId: String, text: String) async throws
+    func agentDraft(machineId: String, terminalId: String) async throws -> String?
+    func prompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws
     func focus(machineId: String, terminalId: String) async throws
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws

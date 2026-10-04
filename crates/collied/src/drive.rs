@@ -10,15 +10,18 @@ use anyhow::Context;
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentStatus, Cwd, ErrorCode, OpId,
     PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskNewParams, TaskOptions,
-    TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId,
+    TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
+use crate::draft::{self, InputBox};
 use crate::herdr::{self, AgentInfo, PaneInfo};
 use crate::{flock, prompt};
 
+/// For `draft_changed` the message is the Mac's current draft: it goes to the phone in
+/// `ErrorBody.draft` and is never written to the audit log.
 pub type Fail = (ErrorCode, String);
 pub type Reply = Result<Response, Fail>;
 /// Checked again right before every herdr write, so an operation still running when its
@@ -32,6 +35,9 @@ const START_POLL: Duration = Duration::from_millis(250);
 pub const OP_TTL: Duration = Duration::from_secs(600);
 pub const OPS_PER_PEER: usize = 256;
 const MAX_SGR_PARAMS: usize = 64;
+const CLEAR_SETTLE: Duration = Duration::from_secs(1);
+const CLEAR_POLL: Duration = Duration::from_millis(100);
+pub const DRAFT_CHANGED: &str = "the Mac's input box has unsent text";
 
 fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, Fail> {
     Err((code, message.into()))
@@ -235,13 +241,92 @@ impl Driver {
         }
     }
 
+    pub async fn draft(&self, terminal_id: &TerminalId) -> Reply {
+        let a = self.find_agent(terminal_id).await?;
+        let text = match a.agent.as_deref() {
+            Some("claude") => match self.input_box(&a.pane_id).await? {
+                Some(InputBox::Draft(d)) => Some(d.text),
+                Some(InputBox::Opaque) | None => None,
+            },
+            _ => None,
+        };
+        Ok(Response::Draft { text })
+    }
+
+    async fn input_box(&self, pane_id: &str) -> Result<Option<InputBox>, Fail> {
+        let read = herdr::pane_read(&self.herdr, pane_id, source_name(ReadSource::Visible), None)
+            .await
+            .map_err(herdr_fail)?;
+        Ok(draft::parse(&sanitize_ansi(&read.text)))
+    }
+
     pub async fn prompt(&self, p: AgentPromptParams, auth: &Authorized) -> Reply {
         let a = self.ready_agent(&p.terminal_id).await?;
+        // herdr pastes a prompt after whatever is in Claude Code's input box.
+        if a.agent.as_deref() == Some("claude") {
+            let expected = p.expected_draft.as_ref().map(|d| d.as_str());
+            self.replace_draft(&a.pane_id, expected, auth).await?;
+        }
         authorized(auth)?;
         herdr::agent_prompt(&self.herdr, &a.pane_id, p.text.as_str())
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
+    }
+
+    /// A draft is cleared only when it is the one the phone saw. Anything else fails
+    /// closed: the agent passed `ready_agent`, so a box that cannot be read or replaced
+    /// may hold text that herdr would paste the prompt after, a shell command in bash mode
+    /// included.
+    async fn replace_draft(
+        &self,
+        pane_id: &str,
+        expected: Option<&str>,
+        auth: &Authorized,
+    ) -> Result<(), Fail> {
+        let current = match self.input_box(pane_id).await? {
+            Some(InputBox::Draft(d)) => d,
+            Some(InputBox::Opaque) => {
+                return fail(
+                    ErrorCode::DraftNotCleared,
+                    "the Mac's input box holds a paste, an image or another mode; nothing was sent",
+                );
+            }
+            None => {
+                return fail(
+                    ErrorCode::DraftNotCleared,
+                    "the Mac's input box could not be read; nothing was sent",
+                );
+            }
+        };
+        if current.text.is_empty() {
+            return Ok(());
+        }
+        if expected.is_none_or(|e| draft::normalize(e) != current.text) {
+            return Err((ErrorCode::DraftChanged, current.text));
+        }
+        for keys in draft::clear_keys(current.lines).chunks(limits::MAX_KEYS_PER_CALL) {
+            authorized(auth)?;
+            herdr::agent_send_keys(&self.herdr, pane_id, keys)
+                .await
+                .map_err(herdr_fail)?;
+        }
+        let deadline = tokio::time::Instant::now() + CLEAR_SETTLE;
+        loop {
+            tokio::time::sleep(CLEAR_POLL).await;
+            if matches!(
+                self.input_box(pane_id).await?,
+                Some(InputBox::Draft(d)) if d.text.is_empty()
+            ) {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return fail(
+                    ErrorCode::DraftNotCleared,
+                    "could not clear the Mac's input box; nothing was sent",
+                );
+            }
+        }
     }
 
     pub async fn send_keys(&self, p: AgentSendKeysParams, auth: &Authorized) -> Reply {

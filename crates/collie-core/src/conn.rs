@@ -442,6 +442,7 @@ mod tests {
             op_id: OpId::new("Zm9vYmFyYmF6cXV4cXV1dQ").unwrap(),
             terminal_id: TerminalId::new("term_1").unwrap(),
             text: PromptText::new("run the tests").unwrap(),
+            expected_draft: None,
         })
     }
 

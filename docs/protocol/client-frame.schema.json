@@ -10,7 +10,18 @@
     },
     "AgentPromptParams": {
       "additionalProperties": false,
+      "description": "For a Claude Code agent, collied replaces an unsent draft in the Mac's input box only\nwhen it equals `expected_draft`; any other draft fails with `draft_changed`.",
       "properties": {
+        "expected_draft": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DraftText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "op_id": {
           "$ref": "#/$defs/OpId"
         },
@@ -214,6 +225,10 @@
         "approve_always",
         "deny"
       ],
+      "type": "string"
+    },
+    "DraftText": {
+      "maxLength": 32768,
       "type": "string"
     },
     "Empty": {
@@ -588,6 +603,22 @@
         },
         "params": {
           "$ref": "#/$defs/Empty"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.draft",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentTarget"
         }
       },
       "required": [

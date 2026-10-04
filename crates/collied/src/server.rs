@@ -923,6 +923,7 @@ impl Session<'_> {
             Request::PaneRead(p) => (drive.read(p, false).await, None),
             Request::AgentWatch(p) => (self.watch(p.terminal_id).await, None),
             Request::TaskOptions(_) => (drive.task_options().await, None),
+            Request::AgentDraft(p) => (drive.draft(&p.terminal_id).await, None),
             Request::AgentPrompt(p) => {
                 let (op_id, d) = (p.op_id.clone(), drive.clone());
                 let op = self.audited(method, target.clone(), async move {
@@ -1271,7 +1272,7 @@ impl Session<'_> {
             Ok(result) => ServerFrame::Result { id, result },
             Err((code, message)) => ServerFrame::Error {
                 id: Some(id),
-                error: ErrorBody { code, message },
+                error: error_body(code, message),
             },
         };
         self.send_frame(&frame).await
@@ -1283,6 +1284,7 @@ impl Session<'_> {
             error: ErrorBody {
                 code,
                 message: message.to_owned(),
+                draft: None,
             },
         };
         self.send_frame(&frame).await;
@@ -1336,6 +1338,7 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::AgentRead(p) | Request::PaneRead(p) => p.terminal_id.as_str(),
         Request::AgentWatch(p) => p.terminal_id.as_ref().map_or("none", |t| t.as_str()),
         Request::AgentPrompt(p) => p.terminal_id.as_str(),
+        Request::AgentDraft(p) => p.terminal_id.as_str(),
         Request::AgentSendKeys(p) => p.terminal_id.as_str(),
         Request::AgentFocus(p) => p.terminal_id.as_str(),
         Request::PaneClose(p) => p.terminal_id.as_str(),
@@ -1450,7 +1453,23 @@ fn outcome(reply: &Reply) -> String {
             terminal_id.as_str()
         ),
         Ok(_) => "ok".to_owned(),
+        Err((ErrorCode::DraftChanged, _)) => code_name(ErrorCode::DraftChanged),
         Err((code, message)) => format!("{}: {message}", code_name(*code)),
+    }
+}
+
+fn error_body(code: ErrorCode, message: String) -> ErrorBody {
+    match code {
+        ErrorCode::DraftChanged => ErrorBody {
+            code,
+            message: drive::DRAFT_CHANGED.to_owned(),
+            draft: Some(message),
+        },
+        _ => ErrorBody {
+            code,
+            message,
+            draft: None,
+        },
     }
 }
 
@@ -1578,5 +1597,16 @@ mod tests {
         let second = &lines()[1];
         assert_eq!(second["target"], "term_1");
         assert_eq!(second["result"], "internal: operation failed");
+    }
+
+    #[test]
+    fn draft_text_reaches_the_phone_but_not_the_audit_log() {
+        let changed: Reply = Err((ErrorCode::DraftChanged, "secret draft".into()));
+        assert_eq!(outcome(&changed), "draft_changed");
+        let body = error_body(ErrorCode::DraftChanged, "secret draft".into());
+        assert_eq!(body.draft.as_deref(), Some("secret draft"));
+        assert!(!body.message.contains("secret"));
+        let other = error_body(ErrorCode::DraftNotCleared, "m".into());
+        assert_eq!((other.message.as_str(), other.draft), ("m", None));
     }
 }

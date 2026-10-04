@@ -261,6 +261,14 @@ validated_string!(
 );
 
 validated_string!(
+    /// Unsent text in the Mac's input box as collied read it; may be empty.
+    DraftText,
+    debug = plain,
+    check = |s| s.len() <= limits::MAX_PROMPT_BYTES && !s.chars().any(|c| (c.is_control() && c != '\n') || is_format(c)),
+    schema = { "maxLength": 32768 }
+);
+
+validated_string!(
     /// 16 random bytes, lowercase hex. Bound to the session that began the upload.
     UploadId,
     debug = plain,
@@ -302,6 +310,16 @@ mod tests {
         assert!(PromptText::new("x\u{9b}201~").is_err());
         assert!(PromptText::new("   ").is_err());
         assert!(PromptText::new("a".repeat(limits::MAX_PROMPT_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn draft_text_may_be_empty_but_not_hostile() {
+        assert!(DraftText::new("").is_ok());
+        assert!(DraftText::new("one\n  two").is_ok());
+        assert!(DraftText::new("a\tb").is_err());
+        assert!(DraftText::new("a\u{1b}[2J").is_err());
+        assert!(DraftText::new("a\u{202e}b").is_err());
+        assert!(DraftText::new("a".repeat(limits::MAX_PROMPT_BYTES + 1)).is_err());
     }
 
     #[test]

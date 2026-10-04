@@ -84,7 +84,9 @@ final class DemoAgentCore: FlockCore {
         read(terminalId)
     }
 
-    func prompt(machineId: String, terminalId: String, text: String) async throws {
+    func agentDraft(machineId: String, terminalId: String) async throws -> String? { nil }
+
+    func prompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws {
         try await Task.sleep(for: .milliseconds(500))
     }
 

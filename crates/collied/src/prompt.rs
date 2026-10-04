@@ -206,7 +206,7 @@ fn trust_wording(text: &str) -> bool {
 }
 
 /// Invisible and bidi formatting characters, as rejected by the protocol's `Label`.
-fn is_format(c: char) -> bool {
+pub fn is_format(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}'
