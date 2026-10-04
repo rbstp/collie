@@ -261,12 +261,31 @@ async fn scenario(
         "a pinned-out Mac must never be contacted"
     );
 
+    println!("a phone the Mac still lists pairs again, as after removing the Mac on the phone");
+    let err = phone_a.pair(uri.clone(), LABEL.into()).await.unwrap_err();
+    assert!(format!("{err}").contains("already paired"), "{err}");
+    phone_a.remove_machine(machine.id.clone()).unwrap();
+    let (machine, _) = pair(&control, phone_a, "Renamed iPhone").await;
+    assert_eq!(machine.node_id, mac_self.stable_id);
+    let Some(Reply::Peers { peers, .. }) = collied::control::request(&control, &Request::PeersList)
+        .await
+        .unwrap()
+    else {
+        panic!("no peers reply");
+    };
+    assert_eq!(peers.len(), 1, "the record is replaced, not added");
+    assert_eq!(
+        (peers[0].stable_id.as_str(), peers[0].label.as_str()),
+        (phone_a_id.as_str(), "Renamed iPhone")
+    );
+    connected_flock(phone_a, &machine.id).await;
+
     println!("revoked phone is closed and then rejected");
     let t = Instant::now();
     let revoked = collied::control::request(
         &control,
         &Request::PeersRevoke {
-            target: LABEL.into(),
+            target: "Renamed iPhone".into(),
         },
     )
     .await

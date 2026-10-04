@@ -58,7 +58,7 @@ On Linux, collied is a systemd user unit, its node is `tag:collie-linux` and the
   - gvisor `tcp/connect.go` + `stack/stack.go`: a SYN reusing a 4-tuple in TIME-WAIT is handed to the forwarder instead of dropped (was the 63 s dial stall).
   - tailscale.com `wgengine/netstack/netstack.go`: close link queues before aborting endpoints so `tsnet.Server.Close` cannot hang.
 - Gate per connection, before the WebSocket upgrade: whois(peer) must show an untagged, not shared-in node owned by the owner user. The owner is `[tailnet] owner_user_id` in `collied.toml` when set; otherwise the first phone confirmed on the machine (`collied pair`, y/N showing node, StableID and login) fixes it in `peers.json`, and every later peer must match. Then:
-  - paired `StableID` → full session (`hello` first, then the allowlist);
+  - paired `StableID` → full session (`hello` first, then the allowlist). While a pairing window is open, `pair.complete` from a paired phone goes through the same code and y/N confirmation as a new phone and replaces its record (a phone that removed the machine pairs again without a revoke);
   - unpaired, while a locally opened pairing window is active → pairing-only session: `hello` and `pair.complete` only, one attempt, then close;
   - otherwise answer a fixed `403` without reading the request, close, and log; the phone treats 403 as final and stops retrying.
   - At most 4 live sessions per node: a fifth evicts that node's oldest (a phone reconnecting after iOS killed its sockets is never locked out). Global cap 64. Revocation cancels in-flight replies and re-checks authorization before every frame.
