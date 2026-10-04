@@ -709,22 +709,7 @@ fn mode(path: &Path) -> u32 {
 }
 
 fn kernel_tcp_listeners() -> Vec<String> {
-    let out = Command::new("lsof")
-        .args([
-            "-nP",
-            "-a",
-            "-p",
-            &std::process::id().to_string(),
-            "-iTCP",
-            "-sTCP:LISTEN",
-        ])
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .skip(1)
-        .map(str::to_owned)
-        .collect()
+    tailnet::kernel_tcp_listeners(std::process::id()).expect("kernel TCP listeners")
 }
 
 struct MockHerdr {
