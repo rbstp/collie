@@ -984,15 +984,35 @@ pub fn import(config_path: &Path, explicit: bool, path: &Path) -> anyhow::Result
             let item = credential_item(&cfg.key_id);
             match read_key(&cred_path) {
                 Ok((existing, _)) => {
-                    let stored = creds::decrypt(&name, &existing)
-                        .with_context(|| format!("decrypt the existing {item}"))?;
+                    let stored = creds::decrypt(&name, &existing).map_err(|e| {
+                        anyhow::anyhow!(
+                            "{item} no longer decrypts on this machine ({e:#}): remove it and import again"
+                        )
+                    })?;
                     anyhow::ensure!(
                         stored.as_slice() == key.as_slice(),
                         "{item} holds a different key; remove it and import again"
                     );
-                    println!("{item} already exists");
+                    drop(stored);
+                    let (old, new) = (creds::seal(&existing), creds::seal(&credential));
+                    if new.has_tpm2() && !old.has_tpm2() {
+                        let check = creds::decrypt(&name, &credential)
+                            .context("decrypt the new credential")?;
+                        anyhow::ensure!(
+                            check.as_slice() == key.as_slice(),
+                            "the new credential decrypts to a different key"
+                        );
+                        creds::store(&cred_path, &credential)?;
+                        println!(
+                            "sealed {item} again: {} instead of {}",
+                            new.describe(),
+                            old.describe()
+                        );
+                    } else {
+                        println!("{item} already exists ({})", old.describe());
+                    }
                 }
-                Err(_) if !cred_path.exists() && cred_path.symlink_metadata().is_err() => {
+                Err(_) if cred_path.symlink_metadata().is_err() => {
                     let check =
                         creds::decrypt(&name, &credential).context("decrypt the new credential")?;
                     anyhow::ensure!(
@@ -1014,6 +1034,13 @@ pub fn import(config_path: &Path, explicit: bool, path: &Path) -> anyhow::Result
             ApnsKey::SystemdCreds
         }
         Err(e) => {
+            // Never trade a credential that exists for a plaintext copy on a passing error.
+            if cred_path.symlink_metadata().is_ok() {
+                return Err(e.context(format!(
+                    "{} exists but systemd-creds failed; not falling back to a plaintext file",
+                    credential_item(&cfg.key_id)
+                )));
+            }
             let dest = apns_dir.join(format!("AuthKey_{}.p8", cfg.key_id));
             println!("systemd-creds is unavailable ({e:#})");
             println!(

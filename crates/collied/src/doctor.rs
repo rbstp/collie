@@ -7,6 +7,9 @@ use security_framework::os::macos::code_signing::{Flags, SecCode, SecRequirement
 #[cfg(target_os = "macos")]
 use security_framework::os::macos::keychain::SecKeychain;
 
+#[cfg(target_os = "macos")]
+use crate::keychain;
+
 use crate::config::{self, ApnsConfig, ApnsKey, Config};
 use crate::control::{self, Reply, Request};
 use crate::{herdr, push};
@@ -370,24 +373,29 @@ async fn check_daemon(r: &mut Report, data_dir: &Path) {
     } else {
         Status::Fail
     };
-    let tagged = info.tags.iter().any(|t| t == crate::daemon::NODE_TAG);
-    r.line(
-        if tagged { Status::Ok } else { Status::Fail },
-        "tag",
-        if tagged {
-            format!("node tagged {}", crate::daemon::NODE_TAG)
-        } else {
+    let tag = crate::daemon::NODE_TAG;
+    match info.tags.as_deref() {
+        None => r.line(
+            Status::Warn,
+            "tag",
+            "not reported: the node status failed, or the daemon predates this check (restart it)",
+        ),
+        Some(tags) if tags.iter().any(|t| t == tag) => {
+            r.line(Status::Ok, "tag", format!("node tagged {tag}"))
+        }
+        Some(tags) => r.line(
+            Status::Fail,
+            "tag",
             format!(
-                "node not tagged {} (tags: {}): run collied login as a tag owner",
-                crate::daemon::NODE_TAG,
-                if info.tags.is_empty() {
+                "node not tagged {tag} (tags: {}); see collied login",
+                if tags.is_empty() {
                     "none".to_owned()
                 } else {
-                    info.tags.join(", ")
+                    tags.join(", ")
                 }
-            )
-        },
-    );
+            ),
+        ),
+    }
     r.line(
         node_status,
         "daemon",

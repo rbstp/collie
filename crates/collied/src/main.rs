@@ -177,10 +177,10 @@ async fn status(control_path: &Path) -> anyhow::Result<()> {
             println!("peers:     {}", s.peers);
             println!(
                 "tags:      {}",
-                if s.tags.is_empty() {
-                    "(none)".to_owned()
-                } else {
-                    s.tags.join(", ")
+                match s.tags.as_deref() {
+                    None => "(not reported)".to_owned(),
+                    Some([]) => "(none)".to_owned(),
+                    Some(t) => t.join(", "),
                 }
             );
             println!(
@@ -189,6 +189,8 @@ async fn status(control_path: &Path) -> anyhow::Result<()> {
             );
             if let Some(flock) = s.flock {
                 print_agents(&flock);
+            } else if s.flock_too_large {
+                println!("agents:    too many to list here");
             }
             Ok(())
         }

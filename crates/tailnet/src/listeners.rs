@@ -59,8 +59,19 @@ mod imp {
         let mut found = Vec::new();
         for table in ["tcp", "tcp6"] {
             let path = format!("/proc/{pid}/net/{table}");
-            let text = std::fs::read_to_string(&path)
-                .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?;
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                // No IPv6 stack (ipv6.disable=1, or no CONFIG_IPV6): no tcp6 table, and
+                // no AF_INET6 socket can exist either.
+                Err(e)
+                    if table == "tcp6"
+                        && e.kind() == io::ErrorKind::NotFound
+                        && !std::path::Path::new("/proc/sys/net/ipv6").exists() =>
+                {
+                    continue;
+                }
+                Err(e) => return Err(io::Error::new(e.kind(), format!("{path}: {e}"))),
+            };
             found.extend(
                 listening(&text, &inodes, table).map_err(|e| {
                     io::Error::new(io::ErrorKind::InvalidData, format!("{path}: {e}"))

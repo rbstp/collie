@@ -67,7 +67,7 @@ pub async fn login(
         match st.backend_state {
             BackendState::Running if st.self_node.is_some() => {
                 print_identity(&st);
-                return check_tag(&st);
+                return check_tag(&st, data_dir);
             }
             BackendState::NeedsMachineAuth if !warned_approval => {
                 println!("This machine needs approval by a tailnet admin; waiting.");
@@ -91,16 +91,23 @@ pub async fn login(
 }
 
 /// A node without the tag is user-owned: the phone refuses it, and the policy grant on
-/// port 8457 does not cover it.
-fn check_tag(st: &Status) -> anyhow::Result<()> {
-    let tagged = st
+/// port 8457 does not cover it. Logging in again does not change the tags of a node that
+/// is already registered, so the way out is a new node.
+fn check_tag(st: &Status, data_dir: &Path) -> anyhow::Result<()> {
+    let tags = st
         .self_node
         .as_ref()
-        .and_then(|n| n.tags.as_ref())
-        .is_some_and(|t| t.iter().any(|t| t == NODE_TAG));
+        .and_then(|n| n.tags.clone())
+        .unwrap_or_default();
     anyhow::ensure!(
-        tagged,
-        "this node is not tagged {NODE_TAG}: add it to tagOwners in the tailnet policy, log in as a tag owner (docs/tailnet.md), then run collied login again"
+        tags.iter().any(|t| t == NODE_TAG),
+        "this node is registered without {NODE_TAG} (tags: {}). Remove it in the Tailscale admin console (Machines), delete {}, make sure your user is a tag owner of {NODE_TAG} (docs/tailnet.md), then run collied login; phones must pair again",
+        if tags.is_empty() {
+            "none".to_owned()
+        } else {
+            tags.join(", ")
+        },
+        data_dir.join(config::TSNET_DIR).display()
     );
     Ok(())
 }
@@ -136,7 +143,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
     loop {
         let st = status(&node)?;
         if st.backend_state == BackendState::Running && st.self_node.is_some() {
-            check_tag(&st)?;
+            check_tag(&st, data_dir)?;
             break;
         }
         anyhow::ensure!(

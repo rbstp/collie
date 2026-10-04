@@ -252,13 +252,18 @@ impl State {
         let (backend_state, tags) = match tokio::task::spawn_blocking(move || node.status()).await {
             Ok(Ok(st)) => (
                 format!("{:?}", st.backend_state),
-                st.self_node.and_then(|n| n.tags).unwrap_or_default(),
+                Some(st.self_node.and_then(|n| n.tags).unwrap_or_default()),
             ),
-            Ok(Err(e)) => (format!("error: {e}"), Vec::new()),
-            Err(e) => (format!("error: {e}"), Vec::new()),
+            Ok(Err(e)) => (format!("error: {e}"), None),
+            Err(e) => (format!("error: {e}"), None),
         };
-        let herdr_version = herdr::ping(&self.herdr).await.ok().map(|p| p.version);
-        let flock = herdr::session_snapshot(&self.herdr).await.ok().map(|snap| {
+        // Concurrent, so a wedged herdr costs one herdr timeout, under the control timeout.
+        let (pong, snap) = tokio::join!(
+            herdr::ping(&self.herdr),
+            herdr::session_snapshot(&self.herdr)
+        );
+        let herdr_version = pong.ok().map(|p| p.version);
+        let flock = snap.ok().map(|snap| {
             let mut tracker = lock(&self.tracker);
             let f = flock::map_flock(
                 &snap,
@@ -285,7 +290,9 @@ impl State {
             herdr_version,
             tags,
             flock,
+            flock_too_large: false,
         }
+        .fit()
     }
 
     /// Closes the window and every pairing-only session it admitted, so a session cannot

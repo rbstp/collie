@@ -8,8 +8,6 @@ use std::process::{Command, Stdio};
 use anyhow::Context;
 use zeroize::Zeroizing;
 
-const SYSTEMD_CREDS: &str = "/usr/bin/systemd-creds";
-const SYSTEMD_ANALYZE: &str = "/usr/bin/systemd-analyze";
 const MAX_CREDENTIAL: u64 = 64 * 1024;
 
 pub fn name(key_id: &str) -> String {
@@ -33,6 +31,10 @@ pub enum Seal {
 }
 
 impl Seal {
+    pub fn has_tpm2(self) -> bool {
+        matches!(self, Seal::HostAndTpm2 | Seal::Tpm2)
+    }
+
     pub fn describe(self) -> &'static str {
         match self {
             Seal::Host => "host key only (no usable TPM2)",
@@ -95,7 +97,7 @@ pub fn seal(credential: &[u8]) -> Seal {
 
 /// Whether systemd reports a fully usable TPM2 (firmware, driver, subsystem, libraries).
 pub fn has_tpm2() -> bool {
-    Command::new(SYSTEMD_ANALYZE)
+    Command::new(crate::system_bin("systemd-analyze"))
         .args(["has-tpm2", "--quiet"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -104,17 +106,22 @@ pub fn has_tpm2() -> bool {
 }
 
 fn run(args: &[&str], input: &[u8]) -> anyhow::Result<Zeroizing<Vec<u8>>> {
-    let mut child = Command::new(SYSTEMD_CREDS)
+    anyhow::ensure!(
+        input.len() as u64 <= MAX_CREDENTIAL,
+        "input too large for systemd-creds"
+    );
+    let bin = crate::system_bin("systemd-creds");
+    let mut child = Command::new(&bin)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("run {SYSTEMD_CREDS}"))?;
+        .with_context(|| format!("run {}", bin.display()))?;
     let mut stdin = child.stdin.take().context("systemd-creds stdin")?;
-    let mut stdout = child.stdout.take().context("systemd-creds stdout")?;
+    let stdout = child.stdout.take().context("systemd-creds stdout")?;
     let mut stderr = child.stderr.take().context("systemd-creds stderr")?;
-    let writer = std::thread::scope(|s| -> anyhow::Result<_> {
+    let (out, wrote, err) = std::thread::scope(|s| -> anyhow::Result<_> {
         let w = s.spawn(move || stdin.write_all(input));
         let e = s.spawn(move || {
             let mut err = String::new();
@@ -122,26 +129,31 @@ fn run(args: &[&str], input: &[u8]) -> anyhow::Result<Zeroizing<Vec<u8>>> {
             err
         });
         let mut out = Zeroizing::new(Vec::new());
-        (&mut stdout)
-            .take(MAX_CREDENTIAL + 1)
-            .read_to_end(&mut out)?;
+        let read = stdout.take(MAX_CREDENTIAL + 1).read_to_end(&mut out);
+        // Past the cap the child may block on a full pipe and never close stderr.
+        if read.is_err() || out.len() as u64 > MAX_CREDENTIAL {
+            let _ = child.kill();
+        }
         let wrote = w.join().map_err(|_| anyhow::anyhow!("writer panicked"))?;
         let err = e.join().unwrap_or_default();
+        read?;
         Ok((out, wrote, err))
     })?;
-    let (out, wrote, err) = writer;
     let status = child.wait()?;
-    anyhow::ensure!(
-        status.success(),
-        "systemd-creds {}: {} ({status})",
-        args.first().copied().unwrap_or_default(),
-        err.trim()
-    );
-    wrote.context("write to systemd-creds")?;
     anyhow::ensure!(
         out.len() as u64 <= MAX_CREDENTIAL,
         "systemd-creds output too large"
     );
+    anyhow::ensure!(
+        status.success(),
+        "systemd-creds {}: {} ({status})",
+        args.iter()
+            .find(|a| !a.starts_with('-'))
+            .copied()
+            .unwrap_or_default(),
+        err.trim()
+    );
+    wrote.context("write to systemd-creds")?;
     Ok(out)
 }
 

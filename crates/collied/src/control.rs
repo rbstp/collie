@@ -14,7 +14,7 @@ use crate::pairing::{self, WINDOW_TTL};
 use crate::peers::{self, Peer};
 use crate::server::State;
 
-const MAX_LINE: u64 = 64 * 1024;
+pub(crate) const MAX_LINE: u64 = 64 * 1024;
 pub const CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,12 +37,28 @@ pub struct StatusInfo {
     pub sessions: usize,
     pub peers: usize,
     pub herdr_version: Option<String>,
-    /// The node's own tags, as the tailnet reports them.
+    /// The node's own tags, as the tailnet reports them; None when the node status failed
+    /// or the daemon predates this field.
     #[serde(default)]
-    pub tags: Vec<String>,
-    /// What the phone would see; None when herdr is unreachable.
+    pub tags: Option<Vec<String>>,
+    /// What the phone would see; None when herdr is unreachable or it would not fit.
     #[serde(default)]
     pub flock: Option<StatusFlock>,
+    #[serde(default)]
+    pub flock_too_large: bool,
+}
+
+impl StatusInfo {
+    /// Drops the flock when the reply would not fit on one control line, so the status
+    /// request, also the liveness probe, never fails on a large herdr session.
+    pub(crate) fn fit(mut self) -> Self {
+        let len = serde_json::to_vec(&self).map_or(usize::MAX, |v| v.len());
+        if len as u64 >= MAX_LINE - 1024 {
+            self.flock = None;
+            self.flock_too_large = true;
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -425,12 +441,51 @@ mod tests {
                 sessions: 0,
                 peers: 0,
                 herdr_version: None,
-                tags: Vec::new(),
+                tags: None,
                 flock: None,
+                flock_too_large: false,
             };
             write_msg(&mut w, &Reply::Status(info)).await.unwrap();
         });
         assert!(bind(&path).await.is_err());
+    }
+
+    #[test]
+    fn status_drops_a_flock_that_would_not_fit() {
+        let workspace = |i: usize| {
+            serde_json::json!({"workspace_id": format!("w{i}"), "label": "x".repeat(200),
+                "number": i, "status": "idle", "cwd": null})
+        };
+        let flock = |n: usize| -> StatusFlock {
+            serde_json::from_value(serde_json::json!({
+                "workspaces": (0..n).map(workspace).collect::<Vec<_>>(), "agents": []
+            }))
+            .unwrap()
+        };
+        let info = |n| StatusInfo {
+            pid: 1,
+            backend_state: "Running".into(),
+            dns_name: "m".into(),
+            node_id: "n".into(),
+            port: 1,
+            sessions: 0,
+            peers: 0,
+            herdr_version: None,
+            tags: Some(vec!["tag:collie-linux".into()]),
+            flock: Some(flock(n)),
+            flock_too_large: false,
+        };
+        let small = info(3).fit();
+        assert!(small.flock.is_some() && !small.flock_too_large);
+        let big = info(1000).fit();
+        assert!(big.flock.is_none() && big.flock_too_large);
+        assert!(serde_json::to_vec(&big).unwrap().len() < MAX_LINE as usize);
+        // A reply from a daemon that predates tags and flock still decodes.
+        let old: StatusInfo = serde_json::from_str(
+            r#"{"pid":1,"backend_state":"Running","dns_name":"m","node_id":"n","port":1,"sessions":0,"peers":0,"herdr_version":null}"#,
+        )
+        .unwrap();
+        assert_eq!(old.tags, None);
     }
 
     #[test]

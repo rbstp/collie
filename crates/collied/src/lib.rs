@@ -28,6 +28,19 @@ pub mod service;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::Path;
 
+/// A systemd tool by absolute path (never PATH): `/usr/bin`, then `/bin` (Debian
+/// without merged /usr), then NixOS's system profile.
+#[cfg(target_os = "linux")]
+pub(crate) fn system_bin(name: &str) -> std::path::PathBuf {
+    let candidates =
+        ["/usr/bin", "/bin", "/run/current-system/sw/bin"].map(|d| Path::new(d).join(name));
+    candidates
+        .iter()
+        .find(|p| p.is_file())
+        .unwrap_or(&candidates[0])
+        .clone()
+}
+
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

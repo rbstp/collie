@@ -9,7 +9,6 @@ use anyhow::Context;
 use crate::config;
 
 pub const UNIT: &str = "collied.service";
-const SYSTEMCTL: &str = "/usr/bin/systemctl";
 
 /// The variables collied resolves its directories from, pinned to what this CLI sees,
 /// so the daemon uses the same data dir whatever the user manager's environment holds.
@@ -135,7 +134,7 @@ WantedBy=default.target
 }
 
 fn systemctl(args: &[&str]) -> anyhow::Result<bool> {
-    let status = Command::new(SYSTEMCTL)
+    let status = Command::new(crate::system_bin("systemctl"))
         .arg("--user")
         .args(args)
         .status()
@@ -144,7 +143,7 @@ fn systemctl(args: &[&str]) -> anyhow::Result<bool> {
 }
 
 fn quiet(args: &[&str]) -> anyhow::Result<bool> {
-    let status = Command::new(SYSTEMCTL)
+    let status = Command::new(crate::system_bin("systemctl"))
         .arg("--user")
         .args(args)
         .stdout(Stdio::null())
@@ -161,7 +160,7 @@ fn active() -> anyhow::Result<bool> {
 /// Where the user manager loads the unit from, so a unit written where the manager does
 /// not look fails here instead of silently never starting.
 fn fragment() -> anyhow::Result<String> {
-    let out = Command::new(SYSTEMCTL)
+    let out = Command::new(crate::system_bin("systemctl"))
         .args(["--user", "show", "--property=FragmentPath", "--value", UNIT])
         .stderr(Stdio::null())
         .output()
@@ -265,7 +264,17 @@ pub fn uninstall() -> anyhow::Result<()> {
     let path = unit_path()?;
     let was_active = active()?;
     if path.exists() {
-        let _ = systemctl(&["disable", "--now", UNIT]);
+        anyhow::ensure!(
+            systemctl(&["disable", "--now", UNIT])?,
+            "systemctl --user disable --now {UNIT} failed; {} left in place",
+            path.display()
+        );
+    } else if was_active {
+        anyhow::bail!(
+            "{UNIT} is running but not installed at {}: the user manager loads it from {:?}",
+            path.display(),
+            fragment().unwrap_or_default()
+        );
     }
     match std::fs::remove_file(&path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
@@ -350,7 +359,15 @@ mod tests {
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr);
-        if stderr.contains("Failed to connect") || stderr.contains("bus") {
+        if [
+            "Failed to connect",
+            "bus",
+            "Failed to initialize manager",
+            "RuntimeDirectory",
+        ]
+        .iter()
+        .any(|m| stderr.contains(m))
+        {
             println!("skipped: no user manager ({stderr})");
             return;
         }
