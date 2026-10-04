@@ -66,7 +66,7 @@ final class FlockModel {
                 group.addTask {
                     do {
                         let flock = try await core.flock(machineId: machine.id)
-                        return MachineFlockEntry(machine: machine, flock: flock, error: flock.link == .connected ? nil : flock.lastError)
+                        return MachineFlockEntry(machine: machine, flock: flock, error: [.connected, .connecting].contains(flock.link) ? nil : flock.lastError)
                     } catch {
                         return MachineFlockEntry(
                             machine: machine,

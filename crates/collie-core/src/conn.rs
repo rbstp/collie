@@ -26,6 +26,12 @@ const DIAL_ATTEMPT: Duration = Duration::from_secs(5);
 const DIAL_BUDGET: Duration = Duration::from_secs(20);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const FOREGROUND_RECONNECT: Duration = Duration::from_secs(10);
+const RESUME_GRACE: Duration = Duration::from_secs(10);
+const GRACE_BACKOFF: [Duration; 3] = [
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+];
 const QUEUE: usize = 8;
 const MUTATION_ATTEMPTS: usize = 3;
 
@@ -137,6 +143,16 @@ pub enum LinkPhase {
 pub struct Link {
     pub phase: LinkPhase,
     pub last_error: Option<String>,
+    resumed: Option<Instant>,
+}
+
+impl Link {
+    fn set(&mut self, phase: LinkPhase, error: Option<String>) {
+        self.phase = phase;
+        if error.is_some() || phase == LinkPhase::Connected {
+            self.last_error = error;
+        }
+    }
 }
 
 pub struct Shared {
@@ -146,11 +162,20 @@ pub struct Shared {
 
 impl Shared {
     fn set(&self, phase: LinkPhase, error: Option<String>) {
+        lock(&self.link).set(phase, error);
+    }
+
+    /// The session may have failed before the app saw the resume: that failure gets the
+    /// grace too, so a waiting link goes back to connecting and must be retried at once.
+    fn resume(&self, now: Instant) -> bool {
         let mut link = lock(&self.link);
-        link.phase = phase;
-        if error.is_some() || phase == LinkPhase::Connected {
-            link.last_error = error;
+        link.resumed = Some(now);
+        if link.phase != LinkPhase::Waiting {
+            return false;
         }
+        link.phase = LinkPhase::Connecting;
+        link.last_error = None;
+        true
     }
 }
 
@@ -191,6 +216,7 @@ impl Conn {
             link: Mutex::new(Link {
                 phase: LinkPhase::Connecting,
                 last_error: None,
+                resumed: None,
             }),
         });
         let (requests, rx) = mpsc::channel(QUEUE);
@@ -241,7 +267,8 @@ impl Conn {
     /// iOS suspends sockets without closing them: after a long background period the
     /// connection is assumed dead, after a short one it is probed.
     pub fn resume(self: &Arc<Self>, background: Duration) {
-        if background >= FOREGROUND_RECONNECT {
+        let waiting = self.shared.resume(Instant::now());
+        if waiting || background >= FOREGROUND_RECONNECT {
             self.reconnect_now();
             return;
         }
@@ -309,7 +336,7 @@ async fn supervise(
     mut reconnect: watch::Receiver<u64>,
     wake: Arc<Notify>,
 ) {
-    let mut attempt = 0;
+    let mut backoff = Backoff::default();
     loop {
         let running = lock(&node).clone();
         let Some(node) = running else {
@@ -339,24 +366,61 @@ async fn supervise(
                     })
                     .await;
                 if since.elapsed() >= RESET_AFTER {
-                    attempt = 0;
+                    backoff.attempt = 0;
                 }
                 ConnectError::Session(end)
             }
-            Err(ConnectError::Offline) => {
-                shared.set(LinkPhase::Offline, None);
-                wait(&wake, OFFLINE_POLL).await;
-                continue;
-            }
             Err(e) => e,
         };
-        if err.is_auth() {
-            shared.set(LinkPhase::Stopped, Some(err.to_string()));
+        let Some(delay) = backoff.failed(&shared, &err, Instant::now()) else {
             return;
+        };
+        wait(&wake, delay).await;
+    }
+}
+
+/// After a foreground resume the node needs a moment to rebuild its paths, and the old
+/// session ends (or is ended) as `Closed`. Failures within `RESUME_GRACE` retry quickly
+/// and stay `Connecting` without an error; auth failures still stop at once. A resume
+/// also restarts the normal backoff.
+#[derive(Default)]
+struct Backoff {
+    attempt: usize,
+    resumed: Option<Instant>,
+    grace_attempt: usize,
+}
+
+impl Backoff {
+    /// Publishes the failure on `shared` and returns the delay before the next attempt,
+    /// or `None` when the supervisor must stop.
+    fn failed(&mut self, shared: &Shared, err: &ConnectError, now: Instant) -> Option<Duration> {
+        let mut link = lock(&shared.link);
+        if err.is_auth() {
+            link.set(LinkPhase::Stopped, Some(err.to_string()));
+            return None;
         }
-        shared.set(LinkPhase::Waiting, Some(err.to_string()));
-        wait(&wake, BACKOFF[attempt.min(BACKOFF.len() - 1)]).await;
-        attempt += 1;
+        if link.resumed != self.resumed {
+            self.resumed = link.resumed;
+            self.attempt = 0;
+            self.grace_attempt = 0;
+        }
+        if link
+            .resumed
+            .is_some_and(|at| now.saturating_duration_since(at) < RESUME_GRACE)
+        {
+            link.set(LinkPhase::Connecting, None);
+            let delay = GRACE_BACKOFF[self.grace_attempt.min(GRACE_BACKOFF.len() - 1)];
+            self.grace_attempt += 1;
+            return Some(delay);
+        }
+        if matches!(err, ConnectError::Offline) {
+            link.set(LinkPhase::Offline, None);
+            return Some(OFFLINE_POLL);
+        }
+        link.set(LinkPhase::Waiting, Some(err.to_string()));
+        let delay = BACKOFF[self.attempt.min(BACKOFF.len() - 1)];
+        self.attempt += 1;
+        Some(delay)
     }
 }
 
@@ -449,6 +513,147 @@ mod tests {
         ));
         drop(tx);
         assert_eq!(task.await.unwrap().len(), MUTATION_ATTEMPTS);
+    }
+
+    fn shared() -> Shared {
+        Shared {
+            flock: Mutex::default(),
+            link: Mutex::new(Link {
+                phase: LinkPhase::Connected,
+                last_error: None,
+                resumed: None,
+            }),
+        }
+    }
+
+    fn link(shared: &Shared) -> (LinkPhase, Option<String>) {
+        let link = lock(&shared.link);
+        (link.phase, link.last_error.clone())
+    }
+
+    fn closed() -> ConnectError {
+        ConnectError::Session(SessionError::Closed)
+    }
+
+    #[test]
+    fn resume_hides_a_transient_failure() {
+        let shared = shared();
+        let mut backoff = Backoff::default();
+        let t0 = Instant::now();
+        shared.resume(t0);
+        assert_eq!(
+            backoff.failed(&shared, &closed(), t0 + Duration::from_millis(100)),
+            Some(GRACE_BACKOFF[0])
+        );
+        assert_eq!(link(&shared), (LinkPhase::Connecting, None));
+        shared.set(LinkPhase::Connected, None);
+        assert_eq!(link(&shared), (LinkPhase::Connected, None));
+        assert_eq!(backoff.attempt, 0, "the normal backoff is untouched");
+    }
+
+    #[test]
+    fn grace_retries_quickly_then_settles() {
+        let shared = shared();
+        let mut backoff = Backoff::default();
+        let t0 = Instant::now();
+        shared.resume(t0);
+        let delays: Vec<_> = (0..5)
+            .map(|i| backoff.failed(&shared, &closed(), t0 + Duration::from_secs(i)))
+            .collect();
+        let ms = |ms| Some(Duration::from_millis(ms));
+        assert_eq!(
+            delays,
+            vec![ms(500), ms(1000), ms(2000), ms(2000), ms(2000)]
+        );
+        assert_eq!(link(&shared), (LinkPhase::Connecting, None));
+
+        shared.resume(t0 + Duration::from_secs(5));
+        assert_eq!(
+            backoff.failed(&shared, &closed(), t0 + Duration::from_secs(6)),
+            ms(500),
+            "a new resume restarts the grace backoff"
+        );
+    }
+
+    #[test]
+    fn failures_after_the_grace_window_wait_with_the_error() {
+        let shared = shared();
+        let mut backoff = Backoff::default();
+        let t0 = Instant::now();
+        shared.resume(t0);
+        backoff.failed(&shared, &closed(), t0);
+        let late = t0 + RESUME_GRACE;
+        assert_eq!(backoff.failed(&shared, &closed(), late), Some(BACKOFF[0]));
+        assert_eq!(
+            link(&shared),
+            (LinkPhase::Waiting, Some("connection closed".into()))
+        );
+        assert_eq!(backoff.failed(&shared, &closed(), late), Some(BACKOFF[1]));
+    }
+
+    #[test]
+    fn without_a_resume_failures_wait_as_before() {
+        let shared = shared();
+        let mut backoff = Backoff::default();
+        let now = Instant::now();
+        assert_eq!(backoff.failed(&shared, &closed(), now), Some(BACKOFF[0]));
+        assert_eq!(
+            link(&shared),
+            (LinkPhase::Waiting, Some("connection closed".into()))
+        );
+        assert_eq!(
+            backoff.failed(&shared, &ConnectError::Offline, now),
+            Some(OFFLINE_POLL)
+        );
+        assert_eq!(link(&shared).0, LinkPhase::Offline);
+    }
+
+    #[test]
+    fn failure_just_before_resume_gets_the_grace() {
+        let shared = shared();
+        let mut backoff = Backoff::default();
+        let t0 = Instant::now();
+        assert_eq!(backoff.failed(&shared, &closed(), t0), Some(BACKOFF[0]));
+        assert_eq!(
+            link(&shared),
+            (LinkPhase::Waiting, Some("connection closed".into()))
+        );
+        assert!(shared.resume(t0), "a waiting link is retried at once");
+        assert_eq!(link(&shared), (LinkPhase::Connecting, None));
+        assert_eq!(
+            backoff.failed(&shared, &closed(), t0),
+            Some(GRACE_BACKOFF[0])
+        );
+        assert_eq!(link(&shared), (LinkPhase::Connecting, None));
+        assert_eq!(
+            backoff.failed(&shared, &closed(), t0 + RESUME_GRACE),
+            Some(BACKOFF[0]),
+            "the resume restarted the normal backoff"
+        );
+    }
+
+    #[test]
+    fn offline_node_during_grace_keeps_connecting() {
+        let shared = shared();
+        let mut backoff = Backoff::default();
+        let t0 = Instant::now();
+        shared.resume(t0);
+        assert_eq!(
+            backoff.failed(&shared, &ConnectError::Offline, t0),
+            Some(GRACE_BACKOFF[0])
+        );
+        assert_eq!(link(&shared), (LinkPhase::Connecting, None));
+    }
+
+    #[test]
+    fn auth_failure_during_grace_stops_at_once() {
+        let shared = shared();
+        let mut backoff = Backoff::default();
+        let t0 = Instant::now();
+        shared.resume(t0);
+        let err = ConnectError::Session(SessionError::NotPaired);
+        assert_eq!(backoff.failed(&shared, &err, t0), None);
+        assert_eq!(link(&shared), (LinkPhase::Stopped, Some(err.to_string())));
     }
 
     #[tokio::test]
