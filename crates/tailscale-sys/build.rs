@@ -24,6 +24,7 @@ fn main() {
         "MACOSX_DEPLOYMENT_TARGET",
         "IPHONEOS_DEPLOYMENT_TARGET",
         "GO",
+        "CC",
     ] {
         println!("cargo:rerun-if-env-changed={var}");
     }
@@ -68,7 +69,7 @@ fn main() {
         .env("GOARCH", go.goarch)
         .env("GOTOOLCHAIN", "local")
         .env("GOFLAGS", "-mod=vendor")
-        .env("CC", xcrun(go.sdk, &["-f", "clang"]))
+        .env("CC", go.cc())
         .env("CGO_CFLAGS", go.cflags())
         .env("CGO_LDFLAGS", go.cflags())
         .args([
@@ -85,14 +86,16 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=tailscale");
-    let mut frameworks = vec!["CoreFoundation", "Security"];
-    if go.goos == "darwin" {
-        frameworks.push("IOKit");
+    if go.apple.is_some() {
+        let mut frameworks = vec!["CoreFoundation", "Security"];
+        if go.goos == "darwin" {
+            frameworks.push("IOKit");
+        }
+        for fw in frameworks {
+            println!("cargo:rustc-link-lib=framework={fw}");
+        }
+        println!("cargo:rustc-link-lib=resolv");
     }
-    for fw in frameworks {
-        println!("cargo:rustc-link-lib=framework={fw}");
-    }
-    println!("cargo:rustc-link-lib=resolv");
     println!("cargo:archive={}", archive.display());
 
     bindgen::Builder::default()
@@ -108,6 +111,10 @@ fn main() {
 struct GoTarget {
     goos: &'static str,
     goarch: &'static str,
+    apple: Option<AppleSdk>,
+}
+
+struct AppleSdk {
     sdk: &'static str,
     clang_target: String,
 }
@@ -116,36 +123,51 @@ impl GoTarget {
     fn from_rust(target: &str) -> Self {
         let macos = env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "14.0".into());
         let ios = env::var("IPHONEOS_DEPLOYMENT_TARGET").unwrap_or_else(|_| "26.0".into());
-        let (goos, goarch, sdk, clang_target) = match target {
+        let apple = |sdk, clang_target| Some(AppleSdk { sdk, clang_target });
+        let (goos, goarch, apple) = match target {
             "aarch64-apple-darwin" => (
                 "darwin",
                 "arm64",
-                "macosx",
-                format!("arm64-apple-macos{macos}"),
+                apple("macosx", format!("arm64-apple-macos{macos}")),
             ),
-            "aarch64-apple-ios" => ("ios", "arm64", "iphoneos", format!("arm64-apple-ios{ios}")),
+            "aarch64-apple-ios" => (
+                "ios",
+                "arm64",
+                apple("iphoneos", format!("arm64-apple-ios{ios}")),
+            ),
             "aarch64-apple-ios-sim" => (
                 "ios",
                 "arm64",
-                "iphonesimulator",
-                format!("arm64-apple-ios{ios}-simulator"),
+                apple("iphonesimulator", format!("arm64-apple-ios{ios}-simulator")),
             ),
+            "x86_64-unknown-linux-gnu" => ("linux", "amd64", None),
+            "aarch64-unknown-linux-gnu" => ("linux", "arm64", None),
             other => panic!("tailscale-sys: unsupported target {other}"),
         };
         Self {
             goos,
             goarch,
-            sdk,
-            clang_target,
+            apple,
+        }
+    }
+
+    /// Linux takes `CC` from the environment (a cross compiler for a foreign target).
+    fn cc(&self) -> String {
+        match &self.apple {
+            Some(a) => xcrun(a.sdk, &["-f", "clang"]),
+            None => env::var("CC").unwrap_or_else(|_| "cc".into()),
         }
     }
 
     fn cflags(&self) -> String {
-        format!(
-            "-target {} -isysroot {}",
-            self.clang_target,
-            xcrun(self.sdk, &["--show-sdk-path"])
-        )
+        match &self.apple {
+            Some(a) => format!(
+                "-target {} -isysroot {}",
+                a.clang_target,
+                xcrun(a.sdk, &["--show-sdk-path"])
+            ),
+            None => String::new(),
+        }
     }
 }
 

@@ -13,6 +13,9 @@ use tailscale_sys as sys;
 use tokio::io::unix::AsyncFd;
 use zeroize::Zeroizing;
 
+mod listeners;
+pub use listeners::kernel_tcp_listeners;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("tailscale: {0}")]

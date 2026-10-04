@@ -419,22 +419,7 @@ fn dial_one(node: &Node, target: &SocketAddr, token: &str) -> Result<(), String>
 }
 
 fn kernel_tcp_listeners() -> Vec<String> {
-    let out = std::process::Command::new("lsof")
-        .args([
-            "-nP",
-            "-a",
-            "-p",
-            &std::process::id().to_string(),
-            "-iTCP",
-            "-sTCP:LISTEN",
-        ])
-        .output()
-        .expect("lsof");
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .skip(1)
-        .map(str::to_owned)
-        .collect()
+    tailnet::kernel_tcp_listeners(std::process::id()).expect("kernel TCP listeners")
 }
 
 fn open_fds() -> usize {

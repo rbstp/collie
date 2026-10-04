@@ -82,7 +82,7 @@ impl ServerHandle {
     }
 
     /// Resolves if the tailnet listener fails for good; the daemon must then exit
-    /// so launchd restarts it instead of serving nothing.
+    /// so the service manager restarts it instead of serving nothing.
     pub async fn listener_failed(&mut self) {
         let _ = self.listener_dead.wait_for(|dead| *dead).await;
     }
@@ -249,12 +249,34 @@ impl State {
 
     pub(crate) async fn status_info(&self) -> StatusInfo {
         let node = self.node.clone();
-        let backend_state = match tokio::task::spawn_blocking(move || node.status()).await {
-            Ok(Ok(st)) => format!("{:?}", st.backend_state),
-            Ok(Err(e)) => format!("error: {e}"),
-            Err(e) => format!("error: {e}"),
+        let (backend_state, tags) = match tokio::task::spawn_blocking(move || node.status()).await {
+            Ok(Ok(st)) => (
+                format!("{:?}", st.backend_state),
+                Some(st.self_node.and_then(|n| n.tags).unwrap_or_default()),
+            ),
+            Ok(Err(e)) => (format!("error: {e}"), None),
+            Err(e) => (format!("error: {e}"), None),
         };
-        let herdr_version = herdr::ping(&self.herdr).await.ok().map(|p| p.version);
+        // Concurrent, so a wedged herdr costs one herdr timeout, under the control timeout.
+        let (pong, snap) = tokio::join!(
+            herdr::ping(&self.herdr),
+            herdr::session_snapshot(&self.herdr)
+        );
+        let herdr_version = pong.ok().map(|p| p.version);
+        let flock = snap.ok().map(|snap| {
+            let mut tracker = lock(&self.tracker);
+            let f = flock::map_flock(
+                &snap,
+                &mut tracker,
+                crate::now_ms(),
+                self.machine.clone(),
+                0,
+            );
+            crate::control::StatusFlock {
+                workspaces: f.workspaces,
+                agents: f.agents,
+            }
+        });
         let sessions = self.lock_sessions().live.len();
         let peers = lock(&self.peers).peers.len();
         StatusInfo {
@@ -266,7 +288,11 @@ impl State {
             sessions,
             peers,
             herdr_version,
+            tags,
+            flock,
+            flock_too_large: false,
         }
+        .fit()
     }
 
     /// Closes the window and every pairing-only session it admitted, so a session cannot

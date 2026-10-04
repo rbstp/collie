@@ -2,12 +2,17 @@ use std::fs::Metadata;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
+#[cfg(target_os = "macos")]
 use security_framework::os::macos::code_signing::{Flags, SecCode, SecRequirement};
+#[cfg(target_os = "macos")]
 use security_framework::os::macos::keychain::SecKeychain;
+
+#[cfg(target_os = "macos")]
+use crate::keychain;
 
 use crate::config::{self, ApnsConfig, ApnsKey, Config};
 use crate::control::{self, Reply, Request};
-use crate::{herdr, keychain, push};
+use crate::{herdr, push};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Status {
@@ -82,12 +87,15 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     let stored = crate::attachments::stored_bytes(&attachments);
     r.line(s, "attachments", format!("{d}, {stored} bytes stored"));
     match config.as_ref().map(|c| &c.apns) {
-        Some(Some(apns)) => check_apns(&mut r, apns, &data_dir.join(APNS_DIR)),
+        Some(Some(apns)) => check_apns(&mut r, apns, &data_dir.join(config::APNS_DIR)),
         Some(None) => r.line(Status::Warn, "apns", "not configured"),
         None => {}
     }
-    let (s, d) = check_signature();
-    r.line(s, "codesign", d);
+    #[cfg(target_os = "macos")]
+    {
+        let (s, d) = check_signature();
+        r.line(s, "codesign", d);
+    }
     r.line(
         Status::Warn,
         "hooks",
@@ -97,75 +105,205 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     Ok(!r.failed)
 }
 
-const APNS_DIR: &str = "apns";
+#[cfg(target_os = "macos")]
 const SIGNING_ID: &str = "dev.rbstp.collied";
 // Apple's Developer ID Application requirement: the Developer ID CA intermediate and the
 // Developer ID Application leaf marker.
+#[cfg(target_os = "macos")]
 const DEVELOPER_ID: &str = "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists";
 
 // Interaction is disabled so a Keychain that would prompt fails instead: no dialog, and
 // what this binary can read is what the daemon (same binary) can read unattended.
+#[cfg(target_os = "macos")]
+fn check_keychain(
+    r: &mut Report,
+    apns: &ApnsConfig,
+    ids: &str,
+) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+    let item = push::keychain_item(&apns.key_id);
+    let read = SecKeychain::disable_user_interaction()
+        .map_err(anyhow::Error::from)
+        .and_then(|_lock| Ok(keychain::read(None, &apns.key_id)?));
+    match read {
+        Ok(Some(key)) => {
+            r.line(
+                Status::Ok,
+                "apns",
+                format!("{item} readable by collied ({ids})"),
+            );
+            Some(key)
+        }
+        Ok(None) => {
+            r.line(
+                Status::Fail,
+                "apns",
+                format!("{item} missing: run `collied apns import <AuthKey.p8>`"),
+            );
+            None
+        }
+        Err(e) => {
+            r.line(
+                Status::Fail,
+                "apns",
+                format!("{item} not readable by this binary without a prompt: {e}"),
+            );
+            None
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn check_keychain(r: &mut Report, _: &ApnsConfig, _: &str) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+    r.line(Status::Fail, "apns", "key = \"keychain\" is macOS only");
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn check_credential(
+    r: &mut Report,
+    apns: &ApnsConfig,
+    ids: &str,
+) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+    use crate::creds;
+    let path = match push::credential_path(&apns.key_id) {
+        Ok(p) => p,
+        Err(e) => {
+            r.line(Status::Fail, "apns", format!("{e:#}"));
+            return None;
+        }
+    };
+    let (s, d) = check_private(
+        &path,
+        Kind::File,
+        (
+            Status::Fail,
+            "missing: run `collied apns import <AuthKey.p8>`",
+        ),
+    );
+    if s == Status::Fail {
+        r.line(s, "apns", d);
+        return None;
+    }
+    let credential = match push::read_key(&path) {
+        Ok((c, _)) => c,
+        Err(e) => {
+            r.line(Status::Fail, "apns", format!("{e:#}"));
+            return None;
+        }
+    };
+    let seal = creds::seal(&credential);
+    match creds::decrypt(&creds::name(&apns.key_id), &credential) {
+        Ok(key) => {
+            let status = match seal {
+                creds::Seal::Null => Status::Fail,
+                creds::Seal::Other => Status::Warn,
+                _ => s,
+            };
+            r.line(
+                status,
+                "apns",
+                format!(
+                    "{d}: systemd credential, {}, decrypts ({ids})",
+                    seal.describe()
+                ),
+            );
+            if seal == creds::Seal::Host && creds::has_tpm2() {
+                r.line(
+                    Status::Warn,
+                    "apns",
+                    "a TPM2 is usable now: import the key again to bind it to the TPM2",
+                );
+            }
+            Some(key)
+        }
+        Err(e) => {
+            r.line(
+                Status::Fail,
+                "apns",
+                format!("{d}: does not decrypt: {e:#}"),
+            );
+            None
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn check_credential(
+    r: &mut Report,
+    _: &ApnsConfig,
+    _: &str,
+) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+    r.line(
+        Status::Fail,
+        "apns",
+        "key = \"systemd-creds\" is Linux only",
+    );
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn creds_usable() -> bool {
+    let name = crate::creds::name("doctor-probe");
+    crate::creds::encrypt(&name, b"probe")
+        .and_then(|c| crate::creds::decrypt(&name, &c))
+        .is_ok_and(|p| p.as_slice() == b"probe")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn creds_usable() -> bool {
+    false
+}
+
+fn check_key_file(r: &mut Report, path: &Path, ids: &str) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+    let (s, d) = check_private(path, Kind::File, (Status::Fail, "key missing"));
+    r.line(s, "apns", format!("{d} ({ids})"));
+    if cfg!(target_os = "macos") {
+        r.line(
+            Status::Warn,
+            "apns",
+            format!(
+                "key_path is set: move the key to the Keychain with `collied apns import '{}'`",
+                path.display()
+            ),
+        );
+    } else if creds_usable() {
+        r.line(
+            Status::Warn,
+            "apns",
+            format!(
+                "key_path is set and systemd-creds works: encrypt the key with `collied apns import '{}'`",
+                path.display()
+            ),
+        );
+    } else {
+        r.line(
+            Status::Ok,
+            "apns",
+            "0600 file fallback (systemd-creds unavailable): protected by its mode only",
+        );
+    }
+    if s == Status::Fail {
+        None
+    } else {
+        match push::read_key(path) {
+            Ok((key, _)) => Some(key),
+            Err(e) => {
+                r.line(Status::Fail, "apns", format!("{e:#}"));
+                None
+            }
+        }
+    }
+}
+
 fn check_apns(r: &mut Report, apns: &ApnsConfig, apns_dir: &Path) {
     let ids = format!(
         "key {}, team {}, bundle {}",
         apns.key_id, apns.team_id, apns.bundle_id
     );
     let key = match &apns.key {
-        ApnsKey::Keychain => {
-            let item = push::keychain_item(&apns.key_id);
-            let read = SecKeychain::disable_user_interaction()
-                .map_err(anyhow::Error::from)
-                .and_then(|_lock| Ok(keychain::read(None, &apns.key_id)?));
-            match read {
-                Ok(Some(key)) => {
-                    r.line(
-                        Status::Ok,
-                        "apns",
-                        format!("{item} readable by collied ({ids})"),
-                    );
-                    Some(key)
-                }
-                Ok(None) => {
-                    r.line(
-                        Status::Fail,
-                        "apns",
-                        format!("{item} missing: run `collied apns import <AuthKey.p8>`"),
-                    );
-                    None
-                }
-                Err(e) => {
-                    r.line(
-                        Status::Fail,
-                        "apns",
-                        format!("{item} not readable by this binary without a prompt: {e}"),
-                    );
-                    None
-                }
-            }
-        }
-        ApnsKey::File(path) => {
-            let (s, d) = check_private(path, Kind::File, (Status::Fail, "key missing"));
-            r.line(s, "apns", format!("{d} ({ids})"));
-            r.line(
-                Status::Warn,
-                "apns",
-                format!(
-                    "key_path is set: move the key to the Keychain with `collied apns import '{}'`",
-                    path.display()
-                ),
-            );
-            if s == Status::Fail {
-                None
-            } else {
-                match push::read_key(path) {
-                    Ok((key, _)) => Some(key),
-                    Err(e) => {
-                        r.line(Status::Fail, "apns", format!("{e:#}"));
-                        None
-                    }
-                }
-            }
-        }
+        ApnsKey::Keychain => check_keychain(r, apns, &ids),
+        ApnsKey::SystemdCreds => check_credential(r, apns, &ids),
+        ApnsKey::File(path) => check_key_file(r, path, &ids),
     };
     if let Some(key) = key {
         match push::check_ids(apns).and_then(|()| push::Apns::with_key(apns, &key)) {
@@ -175,7 +313,7 @@ fn check_apns(r: &mut Report, apns: &ApnsConfig, apns_dir: &Path) {
     }
     let configured = match &apns.key {
         ApnsKey::File(p) => Some(p.as_path()),
-        ApnsKey::Keychain => None,
+        ApnsKey::Keychain | ApnsKey::SystemdCreds => None,
     };
     if let Ok(entries) = std::fs::read_dir(apns_dir) {
         for path in entries.flatten().map(|e| e.path()) {
@@ -191,6 +329,7 @@ fn check_apns(r: &mut Report, apns: &ApnsConfig, apns_dir: &Path) {
 }
 
 /// Whether the running binary is Developer ID signed with collied's identifier.
+#[cfg(target_os = "macos")]
 pub fn signed_as_collied() -> Result<(), String> {
     let check = |requirement: &str| -> Result<(), security_framework::base::Error> {
         let requirement: SecRequirement = requirement.parse()?;
@@ -202,6 +341,7 @@ pub fn signed_as_collied() -> Result<(), String> {
         .map_err(|_| format!("Developer ID, but the identifier is not {SIGNING_ID}"))
 }
 
+#[cfg(target_os = "macos")]
 fn check_signature() -> (Status, String) {
     match signed_as_collied() {
         Ok(()) => (Status::Ok, format!("Developer ID, identifier {SIGNING_ID}")),
@@ -233,6 +373,29 @@ async fn check_daemon(r: &mut Report, data_dir: &Path) {
     } else {
         Status::Fail
     };
+    let tag = crate::daemon::NODE_TAG;
+    match info.tags.as_deref() {
+        None => r.line(
+            Status::Warn,
+            "tag",
+            "not reported: the node status failed, or the daemon predates this check (restart it)",
+        ),
+        Some(tags) if tags.iter().any(|t| t == tag) => {
+            r.line(Status::Ok, "tag", format!("node tagged {tag}"))
+        }
+        Some(tags) => r.line(
+            Status::Fail,
+            "tag",
+            format!(
+                "node not tagged {tag} (tags: {}); see collied login",
+                if tags.is_empty() {
+                    "none".to_owned()
+                } else {
+                    tags.join(", ")
+                }
+            ),
+        ),
+    }
     r.line(
         node_status,
         "daemon",
@@ -247,7 +410,7 @@ async fn check_daemon(r: &mut Report, data_dir: &Path) {
             info.peers
         ),
     );
-    match kernel_listeners(info.pid) {
+    match tailnet::kernel_tcp_listeners(info.pid) {
         Ok(lines) if lines.is_empty() => r.line(
             Status::Ok,
             "listen",
@@ -258,38 +421,8 @@ async fn check_daemon(r: &mut Report, data_dir: &Path) {
             "listen",
             format!("kernel TCP listener(s): {}", lines.join("; ")),
         ),
-        Err(e) => r.line(Status::Fail, "listen", format!("lsof: {e}")),
+        Err(e) => r.line(Status::Fail, "listen", e.to_string()),
     }
-}
-
-// lsof prints nothing and exits 1 both when nothing matches and when the pid is gone, so
-// an empty result only counts once the pid is known to be alive and lsof stayed silent.
-fn kernel_listeners(pid: u32) -> std::io::Result<Vec<String>> {
-    let pid_ok = i32::try_from(pid)
-        .ok()
-        .and_then(rustix::process::Pid::from_raw)
-        .is_some_and(|p| rustix::process::test_kill_process(p).is_ok());
-    if !pid_ok {
-        return Err(std::io::Error::other(format!(
-            "daemon pid {pid} is not running"
-        )));
-    }
-    let out = std::process::Command::new("/usr/sbin/lsof")
-        .args(["-nP", "-a", "-p", &pid.to_string(), "-iTCP", "-sTCP:LISTEN"])
-        .output()?;
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if !stderr.trim().is_empty() || !matches!(out.status.code(), Some(0 | 1)) {
-        return Err(std::io::Error::other(format!(
-            "{} ({})",
-            stderr.trim(),
-            out.status
-        )));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .skip(1)
-        .map(str::to_owned)
-        .collect())
 }
 
 #[derive(Clone, Copy)]
@@ -405,20 +538,5 @@ fn check_tailnet(r: &mut Report, config: &Config, tsnet: &Path) {
             "tailnet",
             format!("{node}: no node state (not logged in)"),
         );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn listener_check_needs_a_live_pid() {
-        assert_eq!(
-            kernel_listeners(std::process::id()).unwrap(),
-            Vec::<String>::new()
-        );
-        assert!(kernel_listeners(999_999).is_err());
-        assert!(kernel_listeners(u32::MAX).is_err());
     }
 }

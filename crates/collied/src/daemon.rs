@@ -12,7 +12,11 @@ use crate::control;
 use crate::server::{self, ServerConfig};
 use crate::{approvals, herdr, push};
 
-pub const MAC_TAG: &str = "tag:collie-mac";
+/// The tag this machine's node advertises and must carry before it serves.
+#[cfg(target_os = "macos")]
+pub const NODE_TAG: &str = "tag:collie-mac";
+#[cfg(target_os = "linux")]
+pub const NODE_TAG: &str = "tag:collie-linux";
 const POLL: Duration = Duration::from_millis(250);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const RUN_START_TIMEOUT: Duration = Duration::from_secs(60);
@@ -34,7 +38,7 @@ fn mac_node(
         hostname: config.tailnet.hostname(),
         auth_key,
         control_url: None,
-        advertise_tags: vec![MAC_TAG.to_owned()],
+        advertise_tags: vec![NODE_TAG.to_owned()],
         log_to_stderr: false,
     })?;
     Ok((node, lock))
@@ -63,16 +67,16 @@ pub async fn login(
         match st.backend_state {
             BackendState::Running if st.self_node.is_some() => {
                 print_identity(&st);
-                return Ok(());
+                return check_tag(&st, data_dir);
             }
             BackendState::NeedsMachineAuth if !warned_approval => {
-                println!("This Mac needs approval by a tailnet admin; waiting.");
+                println!("This machine needs approval by a tailnet admin; waiting.");
                 warned_approval = true;
             }
             _ => {}
         }
         if !st.auth_url.is_empty() && st.auth_url != shown_url {
-            println!("Log in to Tailscale to add this Mac to your tailnet:\n");
+            println!("Log in to Tailscale to add this machine to your tailnet:\n");
             println!("{}", crate::qr_text(&st.auth_url)?);
             println!("{}\n", st.auth_url);
             shown_url = st.auth_url;
@@ -84,6 +88,28 @@ pub async fn login(
         );
         tokio::time::sleep(POLL).await;
     }
+}
+
+/// A node without the tag is user-owned: the phone refuses it, and the policy grant on
+/// port 8457 does not cover it. Logging in again does not change the tags of a node that
+/// is already registered, so the way out is a new node.
+fn check_tag(st: &Status, data_dir: &Path) -> anyhow::Result<()> {
+    let tags = st
+        .self_node
+        .as_ref()
+        .and_then(|n| n.tags.clone())
+        .unwrap_or_default();
+    anyhow::ensure!(
+        tags.iter().any(|t| t == NODE_TAG),
+        "this node is registered without {NODE_TAG} (tags: {}). Remove it in the Tailscale admin console (Machines), delete {}, make sure your user is a tag owner of {NODE_TAG} (docs/tailnet.md), then run collied login; phones must pair again",
+        if tags.is_empty() {
+            "none".to_owned()
+        } else {
+            tags.join(", ")
+        },
+        data_dir.join(config::TSNET_DIR).display()
+    );
+    Ok(())
 }
 
 fn print_identity(st: &Status) {
@@ -116,7 +142,8 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
     let deadline = Instant::now() + RUN_START_TIMEOUT;
     loop {
         let st = status(&node)?;
-        if st.backend_state == BackendState::Running {
+        if st.backend_state == BackendState::Running && st.self_node.is_some() {
+            check_tag(&st, data_dir)?;
             break;
         }
         anyhow::ensure!(
@@ -159,7 +186,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
     handle.shutdown().await;
     anyhow::ensure!(
         !listener_failed,
-        "tailnet listener failed; exiting so launchd restarts collied"
+        "tailnet listener failed; exiting so the service manager restarts collied"
     );
     Ok(())
 }

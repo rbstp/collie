@@ -16,6 +16,8 @@ pub const KNOBS: [(&str, &str); 1] = [("TS_DISABLE_PORTMAPPER", "1")];
 pub const PORT: u16 = protocol::DEFAULT_PORT;
 pub const WATCHDOG: Duration = Duration::from_secs(240);
 pub const LABEL: &str = "E2E iPhone";
+// The tag collie-core's pin requires of the Mac node, whatever OS the test runs on.
+pub const PHONE_PINNED_TAG: &str = "tag:collie-mac";
 
 // libtailscale's Go runtime reads TS_* knobs once at load, so each test re-runs itself
 // in a child process that has them (same approach as crates/tailnet/tests/end_to_end.rs).
@@ -107,22 +109,7 @@ pub fn audit_lines(path: &Path) -> Vec<Value> {
 }
 
 pub fn kernel_tcp_listeners() -> Vec<String> {
-    let out = Command::new("lsof")
-        .args([
-            "-nP",
-            "-a",
-            "-p",
-            &std::process::id().to_string(),
-            "-iTCP",
-            "-sTCP:LISTEN",
-        ])
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .skip(1)
-        .map(str::to_owned)
-        .collect()
+    tailnet::kernel_tcp_listeners(std::process::id()).expect("kernel TCP listeners")
 }
 
 pub struct Net {
@@ -143,13 +130,7 @@ impl Net {
     pub fn with_key(root: &Path, key: String) -> Self {
         let control = TestControl::start(&key, root);
         let url = control.url.clone();
-        let mac = start_node(
-            root,
-            "collie-e2e-mac",
-            &key,
-            &url,
-            &[collied::daemon::MAC_TAG],
-        );
+        let mac = start_node(root, "collie-e2e-mac", &key, &url, &[PHONE_PINNED_TAG]);
         Self {
             _control: control,
             key,

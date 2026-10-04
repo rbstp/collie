@@ -4,13 +4,15 @@ Watch and steer your [herdr](https://github.com/herdrdev/herdr) coding agents fr
 
 collie has two parts:
 
-- **`collied`**, a Rust daemon on your Mac. It talks to herdr over herdr's local Unix socket and joins your tailnet on its own through an embedded [libtailscale](https://github.com/tailscale/libtailscale).
+- **`collied`**, a Rust daemon on your Mac or Linux machine. It talks to herdr over herdr's local Unix socket and joins your tailnet on its own through an embedded [libtailscale](https://github.com/tailscale/libtailscale).
 - **Collie**, the iOS app: SwiftUI over a Rust core (`collie-core`, exposed with UniFFI) that embeds its own Tailscale node too.
 
 No Tailscale app is needed on either device, and no TCP port is opened outside the tailnet (the only socket on the real network is Tailscale's own WireGuard UDP socket).
 
+collied on Linux is in progress: it logs in and serves, but the app does not pair with a Linux machine yet (see [Getting started](#getting-started)).
+
 ```
- iPhone                                                  Mac
+ iPhone                                                  Mac or Linux machine
 ┌──────────────────────────┐   tailnet (WireGuard)   ┌──────────────────────────┐
 │ Collie (SwiftUI)         │      TCP 8457, WS       │ collied                  │
 │  └ collie-core (Rust)    │ ──────────────────────► │  ├ whois gate + pairing  │
@@ -36,11 +38,11 @@ Security is the first requirement. The short version:
 
 - **Tailnet only**: collied accepts connections only through its embedded Tailscale node, on one port. A test asserts it opens no kernel TCP listener.
 - **Whois gate**: every connection is checked with Tailscale whois before the WebSocket upgrade. The peer must be untagged, not shared in from another tailnet, owned by the collie owner (`owner_user_id` in `collied.toml`, or else the user of the first phone you confirm at pairing), and a paired phone: its node `StableID` must be paired and still belong to the user it was paired with. Authorization is re-checked before every frame, and revoking a phone cuts its live sessions.
-- **Pairing**: a QR code shown by `collied pair`, plus a local y/N confirmation on the Mac.
+- **Pairing**: a QR code shown by `collied pair`, plus a local y/N confirmation on the computer running collied.
 - **Approvals**: a nonce plus a fingerprint of the prompt on screen. collied moves the cursor, re-reads the screen, and presses Enter only if the fingerprint still matches; a prompt that changed is answered `superseded`. A small gap between that last re-read and Enter remains until herdr supports conditional input.
 - **Push notifications**: the cleartext part of the push only says which agent is blocked and where. The command itself is end-to-end encrypted (ChaCha20-Poly1305, under a per-Mac key generated on the phone, kept in its Keychain and handed to collied over the tailnet). The phone's notification extension decrypts it, so Apple sees the command only as ciphertext. Apple still sees agent and workspace names, ids and timing.
 - **Attachments**: uploads are size-capped (20 MiB per file, 200 MiB in total) and checksummed. Each is stored in a fresh random directory inside a private cache directory (0700 directories, 0600 non-executable files), under a sanitized copy of the file name, and deleted after 24 hours.
-- **Secrets**: `collied apns import` stores the APNs signing key in the Mac's login Keychain. The item's ACL lets only the Developer ID-signed collied read it without a Keychain prompt.
+- **Secrets**: `collied apns import` stores the APNs signing key in the Mac's login Keychain. The item's ACL lets only the Developer ID-signed collied read it without a Keychain prompt. On Linux it stores the key as a systemd user credential: encrypted with the host key, and also sealed to the TPM2 when one is usable. Where `systemd-creds` cannot encrypt, it falls back to a 0600 file. This is weaker than the Keychain: any process running as your user can decrypt the credential, not only collied ([docs/threat-model.md](docs/threat-model.md)).
 
 Details, including what is not covered: [docs/threat-model.md](docs/threat-model.md) and [docs/architecture.md](docs/architecture.md).
 
@@ -53,24 +55,26 @@ Details, including what is not covered: [docs/threat-model.md](docs/threat-model
 | 2 | Terminal, prompt, keys, new task | done |
 | 3 | Lock-screen approvals with encrypted context, attachments | done |
 | 4 | Live Activities and Dynamic Island for agents you follow, approvals on the activity, question menus | done |
-| 5 | Claude Code hooks enrichment, audit viewer, multiple computers (macOS and Linux) | planned |
+| 5 | Claude Code hooks enrichment, audit viewer, multiple computers (macOS and Linux) | planned; Linux daemon in progress |
 | 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | planned |
 | 7 | Improvements: a Mac menu bar icon (on/off, pairing, pending approvals, quit), compact status icons | planned |
 
 ## Requirements
 
 - An Apple silicon Mac running [herdr](https://github.com/herdrdev/herdr) 0.9.3 (the version collied is tested against). Intel Macs are not supported.
+- Or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.3. The encrypted APNs key needs systemd 256 or later (`systemd-creds --user`); older versions fall back to a 0600 file. collied is built and tested on Arch Linux. aarch64 Linux is mapped in the build but not built or tested.
 - An iPhone on iOS 26 or later.
 - A Tailscale account whose policy file you can edit.
-- To build: Rust (see `rust-toolchain.toml`), Go, Xcode 27 with an iPhone 18 Pro simulator, [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, and `jq` (for `just ios-run-device`). The libghostty-vt build script downloads its own pinned Zig.
-- An Apple Developer account with a Developer ID Application certificate (collied is always signed), and an APNs key for push notifications.
+- To build on macOS: Rust (see `rust-toolchain.toml`), Go, Xcode 27 with an iPhone 18 Pro simulator, [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, and `jq` (for `just ios-run-device`). The libghostty-vt build script downloads its own pinned Zig.
+- To build collied on Linux: Rust (see `rust-toolchain.toml`), Go 1.27.1 or later, a C compiler, libclang (for bindgen), [just](https://github.com/casey/just) and `cargo-deny`.
+- An Apple Developer account with a Developer ID Application certificate (collied is always signed on macOS; it is not signed on Linux), and an APNs key for push notifications.
 
 The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID and `dev.rbstp` bundle identifiers. Change them to your own before building.
 
 ## Getting started
 
-1. **Tailnet policy**: add a `tag:collie-mac` tag owner and a grant from your user to `tag:collie-mac` on TCP 8457. The full policy, with tests, is in [docs/tailnet.md](docs/tailnet.md).
-2. **Build and install collied** (signed with your Developer ID Application certificate, installed to `~/.cargo/bin`):
+1. **Tailnet policy**: add a `tag:collie-mac` tag owner and a grant from your user to `tag:collie-mac` on TCP 8457. For a Linux machine, add a `tag:collie-linux` tag owner and the same TCP 8457 grant to `tag:collie-linux`. The full policy, with tests, is in [docs/tailnet.md](docs/tailnet.md).
+2. **Build and install collied** on macOS (signed with your Developer ID Application certificate, installed to `~/.cargo/bin`):
 
    ```sh
    git clone --recurse-submodules https://github.com/rbstp/collie
@@ -82,13 +86,27 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
    collied doctor            # no line should say fail; warn lines for peers, apns and hooks are expected now
    ```
 
+   On Linux (not signed, installed to `~/.cargo/bin`):
+
+   ```sh
+   git clone --recurse-submodules https://github.com/rbstp/collie
+   cd collie
+   just setup
+   just collied-install
+   collied login             # sign in as the tag owner; the node becomes tag:collie-linux
+   collied service install   # systemd user unit that runs collied in your user session
+   collied doctor            # no line should say fail; warn lines for peers, apns and hooks are expected now
+   ```
+
+   On Linux, collied's data directory is `$XDG_DATA_HOME/collie`, else `~/.local/share/collie`. It holds `collied.toml`, the node state, paired phones and the audit log. Logs go to the user journal: `journalctl --user -u collied`. A user unit runs while you have a session. `loginctl enable-linger` (optional) keeps it running without a login.
+
 3. **Install the app** on a connected iPhone with Developer Mode on (`just ios-run-device`). Sign in to Tailscale inside the app with your own account.
-4. **Pair**: run `collied pair` on the Mac, scan the QR code with the app, and confirm with `y` on the Mac.
-5. **Push notifications** (optional): add an `[apns]` section to `~/Library/Application Support/collie/collied.toml`, import the key with `collied apns import AuthKey_<KEY_ID>.p8`, then check with `collied apns test`. The full steps are in [docs/release.md](docs/release.md).
+4. **Pair**: run `collied pair` on the computer, scan the QR code with the app, and confirm with `y` on the computer. The app accepts only `tag:collie-mac` for now: a Linux collied logs in and serves, but the app refuses its node until the app side accepts `tag:collie-linux`.
+5. **Push notifications** (optional): add an `[apns]` section to `collied.toml` (`~/Library/Application Support/collie/collied.toml` on macOS, in the data directory on Linux), import the key with `collied apns import AuthKey_<KEY_ID>.p8`, then check with `collied apns test`. Each machine uses its own APNs key (its own key ID, revoked on its own) and sends its own pushes. On Linux, `collied apns import` encrypts the key into a systemd user credential (also sealed to the TPM2 when one is usable), with a 0600 file as the fallback where `systemd-creds` cannot encrypt. `collied doctor` reports which one is in use and, for a credential, its seal. The full steps are in [docs/release.md](docs/release.md).
 
-List paired phones with `collied peers list`, revoke one with `collied peers revoke <label or StableID>`, and inspect the daemon with `collied status`.
+List paired phones with `collied peers list`, revoke one with `collied peers revoke <label or StableID>`, and inspect the daemon with `collied status` (its tags and the herdr agents it sees).
 
-`collied stop` turns collied off and keeps it off, across reboots, until `collied start`.
+`collied stop` turns collied off and keeps it off, across reboots, until `collied start`. This is the same with the launchd agent and the systemd user unit.
 
 ## Development
 
@@ -102,9 +120,9 @@ List paired phones with `collied peers list`, revoke one with `collied peers rev
 | `just ios-test` | iOS unit tests on the simulator |
 | `just ios-build-sim` | Simulator build |
 | `just ios-run-device` | Builds, installs and launches on a connected iPhone |
-| `just collied-install` | Release build of collied, signed, installed to `~/.cargo/bin`; restarts the launchd agent if it is installed |
+| `just collied-install` | Release build of collied, installed to `~/.cargo/bin`. On macOS it is signed and restarts the launchd agent if it is installed. On Linux it is not signed and restarts the systemd user unit if it is active |
 
-CI runs lint, the Rust tests, and the iOS simulator build and tests on every pull request and on pushes to `master`. Merging a pull request that changes code into `master` uploads a build to the maintainer's TestFlight ([docs/release.md](docs/release.md)).
+CI runs on macOS: lint, the Rust tests, and the iOS simulator build and tests, on every pull request and on pushes to `master`. Merging a pull request that changes code into `master` uploads a build to the maintainer's TestFlight ([docs/release.md](docs/release.md)).
 
 ## Repository layout
 
@@ -113,7 +131,7 @@ crates/
   protocol/        Wire types (allowlisted requests, validated newtypes), JSON Schema
   tailscale-sys/   libtailscale (pinned submodule + patches) built as a Go c-archive
   tailnet/         Safe Rust wrapper: node, listener, dial, whois
-  collied/         The Mac daemon
+  collied/         The daemon (macOS and Linux)
   collie-core/     The phone's Rust core, exposed to Swift with UniFFI
   uniffi-bindgen/  UniFFI binding generator used by `just ios-framework`
   e2e/             End-to-end tests: phone core against collied over a local test tailnet

@@ -1,9 +1,14 @@
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+compile_error!("collied runs on macOS and Linux only");
+
 pub mod activity;
 pub mod approvals;
 pub mod attachments;
 pub mod audit;
 pub mod config;
 pub mod control;
+#[cfg(target_os = "linux")]
+pub mod creds;
 pub mod daemon;
 pub mod doctor;
 pub mod draft;
@@ -11,6 +16,7 @@ pub mod drive;
 pub mod flock;
 pub mod gate;
 pub mod herdr;
+#[cfg(target_os = "macos")]
 pub mod keychain;
 pub mod pairing;
 pub mod peers;
@@ -22,6 +28,22 @@ pub mod service;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::Path;
 
+#[cfg(target_os = "linux")]
+use anyhow::Context;
+
+/// A systemd tool by absolute path (never PATH): `/usr/bin`, then `/bin` (Debian
+/// without merged /usr), then NixOS's system profile.
+#[cfg(target_os = "linux")]
+pub(crate) fn system_bin(name: &str) -> std::path::PathBuf {
+    let candidates =
+        ["/usr/bin", "/bin", "/run/current-system/sw/bin"].map(|d| Path::new(d).join(name));
+    candidates
+        .iter()
+        .find(|p| p.is_file())
+        .unwrap_or(&candidates[0])
+        .clone()
+}
+
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -30,6 +52,15 @@ pub fn now_ms() -> u64 {
 
 // Refuses a symlink, a foreign owner or any group/world bit.
 pub fn ensure_private_dir(dir: &Path) -> anyhow::Result<()> {
+    // A fresh account may have no XDG base directory yet; the spec creates it 0700.
+    #[cfg(target_os = "linux")]
+    if let Some(parent) = dir.parent().filter(|p| !p.exists()) {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
+    }
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
             return Err(anyhow::Error::new(e).context(format!("create {}", dir.display())));
