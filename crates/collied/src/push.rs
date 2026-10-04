@@ -26,6 +26,7 @@ use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
 use crate::config::{self, ApnsConfig, ApnsKey};
+#[cfg(target_os = "macos")]
 use crate::keychain;
 use crate::peers::{self, Store};
 
@@ -759,19 +760,65 @@ pub fn check_ids(cfg: &ApnsConfig) -> anyhow::Result<()> {
 pub fn load_key(cfg: &ApnsConfig) -> anyhow::Result<Zeroizing<Vec<u8>>> {
     match &cfg.key {
         ApnsKey::File(path) => Ok(read_key(path)?.0),
-        ApnsKey::Keychain => keychain::read(None, &cfg.key_id)
-            .with_context(|| keychain_item(&cfg.key_id))?
-            .with_context(|| {
-                format!(
-                    "{} not found: run `collied apns import <AuthKey.p8>`",
-                    keychain_item(&cfg.key_id)
-                )
-            }),
+        ApnsKey::Keychain => load_keychain(cfg),
+        ApnsKey::SystemdCreds => load_credential(cfg),
     }
 }
 
+#[cfg(target_os = "macos")]
+fn load_keychain(cfg: &ApnsConfig) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+    keychain::read(None, &cfg.key_id)
+        .with_context(|| keychain_item(&cfg.key_id))?
+        .with_context(|| {
+            format!(
+                "{} not found: run `collied apns import <AuthKey.p8>`",
+                keychain_item(&cfg.key_id)
+            )
+        })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn load_keychain(_: &ApnsConfig) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+    anyhow::bail!("the Keychain is macOS only")
+}
+
+#[cfg(target_os = "linux")]
+fn load_credential(cfg: &ApnsConfig) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+    let path = credential_path(&cfg.key_id)?;
+    let (credential, _) = read_key(&path).with_context(|| {
+        format!(
+            "{}: run `collied apns import <AuthKey.p8>`",
+            credential_item(&cfg.key_id)
+        )
+    })?;
+    crate::creds::decrypt(&crate::creds::name(&cfg.key_id), &credential)
+        .with_context(|| format!("decrypt {}", path.display()))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn load_credential(_: &ApnsConfig) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+    anyhow::bail!("systemd-creds is Linux only")
+}
+
+#[cfg(target_os = "macos")]
 pub fn keychain_item(key_id: &str) -> String {
     format!("Keychain item {}/{key_id}", keychain::SERVICE)
+}
+
+#[cfg(target_os = "linux")]
+pub fn credential_path(key_id: &str) -> anyhow::Result<PathBuf> {
+    Ok(crate::creds::path(
+        &config::data_dir()?.join(config::APNS_DIR),
+        key_id,
+    ))
+}
+
+#[cfg(target_os = "linux")]
+pub fn credential_item(key_id: &str) -> String {
+    match credential_path(key_id) {
+        Ok(p) => format!("systemd credential {}", p.display()),
+        Err(_) => format!("systemd credential {key_id}.cred"),
+    }
 }
 
 /// Opened without following symlinks and checked on the open descriptor: a regular file
@@ -797,9 +844,13 @@ pub fn read_key(path: &Path) -> anyhow::Result<(Zeroizing<Vec<u8>>, rustix::fs::
     Ok((key, st))
 }
 
-/// Moves a `.p8` into the login Keychain, readable without a prompt only by this
-/// executable's signing identity, then offers to delete the file.
-pub fn import(config_path: &Path, explicit: bool, path: &Path) -> anyhow::Result<bool> {
+/// The `[apns]` ids, and the key read from `path` with the `key_path` checks and checked
+/// to be an APNs ES256 key named for that key ID.
+fn import_source(
+    config_path: &Path,
+    explicit: bool,
+    path: &Path,
+) -> anyhow::Result<(ApnsConfig, Zeroizing<Vec<u8>>, rustix::fs::Stat)> {
     let config = config::load(config_path, explicit)?.unwrap_or_default();
     let cfg = config.apns.with_context(|| {
         format!(
@@ -822,6 +873,69 @@ pub fn import(config_path: &Path, explicit: bool, path: &Path) -> anyhow::Result
     }
     let (key, st) = read_key(path)?;
     Apns::with_key(&cfg, &key).context("not an APNs ES256 key")?;
+    Ok((cfg, key, st))
+}
+
+/// Points `[apns]` at `key` unless it already is; false when that has to be done by hand.
+fn switch_config(config_path: &Path, cfg: &ApnsConfig, key: &ApnsKey) -> anyhow::Result<bool> {
+    if cfg.key == *key {
+        return Ok(true);
+    }
+    let text = std::fs::read_to_string(config_path)?;
+    let line = match key {
+        ApnsKey::File(p) => format!("key_path = {:?}", p.display().to_string()),
+        k => format!("key = \"{}\"", k.config_value().unwrap_or_default()),
+    };
+    match config::set_apns_key(&text, key, true) {
+        Some(new) => {
+            config::rewrite(config_path, &new)?;
+            println!("{}: [apns] now has {line}", config_path.display());
+            Ok(true)
+        }
+        None => {
+            println!(
+                "{}: could not update [apns] automatically; set {line} there yourself (and remove any other key or key_path line)",
+                config_path.display()
+            );
+            Ok(false)
+        }
+    }
+}
+
+// st_dev is an i32 on macOS and a u64 on Linux.
+#[allow(clippy::unnecessary_cast)]
+fn dev_ino(st: &rustix::fs::Stat) -> (u64, u64) {
+    (st.st_dev as u64, st.st_ino as u64)
+}
+
+/// Offers to delete the imported file, only if it is still the inode that was read.
+fn offer_delete(path: &Path, st: &rustix::fs::Stat) -> anyhow::Result<()> {
+    // Discard anything typed earlier so a stray "y" cannot delete the file.
+    let _ = rustix::termios::tcflush(std::io::stdin(), rustix::termios::QueueSelector::IFlush);
+    print!("Delete {}? [y/N] ", path.display());
+    std::io::Write::flush(&mut std::io::stdout())?;
+    let mut answer = String::new();
+    std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut answer)?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        println!("kept {}", path.display());
+        return Ok(());
+    }
+    let now = std::fs::symlink_metadata(path)?;
+    anyhow::ensure!(
+        (now.dev(), now.ino()) == dev_ino(st),
+        "{} changed since it was read; not deleted",
+        path.display()
+    );
+    std::fs::remove_file(path)?;
+    println!("deleted {}", path.display());
+    Ok(())
+}
+
+/// Moves a `.p8` into the login Keychain, readable without a prompt only by this
+/// executable's signing identity, then offers to delete the file.
+#[cfg(target_os = "macos")]
+pub fn import(config_path: &Path, explicit: bool, path: &Path) -> anyhow::Result<bool> {
+    let (cfg, key, st) = import_source(config_path, explicit, path)?;
     // The item trusts the importing binary's designated requirement, so only the
     // installed, signed collied may create it.
     crate::doctor::signed_as_collied()
@@ -844,45 +958,117 @@ pub fn import(config_path: &Path, explicit: bool, path: &Path) -> anyhow::Result
     drop(key);
     println!("read back {item}: identical");
 
-    if let ApnsKey::File(_) = cfg.key {
-        let text = std::fs::read_to_string(config_path)?;
-        match config::use_keychain(&text) {
-            Some(new) => {
-                config::rewrite(config_path, &new)?;
-                println!(
-                    "{}: [apns] now reads the key from the Keychain",
-                    config_path.display()
-                );
-            }
-            None => {
-                println!(
-                    "{}: could not switch [apns] automatically; replace key_path with key = \"keychain\" yourself",
-                    config_path.display()
-                );
-                return Ok(false);
-            }
-        }
+    if let ApnsKey::File(_) = cfg.key
+        && !switch_config(config_path, &cfg, &ApnsKey::Keychain)?
+    {
+        return Ok(false);
     }
-
-    // Discard anything typed earlier so a stray "y" cannot delete the file.
-    let _ = rustix::termios::tcflush(std::io::stdin(), rustix::termios::QueueSelector::IFlush);
-    print!("Delete {}? [y/N] ", path.display());
-    std::io::Write::flush(&mut std::io::stdout())?;
-    let mut answer = String::new();
-    std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut answer)?;
-    if !answer.trim().eq_ignore_ascii_case("y") {
-        println!("kept {}", path.display());
-        return Ok(true);
-    }
-    let now = std::fs::symlink_metadata(path)?;
-    anyhow::ensure!(
-        (now.dev(), now.ino()) == (st.st_dev as u64, st.st_ino),
-        "{} changed since it was read; not deleted",
-        path.display()
-    );
-    std::fs::remove_file(path)?;
-    println!("deleted {}", path.display());
+    offer_delete(path, &st)?;
     Ok(true)
+}
+
+/// Encrypts a `.p8` as a systemd user credential (host key, plus the TPM2 when one is
+/// usable) in `<data dir>/apns`, or, when systemd-creds is unavailable, copies it there as
+/// a 0600 file; then offers to delete the original.
+#[cfg(target_os = "linux")]
+pub fn import(config_path: &Path, explicit: bool, path: &Path) -> anyhow::Result<bool> {
+    use crate::creds;
+    let (cfg, key, st) = import_source(config_path, explicit, path)?;
+    let apns_dir = config::data_dir()?.join(config::APNS_DIR);
+    crate::ensure_private_dir(&config::data_dir()?)?;
+    crate::ensure_private_dir(&apns_dir)?;
+    let name = creds::name(&cfg.key_id);
+    let cred_path = creds::path(&apns_dir, &cfg.key_id);
+    let target = match creds::encrypt(&name, &key) {
+        Ok(credential) => {
+            let item = credential_item(&cfg.key_id);
+            match read_key(&cred_path) {
+                Ok((existing, _)) => {
+                    let stored = creds::decrypt(&name, &existing)
+                        .with_context(|| format!("decrypt the existing {item}"))?;
+                    anyhow::ensure!(
+                        stored.as_slice() == key.as_slice(),
+                        "{item} holds a different key; remove it and import again"
+                    );
+                    println!("{item} already exists");
+                }
+                Err(_) if !cred_path.exists() && cred_path.symlink_metadata().is_err() => {
+                    let check =
+                        creds::decrypt(&name, &credential).context("decrypt the new credential")?;
+                    anyhow::ensure!(
+                        check.as_slice() == key.as_slice(),
+                        "the new credential decrypts to a different key"
+                    );
+                    creds::store(&cred_path, &credential)?;
+                    println!("stored {item} ({})", creds::seal(&credential).describe());
+                }
+                Err(e) => return Err(e.context(item)),
+            }
+            let (stored, _) = read_key(&cred_path)?;
+            let back = creds::decrypt(&name, &stored).context("read back")?;
+            anyhow::ensure!(
+                back.as_slice() == key.as_slice(),
+                "{item} decrypts to a different key"
+            );
+            println!("read back {item}: identical");
+            ApnsKey::SystemdCreds
+        }
+        Err(e) => {
+            let dest = apns_dir.join(format!("AuthKey_{}.p8", cfg.key_id));
+            println!("systemd-creds is unavailable ({e:#})");
+            println!(
+                "falling back to a 0600 file, protected by its mode only: {}",
+                dest.display()
+            );
+            let same =
+                std::fs::symlink_metadata(&dest).is_ok_and(|m| (m.dev(), m.ino()) == dev_ino(&st));
+            if !same {
+                write_private(&dest, &key)?;
+            }
+            let (back, _) = read_key(&dest)?;
+            anyhow::ensure!(
+                back.as_slice() == key.as_slice(),
+                "{} holds a different key; remove it and import again",
+                dest.display()
+            );
+            if same {
+                return switch_config(config_path, &cfg, &ApnsKey::File(dest));
+            }
+            ApnsKey::File(dest)
+        }
+    };
+    drop(key);
+    if !switch_config(config_path, &cfg, &target)? {
+        return Ok(false);
+    }
+    offer_delete(path, &st)?;
+    Ok(true)
+}
+
+/// A new 0600 file holding `data`; an existing file is kept and must hold the same bytes.
+#[cfg(target_os = "linux")]
+fn write_private(path: &Path, data: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(path)
+    {
+        Ok(mut f) => {
+            f.write_all(data)?;
+            f.sync_all()?;
+            println!("stored {}", path.display());
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            println!("{} already exists", path.display());
+            Ok(())
+        }
+        Err(e) => Err(e).with_context(|| format!("create {}", path.display())),
+    }
 }
 
 pub async fn send_test(data_dir: &Path, cfg: &ApnsConfig) -> anyhow::Result<bool> {

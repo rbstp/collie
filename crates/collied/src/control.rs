@@ -37,6 +37,18 @@ pub struct StatusInfo {
     pub sessions: usize,
     pub peers: usize,
     pub herdr_version: Option<String>,
+    /// The node's own tags, as the tailnet reports them.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// What the phone would see; None when herdr is unreachable.
+    #[serde(default)]
+    pub flock: Option<StatusFlock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StatusFlock {
+    pub workspaces: Vec<protocol::Workspace>,
+    pub agents: Vec<protocol::Agent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -413,6 +425,8 @@ mod tests {
                 sessions: 0,
                 peers: 0,
                 herdr_version: None,
+                tags: Vec::new(),
+                flock: None,
             };
             write_msg(&mut w, &Reply::Status(info)).await.unwrap();
         });

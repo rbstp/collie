@@ -61,9 +61,30 @@ impl Default for TasksConfig {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApnsKey {
+    /// macOS: the login Keychain item.
     Keychain,
-    /// Legacy: the `.p8` file named by `key_path`.
+    /// Linux: a systemd user credential in `<data dir>/apns/<key_id>.cred`.
+    SystemdCreds,
+    /// The `.p8` file named by `key_path`: legacy on macOS, the fallback on Linux.
     File(PathBuf),
+}
+
+impl ApnsKey {
+    pub const fn platform_default() -> Self {
+        if cfg!(target_os = "macos") {
+            ApnsKey::Keychain
+        } else {
+            ApnsKey::SystemdCreds
+        }
+    }
+
+    pub fn config_value(&self) -> Option<&'static str> {
+        match self {
+            ApnsKey::Keychain => Some("keychain"),
+            ApnsKey::SystemdCreds => Some("systemd-creds"),
+            ApnsKey::File(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,9 +97,10 @@ pub struct ApnsConfig {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 enum KeyStore {
     Keychain,
+    SystemdCreds,
 }
 
 #[derive(Deserialize)]
@@ -96,11 +118,19 @@ impl TryFrom<RawApnsConfig> for ApnsConfig {
 
     fn try_from(r: RawApnsConfig) -> Result<Self, Self::Error> {
         let key = match (r.key, r.key_path) {
-            (Some(KeyStore::Keychain), Some(_)) => {
-                return Err("set either key = \"keychain\" or key_path, not both");
+            (Some(_), Some(_)) => return Err("set either key or key_path, not both"),
+            (None, Some(path)) => ApnsKey::File(path),
+            (None, None) => ApnsKey::platform_default(),
+            (Some(KeyStore::Keychain), None) if cfg!(target_os = "macos") => ApnsKey::Keychain,
+            (Some(KeyStore::SystemdCreds), None) if cfg!(target_os = "linux") => {
+                ApnsKey::SystemdCreds
             }
-            (_, Some(path)) => ApnsKey::File(path),
-            (_, None) => ApnsKey::Keychain,
+            (Some(KeyStore::Keychain), None) => {
+                return Err("key = \"keychain\" is macOS only: use key = \"systemd-creds\"");
+            }
+            (Some(KeyStore::SystemdCreds), None) => {
+                return Err("key = \"systemd-creds\" is Linux only: use key = \"keychain\"");
+            }
         };
         Ok(Self {
             key,
@@ -119,6 +149,7 @@ pub const NODE_LOCK: &str = "node.lock";
 pub const PEERS_LOCK: &str = "peers.lock";
 pub const AUDIT_FILE: &str = "audit.log";
 pub const CONTROL_SOCKET: &str = "control.sock";
+pub const APNS_DIR: &str = "apns";
 
 pub fn home_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(
@@ -126,13 +157,35 @@ pub fn home_dir() -> Result<PathBuf> {
     ))
 }
 
+#[cfg(target_os = "macos")]
 pub fn data_dir() -> Result<PathBuf> {
     Ok(home_dir()?.join("Library/Application Support/collie"))
 }
 
 /// No spaces in the path, so an agent reads it back cleanly from a prompt.
+#[cfg(target_os = "macos")]
 pub fn attachments_dir() -> Result<PathBuf> {
     Ok(home_dir()?.join("Library/Caches/dev.rbstp.collied/attachments"))
+}
+
+#[cfg(target_os = "linux")]
+pub fn data_dir() -> Result<PathBuf> {
+    Ok(xdg_dir("XDG_DATA_HOME", ".local/share")?.join("collie"))
+}
+
+#[cfg(target_os = "linux")]
+pub fn attachments_dir() -> Result<PathBuf> {
+    Ok(xdg_dir("XDG_CACHE_HOME", ".cache")?.join("collied/attachments"))
+}
+
+/// The XDG base directory in `var`, or `~/<fallback>` when it is unset, empty or
+/// relative (the spec says to ignore a relative value).
+#[cfg(target_os = "linux")]
+pub fn xdg_dir(var: &str, fallback: &str) -> Result<PathBuf> {
+    match std::env::var_os(var).map(PathBuf::from) {
+        Some(p) if p.is_absolute() => Ok(p),
+        _ => Ok(home_dir()?.join(fallback)),
+    }
 }
 
 pub fn parse(text: &str) -> Result<Config, toml::de::Error> {
@@ -159,33 +212,73 @@ pub fn load(path: &Path, explicit: bool) -> Result<Option<Config>> {
 /// unless there is exactly one such line and the result parses to the same `[apns]` with
 /// the key in the Keychain.
 pub fn use_keychain(text: &str) -> Option<String> {
+    set_apns_key(text, &ApnsKey::Keychain, false)
+}
+
+/// `text` with the `[apns]` key location set to `key`: its one `key` or `key_path` line
+/// replaced, or, with `insert`, a line added under `[apns]` when it has neither. None
+/// unless the result parses to the same `[apns]` with `key`.
+pub fn set_apns_key(text: &str, key: &ApnsKey, insert: bool) -> Option<String> {
+    let line_for = |indent: &str, eol: &str| match key {
+        ApnsKey::File(path) => {
+            let value = toml::Value::String(path.to_str()?.to_owned());
+            Some(format!("{indent}key_path = {value}{eol}"))
+        }
+        k => Some(format!("{indent}key = \"{}\"{eol}", k.config_value()?)),
+    };
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let mut table = "";
+    let mut header = None;
     let mut hits = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let t = line.trim();
         if t.starts_with('[') {
             table = t.split('#').next().unwrap_or_default().trim();
+            if table == "[apns]" {
+                header = Some(i);
+            }
         } else if table == "[apns]"
-            && t.strip_prefix("key_path")
-                .is_some_and(|rest| rest.trim_start().starts_with('='))
+            && ["key_path", "key"].iter().any(|k| {
+                t.strip_prefix(k)
+                    .is_some_and(|rest| rest.trim_start().starts_with('='))
+            })
         {
             hits.push(i);
         }
     }
-    let [i] = hits[..] else { return None };
-    let line = lines[i];
-    let indent = &line[..line.len() - line.trim_start().len()];
-    let eol = &line[line.trim_end().len()..];
-    let replaced = format!("{indent}key = \"keychain\"{eol}");
-    let out: String = lines
-        .iter()
-        .enumerate()
-        .map(|(j, l)| if j == i { replaced.as_str() } else { l })
-        .collect();
+    let (at, replaced) = match hits[..] {
+        [i] => {
+            let line = lines[i];
+            let indent = &line[..line.len() - line.trim_start().len()];
+            let eol = &line[line.trim_end().len()..];
+            (i, line_for(indent, eol)?)
+        }
+        [] if insert => {
+            let h = header?;
+            let eol = if lines[h].ends_with("\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            };
+            (h, format!("{}{}", lines[h], line_for("", eol)?))
+        }
+        _ => return None,
+    };
+    let mut out = String::with_capacity(text.len() + replaced.len());
+    for (j, l) in lines.iter().enumerate() {
+        if j == at {
+            if hits.is_empty() && !l.ends_with('\n') {
+                return None;
+            }
+            out.push_str(&replaced);
+        } else {
+            out.push_str(l);
+        }
+    }
     let before = parse(text).ok()?.apns?;
     let after = parse(&out).ok()?.apns?;
-    (after.key == ApnsKey::Keychain
+    (after.key == *key
+        && before.key != *key
         && after.key_id == before.key_id
         && after.team_id == before.team_id
         && after.bundle_id == before.bundle_id)
@@ -331,18 +424,33 @@ mod tests {
     fn apns_key_modes() {
         let key =
             |extra: &str| parse(&format!("[apns]\n{extra}{IDS}")).map(|c| c.apns.unwrap().key);
-        assert_eq!(key("").unwrap(), ApnsKey::Keychain);
-        assert_eq!(key("key = \"keychain\"\n").unwrap(), ApnsKey::Keychain);
+        assert_eq!(key("").unwrap(), ApnsKey::platform_default());
+        if cfg!(target_os = "macos") {
+            assert_eq!(key("key = \"keychain\"\n").unwrap(), ApnsKey::Keychain);
+            let linux = key("key = \"systemd-creds\"\n").unwrap_err();
+            assert!(linux.message().contains("Linux only"), "{linux}");
+        } else {
+            assert_eq!(key("").unwrap(), ApnsKey::SystemdCreds);
+            assert_eq!(
+                key("key = \"systemd-creds\"\n").unwrap(),
+                ApnsKey::SystemdCreds
+            );
+            let mac = key("key = \"keychain\"\n").unwrap_err();
+            assert!(mac.message().contains("macOS only"), "{mac}");
+        }
         assert_eq!(
             key("key_path = \"/k.p8\"\n").unwrap(),
             ApnsKey::File(PathBuf::from("/k.p8"))
         );
-        let both = key("key = \"keychain\"\nkey_path = \"/k.p8\"\n").unwrap_err();
-        assert!(both.message().contains("not both"), "{both}");
+        for store in ["keychain", "systemd-creds"] {
+            let both = key(&format!("key = \"{store}\"\nkey_path = \"/k.p8\"\n")).unwrap_err();
+            assert!(both.message().contains("not both"), "{both}");
+        }
         assert!(key("key = \"file\"\n").is_err());
         assert!(key("key = \"/k.p8\"\n").is_err());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn switches_to_keychain() {
         let text = format!(
@@ -372,6 +480,72 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn switches_between_credential_and_file() {
+        let text = format!(
+            "# mine\n[tailnet]\nport = 9000\n\n[apns]\n  key_path = \"/k.p8\" # old\r\n{IDS}"
+        );
+        let out = set_apns_key(&text, &ApnsKey::SystemdCreds, true).unwrap();
+        assert_eq!(
+            out,
+            format!("# mine\n[tailnet]\nport = 9000\n\n[apns]\n  key = \"systemd-creds\"\r\n{IDS}")
+        );
+        assert_eq!(
+            parse(&out).unwrap().apns.unwrap().key,
+            ApnsKey::SystemdCreds
+        );
+
+        // Already the default: nothing to change, either way.
+        let bare = format!("[apns]\n{IDS}");
+        assert_eq!(set_apns_key(&bare, &ApnsKey::SystemdCreds, true), None);
+
+        // Fallback: a key_path added under [apns], or replacing key = "systemd-creds".
+        let file = ApnsKey::File(PathBuf::from(
+            "/home/me/.local/share/collie/apns/AuthKey_6Y7FRZ845U.p8",
+        ));
+        let out = set_apns_key(&bare, &file, true).unwrap();
+        assert_eq!(
+            out,
+            format!(
+                "[apns]\nkey_path = \"/home/me/.local/share/collie/apns/AuthKey_6Y7FRZ845U.p8\"\n{IDS}"
+            )
+        );
+        assert_eq!(parse(&out).unwrap().apns.unwrap().key, file);
+        assert_eq!(set_apns_key(&bare, &file, false), None);
+        let creds = format!("[apns]\nkey = \"systemd-creds\"\n{IDS}");
+        assert_eq!(
+            parse(&set_apns_key(&creds, &file, true).unwrap())
+                .unwrap()
+                .apns
+                .unwrap()
+                .key,
+            file
+        );
+        let quoted = ApnsKey::File(PathBuf::from("/a \"b\"\\c.p8"));
+        assert_eq!(
+            parse(&set_apns_key(&bare, &quoted, true).unwrap())
+                .unwrap()
+                .apns
+                .unwrap()
+                .key,
+            quoted
+        );
+
+        // Never two key lines, never an inline table, never a header without a newline.
+        let two = format!("[apns]\nkey_path = \"/a\"\nkey_path = \"/b\"\n{IDS}");
+        assert_eq!(set_apns_key(&two, &ApnsKey::SystemdCreds, true), None);
+        assert_eq!(
+            set_apns_key(
+                "apns = { key_path = \"/k\", key_id = \"6Y7FRZ845U\", team_id = \"RM3UT3MMSR\", bundle_id = \"b\" }\n",
+                &ApnsKey::SystemdCreds,
+                true
+            ),
+            None
+        );
+        assert_eq!(set_apns_key(&format!("{IDS}[apns]"), &file, true), None);
     }
 
     #[test]

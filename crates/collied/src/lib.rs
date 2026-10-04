@@ -1,9 +1,14 @@
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+compile_error!("collied runs on macOS and Linux only");
+
 pub mod activity;
 pub mod approvals;
 pub mod attachments;
 pub mod audit;
 pub mod config;
 pub mod control;
+#[cfg(target_os = "linux")]
+pub mod creds;
 pub mod daemon;
 pub mod doctor;
 pub mod draft;
@@ -11,6 +16,7 @@ pub mod drive;
 pub mod flock;
 pub mod gate;
 pub mod herdr;
+#[cfg(target_os = "macos")]
 pub mod keychain;
 pub mod pairing;
 pub mod peers;

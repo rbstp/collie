@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 const AUTHKEY_ENV: &str = "COLLIE_TS_AUTHKEY";
 
 #[derive(Parser)]
-#[command(version, about = "collie Mac daemon")]
+#[command(version, about = "collie daemon")]
 struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
@@ -23,7 +23,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Join the tailnet as tag:collie-mac (interactive, or COLLIE_TS_AUTHKEY).
+    /// Join the tailnet as tag:collie-mac on macOS, tag:collie-linux on Linux
+    /// (interactive, or COLLIE_TS_AUTHKEY).
     Login,
     /// Run the daemon.
     Run,
@@ -40,11 +41,11 @@ enum Command {
     },
     /// Show the running daemon's state.
     Status,
-    /// Stop the launchd agent and keep it off, across reboots, until `collied start`.
+    /// Stop the service and keep it off, across reboots, until `collied start`.
     Stop,
-    /// Start the launchd agent again after `collied stop`.
+    /// Start the service again after `collied stop`.
     Start,
-    /// Install or remove the launchd agent.
+    /// Install or remove the service (launchd agent on macOS, systemd user unit on Linux).
     Service {
         #[command(subcommand)]
         command: ServiceCommand,
@@ -175,13 +176,44 @@ async fn status(control_path: &Path) -> anyhow::Result<()> {
             println!("sessions:  {}", s.sessions);
             println!("peers:     {}", s.peers);
             println!(
+                "tags:      {}",
+                if s.tags.is_empty() {
+                    "(none)".to_owned()
+                } else {
+                    s.tags.join(", ")
+                }
+            );
+            println!(
                 "herdr:     {}",
                 s.herdr_version.as_deref().unwrap_or("unreachable")
             );
+            if let Some(flock) = s.flock {
+                print_agents(&flock);
+            }
             Ok(())
         }
         Some(other) => anyhow::bail!("unexpected reply: {other:?}"),
         None => Err(not_running()),
+    }
+}
+
+fn print_agents(flock: &control::StatusFlock) {
+    let p = collied::printable;
+    println!("agents:    {}", flock.agents.len());
+    for a in &flock.agents {
+        let workspace = flock
+            .workspaces
+            .iter()
+            .find(|w| w.workspace_id == a.workspace_id)
+            .map_or("?", |w| w.label.as_str());
+        let name = a.name.as_deref().or(a.kind.as_deref()).unwrap_or("agent");
+        println!(
+            "  {:<8} {}\t{}\t{}",
+            format!("{:?}", a.status).to_lowercase(),
+            p(name),
+            p(workspace),
+            p(a.terminal_id.as_str())
+        );
     }
 }
 
