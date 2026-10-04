@@ -571,8 +571,9 @@ impl Driver {
         })
     }
 
-    // Busy retry and readiness rules follow herdr's own `herdr agent start` CLI (0.9.3),
-    // with collied's 30 s budget for the busy retry instead of the CLI's 2 s.
+    // Readiness rules follow herdr's own `herdr agent start` CLI (0.9.3). The busy retry
+    // gets 30 s instead of the CLI's 2 s and, unlike the CLI, does not require the shell
+    // in the foreground: the CLI targets any pane, this one was just created.
     async fn start_agent(
         &self,
         pane: &PaneInfo,
@@ -585,12 +586,13 @@ impl Driver {
             authorized(auth)?;
             match herdr::agent_start(&self.herdr, &name, kind.as_str(), &pane.pane_id).await {
                 Ok(a) => break a,
-                // Retried only while the pane still holds the new terminal and its shell is
-                // still starting, never when it is busy with something else.
+                // Retried while the pane still holds the terminal created for this task: what
+                // runs there is the shell's startup (rc files often run helpers in the
+                // foreground), as nothing else has used the pane yet.
                 Err(herdr::Error::Herdr { code, .. })
                     if code == "agent_pane_busy"
                         && tokio::time::Instant::now() < deadline
-                        && self.shell_starting(pane).await =>
+                        && self.still_new(pane).await =>
                 {
                     tokio::time::sleep(START_POLL).await;
                 }
@@ -666,16 +668,10 @@ impl Driver {
         )
     }
 
-    async fn shell_starting(&self, pane: &PaneInfo) -> bool {
-        let Ok(now) = herdr::pane_get(&self.herdr, &pane.pane_id).await else {
-            return false;
-        };
-        if now.terminal_id != pane.terminal_id {
-            return false;
-        }
-        herdr::pane_process_info(&self.herdr, &pane.pane_id)
+    async fn still_new(&self, pane: &PaneInfo) -> bool {
+        herdr::pane_get(&self.herdr, &pane.pane_id)
             .await
-            .is_ok_and(|info| shell_in_foreground(&info))
+            .is_ok_and(|now| now.terminal_id == pane.terminal_id)
     }
 
     pub async fn workspace_close(&self, p: WorkspaceCloseParams, auth: &Authorized) -> Reply {
