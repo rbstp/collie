@@ -34,7 +34,7 @@ const MAX_LABEL_CHARS: usize = 64;
 const DECIDE_BUDGET: Duration = Duration::from_secs(6);
 // Reissues of a prompt (after a burned nonce) alert at most this often per terminal, so
 // bad attempts cannot flood the phone; the reissued approval still reaches live sessions.
-const ALERT_GAP: Duration = Duration::from_secs(30);
+pub const ALERT_GAP: Duration = Duration::from_secs(30);
 
 /// What collied saw on an agent's screen. Never leaves collied except as the snippet and
 /// the sealed alert context.
@@ -177,13 +177,22 @@ fn agent_label(a: &AgentInfo) -> String {
 
 /// The APNs title goes through Apple, so it never comes from the terminal title or any
 /// title the pane's program reports: the herdr agent name, else the agent kind.
-fn alert_title(a: &AgentInfo) -> String {
+pub(crate) fn alert_title(a: &AgentInfo) -> String {
     [&a.name, &a.agent]
         .into_iter()
         .flatten()
         .map(|s| label(s))
         .find(|s| !s.is_empty())
         .unwrap_or_else(|| "agent".to_owned())
+}
+
+pub(crate) fn workspace_label(workspace_id: &str, workspaces: &[WorkspaceInfo]) -> String {
+    workspaces
+        .iter()
+        .find(|w| w.workspace_id == workspace_id)
+        .map(|w| label(&w.label))
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| "workspace".to_owned())
 }
 
 fn decision_name(d: Decision) -> &'static str {
@@ -341,12 +350,7 @@ impl Approvals {
             approval_id: ApprovalId::new(random(16)?)?,
             terminal_id,
             agent_label: agent_label(a),
-            workspace_label: workspaces
-                .iter()
-                .find(|w| w.workspace_id == a.workspace_id)
-                .map(|w| label(&w.label))
-                .filter(|l| !l.is_empty())
-                .unwrap_or_else(|| "workspace".to_owned()),
+            workspace_label: workspace_label(&a.workspace_id, workspaces),
             snippet: screen.snippet.clone(),
             tool: None,
             options: screen.offered.iter().map(|(d, _)| *d).collect(),
@@ -372,13 +376,12 @@ impl Approvals {
             alert
         };
         // A reissued alert replaces the dead one, whose approval_id no longer works.
-        if let Some(push) = self.push.as_ref().filter(|_| alert) {
-            push.notify(push::approval_alert(
+        if let Some(push) = &self.push {
+            push.notify_approval(
                 &approval,
-                &title,
-                &self.node_id,
-                &context,
-            ));
+                push::approval_alert(&approval, &title, &self.node_id, &context),
+                alert,
+            );
         }
         let _ = self.events.send(Event::ApprovalNeeded { approval });
         Ok(())

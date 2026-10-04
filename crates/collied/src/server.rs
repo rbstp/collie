@@ -26,6 +26,7 @@ use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode, header};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Bytes, Error as WsError, Message};
 
+use crate::activity;
 use crate::approvals::{self, Approvals};
 use crate::attachments::{self, Attachments};
 use crate::audit::Audit;
@@ -35,7 +36,7 @@ use crate::flock::{self, Baseline, StatusTracker};
 use crate::gate::{self, Decision};
 use crate::pairing::{Attempt, Pairing};
 use crate::peers::{self, Peer, Store};
-use crate::push::{self, Push};
+use crate::push::{self, ActivityError, Push};
 use crate::{config, herdr};
 
 const MAX_CONNECTIONS: usize = 64;
@@ -163,6 +164,7 @@ pub struct State {
     chunk_buckets: Mutex<HashMap<String, TokenBucket>>,
     reject_buckets: Mutex<HashMap<IpAddr, TokenBucket>>,
     tracker: Mutex<StatusTracker>,
+    live: Mutex<activity::Live>,
     events: broadcast::Sender<Event>,
     drive: Arc<Driver>,
     approvals: Arc<Approvals>,
@@ -433,6 +435,7 @@ pub async fn start_with(
         chunk_buckets: Mutex::new(HashMap::new()),
         reject_buckets: Mutex::new(HashMap::new()),
         tracker: Mutex::new(StatusTracker::default()),
+        live: Mutex::new(activity::Live::default()),
         events,
         drive,
         approvals,
@@ -997,9 +1000,44 @@ impl Session<'_> {
                     }),
                 None,
             ),
-            Request::PushActivityToken(_) => {
-                (err(ErrorCode::NotImplemented, "not implemented"), None)
-            }
+            Request::PushActivityToken(_) | Request::PushActivityEnd(_) if !auth() => (
+                err(ErrorCode::NotPaired, "peer is no longer authorized"),
+                None,
+            ),
+            Request::PushActivityToken(p) => (
+                self.state
+                    .push
+                    .register_activity(
+                        &peer,
+                        p.activity_id,
+                        p.terminal_id,
+                        p.token,
+                        p.shows_approvals,
+                    )
+                    .map(|()| Response::Ok)
+                    .map_err(|e| {
+                        let code = match e {
+                            ActivityError::NotPaired => ErrorCode::NotPaired,
+                            ActivityError::NoDevice => ErrorCode::NotFound,
+                            ActivityError::TooMany => ErrorCode::TooLarge,
+                            ActivityError::Store => ErrorCode::Internal,
+                        };
+                        (code, e.to_string())
+                    }),
+                None,
+            ),
+            // Ending an activity the device no longer has is not an error.
+            Request::PushActivityEnd(p) => (
+                self.state
+                    .push
+                    .end_activity(&peer, &p.activity_id)
+                    .map(|_| Response::Ok)
+                    .map_err(|e| {
+                        tracing::error!(error = %e, "push.activity_end");
+                        (ErrorCode::Internal, "could not remove the token".to_owned())
+                    }),
+                None,
+            ),
             Request::AttachmentBegin(p) => {
                 let (op_id, store, session) =
                     (p.op_id.clone(), self.state.attachments.clone(), self.id);
@@ -1344,6 +1382,10 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::PaneClose(p) => p.terminal_id.as_str(),
         Request::WorkspaceClose(p) => p.workspace_id.as_str(),
         Request::TaskNew(p) => p.cwd.as_str(),
+        Request::PushActivityToken(p) => {
+            return Some(activity::target(&p.terminal_id, &p.activity_id));
+        }
+        Request::PushActivityEnd(p) => p.activity_id.as_str(),
         _ => return None,
     };
     Some(target.to_owned())
@@ -1539,6 +1581,15 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         base = Some(next);
         outage = false;
         state.approvals.observe(&agents, &workspaces).await;
+        let pending = state.approvals.pending();
+        lock(&state.live).observe(
+            &state.push,
+            &state.audit,
+            &agents,
+            &workspaces,
+            &pending,
+            &mut lock(&state.tracker),
+        );
     }
 }
 

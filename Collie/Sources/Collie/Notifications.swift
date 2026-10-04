@@ -136,6 +136,14 @@ extension ApprovalDecision {
     var noun: String {
         self == .deny ? "denial" : "approval"
     }
+
+    var progressive: String {
+        switch self {
+        case .approve: "Approving…"
+        case .approveAlways: "Always approving…"
+        case .deny: "Denying…"
+        }
+    }
 }
 
 extension PushEnvironment {

@@ -18,7 +18,7 @@ use collie_core::{
 };
 use collied::config::{PUSH_FILE, TasksConfig};
 use collied::control::{Client, Reply, Request};
-use collied::push::{Alert, Device, Devices, Rejection, Sender};
+use collied::push::{Alert, Delivery, Device, Devices, Rejection, Sender};
 use collied::server::{self, ServerConfig, ServerHandle};
 use common::*;
 use futures_util::{SinkExt, StreamExt};
@@ -40,6 +40,11 @@ const KEY: &str = "test-authkey-colliee2ephase3";
 const TERMINAL: &str = "term_0a1b2c3d4e5f60";
 const PANE: &str = "w7:p1";
 const TOKEN: &str = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00";
+const ACTIVITY: &str = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
+const ACTIVITY_TOKEN: &str =
+    "a11ce0a11ce0a11ce0a11ce0a11ce0a11ce0a11ce0a11ce0a11ce0a11ce0a11ce0a11ce0a11ce0";
+const SECOND_TOKEN: &str =
+    "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0";
 const BUDGET_MS: u64 = 20_000;
 // The shared test vector's key (docs/protocol/notification-vector.json).
 const NOTIFY_KEY: [u8; 32] = [
@@ -282,6 +287,198 @@ fn phase3_expired_approvals() {
     });
     drop(core);
     rt.block_on(handle.shutdown());
+}
+
+// The followed agent's Live Activity: an update token registered from the app, a push
+// with the Live Activity topic when the agent blocks, and an end when its pane closes.
+#[test]
+fn live_activity_follows_an_agent() {
+    if !in_child_with("live_activity_follows_an_agent", &[("TS_AUTHKEY", KEY)]) {
+        return;
+    }
+    let root = TempDir::new("e2e4");
+    let net = Net::with_key(&root.0, KEY.into());
+    wait_ready(&net.mac, 0);
+    let core = phone(&root.0, "phone", &net);
+    let rt = runtime();
+    rt.block_on(core.node_start(Some(net.key.clone()))).unwrap();
+    wait_ready(&net.mac, 1);
+    wait_phone(&rt, &core);
+    let herdr = rt.block_on(async { Mock::start(&root.0.join("herdr.sock")) });
+    let apns = Arc::new(Apns::default());
+    let data_dir = root.0.join("collied");
+    let handle = rt.block_on(start_collied(
+        &net,
+        &data_dir,
+        &herdr,
+        apns.clone(),
+        collied::approvals::TTL,
+    ));
+    rt.block_on(async {
+        let (machine, _) = pair(&handle.control_path(), &core, LABEL).await;
+        let m = machine.id.clone();
+        connected_flock(&core, &m).await;
+        core.register_push(
+            m.clone(),
+            TOKEN.into(),
+            PushEnvironment::Production,
+            NOTIFY_KEY.to_vec(),
+        )
+        .unwrap();
+        core.register_activity_token(
+            m.clone(),
+            ACTIVITY.into(),
+            TERMINAL.into(),
+            ACTIVITY_TOKEN.into(),
+        )
+        .unwrap();
+        let activities = || match std::fs::read_to_string(data_dir.join(PUSH_FILE)) {
+            Ok(text) => serde_json::from_str::<Devices>(&text).unwrap().activities,
+            Err(_) => Vec::new(),
+        };
+        wait_for("push.activity_token", || activities().len() == 1).await;
+        let stored = &activities()[0];
+        assert_eq!(stored.terminal_id.as_str(), TERMINAL);
+        assert_eq!(stored.environment, ApnsEnvironment::Production);
+
+        println!("the activity is synced quietly, then a blocked agent pushes with priority 10");
+        let (_, sync) = live(&apns, "the first sync", |_, _| true).await;
+        assert_eq!(sync.delivery, Delivery::LiveActivity { urgent: false });
+        assert_eq!(sync.payload["aps"]["content-state"]["status"], "working");
+        let rev = core.approval_feed(m.clone(), 0).unwrap().revision;
+        herdr.set_status("blocked");
+        let (approval, _) = needed(&core, &m, rev).await;
+        let (device, blocked) = live(&apns, "the blocked update", |_, a| {
+            a.payload["aps"]["content-state"]["status"] == "blocked"
+        })
+        .await;
+        assert_eq!(device.token.as_str(), ACTIVITY_TOKEN);
+        assert_eq!(device.environment, ApnsEnvironment::Production);
+        assert_eq!(device.notification_key, None);
+        let headers = blocked.headers("dev.rbstp.collie");
+        assert_eq!(headers.push_type.to_string(), "liveactivity");
+        assert_eq!(headers.topic, "dev.rbstp.collie.push-type.liveactivity");
+        assert_eq!(headers.priority, 10);
+        let aps = &blocked.payload["aps"];
+        assert_eq!(aps["event"], "update");
+        let state = &aps["content-state"];
+        assert_eq!(
+            *state,
+            json!({
+                "status": "blocked",
+                "statusSince": state["statusSince"],
+                "title": "api-fixer",
+                "workspace": "api",
+                "approvals": 1,
+                "approvalId": state["approvalId"],
+                "enc": state["enc"],
+            })
+        );
+        assert_eq!(state["approvalId"], approval.approval_id.as_str());
+        assert_eq!(
+            phone_opens(&json!({"enc": state["enc"], "approval_id": state["approvalId"]})),
+            json!({"v": 1, "body": "Bash: rm -rf build\nRemove the build directory"})
+        );
+        assert!(
+            !apns
+                .sent
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, a)| a.delivery == Delivery::Alert),
+            "the follower gets the approval on its activity only"
+        );
+        assert_eq!(
+            aps["alert"],
+            json!({"title": "api-fixer", "body": "Blocked in api"})
+        );
+        let now = collied::now_ms() / 1000;
+        let since = aps["content-state"]["statusSince"].as_i64().unwrap();
+        assert!(
+            (now as i64 - 978_307_200 - since).abs() < 30,
+            "seconds since 2001: {since}"
+        );
+        assert!(aps["stale-date"].as_u64().unwrap() >= now + 800);
+        let text = blocked.payload.to_string();
+        assert!(!text.contains("rm -rf") && !text.contains("Bash"), "{text}");
+
+        println!("ending it from the phone removes the token");
+        core.end_activity(m.clone(), ACTIVITY.into()).unwrap();
+        wait_for("push.activity_end", || activities().is_empty()).await;
+
+        println!("a closed pane ends the activity with a dismissal date");
+        core.register_activity_token(
+            m.clone(),
+            "SECOND".into(),
+            TERMINAL.into(),
+            SECOND_TOKEN.into(),
+        )
+        .unwrap();
+        live(&apns, "the second sync", |d, _| {
+            d.token.as_str() == SECOND_TOKEN
+        })
+        .await;
+        herdr.with(|h| h.gone = true);
+        let (_, ended) = live(&apns, "the end", |d, a| {
+            d.token.as_str() == SECOND_TOKEN && a.payload["aps"]["event"] == "end"
+        })
+        .await;
+        assert_eq!(ended.payload["aps"]["event"], "end");
+        assert!(ended.payload["aps"]["dismissal-date"].as_u64().unwrap() >= now + 60);
+        wait_for("token dropped", || activities().is_empty()).await;
+
+        let audit = audit_lines(&data_dir.join("audit.log"));
+        let lines: Vec<(String, String)> = audit
+            .iter()
+            .filter(|l| {
+                l["method"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with("push.activity"))
+            })
+            .map(|l| {
+                (
+                    l["method"].as_str().unwrap().to_owned(),
+                    l["result"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("push.activity_token".into(), "ok".into()),
+                ("push.activity_end".into(), "ok".into()),
+                ("push.activity_token".into(), "ok".into()),
+                ("push.activity_end".into(), "ended: agent gone".into()),
+            ]
+        );
+        let text = std::fs::read_to_string(data_dir.join("audit.log")).unwrap();
+        assert!(
+            !text.contains(ACTIVITY_TOKEN) && !text.contains(SECOND_TOKEN),
+            "token in the audit log"
+        );
+    });
+    drop(core);
+    rt.block_on(handle.shutdown());
+}
+
+/// The first Live Activity push that matches.
+async fn live(
+    apns: &Apns,
+    what: &str,
+    matches: impl Fn(&Device, &Alert) -> bool,
+) -> (Device, Alert) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let found = apns.sent.lock().unwrap().iter().find_map(|(d, a)| {
+            (matches!(a.delivery, Delivery::LiveActivity { .. }) && matches(d, a))
+                .then(|| (d.clone(), a.clone()))
+        });
+        if let Some(found) = found {
+            return found;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 struct Rig {
@@ -937,6 +1134,7 @@ struct Herdr {
     calls: Vec<(String, Value)>,
     held: usize,
     down: bool,
+    gone: bool,
 }
 
 struct Mock {
@@ -959,6 +1157,7 @@ impl Mock {
             calls: Vec::new(),
             held: 0,
             down: false,
+            gone: false,
         }));
         let (hold, gate) = watch::channel(false);
         let listener = UnixListener::bind(socket).unwrap();
@@ -1056,6 +1255,7 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
     if h.down {
         return Err("unavailable".into());
     }
+    let agents = if h.gone { json!([]) } else { json!([h.agent]) };
     let workspace = json!({"workspace_id": "w7", "number": 1, "label": "api", "focused": false,
         "pane_count": 1, "tab_count": 1, "active_tab_id": "w7:t1",
         "agent_status": h.agent["agent_status"]});
@@ -1065,9 +1265,9 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
             "workspaces": [workspace],
             "panes": [{"pane_id": PANE, "terminal_id": TERMINAL, "workspace_id": "w7",
                 "tab_id": "w7:t1", "cwd": "/Users/me/src/api"}],
-            "agents": [h.agent],
+            "agents": agents,
         }}),
-        "agent.list" => json!({"type": "agent_list", "agents": [h.agent]}),
+        "agent.list" => json!({"type": "agent_list", "agents": agents}),
         "workspace.list" => json!({"type": "workspace_list", "workspaces": [workspace]}),
         "agent.get" if p["target"] == PANE || p["target"] == TERMINAL => {
             json!({"type": "agent_info", "agent": h.agent})

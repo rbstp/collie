@@ -327,11 +327,28 @@
       "minLength": 1,
       "type": "string"
     },
-    "PushActivityTokenParams": {
+    "PushActivityEndParams": {
       "additionalProperties": false,
       "properties": {
         "activity_id": {
           "$ref": "#/$defs/ActivityId"
+        }
+      },
+      "required": [
+        "activity_id"
+      ],
+      "type": "object"
+    },
+    "PushActivityTokenParams": {
+      "additionalProperties": false,
+      "description": "A Live Activity's update token. collied pushes the followed terminal's status to it,\nin the APNs environment of the device's own `push.register`.",
+      "properties": {
+        "activity_id": {
+          "$ref": "#/$defs/ActivityId"
+        },
+        "shows_approvals": {
+          "description": "The activity shows an approval's command and its Approve and Deny buttons. Without\nit collied keeps sending that device the approval alert.",
+          "type": "boolean"
         },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"
@@ -779,6 +796,22 @@
         },
         "params": {
           "$ref": "#/$defs/PushActivityTokenParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "push.activity_end",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/PushActivityEndParams"
         }
       },
       "required": [

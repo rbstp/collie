@@ -22,9 +22,13 @@ final class AppModel {
     private(set) var signingIn = false
     private(set) var pushStatus = "not registered"
     private var pushToken: Data?
+    private var alertsOff = false
     let approvals: ApprovalsModel
+    let follows: FollowModel
     var tab = AppTab.agents
+    var openingAgent: AgentRoute?
     private var backgroundedAt: Date?
+    @ObservationIgnored private var activityDecisions: Set<String> = []
 
     private let log = Logger(subsystem: "dev.rbstp.collie", category: "app")
 
@@ -36,6 +40,7 @@ final class AppModel {
             startupError = describe(error)
         }
         approvals = ApprovalsModel(core: core)
+        follows = FollowModel(core: core, approvals: approvals)
         machines = core?.machines() ?? []
         if let core, let group = AppGroup.container {
             do {
@@ -156,19 +161,19 @@ final class AppModel {
                 core?.resume(backgroundSecs: UInt64(max(0, Date.now.timeIntervalSince(since))))
             }
             backgroundedAt = nil
+            follows.foreground()
         default:
             break
         }
     }
 
-    /// Asks once, after onboarding; later launches only refresh the APNs token.
+    /// Asks once, after onboarding; later launches only refresh the APNs token. Registers even
+    /// when alerts are denied: collied refuses Live Activity tokens from a device without `push.register`.
     func enableNotifications() async {
         let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
-        if granted {
-            UIApplication.shared.registerForRemoteNotifications()
-        } else {
-            pushStatus = "notifications are off for collie"
-        }
+        alertsOff = !granted
+        if alertsOff { pushStatus = "notifications are off for collie" }
+        UIApplication.shared.registerForRemoteNotifications()
     }
 
     /// One notification key per Mac, keyed by its node id: the NSE only sees `node_id` in the alert.
@@ -191,6 +196,8 @@ final class AppModel {
         }
         if let failure {
             pushStatus = describe(failure)
+        } else if alertsOff {
+            pushStatus = "registered, notifications are off for collie"
         } else {
             pushStatus = environment == .production ? "registered" : "registered (sandbox)"
         }
@@ -205,13 +212,30 @@ final class AppModel {
         approvals.open(link)
     }
 
+    /// A Live Activity tap: the Agents tab, on that agent. Links to a Mac that is not paired are ignored.
+    func open(_ url: URL) {
+        guard let route = Self.route(for: url, machines: machines) else { return }
+        tab = .agents
+        openingAgent = route
+    }
+
+    nonisolated static func route(for url: URL, machines: [Machine]) -> AgentRoute? {
+        guard let link = AgentLink(url: url), machines.contains(where: { $0.id == link.machineId }) else { return nil }
+        return AgentRoute(machineId: link.machineId, terminalId: link.terminalId)
+    }
+
     /// Lock-screen Approve/Deny. iOS has already required the device owner to unlock
     /// (the actions are `authenticationRequired`); the app may have been launched in the
-    /// background for this alone.
-    func decideFromNotification(_ link: ApprovalLink, _ decision: ApprovalDecision, agent: String, thread: String) async {
+    /// background for this alone. `quietWhenApplied` skips the follow-up when the outcome
+    /// already shows elsewhere (on the Live Activity).
+    @discardableResult
+    func decideFromNotification(
+        _ link: ApprovalLink, _ decision: ApprovalDecision, agent: String, thread: String, quietWhenApplied: Bool = false
+    ) async -> BackgroundOutcome? {
         let assertion = BackgroundAssertion(name: "approval.decide")
         defer { assertion.end() }
         let followUp: FollowUp
+        var outcome: BackgroundOutcome?
         if let core {
             let report = await core.decideFromNotification(
                 machineNodeId: link.nodeId, approvalId: link.approvalId, decision: decision, budgetMs: 20_000
@@ -219,6 +243,8 @@ final class AppModel {
             log.notice(
                 "lock-screen decide: outcome=\(String(describing: report.outcome), privacy: .public) nodeWasRunning=\(report.nodeWasRunning, privacy: .public) nodeUp=\(report.nodeUpMs.map(String.init) ?? "-", privacy: .public)ms connect=\(report.connectMs.map(String.init) ?? "-", privacy: .public)ms lookup=\(report.lookupMs.map(String.init) ?? "-", privacy: .public)ms decide=\(report.decideMs.map(String.init) ?? "-", privacy: .public)ms total=\(report.totalMs, privacy: .public)ms"
             )
+            outcome = report.outcome
+            if quietWhenApplied, case .applied = report.outcome { return outcome }
             followUp = FollowUp.after(report.outcome, decision: decision, agent: agent)
         } else {
             followUp = FollowUp(title: agent, body: FollowUp.unreachable, opensApproval: true)
@@ -236,6 +262,24 @@ final class AppModel {
             try await UNUserNotificationCenter.current().add(request)
         } catch {
             log.error("follow-up notification: \(describe(error), privacy: .public)")
+        }
+        return outcome
+    }
+
+    /// Approve/Deny on a followed agent's Live Activity, with the same unlock requirement
+    /// (`DecideApprovalIntent.authenticationPolicy`) and path as the notification actions.
+    func decideFromActivity(_ link: ApprovalLink, _ decision: ApprovalDecision) async {
+        // A second tap would only fail as already resolved and post a misleading follow-up.
+        guard activityDecisions.insert(link.approvalId).inserted else { return }
+        defer { activityDecisions.remove(link.approvalId) }
+        let agent = await FollowModel.show(progress: decision.progressive, on: link)
+        let outcome = await decideFromNotification(
+            link, decision, agent: agent?.title ?? "agent", thread: agent?.terminalId ?? "", quietWhenApplied: true
+        )
+        if case .applied(let applied) = outcome {
+            await FollowModel.show(progress: applied.pastTense, on: link)
+        } else {
+            await FollowModel.show(progress: nil, on: link)
         }
     }
 

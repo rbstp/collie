@@ -5,6 +5,8 @@ struct FlockScreen: View {
     let core: (any FlockCore)?
     let machines: [Machine]
     let approvals: ApprovalsModel?
+    let follows: FollowModel?
+    @Binding var opening: AgentRoute?
     var tailnetStarting = false
     @State private var model = FlockModel()
     @State private var path: [AgentRoute] = []
@@ -38,9 +40,16 @@ struct FlockScreen: View {
                         ForEach(entry.agents, id: \.terminalId) { agent in
                             let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
                             NavigationLink(value: route) {
-                                AgentRow(agent: agent, workspace: entry.workspaceLabel(for: agent))
+                                AgentRow(
+                                    agent: agent, workspace: entry.workspaceLabel(for: agent),
+                                    followed: follows?.isFollowing(route) == true
+                                )
                             }
                             .contextMenu {
+                                if let follows {
+                                    FollowMenuItem(follows: follows, route: route)
+                                    Divider()
+                                }
                                 Button("Close pane", systemImage: "xmark.square", role: .destructive) {
                                     model.beginClose(.pane, route: route)
                                 }
@@ -78,7 +87,7 @@ struct FlockScreen: View {
             }
             .navigationDestination(for: AgentRoute.self) { route in
                 if let core {
-                    AgentScreen(core: core, route: route, approvals: approvals)
+                    AgentScreen(core: core, route: route, approvals: approvals, follows: follows)
                 }
             }
             .sheet(isPresented: $newTask) {
@@ -89,10 +98,17 @@ struct FlockScreen: View {
             .task {
                 while !Task.isCancelled {
                     await model.refresh(core: core)
+                    follows?.sync()
                     try? await Task.sleep(for: .seconds(3))
                 }
             }
+            .onChange(of: opening, initial: true) { _, route in
+                guard let route else { return }
+                path = [route]
+                opening = nil
+            }
         }
+        .followNotice(follows)
     }
 }
 
@@ -123,12 +139,21 @@ private struct MachineHeader: View {
 private struct AgentRow: View {
     let agent: AgentSummary
     let workspace: String?
+    let followed: Bool
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             StatusPill(state: agent.status)
             VStack(alignment: .leading, spacing: 2) {
-                Text(agent.displayTitle).lineLimit(2)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    if followed {
+                        Image(systemName: "pin.fill")
+                            .font(.caption)
+                            .foregroundStyle(.tint)
+                            .accessibilityLabel("Followed")
+                    }
+                    Text(agent.displayTitle).lineLimit(2)
+                }
                 if let subtitle = [workspace, agent.kind].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
                     Text(subtitle).font(.caption).foregroundStyle(.secondary)
                 }

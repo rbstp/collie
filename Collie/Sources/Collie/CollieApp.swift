@@ -15,13 +15,19 @@ struct CollieApp: App {
             } else {
                 RootView(app: delegate.app)
                     .task { await delegate.app.launch() }
+                    .onOpenURL { delegate.app.open($0) }
             }
             #else
             RootView(app: delegate.app)
                 .task { await delegate.app.launch() }
+                .onOpenURL { delegate.app.open($0) }
             #endif
         }
         .onChange(of: scenePhase) { _, phase in
+            #if DEBUG
+            // The demos run without the app model; its foreground work would end their Live Activity.
+            if ["--terminal-demo", "--approvals-demo"].contains(where: CommandLine.arguments.contains) { return }
+            #endif
             delegate.app.scenePhaseChanged(to: phase)
         }
     }
@@ -36,7 +42,10 @@ struct RootView: View {
         } else if app.showsMain {
             TabView(selection: $app.tab) {
                 Tab("Agents", systemImage: "square.grid.2x2", value: AppTab.agents) {
-                    FlockScreen(core: app.core, machines: app.machines, approvals: app.approvals, tailnetStarting: !app.isRunning)
+                    FlockScreen(
+                        core: app.core, machines: app.machines, approvals: app.approvals, follows: app.follows,
+                        opening: $app.openingAgent, tailnetStarting: !app.isRunning
+                    )
                 }
                 Tab("Approvals", systemImage: "checkmark.shield", value: AppTab.approvals) {
                     ApprovalsScreen(model: app.approvals)

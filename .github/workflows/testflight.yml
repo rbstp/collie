@@ -88,6 +88,7 @@ jobs:
           APPLE_DIST_CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
           APPLE_PROVISIONING_PROFILE_PUSH: ${{ secrets.APPLE_PROVISIONING_PROFILE_PUSH }}
+          APPLE_PROVISIONING_PROFILE_WIDGETS: ${{ secrets.APPLE_PROVISIONING_PROFILE_WIDGETS }}
           APPLE_KEY_P8: ${{ secrets.APPLE_KEY_P8 }}
           APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
           APPLE_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
@@ -172,6 +173,7 @@ jobs:
           APPLE_DIST_CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
           APPLE_PROVISIONING_PROFILE_PUSH: ${{ secrets.APPLE_PROVISIONING_PROFILE_PUSH }}
+          APPLE_PROVISIONING_PROFILE_WIDGETS: ${{ secrets.APPLE_PROVISIONING_PROFILE_WIDGETS }}
           APPLE_KEY_P8: ${{ secrets.APPLE_KEY_P8 }}
 
       # No PROVISIONING_PROFILE_SPECIFIER here: a command-line setting applies to every target, so each target names its profile in project.yml.

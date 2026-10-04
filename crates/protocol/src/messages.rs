@@ -58,6 +58,8 @@ pub enum Request {
     PushRegister(PushRegisterParams),
     #[serde(rename = "push.activity_token")]
     PushActivityToken(PushActivityTokenParams),
+    #[serde(rename = "push.activity_end")]
+    PushActivityEnd(PushActivityEndParams),
 
     #[serde(rename = "attachment.begin")]
     AttachmentBegin(AttachmentBeginParams),
@@ -90,6 +92,7 @@ impl Request {
         "approval.decide",
         "push.register",
         "push.activity_token",
+        "push.activity_end",
         "attachment.begin",
         "attachment.chunk",
         "attachment.commit",
@@ -117,6 +120,7 @@ impl Request {
             Self::ApprovalDecide(_) => "approval.decide",
             Self::PushRegister(_) => "push.register",
             Self::PushActivityToken(_) => "push.activity_token",
+            Self::PushActivityEnd(_) => "push.activity_end",
             Self::AttachmentBegin(_) => "attachment.begin",
             Self::AttachmentChunk(_) => "attachment.chunk",
             Self::AttachmentCommit(_) => "attachment.commit",
@@ -146,7 +150,9 @@ impl Request {
             | Self::AttachmentCommit(_)
             | Self::AttachmentAbort(_) => MethodClass::Drive,
             Self::ApprovalDecide(_) => MethodClass::Approval,
-            Self::PushRegister(_) | Self::PushActivityToken(_) => MethodClass::Push,
+            Self::PushRegister(_) | Self::PushActivityToken(_) | Self::PushActivityEnd(_) => {
+                MethodClass::Push
+            }
         }
     }
 }
@@ -348,12 +354,24 @@ pub struct PushRegisterParams {
     pub notification_key: NotificationKey,
 }
 
+/// A Live Activity's update token. collied pushes the followed terminal's status to it,
+/// in the APNs environment of the device's own `push.register`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PushActivityTokenParams {
     pub activity_id: ActivityId,
     pub terminal_id: TerminalId,
     pub token: PushToken,
+    /// The activity shows an approval's command and its Approve and Deny buttons. Without
+    /// it collied keeps sending that device the approval alert.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shows_approvals: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PushActivityEndParams {
+    pub activity_id: ActivityId,
 }
 
 /// `sha256` covers the whole file; collied checks it and the size before keeping it.
@@ -823,6 +841,36 @@ mod tests {
         let older: ErrorBody =
             serde_json::from_str(r#"{"code":"not_found","message":"m"}"#).unwrap();
         assert_eq!(older.draft, None);
+    }
+
+    #[test]
+    fn activity_token_and_end() {
+        let activity = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
+        let token = "ab".repeat(40);
+        let register = parse(&format!(
+            r#"{{"id":1,"method":"push.activity_token","params":{{"activity_id":"{activity}","terminal_id":"term_1","token":"{token}"}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(register.request.class(), MethodClass::Push);
+        assert!(!format!("{register:?}").contains(&token));
+        let end = parse(&format!(
+            r#"{{"id":2,"method":"push.activity_end","params":{{"activity_id":"{activity}"}}}}"#
+        ))
+        .unwrap();
+        assert_eq!(end.request.class(), MethodClass::Push);
+        assert_eq!(end.request.method(), "push.activity_end");
+        let Request::PushActivityEnd(p) = end.request else {
+            panic!("not an activity end");
+        };
+        assert_eq!(p.activity_id.as_str(), activity);
+        for bad in [
+            r#"{"activity_id":"a/b"}"#,
+            r#"{"activity_id":""}"#,
+            r#"{"activity_id":"a","terminal_id":"t"}"#,
+        ] {
+            let frame = format!(r#"{{"id":3,"method":"push.activity_end","params":{bad}}}"#);
+            assert_eq!(parse(&frame).unwrap_err().code, ErrorCode::InvalidParams);
+        }
     }
 
     #[test]

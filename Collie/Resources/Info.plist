@@ -28,6 +28,21 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CollieApsEnvironment</key>
 	<string>$(APS_ENVIRONMENT)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>dev.rbstp.collie</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>collie</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<false/>
 	<key>NSCameraUsageDescription</key>
 	<string>collie uses the camera to scan the pairing QR code shown by collied on your Mac.</string>
 	<key>NSFaceIDUsageDescription</key>
