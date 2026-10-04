@@ -1,5 +1,5 @@
-use protocol::Decision;
-use protocol::limits::MAX_SNIPPET_CHARS;
+use protocol::limits::{MAX_CHOICE_LABEL_CHARS, MAX_SNIPPET_CHARS};
+use protocol::{ApprovalChoice, Decision};
 
 const MAX_CONTINUATION_LINES: usize = 3;
 const MAX_BODY_LINES: usize = 12;
@@ -20,6 +20,34 @@ const CLAUDE_MENU_RULES: &[&str] = &[
 
 pub fn uses_menu(kind: &str, rule: Option<&str>) -> bool {
     kind == "claude" && rule.is_some_and(|r| CLAUDE_MENU_RULES.contains(&r))
+}
+
+/// herdr rule ids (claude manifest 2026.09.11.1) of Claude Code's question and form
+/// dialogs. Keys and typed text reach a blocked agent only under these: a permission
+/// rule, an unknown rule or none at all (a hook-reported status) fails closed, whatever
+/// the screen parses to.
+const CLAUDE_FORM_RULES: &[&str] = &["live_blocked_form"];
+
+/// Whether a blocked prompt may be answered with keys or text instead of an approval: a
+/// Claude Code form whose dialog has no trust wording and no option that reads as a
+/// decision or starts with "yes" (a plan's "Yes, and auto-accept edits" grants a
+/// permission mode). Every numbered or `❯` line of the dialog counts, not only a parsed
+/// menu, so a menu that does not parse (wrapped labels, a second `❯`, the unnumbered trust
+/// prompt of Claude Code 2.1.289) cannot hide its approve option.
+pub fn open_to_keys(kind: &str, rule: Option<&str>, text: &str) -> bool {
+    kind == "claude"
+        && rule.is_some_and(|r| CLAUDE_FORM_RULES.contains(&r))
+        && !after_last_rule(text).into_iter().any(|l| {
+            trust_wording(l)
+                || option_line(l)
+                    .map(|(_, _, label)| label)
+                    .or_else(|| l.trim_start().strip_prefix('❯').map(str::trim))
+                    .is_some_and(grants)
+        })
+}
+
+fn grants(label: &str) -> bool {
+    classify(label).is_some() || label.to_lowercase().starts_with("yes")
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +84,8 @@ impl Menu {
                     break;
                 }
                 expect = Some(n - 1);
+            } else if splits_options(&lines, i) {
+                continue;
             } else if line.trim().is_empty()
                 || is_rule(line)
                 || continuation.len() == MAX_CONTINUATION_LINES
@@ -87,22 +117,56 @@ impl Menu {
         })
     }
 
-    /// Each decision maps to exactly one option, or it is not offered.
+    /// Each decision maps to exactly one option, or it is not offered. A menu without an
+    /// approve option is not a permission prompt (a plan, a question): it offers no
+    /// decision, and its options are only chosen by index.
     pub fn decisions(&self) -> Vec<(Decision, usize)> {
-        [Decision::Approve, Decision::ApproveAlways, Decision::Deny]
-            .into_iter()
-            .filter_map(|d| {
-                let mut hits = self
-                    .options
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, l)| classify(l) == Some(d));
-                match (hits.next(), hits.next()) {
-                    (Some((i, _)), None) => Some((d, i)),
-                    _ => None,
-                }
+        let offered: Vec<(Decision, usize)> =
+            [Decision::Approve, Decision::ApproveAlways, Decision::Deny]
+                .into_iter()
+                .filter_map(|d| {
+                    let mut hits = self
+                        .options
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, l)| classify(l) == Some(d));
+                    match (hits.next(), hits.next()) {
+                        (Some((i, _)), None) => Some((d, i)),
+                        _ => None,
+                    }
+                })
+                .collect();
+        if offered.iter().any(|(d, _)| *d != Decision::Deny) {
+            offered
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn choices(&self) -> Vec<ApprovalChoice> {
+        self.options
+            .iter()
+            .enumerate()
+            .map(|(i, label)| ApprovalChoice {
+                index: i as u8,
+                label: clean(label).chars().take(MAX_CHOICE_LABEL_CHARS).collect(),
+                current: i == self.cursor,
             })
             .collect()
+    }
+
+    /// Claude Code's free-text option, which turns into an inline text field under the
+    /// cursor.
+    pub fn free_text(&self) -> Option<usize> {
+        let mut hits = self
+            .options
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.eq_ignore_ascii_case("type something."));
+        match (hits.next(), hits.next()) {
+            (Some((i, _)), None) => Some(i),
+            _ => None,
+        }
     }
 
     pub fn tail(&self) -> &[String] {
@@ -119,12 +183,15 @@ impl Menu {
         {
             return (Vec::new(), "esc");
         }
-        let (key, n) = if target >= self.cursor {
-            ("down", target - self.cursor)
+        (self.arrows(target), "enter")
+    }
+
+    pub fn arrows(&self, target: usize) -> Vec<&'static str> {
+        if target >= self.cursor {
+            vec!["down"; target - self.cursor]
         } else {
-            ("up", self.cursor - target)
-        };
-        (vec![key; n], "enter")
+            vec!["up"; self.cursor - target]
+        }
     }
 
     /// Only the dialog title and the options decide: the body can quote any text, such
@@ -329,9 +396,20 @@ pub fn snippet<'a>(lines: impl DoubleEndedIterator<Item = &'a str>) -> String {
     kept.join("\n")
 }
 
+/// Claude Code 2.1.289 draws a rule inside a question's options, above "Chat about
+/// this": it ends neither the menu nor the dialog.
+fn splits_options(lines: &[&str], i: usize) -> bool {
+    is_rule(lines[i])
+        && i > 0
+        && option_line(lines[i - 1]).is_some()
+        && lines.get(i + 1).is_some_and(|l| option_line(l).is_some())
+}
+
 pub fn after_last_rule(text: &str) -> Vec<&str> {
     let lines: Vec<&str> = text.lines().collect();
-    let start = lines.iter().rposition(|l| is_rule(l)).map_or(0, |i| i + 1);
+    let start = (0..lines.len())
+        .rposition(|i| is_rule(lines[i]) && !splits_options(&lines, i))
+        .map_or(0, |i| i + 1);
     let tail = &lines[start..];
     if tail.iter().any(|l| !l.trim().is_empty()) {
         tail.to_vec()
@@ -435,6 +513,42 @@ pub mod fixtures {
  ❯ 1. Yes, and auto-accept edits
    2. Yes, and manually approve edits
    3. No, keep planning
+";
+
+    // Captured from Claude Code 2.1.289 (tmux, 100 columns): a rule splits the options,
+    // and the trust prompt is unnumbered.
+    pub const QUESTION_LIVE: &str = "\
+❯ Use the AskUserQuestion tool to ask me which storage backend the cache should use.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Cache Backend
+
+Which storage backend should the cache use?
+
+❯ 1. SQLite
+     File-based database, good for single-instance deployments with local persistence
+  2. Redis
+     In-memory data store, better for distributed systems and high-performance scenarios
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+";
+
+    pub const TRUST_LIVE: &str = "\
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /tmp/askq
+
+ Quick safety check: Is this a project you created or one you trust?
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
 ";
 }
 
@@ -547,7 +661,58 @@ mod tests {
         assert_eq!(m.options[2], "Type something.");
         assert!(m.decisions().is_empty());
         let m = Menu::parse(PLAN).unwrap();
-        assert_eq!(m.decisions(), [(Deny, 2)]);
+        assert!(
+            m.decisions().is_empty(),
+            "no approve option: not a permission prompt"
+        );
+    }
+
+    #[test]
+    fn choices_are_the_menu_as_read() {
+        let labels = |text: &str| -> Vec<(u8, String, bool)> {
+            Menu::parse(text)
+                .unwrap()
+                .choices()
+                .into_iter()
+                .map(|c| (c.index, c.label, c.current))
+                .collect()
+        };
+        assert_eq!(
+            labels(QUESTION),
+            [
+                (0, "SQLite Embedded, no server".into(), true),
+                (1, "Redis Shared across processes".into(), false),
+                (2, "Type something.".into(), false),
+            ]
+        );
+        assert_eq!(
+            labels(PLAN),
+            [
+                (0, "Yes, and auto-accept edits".into(), true),
+                (1, "Yes, and manually approve edits".into(), false),
+                (2, "No, keep planning".into(), false),
+            ]
+        );
+        assert_eq!(labels(BASH).len(), 3);
+        assert_eq!(
+            labels(BASH)[2].1,
+            "No, and tell Claude what to do differently (esc)"
+        );
+        let hostile = QUESTION.replace(
+            "2. Redis",
+            &format!("2. Re\u{202e}dis\u{1b}]52;c;eA==\u{7}{}", "x".repeat(200)),
+        );
+        let m = Menu::parse(&hostile).unwrap();
+        let label = &m.choices()[1].label;
+        assert_eq!(label.chars().count(), MAX_CHOICE_LABEL_CHARS);
+        assert!(label.starts_with("Redis]52;c;eA==xxx"), "{label}");
+        let moved = QUESTION
+            .replace(" ❯ 1. SQLite", "   1. SQLite")
+            .replace("   3. Type", " ❯ 3. Type");
+        let m = Menu::parse(&moved).unwrap();
+        assert!(m.choices()[2].current && !m.choices()[0].current);
+        assert_eq!(m.arrows(0), ["up", "up"]);
+        assert!(m.arrows(2).is_empty());
     }
 
     #[test]
@@ -579,11 +744,78 @@ mod tests {
         assert_eq!(Menu::parse(&split), None);
         assert_eq!(Menu::parse("nothing here\n❯"), None);
         let twice = "❯ 1. Yes\n  2. Yes\n  3. No\n";
-        assert_eq!(
-            Menu::parse(twice).unwrap().decisions(),
-            [(Deny, 2)],
-            "an ambiguous decision is dropped"
+        assert!(
+            Menu::parse(twice).unwrap().decisions().is_empty(),
+            "an ambiguous approve is dropped, and Deny alone is no permission prompt"
         );
+        let twice_always = "❯ 1. Yes\n  2. Yes\n  3. Yes, and don't ask again\n  4. No\n";
+        assert_eq!(
+            Menu::parse(twice_always).unwrap().decisions(),
+            [(ApproveAlways, 2), (Deny, 3)]
+        );
+    }
+
+    #[test]
+    fn a_rule_inside_the_options_ends_nothing() {
+        let m = Menu::parse(QUESTION_LIVE).unwrap();
+        assert_eq!(
+            m.options,
+            [
+                "SQLite File-based database, good for single-instance deployments with local persistence",
+                "Redis In-memory data store, better for distributed systems and high-performance scenarios",
+                "Type something.",
+                "Chat about this",
+            ]
+        );
+        assert_eq!(
+            m.body,
+            [
+                "☐ Cache Backend",
+                "Which storage backend should the cache use?"
+            ]
+        );
+        assert_eq!((m.cursor, m.free_text()), (0, Some(2)));
+        assert!(m.decisions().is_empty());
+        assert_eq!(after_last_rule(QUESTION_LIVE)[0], " ☐ Cache Backend");
+        assert_eq!(Menu::parse(QUESTION).unwrap().free_text(), Some(2));
+        assert_eq!(Menu::parse(BASH).unwrap().free_text(), None);
+        let gap = QUESTION_LIVE.replace("  3. Type something.\n", "  3. Type something.\n\n");
+        assert_eq!(Menu::parse(&gap), None);
+    }
+
+    #[test]
+    fn keys_reach_only_question_forms() {
+        let form = Some("live_blocked_form");
+        assert!(open_to_keys("claude", form, QUESTION));
+        assert!(open_to_keys("claude", form, QUESTION_LIVE));
+        for screen in [BASH, BASH_TWO, EDIT, TRUST, TRUST_LIVE, PLAN] {
+            assert!(!open_to_keys("claude", form, screen), "{screen}");
+        }
+        for rule in [
+            Some("bash_permission_prompt"),
+            Some("generic_permission_prompt"),
+            Some("mcp_elicitation_prompt"),
+            Some("legacy_no_prompt_blocker"),
+            None,
+        ] {
+            assert!(!open_to_keys("claude", rule, QUESTION), "{rule:?}");
+        }
+        assert!(!open_to_keys("codex", form, QUESTION));
+        assert!(!open_to_keys(
+            "codex",
+            Some("live_strong_blocker"),
+            "Allow command `make`? [y/n]"
+        ));
+        let wrapped = BASH.replace(
+            "   2. Yes, and don't ask again for rm commands in /Users/me/src/app\n",
+            "   2. Yes, and don't ask again for rm commands in\n      /a\n      /b\n      /c\n      /d\n",
+        );
+        assert_eq!(Menu::parse(&wrapped), None);
+        assert!(
+            !open_to_keys("claude", form, &wrapped),
+            "an approve option that does not parse still counts"
+        );
+        assert!(open_to_keys("claude", form, "Pick one\nEnter to select"));
     }
 
     #[test]
@@ -644,6 +876,10 @@ mod tests {
         assert_eq!(context(EDIT), "Edit: src/main.rs");
         assert_eq!(
             context(QUESTION),
+            "Which storage backend should the cache use?"
+        );
+        assert_eq!(
+            context(QUESTION_LIVE),
             "Which storage backend should the cache use?"
         );
         assert_eq!(context(PLAN), "Would you like to proceed?");

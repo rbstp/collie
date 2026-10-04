@@ -24,6 +24,26 @@ const NEW_TERMINAL: &str = "term_e2e00000000009";
 const HELD_PROMPT: &str = "held until the phone has reconnected";
 const RULE: &str = "\u{1b}[38;2;136;136;136m────────────────────────────────────────\u{1b}[39m";
 const PLACEHOLDER: &str = "❯ \u{1b}[0m\u{1b}[2mTry \"create a util logging.py that...\"\u{1b}[0m";
+const BASH: &str = "\
+────────────────────────────────────────
+ Bash command
+
+   rm -rf build
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No, and tell Claude what to do differently (esc)
+";
+const QUESTION: &str = "\
+────────────────────────────────────────
+ Which storage backend should the cache use?
+
+   1. SQLite
+   2. Redis
+ ❯ 3. Type something.
+
+ Enter to select · ↑/↓ to navigate · Esc to cancel
+";
 const MUTATING: [&str; 10] = [
     "agent.prompt",
     "agent.send_keys",
@@ -162,7 +182,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         vec![json!({"target": "w6:p1", "text": text})]
     );
 
-    println!("prompt and send_keys are refused for a blocked agent");
+    println!("a blocked agent takes no prompt, and keys or text only without a decision");
     let before = herdr.mutations();
     for terminal in [CODEX_BLOCKED, CLAUDE] {
         // CLAUDE is listed as working, but agent.get just before the write says blocked.
@@ -172,14 +192,64 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             .await
             .unwrap_err();
         assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
-        let err = core
-            .send_keys(m.clone(), terminal.into(), vec![AgentKey::Y])
-            .await
-            .unwrap_err();
-        assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
     }
-    herdr.with(|h| h.claude_blocked = false);
-    assert_eq!(herdr.mutations(), before, "a blocked agent got input");
+    herdr.with(|h| h.blocked_on = Some(BASH.into()));
+    let err = core
+        .send_keys(m.clone(), CLAUDE.into(), vec![AgentKey::Y])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
+    let err = core
+        .type_text(m.clone(), CLAUDE.into(), "yes".into())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
+    assert_eq!(herdr.mutations(), before, "a permission prompt got input");
+    herdr.with(|h| h.blocked_on = Some(QUESTION.into()));
+    core.send_keys(m.clone(), CLAUDE.into(), vec![AgentKey::Down])
+        .await
+        .unwrap();
+    core.type_text(m.clone(), CLAUDE.into(), "DuckDB".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        herdr.mutation_calls()[before.len()..],
+        [
+            (
+                "agent.send_keys".to_owned(),
+                json!({"target": "w6:p1", "keys": ["down"]})
+            ),
+            (
+                "pane.send_text".to_owned(),
+                json!({"pane_id": "w6:p1", "text": "DuckDB"})
+            ),
+            (
+                "agent.send_keys".to_owned(),
+                json!({"target": "w6:p1", "keys": ["enter"]})
+            ),
+        ]
+    );
+    herdr.with(|h| {
+        h.claude_blocked = false;
+        h.blocked_on = None;
+    });
+    let lines = audit_lines(&audit);
+    let keyed: Vec<(&Value, &Value)> = lines
+        .iter()
+        .filter(|l| l["method"] == "agent.send_keys" || l["method"] == "agent.type_text")
+        .map(|l| (&l["target"], &l["result"]))
+        .collect();
+    assert_eq!(
+        keyed[keyed.len() - 2..],
+        [
+            (&json!(format!("{CLAUDE} blocked keys=down")), &json!("ok")),
+            (&json!(CLAUDE), &json!("ok")),
+        ]
+    );
+    assert!(
+        !std::fs::read_to_string(&audit).unwrap().contains("DuckDB"),
+        "typed text reached the audit log"
+    );
 
     println!("send_keys maps every key in order");
     let keys = vec![
@@ -197,10 +267,10 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         .await
         .unwrap();
     assert_eq!(
-        herdr.params("agent.send_keys"),
-        vec![json!({"target": "w6:p1", "keys": [
+        herdr.params("agent.send_keys").last(),
+        Some(&json!({"target": "w6:p1", "keys": [
             "esc", "enter", "up", "down", "tab", "shift+tab", "ctrl+c", "y", "n"
-        ]})]
+        ]}))
     );
 
     println!("task.options and task.new");
@@ -415,6 +485,9 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         writes,
         [
             "agent.prompt",
+            "agent.send_keys",
+            "pane.send_text",
+            "agent.send_keys",
             "agent.send_keys",
             "workspace.create",
             "agent.start",
@@ -708,6 +781,8 @@ struct Herdr {
     recent: String,
     screens: VecDeque<String>,
     claude_blocked: bool,
+    /// What `pane.read source=detection` shows; `pane.send_text` types into its field.
+    blocked_on: Option<String>,
     started: Option<String>,
 }
 
@@ -865,6 +940,21 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
                 "truncated": true,
             }})
         }
+        "pane.read" if p["source"] == "detection" => json!({"type": "pane_read", "read": {
+            "pane_id": p["pane_id"], "workspace_id": "w6", "tab_id": "w6:t1",
+            "source": "detection", "format": "text",
+            "text": h.blocked_on.as_deref().unwrap_or(""), "revision": 0, "truncated": false,
+        }}),
+        "agent.explain" => json!({"type": "agent_explain", "explain": {
+            "matched_rule": h.blocked_on.as_ref().map(|_| json!({"id": "live_blocked_form"})),
+        }}),
+        "pane.send_text" => {
+            if let Some(screen) = &mut h.blocked_on {
+                let typed = format!("❯ 3. {}", p["text"].as_str().unwrap());
+                *screen = screen.replace("❯ 3. Type something.", &typed);
+            }
+            json!({"type": "ok"})
+        }
         "pane.read" => {
             let text = match h.screens.len() {
                 0 => format!("{RULE}\r\n{PLACEHOLDER}\r\n{RULE}\r\n"),
@@ -880,7 +970,9 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
         "agent.prompt" => {
             json!({"type": "agent_prompted", "agent": agent_by_pane(h, &p["target"]).unwrap_or(json!({}))})
         }
-        "agent.send_keys" | "workspace.close" | "pane.close" => json!({"type": "ok"}),
+        "agent.send_keys" | "workspace.close" | "pane.close" => {
+            json!({"type": "ok"})
+        }
         "workspace.create" => json!({"type": "workspace_created",
             "workspace": {"workspace_id": "w9", "number": 3, "label": p["label"], "focused": false,
                 "pane_count": 1, "tab_count": 1, "active_tab_id": "w9:t1", "agent_status": "unknown"},

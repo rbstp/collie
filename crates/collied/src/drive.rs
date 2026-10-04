@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use protocol::{
-    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentStatus, Cwd, ErrorCode, OpId,
-    PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskNewParams, TaskOptions,
-    TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId, limits,
+    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentStatus, AgentTypeTextParams, Cwd,
+    ErrorCode, OpId, PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskNewParams,
+    TaskOptions, TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -18,7 +18,8 @@ use tokio::time::MissedTickBehavior;
 
 use crate::draft::{self, InputBox};
 use crate::herdr::{self, AgentInfo, PaneInfo};
-use crate::{flock, prompt};
+use crate::prompt::Menu;
+use crate::{approvals, flock, prompt};
 
 /// For `draft_changed` the message is the Mac's current draft: it goes to the phone in
 /// `ErrorBody.draft` and is never written to the audit log.
@@ -35,9 +36,11 @@ const START_POLL: Duration = Duration::from_millis(250);
 pub const OP_TTL: Duration = Duration::from_secs(600);
 pub const OPS_PER_PEER: usize = 256;
 const MAX_SGR_PARAMS: usize = 64;
-const CLEAR_SETTLE: Duration = Duration::from_secs(1);
-const CLEAR_POLL: Duration = Duration::from_millis(100);
+const SCREEN_SETTLE: Duration = Duration::from_secs(1);
+const SCREEN_POLL: Duration = Duration::from_millis(100);
 pub const DRAFT_CHANGED: &str = "the Mac's input box has unsent text";
+const BLOCKED: &str = "agent is blocked; answer it through an approval";
+const TYPED_NOT_SENT: &str = "the prompt did not take the text; Enter was not sent";
 
 fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, Fail> {
     Err((code, message.into()))
@@ -49,10 +52,7 @@ pub fn herdr_fail(e: herdr::Error) -> Fail {
         return (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned());
     };
     let (code, message) = match code.as_str() {
-        "agent_blocked" => (
-            ErrorCode::AgentBlocked,
-            "agent is blocked; answer it through an approval",
-        ),
+        "agent_blocked" => (ErrorCode::AgentBlocked, BLOCKED),
         "agent_not_ready" | "agent_not_running" | "agent_launch_pending" => {
             (ErrorCode::AgentNotReady, "agent is not ready")
         }
@@ -176,6 +176,57 @@ impl Driver {
             .map_err(herdr_fail)?;
         check_ready(&listed, &current)?;
         Ok(current)
+    }
+
+    /// For a blocked agent also returns the screen, read now, of a prompt open to keys and
+    /// text ([`approvals::open_to_keys`]); any other blocked prompt is refused.
+    async fn writable_agent(
+        &self,
+        terminal_id: &TerminalId,
+    ) -> Result<(AgentInfo, Option<String>), Fail> {
+        let listed = self.find_agent(terminal_id).await?;
+        let current = herdr::agent_get(&self.herdr, &listed.pane_id)
+            .await
+            .map_err(herdr_fail)?;
+        match check_ready(&listed, &current) {
+            Ok(()) => Ok((current, None)),
+            Err((ErrorCode::AgentBlocked, _)) => {
+                match approvals::open_to_keys(&self.herdr, &current)
+                    .await
+                    .map_err(herdr_fail)?
+                {
+                    Some(screen) => Ok((current, Some(screen))),
+                    None => fail(ErrorCode::AgentBlocked, BLOCKED),
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Polls the blocked agent's menu until `done` holds. The agent must stay `blocked`
+    /// with the same `state_change_seq` throughout: a new prompt comes with a new one.
+    async fn settle_menu(&self, a: &AgentInfo, done: impl Fn(&Menu) -> bool) -> Result<(), Fail> {
+        let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
+        loop {
+            tokio::time::sleep(SCREEN_POLL).await;
+            let now = herdr::agent_get(&self.herdr, &a.pane_id)
+                .await
+                .map_err(herdr_fail)?;
+            if !matches!(check_ready(a, &now), Err((ErrorCode::AgentBlocked, _)))
+                || now.state_change_seq != a.state_change_seq
+            {
+                return fail(ErrorCode::AgentNotReady, TYPED_NOT_SENT);
+            }
+            let text = herdr::detection_text(&self.herdr, &a.pane_id)
+                .await
+                .map_err(herdr_fail)?;
+            if Menu::parse(&text).is_some_and(|m| done(&m)) {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return fail(ErrorCode::AgentNotReady, TYPED_NOT_SENT);
+            }
+        }
     }
 
     pub async fn read(&self, p: ReadParams, agent: bool) -> Reply {
@@ -311,9 +362,9 @@ impl Driver {
                 .await
                 .map_err(herdr_fail)?;
         }
-        let deadline = tokio::time::Instant::now() + CLEAR_SETTLE;
+        let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
         loop {
-            tokio::time::sleep(CLEAR_POLL).await;
+            tokio::time::sleep(SCREEN_POLL).await;
             if matches!(
                 self.input_box(pane_id).await?,
                 Some(InputBox::Draft(d)) if d.text.is_empty()
@@ -329,11 +380,67 @@ impl Driver {
         }
     }
 
-    pub async fn send_keys(&self, p: AgentSendKeysParams, auth: &Authorized) -> Reply {
-        let a = self.ready_agent(&p.terminal_id).await?;
+    /// Keys to a blocked agent also return their audit target, which names the keys.
+    pub async fn send_keys(
+        &self,
+        p: AgentSendKeysParams,
+        auth: &Authorized,
+    ) -> (Reply, Option<String>) {
+        let (a, screen) = match self.writable_agent(&p.terminal_id).await {
+            Ok(found) => found,
+            Err(e) => return (Err(e), None),
+        };
         let keys: Vec<&str> = p.keys.iter().map(|k| k.herdr_name()).collect();
+        let target = screen
+            .is_some()
+            .then(|| format!("{} blocked keys={}", p.terminal_id.as_str(), keys.join(",")));
+        let sent = async {
+            authorized(auth)?;
+            herdr::agent_send_keys(&self.herdr, &a.pane_id, &keys)
+                .await
+                .map_err(herdr_fail)?;
+            Ok(Response::Ok)
+        };
+        (sent.await, target)
+    }
+
+    /// Answers a Claude Code question through its free-text option: the cursor moves
+    /// there, the text is typed, and Enter is sent only once that option reads as the
+    /// text with the rest of the dialog unchanged. Typed under any other option, the text
+    /// would be dropped (or read as digit shortcuts) and Enter would confirm that option.
+    pub async fn type_text(&self, p: AgentTypeTextParams, auth: &Authorized) -> Reply {
+        let (a, screen) = self.writable_agent(&p.terminal_id).await?;
+        let Some(screen) = screen else {
+            return fail(
+                ErrorCode::AgentNotReady,
+                "the agent is not waiting for an answer; send a prompt",
+            );
+        };
+        let Some((menu, field)) =
+            Menu::parse(&screen).and_then(|m| m.free_text().map(|field| (m, field)))
+        else {
+            return fail(
+                ErrorCode::AgentBlocked,
+                "this prompt has no text field; choose an option",
+            );
+        };
+        let arrows = menu.arrows(field);
+        if !arrows.is_empty() {
+            authorized(auth)?;
+            herdr::agent_send_keys(&self.herdr, &a.pane_id, &arrows)
+                .await
+                .map_err(herdr_fail)?;
+            let on_field = menu.region_at(field);
+            self.settle_menu(&a, |m| m.region() == on_field).await?;
+        }
         authorized(auth)?;
-        herdr::agent_send_keys(&self.herdr, &a.pane_id, &keys)
+        herdr::pane_send_text(&self.herdr, &a.pane_id, p.text.as_str())
+            .await
+            .map_err(herdr_fail)?;
+        self.settle_menu(&a, |m| typed_into(&menu, field, m, p.text.as_str()))
+            .await?;
+        authorized(auth)?;
+        herdr::agent_send_keys(&self.herdr, &a.pane_id, &["enter"])
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
@@ -587,6 +694,17 @@ impl Driver {
     }
 }
 
+/// Whitespace is ignored because a long answer wraps onto continuation rows.
+fn typed_into(before: &Menu, field: usize, now: &Menu, text: &str) -> bool {
+    let squash = |s: &str| s.split_whitespace().collect::<String>();
+    now.cursor == field
+        && now.body == before.body
+        && now.options.len() == before.options.len()
+        && (0..now.options.len()).all(|i| i == field || now.options[i] == before.options[i])
+        && squash(&now.options[field]) == squash(text)
+        && squash(text) != squash(&before.options[field])
+}
+
 /// `listed` comes from `agent.list`, `current` from `agent.get` just before the write.
 pub fn check_ready(listed: &AgentInfo, current: &AgentInfo) -> Result<(), Fail> {
     let session = |a: &AgentInfo| a.agent_session.as_ref().map(|s| s.value.clone());
@@ -600,10 +718,7 @@ pub fn check_ready(listed: &AgentInfo, current: &AgentInfo) -> Result<(), Fail> 
         );
     }
     if flock::status(&current.agent_status) == AgentStatus::Blocked {
-        return fail(
-            ErrorCode::AgentBlocked,
-            "agent is blocked; answer it through an approval",
-        );
+        return fail(ErrorCode::AgentBlocked, BLOCKED);
     }
     if current.agent.is_none() || current.launch_pending {
         return fail(ErrorCode::AgentNotReady, "agent is not ready");

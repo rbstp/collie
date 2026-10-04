@@ -124,6 +124,8 @@ final class DemoAgentCore: ActivityCore {
 
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {}
 
+    func typeText(machineId: String, terminalId: String, text: String) async throws {}
+
     func focus(machineId: String, terminalId: String) async throws {}
 
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
@@ -223,13 +225,44 @@ final class DemoApprovalCore: ApprovalCore {
                   3. No, and tell Claude what to do differently (esc)
                 """,
                 toolName: "Bash", toolSummary: "cargo test -p collied --test approvals",
-                options: [.approve, .approveAlways, .deny], createdAtMs: now - 45_000, expiresAtMs: now + 555_000
+                options: [.approve, .approveAlways, .deny],
+                choices: [
+                    ApprovalChoice(index: 0, label: "Yes", current: true),
+                    ApprovalChoice(index: 1, label: "Yes, and don't ask again for cargo test commands", current: false),
+                    ApprovalChoice(index: 2, label: "No, and tell Claude what to do differently (esc)", current: false),
+                ],
+                acceptsInput: false, hasTextField: false,
+                createdAtMs: now - 45_000, expiresAtMs: now + 555_000
             ),
             PendingApproval(
                 approvalId: "ap_demo2", terminalId: "term_2", agentLabel: "claude", workspaceLabel: "website",
                 snippet: "Do you trust the files in this folder?\n> 1. Yes, proceed\n  2. No, exit",
                 toolName: nil, toolSummary: nil,
-                options: [.approve, .deny], createdAtMs: now - 10_000, expiresAtMs: now + 190_000
+                options: [.approve, .deny],
+                choices: [
+                    ApprovalChoice(index: 0, label: "Yes, proceed", current: true),
+                    ApprovalChoice(index: 1, label: "No, exit", current: false),
+                ],
+                acceptsInput: false, hasTextField: false,
+                createdAtMs: now - 10_000, expiresAtMs: now + 190_000
+            ),
+            PendingApproval(
+                approvalId: "ap_demo3", terminalId: "term_3", agentLabel: "plan the migration", workspaceLabel: "collie",
+                snippet: """
+                Which database should the migration target?
+                > 1. PostgreSQL 17
+                  2. SQLite
+                  3. Type something.
+                """,
+                toolName: nil, toolSummary: nil,
+                options: [],
+                choices: [
+                    ApprovalChoice(index: 0, label: "PostgreSQL 17", current: true),
+                    ApprovalChoice(index: 1, label: "SQLite", current: false),
+                    ApprovalChoice(index: 2, label: "Type something.", current: false),
+                ],
+                acceptsInput: true, hasTextField: true,
+                createdAtMs: now - 60_000, expiresAtMs: now + 540_000
             ),
         ]
     }

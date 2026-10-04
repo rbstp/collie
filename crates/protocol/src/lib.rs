@@ -17,6 +17,7 @@ pub mod limits {
     pub const MAX_READ_LINES: u16 = 1000;
     pub const MAX_SNIPPET_CHARS: usize = 200;
     pub const MAX_LABEL_CHARS: usize = 64;
+    pub const MAX_CHOICE_LABEL_CHARS: usize = 120;
     pub const MAX_CWD_BYTES: usize = 1024;
     pub const NONCE_BYTES: usize = 32;
     pub const PAIRING_CODE_BYTES: usize = 16;

@@ -47,6 +47,66 @@ const BASH: &str = "\
  Esc to cancel · Tab to amend · ctrl+e to explain
 ";
 
+const QUESTION: &str = "\
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Storage
+
+ Which storage backend should the cache use?
+
+ ❯ 1. SQLite
+      Embedded, no server
+   2. Redis
+      Shared across processes
+   3. Type something.
+
+ Enter to select · ↑/↓ to navigate · Esc to cancel
+";
+
+const PLAN: &str = "\
+────────────────────────────────────────────────────────────────────────────────
+ Would you like to proceed?
+
+ ❯ 1. Yes, and auto-accept edits
+   2. Yes, and manually approve edits
+   3. No, keep planning
+";
+
+// Claude Code 2.1.289 (tmux, 100 columns): a rule splits the options, and the trust
+// prompt is unnumbered.
+const QUESTION_LIVE: &str = "\
+❯ Use the AskUserQuestion tool to ask me which storage backend the cache should use.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Cache Backend
+
+Which storage backend should the cache use?
+
+❯ 1. SQLite
+     File-based database, good for single-instance deployments with local persistence
+  2. Redis
+     In-memory data store, better for distributed systems and high-performance scenarios
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+";
+
+const TRUST_LIVE: &str = "\
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /tmp/askq
+
+ Quick safety check: Is this a project you created or one you trust?
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+";
+
 const MUTATING: [&str; 6] = [
     "agent.prompt",
     "agent.send_keys",
@@ -389,8 +449,20 @@ impl Rig {
         let p = ApprovalDecideParams {
             approval_id: a.approval_id.clone(),
             decision,
+            choice: None,
             nonce: nonce.clone(),
         };
+        self.approvals.decide(LABEL, PHONE, p, &auth).await
+    }
+
+    async fn choose(&self, a: &Approval, choice: u8, nonce: &Nonce) -> Reply {
+        let p = ApprovalDecideParams {
+            approval_id: a.approval_id.clone(),
+            decision: Decision::Choose,
+            choice: Some(choice),
+            nonce: nonce.clone(),
+        };
+        let auth: Authorized = Arc::new(|| true);
         self.approvals.decide(LABEL, PHONE, p, &auth).await
     }
 
@@ -481,6 +553,23 @@ async fn blocked_agent_gets_one_approval_and_one_alert() {
         "Bash command\nrm -rf build\nRemove the build directory\nDo you want to proceed?"
     );
     assert_eq!(a.tool, None);
+    let labels: Vec<(u8, &str, bool)> = a
+        .choices
+        .iter()
+        .map(|c| (c.index, c.label.as_str(), c.current))
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            (0, "Yes", true),
+            (
+                1,
+                "Yes, and don't ask again for rm commands in /Users/me/src/app",
+                false
+            ),
+            (2, "No, and tell Claude what to do differently (esc)", false),
+        ]
+    );
     assert_eq!(a.expires_at_ms - a.created_at_ms, TTL.as_millis() as u64);
     assert_eq!(rig.approvals.pending(), std::slice::from_ref(&a));
 
@@ -1053,4 +1142,271 @@ async fn an_activity_without_approvals_keeps_the_notification() {
     let state = &live.payload["aps"]["content-state"];
     assert_eq!(state["status"], "blocked");
     assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
+}
+
+fn choice_labels(a: &Approval) -> Vec<(u8, String, bool)> {
+    a.choices
+        .iter()
+        .map(|c| (c.index, c.label.clone(), c.current))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_question_is_answered_by_choosing_an_option() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| {
+        h.rule = "live_blocked_form".into();
+        h.text = QUESTION.into();
+    });
+    let a = rig.needed().await;
+    assert!(a.options.is_empty());
+    assert_eq!(
+        choice_labels(&a),
+        [
+            (0, "SQLite Embedded, no server".to_owned(), true),
+            (1, "Redis Shared across processes".to_owned(), false),
+            (2, "Type something.".to_owned(), false),
+        ]
+    );
+    let alerts = rig.alerts(1).await;
+    assert!(alerts[0].1.payload["aps"].get("category").is_none());
+
+    let outcome = resolved(rig.choose(&a, 1, &a.nonce).await);
+    assert_eq!(
+        outcome,
+        ApprovalOutcome::Chosen {
+            choice: 1,
+            by: LABEL.into()
+        }
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ]
+    );
+    assert!(matches!(
+        rig.event().await,
+        Event::ApprovalResolved { approval_id, outcome: ApprovalOutcome::Chosen { choice: 1, .. } }
+            if approval_id == a.approval_id
+    ));
+    assert_eq!(
+        rig.audit()[0]["result"],
+        format!("choose 1: applied terminal={TERMINAL} keys=down,enter")
+    );
+    assert_eq!(
+        code(rig.choose(&a, 1, &a.nonce).await),
+        ErrorCode::ApprovalAlreadyResolved
+    );
+
+    rig.herdr.with(|h| {
+        h.unblock_on_keys = false;
+        h.text = QUESTION.into();
+        set_status(h, "blocked");
+    });
+    let b = rig.needed().await;
+    assert_eq!(
+        resolved(rig.choose(&b, 0, &b.nonce).await),
+        ApprovalOutcome::ChosenUnconfirmed {
+            choice: 0,
+            by: LABEL.into()
+        },
+        "Enter alone, the cursor is already there"
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys")[2],
+        json!({"target": "w7:p1", "keys": ["enter"]})
+    );
+}
+
+#[tokio::test]
+async fn a_plan_is_chosen_with_arrows_never_esc() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| {
+        h.rule = "live_blocked_form".into();
+        h.text = PLAN.into();
+    });
+    let a = rig.needed().await;
+    assert!(
+        a.options.is_empty(),
+        "no approve option: not a permission prompt"
+    );
+    assert_eq!(
+        choice_labels(&a),
+        [
+            (0, "Yes, and auto-accept edits".to_owned(), true),
+            (1, "Yes, and manually approve edits".to_owned(), false),
+            (2, "No, keep planning".to_owned(), false),
+        ]
+    );
+    assert_eq!(
+        code(rig.decide(&a, Decision::Deny, &a.nonce).await),
+        ErrorCode::InvalidParams
+    );
+    let b = rig.needed().await;
+    assert!(matches!(
+        resolved(rig.choose(&b, 2, &b.nonce).await),
+        ApprovalOutcome::Chosen { choice: 2, .. }
+    ));
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down", "down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn approvals_say_whether_keys_and_text_are_taken() {
+    let mut rig = Rig::start(TTL).await;
+    for (rule, text, input, field) in [
+        ("live_blocked_form", QUESTION_LIVE, true, true),
+        ("live_blocked_form", QUESTION, true, true),
+        ("live_blocked_form", PLAN, false, false),
+        ("live_blocked_form", TRUST_LIVE, false, false),
+        ("bash_permission_prompt", BASH, false, false),
+        ("live_blocked_form", BASH, false, false),
+        (
+            "live_blocked_form",
+            &QUESTION.replace("   3. Type something.\n", ""),
+            true,
+            false,
+        ),
+    ] {
+        rig.herdr.with(|h| {
+            h.rule = rule.into();
+            h.text = text.into();
+            set_status(h, "blocked");
+        });
+        let a = rig.needed().await;
+        assert_eq!(
+            (a.accepts_input, a.has_text_field),
+            (input, field),
+            "{rule} {text}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn choices_are_refused_where_a_decision_is_offered_or_out_of_range() {
+    let mut rig = Rig::start(TTL).await;
+    let a = rig.needed().await;
+    assert_eq!(a.choices.len(), 3);
+    assert_eq!(
+        code(rig.choose(&a, 0, &a.nonce).await),
+        ErrorCode::InvalidParams,
+        "a permission prompt is answered with its decisions only"
+    );
+    assert!(matches!(
+        rig.event().await,
+        Event::ApprovalResolved {
+            outcome: ApprovalOutcome::Superseded,
+            ..
+        }
+    ));
+
+    rig.herdr.with(|h| {
+        h.rule = "live_blocked_form".into();
+        h.text = QUESTION.into();
+        set_status(h, "blocked");
+    });
+    let b = rig.needed().await;
+    assert_eq!(
+        code(rig.choose(&b, 3, &b.nonce).await),
+        ErrorCode::InvalidParams
+    );
+    let c = rig.needed().await;
+    assert_eq!(
+        code(rig.decide(&c, Decision::Choose, &c.nonce).await),
+        ErrorCode::InvalidParams,
+        "choose without a choice"
+    );
+    assert!(rig.mutations().is_empty());
+    let results: Vec<Value> = rig.audit().iter().map(|e| e["result"].clone()).collect();
+    assert_eq!(
+        results,
+        [
+            "choose 0: rejected: choice not offered",
+            "choose 3: rejected: choice not offered",
+            "choose: rejected: decision not offered",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_changed_question_supersedes_the_choice() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| {
+        h.rule = "live_blocked_form".into();
+        h.text = QUESTION.into();
+    });
+    let a = rig.needed().await;
+    rig.herdr
+        .with(|h| h.text = QUESTION.replace("2. Redis", "2. Postgres"));
+    assert_eq!(
+        resolved(rig.choose(&a, 1, &a.nonce).await),
+        ApprovalOutcome::Superseded
+    );
+    assert!(rig.mutations().is_empty());
+
+    let b = rig.needed().await;
+    rig.herdr.with(|h| h.arrows_move = false);
+    assert_eq!(
+        resolved(rig.choose(&b, 2, &b.nonce).await),
+        ApprovalOutcome::Superseded,
+        "lost arrows never confirm"
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [json!({"target": "w7:p1", "keys": ["down", "down"]})]
+    );
+}
+
+#[tokio::test]
+async fn a_screen_that_drifts_under_a_blocked_agent_reissues_quietly() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| {
+        h.rule = "live_blocked_form".into();
+        h.text = QUESTION.replace("   3. Type something.\n", "");
+    });
+    let a = rig.needed().await;
+    assert_eq!((a.accepts_input, a.has_text_field), (true, false));
+
+    rig.herdr.with(|h| h.text = move_cursor(&h.text, 1));
+    rig.observe().await;
+    rig.no_event();
+    assert_eq!(rig.approvals.pending(), std::slice::from_ref(&a));
+
+    rig.herdr.with(|h| h.text = QUESTION.into());
+    rig.observe().await;
+    assert!(matches!(
+        rig.event().await,
+        Event::ApprovalResolved { approval_id, outcome: ApprovalOutcome::Superseded }
+            if approval_id == a.approval_id
+    ));
+    let Event::ApprovalNeeded { approval: b } = rig.event().await else {
+        panic!("expected approval.needed");
+    };
+    assert_eq!((b.accepts_input, b.has_text_field), (true, true));
+    assert_eq!(b.choices.len(), 3);
+
+    rig.herdr.with(|h| h.text = PLAN.into());
+    let c = rig.needed().await;
+    assert_ne!(c.approval_id, b.approval_id);
+    assert_eq!((c.accepts_input, c.has_text_field), (false, false));
+    assert_eq!(
+        rig.alerts(2).await.len(),
+        1,
+        "a rebuilt approval within 30 s does not alert again"
+    );
+
+    rig.herdr.with(|h| {
+        h.text = QUESTION.into();
+        set_status(h, "blocked");
+    });
+    rig.needed().await;
+    assert_eq!(rig.alerts(2).await.len(), 2, "a new episode alerts");
+    assert!(rig.mutations().is_empty());
 }

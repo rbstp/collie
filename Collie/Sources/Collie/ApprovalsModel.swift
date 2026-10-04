@@ -31,6 +31,14 @@ struct ApprovalItem: Identifiable, Equatable {
     var id: String { approval.approvalId }
 }
 
+/// What collied takes from the phone on the prompt an agent is blocked on.
+enum BlockedInput: Equatable {
+    case optionsOnly
+    case keys
+    /// Keys, and typed text into the menu's free-text option.
+    case keysAndText
+}
+
 struct LoadingApproval: Equatable {
     let link: ApprovalLink
     let machine: Machine
@@ -51,14 +59,23 @@ final class ApprovalsModel {
     private(set) var items: [ApprovalItem] = []
     private(set) var steps: [String: Step] = [:]
     private(set) var notice: String?
+    private(set) var expanded: Set<String> = []
+    /// The approval the notice reports on: it leaving the list is the expected result, not a change to clear for.
+    private var noticeSubject: String?
+    private var noticeTimer: Task<Void, Never>?
+    private let noticeLifetime: Duration
     private(set) var refreshing = false
     private(set) var loading: LoadingApproval?
     private var loadTask: Task<Void, Never>?
     var highlighted: String?
 
-    init(core: (any ApprovalCore)?, auth: any Authenticator = DeviceOwnerAuthenticator()) {
+    init(
+        core: (any ApprovalCore)?, auth: any Authenticator = DeviceOwnerAuthenticator(),
+        noticeLifetime: Duration = .seconds(6)
+    ) {
         self.core = core
         self.auth = auth
+        self.noticeLifetime = noticeLifetime
     }
 
     /// Local and cheap: reads what the connections already hold.
@@ -69,7 +86,29 @@ final class ApprovalsModel {
                 .map { ApprovalItem(machine: machine, approval: $0) }
         }
         .sorted { ($0.approval.createdAtMs, $0.id) < ($1.approval.createdAtMs, $1.id) }
-        if next != items { items = next }
+        guard next != items else { return }
+        if next == items.filter({ $0.id != noticeSubject }) {
+            noticeSubject = nil
+        } else {
+            show(nil)
+        }
+        items = next
+        expanded.formIntersection(next.map(\.id))
+    }
+
+    func toggleExpanded(_ item: ApprovalItem) {
+        if expanded.remove(item.id) == nil { expanded.insert(item.id) }
+    }
+
+    private func show(_ text: String?, about subject: String? = nil) {
+        notice = text
+        noticeSubject = text == nil ? nil : subject
+        noticeTimer?.cancel()
+        guard text != nil else { return }
+        noticeTimer = Task { [weak self, noticeLifetime] in
+            try? await Task.sleep(for: noticeLifetime)
+            if !Task.isCancelled { self?.show(nil) }
+        }
     }
 
     /// Fetches a fresh snapshot from every Mac, which also opens connections that do not exist yet.
@@ -89,10 +128,18 @@ final class ApprovalsModel {
         items.filter { $0.machine.id == machineId && $0.approval.terminalId == terminalId }
     }
 
+    /// What collied takes from the phone while this agent is blocked: nil when no approval blocks it.
+    func blockedInput(machineId: String, terminalId: String) -> BlockedInput? {
+        let blocking = items(machineId: machineId, terminalId: terminalId).map(\.approval)
+        guard !blocking.isEmpty else { return nil }
+        guard blocking.allSatisfy(\.acceptsInput) else { return .optionsOnly }
+        return blocking.allSatisfy(\.hasTextField) ? .keysAndText : .keys
+    }
+
     @discardableResult
     func open(_ link: ApprovalLink) -> Task<Void, Never>? {
         highlighted = link.approvalId
-        notice = nil
+        show(nil)
         loadTask?.cancel()
         loading = nil
         poll()
@@ -114,7 +161,7 @@ final class ApprovalsModel {
             poll()
             if items.contains(where: { $0.id == link.approvalId }) { break }
             if wasConnected, flock?.link == .connected {
-                notice = "This approval is no longer pending."
+                show("This approval is no longer pending.")
                 break
             }
             if let phase = flock?.link { loading?.phase = phase }
@@ -125,12 +172,12 @@ final class ApprovalsModel {
 
     /// Nothing reaches the core unless the device owner authenticates first.
     func decide(_ item: ApprovalItem, _ decision: ApprovalDecision) async {
-        guard let core, steps[item.id] == nil, item.approval.options.contains(decision) else { return }
+        guard let core, steps[item.id] == nil, item.approval.offers(decision) else { return }
         steps[item.id] = .authenticating(decision)
-        notice = nil
-        guard await auth.authenticate(reason: "\(decision.title) \(item.approval.agentLabel)") else {
+        show(nil)
+        guard await auth.authenticate(reason: decision.reason(agent: item.approval.agentLabel)) else {
             steps[item.id] = nil
-            notice = "Not authenticated. Nothing was sent."
+            show("Not authenticated. Nothing was sent.", about: item.id)
             return
         }
         steps[item.id] = .sending(decision)
@@ -139,11 +186,21 @@ final class ApprovalsModel {
             let outcome = try await core.decide(
                 machineId: item.machine.id, approvalId: item.approval.approvalId, decision: decision
             )
-            notice = outcome.message(agent: item.approval.agentLabel)
+            show(outcome.message(agent: item.approval.agentLabel), about: item.id)
         } catch {
-            notice = describe(error)
+            show(describe(error), about: item.id)
         }
         poll()
+    }
+}
+
+extension PendingApproval {
+    /// A menu option is only ever chosen where collied offers no Approve/Deny.
+    func offers(_ decision: ApprovalDecision) -> Bool {
+        if case .choose(let choice) = decision {
+            return options.isEmpty && choices.contains { $0.index == choice }
+        }
+        return options.contains(decision)
     }
 }
 

@@ -938,7 +938,15 @@ impl Session<'_> {
             Request::AgentSendKeys(p) => {
                 let (op_id, d) = (p.op_id.clone(), drive.clone());
                 let op = self.audited(method, target.clone(), async move {
-                    (d.send_keys(p, &auth).await, None)
+                    d.send_keys(p, &auth).await
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
+            Request::AgentTypeText(p) => {
+                let (op_id, d) = (p.op_id.clone(), drive.clone());
+                let op = self.audited(method, target.clone(), async move {
+                    (d.type_text(p, &auth).await, None)
                 });
                 let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
                 (reply, Some(origin))
@@ -1378,6 +1386,7 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::AgentPrompt(p) => p.terminal_id.as_str(),
         Request::AgentDraft(p) => p.terminal_id.as_str(),
         Request::AgentSendKeys(p) => p.terminal_id.as_str(),
+        Request::AgentTypeText(p) => p.terminal_id.as_str(),
         Request::AgentFocus(p) => p.terminal_id.as_str(),
         Request::PaneClose(p) => p.terminal_id.as_str(),
         Request::WorkspaceClose(p) => p.workspace_id.as_str(),
