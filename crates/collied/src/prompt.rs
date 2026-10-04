@@ -46,6 +46,53 @@ pub fn open_to_keys(kind: &str, rule: Option<&str>, text: &str) -> bool {
         })
 }
 
+/// herdr rule ids (claude manifest 2026.09.11.1) under which Claude Code 2.1.289 shows its
+/// plan prompt ("Would you like to proceed?").
+const CLAUDE_PLAN_RULES: &[&str] = &["legacy_no_prompt_blocker"];
+
+const FEEDBACK: &str = "Tell Claude what to change";
+const FEEDBACK_HINT: &str = "shift+tab to approve with this feedback";
+
+/// Whether `agent.type_text` may answer a blocked prompt: one open to keys, or a Claude
+/// Code plan through its "Tell Claude what to change" option. A plan takes no keys: its
+/// other options grant permission modes. Text is confirmed only with Enter on that
+/// option, never with shift+tab, which approves the plan with the feedback.
+pub fn open_to_text(kind: &str, rule: Option<&str>, text: &str) -> bool {
+    open_to_keys(kind, rule, text)
+        || (kind == "claude"
+            && rule.is_some_and(|r| CLAUDE_PLAN_RULES.contains(&r))
+            && !after_last_rule(text).into_iter().any(trust_wording)
+            && Menu::parse(text).is_some_and(|m| {
+                m.decisions().is_empty()
+                    && m.free_text()
+                        .is_some_and(|i| m.options[i].eq_ignore_ascii_case(FEEDBACK))
+            }))
+}
+
+/// Whether the permission prompt offers "Tab to amend". Only the lines under the last
+/// option count: the body can quote any text.
+pub fn offers_note(text: &str) -> bool {
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .iter()
+        .rposition(|l| option_line(l).is_some())
+        .is_some_and(|last| {
+            lines[last + 1..]
+                .iter()
+                .any(|l| l.to_lowercase().contains("tab to amend"))
+        })
+}
+
+/// What Tab turns the option of an Approve or Deny into, lowercase, and the prefix the
+/// typed note then follows.
+pub fn amend(decision: Decision) -> Option<(&'static str, &'static str)> {
+    match decision {
+        Decision::Approve => Some(("yes, and tell claude what to do next", "Yes, ")),
+        Decision::Deny => Some(("no, and tell claude what to do differently", "No, ")),
+        Decision::ApproveAlways | Decision::Choose => None,
+    }
+}
+
 fn grants(label: &str) -> bool {
     classify(label).is_some() || label.to_lowercase().starts_with("yes")
 }
@@ -55,6 +102,8 @@ pub struct Menu {
     pub body: Vec<String>,
     pub options: Vec<String>,
     pub cursor: usize,
+    /// The lines right under the last option: where its label wraps, and hints.
+    pub after: Vec<String>,
 }
 
 impl Menu {
@@ -63,6 +112,12 @@ impl Menu {
     pub fn parse(text: &str) -> Option<Self> {
         let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
         let last = lines.iter().rposition(|l| option_line(l).is_some())?;
+        let after = lines[last + 1..]
+            .iter()
+            .take_while(|l| !l.trim().is_empty() && !is_rule(l))
+            .take(MAX_CONTINUATION_LINES + 1)
+            .map(|l| l.trim().to_owned())
+            .collect();
         let mut options: Vec<(bool, String)> = Vec::new();
         let mut continuation: Vec<&str> = Vec::new();
         let mut expect = None;
@@ -114,6 +169,7 @@ impl Menu {
             body,
             options: options.into_iter().map(|(_, l)| l).collect(),
             cursor,
+            after,
         })
     }
 
@@ -156,17 +212,37 @@ impl Menu {
     }
 
     /// Claude Code's free-text option, which turns into an inline text field under the
-    /// cursor.
+    /// cursor: a question's "Type something.", a plan's "Tell Claude what to change".
     pub fn free_text(&self) -> Option<usize> {
-        let mut hits = self
-            .options
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| l.eq_ignore_ascii_case("type something."));
+        let mut hits = self.options.iter().enumerate().filter(|(_, l)| {
+            l.eq_ignore_ascii_case("type something.") || l.eq_ignore_ascii_case(FEEDBACK)
+        });
         match (hits.next(), hits.next()) {
             (Some((i, _)), None) => Some(i),
             _ => None,
         }
+    }
+
+    /// Whether option `i` reads `text`, whitespace aside, wrapped lines included. A plan's
+    /// shift+tab hint under its last option may follow.
+    pub fn reads(&self, i: usize, text: &str) -> bool {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let mut shown = squash(&self.options[i]);
+        if i + 1 == self.options.len() {
+            shown.push_str(&squash(&self.after.join(" ")));
+        }
+        shown.strip_prefix(&squash(text)).is_some_and(|rest| {
+            rest.is_empty() || rest.eq_ignore_ascii_case(&squash(FEEDBACK_HINT))
+        })
+    }
+
+    /// Whether `now` is this menu with the cursor on option `i` and no option but `i`
+    /// changed.
+    pub fn only_changed(&self, i: usize, now: &Menu) -> bool {
+        now.cursor == i
+            && now.body == self.body
+            && now.options.len() == self.options.len()
+            && (0..now.options.len()).all(|j| j == i || now.options[j] == self.options[j])
     }
 
     pub fn tail(&self) -> &[String] {
@@ -305,6 +381,11 @@ fn is_border(line: &str) -> bool {
         .all(|c| matches!(c, '\u{2500}'..='\u{257F}') || c.is_whitespace())
 }
 
+fn is_dashed(line: &str) -> bool {
+    let t = line.trim();
+    !t.is_empty() && t.chars().all(|c| c == '╌')
+}
+
 /// A Claude Code tip printed at the dialog's own margin. Command lines are indented
 /// further, so a command that starts with `Tip:` is never taken for one.
 fn is_tip(raw: &str) -> bool {
@@ -316,21 +397,28 @@ fn is_tip(raw: &str) -> bool {
 }
 
 /// The pending action, for the encrypted alert body: every line of a Claude Code Bash
-/// prompt's command block (`Bash: <command>`; Claude's description under the command
-/// cannot be told apart from it in plain text, so it is kept), the target of another tool
-/// prompt (`Edit: <path>`), else the question, else the first line (with the line after
-/// it when it ends in `:`). The approver acts on this text, so nothing inside the command
-/// block is ever dropped: it is cut only at the length cap, with `…`.
+/// prompt's command block (`Bash: <command>`; Claude's description, under the command or,
+/// since 2.1.289, above it, cannot be told apart from it in plain text, so it is kept),
+/// the target of another tool prompt (`Edit: <path>`), else the question, else the first
+/// line (with the line after it when it ends in `:`). The approver acts on this text, so
+/// nothing inside the command block is ever dropped: it is cut only at the length cap,
+/// with `…`.
 pub fn context(text: &str) -> String {
     let region = after_last_rule(text);
     let end = region
         .iter()
         .rposition(|l| option_line(l).is_some_and(|(_, n, _)| n == 1))
         .unwrap_or(region.len());
+    // Claude Code 2.1.289 prints the command at the dialog's margin, between dashed
+    // rules: no line from the first to the last of them is a tip.
+    let dashed = |i: &usize| is_dashed(region[*i]);
+    let first = (0..end).find(dashed);
+    let last = (0..end).rfind(dashed);
     let lines: Vec<String> = region[..end]
         .iter()
-        .filter(|l| !is_tip(l))
-        .map(|l| clean(l))
+        .enumerate()
+        .filter(|(i, l)| first.zip(last).is_some_and(|(f, e)| f < *i && *i < e) || !is_tip(l))
+        .map(|(_, l)| clean(l))
         .filter(|l| !is_border(l) || l.is_empty())
         .collect();
     let Some(head) = lines.iter().position(|l| !l.is_empty()) else {
@@ -550,6 +638,21 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 
  Enter to confirm · Esc to cancel
 ";
+
+    // Captured from Claude Code 2.1.289 in herdr 0.9.3 (188 columns, the working
+    // directory renamed). The Bash description sits above the command, which is printed
+    // between dashed rules at the dialog's margin. Tab on "Yes" turns it into a text
+    // field, and typing replaces its label.
+    pub const BASH_LIVE: &str = include_str!("../tests/fixtures/claude-2.1.289/bash.detection.txt");
+    pub const BASH_AMEND_LIVE: &str =
+        include_str!("../tests/fixtures/claude-2.1.289/bash-amend-yes.detection.txt");
+    pub const BASH_AMEND_TYPED_LIVE: &str =
+        include_str!("../tests/fixtures/claude-2.1.289/bash-amend-yes-typed.detection.txt");
+    // The plan prompt (herdr rule legacy_no_prompt_blocker), indented by 2 columns, and
+    // the same with feedback typed into its third option.
+    pub const PLAN_LIVE: &str = include_str!("../tests/fixtures/claude-2.1.289/plan.detection.txt");
+    pub const PLAN_TYPED_LIVE: &str =
+        include_str!("../tests/fixtures/claude-2.1.289/plan-feedback-typed.detection.txt");
 }
 
 #[cfg(test)]
@@ -788,7 +891,18 @@ mod tests {
         let form = Some("live_blocked_form");
         assert!(open_to_keys("claude", form, QUESTION));
         assert!(open_to_keys("claude", form, QUESTION_LIVE));
-        for screen in [BASH, BASH_TWO, EDIT, TRUST, TRUST_LIVE, PLAN] {
+        for screen in [
+            BASH,
+            BASH_TWO,
+            EDIT,
+            TRUST,
+            TRUST_LIVE,
+            PLAN,
+            BASH_LIVE,
+            BASH_AMEND_LIVE,
+            PLAN_LIVE,
+            PLAN_TYPED_LIVE,
+        ] {
             assert!(!open_to_keys("claude", form, screen), "{screen}");
         }
         for rule in [
@@ -816,6 +930,224 @@ mod tests {
             "an approve option that does not parse still counts"
         );
         assert!(open_to_keys("claude", form, "Pick one\nEnter to select"));
+    }
+
+    #[test]
+    fn live_bash_prompt() {
+        let m = Menu::parse(BASH_LIVE).unwrap();
+        assert_eq!(
+            m.options,
+            [
+                "Yes",
+                "Yes, and always allow access to /tmp/planlab from this project",
+                "Yes, and switch to auto mode · auto mode handles these prompts for you",
+                "No",
+            ]
+        );
+        assert_eq!(m.cursor, 0);
+        assert_eq!(
+            m.decisions(),
+            [(Approve, 0), (ApproveAlways, 1), (Deny, 3)],
+            "switching to auto mode is no decision"
+        );
+        assert_eq!(m.keys(0), (vec![], "enter"));
+        assert_eq!(m.keys(1), (vec!["down"], "enter"));
+        assert_eq!(
+            m.keys(3),
+            (vec!["down", "down", "down"], "enter"),
+            "no (esc) on No: arrows and Enter"
+        );
+        assert!(!m.is_trust_prompt());
+        assert_eq!(m.free_text(), None);
+        assert_eq!(
+            context(BASH_LIVE),
+            "Bash: Create empty probe2.txt file\ntouch probe2.txt"
+        );
+        let s = snippet(m.tail().iter().map(String::as_str));
+        assert!(s.contains("touch probe2.txt") && !s.contains('╌'), "{s}");
+        assert!(offers_note(BASH_LIVE) && offers_note(BASH));
+        assert!(!offers_note(BASH_TWO) && !offers_note(BASH_AMEND_LIVE));
+        let quoted = BASH_LIVE
+            .replace("Esc to cancel · Tab to amend", "Esc to cancel")
+            .replace(" touch probe2.txt\n", " echo 'Tab to amend'\n");
+        assert!(!offers_note(&quoted), "only the lines under the menu count");
+        for rule in [
+            Some("live_blocked_form"),
+            Some("legacy_no_prompt_blocker"),
+            Some("bash_permission_prompt"),
+        ] {
+            assert!(!open_to_keys("claude", rule, BASH_LIVE), "{rule:?}");
+            assert!(!open_to_text("claude", rule, BASH_LIVE), "{rule:?}");
+        }
+    }
+
+    #[test]
+    fn live_bash_amend() {
+        let m = Menu::parse(BASH_LIVE).unwrap();
+        let (yes, yes_prefix) = amend(Approve).unwrap();
+        let amended = Menu::parse(BASH_AMEND_LIVE).unwrap();
+        assert_eq!(amended.options[0], "Yes, and tell Claude what to do next");
+        assert!(m.only_changed(0, &amended));
+        assert!(amended.options[0].to_lowercase().starts_with(yes));
+        assert_eq!(
+            amended.decisions(),
+            [(ApproveAlways, 1), (Deny, 3)],
+            "the amend field is no decision"
+        );
+        let typed = Menu::parse(BASH_AMEND_TYPED_LIVE).unwrap();
+        assert!(m.only_changed(0, &typed) && amended.only_changed(0, &typed));
+        let note = format!("{yes_prefix}use a .tmp extension");
+        assert!(typed.reads(0, &note));
+        assert!(!amended.reads(0, &note));
+        assert!(!typed.reads(0, "Yes, use a .tmp"));
+        assert!(!typed.reads(0, "Yes, use a .tmp extension, then rm -rf ~"));
+        assert!(!typed.reads(1, &note));
+        assert_eq!(context(BASH_AMEND_TYPED_LIVE), context(BASH_LIVE));
+        assert_eq!(amend(ApproveAlways), None);
+        assert_eq!(amend(Choose), None);
+
+        let (no, no_prefix) = amend(Deny).unwrap();
+        let on_no = BASH_LIVE
+            .replace(" ❯ 1. Yes\n", "   1. Yes\n")
+            .replace("   4. No\n", " ❯ 4. No\n");
+        let on_no = Menu::parse(&on_no).unwrap();
+        let denied = BASH_AMEND_LIVE
+            .replace(" ❯ 1. Yes, and tell Claude what to do next", "   1. Yes")
+            .replace(
+                "   4. No\n",
+                " ❯ 4. No, and tell Claude what to do differently\n",
+            );
+        let denied = Menu::parse(&denied).unwrap();
+        assert!(on_no.only_changed(3, &denied));
+        assert!(denied.options[3].to_lowercase().starts_with(no));
+        let wrapped = BASH_AMEND_LIVE
+            .replace(" ❯ 1. Yes, and tell Claude what to do next", "   1. Yes")
+            .replace("   4. No\n", " ❯ 4. No, run the tests\n      first\n");
+        let wrapped = Menu::parse(&wrapped).unwrap();
+        assert_eq!(wrapped.after, ["first"]);
+        assert!(on_no.only_changed(3, &wrapped));
+        assert!(wrapped.reads(3, &format!("{no_prefix}run the tests first")));
+        assert!(!wrapped.reads(3, &format!("{no_prefix}run the tests")));
+    }
+
+    #[test]
+    fn the_longest_note_reads_back() {
+        let note: String = "use a .tmp extension, "
+            .repeat(10)
+            .chars()
+            .take(protocol::limits::MAX_NOTE_CHARS)
+            .collect();
+        let (_, yes_prefix) = amend(Approve).unwrap();
+        let (_, no_prefix) = amend(Deny).unwrap();
+        for columns in [80, 60] {
+            let rows = |label: String| {
+                let chars: Vec<char> = label.chars().collect();
+                let rows: Vec<String> = chars
+                    .chunks(columns - 6)
+                    .map(|c| c.iter().collect())
+                    .collect();
+                assert!(rows.len() <= MAX_CONTINUATION_LINES + 1, "{columns}");
+                rows.join("\n      ")
+            };
+            let yes = BASH_AMEND_LIVE.replace(
+                "1. Yes, and tell Claude what to do next",
+                &format!("1. {}", rows(format!("{yes_prefix}{note}"))),
+            );
+            assert!(
+                Menu::parse(&yes)
+                    .unwrap()
+                    .reads(0, &format!("{yes_prefix}{note}"))
+            );
+            let no = BASH_AMEND_LIVE
+                .replace(" ❯ 1. Yes, and tell Claude what to do next", "   1. Yes")
+                .replace(
+                    "   4. No\n",
+                    &format!(" ❯ 4. {}\n", rows(format!("{no_prefix}{note}"))),
+                );
+            assert!(
+                Menu::parse(&no)
+                    .unwrap()
+                    .reads(3, &format!("{no_prefix}{note}"))
+            );
+        }
+    }
+
+    #[test]
+    fn live_plan_takes_feedback_but_no_keys() {
+        let m = Menu::parse(PLAN_LIVE).unwrap();
+        assert_eq!(
+            m.options,
+            [
+                "Yes, and use auto mode",
+                "Yes, manually approve edits",
+                "Tell Claude what to change"
+            ]
+        );
+        assert_eq!(
+            m.body,
+            ["Claude has written up a plan and is ready to execute. Would you like to proceed?"]
+        );
+        assert_eq!(m.after, ["shift+tab to approve with this feedback"]);
+        assert_eq!((m.cursor, m.free_text()), (0, Some(2)));
+        assert!(m.decisions().is_empty());
+        assert_eq!(m.arrows(2), ["down", "down"]);
+        assert_eq!(
+            context(PLAN_LIVE),
+            "Claude has written up a plan and is ready to execute. Would you like to proceed?"
+        );
+        assert!(!offers_note(PLAN_LIVE));
+
+        let plan = Some("legacy_no_prompt_blocker");
+        assert!(!open_to_keys("claude", plan, PLAN_LIVE));
+        assert!(open_to_text("claude", plan, PLAN_LIVE));
+        for (kind, rule) in [
+            ("claude", Some("live_blocked_form")),
+            ("claude", Some("bash_permission_prompt")),
+            ("claude", Some("generic_permission_prompt")),
+            ("claude", None),
+            ("codex", plan),
+        ] {
+            assert!(!open_to_text(kind, rule, PLAN_LIVE), "{kind} {rule:?}");
+        }
+        for screen in [PLAN, TRUST, TRUST_LIVE, BASH, BASH_LIVE] {
+            assert!(!open_to_text("claude", plan, screen), "{screen}");
+        }
+        let approves = PLAN_LIVE.replace("2. Yes, manually approve edits", "2. Yes");
+        assert!(
+            !open_to_text("claude", plan, &approves),
+            "a menu with a decision is a permission prompt"
+        );
+        assert!(open_to_text("claude", Some("live_blocked_form"), QUESTION));
+
+        let typed = Menu::parse(PLAN_TYPED_LIVE).unwrap();
+        assert_eq!(typed.options[2], "use echo instead");
+        assert!(m.only_changed(2, &typed));
+        assert!(typed.reads(2, "use echo instead"));
+        assert!(!m.reads(2, "use echo instead"));
+        assert!(m.reads(2, "Tell Claude what to change"));
+        assert!(!typed.reads(2, "use echo"));
+        let wrapped = PLAN_TYPED_LIVE.replace(
+            "   ❯ 3. use echo instead\n",
+            "   ❯ 3. use echo\n        instead\n",
+        );
+        assert!(Menu::parse(&wrapped).unwrap().reads(2, "use echo instead"));
+        assert!(
+            !open_to_text("claude", plan, PLAN_TYPED_LIVE),
+            "text already in the field"
+        );
+    }
+
+    #[test]
+    fn live_context_never_hides_command_lines() {
+        let with = |block: &str| context(&BASH_LIVE.replace(" touch probe2.txt\n", block));
+        assert_eq!(
+            with(" Tip: rm -rf ~\n"),
+            "Bash: Create empty probe2.txt file\nTip: rm -rf ~"
+        );
+        assert_eq!(
+            with(" ls\n ╌╌╌\n Tip: rm -rf ~\n"),
+            "Bash: Create empty probe2.txt file\nls\nTip: rm -rf ~"
+        );
     }
 
     #[test]

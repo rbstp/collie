@@ -178,11 +178,12 @@ impl Driver {
         Ok(current)
     }
 
-    /// For a blocked agent also returns the screen, read now, of a prompt open to keys and
-    /// text ([`approvals::open_to_keys`]); any other blocked prompt is refused.
+    /// For a blocked agent also returns the screen, read now, of a prompt `open` lets the
+    /// phone answer ([`approvals::open_to`]); any other blocked prompt is refused.
     async fn writable_agent(
         &self,
         terminal_id: &TerminalId,
+        open: fn(&str, Option<&str>, &str) -> bool,
     ) -> Result<(AgentInfo, Option<String>), Fail> {
         let listed = self.find_agent(terminal_id).await?;
         let current = herdr::agent_get(&self.herdr, &listed.pane_id)
@@ -191,7 +192,7 @@ impl Driver {
         match check_ready(&listed, &current) {
             Ok(()) => Ok((current, None)),
             Err((ErrorCode::AgentBlocked, _)) => {
-                match approvals::open_to_keys(&self.herdr, &current)
+                match approvals::open_to(&self.herdr, &current, open)
                     .await
                     .map_err(herdr_fail)?
                 {
@@ -386,7 +387,10 @@ impl Driver {
         p: AgentSendKeysParams,
         auth: &Authorized,
     ) -> (Reply, Option<String>) {
-        let (a, screen) = match self.writable_agent(&p.terminal_id).await {
+        let (a, screen) = match self
+            .writable_agent(&p.terminal_id, prompt::open_to_keys)
+            .await
+        {
             Ok(found) => found,
             Err(e) => return (Err(e), None),
         };
@@ -404,12 +408,16 @@ impl Driver {
         (sent.await, target)
     }
 
-    /// Answers a Claude Code question through its free-text option: the cursor moves
-    /// there, the text is typed, and Enter is sent only once that option reads as the
-    /// text with the rest of the dialog unchanged. Typed under any other option, the text
-    /// would be dropped (or read as digit shortcuts) and Enter would confirm that option.
+    /// Answers a Claude Code question or plan through its free-text option: the cursor
+    /// moves there, the text is typed, and Enter is sent only once that option reads as
+    /// the text with the rest of the dialog unchanged. Typed under any other option, the
+    /// text would be dropped (or read as digit shortcuts) and Enter would confirm that
+    /// option. Only arrows, the text and Enter are sent: never shift+tab, which on a plan
+    /// approves it with the feedback.
     pub async fn type_text(&self, p: AgentTypeTextParams, auth: &Authorized) -> Reply {
-        let (a, screen) = self.writable_agent(&p.terminal_id).await?;
+        let (a, screen) = self
+            .writable_agent(&p.terminal_id, prompt::open_to_text)
+            .await?;
         let Some(screen) = screen else {
             return fail(
                 ErrorCode::AgentNotReady,
@@ -696,13 +704,7 @@ impl Driver {
 
 /// Whitespace is ignored because a long answer wraps onto continuation rows.
 fn typed_into(before: &Menu, field: usize, now: &Menu, text: &str) -> bool {
-    let squash = |s: &str| s.split_whitespace().collect::<String>();
-    now.cursor == field
-        && now.body == before.body
-        && now.options.len() == before.options.len()
-        && (0..now.options.len()).all(|i| i == field || now.options[i] == before.options[i])
-        && squash(&now.options[field]) == squash(text)
-        && squash(text) != squash(&before.options[field])
+    before.only_changed(field, now) && now.reads(field, text) && !before.reads(field, text)
 }
 
 /// `listed` comes from `agent.list`, `current` from `agent.get` just before the write.

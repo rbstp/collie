@@ -697,9 +697,10 @@ impl CollieCore {
         expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
     }
 
-    /// Answers a blocked prompt that offers no approval decision, such as a question's
-    /// "Type something." field: collied types `text`, then Enter. One line. Refused with
-    /// `AgentBlocked` on a permission prompt, `AgentNotReady` when the agent is not blocked.
+    /// Answers a blocked prompt that offers no approval decision through its free-text
+    /// field, a question's "Type something." or a plan's "Tell Claude what to change":
+    /// collied types `text`, then Enter. One line. Refused with `AgentBlocked` on a
+    /// permission prompt, `AgentNotReady` when the agent is not blocked.
     pub async fn type_text(
         &self,
         machine_id: String,
@@ -815,15 +816,35 @@ impl CollieCore {
     }
 
     /// Uses the nonce collie-core holds from the flock and `approval.needed`, fetching
-    /// `approval.list` when it has none. Not retried: the nonce is single use.
+    /// `approval.list` when it has none. Not retried: the nonce is single use. `note`, one
+    /// line, goes with Approve or Deny on an approval with `supports_note`.
     pub async fn decide(
         &self,
         machine_id: String,
         approval_id: String,
         decision: ApprovalDecision,
+        note: Option<String>,
     ) -> Result<DecisionOutcome, CoreError> {
         let approval_id = ApprovalId::new(approval_id)
             .map_err(|_| invalid("approval_id", "invalid approval id"))?;
+        let note = match note {
+            None => None,
+            Some(note) => Some(
+                PromptText::new(note)
+                    .ok()
+                    .filter(|n| !n.as_str().contains(['\n', '\t']))
+                    .filter(|n| n.as_str().chars().count() <= limits::MAX_NOTE_CHARS)
+                    .filter(|_| {
+                        matches!(decision, ApprovalDecision::Approve | ApprovalDecision::Deny)
+                    })
+                    .ok_or_else(|| {
+                        invalid(
+                            "note",
+                            "a note must be one non-empty line of at most 200 characters, without control characters, with Approve or Deny",
+                        )
+                    })?,
+            ),
+        };
         let conn = self.conn(&machine_id)?;
         self.run(async move {
             let cached = approvals::cached_nonce(&lock(&conn.shared.flock), &approval_id);
@@ -838,8 +859,12 @@ impl CollieCore {
                         .ok_or(CoreError::ApprovalNotFound)?
                 }
             };
-            let request =
-                Request::ApprovalDecide(approvals::decide_params(approval_id, decision, nonce));
+            let request = Request::ApprovalDecide(approvals::decide_params(
+                approval_id,
+                decision,
+                nonce,
+                note,
+            ));
             let response = conn
                 .request(request, DECIDE_TIMEOUT)
                 .await
@@ -2109,6 +2134,7 @@ mod tailnet_tests {
         approvals: Vec<protocol::Approval>,
         lists: usize,
         decisions: Vec<(String, protocol::Decision)>,
+        notes: Vec<Option<String>>,
         pushes: Vec<String>,
         activities: Vec<String>,
     }
@@ -2129,6 +2155,7 @@ mod tailnet_tests {
             choices: Vec::new(),
             accepts_input: false,
             has_text_field: false,
+            supports_note: true,
             nonce: protocol::Nonce::new(NONCE).unwrap(),
             created_at_ms: 1,
             expires_at_ms: u64::MAX,
@@ -2298,6 +2325,7 @@ mod tailnet_tests {
                                     seen.approvals.remove(i);
                                     seen.decisions
                                         .push((p.approval_id.as_str().into(), p.decision));
+                                    seen.notes.push(p.note.map(|n| n.as_str().to_owned()));
                                     let outcome = match p.choice {
                                         Some(choice) => protocol::ApprovalOutcome::Chosen {
                                             choice,
@@ -2737,7 +2765,7 @@ mod tailnet_tests {
         assert_eq!(feed.pending, vec![pending.clone(), asked.clone()]);
         assert!(asked.options.is_empty());
         assert!(asked.accepts_input && asked.has_text_field);
-        assert!(!pending.accepts_input && !pending.has_text_field);
+        assert!(!pending.accepts_input && !pending.has_text_field && pending.supports_note);
         assert_eq!(
             asked.choices[1],
             ApprovalChoice {
@@ -2755,8 +2783,27 @@ mod tailnet_tests {
             );
         }
         assert_eq!(lock(&seen).lists, 1);
+        for (decision, note) in [
+            (ApprovalDecision::ApproveAlways, "x".to_owned()),
+            (ApprovalDecision::Approve, "a\nb".to_owned()),
+            (ApprovalDecision::Approve, "a\u{1b}[Z".to_owned()),
+            (
+                ApprovalDecision::Deny,
+                "a".repeat(limits::MAX_NOTE_CHARS + 1),
+            ),
+        ] {
+            let err = rt
+                .block_on(core.decide(id(), "a1".into(), decision, Some(note)))
+                .unwrap_err();
+            assert!(matches!(err, CoreError::InvalidInput { .. }), "{err:?}");
+        }
         let outcome = rt
-            .block_on(core.decide(id(), "a1".into(), ApprovalDecision::Approve))
+            .block_on(core.decide(
+                id(),
+                "a1".into(),
+                ApprovalDecision::Approve,
+                Some("use a .tmp extension".into()),
+            ))
             .unwrap();
         assert_eq!(
             outcome,
@@ -2774,6 +2821,7 @@ mod tailnet_tests {
             lock(&seen).decisions,
             vec![("a1".to_owned(), protocol::Decision::Approve)]
         );
+        assert_eq!(lock(&seen).notes, [Some("use a .tmp extension".to_owned())]);
         let resolved = poll("approval.resolved", || {
             core.approval_feed(id(), feed.revision)
                 .filter(|f| !f.events.is_empty())
@@ -2784,11 +2832,16 @@ mod tailnet_tests {
         ));
         assert_eq!(resolved.pending.len(), 1);
         let err = rt
-            .block_on(core.decide(id(), "a1".into(), ApprovalDecision::Approve))
+            .block_on(core.decide(id(), "a1".into(), ApprovalDecision::Approve, None))
             .unwrap_err();
         assert!(matches!(err, CoreError::ApprovalNotFound), "{err:?}");
         let chosen = rt
-            .block_on(core.decide(id(), "q1".into(), ApprovalDecision::Choose { choice: 1 }))
+            .block_on(core.decide(
+                id(),
+                "q1".into(),
+                ApprovalDecision::Choose { choice: 1 },
+                None,
+            ))
             .unwrap();
         assert_eq!(
             chosen,

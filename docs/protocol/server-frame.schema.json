@@ -102,7 +102,7 @@
         },
         "has_text_field": {
           "default": false,
-          "description": "The menu has its free-text option, which `agent.type_text` fills; never true\nwithout `accepts_input`.",
+          "description": "The menu has a free-text option that `agent.type_text` fills: a question's \"Type\nsomething.\" (with `accepts_input`), or a plan's \"Tell Claude what to change\", which\ntakes text but no keys (`accepts_input` false).",
           "type": "boolean"
         },
         "nonce": {
@@ -116,6 +116,11 @@
         },
         "snippet": {
           "type": "string"
+        },
+        "supports_note": {
+          "default": false,
+          "description": "`approval.decide` takes a `note` with `approve` and `deny`: the prompt shows \"Tab\nto amend\".",
+          "type": "boolean"
         },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"

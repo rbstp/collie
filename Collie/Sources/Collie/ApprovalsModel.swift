@@ -8,7 +8,8 @@ protocol ApprovalCore: AnyObject, Sendable {
     func machines() -> [Machine]
     func approvalFeed(machineId: String, afterRevision: UInt64) -> ApprovalFeed?
     func flock(machineId: String) async throws -> MachineFlock
-    func decide(machineId: String, approvalId: String, decision: ApprovalDecision) async throws -> DecisionOutcome
+    func decide(machineId: String, approvalId: String, decision: ApprovalDecision, note: String?) async throws -> DecisionOutcome
+    func typeText(machineId: String, terminalId: String, text: String) async throws
 }
 
 extension CollieCore: ApprovalCore {}
@@ -51,6 +52,7 @@ final class ApprovalsModel {
     enum Step: Equatable {
         case authenticating(ApprovalDecision)
         case sending(ApprovalDecision)
+        case typing
     }
 
     private let core: (any ApprovalCore)?
@@ -60,6 +62,10 @@ final class ApprovalsModel {
     private(set) var steps: [String: Step] = [:]
     private(set) var notice: String?
     private(set) var expanded: Set<String> = []
+    /// Unsent notes and plan feedback, by approval.
+    var drafts: [String: String] = [:]
+    /// Approvals whose note field is shown; a hidden note is never sent.
+    private(set) var noting: Set<String> = []
     /// The approval the notice reports on: it leaving the list is the expected result, not a change to clear for.
     private var noticeSubject: String?
     private var noticeTimer: Task<Void, Never>?
@@ -93,11 +99,25 @@ final class ApprovalsModel {
             show(nil)
         }
         items = next
-        expanded.formIntersection(next.map(\.id))
+        let ids = Set(next.map(\.id))
+        expanded.formIntersection(ids)
+        noting.formIntersection(ids)
+        drafts = drafts.filter { ids.contains($0.key) }
     }
 
     func toggleExpanded(_ item: ApprovalItem) {
         if expanded.remove(item.id) == nil { expanded.insert(item.id) }
+    }
+
+    func toggleNote(_ item: ApprovalItem) {
+        if noting.remove(item.id) == nil { noting.insert(item.id) }
+    }
+
+    /// The note Approve or Deny sends: nil while the field is hidden or blank.
+    func note(for item: ApprovalItem) -> String? {
+        guard noting.contains(item.id) else { return nil }
+        let text = drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     private func show(_ text: String?, about subject: String? = nil) {
@@ -172,7 +192,10 @@ final class ApprovalsModel {
 
     /// Nothing reaches the core unless the device owner authenticates first.
     func decide(_ item: ApprovalItem, _ decision: ApprovalDecision) async {
-        guard let core, steps[item.id] == nil, item.approval.offers(decision) else { return }
+        let note = note(for: item)
+        guard let core, steps[item.id] == nil, item.approval.offers(decision),
+            note == nil || item.approval.takesNote(with: decision)
+        else { return }
         steps[item.id] = .authenticating(decision)
         show(nil)
         guard await auth.authenticate(reason: decision.reason(agent: item.approval.agentLabel)) else {
@@ -184,9 +207,32 @@ final class ApprovalsModel {
         defer { steps[item.id] = nil }
         do {
             let outcome = try await core.decide(
-                machineId: item.machine.id, approvalId: item.approval.approvalId, decision: decision
+                machineId: item.machine.id, approvalId: item.approval.approvalId, decision: decision, note: note
             )
             show(outcome.message(agent: item.approval.agentLabel), about: item.id)
+        } catch {
+            show(describe(error), about: item.id)
+        }
+        poll()
+    }
+
+    /// Typed into the plan's "Tell Claude what to change"; collied moves the cursor there and never sends shift+tab.
+    func sendFeedback(_ item: ApprovalItem) async {
+        let text = drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let core, steps[item.id] == nil, item.approval.takesFeedback, !text.isEmpty else { return }
+        // Feedback is typed into whatever text option is on screen, so only for a plan still pending.
+        poll()
+        guard items.contains(where: { $0.id == item.id }) else {
+            show("This plan is no longer waiting for an answer.", about: item.id)
+            return
+        }
+        steps[item.id] = .typing
+        show(nil)
+        defer { steps[item.id] = nil }
+        do {
+            try await core.typeText(machineId: item.machine.id, terminalId: item.approval.terminalId, text: text)
+            drafts[item.id] = nil
+            show("Sent your feedback to \(item.approval.agentLabel).", about: item.id)
         } catch {
             show(describe(error), about: item.id)
         }
@@ -202,6 +248,14 @@ extension PendingApproval {
         }
         return options.contains(decision)
     }
+
+    /// collied takes a note only with Approve or Deny, on a prompt that showed "Tab to amend".
+    func takesNote(with decision: ApprovalDecision) -> Bool {
+        supportsNote && (decision == .approve || decision == .deny)
+    }
+
+    /// A plan prompt: options only for keys, but its free-text option takes typed feedback.
+    var takesFeedback: Bool { hasTextField && !acceptsInput }
 }
 
 extension DecisionOutcome {

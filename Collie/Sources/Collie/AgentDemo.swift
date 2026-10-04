@@ -218,20 +218,22 @@ final class DemoApprovalCore: ApprovalCore {
                 approvalId: "ap_demo1", terminalId: "term_1", agentLabel: "fix the flaky test", workspaceLabel: "collie",
                 snippet: """
                 Bash command
+                  Run the approval tests
                   cargo test -p collied --test approvals
                 Do you want to proceed?
                 > 1. Yes
                   2. Yes, and don't ask again for cargo test commands
-                  3. No, and tell Claude what to do differently (esc)
+                  3. No
+                Esc to cancel · Tab to amend
                 """,
                 toolName: "Bash", toolSummary: "cargo test -p collied --test approvals",
                 options: [.approve, .approveAlways, .deny],
                 choices: [
                     ApprovalChoice(index: 0, label: "Yes", current: true),
                     ApprovalChoice(index: 1, label: "Yes, and don't ask again for cargo test commands", current: false),
-                    ApprovalChoice(index: 2, label: "No, and tell Claude what to do differently (esc)", current: false),
+                    ApprovalChoice(index: 2, label: "No", current: false),
                 ],
-                acceptsInput: false, hasTextField: false,
+                acceptsInput: false, hasTextField: false, supportsNote: true,
                 createdAtMs: now - 45_000, expiresAtMs: now + 555_000
             ),
             PendingApproval(
@@ -243,7 +245,7 @@ final class DemoApprovalCore: ApprovalCore {
                     ApprovalChoice(index: 0, label: "Yes, proceed", current: true),
                     ApprovalChoice(index: 1, label: "No, exit", current: false),
                 ],
-                acceptsInput: false, hasTextField: false,
+                acceptsInput: false, hasTextField: false, supportsNote: false,
                 createdAtMs: now - 10_000, expiresAtMs: now + 190_000
             ),
             PendingApproval(
@@ -261,8 +263,27 @@ final class DemoApprovalCore: ApprovalCore {
                     ApprovalChoice(index: 1, label: "SQLite", current: false),
                     ApprovalChoice(index: 2, label: "Type something.", current: false),
                 ],
-                acceptsInput: true, hasTextField: true,
+                acceptsInput: true, hasTextField: true, supportsNote: false,
                 createdAtMs: now - 60_000, expiresAtMs: now + 540_000
+            ),
+            PendingApproval(
+                approvalId: "ap_demo4", terminalId: "term_4", agentLabel: "add dark mode", workspaceLabel: "website",
+                snippet: """
+                Ready to code?
+                Would you like to proceed?
+                > 1. Yes, and use auto mode
+                  2. Yes, manually approve edits
+                  3. Tell Claude what to change
+                """,
+                toolName: nil, toolSummary: nil,
+                options: [],
+                choices: [
+                    ApprovalChoice(index: 0, label: "Yes, and use auto mode", current: true),
+                    ApprovalChoice(index: 1, label: "Yes, manually approve edits", current: false),
+                    ApprovalChoice(index: 2, label: "Tell Claude what to change", current: false),
+                ],
+                acceptsInput: false, hasTextField: true, supportsNote: false,
+                createdAtMs: now - 20_000, expiresAtMs: now + 580_000
             ),
         ]
     }
@@ -275,9 +296,13 @@ final class DemoApprovalCore: ApprovalCore {
 
     func flock(machineId: String) async throws -> MachineFlock { throw CoreError.MachineNotFound }
 
-    func decide(machineId: String, approvalId: String, decision: ApprovalDecision) async throws -> DecisionOutcome {
+    func decide(machineId: String, approvalId: String, decision: ApprovalDecision, note: String?) async throws -> DecisionOutcome {
         try await Task.sleep(for: .milliseconds(500))
         return .applied(decision: decision, by: "demo")
+    }
+
+    func typeText(machineId: String, terminalId: String, text: String) async throws {
+        try await Task.sleep(for: .milliseconds(500))
     }
 }
 #endif

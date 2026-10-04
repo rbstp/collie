@@ -108,6 +108,9 @@ struct ApprovalCard: View {
                     .padding(8)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 8))
             }
+            if approval.supportsNote, model.noting.contains(item.id) {
+                NoteField(model: model, item: item)
+            }
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 let expired = approval.expiresAtMs <= UInt64(context.date.timeIntervalSince1970 * 1000)
                 if approval.options.isEmpty {
@@ -116,8 +119,70 @@ struct ApprovalCard: View {
                     DecisionButtons(model: model, item: item, expired: expired)
                 }
             }
+            if approval.supportsNote, !model.noting.contains(item.id) {
+                Button("Add note", systemImage: "text.bubble") { model.toggleNote(item) }
+                    .font(.footnote)
+                    .disabled(model.steps[item.id] != nil)
+            }
+            if approval.takesFeedback {
+                FeedbackField(model: model, item: item)
+            }
         }
         .padding(.vertical, 4)
+    }
+}
+
+extension ApprovalsModel {
+    func draft(_ item: ApprovalItem) -> Binding<String> {
+        // collied caps notes at 200 characters: a longer line cannot be read back once wrapped.
+        Binding(get: { self.drafts[item.id, default: ""] }, set: { self.drafts[item.id] = String($0.prefix(200)) })
+    }
+}
+
+/// Sent with Approve or Deny, typed on the Mac in place of the option's amend placeholder.
+private struct NoteField: View {
+    let model: ApprovalsModel
+    let item: ApprovalItem
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("Note for \(item.approval.agentLabel)", text: model.draft(item))
+                .textFieldStyle(.roundedBorder)
+                .submitLabel(.done)
+            Button("Remove note", systemImage: "xmark.circle.fill") { model.toggleNote(item) }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+        }
+        .disabled(model.steps[item.id] != nil)
+    }
+}
+
+/// The plan's "Tell Claude what to change", sent with `typeText`.
+private struct FeedbackField: View {
+    let model: ApprovalsModel
+    let item: ApprovalItem
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("Tell Claude what to change", text: model.draft(item))
+                .textFieldStyle(.roundedBorder)
+                .submitLabel(.send)
+                .onSubmit { Task { await model.sendFeedback(item) } }
+            Button {
+                Task { await model.sendFeedback(item) }
+            } label: {
+                if model.steps[item.id] == .typing {
+                    ProgressView().frame(width: 28, height: 28)
+                } else {
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 28))
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(model.drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel("Send feedback")
+        }
+        .disabled(model.steps[item.id] != nil)
     }
 }
 
@@ -142,6 +207,7 @@ private struct DecisionButtons: View {
                     .frame(maxWidth: .infinity)
                 }
                 .modifier(DecisionStyle(prominent: decision == .approve))
+                .disabled(model.note(for: item) != nil && !item.approval.takesNote(with: decision))
             }
         }
         .disabled(expired || model.steps[item.id] != nil)

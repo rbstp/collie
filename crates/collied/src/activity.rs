@@ -427,6 +427,7 @@ mod tests {
             choices: vec![],
             accepts_input: false,
             has_text_field: false,
+            supports_note: false,
             nonce: Nonce::new("N".repeat(43)).unwrap(),
             created_at_ms: T0,
             expires_at_ms: T0 + 600_000,
