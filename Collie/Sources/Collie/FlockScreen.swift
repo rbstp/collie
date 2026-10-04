@@ -155,7 +155,9 @@ private struct AgentRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            StatusPill(state: agent.status)
+            StatusIcon(state: agent.status)
+                // Centered on the title's first line rather than sitting on its baseline.
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if followed {
@@ -195,6 +197,35 @@ struct StatusPill: View {
             .padding(.vertical, 3)
             .background(state.color.opacity(0.18), in: Capsule())
             .foregroundStyle(state.color)
+    }
+}
+
+struct StatusIcon: View {
+    let state: AgentState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var spinning = false
+
+    var body: some View {
+        Group {
+            switch state {
+            case .working:
+                Circle()
+                    .trim(from: 0, to: 0.7)
+                    .stroke(state.color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .padding(2)
+                    .rotationEffect(.degrees(spinning ? 360 : 0))
+                    .animation(reduceMotion ? nil : .linear(duration: 1).repeatForever(autoreverses: false), value: spinning)
+                    .onAppear { spinning = true }
+            case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(state.color)
+            case .idle: Image(systemName: "circle.fill").font(.system(size: 9)).foregroundStyle(state.color)
+            case .blocked: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(state.color)
+            case .unknown: Image(systemName: "questionmark.circle").foregroundStyle(state.color)
+            }
+        }
+        .font(.system(size: 18))
+        .frame(width: 20, height: 20)
+        .accessibilityElement()
+        .accessibilityLabel(state.label)
     }
 }
 
