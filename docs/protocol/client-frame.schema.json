@@ -346,6 +346,10 @@
         "activity_id": {
           "$ref": "#/$defs/ActivityId"
         },
+        "shows_approvals": {
+          "description": "The activity shows an approval's command and its Approve and Deny buttons. Without\nit collied keeps sending that device the approval alert.",
+          "type": "boolean"
+        },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"
         },

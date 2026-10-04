@@ -70,6 +70,7 @@ targets:
       - path: Sources/Shared
         excludes:
           - AgentActivity.swift
+          - DecideApprovalIntent.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie.push
@@ -97,12 +98,15 @@ targets:
     sources:
       - path: CollieWidgets
       - path: Sources/Shared/AgentActivity.swift
+      - path: Sources/Shared/DecideApprovalIntent.swift
+      - path: Sources/Shared/NotificationKey.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie.widgets
         PRODUCT_NAME: CollieWidgets
         INFOPLIST_FILE: CollieWidgets/Info.plist
         GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: CollieWidgets/CollieWidgets.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
         TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO

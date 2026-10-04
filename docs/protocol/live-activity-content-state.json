@@ -7,5 +7,14 @@
     "workspace": "api",
     "approvals": 1
   },
+  "content_state_with_approval": {
+    "status": "blocked",
+    "statusSince": 812721600,
+    "title": "api-fixer",
+    "workspace": "api",
+    "approvals": 1,
+    "approvalId": "apr_test",
+    "enc": "oKGio6Slpqeoqaqr7QAv18tqJkZ41BDjm3Mz/9NV7Tim7Fe0ZJoerlF+PbZlhhy7Ws9jjgfEGOzE+w=="
+  },
   "statuses": ["idle", "working", "blocked", "done", "unknown"]
 }

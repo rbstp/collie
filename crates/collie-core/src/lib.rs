@@ -909,6 +909,8 @@ impl CollieCore {
             terminal_id: terminal(terminal_id)?,
             token: PushToken::new(token_hex.trim())
                 .map_err(|_| invalid("token", "activity token must be 64 to 256 hex characters"))?,
+            // The app restarts activities an older build started before it registers any.
+            shows_approvals: true,
         };
         {
             let machines = lock(&self.inner.machines);
@@ -2260,10 +2262,11 @@ mod tailnet_tests {
                         }
                         Request::PushActivityToken(p) => {
                             lock(&seen).activities.push(format!(
-                                "token {} {} {}",
+                                "token {} {} {} {}",
                                 p.activity_id.as_str(),
                                 p.terminal_id.as_str(),
-                                p.token.as_str()
+                                p.token.as_str(),
+                                p.shows_approvals
                             ));
                             Ok(Response::Ok)
                         }
@@ -2709,7 +2712,7 @@ mod tailnet_tests {
         let token = "ab".repeat(80);
         core.register_activity_token(id(), ACTIVITY.into(), "term_1".into(), token.clone())
             .unwrap();
-        let registered = format!("token {ACTIVITY} term_1 {token}");
+        let registered = format!("token {ACTIVITY} term_1 {token} true");
         poll("push.activity_token", || {
             (lock(&seen).activities.last() == Some(&registered)).then_some(())
         });

@@ -362,6 +362,10 @@ pub struct PushActivityTokenParams {
     pub activity_id: ActivityId,
     pub terminal_id: TerminalId,
     pub token: PushToken,
+    /// The activity shows an approval's command and its Approve and Deny buttons. Without
+    /// it collied keeps sending that device the approval alert.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shows_approvals: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

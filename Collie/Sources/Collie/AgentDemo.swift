@@ -1,12 +1,15 @@
 #if DEBUG
+import ActivityKit
 import CollieCore
+import CryptoKit
 import Foundation
 import SwiftUI
 import UserNotifications
 
 /// `--terminal-demo <file>`: the Agents list over fake agents, each agent screen showing the
 /// first "text" string of a herdr JSON response (or the raw file), with no Mac. Debug builds only.
-/// `--follow-demo <terminal id>` also follows that agent, which starts its Live Activity.
+/// `--follow-demo <terminal id>` also follows that agent, which starts its Live Activity, and
+/// gives a blocked one the approval fields collied would push.
 struct AgentDemo: View {
     let core: DemoAgentCore
     private let followed: String?
@@ -36,9 +39,25 @@ struct AgentDemo: View {
             follows.foreground()
             if let followed {
                 follows.follow(AgentRoute(machineId: DemoAgentCore.machine.id, terminalId: followed))
+                await Self.pushDemoApproval()
             }
         }
         .onOpenURL { opening = AppModel.route(for: $0, machines: [DemoAgentCore.machine]) }
+    }
+
+    /// Sealed like collied's `enc`, with a key stored for the demo Mac as pairing would.
+    private nonisolated static func pushDemoApproval() async {
+        let approvalId = "ap_demo"
+        let plaintext = #"{"v":1,"body":"Bash: Run the approval tests\ncargo test -p collied --test approvals -- --nocapture"}"#
+        guard let key = try? NotificationKey.loadOrCreate(nodeId: DemoAgentCore.machine.nodeId),
+            let sealed = try? ChaChaPoly.seal(Data(plaintext.utf8), using: key, authenticating: Data(approvalId.utf8))
+        else { return }
+        for activity in Activity<AgentActivityAttributes>.activities where activity.content.state.status == .blocked {
+            var state = activity.content.state
+            state.approvalId = approvalId
+            state.enc = sealed.combined.base64EncodedString()
+            await activity.update(FollowModel.activityContent(state))
+        }
     }
 
     private static func firstText(_ value: Any) -> String? {

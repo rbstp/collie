@@ -1,4 +1,5 @@
 import ActivityKit
+import CryptoKit
 import Foundation
 import SwiftUI
 
@@ -9,25 +10,38 @@ struct AgentActivityAttributes: ActivityAttributes {
     let machineId: String
     let terminalId: String
     let machineLabel: String
+    /// The Mac's node id, which keys its notification key and its decisions. Nil on activities
+    /// an older build started; those are restarted on the next foreground.
+    let nodeId: String?
 
     /// Plaintext to Apple: only what the approval alert already shows, plus the status and a count.
+    /// `enc` is the approval context sealed like the alert's, so Apple only sees ciphertext.
     struct ContentState: Codable, Hashable, Sendable {
         var status: AgentActivityStatus
         var statusSince: Date
         var title: String
         var workspace: String?
         var approvals: Int
+        var approvalId: String?
+        var enc: String?
+        /// Local only, never sent by collied: "Approving…" after a tap, until its next push.
+        var progress: String?
 
-        init(status: AgentActivityStatus, statusSince: Date, title: String, workspace: String?, approvals: Int) {
+        init(
+            status: AgentActivityStatus, statusSince: Date, title: String, workspace: String?, approvals: Int,
+            approvalId: String? = nil, enc: String? = nil
+        ) {
             self.status = status
             self.statusSince = statusSince
             self.title = title
             self.workspace = workspace
             self.approvals = approvals
+            self.approvalId = approvalId
+            self.enc = enc
         }
 
         enum CodingKeys: String, CodingKey {
-            case status, statusSince, title, workspace, approvals
+            case status, statusSince, title, workspace, approvals, approvalId, enc, progress
         }
 
         // statusSince is whole seconds since 2001-01-01 UTC (Foundation's reference date, what a
@@ -39,6 +53,9 @@ struct AgentActivityAttributes: ActivityAttributes {
             title = try container.decode(String.self, forKey: .title)
             workspace = try container.decodeIfPresent(String.self, forKey: .workspace)
             approvals = try container.decode(Int.self, forKey: .approvals)
+            approvalId = try container.decodeIfPresent(String.self, forKey: .approvalId)
+            enc = try container.decodeIfPresent(String.self, forKey: .enc)
+            progress = try container.decodeIfPresent(String.self, forKey: .progress)
         }
 
         func encode(to encoder: any Encoder) throws {
@@ -48,10 +65,22 @@ struct AgentActivityAttributes: ActivityAttributes {
             try container.encode(title, forKey: .title)
             try container.encodeIfPresent(workspace, forKey: .workspace)
             try container.encode(approvals, forKey: .approvals)
+            try container.encodeIfPresent(approvalId, forKey: .approvalId)
+            try container.encodeIfPresent(enc, forKey: .enc)
+            try container.encodeIfPresent(progress, forKey: .progress)
         }
 
         /// Matches collied's `relevance-score`.
         var relevance: Double { status == .blocked ? 100 : 50 }
+
+        /// The approval this blocked state can be decided from the activity, if collied sent one.
+        var pendingApproval: String? { status == .blocked ? approvalId : nil }
+
+        /// The decrypted command of the pending approval, nil when anything is missing or wrong.
+        func command(key: SymmetricKey?) -> String? {
+            guard let approvalId = pendingApproval, let enc, let key else { return nil }
+            return PushContext.open(enc, approvalId: approvalId, key: key)
+        }
     }
 }
 

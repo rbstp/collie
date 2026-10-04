@@ -39,7 +39,10 @@ struct FlockScreen: View {
                         ForEach(entry.agents, id: \.terminalId) { agent in
                             let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
                             NavigationLink(value: route) {
-                                AgentRow(agent: agent, workspace: entry.workspaceLabel(for: agent))
+                                AgentRow(
+                                    agent: agent, workspace: entry.workspaceLabel(for: agent),
+                                    followed: follows?.isFollowing(route) == true
+                                )
                             }
                             .contextMenu {
                                 if let follows {
@@ -119,12 +122,21 @@ private struct MachineHeader: View {
 private struct AgentRow: View {
     let agent: AgentSummary
     let workspace: String?
+    let followed: Bool
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             StatusPill(state: agent.status)
             VStack(alignment: .leading, spacing: 2) {
-                Text(agent.displayTitle).lineLimit(2)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    if followed {
+                        Image(systemName: "pin.fill")
+                            .font(.caption)
+                            .foregroundStyle(.tint)
+                            .accessibilityLabel("Followed")
+                    }
+                    Text(agent.displayTitle).lineLimit(2)
+                }
                 if let subtitle = [workspace, agent.kind].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
                     Text(subtitle).font(.caption).foregroundStyle(.secondary)
                 }

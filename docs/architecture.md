@@ -102,7 +102,7 @@ Every attempt is audited with its decision and result, including replays, rate-l
 - `collied apns import <AuthKey_ID.p8>`, run from the signed binary: needs `[apns]` ids, refuses a file named for another key ID, reads the file with the `key_path` checks, checks it is an ES256 key, stores it (an existing item is kept), reads it back and compares, rewrites `key_path` to `key = "keychain"` in `collied.toml` (atomic, same mode, never through a symlink), then asks y/N before deleting the file (only if it is still the same inode).
 - `collied doctor` checks the signature (Developer ID requirement and identifier, `codesign` line), reads the item with user interaction disabled (what it reads is what the daemon reads unattended), signs a provider token as a dry run, and warns about any `.p8` left in `<data dir>/apns`.
 - Tokens arrive by `push.register` and are stored per `StableID` in `push.json` (0600, atomic), with the device's notification key (below). Each token carries its environment (Debug builds: sandbox, TestFlight: production); one collied keeps a client for each. Every send re-checks the pairing (a registration racing a revoke never gets an alert); `Unregistered` and `BadDeviceToken` drop the token; revoking a peer forgets its tokens. Queue of 64 alerts, dropped when full; 10 s per send.
-- Approval alert: push type `alert`, priority 10, `apns-expiration` = approval expiry, `apns-collapse-id` = `terminal_id`.
+- Approval alert: push type `alert`, priority 10, `apns-expiration` = approval expiry, `apns-collapse-id` = `terminal_id`. A device whose Live Activity for the approval's terminal shows approvals gets the approval on that activity instead, and the alert only if the activity push fails or the approval is still pending 2 min later ([Approval on the activity](#approval-on-the-activity)).
 - Live Activity update tokens are stored next to the device's token and pushed to with their own headers: [Live Activities](#live-activities).
 
 | Field | Value |
@@ -217,17 +217,18 @@ The lock screen and the Dynamic Island show an agent only while the user follows
 
 ### Protocol
 
-- `push.activity_token {activity_id, terminal_id, token}` and `push.activity_end {activity_id}`, both `MethodClass::Push`. `activity_id` is ActivityKit's `Activity.id` (`[A-Za-z0-9-]`, at most 64), `token` is the update token in hex (64 to 256 characters, redacted in `Debug`).
-- Additive: the protocol version stays 2. An older collied answers `not_implemented` or `unknown_method`, which the phone ignores.
+- `push.activity_token {activity_id, terminal_id, token, shows_approvals?}` and `push.activity_end {activity_id}`, both `MethodClass::Push`. `activity_id` is ActivityKit's `Activity.id` (`[A-Za-z0-9-]`, at most 64), `token` is the update token in hex (64 to 256 characters, redacted in `Debug`). `shows_approvals` (default false, omitted when false) says the activity shows an approval's command and its buttons; collie-core always sends `true`, since the app restarts activities an older build started before it registers any.
+- Additive: the protocol version stays 2. An older collied answers `not_implemented` or `unknown_method`, which the phone ignores. A collied from before `shows_approvals` rejects it as an unknown field (`invalid_params`), so collied is upgraded before the app; an app from before it registers without it and keeps getting approval notifications.
 
 ### collied
 
-- Stored in `push.json` (0600, atomic) under `activities`: `{stable_id, activity_id, terminal_id, token, environment, registered_at}`. A file without `activities` loads as before; an empty list is not written.
+- Stored in `push.json` (0600, atomic) under `activities`: `{stable_id, activity_id, terminal_id, token, environment, registered_at, shows_approvals}` (`shows_approvals` omitted when false, so entries stored before it load as false). A file without `activities` loads as before; an empty list is not written.
 - Bound to the session's `StableID`: a device registers, replaces and ends only its own activities. The same `activity_id` or the same `terminal_id` from the same device replaces the old entry (the phone keeps one activity per followed agent, so an activity it never ended cannot hold a slot); a token is stored once. The environment is the device's own from `push.register` (`not_found` without one). At most 8 per device (`too_large` beyond). `push.activity_end` for an id the device does not have answers `ok`.
-- Dropped on `push.activity_end`, on revoke, at start for peers no longer paired, on `Unregistered` or `BadDeviceToken` for that token, when the terminal is gone, and quietly (no push, audited as `ended: expired`) 8 h after `registered_at`: ActivityKit ends an activity 8 h after it starts, and the phone registers after the start and again on every foreground, which refreshes `registered_at`.
+- Dropped on `push.activity_end`, on revoke, at start for peers no longer paired, on `Unregistered` or `BadDeviceToken` for that token, when the terminal is gone, and quietly (no push, audited as `ended: expired`) 8 h after `registered_at`: ActivityKit ends an activity 8 h after it starts. The phone registers right after the start and again on every foreground; a registration of an `activity_id` collied already has keeps its `registered_at`, so the 8 h count from the first one.
 - Updates come from the 1 s agent reconcile, after the approvals pass, never from terminal output. Per activity:
   - first sight (a new activity, a new token, or a collied restart): one update without alert, so the activity shows what the Mac sees;
-  - content changed: an update, at most one per 2 s per activity (a change inside the gap goes out on the first reconcile after it); an update that enters `blocked` is urgent (priority 10 and an alert) at most once per 30 s per activity, so a status flapping on the same prompt alerts once and then sends plain updates;
+  - content changed: an update, at most one per 2 s per activity (a change inside the gap goes out on the first reconcile after it); a status change alone never alerts;
+  - an approval routed to the activity ([below](#approval-on-the-activity)): sent in the same reconcile, whatever the 2 s gap;
   - nothing changed: the same content again every 10 min, to move the stale date while the Mac is up;
   - the terminal missing from two reconciles in a row: `end` with `dismissal-date` = now + 60 s, then the token is dropped. A missed `agent.list` (herdr down) changes nothing.
 - Every send re-checks the pairing, like alerts. One audit line per register (`push.activity_token`, target `<terminal_id> activity=<activity_id>`) and per end (`push.activity_end`, from the phone, or `ended: agent gone` and `ended: expired` from collied); tokens are never logged or audited.
@@ -236,24 +237,36 @@ The lock screen and the Dynamic Island show an agent only while the user follows
 |---|---|
 | `apns-push-type` | `liveactivity` |
 | `apns-topic` | `<bundle_id>.push-type.liveactivity` |
-| `apns-priority` | 10 for the update that enters `blocked` (it carries the alert, at most once per 30 s per activity), 5 for every other update, refresh and end |
-| `apns-expiration` | now + 5 min |
+| `apns-priority` | 10 for the update that carries an approval alert, 5 for every other update, refresh and end |
+| `apns-expiration` | the approval's expiry for the update that carries an approval alert, as for the approval alert it replaces; now + 5 min for every other |
 | `apns-collapse-id` | none |
 
 ```json
 {"aps": {
   "timestamp": 1791028800,
   "event": "update",
-  "content-state": {"status": "blocked", "statusSince": 812721600, "title": "api-fixer", "workspace": "api", "approvals": 1},
+  "content-state": {"status": "blocked", "statusSince": 812721600, "title": "api-fixer", "workspace": "api", "approvals": 1,
+                    "approvalId": "apr_test", "enc": "oKGio6Slpqeoqaqr7QAv18tqJkZ41BDjm3Mz/9NV7Tim7Fe0ZJoerlF+PbZlhhy7Ws9jjgfEGOzE+w=="},
   "stale-date": 1791029700,
   "relevance-score": 100,
   "alert": {"title": "api-fixer", "body": "Blocked in api"}
 }}
 ```
 
-- `timestamp`, `stale-date` (now + 15 min) and `dismissal-date` are Unix seconds. `relevance-score` is 100 while `blocked`, else 50. `alert` only on the update that enters `blocked`, so the Dynamic Island expands; its text is the approval alert's.
-- `content-state` decodes into `AgentActivityAttributes.ContentState` with ActivityKit's default decoder: `status` is `idle | working | blocked | done | unknown`; `statusSince` is whole seconds since 2001-01-01T00:00:00Z (Unix seconds − 978307200), Swift's default `Date` Codable value, with no custom date strategy on either side; `title` is the alert title (herdr agent name, else agent kind, else `agent`); `workspace` is the workspace label; `approvals` counts the agent's pending approvals (0 or 1). The fixture [protocol/live-activity-content-state.json](protocol/live-activity-content-state.json) is checked by collied's and the app's tests.
-- The content state is plaintext to Apple: status, its start, the agent and workspace labels and a count. Never the terminal title, snippet, context or nonce ([threat-model.md](threat-model.md#apple-sees-push-payload-metadata)).
+- `timestamp`, `stale-date` (now + 15 min) and `dismissal-date` are Unix seconds. `relevance-score` is 100 while `blocked`, else 50. `alert` only on the update that carries an approval alert, so the Dynamic Island expands; its text is the approval alert's.
+- `content-state` decodes into `AgentActivityAttributes.ContentState` with ActivityKit's default decoder: `status` is `idle | working | blocked | done | unknown`; `statusSince` is whole seconds since 2001-01-01T00:00:00Z (Unix seconds − 978307200), Swift's default `Date` Codable value, with no custom date strategy on either side; `title` is the alert title (herdr agent name, else agent kind, else `agent`); `workspace` is the workspace label; `approvals` counts the agent's pending approvals (0 or 1); `approvalId` and `enc` are optional and present only while an approval routed to this device is pending (an older app ignores them). The fixture [protocol/live-activity-content-state.json](protocol/live-activity-content-state.json) has both forms; its `enc` is the [notification test vector](protocol/notification-vector.json)'s. Both are checked by collied's and the app's tests.
+- The content state is plaintext to Apple: status, its start, the agent and workspace labels, a count and an approval id. The context only as `enc`; never the terminal title, snippet or nonce ([threat-model.md](threat-model.md#apple-sees-push-payload-metadata)).
+
+### Approval on the activity
+
+- A device that follows an agent gets its approvals on the activity alone: one alert, the Dynamic Island expands, the command and Approve and Deny are on the activity, and no approval notification.
+- Only an activity registered with `shows_approvals` takes the approval; a device whose activity for the terminal lacks it (an older app) gets the approval alert as before, and its activity only the status.
+- When `alert_due` lets an approval alert go out, every paired device without such an activity for that terminal gets the approval alert as before. A device with one gets, in the same reconcile, an update of that activity with priority 10, the approval alert's `aps.alert` and the content state with `approvalId` and `enc`: the context sealed to that device's notification key exactly like the alert's `enc` (fresh nonce, AAD = `approval_id`, `{"v":1,"body":...}`; no `enc` without a key or a context). The same rules as for alerts decide whether it alerts (a new episode or a changed prompt does, the same prompt reissued within 30 s does not), so an approval alerts once either way.
+- A reissue that `alert_due` keeps quiet still reaches the activity, as an update with priority 5, no alert and the new `approvalId` and `enc`, so its buttons never decide a burned approval. It reaches no other device, as before.
+- Fallback: if the activity push fails (any APNs error, a network error or a dead token, which is dropped as usual), or the activity or the agent is gone by the time collied would push, the device gets the approval alert at once.
+- Late fallback: APNs accepts a push to an activity the phone has ended (dismissed or ended by iOS while the app was suspended, Live Activities turned off, an update dropped by iOS's budget, or replaced by a later update while the phone was offline), and nothing tells collied. So an approval that alerted on an activity and is still pending and not being decided 2 min later also goes to that device as the approval alert, once (never twice with the early fallback). The cost: a user who has not answered within 2 min gets the notification as a reminder; a dead activity delays the alert by up to 2 min. Both timers live in collied's memory; a restart reissues pending approvals, which alert again.
+- `enc` is sealed once per device and approval and repeated on later updates (refresh, new token), so coalescing still sees an unchanged state. Once the approval resolves (applied, denied, superseded, expired) or the agent leaves `blocked`, the next update omits `approvalId` and `enc`; it is a normal coalesced update without alert. An `end` never carries them.
+- On the phone, `AgentActivityAttributes` carries the Mac's `nodeId`. The widget reads the notification key for it from the shared Keychain access group, opens `enc` (`PushContext.open`) and shows the command on the lock screen and in the expanded Dynamic Island (`privacySensitive`: redacted while locked), else "Approval needed" without buttons. Approve and Deny, shown only with a command that decrypts, are `Button(intent:)` with a `LiveActivityIntent` whose `authenticationPolicy` is `.requiresAuthentication`: iOS makes the user unlock first, then the intent runs in the app process and takes the same path as the notification actions (`decideFromNotification`, background budget; the nonce comes from the Mac over the tailnet).
 
 ## iOS
 
@@ -282,7 +295,7 @@ The lock screen and the Dynamic Island show an agent only while the user follows
 | herdr server load (status entry polls `pane.get` every 100 ms) | CPU with many panes | measure; fall back to `agent.list` polling if needed |
 | UniFFI + Swift 6 | build friction | Swift 5 mode bindings target; no async foreign traits on hot paths |
 | APNs `.p8` is team wide | leak allows pushes to every app on the team | dedicated revocable key; Keychain item whose ACL trusts only the Developer ID signed collied; payload never carries the nonce; limits in [threat-model.md](threat-model.md#same-uid-malware-on-the-mac) |
-| APNs payload transits Apple | project names exposed | alert carries agent and workspace labels in clear; the pending action only sealed to the phone's notification key; never the nonce; detail fetched over the tailnet. Live Activity content (status, labels, a count) only for followed agents |
+| APNs payload transits Apple | project names exposed | alert carries agent and workspace labels in clear; the pending action only sealed to the phone's notification key; never the nonce; detail fetched over the tailnet. Live Activity content (status, labels, a count, an approval id; the context only sealed) only for followed agents |
 | Answering a blocked prompt outside approvals | bypasses nonce/expiry/audit | collied refuses prompt/keys while `blocked` |
 | Prompt delivered after agent exit | prompt runs as a shell command | foreground check before send; conditional input in herdr upstream |
 | Retried mutations | duplicate prompts/tasks | `op_id` outcome cache |

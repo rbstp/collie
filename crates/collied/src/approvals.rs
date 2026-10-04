@@ -376,13 +376,12 @@ impl Approvals {
             alert
         };
         // A reissued alert replaces the dead one, whose approval_id no longer works.
-        if let Some(push) = self.push.as_ref().filter(|_| alert) {
-            push.notify(push::approval_alert(
+        if let Some(push) = &self.push {
+            push.notify_approval(
                 &approval,
-                &title,
-                &self.node_id,
-                &context,
-            ));
+                push::approval_alert(&approval, &title, &self.node_id, &context),
+                alert,
+            );
         }
         let _ = self.events.send(Event::ApprovalNeeded { approval });
         Ok(())

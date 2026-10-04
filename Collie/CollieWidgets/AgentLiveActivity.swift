@@ -1,4 +1,5 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -33,10 +34,11 @@ struct AgentLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(subtitle(context)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        if state.status == .blocked {
-                            ApprovalNeeded()
+                        // The island is too short for both: the command matters more.
+                        if state.pendingApproval == nil {
+                            Text(subtitle(context)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
+                        Approval(context: context)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 4)
@@ -80,9 +82,7 @@ private struct LockScreenView: View {
                     .foregroundStyle(.secondary)
             }
             Text(subtitle(context)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            if state.status == .blocked {
-                ApprovalNeeded()
-            }
+            Approval(context: context)
         }
         .padding(16)
         .environment(\.colorScheme, .dark)
@@ -100,6 +100,52 @@ private struct StatusPill: View {
             .background(status.color.opacity(0.18), in: Capsule())
             .foregroundStyle(status.color)
     }
+}
+
+/// The pending approval's command, decrypted here with the Mac's notification key, and the
+/// buttons that decide it. Without a command that decrypts, only "Approval needed".
+private struct Approval: View {
+    let context: ActivityViewContext<AgentActivityAttributes>
+
+    var body: some View {
+        let state = context.state
+        // Buttons only for an approval whose command opened under the Mac's key with its id as
+        // AAD: an id Apple or the APNs key holder pushed in clear must not become decidable here.
+        if let approvalId = state.pendingApproval, let nodeId = context.attributes.nodeId,
+            let command = state.command(key: NotificationKey.load(nodeId: nodeId))
+        {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(command)
+                    .font(.caption.monospaced())
+                    .lineLimit(3)
+                    .truncationMode(.tail)
+                    .privacySensitive()
+                if let progress = state.progress {
+                    Text(progress).font(.subheadline.bold()).foregroundStyle(.secondary)
+                } else {
+                    HStack(spacing: 8) {
+                        Button(intent: DecideApprovalIntent(nodeId: nodeId, approvalId: approvalId, decision: .deny)) {
+                            Text("Deny").frame(maxWidth: .infinity)
+                        }
+                        .tint(.red)
+                        Button(intent: DecideApprovalIntent(nodeId: nodeId, approvalId: approvalId, decision: .approve)) {
+                            Text("Approve").frame(maxWidth: .infinity)
+                        }
+                        .tint(.green)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .font(.subheadline.bold())
+                }
+            }
+        } else if state.status == .blocked {
+            ApprovalNeeded()
+        }
+    }
+}
+
+/// Never runs: iOS runs a LiveActivityIntent in the app, which has the real `perform`.
+extension DecideApprovalIntent {
+    func perform() async throws -> some IntentResult { .result() }
 }
 
 private struct ApprovalNeeded: View {

@@ -1,4 +1,6 @@
+import AppIntents
 import CollieCore
+import CryptoKit
 import Foundation
 import Testing
 
@@ -41,6 +43,91 @@ private func fixture() throws -> [String: Any] {
         #expect(decoded.rawValue == status)
     }
     #expect(try JSONDecoder().decode(AgentActivityStatus.self, from: Data(#""sleeping""#.utf8)) == .unknown)
+}
+
+@Test func contentStateWithoutApprovalHasNoCommand() throws {
+    let object = try fixture()
+    let json = try JSONSerialization.data(withJSONObject: try #require(object["content_state"]))
+    let state = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: json)
+    #expect(state.approvalId == nil)
+    #expect(state.enc == nil)
+    #expect(state.pendingApproval == nil)
+    #expect(state.command(key: vectorKey) == nil)
+}
+
+/// docs/protocol/notification-vector.json's key, which the fixture's `enc` is sealed with.
+private let vectorKey = SymmetricKey(data: Data((1...32).map { UInt8($0) }))
+
+@Test func contentStateWithApprovalOpensWithTheMacKey() throws {
+    let object = try fixture()
+    let expected = try #require(object["content_state_with_approval"] as? NSDictionary)
+    let state = try JSONDecoder().decode(
+        AgentActivityAttributes.ContentState.self, from: JSONSerialization.data(withJSONObject: expected)
+    )
+    let approvalId = try #require(state.approvalId)
+    #expect(state.status == .blocked)
+    #expect(state.pendingApproval == approvalId)
+    #expect(state.enc != nil)
+    #expect(state.command(key: vectorKey) == "Bash: echo hi")
+    #expect(state.command(key: SymmetricKey(size: .bits256)) == nil)
+    #expect(state.command(key: nil) == nil)
+    var other = state
+    other.approvalId = "ap_other"
+    #expect(other.command(key: vectorKey) == nil)
+    var working = state
+    working.status = .working
+    #expect(working.pendingApproval == nil)
+    #expect(working.command(key: vectorKey) == nil)
+    let encoded = try JSONEncoder().encode(state)
+    #expect(try JSONSerialization.jsonObject(with: encoded) as? NSDictionary == expected)
+}
+
+@Test func localUpdatesKeepTheApprovalOnlyWhileBlocked() throws {
+    let since = Date(timeIntervalSinceReferenceDate: 812_721_600)
+    var pushed = AgentActivityAttributes.ContentState(
+        status: .blocked, statusSince: since, title: "claude", workspace: "api", approvals: 1, approvalId: "ap_1", enc: "c2VhbGVk"
+    )
+    pushed.progress = "Approving…"
+    let local = AgentActivityAttributes.ContentState(status: .blocked, statusSince: since, title: "claude", workspace: "api", approvals: 1)
+    #expect(local.keepingApproval(of: pushed) == pushed)
+    let moved = AgentActivityAttributes.ContentState(status: .working, statusSince: since, title: "claude", workspace: "api", approvals: 0)
+    #expect(moved.keepingApproval(of: pushed) == moved)
+    #expect(local.keepingApproval(of: moved) == local)
+}
+
+@Test func activitiesFromAnOlderBuildAreRestarted() throws {
+    let old = #"{"machineId":"m1","terminalId":"t1","machineLabel":"Mac"}"#
+    let attributes = try JSONDecoder().decode(AgentActivityAttributes.self, from: Data(old.utf8))
+    #expect(attributes.nodeId == nil)
+    #expect(attributes.isOutdated)
+    let current = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Mac", nodeId: "nMAC")
+    #expect(!current.isOutdated)
+    let decoded = try JSONDecoder().decode(AgentActivityAttributes.self, from: JSONEncoder().encode(current))
+    #expect(decoded.nodeId == "nMAC")
+}
+
+@MainActor
+@Test func activityButtonsNeedUnlockAndDecideThroughTheNotificationPath() async throws {
+    #expect(DecideApprovalIntent.authenticationPolicy == .requiresAuthentication)
+    #expect(!DecideApprovalIntent.openAppWhenRun)
+    var calls: [String] = []
+    let previous = DecideApprovalIntent.decide
+    DecideApprovalIntent.decide = { link, decision in calls.append("\(link.nodeId) \(link.approvalId) \(decision)") }
+    defer { DecideApprovalIntent.decide = previous }
+
+    _ = try await DecideApprovalIntent(nodeId: "nMAC123", approvalId: "ap_1", decision: .approve).perform()
+    _ = try await DecideApprovalIntent(nodeId: "nMAC123", approvalId: "ap_2", decision: .deny).perform()
+    #expect(calls == ["nMAC123 ap_1 approve", "nMAC123 ap_2 deny"])
+
+    for (nodeId, approvalId) in [
+        ("", "ap_1"), ("nMAC", ""), ("nMAC", "../ap"), ("n MAC", "ap_1"), ("nMAC", "ap_é"),
+        (String(repeating: "a", count: 65), "ap_1"), ("nMAC", "w6:p1"),
+    ] {
+        await #expect(throws: DecideApprovalError.invalidIds) {
+            _ = try await DecideApprovalIntent(nodeId: nodeId, approvalId: approvalId, decision: .approve).perform()
+        }
+    }
+    #expect(calls.count == 2)
 }
 
 @Test func contentStateWithoutWorkspace() throws {

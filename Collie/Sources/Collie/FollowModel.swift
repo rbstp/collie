@@ -1,4 +1,5 @@
 import ActivityKit
+import AppIntents
 import CollieCore
 import Foundation
 import Observation
@@ -87,7 +88,7 @@ struct FollowList: Codable, Equatable {
 @MainActor
 @Observable
 final class FollowModel {
-    static let staleAfter: TimeInterval = 15 * 60
+    nonisolated static let staleAfter: TimeInterval = 15 * 60
 
     private let core: (any ActivityCore)?
     private let approvals: ApprovalsModel?
@@ -124,12 +125,12 @@ final class FollowModel {
             notice = "Live Activities are off for collie. Turn them on in Settings to follow agents on the Lock Screen."
             return
         }
-        guard case let (machineLabel, state)? = content(for: agent) else {
+        guard case let (machine, state)? = content(for: agent) else {
             notice = "This agent's status is not known yet. Try again once its Mac is connected."
             return
         }
         do {
-            try start(agent, machineLabel: machineLabel, state: state)
+            try start(agent, machine: machine, state: state)
         } catch {
             notice = "Could not start the Live Activity: \(error.localizedDescription)"
             return
@@ -150,13 +151,13 @@ final class FollowModel {
     }
 
     /// On every foreground: hand each running activity's token to its Mac again, end activities
-    /// no longer followed, and restart followed ones iOS ended.
+    /// no longer followed, and restart followed ones iOS ended or an older build started.
     func foreground() {
         enabled = ActivityAuthorizationInfo().areActivitiesEnabled
         attempted = []
         for activity in Activity<AgentActivityAttributes>.activities where activity.isLive {
             let agent = FollowedAgent(AgentRoute(machineId: activity.attributes.machineId, terminalId: activity.attributes.terminalId))
-            guard list.contains(agent) else {
+            guard list.contains(agent), !activity.attributes.isOutdated else {
                 end(activity, dismissal: .immediate)
                 continue
             }
@@ -194,14 +195,14 @@ final class FollowModel {
                 }
                 continue
             }
-            guard case let (machineLabel, state)? = content(for: agent) else { continue }
+            guard case let (machine, state)? = content(for: agent) else { continue }
             let live = activities(for: agent)
             if live.isEmpty {
                 guard enabled, !attempted.contains(agent), UIApplication.shared.applicationState == .active else { continue }
                 attempted.insert(agent)
                 endDead()
                 do {
-                    try start(agent, machineLabel: machineLabel, state: state)
+                    try start(agent, machine: machine, state: state)
                 } catch {
                     log.error("restart: \(error.localizedDescription, privacy: .public)")
                 }
@@ -209,6 +210,7 @@ final class FollowModel {
             }
             for activity in live {
                 let current = activity.content
+                let state = state.keepingApproval(of: current.state)
                 let staleSoon = current.staleDate.map { $0 < .now.addingTimeInterval(Self.staleAfter / 3) } ?? true
                 guard current.state != state || staleSoon else { continue }
                 let content = Self.activityContent(state)
@@ -218,28 +220,48 @@ final class FollowModel {
         }
     }
 
-    static func activityContent(_ state: AgentActivityAttributes.ContentState) -> ActivityContent<AgentActivityAttributes.ContentState> {
+    nonisolated static func activityContent(
+        _ state: AgentActivityAttributes.ContentState
+    ) -> ActivityContent<AgentActivityAttributes.ContentState> {
         ActivityContent(state: state, staleDate: .now.addingTimeInterval(staleAfter), relevanceScore: state.relevance)
     }
 
-    private func content(for agent: FollowedAgent) -> (String, AgentActivityAttributes.ContentState)? {
+    /// Shows `progress` instead of the buttons on the live activity holding this approval, and
+    /// returns that activity's agent title and terminal id.
+    @discardableResult
+    nonisolated static func show(progress: String?, on link: ApprovalLink) async -> (title: String, terminalId: String)? {
+        guard
+            let activity = Activity<AgentActivityAttributes>.activities.first(where: {
+                $0.isLive && $0.attributes.nodeId == link.nodeId && $0.content.state.pendingApproval == link.approvalId
+            })
+        else { return nil }
+        var state = activity.content.state
+        state.progress = progress
+        await activity.update(activityContent(state))
+        return (state.title, activity.attributes.terminalId)
+    }
+
+    private func content(for agent: FollowedAgent) -> (Machine, AgentActivityAttributes.ContentState)? {
         guard let flock = core?.cachedFlock(machineId: agent.machineId),
             let summary = flock.agents.first(where: { $0.terminalId == agent.terminalId })
         else { return nil }
         let workspace = flock.workspaces.first { $0.workspaceId == summary.workspaceId }?.label
         let approvals = approvals?.items(machineId: agent.machineId, terminalId: agent.terminalId).count ?? 0
-        return (flock.machine.label, AgentActivityAttributes.ContentState(agent: summary, workspace: workspace, approvals: approvals))
+        return (flock.machine, AgentActivityAttributes.ContentState(agent: summary, workspace: workspace, approvals: approvals))
     }
 
-    private func start(_ agent: FollowedAgent, machineLabel: String, state: AgentActivityAttributes.ContentState) throws {
-        let attributes = AgentActivityAttributes(machineId: agent.machineId, terminalId: agent.terminalId, machineLabel: machineLabel)
+    private func start(_ agent: FollowedAgent, machine: Machine, state: AgentActivityAttributes.ContentState) throws {
+        let attributes = AgentActivityAttributes(
+            machineId: agent.machineId, terminalId: agent.terminalId, machineLabel: machine.label, nodeId: machine.nodeId
+        )
         let activity = try Activity.request(attributes: attributes, content: Self.activityContent(state), pushType: .token)
         watch(activity)
     }
 
     private func activities(for agent: FollowedAgent) -> [Activity<AgentActivityAttributes>] {
         Activity<AgentActivityAttributes>.activities.filter {
-            $0.isLive && $0.attributes.machineId == agent.machineId && $0.attributes.terminalId == agent.terminalId
+            $0.isLive && !$0.attributes.isOutdated && $0.attributes.machineId == agent.machineId
+                && $0.attributes.terminalId == agent.terminalId
         }
     }
 
@@ -306,6 +328,30 @@ extension Activity {
     }
 }
 
+extension AgentActivityAttributes {
+    /// Started by a build before `nodeId`: it can show neither the command nor the buttons.
+    var isOutdated: Bool { nodeId == nil }
+}
+
+extension DecideApprovalIntent {
+    /// Set by the AppDelegate at launch, before iOS hands the app any intent.
+    @MainActor static var decide: ((ApprovalLink, ApprovalDecision) async -> Void)?
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        guard let link = ApprovalLink(nodeId: nodeId, approvalId: approvalId) else { throw DecideApprovalError.invalidIds }
+        // Defense in depth under `authenticationPolicy`: never decide while the device is locked.
+        guard UIApplication.shared.isProtectedDataAvailable else { throw DecideApprovalError.locked }
+        guard let decide = Self.decide else { throw DecideApprovalError.notReady }
+        await decide(link, decision == .approve ? .approve : .deny)
+        return .result()
+    }
+}
+
+enum DecideApprovalError: Error, Equatable {
+    case invalidIds, locked, notReady
+}
+
 extension AgentActivityStatus {
     init(_ state: AgentState) {
         switch state {
@@ -327,6 +373,17 @@ extension AgentActivityAttributes.ContentState {
             workspace: workspace,
             approvals: approvals
         )
+    }
+
+    /// The approval fields come only from collied's pushes: a local update keeps them while the
+    /// agent is still blocked, and drops them once it is not.
+    func keepingApproval(of current: Self) -> Self {
+        guard status == .blocked, current.status == .blocked else { return self }
+        var state = self
+        state.approvalId = current.approvalId
+        state.enc = current.enc
+        state.progress = current.progress
+        return state
     }
 }
 

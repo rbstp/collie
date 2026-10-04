@@ -7,14 +7,16 @@ use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
+use collied::activity::Live;
 use collied::approvals::Approvals;
 use collied::audit::Audit;
 use collied::drive::{Authorized, Reply};
-use collied::push::{Alert, Device, Push, Rejection, Sender};
+use collied::flock::StatusTracker;
+use collied::push::{Alert, Delivery, Device, Push, Rejection, Sender};
 use futures_util::future::BoxFuture;
 use protocol::{
-    ApnsEnvironment, Approval, ApprovalDecideParams, ApprovalOutcome, Decision, ErrorCode, Event,
-    Nonce, NotificationKey, PushToken, Response,
+    ActivityId, ApnsEnvironment, Approval, ApprovalDecideParams, ApprovalOutcome, Decision,
+    ErrorCode, Event, Nonce, NotificationKey, PushToken, Response, TerminalId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -188,6 +190,8 @@ fn move_cursor(text: &str, by: isize) -> String {
 #[derive(Default)]
 struct Apns {
     sent: Mutex<Vec<(String, Alert)>>,
+    live_fails: Mutex<Option<Rejection>>,
+    live_attempts: AtomicUsize,
 }
 
 impl Sender for Apns {
@@ -197,6 +201,12 @@ impl Sender for Apns {
         alert: &'a Alert,
     ) -> BoxFuture<'a, Result<(), Rejection>> {
         Box::pin(async move {
+            if matches!(alert.delivery, Delivery::LiveActivity { .. }) {
+                self.live_attempts.fetch_add(1, Ordering::SeqCst);
+                if let Some(e) = self.live_fails.lock().unwrap().clone() {
+                    return Err(e);
+                }
+            }
             self.sent
                 .lock()
                 .unwrap()
@@ -209,14 +219,27 @@ impl Sender for Apns {
 struct Rig {
     herdr: Mock,
     apns: Arc<Apns>,
+    push: Arc<Push>,
     approvals: Arc<Approvals>,
+    live: Mutex<(Live, StatusTracker)>,
     events: broadcast::Receiver<Event>,
     audit: PathBuf,
+    audit_log: Arc<Audit>,
     _dir: tempfile::TempDir,
 }
 
 fn token() -> PushToken {
     PushToken::new("ab".repeat(32)).unwrap()
+}
+
+const OTHER: &str = "nOTHER";
+
+fn other_token() -> PushToken {
+    PushToken::new("cd".repeat(32)).unwrap()
+}
+
+fn activity_token() -> PushToken {
+    PushToken::new("ef".repeat(80)).unwrap()
 }
 
 impl Rig {
@@ -237,13 +260,14 @@ impl Rig {
         push.register(PHONE, token(), ApnsEnvironment::Sandbox, key())
             .unwrap();
         let audit = dir.path().join("audit.log");
+        let audit_log = Arc::new(Audit::open(&audit).unwrap());
         let (tx, events) = broadcast::channel(64);
         let mut approvals = Approvals::new(
             herdr.socket.clone(),
             "nMAC".into(),
             tx,
-            Arc::new(Audit::open(&audit).unwrap()),
-            Some(push),
+            audit_log.clone(),
+            Some(push.clone()),
         )
         .with_timing(ttl, SETTLE);
         if let Some(budget) = budget {
@@ -253,11 +277,64 @@ impl Rig {
         Self {
             herdr,
             apns,
+            push,
             approvals,
+            live: Mutex::new((Live::default(), StatusTracker::default())),
             events,
             audit,
+            audit_log,
             _dir: dir,
         }
+    }
+
+    fn follow(&self) {
+        self.push
+            .register_activity(
+                PHONE,
+                ActivityId::new("ACT-1").unwrap(),
+                TerminalId::new(TERMINAL).unwrap(),
+                activity_token(),
+                true,
+            )
+            .unwrap();
+    }
+
+    /// One reconcile as the server runs it: approvals, then Live Activities.
+    async fn tick(&self) {
+        let agents = collied::herdr::agent_list(&self.herdr.socket)
+            .await
+            .unwrap();
+        let workspaces = collied::herdr::workspace_list(&self.herdr.socket)
+            .await
+            .unwrap();
+        self.approvals.observe(&agents, &workspaces).await;
+        let pending = self.approvals.pending();
+        let (live, tracker) = &mut *self.live.lock().unwrap();
+        live.observe(
+            &self.push,
+            &self.audit_log,
+            &agents,
+            &workspaces,
+            &pending,
+            tracker,
+        );
+    }
+
+    async fn ticked_needed(&mut self) -> Approval {
+        self.tick().await;
+        loop {
+            match self.event().await {
+                Event::ApprovalNeeded { approval } => return approval,
+                Event::ApprovalResolved { .. } => {}
+                other => panic!("expected approval.needed, got {other:?}"),
+            }
+        }
+    }
+
+    /// Everything sent so far, once the queue has drained.
+    async fn sent(&self) -> Vec<(String, Alert)> {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        self.apns.sent.lock().unwrap().clone()
     }
 
     async fn observe(&self) {
@@ -802,4 +879,178 @@ async fn reissues_cannot_flood_the_phone() {
     assert_eq!(alerts.len(), 2, "a new prompt always alerts");
     assert_eq!(alerts[1].1.payload["approval_id"], b.approval_id.as_str());
     assert!(rig.mutations().is_empty());
+}
+
+fn alerting(sent: &[(String, Alert)]) -> Vec<(String, Alert)> {
+    sent.iter()
+        .filter(|(_, a)| a.payload["aps"].get("alert").is_some())
+        .cloned()
+        .collect()
+}
+
+/// The widget's side: `enc` from the content-state opened with the device key, AAD = approvalId.
+fn open_offered(state: &Value) -> Value {
+    open_context(&json!({"enc": state["enc"], "approval_id": state["approvalId"]}))
+}
+
+#[tokio::test]
+async fn a_followed_terminal_alerts_on_its_activity_only() {
+    let mut rig = Rig::start(TTL).await;
+    rig.push
+        .register(OTHER, other_token(), ApnsEnvironment::Sandbox, key())
+        .unwrap();
+    rig.push
+        .register_activity(
+            OTHER,
+            ActivityId::new("ACT-2").unwrap(),
+            TerminalId::new("term_elsewhere").unwrap(),
+            PushToken::new("12".repeat(80)).unwrap(),
+            true,
+        )
+        .unwrap();
+    rig.follow();
+    let a = rig.ticked_needed().await;
+    let sent = rig.sent().await;
+    let alerts = alerting(&sent);
+    assert_eq!(alerts.len(), 2, "{sent:?}");
+    let (to, live) = alerts
+        .iter()
+        .find(|(_, a)| a.delivery == (Delivery::LiveActivity { urgent: true }))
+        .unwrap();
+    assert_eq!(to, activity_token().as_str());
+    assert_eq!(live.headers("dev.rbstp.collie").priority, 10);
+    let aps = &live.payload["aps"];
+    assert_eq!(
+        aps["alert"],
+        json!({"title": "api-fixer", "body": "Blocked in api"})
+    );
+    let state = &aps["content-state"];
+    assert_eq!(state["status"], "blocked");
+    assert_eq!(state["approvalId"], a.approval_id.as_str());
+    assert_eq!(
+        open_offered(state),
+        json!({"v": 1, "body": "Bash: rm -rf build\nRemove the build directory"})
+    );
+    let wire = live.payload.to_string();
+    assert!(
+        !wire.contains("rm -rf") && !wire.contains(a.nonce.as_str()),
+        "{wire}"
+    );
+    let (to, regular) = alerts
+        .iter()
+        .find(|(_, a)| a.delivery == Delivery::Alert)
+        .unwrap();
+    assert_eq!(
+        to,
+        other_token().as_str(),
+        "a device that does not follow it"
+    );
+    assert_eq!(regular.payload["approval_id"], a.approval_id.as_str());
+    assert!(
+        !sent.iter().any(|(t, _)| t == token().as_str()),
+        "no approval notification for the follower"
+    );
+
+    for _ in 0..3 {
+        rig.tick().await;
+    }
+    assert_eq!(
+        alerting(&rig.sent().await).len(),
+        2,
+        "exactly one alert per approval"
+    );
+
+    assert_eq!(
+        code(rig.decide(&a, Decision::Deny, &wrong(&a.nonce)).await),
+        ErrorCode::ApprovalNonceMismatch
+    );
+    let b = rig.ticked_needed().await;
+    let sent = rig.sent().await;
+    assert_eq!(
+        alerting(&sent).len(),
+        2,
+        "a reissue within 30 s stays quiet"
+    );
+    let (to, quiet) = sent.last().unwrap();
+    assert_eq!(to, activity_token().as_str());
+    assert_eq!(quiet.delivery, Delivery::LiveActivity { urgent: false });
+    let state = &quiet.payload["aps"]["content-state"];
+    assert_eq!(state["approvalId"], b.approval_id.as_str());
+    assert_eq!(open_offered(state)["v"], 1);
+
+    assert!(matches!(
+        resolved(rig.decide(&b, Decision::Approve, &b.nonce).await),
+        ApprovalOutcome::Applied { .. }
+    ));
+    tokio::time::sleep(collied::activity::MIN_GAP).await;
+    rig.tick().await;
+    let sent = rig.sent().await;
+    let (to, cleared) = sent.last().unwrap();
+    assert_eq!(to, activity_token().as_str());
+    assert_eq!(cleared.delivery, Delivery::LiveActivity { urgent: false });
+    let state = &cleared.payload["aps"]["content-state"];
+    assert_eq!(state["status"], "working");
+    assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
+    assert_eq!(alerting(&sent).len(), 2);
+}
+
+#[tokio::test]
+async fn a_failed_activity_alert_falls_back_to_the_notification() {
+    for rejection in [
+        Rejection::Unregistered,
+        Rejection::Other("503 ServiceUnavailable".into()),
+    ] {
+        let mut rig = Rig::start(TTL).await;
+        rig.follow();
+        *rig.apns.live_fails.lock().unwrap() = Some(rejection.clone());
+        let a = rig.ticked_needed().await;
+        let sent = rig.sent().await;
+        assert_eq!(rig.apns.live_attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(sent.len(), 1, "{rejection}");
+        let (to, alert) = &sent[0];
+        assert_eq!(to, token().as_str());
+        assert_eq!(alert.delivery, Delivery::Alert);
+        assert_eq!(alert.payload["approval_id"], a.approval_id.as_str());
+        assert_eq!(open_context(&alert.payload)["v"], 1);
+        assert_eq!(
+            rig.push.activities().is_empty(),
+            rejection == Rejection::Unregistered,
+            "only a dead token is dropped"
+        );
+
+        for _ in 0..3 {
+            rig.tick().await;
+        }
+        assert_eq!(alerting(&rig.sent().await).len(), 1, "{rejection}");
+    }
+}
+
+#[tokio::test]
+async fn an_activity_without_approvals_keeps_the_notification() {
+    let mut rig = Rig::start(TTL).await;
+    rig.push
+        .register_activity(
+            PHONE,
+            ActivityId::new("ACT-1").unwrap(),
+            TerminalId::new(TERMINAL).unwrap(),
+            activity_token(),
+            false,
+        )
+        .unwrap();
+    let a = rig.ticked_needed().await;
+    let sent = rig.sent().await;
+    let alerts = alerting(&sent);
+    assert_eq!(alerts.len(), 1, "{sent:?}");
+    assert_eq!(alerts[0].0, token().as_str());
+    assert_eq!(alerts[0].1.delivery, Delivery::Alert);
+    assert_eq!(alerts[0].1.payload["approval_id"], a.approval_id.as_str());
+    let (to, live) = sent.last().unwrap();
+    assert_eq!(
+        to,
+        activity_token().as_str(),
+        "the activity still shows the status"
+    );
+    let state = &live.payload["aps"]["content-state"];
+    assert_eq!(state["status"], "blocked");
+    assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
 }

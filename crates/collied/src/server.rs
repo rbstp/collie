@@ -1007,7 +1007,13 @@ impl Session<'_> {
             Request::PushActivityToken(p) => (
                 self.state
                     .push
-                    .register_activity(&peer, p.activity_id, p.terminal_id, p.token)
+                    .register_activity(
+                        &peer,
+                        p.activity_id,
+                        p.terminal_id,
+                        p.token,
+                        p.shows_approvals,
+                    )
                     .map(|()| Response::Ok)
                     .map_err(|e| {
                         let code = match e {

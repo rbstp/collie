@@ -345,7 +345,9 @@ fn live_activity_follows_an_agent() {
         let (_, sync) = live(&apns, "the first sync", |_, _| true).await;
         assert_eq!(sync.delivery, Delivery::LiveActivity { urgent: false });
         assert_eq!(sync.payload["aps"]["content-state"]["status"], "working");
+        let rev = core.approval_feed(m.clone(), 0).unwrap().revision;
         herdr.set_status("blocked");
+        let (approval, _) = needed(&core, &m, rev).await;
         let (device, blocked) = live(&apns, "the blocked update", |_, a| {
             a.payload["aps"]["content-state"]["status"] == "blocked"
         })
@@ -359,15 +361,32 @@ fn live_activity_follows_an_agent() {
         assert_eq!(headers.priority, 10);
         let aps = &blocked.payload["aps"];
         assert_eq!(aps["event"], "update");
+        let state = &aps["content-state"];
         assert_eq!(
-            aps["content-state"],
+            *state,
             json!({
                 "status": "blocked",
-                "statusSince": aps["content-state"]["statusSince"],
+                "statusSince": state["statusSince"],
                 "title": "api-fixer",
                 "workspace": "api",
-                "approvals": aps["content-state"]["approvals"],
+                "approvals": 1,
+                "approvalId": state["approvalId"],
+                "enc": state["enc"],
             })
+        );
+        assert_eq!(state["approvalId"], approval.approval_id.as_str());
+        assert_eq!(
+            phone_opens(&json!({"enc": state["enc"], "approval_id": state["approvalId"]})),
+            json!({"v": 1, "body": "Bash: rm -rf build\nRemove the build directory"})
+        );
+        assert!(
+            !apns
+                .sent
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, a)| a.delivery == Delivery::Alert),
+            "the follower gets the approval on its activity only"
         );
         assert_eq!(
             aps["alert"],
