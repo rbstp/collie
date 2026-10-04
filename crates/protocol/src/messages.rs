@@ -40,6 +40,8 @@ pub enum Request {
     AgentPrompt(AgentPromptParams),
     #[serde(rename = "agent.send_keys")]
     AgentSendKeys(AgentSendKeysParams),
+    #[serde(rename = "agent.type_text")]
+    AgentTypeText(AgentTypeTextParams),
     #[serde(rename = "agent.focus")]
     AgentFocus(AgentTarget),
     #[serde(rename = "task.new")]
@@ -84,6 +86,7 @@ impl Request {
         "agent.draft",
         "agent.prompt",
         "agent.send_keys",
+        "agent.type_text",
         "agent.focus",
         "task.new",
         "workspace.close",
@@ -112,6 +115,7 @@ impl Request {
             Self::AgentDraft(_) => "agent.draft",
             Self::AgentPrompt(_) => "agent.prompt",
             Self::AgentSendKeys(_) => "agent.send_keys",
+            Self::AgentTypeText(_) => "agent.type_text",
             Self::AgentFocus(_) => "agent.focus",
             Self::TaskNew(_) => "task.new",
             Self::WorkspaceClose(_) => "workspace.close",
@@ -141,6 +145,7 @@ impl Request {
             | Self::ApprovalList(_) => MethodClass::Read,
             Self::AgentPrompt(_)
             | Self::AgentSendKeys(_)
+            | Self::AgentTypeText(_)
             | Self::AgentFocus(_)
             | Self::TaskNew(_)
             | Self::WorkspaceClose(_)
@@ -293,6 +298,22 @@ impl AgentSendKeysParams {
     }
 }
 
+/// Typed into a blocked Claude Code question's free-text field, then Enter. One line:
+/// Enter is what submits it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentTypeTextParams {
+    pub op_id: OpId,
+    pub terminal_id: TerminalId,
+    pub text: PromptText,
+}
+
+impl AgentTypeTextParams {
+    pub fn is_valid(&self) -> bool {
+        !self.text.as_str().contains(['\n', '\t'])
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TaskNewParams {
@@ -327,14 +348,25 @@ pub enum Decision {
     Approve,
     ApproveAlways,
     Deny,
+    /// Pick `Approval.choices[choice]`; only on an approval that offers no other decision.
+    Choose,
 }
 
+/// `choice` is set exactly when `decision` is `choose`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ApprovalDecideParams {
     pub approval_id: ApprovalId,
     pub decision: Decision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<u8>,
     pub nonce: Nonce,
+}
+
+impl ApprovalDecideParams {
+    pub fn is_valid(&self) -> bool {
+        (self.decision == Decision::Choose) == self.choice.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -555,9 +587,28 @@ pub struct Approval {
     pub snippet: String,
     pub tool: Option<PendingTool>,
     pub options: Vec<Decision>,
+    /// The menu on screen, in order, whenever collied could read one.
+    #[serde(default)]
+    pub choices: Vec<ApprovalChoice>,
+    /// Whether collied takes `agent.send_keys` and `agent.type_text` on this prompt: false for
+    /// any prompt that grants a permission, and from a collied that predates the field.
+    #[serde(default)]
+    pub accepts_input: bool,
+    /// The menu has its free-text option, which `agent.type_text` fills; never true
+    /// without `accepts_input`.
+    #[serde(default)]
+    pub has_text_field: bool,
     pub nonce: Nonce,
     pub created_at_ms: u64,
     pub expires_at_ms: u64,
+}
+
+/// `index` is 0-based; `current` marks the option under the menu cursor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ApprovalChoice {
+    pub index: u8,
+    pub label: String,
+    pub current: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -571,6 +622,17 @@ pub enum ApprovalOutcome {
     /// Keys were sent but the agent was still `blocked` when collied stopped waiting.
     Unconfirmed {
         decision: Decision,
+        by: String,
+    },
+    /// `applied` for a `choose` decision. Its own outcome, so an older app decodes it as
+    /// `other` instead of failing on an unknown decision.
+    Chosen {
+        choice: u8,
+        by: String,
+    },
+    /// `unconfirmed` for a `choose` decision.
+    ChosenUnconfirmed {
+        choice: u8,
         by: String,
     },
     Expired,
@@ -702,6 +764,8 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
     let valid = match &request {
         Request::AgentRead(p) | Request::PaneRead(p) => p.is_valid(),
         Request::AgentSendKeys(p) => p.is_valid(),
+        Request::AgentTypeText(p) => p.is_valid(),
+        Request::ApprovalDecide(p) => p.is_valid(),
         Request::AttachmentBegin(p) => p.is_valid(),
         _ => true,
     };
@@ -867,6 +931,111 @@ mod tests {
             let frame = format!(r#"{{"id":3,"method":"push.activity_end","params":{bad}}}"#);
             assert_eq!(parse(&frame).unwrap_err().code, ErrorCode::InvalidParams);
         }
+    }
+
+    #[test]
+    fn choose_carries_exactly_one_choice() {
+        let decide = |rest: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"approval.decide","params":{{"approval_id":"a1","nonce":"{}"{rest}}}}}"#,
+                "A".repeat(43)
+            ))
+        };
+        let Request::ApprovalDecide(p) = decide(r#","decision":"choose","choice":2"#)
+            .unwrap()
+            .request
+        else {
+            panic!("not a decision");
+        };
+        assert_eq!((p.decision, p.choice), (Decision::Choose, Some(2)));
+        let Request::ApprovalDecide(p) = decide(r#","decision":"deny""#).unwrap().request else {
+            panic!("not a decision");
+        };
+        assert!(!serde_json::to_string(&p).unwrap().contains("choice"));
+        for bad in [
+            r#","decision":"choose""#,
+            r#","decision":"approve","choice":0"#,
+            r#","decision":"choose","choice":256"#,
+        ] {
+            assert_eq!(
+                decide(bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_text_is_one_line() {
+        let typed = |text: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"agent.type_text","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"t","text":{}}}}}"#,
+                serde_json::to_string(text).unwrap()
+            ))
+        };
+        let ok = typed("use Redis, it is shared").unwrap();
+        assert_eq!(ok.request.class(), MethodClass::Drive);
+        assert_eq!(ok.request.method(), "agent.type_text");
+        for bad in ["a\nb", "a\tb", "a\u{1b}[2J", "  "] {
+            assert_eq!(
+                typed(bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn older_apps_tolerate_choices() {
+        let chosen: ApprovalOutcome =
+            serde_json::from_str(r#"{"outcome":"chosen","choice":1,"by":"phone"}"#).unwrap();
+        assert_eq!(
+            chosen,
+            ApprovalOutcome::Chosen {
+                choice: 1,
+                by: "phone".into()
+            }
+        );
+        #[derive(Deserialize)]
+        #[serde(tag = "outcome", rename_all = "snake_case")]
+        enum Older {
+            Applied {
+                #[allow(dead_code)]
+                decision: Decision,
+            },
+            #[serde(other)]
+            Other,
+        }
+        for outcome in [
+            ApprovalOutcome::Chosen {
+                choice: 1,
+                by: "phone".into(),
+            },
+            ApprovalOutcome::ChosenUnconfirmed {
+                choice: 1,
+                by: "phone".into(),
+            },
+        ] {
+            let json = serde_json::to_string(&outcome).unwrap();
+            assert!(matches!(
+                serde_json::from_str::<Older>(&json).unwrap(),
+                Older::Other
+            ));
+        }
+        let approval: Approval = serde_json::from_value(serde_json::json!({
+            "approval_id": "a1", "terminal_id": "t", "agent_label": "a", "workspace_label": "w",
+            "snippet": "", "tool": null, "options": [], "nonce": "A".repeat(43),
+            "created_at_ms": 1, "expires_at_ms": 2,
+        }))
+        .unwrap();
+        assert!(
+            approval.choices.is_empty(),
+            "an older collied sends no choices"
+        );
+        assert!(
+            !approval.accepts_input && !approval.has_text_field,
+            "an older collied takes no input the phone can count on"
+        );
     }
 
     #[test]

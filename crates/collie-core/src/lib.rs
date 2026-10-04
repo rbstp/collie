@@ -16,19 +16,20 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
-    ActivityId, AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTarget, AgentWatchParams,
-    ApprovalId, Cwd, DraftText, Empty, ErrorCode, Key, Label, NotificationKey, OpId,
-    PairCompleteParams, PairingInvite, PaneCloseParams, PromptText, PushActivityEndParams,
-    PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams, ReadSource, Request,
-    Response, TaskNewParams, TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId, limits,
+    ActivityId, AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTarget,
+    AgentTypeTextParams, AgentWatchParams, ApprovalId, Cwd, DraftText, Empty, ErrorCode, Key,
+    Label, NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
+    PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
+    ReadSource, Request, Response, TaskNewParams, TerminalId, TerminalRead, WorkspaceCloseParams,
+    WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
 pub use approvals::{
-    ApprovalDecision, ApprovalEvent, ApprovalFeed, BackgroundDecideReport, BackgroundOutcome,
-    DecideStage, DecisionOutcome, PendingApproval,
+    ApprovalChoice, ApprovalDecision, ApprovalEvent, ApprovalFeed, BackgroundDecideReport,
+    BackgroundOutcome, DecideStage, DecisionOutcome, PendingApproval,
 };
 pub use attachments::UploadProgress;
 use conn::{Conn, ConnectError, LinkPhase, NodeSlot, PushSlot, RequestError, blocking};
@@ -696,6 +697,32 @@ impl CollieCore {
         expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
     }
 
+    /// Answers a blocked prompt that offers no approval decision, such as a question's
+    /// "Type something." field: collied types `text`, then Enter. One line. Refused with
+    /// `AgentBlocked` on a permission prompt, `AgentNotReady` when the agent is not blocked.
+    pub async fn type_text(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        text: String,
+    ) -> Result<(), CoreError> {
+        let text = PromptText::new(text)
+            .ok()
+            .filter(|t| !t.as_str().contains(['\n', '\t']))
+            .ok_or_else(|| {
+                invalid(
+                    "text",
+                    "an answer must be one non-empty line of at most 32 KiB, without control characters",
+                )
+            })?;
+        let request = Request::AgentTypeText(AgentTypeTextParams {
+            op_id: new_op_id(),
+            terminal_id: terminal(terminal_id)?,
+            text,
+        });
+        expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
+    }
+
     /// Brings the agent's pane to the front in herdr on the Mac.
     pub async fn focus(&self, machine_id: String, terminal_id: String) -> Result<(), CoreError> {
         let request = Request::AgentFocus(AgentTarget {
@@ -811,11 +838,8 @@ impl CollieCore {
                         .ok_or(CoreError::ApprovalNotFound)?
                 }
             };
-            let request = Request::ApprovalDecide(protocol::ApprovalDecideParams {
-                approval_id,
-                decision: decision.into(),
-                nonce,
-            });
+            let request =
+                Request::ApprovalDecide(approvals::decide_params(approval_id, decision, nonce));
             let response = conn
                 .request(request, DECIDE_TIMEOUT)
                 .await
@@ -1434,6 +1458,7 @@ fn op_id_mut(request: &mut Request) -> Option<&mut OpId> {
     match request {
         Request::AgentPrompt(p) => Some(&mut p.op_id),
         Request::AgentSendKeys(p) => Some(&mut p.op_id),
+        Request::AgentTypeText(p) => Some(&mut p.op_id),
         Request::TaskNew(p) => Some(&mut p.op_id),
         _ => None,
     }
@@ -1949,6 +1974,13 @@ mod tests {
             field(rt.block_on(core.send_keys(m(), t(), vec![AgentKey::Y; 17]))),
             Some("keys".into())
         );
+        for bad in ["", "one\ntwo", "a\tb", "x\u{1b}[2J"] {
+            assert_eq!(
+                field(rt.block_on(core.type_text(m(), t(), bad.into()))),
+                Some("text".into()),
+                "{bad:?}"
+            );
+        }
         let task = |cwd: &str, agent: &str, label: Option<&str>| {
             rt.block_on(core.task_new(
                 m(),
@@ -2092,9 +2124,30 @@ mod tailnet_tests {
             snippet: "Run cargo test?".into(),
             tool: None,
             options: vec![protocol::Decision::Approve, protocol::Decision::Deny],
+            choices: Vec::new(),
+            accepts_input: false,
+            has_text_field: false,
             nonce: protocol::Nonce::new(NONCE).unwrap(),
             created_at_ms: 1,
             expires_at_ms: u64::MAX,
+        }
+    }
+
+    fn question(id: &str) -> protocol::Approval {
+        protocol::Approval {
+            options: Vec::new(),
+            choices: ["SQLite", "Redis", "Type something."]
+                .iter()
+                .enumerate()
+                .map(|(i, l)| protocol::ApprovalChoice {
+                    index: i as u8,
+                    label: (*l).into(),
+                    current: i == 0,
+                })
+                .collect(),
+            accepts_input: true,
+            has_text_field: true,
+            ..approval(id)
         }
     }
 
@@ -2201,6 +2254,10 @@ mod tailnet_tests {
                             assert_eq!(p.keys, vec![protocol::Key::ShiftTab, protocol::Key::Y]);
                             Err(ErrorCode::AgentBlocked)
                         }
+                        Request::AgentTypeText(p) => {
+                            assert_eq!(p.text.as_str(), "DuckDB");
+                            Ok(Response::Ok)
+                        }
                         Request::TaskOptions(_) => {
                             Ok(Response::TaskOptions(protocol::TaskOptions {
                                 agents: vec![AgentKind::new("claude").unwrap()],
@@ -2239,9 +2296,15 @@ mod tailnet_tests {
                                     seen.approvals.remove(i);
                                     seen.decisions
                                         .push((p.approval_id.as_str().into(), p.decision));
-                                    let outcome = protocol::ApprovalOutcome::Applied {
-                                        decision: p.decision,
-                                        by: "phone".into(),
+                                    let outcome = match p.choice {
+                                        Some(choice) => protocol::ApprovalOutcome::Chosen {
+                                            choice,
+                                            by: "phone".into(),
+                                        },
+                                        None => protocol::ApprovalOutcome::Applied {
+                                            decision: p.decision,
+                                            by: "phone".into(),
+                                        },
                                     };
                                     events = vec![(
                                         seq + 1,
@@ -2550,6 +2613,8 @@ mod tailnet_tests {
             .block_on(core.send_keys(id(), t1(), vec![AgentKey::ShiftTab, AgentKey::Y]))
             .unwrap_err();
         assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
+        rt.block_on(core.type_text(id(), t1(), "DuckDB".into()))
+            .unwrap();
         let options = rt.block_on(core.task_options(id())).unwrap();
         assert_eq!(options.default_agent, "claude");
         assert_eq!(options.recent_cwds, vec!["/src/collie".to_owned()]);
@@ -2634,7 +2699,7 @@ mod tailnet_tests {
         // The fake collied outlives the phone's runtime, which is dropped for the cold start.
         let server_rt = tokio::runtime::Runtime::new().unwrap();
         let seen = Arc::new(Mutex::new(Seen {
-            approvals: vec![approval("a1")],
+            approvals: vec![approval("a1"), question("q1")],
             ..Seen::default()
         }));
         server_rt.spawn(serve(mac.clone(), phone_id, mac_id.clone(), seen.clone()));
@@ -2656,18 +2721,30 @@ mod tailnet_tests {
 
         let feed = poll("approval.needed", || {
             core.approval_feed(id(), 0)
-                .filter(|f| !f.events.is_empty() && !f.pending.is_empty())
+                .filter(|f| f.events.len() >= 2 && f.pending.len() == 2)
         });
         let pending = PendingApproval::from(&approval("a1"));
+        let asked = PendingApproval::from(&question("q1"));
         assert_eq!(
             feed.events[0],
             ApprovalEvent::Needed {
                 approval: pending.clone()
             }
         );
-        assert_eq!(feed.pending, vec![pending.clone()]);
+        assert_eq!(feed.pending, vec![pending.clone(), asked.clone()]);
+        assert!(asked.options.is_empty());
+        assert!(asked.accepts_input && asked.has_text_field);
+        assert!(!pending.accepts_input && !pending.has_text_field);
+        assert_eq!(
+            asked.choices[1],
+            ApprovalChoice {
+                index: 1,
+                label: "Redis".into(),
+                current: false
+            }
+        );
         let listed = rt.block_on(core.approvals(id())).unwrap();
-        assert_eq!(listed, vec![pending]);
+        assert_eq!(listed, vec![pending, asked]);
         for shown in [format!("{feed:?}"), format!("{listed:?}")] {
             assert!(
                 !shown.contains(NONCE) && !shown.contains("Nonce"),
@@ -2702,11 +2779,25 @@ mod tailnet_tests {
             &resolved.events[0],
             ApprovalEvent::Resolved { approval_id, .. } if approval_id == "a1"
         ));
-        assert!(resolved.pending.is_empty());
+        assert_eq!(resolved.pending.len(), 1);
         let err = rt
             .block_on(core.decide(id(), "a1".into(), ApprovalDecision::Approve))
             .unwrap_err();
         assert!(matches!(err, CoreError::ApprovalNotFound), "{err:?}");
+        let chosen = rt
+            .block_on(core.decide(id(), "q1".into(), ApprovalDecision::Choose { choice: 1 }))
+            .unwrap();
+        assert_eq!(
+            chosen,
+            DecisionOutcome::Applied {
+                decision: ApprovalDecision::Choose { choice: 1 },
+                by: "phone".into()
+            }
+        );
+        assert_eq!(
+            lock(&seen).decisions[1],
+            ("q1".to_owned(), protocol::Decision::Choose)
+        );
 
         core.register_push(id(), TOKEN.into(), PushEnvironment::Sandbox, vec![7; 32])
             .unwrap();

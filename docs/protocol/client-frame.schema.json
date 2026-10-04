@@ -76,6 +76,27 @@
       ],
       "type": "object"
     },
+    "AgentTypeTextParams": {
+      "additionalProperties": false,
+      "description": "Typed into a blocked Claude Code question's free-text field, then Enter. One line:\nEnter is what submits it.",
+      "properties": {
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "text": {
+          "$ref": "#/$defs/PromptText"
+        }
+      },
+      "required": [
+        "op_id",
+        "terminal_id",
+        "text"
+      ],
+      "type": "object"
+    },
     "AgentWatchParams": {
       "additionalProperties": false,
       "description": "One watched agent per connection; `None` stops `agent.output` events.",
@@ -102,9 +123,19 @@
     },
     "ApprovalDecideParams": {
       "additionalProperties": false,
+      "description": "`choice` is set exactly when `decision` is `choose`.",
       "properties": {
         "approval_id": {
           "$ref": "#/$defs/ApprovalId"
+        },
+        "choice": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "decision": {
           "$ref": "#/$defs/Decision"
@@ -220,12 +251,21 @@
       "type": "string"
     },
     "Decision": {
-      "enum": [
-        "approve",
-        "approve_always",
-        "deny"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "approve",
+            "approve_always",
+            "deny"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "choose",
+          "description": "Pick `Approval.choices[choice]`; only on an approval that offers no other decision.",
+          "type": "string"
+        }
+      ]
     },
     "DraftText": {
       "maxLength": 32768,
@@ -664,6 +704,22 @@
         },
         "params": {
           "$ref": "#/$defs/AgentSendKeysParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.type_text",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentTypeTextParams"
         }
       },
       "required": [

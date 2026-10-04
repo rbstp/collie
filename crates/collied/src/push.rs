@@ -833,6 +833,13 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             snippet: "rm -rf build SNIPPET".into(),
             tool: None,
             options,
+            choices: vec![protocol::ApprovalChoice {
+                index: 0,
+                label: "CHOICE".into(),
+                current: true,
+            }],
+            accepts_input: false,
+            has_text_field: false,
             nonce: Nonce::new("N".repeat(43)).unwrap(),
             created_at_ms: 1_000_000,
             expires_at_ms: 1_600_000,
@@ -864,7 +871,10 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         assert_eq!(alert.expiration, Some(1600));
         let text = alert.payload.to_string();
         assert!(
-            !text.contains("SNIPPET") && !text.contains("NNNN") && !text.contains("TITLE"),
+            !text.contains("SNIPPET")
+                && !text.contains("NNNN")
+                && !text.contains("TITLE")
+                && !text.contains("CHOICE"),
             "{text}"
         );
 

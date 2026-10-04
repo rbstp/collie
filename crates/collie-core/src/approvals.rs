@@ -13,31 +13,57 @@ use crate::pin;
 use crate::session::{FlockState, Session, SessionError, lock, unexpected};
 use crate::{Inner, POLL_INTERVAL, ms};
 
+/// `Choose` picks `PendingApproval.choices[choice]`: collied takes it only for an
+/// approval with no `options`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum ApprovalDecision {
     Approve,
     ApproveAlways,
     Deny,
+    Choose { choice: u8 },
 }
 
-impl From<ApprovalDecision> for Decision {
-    fn from(d: ApprovalDecision) -> Self {
-        match d {
-            ApprovalDecision::Approve => Self::Approve,
-            ApprovalDecision::ApproveAlways => Self::ApproveAlways,
-            ApprovalDecision::Deny => Self::Deny,
+impl ApprovalDecision {
+    fn wire(self) -> (Decision, Option<u8>) {
+        match self {
+            Self::Approve => (Decision::Approve, None),
+            Self::ApproveAlways => (Decision::ApproveAlways, None),
+            Self::Deny => (Decision::Deny, None),
+            Self::Choose { choice } => (Decision::Choose, Some(choice)),
         }
+    }
+
+    fn received(decision: Decision, choice: Option<u8>) -> Option<Self> {
+        Some(match (decision, choice) {
+            (Decision::Approve, _) => Self::Approve,
+            (Decision::ApproveAlways, _) => Self::ApproveAlways,
+            (Decision::Deny, _) => Self::Deny,
+            (Decision::Choose, Some(choice)) => Self::Choose { choice },
+            (Decision::Choose, None) => return None,
+        })
     }
 }
 
-impl From<Decision> for ApprovalDecision {
-    fn from(d: Decision) -> Self {
-        match d {
-            Decision::Approve => Self::Approve,
-            Decision::ApproveAlways => Self::ApproveAlways,
-            Decision::Deny => Self::Deny,
-        }
+pub(crate) fn decide_params(
+    approval_id: ApprovalId,
+    decision: ApprovalDecision,
+    nonce: Nonce,
+) -> ApprovalDecideParams {
+    let (decision, choice) = decision.wire();
+    ApprovalDecideParams {
+        approval_id,
+        decision,
+        choice,
+        nonce,
     }
+}
+
+/// One option of the menu on the Mac's screen; `current` is under its cursor.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ApprovalChoice {
+    pub index: u8,
+    pub label: String,
+    pub current: bool,
 }
 
 /// An approval as Swift sees it: the nonce never leaves collie-core.
@@ -51,6 +77,12 @@ pub struct PendingApproval {
     pub tool_name: Option<String>,
     pub tool_summary: Option<String>,
     pub options: Vec<ApprovalDecision>,
+    /// The menu as collied read it, also when it offers no `options`.
+    pub choices: Vec<ApprovalChoice>,
+    /// collied takes keys and typed text on this prompt; false from an older collied.
+    pub accepts_input: bool,
+    /// The menu's free-text option can be filled with `type_text`.
+    pub has_text_field: bool,
     pub created_at_ms: u64,
     pub expires_at_ms: u64,
 }
@@ -65,7 +97,22 @@ impl From<&Approval> for PendingApproval {
             snippet: a.snippet.clone(),
             tool_name: a.tool.as_ref().map(|t| t.name.clone()),
             tool_summary: a.tool.as_ref().map(|t| t.summary.clone()),
-            options: a.options.iter().copied().map(Into::into).collect(),
+            options: a
+                .options
+                .iter()
+                .filter_map(|d| ApprovalDecision::received(*d, None))
+                .collect(),
+            choices: a
+                .choices
+                .iter()
+                .map(|c| ApprovalChoice {
+                    index: c.index,
+                    label: c.label.clone(),
+                    current: c.current,
+                })
+                .collect(),
+            accepts_input: a.accepts_input,
+            has_text_field: a.has_text_field,
             created_at_ms: a.created_at_ms,
             expires_at_ms: a.expires_at_ms,
         }
@@ -92,12 +139,24 @@ pub enum DecisionOutcome {
 impl From<ApprovalOutcome> for DecisionOutcome {
     fn from(o: ApprovalOutcome) -> Self {
         match o {
-            ApprovalOutcome::Applied { decision, by } => Self::Applied {
-                decision: decision.into(),
+            ApprovalOutcome::Applied { decision, by } => {
+                match ApprovalDecision::received(decision, None) {
+                    Some(decision) => Self::Applied { decision, by },
+                    None => Self::Unknown,
+                }
+            }
+            ApprovalOutcome::Unconfirmed { decision, by } => {
+                match ApprovalDecision::received(decision, None) {
+                    Some(decision) => Self::Unconfirmed { decision, by },
+                    None => Self::Unknown,
+                }
+            }
+            ApprovalOutcome::Chosen { choice, by } => Self::Applied {
+                decision: ApprovalDecision::Choose { choice },
                 by,
             },
-            ApprovalOutcome::Unconfirmed { decision, by } => Self::Unconfirmed {
-                decision: decision.into(),
+            ApprovalOutcome::ChosenUnconfirmed { choice, by } => Self::Unconfirmed {
+                decision: ApprovalDecision::Choose { choice },
                 by,
             },
             ApprovalOutcome::Expired => Self::Expired,
@@ -366,29 +425,22 @@ async fn attempt(
     report.lookup_ms = Some(ms(step.elapsed()));
 
     let step = Instant::now();
-    let request = Request::ApprovalDecide(ApprovalDecideParams {
-        approval_id,
-        decision: decision.into(),
-        nonce,
-    });
+    let request = Request::ApprovalDecide(decide_params(approval_id, decision, nonce));
     let response = call(&mut session, request, deadline, DecideStage::Decide).await?;
     report.decide_ms = Some(ms(step.elapsed()));
     tokio::spawn(session.close());
-    Ok(
-        match expect_resolved(response).map_err(|e| failed(e, DecideStage::Decide))? {
-            ApprovalOutcome::Applied { decision, .. } => BackgroundOutcome::Applied {
-                decision: decision.into(),
-            },
-            ApprovalOutcome::Unconfirmed { decision, .. } => BackgroundOutcome::Unconfirmed {
-                decision: decision.into(),
-            },
-            ApprovalOutcome::Expired => BackgroundOutcome::Expired,
-            ApprovalOutcome::Superseded => BackgroundOutcome::Superseded,
-            ApprovalOutcome::Other => BackgroundOutcome::Failed {
-                message: "unrecognized outcome, open Collie".into(),
-            },
+    let outcome = expect_resolved(response).map_err(|e| failed(e, DecideStage::Decide))?;
+    Ok(match DecisionOutcome::from(outcome) {
+        DecisionOutcome::Applied { decision, .. } => BackgroundOutcome::Applied { decision },
+        DecisionOutcome::Unconfirmed { decision, .. } => {
+            BackgroundOutcome::Unconfirmed { decision }
+        }
+        DecisionOutcome::Expired => BackgroundOutcome::Expired,
+        DecisionOutcome::Superseded => BackgroundOutcome::Superseded,
+        DecisionOutcome::Unknown => BackgroundOutcome::Failed {
+            message: "unrecognized outcome, open Collie".into(),
         },
-    )
+    })
 }
 
 /// Starts the node from its cached state (never a login) and waits until the pinned
@@ -532,6 +584,51 @@ mod tests {
             approvals: vec![approval("a0")],
         });
         s
+    }
+
+    #[test]
+    fn choices_map_both_ways() {
+        let id = || ApprovalId::new("a1").unwrap();
+        let nonce = || Nonce::new(NONCE).unwrap();
+        let p = decide_params(id(), ApprovalDecision::Choose { choice: 2 }, nonce());
+        assert_eq!((p.decision, p.choice), (Decision::Choose, Some(2)));
+        let p = decide_params(id(), ApprovalDecision::Deny, nonce());
+        assert_eq!((p.decision, p.choice), (Decision::Deny, None));
+        assert_eq!(
+            DecisionOutcome::from(ApprovalOutcome::ChosenUnconfirmed {
+                choice: 2,
+                by: "mac".into()
+            }),
+            DecisionOutcome::Unconfirmed {
+                decision: ApprovalDecision::Choose { choice: 2 },
+                by: "mac".into()
+            }
+        );
+        assert_eq!(
+            DecisionOutcome::from(ApprovalOutcome::Applied {
+                decision: Decision::Choose,
+                by: "mac".into()
+            }),
+            DecisionOutcome::Unknown,
+            "a choice without its index"
+        );
+        let mut a = approval("a1");
+        a.options.push(Decision::Choose);
+        a.choices = vec![protocol::ApprovalChoice {
+            index: 0,
+            label: "Yes".into(),
+            current: true,
+        }];
+        let pending = PendingApproval::from(&a);
+        assert_eq!(pending.options.len(), 3);
+        assert_eq!(
+            pending.choices,
+            [ApprovalChoice {
+                index: 0,
+                label: "Yes".into(),
+                current: true
+            }]
+        );
     }
 
     #[test]

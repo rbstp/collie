@@ -122,6 +122,7 @@ extension ApprovalDecision {
         case .approve: "Approve"
         case .approveAlways: "Approve always"
         case .deny: "Deny"
+        case .choose(let choice): "Choose option \(Int(choice) + 1)"
         }
     }
 
@@ -130,11 +131,21 @@ extension ApprovalDecision {
         case .approve: "Approved"
         case .approveAlways: "Always approved"
         case .deny: "Denied"
+        case .choose(let choice): "Chose option \(Int(choice) + 1)"
         }
     }
 
     var noun: String {
-        self == .deny ? "denial" : "approval"
+        switch self {
+        case .deny: "denial"
+        case .choose: "choice"
+        case .approve, .approveAlways: "approval"
+        }
+    }
+
+    func reason(agent: String) -> String {
+        if case .choose = self { return "\(title) for \(agent)" }
+        return "\(title) \(agent)"
     }
 }
 

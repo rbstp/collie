@@ -9,6 +9,7 @@ protocol AgentCore: AnyObject, Sendable {
     func agentDraft(machineId: String, terminalId: String) async throws -> String?
     func prompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws
+    func typeText(machineId: String, terminalId: String, text: String) async throws
     func focus(machineId: String, terminalId: String) async throws
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws
     func closePane(machineId: String, terminalId: String, confirm: Bool) async throws

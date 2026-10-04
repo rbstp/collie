@@ -5,6 +5,7 @@ struct SettingsView: View {
     let app: AppModel
     @State private var removeError: String?
     @State private var report: ColdStartReport?
+    @State private var keepKeyboard = DevicePrefs.load(from: DevicePrefs.file).keepKeyboard
     private let build = buildInfo()
 
     var body: some View {
@@ -20,6 +21,9 @@ struct SettingsView: View {
                 }
                 Section("Notifications") {
                     LabeledContent("Push", value: app.pushStatus)
+                }
+                Section("Prompt") {
+                    Toggle("Keep keyboard open after sending", isOn: $keepKeyboard)
                 }
                 Section("Machines") {
                     NavigationLink("Paired machines (\(app.machines.count))") {
@@ -48,6 +52,11 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .onChange(of: keepKeyboard) { _, keep in
+                var prefs = DevicePrefs.load(from: DevicePrefs.file)
+                prefs.keepKeyboard = keep
+                prefs.save(to: DevicePrefs.file)
+            }
             .refreshable { await app.refreshNode() }
             .task {
                 await app.refreshNode()

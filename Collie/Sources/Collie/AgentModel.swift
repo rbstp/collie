@@ -24,6 +24,8 @@ final class AgentModel {
     private var uploadTask: Task<Void, Never>?
     private(set) var attachments: [AttachedFile] = []
 
+    /// nil while no approval blocks the agent; collied refuses keys and text on the rest.
+    var blocked: BlockedInput?
     private(set) var notice: String?
     private(set) var keyTaps = 0
     private var queuedKeys: [AgentKey] = []
@@ -34,8 +36,14 @@ final class AgentModel {
 
     private let prefsFile: URL?
     var wrapLines: Bool {
-        didSet { DevicePrefs(wrapLines: wrapLines).save(to: prefsFile) }
+        didSet {
+            var prefs = DevicePrefs.load(from: prefsFile)
+            prefs.wrapLines = wrapLines
+            prefs.save(to: prefsFile)
+        }
     }
+
+    var keepsKeyboard: Bool { DevicePrefs.load(from: prefsFile).keepKeyboard }
 
     // One chain for every screen: a late unwatch from a popped screen must not land after
     // the next screen's watch.
@@ -48,8 +56,22 @@ final class AgentModel {
         wrapLines = DevicePrefs.load(from: prefsFile).wrapLines
     }
 
+    var acceptsKeys: Bool { blocked != .optionsOnly }
+
+    /// Typed text answers the blocking prompt instead of prompting the agent.
+    var answering: Bool { blocked == .keysAndText }
+
+    var blockedHint: String? {
+        switch blocked {
+        case nil: nil
+        case .optionsOnly: "Choose an option above."
+        case .keys: "Choose an option above or use the arrow keys."
+        case .keysAndText: "Choose an option above, use the arrow keys, or type an answer."
+        }
+    }
+
     var canSendPrompt: Bool {
-        !sendingPrompt && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+        !sendingPrompt && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
     }
 
     /// Runs while the screen is visible: watch, poll the core at 10 Hz, unwatch on cancel.
@@ -107,6 +129,10 @@ final class AgentModel {
     /// Text typed and files attached while the send is in flight stay for the next prompt.
     /// Paths on the Mac never have spaces, so they are set apart by single spaces.
     func sendPrompt() async {
+        if answering {
+            await sendAnswer()
+            return
+        }
         let sent = draft
         let files = attachments
         let typed = sent.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -125,6 +151,24 @@ final class AgentModel {
             }
         } catch {
             if case .DraftChanged(let current) = error as? CoreError { macDraft = current }
+            promptError = Self.message(for: error)
+        }
+    }
+
+    /// Typed into the prompt's own answer field and submitted with Enter; attachments stay for the next prompt.
+    private func sendAnswer() async {
+        let sent = draft
+        let typed = sent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sendingPrompt, !typed.isEmpty else { return }
+        sendingPrompt = true
+        promptError = nil
+        defer { sendingPrompt = false }
+        do {
+            try await core.typeText(machineId: route.machineId, terminalId: route.terminalId, text: typed)
+            if draft.hasPrefix(sent) {
+                draft = String(draft.dropFirst(sent.count).drop(while: \.isWhitespace))
+            }
+        } catch {
             promptError = Self.message(for: error)
         }
     }
@@ -210,6 +254,7 @@ final class AgentModel {
     /// Keys go out in tap order: taps made while a send is in flight are batched into the next call.
     @discardableResult
     func tap(_ key: AgentKey) -> Task<Void, Never>? {
+        guard acceptsKeys else { return nil }
         keyTaps += 1
         queuedKeys.append(key)
         guard !sendingKeys else { return nil }

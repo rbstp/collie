@@ -187,12 +187,22 @@ final class FakeAuthenticator: Authenticator {
     }
 }
 
-private func approval(_ id: String, options: [ApprovalDecision] = [.approve, .approveAlways, .deny]) -> PendingApproval {
+private func approval(
+    _ id: String, options: [ApprovalDecision] = [.approve, .approveAlways, .deny], choices: [ApprovalChoice] = [],
+    acceptsInput: Bool = false, hasTextField: Bool = false
+) -> PendingApproval {
     PendingApproval(
         approvalId: id, terminalId: "term_1", agentLabel: "claude", workspaceLabel: "collie", snippet: "Do you want to proceed?",
-        toolName: "Bash", toolSummary: "cargo test", options: options, createdAtMs: 1, expiresAtMs: .max
+        toolName: "Bash", toolSummary: "cargo test", options: options, choices: choices, acceptsInput: acceptsInput,
+        hasTextField: hasTextField, createdAtMs: 1, expiresAtMs: .max
     )
 }
+
+private let questionChoices = [
+    ApprovalChoice(index: 0, label: "PostgreSQL", current: true),
+    ApprovalChoice(index: 1, label: "SQLite", current: false),
+    ApprovalChoice(index: 2, label: "Type something.", current: false),
+]
 
 @MainActor
 private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator) -> ApprovalsModel {
@@ -325,4 +335,115 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     let unknown = try #require(ApprovalLink(nodeId: "nOTHER", approvalId: "ap_1"))
     #expect(model.open(unknown) == nil)
     #expect(model.loading == nil)
+}
+
+@MainActor
+@Test func noticeClearsAfterItsLifetime() async throws {
+    let core = FakeApprovalCore()
+    core.state.withLock { $0.pending = [approval("ap_1")] }
+    let model = ApprovalsModel(core: core, auth: FakeAuthenticator(), noticeLifetime: .milliseconds(50))
+    model.poll()
+    let item = try #require(model.items.first)
+    core.state.withLock { $0.pending = [] }
+    await model.decide(item, .approve)
+    #expect(model.notice == "Approved: claude. The agent moved on.")
+    #expect(model.items.isEmpty)
+    while model.notice != nil {
+        try await Task.sleep(for: .milliseconds(5))
+    }
+}
+
+@MainActor
+@Test func noticeClearsWhenTheListChangesOtherThanItsApprovalLeaving() async throws {
+    let core = FakeApprovalCore()
+    let model = approvalsModel(core, FakeAuthenticator())
+    let item = try #require(model.items.first)
+    await model.decide(item, .approve)
+    #expect(model.notice != nil)
+
+    core.state.withLock { $0.pending = [approval("ap_2", options: [.approve, .deny])] }
+    model.poll()
+    #expect(model.notice == "Approved: claude. The agent moved on.")
+
+    core.state.withLock { $0.pending = [approval("ap_2", options: [.approve, .deny]), approval("ap_3")] }
+    model.poll()
+    #expect(model.notice == nil)
+}
+
+@MainActor
+@Test func headerTapTogglesTheFullPrompt() throws {
+    let core = FakeApprovalCore()
+    let model = approvalsModel(core, FakeAuthenticator())
+    let item = try #require(model.items.first)
+    #expect(model.expanded.isEmpty)
+    model.toggleExpanded(item)
+    #expect(model.expanded == ["ap_1"])
+    model.toggleExpanded(item)
+    #expect(model.expanded.isEmpty)
+
+    model.toggleExpanded(item)
+    core.state.withLock { $0.pending = [] }
+    model.poll()
+    #expect(model.expanded.isEmpty)
+}
+
+@MainActor
+@Test func menuOptionIsChosenOnlyAfterAuthenticationAndOnlyWithoutDecisions() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    core.state.withLock { s in
+        s.pending = [approval("ap_q", options: [], choices: questionChoices), approval("ap_b", choices: questionChoices)]
+        s.outcome = .applied(decision: .choose(choice: 1), by: "phone")
+    }
+    let model = ApprovalsModel(core: core, auth: auth)
+    model.poll()
+    let question = try #require(model.items.first { $0.id == "ap_q" })
+    let bash = try #require(model.items.first { $0.id == "ap_b" })
+
+    await model.decide(bash, .choose(choice: 0))
+    await model.decide(question, .choose(choice: 3))
+    await model.decide(question, .approve)
+    #expect(auth.state.withLock { $0.reasons }.isEmpty)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+
+    auth.state.withLock { $0.result = false }
+    await model.decide(question, .choose(choice: 1))
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+    #expect(model.notice?.contains("Nothing was sent") == true)
+
+    auth.state.withLock { $0.result = true }
+    await model.decide(question, .choose(choice: 1))
+    #expect(auth.state.withLock { $0.reasons } == ["Choose option 2 for claude", "Choose option 2 for claude"])
+    #expect(core.state.withLock { $0.decisions } == ["m1 ap_q choose(choice: 1)"])
+    #expect(model.notice == "Chose option 2: claude. The agent moved on.")
+
+    core.state.withLock { $0.outcome = .superseded }
+    await model.decide(question, .choose(choice: 0))
+    #expect(model.notice == "The prompt changed on the Mac. Nothing was sent.")
+}
+
+@MainActor
+@Test func keysAndTextAreOfferedOnlyWhereColliedAcceptsInput() {
+    let core = FakeApprovalCore()
+    let model = ApprovalsModel(core: core, auth: FakeAuthenticator())
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == nil)
+
+    core.state.withLock { $0.pending = [approval("ap_b", choices: questionChoices)] }
+    model.poll()
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .optionsOnly)
+
+    core.state.withLock { $0.pending = [approval("ap_plan", options: [], choices: questionChoices)] }
+    model.poll()
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .optionsOnly)
+
+    core.state.withLock {
+        $0.pending = [approval("ap_q", options: [], choices: questionChoices, acceptsInput: true, hasTextField: true)]
+    }
+    model.poll()
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .keysAndText)
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_2") == nil)
+
+    core.state.withLock { $0.pending = [approval("ap_k", options: [], choices: questionChoices, acceptsInput: true)] }
+    model.poll()
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .keys)
 }
