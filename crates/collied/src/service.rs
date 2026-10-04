@@ -77,6 +77,16 @@ fn launchctl(args: &[&str]) -> anyhow::Result<bool> {
     Ok(status.success())
 }
 
+fn loaded(target: &str) -> anyhow::Result<bool> {
+    let status = Command::new("/bin/launchctl")
+        .args(["print", target])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("run launchctl")?;
+    Ok(status.success())
+}
+
 pub fn install(config: Option<&Path>, data_dir: &Path) -> anyhow::Result<()> {
     crate::ensure_private_dir(data_dir)?;
     let exe = std::env::current_exe()?.canonicalize()?;
@@ -107,12 +117,56 @@ pub fn install(config: Option<&Path>, data_dir: &Path) -> anyhow::Result<()> {
     file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
     file.sync_all()?;
     std::fs::rename(&tmp, &path)?;
+    let _ = launchctl(&["enable", &target]);
     anyhow::ensure!(
         launchctl(&["bootstrap", &domain(), &path.display().to_string()])?,
         "launchctl bootstrap {} failed",
         path.display()
     );
     println!("installed {} ({})", path.display(), exe.display());
+    Ok(())
+}
+
+/// Unloads the agent and disables it, so it also stays off after logout or a reboot until
+/// `start`; the plist stays in place.
+pub fn stop() -> anyhow::Result<()> {
+    let path = plist_path()?;
+    anyhow::ensure!(path.exists(), "not installed: run collied service install");
+    let target = format!("{}/{LABEL}", domain());
+    anyhow::ensure!(
+        launchctl(&["disable", &target])?,
+        "launchctl disable {target} failed"
+    );
+    let unloaded = loaded(&target)? && launchctl(&["bootout", &target])?;
+    println!(
+        "{}; stays off until collied start",
+        if unloaded {
+            "stopped"
+        } else {
+            "already stopped"
+        }
+    );
+    Ok(())
+}
+
+pub fn start() -> anyhow::Result<()> {
+    let path = plist_path()?;
+    anyhow::ensure!(path.exists(), "not installed: run collied service install");
+    let target = format!("{}/{LABEL}", domain());
+    anyhow::ensure!(
+        launchctl(&["enable", &target])?,
+        "launchctl enable {target} failed"
+    );
+    if loaded(&target)? {
+        println!("already running");
+        return Ok(());
+    }
+    anyhow::ensure!(
+        launchctl(&["bootstrap", &domain(), &path.display().to_string()])?,
+        "launchctl bootstrap {} failed",
+        path.display()
+    );
+    println!("started");
     Ok(())
 }
 
