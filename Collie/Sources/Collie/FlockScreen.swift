@@ -202,20 +202,11 @@ struct StatusPill: View {
 
 struct StatusIcon: View {
     let state: AgentState
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var spinning = false
 
     var body: some View {
         Group {
             switch state {
-            case .working:
-                Circle()
-                    .trim(from: 0, to: 0.7)
-                    .stroke(state.color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .padding(2)
-                    .rotationEffect(.degrees(spinning ? 360 : 0))
-                    .animation(reduceMotion ? nil : .linear(duration: 1).repeatForever(autoreverses: false), value: spinning)
-                    .onAppear { spinning = true }
+            case .working: SpinningRing(color: state.color)
             case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(state.color)
             case .idle: Image(systemName: "circle.fill").font(.system(size: 9)).foregroundStyle(state.color)
             case .blocked: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(state.color)
@@ -226,6 +217,23 @@ struct StatusIcon: View {
         .frame(width: 20, height: 20)
         .accessibilityElement()
         .accessibilityLabel(state.label)
+    }
+}
+
+/// Its own view so every switch to working starts a fresh spin.
+private struct SpinningRing: View {
+    let color: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var spinning = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.7)
+            .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            .padding(2)
+            .rotationEffect(.degrees(spinning ? 360 : 0))
+            .animation(reduceMotion ? nil : .linear(duration: 1).repeatForever(autoreverses: false), value: spinning)
+            .onAppear { spinning = true }
     }
 }
 
@@ -257,6 +265,7 @@ extension LinkPhase {
         case .connecting: "connecting"
         case .connected: "connected"
         case .waiting: "retrying"
+        case .unavailable: "offline"
         case .offline: "offline"
         case .stopped: "stopped"
         }

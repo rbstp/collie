@@ -253,7 +253,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     #expect(model.items.map(\.link) == [.connected, .waiting])
     #expect(model.items.map(\.unreachable) == [false, true])
 
-    let phases: [(LinkPhase, Bool)] = [(.connecting, false), (.connected, false), (.offline, true), (.stopped, true), (.waiting, true)]
+    let phases: [(LinkPhase, Bool)] = [(.connecting, false), (.connected, false), (.offline, true), (.stopped, true), (.waiting, true), (.unavailable, true)]
     for (link, unreachable) in phases {
         core.state.withLock { $0.link["m2"] = link }
         model.poll()

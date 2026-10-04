@@ -33,7 +33,7 @@ struct ApprovalItem: Identifiable, Equatable {
     var id: String { approval.approvalId }
 
     /// Connecting stays reachable, so a decision made during the resume grace still goes out.
-    var unreachable: Bool { [.waiting, .offline, .stopped].contains(link) }
+    var unreachable: Bool { [.waiting, .unavailable, .offline, .stopped].contains(link) }
 }
 
 /// What collied takes from the phone on the prompt an agent is blocked on.

@@ -197,6 +197,8 @@ pub enum LinkPhase {
     Connecting,
     Connected,
     Waiting,
+    /// Tailscale reports the machine offline; it is not dialed until it is back.
+    Unavailable,
     Offline,
     Stopped,
 }
@@ -509,7 +511,7 @@ impl Backoff {
             self.grace_attempt = 0;
         }
         if matches!(err, ConnectError::PeerOffline) {
-            link.set(LinkPhase::Waiting, Some(err.to_string()));
+            link.set(LinkPhase::Unavailable, Some(err.to_string()));
             return Some(OFFLINE_POLL);
         }
         if link
@@ -774,7 +776,7 @@ mod tests {
         assert_eq!(
             link(&shared),
             (
-                LinkPhase::Waiting,
+                LinkPhase::Unavailable,
                 Some("not reachable, it may be off or asleep".into())
             )
         );
