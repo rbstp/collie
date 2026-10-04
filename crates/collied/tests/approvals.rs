@@ -1076,7 +1076,12 @@ async fn a_followed_terminal_alerts_on_its_activity_only() {
     let sent = rig.sent().await;
     let (to, cleared) = sent.last().unwrap();
     assert_eq!(to, activity_token().as_str());
-    assert_eq!(cleared.delivery, Delivery::LiveActivity { urgent: false });
+    assert_eq!(
+        cleared.delivery,
+        Delivery::LiveActivity { urgent: true },
+        "the update that drops the buttons goes at priority 10"
+    );
+    assert!(cleared.payload["aps"].get("alert").is_none());
     let state = &cleared.payload["aps"]["content-state"];
     assert_eq!(state["status"], "working");
     assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
