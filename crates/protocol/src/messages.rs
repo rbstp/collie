@@ -627,6 +627,11 @@ pub struct ApprovalChoice {
     pub index: u8,
     pub label: String,
     pub current: bool,
+    /// The lines under the option's first line: a question option's description, or the
+    /// rest of a label that wrapped. Absent from a collied that predates the field, which
+    /// joins them into `label`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

@@ -1241,10 +1241,14 @@ async fn a_question_is_answered_by_choosing_an_option() {
     assert_eq!(
         choice_labels(&a),
         [
-            (0, "SQLite Embedded, no server".to_owned(), true),
-            (1, "Redis Shared across processes".to_owned(), false),
+            (0, "SQLite".to_owned(), true),
+            (1, "Redis".to_owned(), false),
             (2, "Type something.".to_owned(), false),
         ]
+    );
+    assert_eq!(
+        a.choices[1].detail.as_deref(),
+        Some("Shared across processes")
     );
     let alerts = rig.alerts(1).await;
     assert!(alerts[0].1.payload["aps"].get("category").is_none());

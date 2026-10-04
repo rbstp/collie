@@ -251,17 +251,16 @@ final class DemoApprovalCore: ApprovalCore {
             PendingApproval(
                 approvalId: "ap_demo3", terminalId: "term_3", agentLabel: "plan the migration", workspaceLabel: "collie",
                 snippet: """
+                ☐ Database
                 Which database should the migration target?
-                > 1. PostgreSQL 17
-                  2. SQLite
-                  3. Type something.
                 """,
                 toolName: nil, toolSummary: nil,
                 options: [],
                 choices: [
-                    ApprovalChoice(index: 0, label: "PostgreSQL 17", current: true),
-                    ApprovalChoice(index: 1, label: "SQLite", current: false),
+                    ApprovalChoice(index: 0, label: "PostgreSQL 17", current: true, detail: "Shared server, the production default"),
+                    ApprovalChoice(index: 1, label: "SQLite", current: false, detail: "Single file, no server to run"),
                     ApprovalChoice(index: 2, label: "Type something.", current: false),
+                    ApprovalChoice(index: 3, label: "Chat about this", current: false),
                 ],
                 acceptsInput: true, hasTextField: true, supportsNote: false,
                 createdAtMs: now - 60_000, expiresAtMs: now + 540_000

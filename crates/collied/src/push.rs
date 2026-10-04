@@ -1162,6 +1162,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
                 index: 0,
                 label: "CHOICE".into(),
                 current: true,
+                detail: None,
             }],
             accepts_input: false,
             has_text_field: false,

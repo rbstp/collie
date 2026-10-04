@@ -61,12 +61,14 @@ pub(crate) fn decide_params(
     }
 }
 
-/// One option of the menu on the Mac's screen; `current` is under its cursor.
+/// One option of the menu on the machine's screen; `current` is under its cursor.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ApprovalChoice {
     pub index: u8,
     pub label: String,
     pub current: bool,
+    #[uniffi(default = None)]
+    pub detail: Option<String>,
 }
 
 /// An approval as Swift sees it: the nonce never leaves collie-core.
@@ -115,6 +117,7 @@ impl From<&Approval> for PendingApproval {
                     index: c.index,
                     label: c.label.clone(),
                     current: c.current,
+                    detail: c.detail.clone(),
                 })
                 .collect(),
             accepts_input: a.accepts_input,
@@ -636,6 +639,7 @@ mod tests {
             index: 0,
             label: "Yes".into(),
             current: true,
+            detail: None,
         }];
         let pending = PendingApproval::from(&a);
         assert_eq!(pending.options.len(), 3);
@@ -644,7 +648,8 @@ mod tests {
             [ApprovalChoice {
                 index: 0,
                 label: "Yes".into(),
-                current: true
+                current: true,
+                detail: None,
             }]
         );
     }

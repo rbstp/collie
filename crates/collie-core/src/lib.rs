@@ -2176,6 +2176,7 @@ mod tailnet_tests {
                     index: i as u8,
                     label: (*l).into(),
                     current: i == 0,
+                    detail: (*l == "Redis").then(|| "Shared across processes".into()),
                 })
                 .collect(),
             accepts_input: true,
@@ -2779,7 +2780,8 @@ mod tailnet_tests {
             ApprovalChoice {
                 index: 1,
                 label: "Redis".into(),
-                current: false
+                current: false,
+                detail: Some("Shared across processes".into()),
             }
         );
         let listed = rt.block_on(core.approvals(id())).unwrap();
