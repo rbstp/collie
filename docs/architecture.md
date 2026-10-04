@@ -214,7 +214,7 @@ Claude Code keeps unsent text in its input box, and herdr's `agent.prompt` paste
 
 ## Client runtime (patterns taken from t3code)
 
-- One connection supervisor in collie-core: backoff 3, 4, 8, 16 s; reset after 30 s connected; wait while offline; stop on auth failures. On foreground after 10 s or more in background, reconnect immediately (iOS suspends sockets without a close); shorter gaps get a 3 s probe.
+- One connection supervisor in collie-core: backoff 3, 4, 8, 16 s; reset after 30 s connected; wait while offline; stop on auth failures. On foreground after 10 s or more in background, reconnect immediately (iOS suspends sockets without a close); shorter gaps get a 3 s probe. For 10 s after a foreground resume, failures (the old session's close, a node still rebuilding its paths after the suspend, the node not yet running) retry after 0.5, 1, then 2 s and keep the link Connecting without surfacing the error; a failure the app saw just before the resume is cleared and retried at once, the resume restarts the normal backoff, auth failures still stop at once, and later failures fall back to the normal backoff. A snapshot request cut off by the reconnect answers from the cache.
 - Snapshot plus sequence: `flock.snapshot` returns the `seq` it reflects; every event frame carries `seq`; the client drops `seq <= last applied`; unknown events still advance the cursor.
 - Mutations are never replayed automatically; a retry reuses its `op_id`.
 - Live Activities: t3code abandoned push-to-start as unreliable from background wakes. Start activities from the foreground, register update tokens on every foreground, priority 5 for routine updates and 10 for alerting ones, always set a stale date. Push-to-start stays a Phase 4 experiment, not a dependency.

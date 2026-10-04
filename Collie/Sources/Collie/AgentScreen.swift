@@ -157,7 +157,10 @@ private struct AgentHeader: View {
                 Text("Agent not in the flock").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            if let link = model.link, link != .connected {
+            if model.link == .connecting {
+                ProgressView().controlSize(.mini)
+                Text("reconnecting").font(.caption).foregroundStyle(.secondary)
+            } else if let link = model.link, link != .connected {
                 Text(model.linkError ?? link.label)
                     .font(.caption)
                     .foregroundStyle(.orange)

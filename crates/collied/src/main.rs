@@ -40,6 +40,10 @@ enum Command {
     },
     /// Show the running daemon's state.
     Status,
+    /// Stop the launchd agent and keep it off, across reboots, until `collied start`.
+    Stop,
+    /// Start the launchd agent again after `collied stop`.
+    Start,
     /// Install or remove the launchd agent.
     Service {
         #[command(subcommand)]
@@ -147,6 +151,8 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
         Command::Pair { show_uri } => return pair(&control_path, show_uri).await,
         Command::Peers { command } => peers(command, &control_path, &data_dir).await?,
         Command::Status => status(&control_path).await?,
+        Command::Stop => service::stop()?,
+        Command::Start => service::start()?,
         Command::Service { command } => match command {
             ServiceCommand::Install => service::install(cli.config.as_deref(), &data_dir)?,
             ServiceCommand::Uninstall => service::uninstall()?,

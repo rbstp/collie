@@ -524,11 +524,18 @@ impl CollieCore {
             return Ok(view(&conn));
         }
         self.run(async move {
-            let response = conn
+            match conn
                 .request(Request::FlockSnapshot(Empty {}), CALL_TIMEOUT)
                 .await
-                .map_err(|e| request_error(&conn, e))?;
-            expect_flock(response).map_err(CoreError::from)?;
+            {
+                Ok(response) => {
+                    expect_flock(response).map_err(CoreError::from)?;
+                }
+                // The session ended under the request (a resume reconnect, or iOS killed
+                // the socket): the link phase reports it, and the supervisor reconnects.
+                Err(RequestError::Failed(e)) if e.is_transport() => {}
+                Err(e) => return Err(request_error(&conn, e)),
+            }
             Ok(view(&conn))
         })
         .await
