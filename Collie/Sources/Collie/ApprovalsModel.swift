@@ -2,6 +2,7 @@ import CollieCore
 import Foundation
 import LocalAuthentication
 import Observation
+import UserNotifications
 
 /// The slice of CollieCore the approvals screens use, so the model can run against a fake.
 protocol ApprovalCore: AnyObject, Sendable {
@@ -77,27 +78,57 @@ final class ApprovalsModel {
     private(set) var refreshing = false
     private(set) var loading: LoadingApproval?
     private var loadTask: Task<Void, Never>?
+    /// Pending approval ids per connected machine at its last notification sweep.
+    private var swept: [String: Set<String>] = [:]
+    private let dismissResolved: @Sendable (_ nodeId: String, _ pending: Set<String>) -> Void
     var highlighted: String?
 
     init(
         core: (any ApprovalCore)?, auth: any Authenticator = DeviceOwnerAuthenticator(),
-        noticeLifetime: Duration = .seconds(6)
+        noticeLifetime: Duration = .seconds(6),
+        dismissResolved: @escaping @Sendable (_ nodeId: String, _ pending: Set<String>) -> Void = ApprovalsModel.removeDelivered
     ) {
         self.core = core
         self.auth = auth
         self.noticeLifetime = noticeLifetime
+        self.dismissResolved = dismissResolved
+    }
+
+    /// Removes this machine's delivered approval alerts whose approval is no longer pending,
+    /// however it was answered. Follow-ups carry no approval_id and stay.
+    nonisolated static func removeDelivered(nodeId: String, pending: Set<String>) {
+        Task {
+            let center = UNUserNotificationCenter.current()
+            let stale = await center.deliveredNotifications().filter { note in
+                let info = note.request.content.userInfo
+                guard info["node_id"] as? String == nodeId, let id = info["approval_id"] as? String else { return false }
+                return !pending.contains(id)
+            }
+            center.removeDeliveredNotifications(withIdentifiers: stale.map(\.request.identifier))
+        }
     }
 
     /// Local and cheap: reads what the connections already hold.
     func poll() {
         guard let core else { return }
         let nowMs = UInt64(Date.now.timeIntervalSince1970 * 1000)
+        var connected: Set<String> = []
         let next = core.machines().flatMap { machine -> [ApprovalItem] in
             guard let feed = core.approvalFeed(machineId: machine.id, afterRevision: .max) else { return [] }
-            return feed.pending.filter { $0.expiresAtMs > nowMs }
-                .map { ApprovalItem(machine: machine, approval: $0, link: feed.link) }
+            let live = feed.pending.filter { $0.expiresAtMs > nowMs }
+            // Only a connected machine's list is current: a cached one may miss resolutions.
+            if feed.link == .connected {
+                connected.insert(machine.id)
+                let ids = Set(live.map(\.approvalId))
+                if swept[machine.id] != ids {
+                    swept[machine.id] = ids
+                    dismissResolved(machine.nodeId, ids)
+                }
+            }
+            return live.map { ApprovalItem(machine: machine, approval: $0, link: feed.link) }
         }
         .sorted { ($0.approval.createdAtMs, $0.id) < ($1.approval.createdAtMs, $1.id) }
+        swept = swept.filter { connected.contains($0.key) }
         guard next != items else { return }
         let pending = next.map(\.approval)
         if pending == items.filter({ $0.id != noticeSubject }).map(\.approval) {

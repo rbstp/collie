@@ -259,6 +259,8 @@ pub enum Key {
     ShiftTab,
     #[serde(rename = "ctrl+c")]
     CtrlC,
+    #[serde(rename = "ctrl+enter")]
+    CtrlEnter,
     #[serde(rename = "y")]
     Y,
     #[serde(rename = "n")]
@@ -277,6 +279,7 @@ impl Key {
             Self::Tab => "tab",
             Self::ShiftTab => "shift+tab",
             Self::CtrlC => "ctrl+c",
+            Self::CtrlEnter => "ctrl+enter",
             Self::Y => "y",
             Self::N => "n",
         }

@@ -346,6 +346,7 @@ pub enum AgentKey {
     Tab,
     ShiftTab,
     CtrlC,
+    CtrlEnter,
     Y,
     N,
 }
@@ -362,6 +363,7 @@ impl From<AgentKey> for Key {
             AgentKey::Tab => Self::Tab,
             AgentKey::ShiftTab => Self::ShiftTab,
             AgentKey::CtrlC => Self::CtrlC,
+            AgentKey::CtrlEnter => Self::CtrlEnter,
             AgentKey::Y => Self::Y,
             AgentKey::N => Self::N,
         }
