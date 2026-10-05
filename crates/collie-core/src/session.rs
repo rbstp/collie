@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use protocol::{
     AgentWatchParams, ClientFrame, Empty, ErrorBody, ErrorCode, Event, Flock, HelloParams,
     HelloResult, Label, PROTOCOL_VERSION, ReadParams, ReadSource, Request, RequestId, Response,
-    ServerFrame, TerminalId, TerminalRead, WS_PATH, WS_SUBPROTOCOL,
+    ServerFrame, TerminalId, TerminalRead, WS_PATH, WS_SUBPROTOCOL, limits,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
@@ -234,7 +234,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
             seed.push(Request::AgentRead(ReadParams {
                 terminal_id,
                 source: ReadSource::Recent,
-                lines: None,
+                lines: Some(limits::MAX_READ_LINES),
             }));
         }
         for request in seed {
@@ -297,11 +297,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                         }
                         ServerFrame::Error { id: None, error } => break error.into(),
                         ServerFrame::Event { seq, event } => {
-                            if lock(state).apply_event(seq, event) == EventOutcome::NeedsSnapshot {
-                                match self.send(Request::FlockSnapshot(Empty {})).await {
-                                    Ok(id) => { pending.insert(id, (None, None)); }
-                                    Err(e) => break e,
+                            let request = match lock(state).apply_event(seq, event) {
+                                EventOutcome::NeedsSnapshot => Request::FlockSnapshot(Empty {}),
+                                EventOutcome::NeedsWatch(terminal_id) => {
+                                    Request::AgentWatch(AgentWatchParams {
+                                        terminal_id: Some(terminal_id),
+                                    })
                                 }
+                                EventOutcome::Dropped | EventOutcome::Applied => continue,
+                            };
+                            match self.send(request).await {
+                                Ok(id) => { pending.insert(id, (None, None)); }
+                                Err(e) => break e,
                             }
                         }
                     }
@@ -352,6 +359,8 @@ pub enum EventOutcome {
     Dropped,
     Applied,
     NeedsSnapshot,
+    /// A patch did not apply: a new watch starts with a full `agent.output`.
+    NeedsWatch(TerminalId),
 }
 
 /// Flock as last seen, kept current by events. `seq` is per connection, so
@@ -363,6 +372,9 @@ pub struct FlockState {
     pub watched: Option<TerminalId>,
     pub output: Option<TerminalRead>,
     pub output_revision: u64,
+    /// The text the watch sent last, the base of its next patch. A read reply can replace
+    /// `output` but not this.
+    watched_output: Option<TerminalRead>,
     /// `approval.needed` and `approval.resolved` events, numbered by `approval_revision`.
     pub approval_events: VecDeque<(u64, Event)>,
     pub approval_revision: u64,
@@ -375,11 +387,13 @@ impl FlockState {
     pub fn new_connection(&mut self) {
         self.last_seq = 0;
         self.since_snapshot.clear();
+        self.watched_output = None;
     }
 
     pub fn watch(&mut self, terminal_id: Option<TerminalId>) {
         if self.watched != terminal_id {
             self.output = None;
+            self.watched_output = None;
         }
         self.watched = terminal_id;
     }
@@ -394,6 +408,13 @@ impl FlockState {
             self.output_revision += 1;
         }
         watched
+    }
+
+    fn apply_watched(&mut self, read: TerminalRead) {
+        if self.apply_output(read.clone()) {
+            self.watched_output = Some(read);
+            self.output_events += 1;
+        }
     }
 
     /// A read reply is not ordered against `agent.output` events: collied may have read
@@ -411,9 +432,22 @@ impl FlockState {
         }
         self.last_seq = seq;
         match event {
-            Event::AgentOutput(read) => {
-                if self.apply_output(read) {
-                    self.output_events += 1;
+            Event::AgentOutput(read) => self.apply_watched(read),
+            Event::AgentOutputPatch(patch) => {
+                if self.watched.as_ref() != Some(&patch.terminal_id) {
+                    return EventOutcome::Applied;
+                }
+                let read = self
+                    .watched_output
+                    .as_ref()
+                    .filter(|o| o.terminal_id == patch.terminal_id)
+                    .and_then(|o| patch.apply(&o.ansi));
+                match read {
+                    Some(read) => self.apply_watched(read),
+                    None => {
+                        self.watched_output = None;
+                        return EventOutcome::NeedsWatch(patch.terminal_id);
+                    }
                 }
             }
             Event::FlockChanged {} => return EventOutcome::NeedsSnapshot,
@@ -475,15 +509,18 @@ fn apply(flock: &mut Flock, event: &Event) {
         Event::ApprovalResolved { approval_id, .. } => {
             flock.approvals.retain(|a| a.approval_id != *approval_id);
         }
-        Event::AgentOutput(_) | Event::FlockChanged {} | Event::Unrecognized => {}
+        Event::AgentOutput(_)
+        | Event::AgentOutputPatch(_)
+        | Event::FlockChanged {}
+        | Event::Unrecognized => {}
     }
 }
 
 #[cfg(test)]
 mod tests {
     use protocol::{
-        Agent, AgentStatus, ApprovalId, ClientFrame, MachineInfo, TerminalId, WorkspaceId,
-        parse_client_frame,
+        Agent, AgentStatus, ApprovalId, ClientFrame, MachineInfo, OutputPatch, TerminalId,
+        WorkspaceId, parse_client_frame,
     };
     use tokio::net::UnixStream;
     use tokio::sync::mpsc;
@@ -690,6 +727,73 @@ mod tests {
             shown(&s),
             Some("still fresh"),
             "an unwatched agent's event does not count"
+        );
+    }
+
+    #[test]
+    fn patches_build_on_the_last_watched_output() {
+        let mut s = FlockState::default();
+        let t1 = TerminalId::new("t1").unwrap();
+        s.watch(Some(t1.clone()));
+        let history = "\u{1b}[1mline\u{1b}[0m\r\n".repeat(50);
+        let text = |end: &str| output("t1", &format!("{history}{end}"), ReadSource::Recent);
+        let patch = |prev: &TerminalRead, next: &TerminalRead| {
+            Event::AgentOutputPatch(OutputPatch::between(&prev.ansi, next).unwrap())
+        };
+        let (a, b, c) = (text("a"), text("b"), text("c"));
+
+        assert_eq!(
+            s.apply_event(1, patch(&a, &b)),
+            EventOutcome::NeedsWatch(t1.clone())
+        );
+        assert_eq!(shown(&s), None);
+        s.apply_event(2, Event::AgentOutput(a.clone()));
+        let mark = s.output_events;
+        assert_eq!(s.apply_event(3, patch(&a, &b)), EventOutcome::Applied);
+        assert_eq!((shown(&s), s.output_revision), (Some(b.ansi.as_str()), 2));
+        assert_eq!(s.output_events, mark + 1, "a patch is an output event");
+
+        s.apply_read(output("t1", "read", ReadSource::Recent), None);
+        assert_eq!(s.apply_event(4, patch(&b, &c)), EventOutcome::Applied);
+        assert_eq!(
+            shown(&s),
+            Some(c.ansi.as_str()),
+            "a read reply is not the base"
+        );
+
+        assert_eq!(
+            s.apply_event(5, patch(&a, &b)),
+            EventOutcome::NeedsWatch(t1.clone())
+        );
+        assert_eq!((shown(&s), s.output_revision), (Some(c.ansi.as_str()), 4));
+        assert_eq!(
+            s.apply_event(6, patch(&c, &b)),
+            EventOutcome::NeedsWatch(t1.clone()),
+            "nothing to patch until the next full output"
+        );
+        s.apply_event(7, Event::AgentOutput(c.clone()));
+        assert_eq!(s.apply_event(8, patch(&c, &a)), EventOutcome::Applied);
+        assert_eq!(shown(&s), Some(a.ansi.as_str()));
+
+        let other = OutputPatch {
+            terminal_id: TerminalId::new("t2").unwrap(),
+            ..OutputPatch::between(&a.ansi, &b).unwrap()
+        };
+        assert_eq!(
+            s.apply_event(9, Event::AgentOutputPatch(other)),
+            EventOutcome::Applied
+        );
+        assert_eq!(shown(&s), Some(a.ansi.as_str()));
+
+        s.new_connection();
+        assert_eq!(
+            s.apply_event(1, patch(&a, &b)),
+            EventOutcome::NeedsWatch(t1)
+        );
+        assert_eq!(
+            shown(&s),
+            Some(a.ansi.as_str()),
+            "kept on screen while reconnecting"
         );
     }
 
@@ -1048,8 +1152,8 @@ mod tests {
                 panic!("{initial:?}")
             };
             assert_eq!(
-                (p.terminal_id.as_str(), p.source),
-                ("t1", ReadSource::Recent)
+                (p.terminal_id.as_str(), p.source, p.lines),
+                ("t1", ReadSource::Recent, Some(limits::MAX_READ_LINES))
             );
             write(
                 &mut ws,
@@ -1079,6 +1183,28 @@ mod tests {
                 },
             )
             .await;
+            let stale = OutputPatch {
+                terminal_id: TerminalId::new("t1").unwrap(),
+                base: 0,
+                head: Vec::new(),
+                skip: 0,
+                keep: 1,
+                tail: vec!["x".into()],
+                truncated: false,
+            };
+            write(
+                &mut ws,
+                ServerFrame::Event {
+                    seq: 2,
+                    event: Event::AgentOutputPatch(stale),
+                },
+            )
+            .await;
+            let rewatch = read(&mut ws).await;
+            let Request::AgentWatch(p) = rewatch.request else {
+                panic!("{rewatch:?}")
+            };
+            assert_eq!(p.terminal_id.unwrap().as_str(), "t1");
         });
         let end = session
             .run(&mut rx, &state, Vec::new(), std::future::pending())

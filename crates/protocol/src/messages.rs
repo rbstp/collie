@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::*;
 use crate::limits;
+use crate::output::OutputPatch;
 
 pub type RequestId = u32;
 
@@ -679,6 +680,8 @@ pub enum Event {
     AgentStatus { agent: Agent },
     #[serde(rename = "agent.output")]
     AgentOutput(TerminalRead),
+    #[serde(rename = "agent.output_patch")]
+    AgentOutputPatch(OutputPatch),
     #[serde(rename = "approval.needed")]
     ApprovalNeeded { approval: Approval },
     #[serde(rename = "approval.resolved")]

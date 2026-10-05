@@ -80,9 +80,32 @@ private func selection(_ a: TerminalCell, _ b: TerminalCell) -> TerminalSelectio
     #expect(try render("hello world again").wrapContinuations.isEmpty)
 }
 
+@Test func aThousandLineHistoryKeepsEveryWrap() throws {
+    let lines = (0..<1000).map { "\($0) " + String(repeating: "x", count: $0 % 4 == 0 ? 150 : 60) }
+    let frame = try render(lines.joined(separator: "\r\n"), wrapColumns: 98)
+    #expect(frame.rows == 1250)
+    #expect(!frame.wrapsUnknown)
+    #expect(frame.wrapContinuations.count == 250)
+    #expect(selection(cell(0, 0), cell(1, 53)).text(in: frame) == lines[0])
+}
+
+@Test func theOldestLinesThatDoNotFitAreDropped() throws {
+    let lines = (1000..<2100).map { "\($0)" + String(repeating: "x", count: 11) }
+    let frame = try render("\u{1B}[31m" + lines.joined(separator: "\r\n"), wrapColumns: 10)
+    #expect(frame.rows == 1998)
+    #expect(!frame.wrapsUnknown)
+    #expect(frame.wrapContinuations.count == 999)
+    #expect(selection(cell(0, 0), cell(1, 4)).text(in: frame) == "1101" + String(repeating: "x", count: 11))
+    let red = try #require(render("\u{1B}[31mx").runs.first?.style.foreground)
+    #expect(red != TerminalRGB(255, 255, 255))
+    #expect(frame.runs.first?.style.foreground == red)
+}
+
 @Test func wrapRowsAreUnknownOnceTheScreenScrolls() throws {
-    let lines = Array(repeating: String(repeating: "x", count: 15), count: 300).joined(separator: "\r\n")
-    let frame = try render(lines, wrapColumns: 10)
+    // A tab after a soft wrap reaches a farther stop than in the unwrapped line, so these
+    // take three rows where two were counted.
+    let lines = Array(repeating: String(repeating: "x", count: 15) + "\tyyyyy", count: 1100).joined(separator: "\r\n")
+    let frame = try render(lines, wrapColumns: 12)
     #expect(frame.rows == Int(TerminalScreen.maxRows))
     #expect(frame.wrapContinuations.isEmpty)
     #expect(frame.wrapsUnknown)
