@@ -260,7 +260,7 @@ async fn handle(stream: UnixStream, state: Arc<State>) {
                 peers: store.peers,
             }
         }
-        Request::PeersRevoke { target } => match state.revoke(&target) {
+        Request::PeersRevoke { target } => match state.revoke(&target, "revoked") {
             Ok((peer, closed_sessions)) => Reply::Revoked {
                 peer,
                 closed_sessions,

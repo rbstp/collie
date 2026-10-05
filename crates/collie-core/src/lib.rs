@@ -515,8 +515,21 @@ impl CollieCore {
         lock(&self.inner.machines).clone()
     }
 
-    pub fn remove_machine(&self, id: String) -> Result<(), CoreError> {
-        self.inner.update_machines(|m| m.id == id, None)
+    /// Asks a connected machine to revoke this phone first, so it stops sending pushes, and
+    /// returns whether it did. The machine is forgotten either way.
+    pub async fn remove_machine(&self, id: String) -> Result<bool, CoreError> {
+        let unpaired = match self.conn(&id) {
+            Ok(conn) if lock(&conn.shared.link).phase == LinkPhase::Connected => self
+                .run(async move {
+                    let reply = conn.request(Request::Unpair(Empty {}), CALL_TIMEOUT).await;
+                    Ok(matches!(reply, Ok(Response::Ok)))
+                })
+                .await
+                .unwrap_or(false),
+            _ => false,
+        };
+        self.inner.update_machines(|m| m.id == id, None)?;
+        Ok(unpaired)
     }
 
     /// Answers from the cache while the link is down so a refresh never waits out
@@ -1832,7 +1845,13 @@ mod tests {
                 .unwrap(),
             [9; 32]
         );
-        core.remove_machine("m2".into()).unwrap();
+        assert!(
+            !core
+                .runtime
+                .block_on(core.remove_machine("m2".into()))
+                .unwrap(),
+            "an unreachable machine is forgotten without an unpair"
+        );
         assert_eq!(
             lock(&core.inner.push).keys().collect::<Vec<_>>(),
             ["m1"],
@@ -2143,6 +2162,7 @@ mod tailnet_tests {
         notes: Vec<Option<String>>,
         pushes: Vec<String>,
         activities: Vec<String>,
+        unpaired: bool,
     }
 
     const NONCE: &str = "Tm9uY2VOb25jZU5vbmNlTm9uY2VOb25jZU5vbmNlTm9";
@@ -2383,6 +2403,10 @@ mod tailnet_tests {
                             lock(&seen)
                                 .activities
                                 .push(format!("end {}", p.activity_id.as_str()));
+                            Ok(Response::Ok)
+                        }
+                        Request::Unpair(_) => {
+                            lock(&seen).unpaired = true;
                             Ok(Response::Ok)
                         }
                         other => panic!("unexpected {}", other.method()),
@@ -2688,7 +2712,15 @@ mod tailnet_tests {
         assert_ne!(again.id, machine.id);
         assert_eq!(core.machines(), vec![again.clone()]);
         assert!(core.cached_flock(machine.id).is_none());
-        core.remove_machine(again.id).unwrap();
+        (0..200)
+            .find(|_| {
+                let f = rt.block_on(core.flock(again.id.clone())).unwrap();
+                std::thread::sleep(Duration::from_millis(50));
+                f.link == LinkPhase::Connected
+            })
+            .expect("connected again");
+        assert!(rt.block_on(core.remove_machine(again.id)).unwrap());
+        assert!(lock(&seen).unpaired);
         assert!(core.machines().is_empty());
         drop(control);
     }

@@ -586,6 +586,22 @@
     {
       "properties": {
         "method": {
+          "const": "unpair",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Empty"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
           "const": "flock.snapshot",
           "type": "string"
         },
