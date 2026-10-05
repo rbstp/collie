@@ -24,7 +24,8 @@ No Tailscale app is needed on either device, and no TCP port is opened outside t
 
 - **Machines**: pair several Macs and Linux machines. Each one sends its own pushes, and one that is asleep or off is shown as offline (gray) without slowing the others. Removing a machine in the app also revokes the phone on that machine when it is reachable.
 - **Agents**: every herdr agent with its status (`idle`, `working`, `blocked`, `done`, as compact icons), grouped by machine (Mac or Linux) with blocked agents first, and each agent's workspace under its title. Long-press an agent, or use the agent screen's menu, to close its pane or workspace.
-- **Terminal**: a live view of the last 240 lines of the agent's pane, rendered with libghostty-vt, with optional line wrapping and the MesloLGS NF font so Nerd Font glyphs match the Mac. Long-press to select text, drag the handles to adjust, and copy (Universal Clipboard included).
+- **Terminal**: a live view of the last 240 lines of the agent's pane, rendered with libghostty-vt, with optional line wrapping and the MesloLGS NF font so Nerd Font glyphs match the Mac. Long-press to select text, drag the handles to adjust, and copy (Universal Clipboard included), or open an http or https link the selection touches.
+- **Gestures** (Settings > Gestures): double-tap pastes into the prompt field, pinch sets the font size, swiping sideways switches to the previous or next agent, and triple-tap can send Esc (off by default). Gestures stay off while text is selected.
 - **Prompt and keys**: send a prompt, or keys from the key strip (`esc ← ↑ ↓ → ⇥ ⇧⇥ ⏎ ⌃⏎`). A Claude Code prompt typed on the machine but not sent shows up in the phone's prompt field, and sending from the phone replaces it. "Focus on <machine>" brings the agent's pane to the front in herdr.
 - **Attachments**: up to 10 photos or files per prompt, uploaded over the tailnet and shown as pills; the agent receives their paths on the machine.
 - **New task**: start an agent in a new workspace from the phone.
@@ -57,7 +58,7 @@ Details, including what is not covered: [docs/threat-model.md](docs/threat-model
 | 4 | Live Activities and Dynamic Island for agents you follow, approvals on the activity, question menus | done |
 | 5 | Multiple computers (macOS and Linux), Claude Code hooks enrichment | done |
 | 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | done |
-| 7 | Improvements: compact status icons (done); a Mac menu bar icon, Codex and Copilot CLI agents, dictation, live terminal previews, gestures, opening links, remaining context and a sessions inbox, an Apple Watch app | planned |
+| 7 | Improvements: compact status icons, opening links, gestures (done); a Mac menu bar icon, Codex and Copilot CLI agents, dictation, live terminal previews, remaining context and a sessions inbox, an Apple Watch app | in progress |
 
 Outside the phases: an audit log viewer, and smaller fixes tracked as [issues](https://github.com/rbstp/collie/issues).
 
