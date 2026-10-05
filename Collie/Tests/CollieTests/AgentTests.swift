@@ -388,8 +388,8 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 }
 
 @Test func keyStripIsTheAllowlistInOrder() {
-    #expect(AgentKey.strip == [.esc, .enter, .left, .up, .down, .right, .tab, .shiftTab, .ctrlC])
-    #expect(AgentKey.strip.map(\.symbol) == ["esc", "⏎", "←", "↑", "↓", "→", "⇥", "⇧⇥", "^C"])
+    #expect(AgentKey.strip == [.esc, .left, .up, .down, .right, .tab, .shiftTab, .enter, .ctrlEnter])
+    #expect(AgentKey.strip.map(\.symbol) == ["esc", "←", "↑", "↓", "→", "⇥", "⇧⇥", "⏎", "⌃⏎"])
     let names = AgentKey.strip.map(\.accessibilityName)
     #expect(Set(names).count == names.count)
     #expect(names.allSatisfy { !$0.isEmpty })

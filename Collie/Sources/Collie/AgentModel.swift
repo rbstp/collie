@@ -374,7 +374,7 @@ struct CloseConfirmation: Equatable {
 }
 
 extension AgentKey {
-    static let strip: [AgentKey] = [.esc, .enter, .left, .up, .down, .right, .tab, .shiftTab, .ctrlC]
+    static let strip: [AgentKey] = [.esc, .left, .up, .down, .right, .tab, .shiftTab, .enter, .ctrlEnter]
 
     var symbol: String {
         switch self {
@@ -387,6 +387,7 @@ extension AgentKey {
         case .tab: "⇥"
         case .shiftTab: "⇧⇥"
         case .ctrlC: "^C"
+        case .ctrlEnter: "⌃⏎"
         case .y: "y"
         case .n: "n"
         }
@@ -403,6 +404,7 @@ extension AgentKey {
         case .tab: "Tab"
         case .shiftTab: "Shift Tab"
         case .ctrlC: "Control C"
+        case .ctrlEnter: "Control Return"
         case .y: "Y"
         case .n: "N"
         }

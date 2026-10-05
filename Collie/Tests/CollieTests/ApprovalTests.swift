@@ -589,3 +589,29 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     #expect(auth.state.withLock { $0.reasons }.isEmpty)
     #expect(core.state.withLock { $0.decisions }.isEmpty)
 }
+
+@MainActor
+@Test func answeredApprovalsAreDismissedFromNotificationCenter() {
+    let core = FakeApprovalCore()
+    core.state.withLock { s in
+        s.pending["m1"] = [approval("ap_1"), approval("ap_2")]
+        s.pending["m2"] = [approval("ap_linux")]
+    }
+    let swept = Mutex<[String]>([])
+    let model = ApprovalsModel(core: core, auth: FakeAuthenticator()) { nodeId, pending in
+        swept.withLock { $0.append("\(nodeId) \(pending.sorted())") }
+    }
+    model.poll()
+    model.poll()
+    #expect(swept.withLock { $0 } == ["nMAC [\"ap_1\", \"ap_2\"]"], "once per change, connected machines only")
+
+    core.state.withLock { $0.pending["m1"] = [approval("ap_2")] }
+    model.poll()
+    #expect(swept.withLock { $0.last } == "nMAC [\"ap_2\"]", "answered in the app or on the machine")
+
+    core.state.withLock { $0.link["m1"] = .waiting }
+    model.poll()
+    core.state.withLock { $0.link["m1"] = .connected }
+    model.poll()
+    #expect(swept.withLock { $0.count } == 3, "swept again after a reconnect, for what was answered meanwhile")
+}
