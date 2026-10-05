@@ -45,6 +45,9 @@ public struct TerminalFrame: Equatable, Sendable {
     public var runs: [TerminalRun]
     /// Rows that continue the row above after a soft wrap.
     public var wrapContinuations: Set<Int> = []
+    /// True when content scrolled while wrapping, so a full row may continue a soft wrap that
+    /// `wrapContinuations` does not list.
+    public var wrapsUnknown = false
 }
 
 /// A libghostty-vt terminal used as a snapshot renderer: no pty, no scrollback, no replies.
@@ -127,7 +130,7 @@ public final class TerminalScreen {
             columns = wantedColumns
             rows = wantedRows
         }
-        var wrapContinuations: Set<Int> = []
+        var wrapContinuations: Set<Int>? = []
         if wrapColumns != nil {
             wrapContinuations = writeTrackingWraps(bytes)
         } else {
@@ -135,15 +138,16 @@ public final class TerminalScreen {
         }
         ghostty_render_state_update(renderState, terminal)
         var frame = readFrame()
-        frame.wrapContinuations = wrapContinuations.filter { $0 < frame.rows }
+        frame.wrapContinuations = wrapContinuations?.filter { $0 < frame.rows } ?? []
+        frame.wrapsUnknown = wrapContinuations == nil
         return frame
     }
 
     /// Writes `bytes` a line at a time and returns the rows that continue a soft-wrapped line,
     /// from the cursor row before and after each line. ghostty_row_get is not in the render-state
     /// build of libghostty-vt. Once a line ends on the bottom row the screen may have scrolled, so
-    /// row numbers are unknown and no row is reported.
-    private func writeTrackingWraps(_ bytes: [UInt8]) -> Set<Int> {
+    /// row numbers are unknown and nil is returned.
+    private func writeTrackingWraps(_ bytes: [UInt8]) -> Set<Int>? {
         var continuations: Set<Int> = []
         var reachedBottom = false
         var start = 0
@@ -157,7 +161,7 @@ public final class TerminalScreen {
             write(bytes[newline..<min(newline + 1, bytes.count)])
             start = newline + 1
         }
-        return reachedBottom ? [] : continuations
+        return reachedBottom ? nil : continuations
     }
 
     /// Columns that fit `width` points of cells `cellWidth` wide, within 1...maxColumns.

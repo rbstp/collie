@@ -85,6 +85,8 @@ private func selection(_ a: TerminalCell, _ b: TerminalCell) -> TerminalSelectio
     let frame = try render(lines, wrapColumns: 10)
     #expect(frame.rows == Int(TerminalScreen.maxRows))
     #expect(frame.wrapContinuations.isEmpty)
+    #expect(frame.wrapsUnknown)
+    #expect(try !render("hello world again", wrapColumns: 6).wrapsUnknown)
 }
 
 @Test func wideCharactersAreCopiedOnce() throws {
