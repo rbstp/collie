@@ -258,7 +258,6 @@ private struct AgentTerminal: UIViewRepresentable {
         view.onDoubleTap = gestures.doubleTap == .none ? nil : { perform(gestures.doubleTap) }
         view.onTripleTap = gestures.tripleTap == .none ? nil : { perform(gestures.tripleTap) }
         view.onPinch = gestures.pinchResizesText ? { resized($0) } : nil
-        view.dismissesKeyboardOnScrollDown = gestures.scrollDownHidesKeyboard
         if gestures.swipeSwitchesAgents, let neighbor {
             let switchAgent = switchAgent
             let offset = { (swipe: TerminalSwipe) in swipe == .left ? 1 : -1 }

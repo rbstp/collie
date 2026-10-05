@@ -81,7 +81,6 @@ private struct GesturesView: View {
                 Picker("Triple-tap", selection: $gestures.tripleTap) {
                     ForEach(GestureAction.allCases, id: \.self) { Text($0.label) }
                 }
-                Toggle("Scrolling down hides the keyboard", isOn: $gestures.scrollDownHidesKeyboard)
                 Toggle("Pinch to resize text", isOn: $gestures.pinchResizesText)
                 Toggle("Swipe sideways to switch agents", isOn: $gestures.swipeSwitchesAgents)
             } footer: {

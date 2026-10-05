@@ -653,7 +653,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     let model = AgentModel(core: FakeCore(), route: route, prefsFile: file)
     #expect(
         model.gestures
-            == TerminalGestures(doubleTap: .paste, tripleTap: .none, scrollDownHidesKeyboard: true, pinchResizesText: true, swipeSwitchesAgents: true)
+            == TerminalGestures(doubleTap: .paste, tripleTap: .none, pinchResizesText: true, swipeSwitchesAgents: true)
     )
     #expect(model.fontSize == 11)
 

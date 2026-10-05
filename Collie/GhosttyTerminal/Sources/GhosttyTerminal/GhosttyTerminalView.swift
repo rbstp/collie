@@ -63,7 +63,6 @@ public final class GhosttyTerminalUIView: UIScrollView {
         didSet { gesturesChanged() }
     }
     public var canSwipe: ((TerminalSwipe) -> Bool)?
-    public var dismissesKeyboardOnScrollDown = false
 
     private let screen = TerminalScreen(background: GhosttyTerminalUIView.background, foreground: GhosttyTerminalUIView.foreground)
     private let canvas = TerminalCanvas()
@@ -307,10 +306,6 @@ public final class GhosttyTerminalUIView: UIScrollView {
         switch recognizer.state {
         case .began:
             hideCopy()
-            let moved = recognizer.translation(in: self)
-            if dismissesKeyboardOnScrollDown && selection == nil && moved.y > abs(moved.x) {
-                window?.endEditing(true)
-            }
         case .ended, .cancelled:
             if selection != nil && pressedWord == nil && draggedEdge == nil {
                 showCopy(at: recognizer.location(in: self))
