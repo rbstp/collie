@@ -7,6 +7,7 @@ struct DevicePrefs: Codable, Equatable {
     var gestures = TerminalGestures()
     var fontSize = 11.0
     var dictationLanguage = DictationLanguage.english
+    var agentsGrid = false
 
     static let file: URL? = try? StateDirectory.prepare().appending(path: "prefs.json")
 
@@ -30,6 +31,7 @@ extension DevicePrefs {
         gestures = (try? container.decodeIfPresent(TerminalGestures.self, forKey: .gestures)) ?? defaults.gestures
         fontSize = try container.decodeIfPresent(Double.self, forKey: .fontSize) ?? defaults.fontSize
         dictationLanguage = (try? container.decodeIfPresent(DictationLanguage.self, forKey: .dictationLanguage)) ?? defaults.dictationLanguage
+        agentsGrid = try container.decodeIfPresent(Bool.self, forKey: .agentsGrid) ?? defaults.agentsGrid
     }
 }
 

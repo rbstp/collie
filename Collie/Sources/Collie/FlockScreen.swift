@@ -11,60 +11,57 @@ struct FlockScreen: View {
     @State private var model = FlockModel()
     @State private var path: [AgentRoute] = []
     @State private var newTask = false
+    @State private var previews = PreviewModel()
+    @State private var grid = DevicePrefs.load(from: DevicePrefs.file).agentsGrid
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack(path: $path) {
-            List {
-                if let notice = model.closeNotice {
-                    Label(notice, systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                }
-                if model.entries.isEmpty {
-                    ContentUnavailableView(
-                        "No machines yet",
-                        systemImage: "desktopcomputer",
-                        description: Text("Pair a machine running collied from the Machines tab.")
+            Group {
+                if grid {
+                    AgentGrid(
+                        entries: model.entries, previews: previews, notice: model.closeNotice,
+                        approvalsCount: approvalsCount, showsLink: !tailnetStarting, follows: follows, menu: menu
                     )
-                }
-                ForEach(model.entries) { entry in
-                    Section {
-                        if let error = entry.error {
-                            Label(error, systemImage: "exclamationmark.triangle")
+                    .task(id: core != nil && scenePhase == .active) {
+                        guard let core, scenePhase == .active else { return }
+                        await previews.run(core: core)
+                    }
+                } else {
+                    List {
+                        if let notice = model.closeNotice {
+                            Label(notice, systemImage: "exclamationmark.triangle")
                                 .font(.footnote)
                                 .foregroundStyle(.orange)
                         }
-                        if entry.flock?.details != nil && entry.agents.isEmpty {
-                            Text("No agents running").foregroundStyle(.secondary)
+                        if model.entries.isEmpty {
+                            NoMachines()
                         }
-                        ForEach(entry.agents, id: \.terminalId) { agent in
-                            let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
-                            NavigationLink(value: route) {
-                                AgentRow(
-                                    agent: agent, workspace: entry.workspaceLabel(for: agent),
-                                    followed: follows?.isFollowing(route) == true
-                                )
-                            }
-                            .contextMenu {
-                                if let follows {
-                                    FollowMenuItem(follows: follows, route: route)
-                                    Divider()
+                        ForEach(model.entries) { entry in
+                            Section {
+                                if let error = entry.error {
+                                    Label(error, systemImage: "exclamationmark.triangle")
+                                        .font(.footnote)
+                                        .foregroundStyle(.orange)
                                 }
-                                Button("Close pane", systemImage: "xmark.square", role: .destructive) {
-                                    model.beginClose(.pane, route: route)
+                                if entry.flock?.details != nil && entry.agents.isEmpty {
+                                    Text("No agents running").foregroundStyle(.secondary)
                                 }
-                                Button("Close workspace", systemImage: "xmark.rectangle.portrait", role: .destructive) {
-                                    model.beginClose(.workspace(id: agent.workspaceId), route: route)
+                                ForEach(entry.agents, id: \.terminalId) { agent in
+                                    let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
+                                    NavigationLink(value: route) {
+                                        AgentRow(
+                                            agent: agent, workspace: entry.workspaceLabel(for: agent),
+                                            followed: follows?.isFollowing(route) == true
+                                        )
+                                    }
+                                    .contextMenu { menu(agent, route) }
                                 }
+                                .opacity(entry.linkDown ? 0.5 : 1)
+                            } header: {
+                                MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting)
                             }
                         }
-                        .opacity(entry.linkDown ? 0.5 : 1)
-                    } header: {
-                        MachineHeader(
-                            entry: entry,
-                            approvalsCount: approvals.map { $0.items.filter { $0.machine.id == entry.id }.count } ?? Int(entry.flock?.approvalsCount ?? 0),
-                            showsLink: !tailnetStarting
-                        )
                     }
                 }
             }
@@ -78,6 +75,11 @@ struct FlockScreen: View {
                             ProgressView().controlSize(.small)
                             Text("Connecting…").font(.headline)
                         }
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(grid ? "Show list" : "Show grid", systemImage: grid ? "list.bullet" : "rectangle.grid.2x2") {
+                        grid.toggle()
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -124,6 +126,12 @@ struct FlockScreen: View {
                     try? await Task.sleep(for: .seconds(3))
                 }
             }
+            .onChange(of: model.entries, initial: true) { _, entries in previews.update(entries) }
+            .onChange(of: grid) { _, grid in
+                var prefs = DevicePrefs.load(from: DevicePrefs.file)
+                prefs.agentsGrid = grid
+                prefs.save(to: DevicePrefs.file)
+            }
             .onChange(of: opening, initial: true) { _, route in
                 guard let route else { return }
                 path = [route]
@@ -132,9 +140,37 @@ struct FlockScreen: View {
         }
         .followNotice(follows)
     }
+
+    private func approvalsCount(_ entry: MachineFlockEntry) -> Int {
+        approvals.map { $0.items.filter { $0.machine.id == entry.id }.count } ?? Int(entry.flock?.approvalsCount ?? 0)
+    }
+
+    @ViewBuilder
+    private func menu(_ agent: AgentSummary, _ route: AgentRoute) -> some View {
+        if let follows {
+            FollowMenuItem(follows: follows, route: route)
+            Divider()
+        }
+        Button("Close pane", systemImage: "xmark.square", role: .destructive) {
+            model.beginClose(.pane, route: route)
+        }
+        Button("Close workspace", systemImage: "xmark.rectangle.portrait", role: .destructive) {
+            model.beginClose(.workspace(id: agent.workspaceId), route: route)
+        }
+    }
 }
 
-private struct MachineHeader: View {
+struct NoMachines: View {
+    var body: some View {
+        ContentUnavailableView(
+            "No machines yet",
+            systemImage: "desktopcomputer",
+            description: Text("Pair a machine running collied from the Machines tab.")
+        )
+    }
+}
+
+struct MachineHeader: View {
     let entry: MachineFlockEntry
     let approvalsCount: Int
     let showsLink: Bool
