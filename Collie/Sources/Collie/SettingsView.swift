@@ -84,7 +84,7 @@ private struct GesturesView: View {
                 Toggle("Scrolling down hides the keyboard", isOn: $gestures.scrollDownHidesKeyboard)
                 Toggle("Pinch to resize text", isOn: $gestures.pinchResizesText)
             } footer: {
-                Text("Paste only fills the prompt field; it never sends. Gestures are off while text is selected.")
+                Text("Paste only fills the prompt field; it never sends. iOS asks before each paste unless Paste from Other Apps is set to Allow in the Settings app under collie. Gestures are off while text is selected.")
             }
         }
         .navigationTitle("Gestures")

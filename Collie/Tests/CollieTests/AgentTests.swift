@@ -625,7 +625,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 
     try Data(#"{"wrapLines":false,"keepKeyboard":true}"#.utf8).write(to: file)
     let model = AgentModel(core: FakeCore(), route: route, prefsFile: file)
-    #expect(model.gestures == TerminalGestures(doubleTap: .paste, tripleTap: .escape, scrollDownHidesKeyboard: true, pinchResizesText: true))
+    #expect(model.gestures == TerminalGestures(doubleTap: .paste, tripleTap: .none, scrollDownHidesKeyboard: true, pinchResizesText: true))
     #expect(model.fontSize == 11)
 
     model.fontSize = 14
@@ -636,6 +636,11 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     #expect(reopened.fontSize == 14)
     #expect(reopened.gestures.doubleTap == .none)
     #expect(!reopened.wrapLines && reopened.keepsKeyboard)
+
+    prefs.gestures.tripleTap = .escape
+    prefs.save(to: file)
+    reopened.reloadGestures()
+    #expect(reopened.gestures.tripleTap == .escape)
 
     try Data(#"{"wrapLines":false,"gestures":{"doubleTap":"later"}}"#.utf8).write(to: file)
     #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false))

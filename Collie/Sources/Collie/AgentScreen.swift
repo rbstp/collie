@@ -102,13 +102,14 @@ struct AgentScreen: View {
             if closed { dismiss() }
         }
         .task { await model.run() }
+        .onAppear { model.reloadGestures() }
         .onDisappear { model.cancelUpload() }
     }
 
     private func perform(_ action: GestureAction) {
         switch action {
         case .none: break
-        case .paste: model.paste(UIPasteboard.general.string)
+        case .paste: if UIPasteboard.general.hasStrings { model.paste(UIPasteboard.general.string) }
         case .escape: model.tap(.esc)
         }
     }
@@ -219,12 +220,6 @@ private struct AgentTerminal: UIViewRepresentable {
 
     func makeUIView(context: Context) -> GhosttyTerminalUIView {
         let view = GhosttyTerminalUIView(fontSize: fontSize)
-        let perform = perform
-        let resized = resized
-        if gestures.doubleTap != .none { view.onDoubleTap = { [gestures] in perform(gestures.doubleTap) } }
-        if gestures.tripleTap != .none { view.onTripleTap = { [gestures] in perform(gestures.tripleTap) } }
-        if gestures.pinchResizesText { view.onPinch = { resized($0) } }
-        view.dismissesKeyboardOnScrollDown = gestures.scrollDownHidesKeyboard
         let control = UIRefreshControl()
         control.tintColor = .white
         let coordinator = context.coordinator
@@ -245,6 +240,11 @@ private struct AgentTerminal: UIViewRepresentable {
         context.coordinator.refresh = refresh
         view.wraps = wraps
         view.fontSize = fontSize
+        let (gestures, perform, resized) = (gestures, perform, resized)
+        view.onDoubleTap = gestures.doubleTap == .none ? nil : { perform(gestures.doubleTap) }
+        view.onTripleTap = gestures.tripleTap == .none ? nil : { perform(gestures.tripleTap) }
+        view.onPinch = gestures.pinchResizesText ? { resized($0) } : nil
+        view.dismissesKeyboardOnScrollDown = gestures.scrollDownHidesKeyboard
         if !ansi.isEmpty {
             view.show(ansiSnapshot: ansi)
         }

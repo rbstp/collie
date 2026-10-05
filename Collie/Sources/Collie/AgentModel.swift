@@ -51,9 +51,13 @@ final class AgentModel {
         }
     }
 
-    let gestures: TerminalGestures
+    private(set) var gestures: TerminalGestures
 
     var keepsKeyboard: Bool { DevicePrefs.load(from: prefsFile).keepKeyboard }
+
+    func reloadGestures() {
+        gestures = DevicePrefs.load(from: prefsFile).gestures
+    }
 
     // One chain per machine: a late unwatch from a popped screen must not land after
     // the next screen's watch on the same machine.

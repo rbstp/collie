@@ -47,14 +47,13 @@ public final class GhosttyTerminalUIView: UIScrollView {
         }
     }
 
-    /// Off while a selection is active, and while nil.
+    // Each gesture below is off while a selection is active, and while its callback is nil.
     public var onDoubleTap: (() -> Void)? {
         didSet { gesturesChanged() }
     }
     public var onTripleTap: (() -> Void)? {
         didSet { gesturesChanged() }
     }
-    /// Pinching sets `fontSize`, then reports it.
     public var onPinch: ((CGFloat) -> Void)? {
         didSet { gesturesChanged() }
     }
@@ -328,7 +327,22 @@ public final class GhosttyTerminalUIView: UIScrollView {
         case .changed:
             let size = TerminalFontSize.pinched(pinchStart, scale: recognizer.scale)
             guard size != fontSize else { return }
+            let point = recognizer.location(in: self)
+            let (old, offset) = (contentSize, contentOffset)
             fontSize = size
+            if old.width > 0 && old.height > 0 {
+                let inset = adjustedContentInset
+                contentOffset.x = TerminalFontSize.pinchedOffset(
+                    point.x, offset: offset.x, from: old.width, to: contentSize.width,
+                    viewport: bounds.width, leading: inset.left, trailing: inset.right
+                )
+                if !followsBottom {
+                    contentOffset.y = TerminalFontSize.pinchedOffset(
+                        point.y, offset: offset.y, from: old.height, to: contentSize.height,
+                        viewport: bounds.height, leading: inset.top, trailing: inset.bottom
+                    )
+                }
+            }
             onPinch?(size)
         default:
             isScrollEnabled = true

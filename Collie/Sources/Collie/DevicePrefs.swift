@@ -33,7 +33,7 @@ extension DevicePrefs {
 
 struct TerminalGestures: Codable, Equatable {
     var doubleTap = GestureAction.paste
-    var tripleTap = GestureAction.escape
+    var tripleTap = GestureAction.none
     var scrollDownHidesKeyboard = true
     var pinchResizesText = true
 }
