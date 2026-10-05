@@ -43,7 +43,7 @@ pub enum SessionError {
     #[error("this phone is not paired with this machine")]
     NotPaired,
     #[error(
-        "the machine does not accept this phone's key: run collied pair on it and scan its code again"
+        "the machine does not accept this phone's key: run collied peers revoke for this phone there, then pair again"
     )]
     KeyRefused,
 }

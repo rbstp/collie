@@ -18,7 +18,9 @@ enum Identity {
         return (key.publicKey.derRepresentation, Signer { try key.signature(for: $0).derRepresentation })
         #else
         guard SecureEnclave.isAvailable else { throw CocoaError(.featureUnsupported) }
-        let key = try stored().map { try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: $0) } ?? {
+        // A blob this enclave can no longer use is replaced: machines then refuse the new key
+        // until the phone is revoked there and paired again.
+        let key = try stored().flatMap { try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: $0) } ?? {
             var error: Unmanaged<CFError>?
             guard let access = SecAccessControlCreateWithFlags(
                 nil, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, .privateKeyUsage, &error)
@@ -44,6 +46,7 @@ enum Identity {
     }
 
     private static func store(_ data: Data) throws {
+        SecItemDelete(baseQuery() as CFDictionary)
         var item = baseQuery()
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         item[kSecValueData as String] = data

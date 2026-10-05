@@ -620,37 +620,13 @@ async fn connection(
             return;
         }
     };
-    let (decision, kill, registration, evicted) = {
-        // Lock order: peers, pairing, sessions. Holding all three makes the decision, the
-        // per-node cap and the registration atomic with respect to revoke and end_window.
+    let decision = {
         let store = lock(&state.peers);
-        let pairing = state.lock_pairing();
-        let mut sessions = state.lock_sessions();
-        let window = pairing.current(Instant::now());
-        let decision = gate::decide(&who.node, state.cfg.owner_user_id, &store, window);
-        // A phone that reconnects after iOS killed its sockets leaves dead sessions
-        // until SILENCE_LIMIT. Evicting the node's oldest session keeps one node from
-        // holding every slot without locking a reconnecting phone out.
-        let mut evicted = None;
-        if !matches!(decision, Decision::Reject(_)) {
-            let mine: Vec<u64> = sessions
-                .live
-                .iter()
-                .filter(|(_, l)| l.stable_id == who.node.stable_id)
-                .map(|(id, _)| *id)
-                .collect();
-            if mine.len() >= MAX_SESSIONS_PER_NODE
-                && let Some(oldest) = mine.iter().min()
-                && let Some(live) = sessions.live.get(oldest)
-            {
-                let _ = live.kill.send(true);
-                evicted = Some(*oldest);
-            }
-        }
-        if let Decision::Reject(reason) = decision {
-            drop(sessions);
-            drop(pairing);
-            drop(store);
+        let window = state.lock_pairing().current(Instant::now());
+        gate::decide(&who.node, state.cfg.owner_user_id, &store, window)
+    };
+    let (name, expect) = match &decision {
+        Decision::Reject(reason) => {
             state.audit_reject(addr, &who.node.stable_id, reason);
             // Nothing from the peer is read. The fixed 403 lets a revoked phone stop
             // retrying instead of treating the close as a transport error.
@@ -660,10 +636,58 @@ async fn connection(
             });
             return;
         }
-        let pairing_window = match decision {
-            Decision::PairingOnly { window } => Some(window),
-            _ => None,
-        };
+        Decision::Full { label, key } => (label.clone(), Some(key.clone())),
+        Decision::PairingOnly { .. } => (who.node.stable_id.clone(), None),
+    };
+    let accept = collie_tls::accept(stream, state.tls.clone(), expect);
+    let (stream, key) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, accept).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            state.audit_reject(addr, &name, &format!("tls handshake: {e}"));
+            return;
+        }
+        Err(_) => {
+            state.audit_reject(addr, &name, "tls handshake timed out");
+            return;
+        }
+    };
+    let pairing_window = match decision {
+        Decision::PairingOnly { window } => Some(window),
+        _ => None,
+    };
+    // Registered only once the TLS key is proven, so a node without the phone's key cannot
+    // evict the phone's sessions. Lock order: peers, pairing, sessions. Holding all three
+    // makes the decision, the per-node cap and the registration atomic with respect to
+    // revoke and end_window.
+    let (kill, registration, evicted) = {
+        let store = lock(&state.peers);
+        let pairing = state.lock_pairing();
+        let mut sessions = state.lock_sessions();
+        let window = pairing.current(Instant::now());
+        if gate::decide(&who.node, state.cfg.owner_user_id, &store, window) != decision {
+            drop(sessions);
+            drop(pairing);
+            drop(store);
+            state.audit_reject(addr, &name, "pairing or peers changed during the handshake");
+            return;
+        }
+        // A phone that reconnects after iOS killed its sockets leaves dead sessions
+        // until SILENCE_LIMIT. Evicting the node's oldest session keeps one node from
+        // holding every slot without locking a reconnecting phone out.
+        let mine: Vec<u64> = sessions
+            .live
+            .iter()
+            .filter(|(_, l)| l.stable_id == who.node.stable_id)
+            .map(|(id, _)| *id)
+            .collect();
+        let mut evicted = None;
+        if mine.len() >= MAX_SESSIONS_PER_NODE
+            && let Some(oldest) = mine.iter().min()
+            && let Some(live) = sessions.live.get(oldest)
+        {
+            let _ = live.kill.send(true);
+            evicted = Some(*oldest);
+        }
         let (tx, rx) = watch::channel(false);
         let id = sessions.next;
         sessions.next += 1;
@@ -675,10 +699,7 @@ async fn connection(
                 kill: tx,
             },
         );
-        drop(sessions);
-        drop(pairing);
         (
-            decision,
             rx,
             Registration {
                 state: state.clone(),
@@ -695,23 +716,6 @@ async fn connection(
             &format!("evicted session {old}: per-node limit"),
         );
     }
-    let (name, pairing_window, expect) = match decision {
-        Decision::Full { label, key } => (label, None, Some(key)),
-        Decision::PairingOnly { window } => (who.node.stable_id.clone(), Some(window), None),
-        Decision::Reject(_) => return,
-    };
-    let accept = collie_tls::accept(stream, state.tls.clone(), expect);
-    let (stream, key) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, accept).await {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            state.audit_reject(addr, &name, &format!("tls handshake: {e}"));
-            return;
-        }
-        Err(_) => {
-            state.audit_reject(addr, &name, "tls handshake timed out");
-            return;
-        }
-    };
     let handshake = tokio_tungstenite::accept_hdr_async_with_config(
         stream,
         check_upgrade,
