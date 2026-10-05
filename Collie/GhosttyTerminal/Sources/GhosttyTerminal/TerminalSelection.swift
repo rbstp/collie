@@ -1,3 +1,4 @@
+import Foundation
 import GhosttyVt
 
 struct TerminalCell: Comparable, Hashable, Sendable {
@@ -117,6 +118,39 @@ struct TerminalSelection: Equatable, Sendable {
         }
         text.trimTrailingSpaces()
         return text
+    }
+
+    /// The http or https link this selection touches, read whole across soft-wrapped rows.
+    func link(in frame: TerminalFrame) -> URL? {
+        guard start.row < frame.rows else { return nil }
+        var first = start.row
+        while frame.wrapContinuations.contains(first) { first -= 1 }
+        var last = min(end.row, frame.rows - 1)
+        while frame.wrapContinuations.contains(last + 1) { last += 1 }
+        let rows = Dictionary(grouping: frame.runs, by: \.row)
+        var text: [Unicode.Scalar] = []
+        var touched: Range<Int>?
+        for row in first...last {
+            if row > first && !frame.wrapContinuations.contains(row) { text.append("\n") }
+            func add(_ scalars: some Sequence<Unicode.Scalar>, columns: Range<Int>) {
+                let lower = text.count
+                text.append(contentsOf: scalars)
+                if text.count > lower && TerminalCell(row: row, column: columns.lowerBound) <= end
+                    && TerminalCell(row: row, column: columns.upperBound - 1) >= start
+                {
+                    touched = (touched?.lowerBound ?? lower)..<text.count
+                }
+            }
+            var next = 0
+            for run in (rows[row] ?? []).sorted(by: { $0.startColumn < $1.startColumn }) {
+                for cluster in Cluster.all(in: run) {
+                    if cluster.column > next { add(repeatElement(" ", count: cluster.column - next), columns: next..<cluster.column) }
+                    add(cluster.text.unicodeScalars, columns: cluster.column..<cluster.end)
+                    next = max(next, cluster.end)
+                }
+            }
+        }
+        return touched.flatMap { TerminalLink.url(in: text, touching: $0) }
     }
 }
 

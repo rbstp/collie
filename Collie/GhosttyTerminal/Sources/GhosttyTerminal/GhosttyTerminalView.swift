@@ -64,7 +64,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private let startHandle = SelectionHandle(edge: .start)
     private let endHandle = SelectionHandle(edge: .end)
     private let copyButton = UIButton(configuration: .filled())
-    /// Where the Copy button points, relative to the visible area so it stays put while the
+    private let openButton = UIButton(configuration: .filled())
+    private let menu = UIStackView()
+    /// Where the pop-up points, relative to the visible area so it stays put while the
     /// content decelerates.
     private var copyAnchor: CGPoint?
     private let press = UILongPressGestureRecognizer()
@@ -99,17 +101,23 @@ public final class GhosttyTerminalUIView: UIScrollView {
             handle.isHidden = true
             addSubview(handle)
         }
-        copyButton.configuration?.cornerStyle = .capsule
-        copyButton.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14)
-        copyButton.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
-            var attributes = $0
-            attributes.font = UIFont.preferredFont(forTextStyle: .subheadline)
-            return attributes
+        for button in [copyButton, openButton] {
+            button.configuration?.cornerStyle = .capsule
+            button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14)
+            button.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
+                var attributes = $0
+                attributes.font = UIFont.preferredFont(forTextStyle: .subheadline)
+                return attributes
+            }
+            menu.addArrangedSubview(button)
         }
         copyButton.accessibilityLabel = "Copy"
         copyButton.addAction(UIAction { [weak self] _ in self?.copySelection() }, for: .primaryActionTriggered)
-        copyButton.isHidden = true
-        addSubview(copyButton)
+        openButton.configuration?.title = "Open"
+        openButton.addAction(UIAction { [weak self] _ in self?.openLink() }, for: .primaryActionTriggered)
+        menu.spacing = 8
+        menu.isHidden = true
+        addSubview(menu)
     }
 
     required init?(coder: NSCoder) {
@@ -166,13 +174,13 @@ public final class GhosttyTerminalUIView: UIScrollView {
             canvas.frame = bounds
             canvas.setNeedsDisplay()
         }
-        if let copyAnchor, !copyButton.isHidden {
-            let size = copyButton.intrinsicContentSize
+        if let copyAnchor, !menu.isHidden {
+            let size = menu.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
             let visible = bounds.inset(by: safeAreaInsets).insetBy(dx: 8, dy: 8)
             let point = CGPoint(x: bounds.minX + copyAnchor.x, y: bounds.minY + copyAnchor.y)
             var y = point.y - 16 - size.height
             if y < visible.minY { y = point.y + 16 }
-            copyButton.frame = CGRect(
+            menu.frame = CGRect(
                 x: min(max(point.x - size.width / 2, visible.minX), visible.maxX - size.width),
                 y: min(max(y, visible.minY), visible.maxY - size.height),
                 width: size.width,
@@ -184,8 +192,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
     public override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
         if recognizer === panGestureRecognizer || recognizer === press || recognizer === tap {
             if draggedEdge != nil { return false }
-            if recognizer !== panGestureRecognizer && !copyButton.isHidden
-                && copyButton.frame.contains(recognizer.location(in: self))
+            if recognizer !== panGestureRecognizer && !menu.isHidden
+                && menu.frame.contains(recognizer.location(in: self))
             {
                 return false
             }
@@ -310,12 +318,13 @@ public final class GhosttyTerminalUIView: UIScrollView {
         copyAnchor = CGPoint(x: point.x - bounds.minX, y: point.y - bounds.minY)
         copyButton.configuration?.title = "Copy"
         copyButton.isUserInteractionEnabled = true
-        copyButton.isHidden = false
+        openButton.isHidden = frameData.flatMap { selection?.link(in: $0) } == nil
+        menu.isHidden = false
         setNeedsLayout()
     }
 
     private func hideCopy() {
-        copyButton.isHidden = true
+        menu.isHidden = true
         copyAnchor = nil
     }
 
@@ -328,14 +337,21 @@ public final class GhosttyTerminalUIView: UIScrollView {
         guard let selection, let frameData else { return }
         // Universal Clipboard stays on so a selection can be pasted on the Mac.
         UIPasteboard.general.string = selection.text(in: frameData)
-        UINotificationFeedbackGenerator(view: self).notificationOccurred(.success, at: copyButton.center)
+        UINotificationFeedbackGenerator(view: self).notificationOccurred(.success, at: menu.convert(copyButton.center, to: self))
         copyButton.configuration?.title = "Copied"
         copyButton.isUserInteractionEnabled = false
+        setNeedsLayout()
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(800))
             guard let self, self.selection == selection else { return }
             self.selection = nil
         }
+    }
+
+    private func openLink() {
+        guard let frameData, let url = selection?.link(in: frameData) else { return }
+        UIApplication.shared.open(url)
+        selection = nil
     }
 
     private func scrollToBottom() {
