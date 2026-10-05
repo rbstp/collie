@@ -47,6 +47,8 @@
 	<string>collie uses the camera to scan the pairing QR code shown by collied on your machine.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>collie uses Face ID to confirm approvals before sending them to your machine.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>collie uses the microphone to dictate prompts. Speech is transcribed on this iPhone and the audio never leaves it.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
