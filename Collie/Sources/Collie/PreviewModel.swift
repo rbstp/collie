@@ -3,8 +3,10 @@ import Foundation
 import Observation
 
 /// Screens for the Agents grid. Only while `run` runs (grid on screen, app active), each visible
-/// card of a connected machine gets one `agent.read` every `interval`, and one at once when its
-/// status changes. A watched agent's output already in the core is used instead of a read.
+/// card of a connected machine gets one `agent.read` when it first shows and at once when its
+/// status changes; only a working or unknown agent, or one whose last read failed, is read again
+/// every `interval`. collied audits every read, so a screen that cannot change is not re-read.
+/// A watched agent's output already in the core is used instead of a read.
 @MainActor
 @Observable
 final class PreviewModel {
@@ -17,16 +19,15 @@ final class PreviewModel {
     @ObservationIgnored private let now: () -> ContinuousClock.Instant
     @ObservationIgnored private var visible: Set<AgentRoute> = []
     @ObservationIgnored private var connected: Set<String> = []
-    @ObservationIgnored private var statuses: [AgentRoute: AgentState] = [:]
+    @ObservationIgnored private var statuses: [AgentRoute: (status: AgentState, since: UInt64)] = [:]
     @ObservationIgnored private var readAt: [AgentRoute: ContinuousClock.Instant] = [:]
+    @ObservationIgnored private var fresh: Set<AgentRoute> = []
     @ObservationIgnored private var reading: Set<AgentRoute> = []
     @ObservationIgnored private var runs = 0
 
     init(now: @escaping () -> ContinuousClock.Instant = { .now }) {
         self.now = now
     }
-
-    var running: Bool { core != nil }
 
     func run(core: any AgentCore) async {
         runs += 1
@@ -51,17 +52,20 @@ final class PreviewModel {
     @discardableResult
     func update(_ entries: [MachineFlockEntry]) -> Task<Void, Never>? {
         connected = Set(entries.filter { $0.flock?.link == .connected }.map(\.id))
-        var next: [AgentRoute: AgentState] = [:]
+        var next: [AgentRoute: (status: AgentState, since: UInt64)] = [:]
         for entry in entries {
             for agent in entry.flock?.agents ?? [] {
-                next[AgentRoute(machineId: entry.id, terminalId: agent.terminalId)] = agent.status
+                next[AgentRoute(machineId: entry.id, terminalId: agent.terminalId)] = (agent.status, agent.statusSinceMs)
             }
         }
-        for (route, status) in next where statuses[route].map({ $0 != status }) == true {
+        // `since` also moves on a change that came and went between two flock polls.
+        for (route, status) in next where statuses[route].map({ $0.status != status.status || $0.since != status.since }) == true {
             readAt[route] = nil
+            fresh.remove(route)
         }
         statuses = next
         readAt = readAt.filter { next[$0.key] != nil }
+        fresh = fresh.filter { next[$0] != nil }
         if screens.keys.contains(where: { next[$0] == nil }) {
             screens = screens.filter { next[$0.key] != nil }
         }
@@ -74,14 +78,16 @@ final class PreviewModel {
         guard let core else { return nil }
         let now = now()
         let due = visible.filter { route in
-            connected.contains(route.machineId) && statuses[route] != nil && !reading.contains(route)
-                && readAt[route].map { now - $0 >= Self.interval } ?? true
+            guard connected.contains(route.machineId), let status = statuses[route]?.status, !reading.contains(route) else { return false }
+            guard let at = readAt[route] else { return true }
+            return now - at >= Self.interval && ([.working, .unknown].contains(status) || !fresh.contains(route))
         }
         var reads: [AgentRoute] = []
         for route in due {
             readAt[route] = now
             if let output = core.agentView(machineId: route.machineId, terminalId: route.terminalId, afterRevision: 0)?.output {
                 show(output.ansi, for: route)
+                fresh.insert(route)
             } else {
                 reads.append(route)
             }
@@ -98,7 +104,10 @@ final class PreviewModel {
                 }
                 for await (route, ansi) in group {
                     reading.remove(route)
-                    if let ansi, statuses[route] != nil { show(ansi, for: route) }
+                    if let ansi, statuses[route] != nil {
+                        show(ansi, for: route)
+                        fresh.insert(route)
+                    }
                 }
             }
         }

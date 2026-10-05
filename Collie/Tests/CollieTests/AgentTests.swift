@@ -27,6 +27,7 @@ final class FakeCore: AgentCore {
         var endedActivities: [String] = []
         var watches: [String?] = []
         var reads: [String] = []
+        var readError: CoreError?
         var output: TerminalSnapshot?
     }
 
@@ -87,10 +88,11 @@ final class FakeCore: AgentCore {
         state.withLock { $0.watches.append(terminalId) }
     }
     func agentRead(machineId: String, terminalId: String, source: TerminalSource) async throws -> TerminalSnapshot {
-        let read = state.withLock { s in
+        let (read, error) = state.withLock { s in
             s.reads.append(terminalId)
-            return s.reads.count
+            return (s.reads.count, s.readError)
         }
+        if let error { throw error }
         return TerminalSnapshot(terminalId: terminalId, source: source, ansi: "read \(read)", truncated: false)
     }
     func agentDraft(machineId: String, terminalId: String) async throws -> String? {

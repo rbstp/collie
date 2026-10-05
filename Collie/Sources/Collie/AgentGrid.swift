@@ -2,7 +2,6 @@ import CollieCore
 import GhosttyTerminal
 import SwiftUI
 
-/// The Agents list as cards, each with the end of the agent's screen from `PreviewModel`.
 struct AgentGrid<Menu: View>: View {
     let entries: [MachineFlockEntry]
     let previews: PreviewModel
@@ -11,6 +10,7 @@ struct AgentGrid<Menu: View>: View {
     let showsLink: Bool
     let follows: FollowModel?
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         ScrollView {
@@ -19,11 +19,15 @@ struct AgentGrid<Menu: View>: View {
                     .font(.footnote)
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
             }
             if entries.isEmpty {
                 NoMachines()
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], alignment: .leading, spacing: 16) {
+            LazyVGrid(
+                columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
+                alignment: .leading, spacing: 16
+            ) {
                 ForEach(entries) { entry in
                     Section {
                         ForEach(entry.agents, id: \.terminalId) { agent in
@@ -70,6 +74,7 @@ private struct AgentCard: View {
     let workspace: String?
     let machine: String
     let followed: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -88,7 +93,7 @@ private struct AgentCard: View {
                                 .foregroundStyle(.tint)
                                 .accessibilityLabel("Followed")
                         }
-                        Text(agent.displayTitle).font(.subheadline).lineLimit(1)
+                        Text(agent.displayTitle).font(.subheadline).lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                     }
                     Text([workspace, machine].compactMap { $0 }.joined(separator: " · "))
                         .font(.caption)

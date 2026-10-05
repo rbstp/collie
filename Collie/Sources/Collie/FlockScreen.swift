@@ -23,8 +23,8 @@ struct FlockScreen: View {
                         entries: model.entries, previews: previews, notice: model.closeNotice,
                         approvalsCount: approvalsCount, showsLink: !tailnetStarting, follows: follows, menu: menu
                     )
-                    .task(id: core != nil && scenePhase == .active) {
-                        guard let core, scenePhase == .active else { return }
+                    .task(id: core != nil && scenePhase == .active && !newTask) {
+                        guard let core, scenePhase == .active, !newTask else { return }
                         await previews.run(core: core)
                     }
                 } else {
