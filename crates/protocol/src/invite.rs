@@ -1,4 +1,4 @@
-use crate::ids::{InvalidValue, PairingCode};
+use crate::ids::{InvalidValue, KeyPin, PairingCode};
 
 pub const DEFAULT_PORT: u16 = 8457;
 pub const WS_PATH: &str = "/collie/v1";
@@ -11,6 +11,7 @@ pub struct PairingInvite {
     pub host: String,
     pub port: u16,
     pub node_id: String,
+    pub key: KeyPin,
     pub code: PairingCode,
 }
 
@@ -20,6 +21,7 @@ impl std::fmt::Debug for PairingInvite {
             .field("host", &self.host)
             .field("port", &self.port)
             .field("node_id", &self.node_id)
+            .field("key", &self.key)
             .finish_non_exhaustive()
     }
 }
@@ -29,10 +31,11 @@ const SCHEME: &str = "collie://pair#";
 impl PairingInvite {
     pub fn to_uri(&self) -> String {
         format!(
-            "{SCHEME}v=1&h={}&p={}&n={}&c={}",
+            "{SCHEME}v=2&h={}&p={}&n={}&k={}&c={}",
             self.host,
             self.port,
             self.node_id,
+            self.key.as_str(),
             self.code.as_str()
         )
     }
@@ -40,7 +43,8 @@ impl PairingInvite {
     pub fn parse(uri: &str) -> Result<Self, InvalidValue> {
         let err = InvalidValue("PairingInvite");
         let rest = uri.trim().strip_prefix(SCHEME).ok_or(err)?;
-        let (mut v, mut host, mut port, mut node, mut code) = (None, None, None, None, None);
+        let (mut v, mut host, mut port, mut node, mut key, mut code) =
+            (None, None, None, None, None, None);
         for pair in rest.split('&') {
             let (k, val) = pair.split_once('=').ok_or(err)?;
             let slot = match k {
@@ -48,6 +52,7 @@ impl PairingInvite {
                 "h" => &mut host,
                 "p" => &mut port,
                 "n" => &mut node,
+                "k" => &mut key,
                 "c" => &mut code,
                 _ => return Err(err),
             };
@@ -55,7 +60,7 @@ impl PairingInvite {
                 return Err(err);
             }
         }
-        if v != Some("1") {
+        if v != Some("2") {
             return Err(err);
         }
         let host = host.filter(|h| is_hostname(h)).ok_or(err)?;
@@ -64,11 +69,13 @@ impl PairingInvite {
             .and_then(|p| p.parse::<u16>().ok())
             .filter(|p| *p != 0)
             .ok_or(err)?;
+        let key = KeyPin::new(key.ok_or(err)?)?;
         let code = PairingCode::new(code.ok_or(err)?)?;
         Ok(Self {
             host: host.to_owned(),
             port,
             node_id: node_id.to_owned(),
+            key,
             code,
         })
     }
@@ -101,6 +108,7 @@ mod tests {
             host: "collie-devolutions496.tail1234.ts.net".into(),
             port: DEFAULT_PORT,
             node_id: "nAbC123CNTRL".into(),
+            key: KeyPin::new("K".repeat(43)).unwrap(),
             code: PairingCode::new("Zm9vYmFyYmF6cXV4cXV1dQ").unwrap(),
         }
     }
@@ -108,7 +116,7 @@ mod tests {
     #[test]
     fn round_trip() {
         let uri = invite().to_uri();
-        assert!(uri.starts_with("collie://pair#v=1&"));
+        assert!(uri.starts_with("collie://pair#v=2&"));
         assert_eq!(PairingInvite::parse(&uri).unwrap(), invite());
     }
 
@@ -116,7 +124,9 @@ mod tests {
     fn rejects_tampering() {
         let uri = invite().to_uri();
         for bad in [
-            uri.replace("v=1", "v=2"),
+            uri.replace("v=2", "v=1"),
+            uri.replace(&format!("&k={}", "K".repeat(43)), ""),
+            uri.replace(&"K".repeat(43), &"K".repeat(42)),
             uri.replace("collie://pair#", "https://pair#"),
             uri.replace(".ts.net", ".ts.net/evil"),
             uri.replace("p=8457", "p=0"),

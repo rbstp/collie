@@ -35,7 +35,10 @@ final class AppModel {
 
     init() {
         do {
-            core = try CollieCore(stateDir: StateDirectory.prepare().path)
+            let core = try CollieCore(stateDir: StateDirectory.prepare().path)
+            let identity = try Identity.load()
+            try core.setIdentity(publicKey: identity.publicKey, signer: identity.signer)
+            self.core = core
         } catch {
             core = nil
             startupError = describe(error)

@@ -1,10 +1,11 @@
+use protocol::KeyPin;
 use tailnet::WhoIsNode;
 
 use crate::peers::Store;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    Full { label: String },
+    Full { label: String, key: KeyPin },
     PairingOnly { window: u64 },
     Reject(&'static str),
 }
@@ -29,13 +30,17 @@ pub fn decide(
     {
         return Decision::Reject("not the owner");
     }
+    // A phone paired before mutual TLS has no key to pin: it pairs again, through a window.
     if let Some(peer) = store.get(&node.stable_id) {
-        if peer.user_id == node.user {
+        if peer.user_id != node.user {
+            return Decision::Reject("paired node changed user");
+        }
+        if let Some(key) = &peer.tls_key {
             return Decision::Full {
                 label: peer.label.clone(),
+                key: key.clone(),
             };
         }
-        return Decision::Reject("paired node changed user");
     }
     match pairing_window {
         Some(window) => Decision::PairingOnly { window },
@@ -66,9 +71,23 @@ mod tests {
             login: "me@example.com".into(),
             label: "phone".into(),
             paired_at: 1,
+            tls_key: Some(key()),
+        })
+        .unwrap();
+        s.add(Peer {
+            stable_id: "nOLD".into(),
+            user_id: 7,
+            login: "me@example.com".into(),
+            label: "old phone".into(),
+            paired_at: 1,
+            tls_key: None,
         })
         .unwrap();
         s
+    }
+
+    fn key() -> KeyPin {
+        KeyPin::new("K".repeat(43)).unwrap()
     }
 
     #[test]
@@ -77,7 +96,8 @@ mod tests {
         assert_eq!(
             d,
             Decision::Full {
-                label: "phone".into()
+                label: "phone".into(),
+                key: key(),
             }
         );
         let d = decide(
@@ -121,6 +141,19 @@ mod tests {
         assert_eq!(
             decide(&node("nPHONE", 8, 0, None), Some(8), &store(), Some(1)),
             Decision::Reject("paired node changed user")
+        );
+    }
+
+    #[test]
+    fn a_phone_paired_before_mutual_tls_pairs_again() {
+        let old = node("nOLD", 7, 0, None);
+        assert_eq!(
+            decide(&old, None, &store(), None),
+            Decision::Reject("not paired")
+        );
+        assert_eq!(
+            decide(&old, None, &store(), Some(2)),
+            Decision::PairingOnly { window: 2 }
         );
     }
 

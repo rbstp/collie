@@ -123,7 +123,7 @@ final class FakeCore: AgentCore {
     func cancelUploads(machineId: String) { state.withLock { $0.cancelledUploads.append(machineId) } }
     func flock(machineId: String) async throws -> MachineFlock {
         guard let started = state.withLock({ $0.started }) else { throw CoreError.MachineNotFound }
-        let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac)
+        let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
         let agent = AgentSummary(
             terminalId: started.terminalId, workspaceId: started.workspaceId, kind: "claude", name: nil, title: nil,
             status: .working, statusSinceMs: 0, cwd: nil, lastLine: nil
@@ -512,7 +512,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 @MainActor
 @Test func newTaskUsesTheDefaultAgentAndNeedsAnAbsoluteFolder() async {
     let core = FakeCore()
-    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac)
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
     let model = NewTaskModel(core: core, machines: [machine])
     await model.loadOptions()
     #expect(model.agent == "codex")
@@ -529,8 +529,8 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 @MainActor
 @Test func newTaskPrefersAConnectedMachineAndIgnoresALateErrorFromTheLastOne() async {
     let core = FakeCore()
-    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac)
-    let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "n2", kind: .linux)
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "n2", kind: .linux, key: "")
     #expect(NewTaskModel(core: core, machines: [mac, linux], preferredMachineId: "m2").machineId == "m2")
     #expect(NewTaskModel(core: core, machines: [mac, linux], preferredMachineId: "gone").machineId == "m1")
     #expect(NewTaskModel(core: core, machines: [mac, linux]).machineId == "m1")
@@ -555,7 +555,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 @Test func cancelledNewTaskNeverNavigates() async {
     let core = FakeCore()
     core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
-    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac)
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
 
     let model = NewTaskModel(core: core, machines: [machine])
     await model.loadOptions()

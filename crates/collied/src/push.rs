@@ -1546,6 +1546,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
                 login: "me@example.com".into(),
                 label: "phone".into(),
                 paired_at: 0,
+                tls_key: None,
             })
             .unwrap();
         push.retain_paired(&store).unwrap();

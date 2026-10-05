@@ -37,6 +37,7 @@ Security is the first requirement. The short version:
 
 - **Tailnet only**: collied accepts connections only through its embedded Tailscale node, on one port. A test asserts it opens no kernel TCP listener.
 - **Whois gate**: every connection is checked with Tailscale whois before the WebSocket upgrade. The peer must be untagged, not shared in from another tailnet, owned by the collie owner (`owner_user_id` in `collied.toml`, or else the user of the first phone you confirm at pairing), and a paired phone: its node `StableID` must be paired and still belong to the user it was paired with. Authorization is re-checked before every frame, and revoking a phone cuts its live sessions.
+- **Mutual TLS**: inside the tunnel, the phone pins the machine's TLS key from the pairing QR, and collied pins the phone's key, which lives in the iPhone's Secure Enclave and never leaves it. A Tailscale node key copied off the phone, or a node injected by a compromised control plane, gets no session.
 - **Pairing**: a QR code shown by `collied pair`, plus a local y/N confirmation on the computer running collied.
 - **Approvals**: a nonce plus a fingerprint of the prompt on screen. collied moves the cursor, re-reads the screen, and presses Enter only if the fingerprint still matches; a prompt that changed is answered `superseded`. A small gap between that last re-read and Enter remains until herdr supports conditional input.
 - **Push notifications**: the cleartext part of the push only says which agent is blocked and where. The command itself is end-to-end encrypted (ChaCha20-Poly1305, under a per-machine key generated on the phone, kept in its Keychain and handed to collied over the tailnet). The phone's notification extension decrypts it, so Apple sees the command only as ciphertext. Apple still sees agent and workspace names, ids and timing.
@@ -55,7 +56,7 @@ Details, including what is not covered: [docs/threat-model.md](docs/threat-model
 | 3 | Lock-screen approvals with encrypted context, attachments | done |
 | 4 | Live Activities and Dynamic Island for agents you follow, approvals on the activity, question menus | done |
 | 5 | Multiple computers (macOS and Linux), Claude Code hooks enrichment | done |
-| 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | planned |
+| 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | done |
 | 7 | Improvements: compact status icons (done); a Mac menu bar icon, Codex and Copilot CLI agents, dictation, live terminal previews, gestures, opening links, remaining context and a sessions inbox, an Apple Watch app | planned |
 
 Outside the phases: an audit log viewer, and smaller fixes tracked as [issues](https://github.com/rbstp/collie/issues).
@@ -102,7 +103,7 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
    On Linux, collied's data directory is `$XDG_DATA_HOME/collie`, else `~/.local/share/collie`. It holds `collied.toml`, the node state, paired phones and the audit log. Logs go to the user journal: `journalctl --user -u collied`. A user unit runs while you have a session. `loginctl enable-linger` (optional) keeps it running without a login.
 
 3. **Install the app** on a connected iPhone with Developer Mode on (`just ios-run-device`). Sign in to Tailscale inside the app with your own account.
-4. **Pair**: run `collied pair` on the computer, scan the QR code with the app, and confirm with `y` on the computer.
+4. **Pair**: run `collied pair` on the computer, scan the QR code with the app, and confirm with `y` on the computer. A phone paired before mutual TLS (Phase 6) pairs again the same way once both sides are updated.
 5. **Push notifications** (optional): add an `[apns]` section to `collied.toml` (`~/Library/Application Support/collie/collied.toml` on macOS, in the data directory on Linux), import the key with `collied apns import AuthKey_<KEY_ID>.p8`, then check with `collied apns test`. Each machine uses its own APNs key (its own key ID, revoked on its own) and sends its own pushes. On Linux, `collied apns import` encrypts the key into a systemd user credential (also sealed to the TPM2 when one is usable), with a 0600 file as the fallback where `systemd-creds` cannot encrypt. `collied doctor` reports which one is in use and, for a credential, its seal. The full steps are in [docs/release.md](docs/release.md).
 
 6. **Claude Code hook** (optional): add `collied hook` as a `PermissionRequest` hook in `~/.claude/settings.json`, so approvals name the exact tool call. It only reports the call to collied; Claude Code's dialog is unchanged. `collied doctor` checks it.

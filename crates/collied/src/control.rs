@@ -83,6 +83,7 @@ pub struct Candidate {
     pub stable_id: String,
     pub login: String,
     pub user_id: i64,
+    pub tls_key: protocol::KeyPin,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -368,6 +369,7 @@ async fn pair(state: &State, r: &mut BufReader<OwnedReadHalf>, w: &mut OwnedWrit
             login: c.login.clone(),
             label: c.device_label.clone(),
             paired_at: crate::now_ms(),
+            tls_key: Some(c.tls_key.clone()),
         })
     } else {
         Err(anyhow::anyhow!("not confirmed on the machine"))

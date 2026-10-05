@@ -1,0 +1,23 @@
+[package]
+name = "collie-tls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+base64 = "0.23.1"
+protocol = { path = "../protocol" }
+ring = "0.17.14"
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
+sha2 = "0.11.0"
+tokio.workspace = true
+tokio-rustls = { version = "0.26.6", default-features = false }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "rt"] }

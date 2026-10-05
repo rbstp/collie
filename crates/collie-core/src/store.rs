@@ -16,6 +16,9 @@ pub struct Machine {
     /// before Linux support are Macs: the pin accepted only tag:collie-mac then.
     #[serde(default)]
     pub kind: MachineKind,
+    /// Empty for a pairing made before mutual TLS, which must pair again.
+    #[serde(default)]
+    pub key: String,
 }
 
 #[derive(
@@ -116,6 +119,7 @@ mod tests {
             port: 8457,
             node_id: "nMAC".into(),
             kind: MachineKind::Mac,
+            key: String::new(),
         }
     }
 

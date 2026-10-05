@@ -6,7 +6,6 @@ use protocol::{
     Nonce, PromptText, Request, Response,
 };
 use tailnet::{BackendState, Node};
-use tokio::net::UnixStream;
 
 use crate::conn::{self, LinkPhase, blocking};
 use crate::pin;
@@ -386,6 +385,7 @@ async fn attempt(
     report.node_up_ms = Some(ms(step.elapsed()));
 
     let step = Instant::now();
+    let identity = lock(&inner.identity).clone();
     let opened = within(
         deadline,
         DecideStage::Connect,
@@ -395,6 +395,8 @@ async fn attempt(
             machine.port,
             &machine.node_id,
             Some(machine.kind),
+            &machine.key,
+            identity,
             true,
         ),
     )
@@ -529,7 +531,7 @@ async fn node_up(
 }
 
 async fn call(
-    session: &mut Session<UnixStream>,
+    session: &mut Session<conn::Stream>,
     request: Request,
     deadline: Instant,
     stage: DecideStage,

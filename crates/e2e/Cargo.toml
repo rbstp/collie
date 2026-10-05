@@ -11,6 +11,7 @@ publish = false
 base64 = "0.23.1"
 chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc"] }
 collie-core = { path = "../collie-core" }
+collie-tls = { path = "../tls" }
 collied = { path = "../collied" }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 protocol = { path = "../protocol" }

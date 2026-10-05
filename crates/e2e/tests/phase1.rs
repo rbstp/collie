@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod common;
 
 use std::collections::BTreeMap;
@@ -236,7 +237,7 @@ async fn scenario(
     println!("  rejected in {:?}", t.elapsed());
 
     println!("phone refuses a Mac whose StableID differs from the invite, or without a collie tag");
-    let code = PairingInvite::parse(&uri).unwrap().code;
+    let PairingInvite { code, key, .. } = PairingInvite::parse(&uri).unwrap();
     let tagged_host = tagged_self.dns_name.trim_end_matches('.').to_owned();
     let before = audit_lines(&audit).len();
     for (host, node_id) in [
@@ -248,6 +249,7 @@ async fn scenario(
             host,
             port: PORT,
             node_id,
+            key: key.clone(),
             code: code.clone(),
         }
         .to_uri();

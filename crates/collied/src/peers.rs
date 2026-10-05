@@ -43,6 +43,9 @@ pub struct Peer {
     pub login: String,
     pub label: String,
     pub paired_at: u64,
+    /// None for a phone paired before mutual TLS, which pairs again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_key: Option<protocol::KeyPin>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -221,6 +224,7 @@ mod tests {
             login: "me@example.com".into(),
             label: label.into(),
             paired_at: 1,
+            tls_key: None,
         }
     }
 
