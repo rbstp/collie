@@ -175,6 +175,36 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     assert_eq!(view.output_revision, revision);
     println!("  watched in {:?}", t.elapsed());
 
+    println!("suspend drops the session and its watch at once, resume brings both back");
+    core.watch_agent(m.clone(), Some(CLAUDE.into()))
+        .await
+        .unwrap();
+    wait_output(core, &m, CLAUDE, "step 9").await;
+    let t = Instant::now();
+    core.suspend().await;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while sessions(&control).await > 0 {
+        assert!(
+            Instant::now() < deadline,
+            "collied kept the suspended phone's session"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    println!("  session gone {:?} after suspend", t.elapsed());
+    let polls = herdr.params("agent.read").len();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        herdr.params("agent.read").len(),
+        polls,
+        "collied kept watching for a suspended phone"
+    );
+    assert_eq!(sessions(&control).await, 0, "a suspended phone dialed");
+    core.resume(1);
+    herdr.with(|h| h.recent = recent(10));
+    wait_output(core, &m, CLAUDE, "step 10").await;
+    assert_eq!(sessions(&control).await, 1);
+    core.watch_agent(m.clone(), None).await.unwrap();
+
     println!("agent.prompt reaches herdr with the exact text");
     let text = "Fix the flaky test\nthen run `cargo test` \"quoted\"\tand say ✓ é";
     core.prompt(m.clone(), CLAUDE.into(), text.into(), None)

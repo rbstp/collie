@@ -172,6 +172,13 @@ final class AppModel {
         switch phase {
         case .background:
             backgroundedAt = .now
+            if let core {
+                let assertion = BackgroundAssertion(name: "core.suspend")
+                Task {
+                    await core.suspend()
+                    assertion.end()
+                }
+            }
         case .active:
             if let since = backgroundedAt {
                 core?.resume(backgroundSecs: UInt64(max(0, Date.now.timeIntervalSince(since))))

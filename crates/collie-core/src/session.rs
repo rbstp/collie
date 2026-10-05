@@ -5,8 +5,8 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
     AgentWatchParams, ClientFrame, Empty, ErrorBody, ErrorCode, Event, Flock, HelloParams,
-    HelloResult, Label, PROTOCOL_VERSION, ReadParams, ReadSource, Request, RequestId, Response,
-    ServerFrame, TerminalId, TerminalRead, WS_PATH, WS_SUBPROTOCOL, limits,
+    HelloResult, Label, PROTOCOL_VERSION, ReadSource, Request, RequestId, Response, ServerFrame,
+    TerminalId, TerminalRead, WS_PATH, WS_SUBPROTOCOL, limits,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
@@ -217,24 +217,21 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
     }
 
     /// `push` is re-registered on every session so collied always has the current tokens.
+    /// The watch's first `agent.output` is the full screen, so no read follows it. When
+    /// `stop` yields true the session sends a WebSocket close before dropping the socket.
     pub async fn run(
         mut self,
         requests: &mut tokio::sync::mpsc::Receiver<(Request, Reply)>,
         state: &Mutex<FlockState>,
         push: Vec<Request>,
-        stop: impl Future<Output = ()>,
+        stop: impl Future<Output = bool>,
     ) -> SessionError {
         let mut pending: HashMap<RequestId, Pending> = HashMap::new();
         let mut seed = vec![Request::FlockSnapshot(Empty {})];
         seed.extend(push);
         if let Some(terminal_id) = lock(state).watched.clone() {
             seed.push(Request::AgentWatch(AgentWatchParams {
-                terminal_id: Some(terminal_id.clone()),
-            }));
-            seed.push(Request::AgentRead(ReadParams {
-                terminal_id,
-                source: ReadSource::Recent,
-                lines: Some(limits::MAX_READ_LINES),
+                terminal_id: Some(terminal_id),
             }));
         }
         for request in seed {
@@ -246,9 +243,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         }
         let silence = tokio::time::sleep_until(self.last_frame + SILENCE_LIMIT);
         tokio::pin!(stop, silence);
+        let mut close = false;
         let end = loop {
             tokio::select! {
-                () = &mut stop => break SessionError::Closed,
+                c = &mut stop => {
+                    close = c;
+                    break SessionError::Closed;
+                }
                 () = &mut silence => {
                     let deadline = self.last_frame + SILENCE_LIMIT;
                     if Instant::now() >= deadline {
@@ -317,6 +318,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         };
         for reply in pending.into_values().filter_map(|(reply, _)| reply) {
             let _ = reply.send(Err(end.clone()));
+        }
+        if close {
+            self.close().await;
         }
         end
     }
@@ -1150,14 +1154,6 @@ mod tests {
                 panic!("{watch:?}")
             };
             assert_eq!(p.terminal_id.unwrap().as_str(), "t1");
-            let initial = read(&mut ws).await;
-            let Request::AgentRead(p) = initial.request else {
-                panic!("{initial:?}")
-            };
-            assert_eq!(
-                (p.terminal_id.as_str(), p.source, p.lines),
-                ("t1", ReadSource::Recent, Some(limits::MAX_READ_LINES))
-            );
             write(
                 &mut ws,
                 ServerFrame::Error {
@@ -1167,14 +1163,6 @@ mod tests {
                         message: "not implemented".into(),
                         draft: None,
                     },
-                },
-            )
-            .await;
-            write(
-                &mut ws,
-                ServerFrame::Result {
-                    id: initial.id,
-                    result: Response::Terminal(output("t1", "hello", ReadSource::Recent)),
                 },
             )
             .await;
@@ -1205,7 +1193,7 @@ mod tests {
             .await;
             let rewatch = read(&mut ws).await;
             let Request::AgentWatch(p) = rewatch.request else {
-                panic!("{rewatch:?}")
+                panic!("no agent.read after the watch: {rewatch:?}")
             };
             assert_eq!(p.terminal_id.unwrap().as_str(), "t1");
         });
@@ -1218,7 +1206,39 @@ mod tests {
         );
         server.await.unwrap();
         let s = lock(&state);
-        assert_eq!((shown(&s), s.output_revision), (Some("hello world"), 2));
+        assert_eq!((shown(&s), s.output_revision), (Some("hello world"), 1));
+    }
+
+    #[tokio::test]
+    async fn a_stop_that_yields_true_closes_the_websocket() {
+        for close in [true, false] {
+            let (session, server) = pair_of(Some(WS_SUBPROTOCOL)).await;
+            let (session, mut ws) = (session.unwrap(), server.unwrap());
+            let state = Mutex::new(FlockState::default());
+            let (_tx, mut rx) = mpsc::channel(8);
+            let (stop_tx, stop_rx) = oneshot::channel();
+            let server = tokio::spawn(async move {
+                assert!(matches!(
+                    read(&mut ws).await.request,
+                    Request::FlockSnapshot(_)
+                ));
+                stop_tx.send(close).unwrap();
+                loop {
+                    match ws.next().await {
+                        Some(Ok(Message::Close(_))) => return true,
+                        Some(Ok(_)) => {}
+                        _ => return false,
+                    }
+                }
+            });
+            let end = session
+                .run(&mut rx, &state, Vec::new(), async {
+                    stop_rx.await.unwrap()
+                })
+                .await;
+            assert!(matches!(end, SessionError::Closed), "{end:?}");
+            assert_eq!(server.await.unwrap(), close);
+        }
     }
 
     #[tokio::test]
