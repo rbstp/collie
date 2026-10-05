@@ -130,6 +130,7 @@ fn phase3_end_to_end() {
         probe: Probe {
             node: probe,
             target: format!("{mac_ip}:{PORT}"),
+            data_dir: root.0.join("collied"),
         },
     };
     let (machine, phone_id, nonces) = rt.block_on(in_app(&rig, &core));
@@ -1019,11 +1020,12 @@ fn files_containing(dir: &Path, needle: &str) -> Vec<PathBuf> {
     hits
 }
 
-type Ws = WebSocketStream<UnixStream>;
+type Ws = WebSocketStream<ProbeStream>;
 
 struct Probe {
     node: Node,
     target: String,
+    data_dir: PathBuf,
 }
 
 impl Probe {
@@ -1050,10 +1052,8 @@ impl Probe {
             header::SEC_WEBSOCKET_PROTOCOL,
             HeaderValue::from_static(protocol::WS_SUBPROTOCOL),
         );
-        let (mut ws, _) =
-            tokio_tungstenite::client_async(req, UnixStream::from_std(stream).unwrap())
-                .await
-                .unwrap();
+        let stream = probe_tls(UnixStream::from_std(stream).unwrap(), &self.data_dir).await;
+        let (mut ws, _) = tokio_tungstenite::client_async(req, stream).await.unwrap();
         let hello = json!({"protocol_version": protocol::PROTOCOL_VERSION, "app_version": "e2e"});
         call(&mut ws, "hello", hello).await.unwrap();
         ws

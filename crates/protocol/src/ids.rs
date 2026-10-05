@@ -229,6 +229,15 @@ validated_string!(
 );
 
 validated_string!(
+    /// SHA-256 of a TLS raw public key (its SubjectPublicKeyInfo DER), base64url without
+    /// padding.
+    KeyPin,
+    debug = plain,
+    check = |s| base64url_len(s, 43),
+    schema = { "pattern": "^[A-Za-z0-9_-]{43}$" }
+);
+
+validated_string!(
     PushToken,
     debug = redacted,
     check = |s| (64..=256).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit()),

@@ -2,13 +2,16 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use base64::Engine;
+use collie_tls::rustls::sign::CertifiedKey;
+use collie_tls::{Sniff, client::TlsStream};
 use collied::control::{Client, Reply, Request};
 use collied::server::{self, ServerConfig};
 use futures_util::{SinkExt, StreamExt};
-use protocol::{AgentStatus, ErrorCode, Event, PairingInvite, Response, ServerFrame};
+use protocol::{AgentStatus, ErrorCode, Event, KeyPin, PairingInvite, Response, ServerFrame};
 use serde_json::{Value, json};
 use tailnet::{BackendState, Config, Node, Status};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -38,7 +41,23 @@ const HERDR_CALLED: [&str; 9] = [
     "pane.read",
 ];
 
-type Ws = WebSocketStream<UnixStream>;
+type Ws = WebSocketStream<TlsStream<Sniff<UnixStream>>>;
+
+static TLS: OnceLock<(KeyPin, Arc<CertifiedKey>)> = OnceLock::new();
+
+fn tls_key() -> Arc<CertifiedKey> {
+    collie_tls::certified(collie_tls::load(&collie_tls::generate().unwrap()).unwrap()).unwrap()
+}
+
+fn machine_pin(data_dir: &Path) -> KeyPin {
+    let file: Value =
+        serde_json::from_slice(&std::fs::read(data_dir.join("tls-key.json")).unwrap()).unwrap();
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(file["pkcs8"].as_str().unwrap())
+        .unwrap();
+    let key = collie_tls::certified(collie_tls::load(&der).unwrap()).unwrap();
+    collie_tls::pin(key.cert[0].as_ref())
+}
 
 #[test]
 fn server_end_to_end() {
@@ -138,6 +157,10 @@ async fn scenario(
     .await
     .unwrap();
     let control = handle.control_path();
+    assert_eq!(mode(&data_dir.join("tls-key.json")), 0o600);
+    let phone_key = tls_key();
+    TLS.set((machine_pin(&data_dir), phone_key.clone()))
+        .unwrap();
     assert_eq!(mode(&control), 0o600);
     assert_eq!(mode(&data_dir), 0o700);
     let offline = collied::control::revoke_offline(&data_dir, "nobody").unwrap_err();
@@ -167,6 +190,7 @@ async fn scenario(
         panic!("no invite");
     };
     let invite = PairingInvite::parse(&uri).unwrap();
+    assert_eq!(invite.key, machine_pin(&data_dir));
     assert_eq!(invite.node_id, mac_self.stable_id);
     assert_eq!(invite.host, mac_self.dns_name.trim_end_matches('.'));
     assert_eq!(invite.port, PORT);
@@ -272,6 +296,15 @@ async fn scenario(
     };
     assert_eq!(owner_user_id, Some(phone_self.user_id));
     assert_eq!(peers.len(), 1);
+    assert_eq!(
+        peers[0].tls_key,
+        Some(collie_tls::pin(phone_key.cert[0].as_ref()))
+    );
+
+    println!("the paired phone must present the key it paired with");
+    let other = (TLS.get().unwrap().0.clone(), tls_key());
+    let refused = connect_as(&phone, &target, &other).await;
+    assert!(refused.is_err(), "an unpinned phone key gets no session");
     let Some(Reply::Status(status)) = collied::control::request(&control, &Request::Status)
         .await
         .unwrap()
@@ -637,7 +670,32 @@ async fn open(node: &Node, target: &str) -> Ws {
     .unwrap()
 }
 
+async fn connect_as(
+    node: &Node,
+    target: &str,
+    tls: &(KeyPin, Arc<CertifiedKey>),
+) -> Result<Ws, String> {
+    connect_with(
+        node,
+        target,
+        protocol::WS_PATH,
+        Some(protocol::WS_SUBPROTOCOL),
+        tls,
+    )
+    .await
+}
+
 async fn connect(node: &Node, target: &str, path: &str, proto: Option<&str>) -> Result<Ws, String> {
+    connect_with(node, target, path, proto, TLS.get().unwrap()).await
+}
+
+async fn connect_with(
+    node: &Node,
+    target: &str,
+    path: &str,
+    proto: Option<&str>,
+    (pin, key): &(KeyPin, Arc<CertifiedKey>),
+) -> Result<Ws, String> {
     let stream = {
         let node = node.clone();
         let target = target.to_owned();
@@ -647,6 +705,11 @@ async fn connect(node: &Node, target: &str, path: &str, proto: Option<&str>) -> 
     };
     stream.set_nonblocking(true).unwrap();
     let stream = UnixStream::from_std(stream).unwrap();
+    let stream = match collie_tls::connect(stream, "collie", pin.clone(), key.clone()).await {
+        Ok(s) => s,
+        Err(collie_tls::ConnectError::Forbidden) => return Err("HTTP 403".into()),
+        Err(collie_tls::ConnectError::Tls(e)) => return Err(format!("tls: {e}")),
+    };
     let mut req = format!("ws://{target}{path}")
         .into_client_request()
         .unwrap();

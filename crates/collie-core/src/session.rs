@@ -42,13 +42,17 @@ pub enum SessionError {
     Protocol(String),
     #[error("this phone is not paired with this machine")]
     NotPaired,
+    #[error(
+        "the machine does not accept this phone's key: run collied peers revoke for this phone there, then pair again"
+    )]
+    KeyRefused,
 }
 
 impl SessionError {
     /// Errors that a reconnect cannot fix: the supervisor stops instead of retrying.
     pub fn is_auth(&self) -> bool {
         match self {
-            Self::NotPaired => true,
+            Self::NotPaired | Self::KeyRefused => true,
             Self::Refused(code) => matches!(code, 401 | 403),
             Self::Server { code, .. } => {
                 matches!(code, ErrorCode::NotPaired | ErrorCode::UnsupportedProtocol)
@@ -67,12 +71,25 @@ impl From<tungstenite::Error> for SessionError {
     fn from(e: tungstenite::Error) -> Self {
         match e {
             tungstenite::Error::Http(resp) => Self::Refused(resp.status().as_u16()),
+            // TLS 1.3: collied checks the phone's key after the phone's side of the
+            // handshake is done, so its refusal arrives on the first read.
+            tungstenite::Error::Io(e) if key_refused(&e) => Self::KeyRefused,
             tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => {
                 Self::Closed
             }
             other => Self::WebSocket(other.to_string()),
         }
     }
+}
+
+fn key_refused(e: &std::io::Error) -> bool {
+    use collie_tls::rustls::{AlertDescription, Error};
+    matches!(
+        e.get_ref().and_then(|e| e.downcast_ref::<Error>()),
+        Some(Error::AlertReceived(
+            AlertDescription::AccessDenied | AlertDescription::BadCertificate
+        ))
+    )
 }
 
 impl From<ErrorBody> for SessionError {

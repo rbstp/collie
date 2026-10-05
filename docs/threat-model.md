@@ -49,7 +49,7 @@ Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the t
 
 | | |
 |---|---|
-| Assets | Pairing code, Mac tailnet node name, Mac `StableID` |
+| Assets | Pairing code, Mac tailnet node name, Mac `StableID`, the pin of its TLS key (public) |
 | Attack | Someone photographs the QR, or copies the invite URI that `collied pair` prints next to it: from terminal scrollback, a screen share or recording, or a herdr pane that other same-UID code can read. They then pair their own device. |
 | Mitigations | The code alone grants nothing: the pairing session is only offered to an untagged, not-shared-in node (owned by the owner, once one is known) and only while a locally opened window is active (P1). One window at a time, 120 s; the first `pair.complete` from any connection burns it, right or wrong code (P1). With the right code, collied shows the candidate's device label, node name, `StableID`, login name and user ID and asks y/N on the Mac, 60 s timeout (P1). Code compared in constant time (P1); carried in the URI fragment and redacted in `Debug` (built). The policy grants port 8457 to the owner's devices only. |
 | Residual | When `owner_user_id` is not configured and nothing is paired yet, the owner is set by the first confirmed pairing (trust on first use), so any tailnet member the policy lets reach the port can race the window with a leaked code; the y/N prompt, which shows the login name, is then the only check. An attacker controlling a node logged in as the owner (account compromise) can race the window at any time. Any node admitted to a pairing-only session can burn an open window (denial of pairing only). The printed URI stays in scrollback and screen recordings after the window closes; it is useless once burned or expired, but a capture read live during the 120 s is as good as the QR. Host name and node ID in the QR are not secret. |
@@ -71,9 +71,9 @@ Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the t
 |---|---|
 | Assets | Node identity, which every collie authorization decision rests on |
 | Attack | The control server (or a stolen admin account) adds a node with its own key and gives it the phone's `StableID` and the owner's user ID, or changes the tag owners and grants, or points the phone's netmap at a fake Mac. |
-| Mitigations | Admin account protection (IdP, MFA) is the user's. collied pins `StableID` + user ID + untagged, and the phone pins the machine's `StableID` + the tag seen at pairing, `tag:collie-mac` or `tag:collie-linux` (P1; the owners of either tag are trusted for the tag half of the pin), which stops casual misconfiguration but not a control plane that lies. The y/N prompt at pairing catches a new device only during pairing. |
-| Residual | High: whois and netmap data both come from control, so a malicious control plane passes the gate on both ends. Tailnet Lock (node keys signed by trusted devices) would close the node-injection path but is not part of the design and untested with tsnet. An application-level key exchanged at pairing would also close it. |
-| Phase | Not planned; open decision. |
+| Mitigations | Admin account protection (IdP, MFA) is the user's. collied pins `StableID` + user ID + untagged, and the phone pins the machine's `StableID` + the tag seen at pairing, `tag:collie-mac` or `tag:collie-linux` (P1; the owners of either tag are trusted for the tag half of the pin), which stops casual misconfiguration but not a control plane that lies. The y/N prompt at pairing catches a new device only during pairing. Mutual TLS inside the tunnel, independent of Tailscale keys (built): the phone pins the machine's TLS key from the pairing QR, which is shown on the machine and so out of band, and collied pins the phone's Secure Enclave key, recorded when the pairing is confirmed. A node the control plane injects with the phone's `StableID`, or a fake machine in the phone's netmap, fails the TLS handshake. |
+| Residual | Low: a lying control plane can still cut or delay traffic, and can learn which nodes talk. It cannot get a full session without the phone's Secure Enclave key, or pass as a machine without its TLS key. |
+| Phase | Built (Phase 6). |
 
 ### Replayed notification
 
@@ -102,8 +102,8 @@ Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the t
 | Assets | Phone node keys, which pass the whois gate as the paired phone |
 | Attack | Keys read from the device (forensic tools, jailbreak, exploit) or from a backup, then used from another machine. |
 | Mitigations | App sandbox; state dir 0700 with data protection `completeUntilFirstUserAuthentication`, set by `StateDirectory.swift` and checked by collie-core (P1). State dir excluded from backups (P1 requirement, not in the tree yet). Revocation and key expiry as for a stolen phone. |
-| Residual | Keys are files, not Keychain or Secure Enclave items: readable after first unlock by code inside the app's sandbox. Until the backup exclusion lands, an iCloud or Finder backup carries the node identity, and restoring it on another device passes the gate as the paired phone. Extracted keys give the attacker the phone's full collie access from anywhere until revoked. |
-| Phase | Backup exclusion (`isExcludedFromBackup`, or keys in a `ThisDeviceOnly` Keychain item): P1. Keychain or Secure Enclave keys: not planned. |
+| Residual | Node keys are files, readable after first unlock by code inside the app's sandbox, and until the backup exclusion lands a backup carries them. They no longer suffice: collied also requires the phone's TLS key, a Secure Enclave P-256 key that cannot leave the device (`ThisDeviceOnly`, usable after first unlock). Code running on the unlocked phone, inside the app's sandbox, can still use that key there. |
+| Phase | Secure Enclave TLS key: built (Phase 6). Backup exclusion for the node state: P1. |
 
 ## Threats from the design
 

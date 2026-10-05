@@ -8,11 +8,14 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use collie_tls::rustls::sign::CertifiedKey;
+use collie_tls::server::TlsStream;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
-    AttachmentChunkParams, ErrorBody, ErrorCode, Event, HelloResult, MachineInfo,
+    AttachmentChunkParams, ErrorBody, ErrorCode, Event, HelloResult, KeyPin, MachineInfo,
     PairCompleteParams, PairingCode, PairingInvite, Request, Response, ServerFrame, TerminalId,
 };
+use serde::{Deserialize, Serialize};
 use tailnet::{Accepted, BackendState, Node, WhoIs};
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
@@ -171,6 +174,8 @@ pub struct State {
     push: Arc<Push>,
     attachments: Arc<Attachments>,
     pub(crate) audit: Arc<Audit>,
+    tls: Arc<CertifiedKey>,
+    tls_pin: KeyPin,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -195,6 +200,7 @@ impl State {
             host: self.dns_name.clone(),
             port: self.cfg.port,
             node_id: self.machine.node_id.clone(),
+            key: self.tls_pin.clone(),
             code,
         }
     }
@@ -446,6 +452,8 @@ pub async fn start_with(
         let dir = cfg.attachments_dir.clone();
         Arc::new(tokio::task::spawn_blocking(move || Attachments::open(dir)).await??)
     };
+    let tls = load_tls_key(&cfg.data_dir.join(config::TLS_KEY_FILE))?;
+    let tls_pin = collie_tls::pin(tls.cert[0].as_ref());
     let control = control::bind(&cfg.data_dir.join(config::CONTROL_SOCKET)).await?;
     let listener = node.listen("tcp", &format!(":{}", cfg.port))?;
 
@@ -476,6 +484,8 @@ pub async fn start_with(
         push,
         attachments,
         audit,
+        tls,
+        tls_pin,
     });
     let (shutdown, rx) = watch::channel(false);
     let (dead_tx, listener_dead) = watch::channel(false);
@@ -493,6 +503,23 @@ pub async fn start_with(
         listener_dead,
         _peers_lock: peers_lock,
     })
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TlsKeyFile {
+    pkcs8: String,
+}
+
+/// Phones pin this key from the pairing QR: a new key means pairing every phone again.
+fn load_tls_key(path: &std::path::Path) -> anyhow::Result<Arc<CertifiedKey>> {
+    let mut file: TlsKeyFile = peers::load_json(path)?;
+    if file.pkcs8.is_empty() {
+        file.pkcs8 = STANDARD.encode(collie_tls::generate()?);
+        peers::save_json(path, &file)?;
+    }
+    let der = zeroize::Zeroizing::new(STANDARD.decode(&file.pkcs8)?);
+    Ok(collie_tls::certified(collie_tls::load(&der)?)?)
 }
 
 const FORBIDDEN: &[u8] =
@@ -551,6 +578,7 @@ struct Remote {
     who: WhoIs,
     name: String,
     pairing_window: Option<u64>,
+    key: KeyPin,
 }
 
 impl Remote {
@@ -592,37 +620,13 @@ async fn connection(
             return;
         }
     };
-    let (decision, kill, registration, evicted) = {
-        // Lock order: peers, pairing, sessions. Holding all three makes the decision, the
-        // per-node cap and the registration atomic with respect to revoke and end_window.
+    let decision = {
         let store = lock(&state.peers);
-        let pairing = state.lock_pairing();
-        let mut sessions = state.lock_sessions();
-        let window = pairing.current(Instant::now());
-        let decision = gate::decide(&who.node, state.cfg.owner_user_id, &store, window);
-        // A phone that reconnects after iOS killed its sockets leaves dead sessions
-        // until SILENCE_LIMIT. Evicting the node's oldest session keeps one node from
-        // holding every slot without locking a reconnecting phone out.
-        let mut evicted = None;
-        if !matches!(decision, Decision::Reject(_)) {
-            let mine: Vec<u64> = sessions
-                .live
-                .iter()
-                .filter(|(_, l)| l.stable_id == who.node.stable_id)
-                .map(|(id, _)| *id)
-                .collect();
-            if mine.len() >= MAX_SESSIONS_PER_NODE
-                && let Some(oldest) = mine.iter().min()
-                && let Some(live) = sessions.live.get(oldest)
-            {
-                let _ = live.kill.send(true);
-                evicted = Some(*oldest);
-            }
-        }
-        if let Decision::Reject(reason) = decision {
-            drop(sessions);
-            drop(pairing);
-            drop(store);
+        let window = state.lock_pairing().current(Instant::now());
+        gate::decide(&who.node, state.cfg.owner_user_id, &store, window)
+    };
+    let (name, expect) = match &decision {
+        Decision::Reject(reason) => {
             state.audit_reject(addr, &who.node.stable_id, reason);
             // Nothing from the peer is read. The fixed 403 lets a revoked phone stop
             // retrying instead of treating the close as a transport error.
@@ -632,10 +636,58 @@ async fn connection(
             });
             return;
         }
-        let pairing_window = match decision {
-            Decision::PairingOnly { window } => Some(window),
-            _ => None,
-        };
+        Decision::Full { label, key } => (label.clone(), Some(key.clone())),
+        Decision::PairingOnly { .. } => (who.node.stable_id.clone(), None),
+    };
+    let accept = collie_tls::accept(stream, state.tls.clone(), expect);
+    let (stream, key) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, accept).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            state.audit_reject(addr, &name, &format!("tls handshake: {e}"));
+            return;
+        }
+        Err(_) => {
+            state.audit_reject(addr, &name, "tls handshake timed out");
+            return;
+        }
+    };
+    let pairing_window = match decision {
+        Decision::PairingOnly { window } => Some(window),
+        _ => None,
+    };
+    // Registered only once the TLS key is proven, so a node without the phone's key cannot
+    // evict the phone's sessions. Lock order: peers, pairing, sessions. Holding all three
+    // makes the decision, the per-node cap and the registration atomic with respect to
+    // revoke and end_window.
+    let (kill, registration, evicted) = {
+        let store = lock(&state.peers);
+        let pairing = state.lock_pairing();
+        let mut sessions = state.lock_sessions();
+        let window = pairing.current(Instant::now());
+        if gate::decide(&who.node, state.cfg.owner_user_id, &store, window) != decision {
+            drop(sessions);
+            drop(pairing);
+            drop(store);
+            state.audit_reject(addr, &name, "pairing or peers changed during the handshake");
+            return;
+        }
+        // A phone that reconnects after iOS killed its sockets leaves dead sessions
+        // until SILENCE_LIMIT. Evicting the node's oldest session keeps one node from
+        // holding every slot without locking a reconnecting phone out.
+        let mine: Vec<u64> = sessions
+            .live
+            .iter()
+            .filter(|(_, l)| l.stable_id == who.node.stable_id)
+            .map(|(id, _)| *id)
+            .collect();
+        let mut evicted = None;
+        if mine.len() >= MAX_SESSIONS_PER_NODE
+            && let Some(oldest) = mine.iter().min()
+            && let Some(live) = sessions.live.get(oldest)
+        {
+            let _ = live.kill.send(true);
+            evicted = Some(*oldest);
+        }
         let (tx, rx) = watch::channel(false);
         let id = sessions.next;
         sessions.next += 1;
@@ -647,10 +699,7 @@ async fn connection(
                 kill: tx,
             },
         );
-        drop(sessions);
-        drop(pairing);
         (
-            decision,
             rx,
             Registration {
                 state: state.clone(),
@@ -667,11 +716,6 @@ async fn connection(
             &format!("evicted session {old}: per-node limit"),
         );
     }
-    let (name, pairing_window) = match decision {
-        Decision::Full { label } => (label, None),
-        Decision::PairingOnly { window } => (who.node.stable_id.clone(), Some(window)),
-        Decision::Reject(_) => return,
-    };
     let handshake = tokio_tungstenite::accept_hdr_async_with_config(
         stream,
         check_upgrade,
@@ -696,6 +740,7 @@ async fn connection(
         who,
         name,
         pairing_window,
+        key,
     };
     Session {
         state: &state,
@@ -743,7 +788,7 @@ fn check_upgrade(req: &HttpRequest, mut resp: HttpResponse) -> Result<HttpRespon
 struct Session<'a> {
     state: &'a Arc<State>,
     id: u64,
-    ws: WebSocketStream<UnixStream>,
+    ws: WebSocketStream<TlsStream<UnixStream>>,
     peer: &'a Remote,
     seq: u64,
     watch: Option<Watcher>,
@@ -1301,6 +1346,7 @@ impl Session<'_> {
                 .map(|u| u.login_name.clone())
                 .unwrap_or_default(),
             user_id: who.node.user,
+            tls_key: self.peer.key.clone(),
         };
         let (tx, code_ok) = match attempt {
             Attempt::NoWindow => {

@@ -67,6 +67,16 @@ On Linux, collied is a systemd user unit, its node is `tag:collie-linux` and the
 - Accepted fds are AF_UNIX socketpairs: await readability with `AsyncFd`, then `tailscale_accept`, then `set_nonblocking`, then `tokio::net::UnixStream`.
 - magicsock binds a UDP socket on real interfaces: that is the WireGuard tunnel itself and is the one unavoidable non-tailnet socket. No TCP listener exists outside the tailnet.
 
+## Mutual TLS
+
+Inside the tunnel, after the whois gate and before the WebSocket upgrade: TLS 1.3 only, with RFC 7250 raw public keys (no certificates), ECDSA P-256 with SHA-256 only, no session resumption (a resumed session would skip the key check). Each side pins the other's key by the SHA-256 of its SubjectPublicKeyInfo (`KeyPin`, base64url). The shared verifiers are in `crates/tls`.
+
+- collied makes its P-256 key on first start (`tls-key.json`, PKCS#8, 0600 in the data dir). Its pin is in the pairing QR (`k=`, invite `v=2`), and the phone keeps it as the machine's `key`. A new key means pairing every phone again.
+- The phone's key is a Secure Enclave key (`Identity.swift`), non-exportable, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, so lock-screen decisions can connect. collie-core holds only its public key and asks the app to sign each handshake (`IdentitySigner`). The simulator uses a software key.
+- A full session needs the phone's pinned key (`peers.json` `tls_key`). A pairing session takes any P-256 key, and confirming the pairing records it. A phone paired before mutual TLS has no key: the gate treats it as unpaired, so it pairs again through a window (`collied pair`, scan), which replaces its record.
+- A peer the gate rejects still gets the fixed clear `403` before any TLS, so nothing from it is parsed. The phone recognizes it from the first bytes it read (`Sniff`) and stops retrying. A machine that presents another key is a pin violation; collied refusing the phone's key arrives on the phone's first read (TLS 1.3 checks the client after the client's side is done) as `KeyRefused`. Both stop retrying and ask to pair again.
+- `PROTOCOL_VERSION` 3: an app and a collied from before mutual TLS cannot talk to the new ones.
+
 ## Approvals
 
 The agent reconcile (`approvals.rs`) issues one approval per `blocked` `terminal_id`: `{approval_id (16 B), terminal_id, agent_label, workspace_label, snippet, tool, options, choices, accepts_input, has_text_field, supports_note, nonce (32 B), created_at_ms, expires_at_ms}`. `expires_at_ms` is `created_at_ms + approval_ttl` (`ServerConfig`, `approvals::TTL` = 600 s; not a `collied.toml` key). The screen comes from `agent.explain` (matched rule id; never exposed, its output carries raw pane text) and `pane.read source=detection`.

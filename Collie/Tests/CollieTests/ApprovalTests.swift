@@ -129,8 +129,8 @@ final class FakeApprovalCore: ApprovalCore {
     }
 
     let state = Mutex(State())
-    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "nMAC", kind: .mac)
-    let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux)
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "nMAC", kind: .mac, key: "")
+    let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
 
     func machines() -> [Machine] { [mac, linux] }
     func approvalFeed(machineId: String, afterRevision: UInt64) -> ApprovalFeed? {

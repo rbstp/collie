@@ -525,6 +525,7 @@ name = "collie-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "collie-tls",
  "futures-util",
  "getrandom 0.4.3",
  "libc",
@@ -542,6 +543,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "collie-tls"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "protocol",
+ "ring",
+ "rustls",
+ "sha2 0.11.0",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "collied"
 version = "0.1.0"
 dependencies = [
@@ -550,6 +564,7 @@ dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
  "clap",
+ "collie-tls",
  "core-foundation",
  "futures-util",
  "getrandom 0.4.3",
@@ -775,6 +790,7 @@ dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
  "collie-core",
+ "collie-tls",
  "collied",
  "futures-util",
  "protocol",
@@ -1688,6 +1704,7 @@ dependencies = [
  "aws-lc-rs",
  "log",
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",

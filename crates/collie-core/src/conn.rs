@@ -3,8 +3,10 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use collie_tls::rustls::CertificateError;
+use collie_tls::rustls::sign::CertifiedKey;
 use protocol::{
-    ActivityId, Empty, HelloResult, PushActivityEndParams, PushActivityTokenParams,
+    ActivityId, Empty, HelloResult, KeyPin, PushActivityEndParams, PushActivityTokenParams,
     PushRegisterParams, Request, Response,
 };
 use tailnet::{BackendState, Node};
@@ -48,6 +50,10 @@ const MUTATION_ATTEMPTS: usize = 3;
 /// Every holder clones the outer Arc, never the inner Node, so the strong count says
 /// whether a replaced node is still open on the shared tsnet state dir.
 pub type NodeSlot = Arc<Mutex<Option<Arc<Node>>>>;
+
+pub type IdentitySlot = Arc<Mutex<Option<Arc<CertifiedKey>>>>;
+
+pub type Stream = collie_tls::client::TlsStream<collie_tls::Sniff<UnixStream>>;
 
 /// Keyed by machine id: each Mac gets its own notification key.
 pub type PushSlot = Arc<Mutex<BTreeMap<String, Registrations>>>;
@@ -101,6 +107,11 @@ pub enum ConnectError {
     Dial(String),
     #[error("not reachable, it may be off or asleep")]
     PeerOffline,
+    #[error("this phone's key is not loaded yet")]
+    NoIdentity,
+    #[error("paired before mutual TLS: run collied pair on the machine and scan its code again")]
+    PairAgain,
+
     #[error(transparent)]
     Session(#[from] SessionError),
 }
@@ -110,6 +121,7 @@ impl ConnectError {
         match self {
             Self::Pin(e) => e.is_violation(),
             Self::Session(e) => e.is_auth(),
+            Self::PairAgain => true,
             _ => false,
         }
     }
@@ -126,14 +138,19 @@ pub async fn blocking<T: Send + 'static>(
 /// Re-checks the pin against the current netmap on every connection, then dials the
 /// pinned node's tailnet IP. The node is released once dialed so a session never
 /// keeps a replaced node open.
+#[allow(clippy::too_many_arguments)]
 pub async fn open(
     node: Arc<Node>,
     host: &str,
     port: u16,
     node_id: &str,
     kind: Option<MachineKind>,
+    key: &str,
+    identity: Option<Arc<CertifiedKey>>,
     dial_offline: bool,
-) -> Result<(Session<UnixStream>, HelloResult, MachineKind), ConnectError> {
+) -> Result<(Session<Stream>, HelloResult, MachineKind), ConnectError> {
+    let key = KeyPin::new(key).map_err(|_| ConnectError::PairAgain)?;
+    let identity = identity.ok_or(ConnectError::NoIdentity)?;
     let n = node.clone();
     let status = blocking(move || n.status())
         .await
@@ -159,10 +176,38 @@ pub async fn open(
     pin::verify_whois(&who.node, host, node_id)?;
     let stream = dial(&node, SocketAddr::new(ip, port)).await?;
     drop(node);
+    let stream = tls(stream, host, key, identity).await?;
     let mut session = Session::connect(stream, host, port).await?;
     let hello = session.hello().await?;
     pin::verify_node(&hello.machine.node_id, host, node_id)?;
     Ok((session, hello, kind))
+}
+
+pub(crate) async fn tls(
+    stream: UnixStream,
+    host: &str,
+    key: KeyPin,
+    identity: Arc<CertifiedKey>,
+) -> Result<Stream, ConnectError> {
+    let handshake = collie_tls::connect(stream, host, key, identity);
+    match tokio::time::timeout(crate::session::CALL_TIMEOUT, handshake).await {
+        Err(_) => Err(SessionError::Timeout.into()),
+        Ok(Ok(s)) => Ok(s),
+        Ok(Err(collie_tls::ConnectError::Forbidden)) => Err(SessionError::Refused(403).into()),
+        Ok(Err(collie_tls::ConnectError::Tls(e))) => {
+            use collie_tls::rustls::Error as Tls;
+            Err(match e.get_ref().and_then(|e| e.downcast_ref::<Tls>()) {
+                Some(Tls::InvalidCertificate(
+                    CertificateError::ApplicationVerificationFailure
+                    | CertificateError::BadEncoding,
+                )) => PinError::KeyMismatch {
+                    host: host.to_owned(),
+                }
+                .into(),
+                _ => ConnectError::Dial(format!("tls: {e}")),
+            })
+        }
+    }
 }
 
 pub(crate) async fn dial(node: &Arc<Node>, addr: SocketAddr) -> Result<UnixStream, ConnectError> {
@@ -271,6 +316,7 @@ impl Conn {
         runtime: &tokio::runtime::Handle,
         machine: Machine,
         node: NodeSlot,
+        identity: IdentitySlot,
         push: PushSlot,
         reach: Arc<Reachability>,
     ) -> Self {
@@ -288,6 +334,7 @@ impl Conn {
         let task = runtime.spawn(supervise(
             machine.clone(),
             node,
+            identity,
             push,
             reach,
             shared.clone(),
@@ -415,6 +462,7 @@ async fn send_mutation(
 async fn supervise(
     machine: Machine,
     node: NodeSlot,
+    identity: IdentitySlot,
     push: PushSlot,
     reach: Arc<Reachability>,
     shared: Arc<Shared>,
@@ -435,12 +483,15 @@ async fn supervise(
         if !peer_offline {
             shared.set(LinkPhase::Connecting, None);
         }
+        let key = lock(&identity).clone();
         let opened = open(
             node,
             &machine.host,
             machine.port,
             &machine.node_id,
             Some(machine.kind),
+            &machine.key,
+            key,
             last_dial.elapsed() >= OFFLINE_REDIAL,
         )
         .await;
@@ -546,6 +597,64 @@ mod tests {
     use protocol::{AgentPromptParams, ErrorCode, OpId, PromptText, TerminalId};
 
     use super::*;
+
+    fn key() -> (Arc<CertifiedKey>, KeyPin) {
+        let key =
+            collie_tls::certified(collie_tls::load(&collie_tls::generate().unwrap()).unwrap())
+                .unwrap();
+        let pin = collie_tls::pin(key.cert[0].as_ref());
+        (key, pin)
+    }
+
+    #[tokio::test]
+    async fn tls_failures_say_which_side_refused() {
+        let (machine, machine_pin) = key();
+        let (phone, phone_pin) = key();
+        let (other, other_pin) = key();
+        let run = |server_key: Arc<CertifiedKey>, expect: KeyPin, pin: KeyPin| {
+            let phone = phone.clone();
+            async move {
+                let (a, b) = UnixStream::pair().unwrap();
+                tokio::spawn(collie_tls::accept(b, server_key, Some(expect)));
+                tls(a, "mac.ts.net", pin, phone).await
+            }
+        };
+        assert!(
+            run(machine.clone(), phone_pin.clone(), machine_pin.clone())
+                .await
+                .is_ok()
+        );
+        let stream = run(machine.clone(), other_pin, machine_pin.clone())
+            .await
+            .unwrap();
+        let err = Session::connect(stream, "mac.ts.net", 8457)
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            matches!(err, SessionError::KeyRefused) && err.is_auth(),
+            "{err:?}"
+        );
+        let err = run(other, phone_pin, machine_pin.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ConnectError::Pin(PinError::KeyMismatch { .. })) && err.is_auth(),
+            "{err:?}"
+        );
+
+        let (a, b) = UnixStream::pair().unwrap();
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let mut b = b;
+            b.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await
+        });
+        let err = tls(a, "mac.ts.net", machine_pin, phone).await.unwrap_err();
+        assert!(
+            matches!(err, ConnectError::Session(SessionError::Refused(403))) && err.is_auth(),
+            "{err:?}"
+        );
+    }
 
     fn prompt() -> Request {
         Request::AgentPrompt(AgentPromptParams {

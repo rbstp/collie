@@ -7,6 +7,7 @@ members = [
     "crates/protocol",
     "crates/tailnet",
     "crates/tailscale-sys",
+    "crates/tls",
     "crates/uniffi-bindgen",
 ]
 

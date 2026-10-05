@@ -1,12 +1,14 @@
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use collie_core::{CollieCore, Machine, MachineFlock, TailnetState};
+use collie_core::{CollieCore, IdentitySigner, Machine, MachineFlock, TailnetState};
+use collie_tls::rustls::sign::SigningKey;
 use collied::control::{Client, Reply, Request};
 use serde_json::Value;
 use tailnet::{BackendState, Config, Node, Status};
@@ -154,8 +156,61 @@ pub fn start_node(root: &Path, name: &str, key: &str, url: &str, tags: &[&str]) 
     node
 }
 
+struct Soft(Arc<dyn SigningKey>);
+
+impl IdentitySigner for Soft {
+    fn sign(&self, message: Vec<u8>) -> Option<Vec<u8>> {
+        self.0
+            .choose_scheme(&[collie_tls::SCHEME])?
+            .sign(&message)
+            .ok()
+    }
+}
+
+pub type ProbeStream = collie_tls::client::TlsStream<collie_tls::Sniff<tokio::net::UnixStream>>;
+
+/// A raw client's TLS, pinning the key collied keeps in `data_dir`, with one key of its own.
+pub async fn probe_tls(stream: tokio::net::UnixStream, data_dir: &Path) -> ProbeStream {
+    static KEY: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let mine = KEY.get_or_init(|| collie_tls::generate().unwrap());
+    let identity = collie_tls::certified(collie_tls::load(mine).unwrap()).unwrap();
+    let file: Value =
+        serde_json::from_slice(&std::fs::read(data_dir.join("tls-key.json")).unwrap()).unwrap();
+    let der = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        file["pkcs8"].as_str().unwrap(),
+    )
+    .unwrap();
+    let machine = collie_tls::certified(collie_tls::load(&der).unwrap()).unwrap();
+    match collie_tls::connect(
+        stream,
+        "collie",
+        collie_tls::pin(machine.cert[0].as_ref()),
+        identity,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(collie_tls::ConnectError::Forbidden) => panic!("probe refused with 403"),
+        Err(collie_tls::ConnectError::Tls(e)) => panic!("probe tls: {e}"),
+    }
+}
+
+/// One key per phone name, as a phone keeps its Secure Enclave key across launches.
 pub fn phone(root: &Path, name: &str, net: &Net) -> Arc<CollieCore> {
-    CollieCore::with_control_url(root.join(name), net.url.clone()).unwrap()
+    static KEYS: Mutex<Option<HashMap<String, Vec<u8>>>> = Mutex::new(None);
+    let core = CollieCore::with_control_url(root.join(name), net.url.clone()).unwrap();
+    let pkcs8 = KEYS
+        .lock()
+        .unwrap()
+        .get_or_insert_default()
+        .entry(name.to_owned())
+        .or_insert_with(|| collie_tls::generate().unwrap())
+        .clone();
+    let key = collie_tls::load(&pkcs8).unwrap();
+    let spki = key.public_key().unwrap().as_ref().to_vec();
+    core.set_identity(spki, Box::new(Soft(key))).unwrap();
+    core
 }
 
 pub fn wait_phone(rt: &tokio::runtime::Runtime, core: &CollieCore) {

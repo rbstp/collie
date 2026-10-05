@@ -79,6 +79,9 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     let peers = data_dir.join(config::PEERS_FILE);
     let (s, d) = check_private(&peers, Kind::File, (Status::Warn, "no paired phones"));
     r.line(s, "peers", d);
+    let tls = data_dir.join(config::TLS_KEY_FILE);
+    let (s, d) = check_private(&tls, Kind::File, (Status::Warn, "not created yet"));
+    r.line(s, "tls key", d);
     let audit = data_dir.join(config::AUDIT_FILE);
     let (s, d) = check_private(&audit, Kind::File, (Status::Warn, "no audit log yet"));
     r.line(s, "audit", d);

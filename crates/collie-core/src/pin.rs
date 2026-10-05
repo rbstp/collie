@@ -23,6 +23,8 @@ pub enum PinError {
     NoAddress { host: String },
     #[error("{host} is shared in from another tailnet")]
     SharedIn { host: String },
+    #[error("{host} did not present the key it was paired with")]
+    KeyMismatch { host: String },
 }
 
 impl PinError {
@@ -31,7 +33,10 @@ impl PinError {
     pub fn is_violation(&self) -> bool {
         matches!(
             self,
-            Self::NodeIdMismatch { .. } | Self::Untagged { .. } | Self::SharedIn { .. }
+            Self::NodeIdMismatch { .. }
+                | Self::Untagged { .. }
+                | Self::SharedIn { .. }
+                | Self::KeyMismatch { .. }
         )
     }
 }

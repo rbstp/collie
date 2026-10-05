@@ -1,6 +1,7 @@
 mod approvals;
 mod attachments;
 mod conn;
+mod identity;
 mod pin;
 mod reach;
 mod session;
@@ -32,7 +33,10 @@ pub use approvals::{
     BackgroundOutcome, DecideStage, DecisionOutcome, PendingApproval,
 };
 pub use attachments::UploadProgress;
-use conn::{Conn, ConnectError, LinkPhase, NodeSlot, PushSlot, RequestError, blocking};
+use conn::{
+    Conn, ConnectError, IdentitySlot, LinkPhase, NodeSlot, PushSlot, RequestError, blocking,
+};
+pub use identity::IdentitySigner;
 use reach::Reachability;
 use session::{CALL_TIMEOUT, SessionError, expect_flock, expect_paired, lock, unexpected};
 pub use store::{Machine, MachineKind};
@@ -449,6 +453,7 @@ struct Inner {
     state_dir: PathBuf,
     control_url: Option<String>,
     node: NodeSlot,
+    identity: IdentitySlot,
     starting: Mutex<()>,
     store: MachineStore,
     machines: Mutex<Vec<Machine>>,
@@ -468,6 +473,19 @@ impl CollieCore {
     #[uniffi::constructor]
     pub fn new(state_dir: String) -> Result<Arc<Self>, CoreError> {
         Self::build(PathBuf::from(state_dir), None)
+    }
+
+    pub fn set_identity(
+        &self,
+        public_key: Vec<u8>,
+        signer: Box<dyn IdentitySigner>,
+    ) -> Result<(), CoreError> {
+        let key = identity::certified(public_key, signer).map_err(|e| CoreError::InvalidInput {
+            field: Some("public_key".into()),
+            message: e.to_string(),
+        })?;
+        *lock(&self.inner.identity) = Some(key);
+        Ok(())
     }
 
     pub fn tailnet_configured(&self) -> bool {
@@ -1114,6 +1132,7 @@ impl CollieCore {
                 state_dir,
                 control_url,
                 node: NodeSlot::default(),
+                identity: IdentitySlot::default(),
                 starting: Mutex::default(),
                 store,
                 machines: Mutex::new(machines),
@@ -1228,6 +1247,7 @@ impl CollieCore {
                     self.runtime.handle(),
                     machine,
                     self.inner.node.clone(),
+                    self.inner.identity.clone(),
                     self.inner.push.clone(),
                     self.inner.reach.clone(),
                 ))
@@ -1349,8 +1369,18 @@ impl Inner {
         let invite = PairingInvite::parse(invite_uri).map_err(|_| CoreError::InvalidInvite)?;
         let device_label = Label::new(device_label.trim()).map_err(|_| CoreError::InvalidLabel)?;
         let node = lock(&self.node).clone().ok_or(CoreError::NotRunning)?;
-        let (mut session, _, kind) =
-            conn::open(node, &invite.host, invite.port, &invite.node_id, None, true).await?;
+        let identity = lock(&self.identity).clone();
+        let (mut session, _, kind) = conn::open(
+            node,
+            &invite.host,
+            invite.port,
+            &invite.node_id,
+            None,
+            invite.key.as_str(),
+            identity,
+            true,
+        )
+        .await?;
         let info = expect_paired(
             session
                 .call(
@@ -1370,6 +1400,7 @@ impl Inner {
             port: invite.port,
             node_id: invite.node_id,
             kind,
+            key: invite.key.as_str().to_owned(),
         };
         let node_id = machine.node_id.clone();
         self.update_machines(|m| m.node_id == node_id, Some(machine.clone()))?;
@@ -1786,6 +1817,7 @@ mod tests {
             port: 8457,
             node_id: format!("n{id}"),
             kind: MachineKind::Mac,
+            key: String::new(),
         };
         MachineStore::new(state.clone())
             .save(&[mac("m1"), mac("m2")])
@@ -1884,6 +1916,7 @@ mod tests {
                 port: 8457,
                 node_id: "nm1".into(),
                 kind: MachineKind::Mac,
+                key: String::new(),
             }])
             .unwrap();
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
@@ -2065,6 +2098,9 @@ mod tests {
 mod tailnet_tests {
     use std::io::{BufRead, BufReader};
     use std::process::{Child, Command, Stdio};
+    use std::sync::OnceLock;
+
+    use collie_tls::rustls::sign::{CertifiedKey, SigningKey};
 
     use futures_util::{SinkExt, StreamExt};
     use protocol::{
@@ -2217,6 +2253,41 @@ mod tailnet_tests {
         }
     }
 
+    struct Soft(Arc<dyn SigningKey>);
+
+    impl IdentitySigner for Soft {
+        fn sign(&self, message: Vec<u8>) -> Option<Vec<u8>> {
+            self.0
+                .choose_scheme(&[collie_tls::SCHEME])?
+                .sign(&message)
+                .ok()
+        }
+    }
+
+    fn phone_key() -> &'static [u8] {
+        static KEY: OnceLock<Vec<u8>> = OnceLock::new();
+        KEY.get_or_init(|| collie_tls::generate().unwrap())
+    }
+
+    fn set_identity(core: &CollieCore) {
+        let key = collie_tls::load(phone_key()).unwrap();
+        let spki = key.public_key().unwrap().as_ref().to_vec();
+        core.set_identity(spki, Box::new(Soft(key))).unwrap();
+    }
+
+    fn mac_key() -> Arc<CertifiedKey> {
+        static KEY: OnceLock<Arc<CertifiedKey>> = OnceLock::new();
+        KEY.get_or_init(|| {
+            collie_tls::certified(collie_tls::load(&collie_tls::generate().unwrap()).unwrap())
+                .unwrap()
+        })
+        .clone()
+    }
+
+    fn mac_pin() -> protocol::KeyPin {
+        collie_tls::pin(mac_key().cert[0].as_ref())
+    }
+
     /// Stand-in for collied: whois-checks the peer, then answers hello, pair.complete,
     /// flock.snapshot and the Phase 2 methods. The first prompt of an op_id is
     /// "executed" and its connection dropped before the reply, like a phone losing its
@@ -2232,8 +2303,12 @@ mod tailnet_tests {
             let mac_id = mac_id.clone();
             let seen = seen.clone();
             tokio::spawn(async move {
+                let Ok((stream, _)) = collie_tls::accept(accepted.stream, mac_key(), None).await
+                else {
+                    return;
+                };
                 let mut ws = tokio_tungstenite::accept_hdr_async(
-                    accepted.stream,
+                    stream,
                     |_: &HsRequest, mut resp: HsResponse| {
                         resp.headers_mut().insert(
                             "Sec-WebSocket-Protocol",
@@ -2517,6 +2592,7 @@ mod tailnet_tests {
         std::fs::set_permissions(&phone_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         let core = CollieCore::with_control_url(phone_dir.clone(), control.1.clone()).unwrap();
+        set_identity(&core);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -2572,10 +2648,12 @@ mod tailnet_tests {
         let mac_ip = mac_self.tailscale_ips.clone().unwrap()[0];
         let session = rt.block_on(core.runtime.spawn({
             let (node, host) = (phone_node.clone(), host.clone());
+            let identity = lock(&core.inner.identity).clone().unwrap();
             async move {
                 let stream = conn::dial(&node, std::net::SocketAddr::new(mac_ip, DEFAULT_PORT))
                     .await
                     .unwrap();
+                let stream = conn::tls(stream, &host, mac_pin(), identity).await.unwrap();
                 let mut session = Session::connect(stream, &host, DEFAULT_PORT).await.unwrap();
                 session.hello().await.unwrap()
             }
@@ -2587,6 +2665,7 @@ mod tailnet_tests {
                 host: host.clone(),
                 port: DEFAULT_PORT,
                 node_id: node_id.into(),
+                key: mac_pin(),
                 code: PairingCode::new(CODE).unwrap(),
             }
             .to_uri()
@@ -2595,6 +2674,15 @@ mod tailnet_tests {
             .block_on(core.pair(invite("nSOMEONEELSE"), "iPhone".into()))
             .unwrap_err();
         assert!(matches!(err, CoreError::PinViolation { .. }), "{err:?}");
+        let mut wrong_key = PairingInvite::parse(&invite(&mac_self.stable_id)).unwrap();
+        wrong_key.key = collie_tls::pin(b"another key");
+        let err = rt
+            .block_on(core.pair(wrong_key.to_uri(), "iPhone".into()))
+            .unwrap_err();
+        assert!(
+            matches!(&err, CoreError::PinViolation { message } if message.contains("key")),
+            "{err:?}"
+        );
 
         assert!(
             mac_self.tags.iter().flatten().any(|t| t == pin::MAC_TAG),
@@ -2748,6 +2836,7 @@ mod tailnet_tests {
         std::fs::set_permissions(&phone_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         let core = CollieCore::with_control_url(phone_dir.clone(), control.1.clone()).unwrap();
+        set_identity(&core);
         core.set_app_group_dir(group.to_string_lossy().into())
             .unwrap();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -2782,6 +2871,7 @@ mod tailnet_tests {
             host: mac_self.dns_name.trim_end_matches('.').to_owned(),
             port: DEFAULT_PORT,
             node_id: mac_id.clone(),
+            key: mac_pin(),
             code: PairingCode::new(CODE).unwrap(),
         };
         let machine = rt
@@ -2952,6 +3042,7 @@ mod tailnet_tests {
         drop(core);
         assert!(node.upgrade().is_none(), "the old node is closed");
         let core = CollieCore::with_control_url(phone_dir.clone(), control.1.clone()).unwrap();
+        set_identity(&core);
         core.set_app_group_dir(group.to_string_lossy().into())
             .unwrap();
         assert!(lock(&core.inner.node).is_none());
