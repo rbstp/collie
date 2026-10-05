@@ -10,19 +10,28 @@ struct AgentScreen: View {
     let follows: FollowModel?
     let machineLabel: String?
     let showsMachine: Bool
-    let switchAgent: ((Int) -> Void)?
+    let neighbor: ((Int) -> AgentRoute?)?
+    let switchAgent: (AgentRoute) -> Void
     @Environment(\.dismiss) private var dismiss
 
     init(
         core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel? = nil, follows: FollowModel? = nil,
-        machineLabel: String? = nil, showsMachine: Bool = false, switchAgent: ((Int) -> Void)? = nil
+        machineLabel: String? = nil, showsMachine: Bool = false, neighbor: ((Int) -> AgentRoute?)? = nil,
+        switchAgent: @escaping (AgentRoute) -> Void = { _ in }
     ) {
         _model = State(initialValue: AgentModel(core: core, route: route))
         self.approvals = approvals
         self.follows = follows
         self.machineLabel = machineLabel
         self.showsMachine = showsMachine
+        self.neighbor = neighbor
         self.switchAgent = switchAgent
+    }
+
+    // Switching agents drops these, as Back does; text loaded from the Mac's input box loads again.
+    private var holdsUnsent: Bool {
+        let typed = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.draft != model.macDraft
+        return typed || !model.attachments.isEmpty || model.upload != nil
     }
 
     private var blocked: BlockedInput? {
@@ -44,7 +53,8 @@ struct AgentScreen: View {
             }
             AgentTerminal(
                 ansi: model.ansi, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
-                perform: perform, resized: { model.fontSize = $0 }, switchAgent: switchAgent
+                perform: perform, resized: { model.fontSize = $0 }, neighbor: holdsUnsent ? nil : neighbor,
+                switchAgent: switchAgent
             ) { await model.refresh() }
                 .overlay {
                     if model.ansi.isEmpty {
@@ -218,7 +228,8 @@ private struct AgentTerminal: UIViewRepresentable {
     let gestures: TerminalGestures
     let perform: @MainActor (GestureAction) -> Void
     let resized: @MainActor (Double) -> Void
-    let switchAgent: ((Int) -> Void)?
+    let neighbor: ((Int) -> AgentRoute?)?
+    let switchAgent: (AgentRoute) -> Void
     let refresh: @MainActor () async -> Void
 
     func makeUIView(context: Context) -> GhosttyTerminalUIView {
@@ -248,10 +259,13 @@ private struct AgentTerminal: UIViewRepresentable {
         view.onTripleTap = gestures.tripleTap == .none ? nil : { perform(gestures.tripleTap) }
         view.onPinch = gestures.pinchResizesText ? { resized($0) } : nil
         view.dismissesKeyboardOnScrollDown = gestures.scrollDownHidesKeyboard
-        if gestures.swipeSwitchesAgents, let switchAgent {
-            // Swiping left brings the next agent in, as with pages.
-            view.onSwipe = { switchAgent($0 == .left ? 1 : -1) }
+        if gestures.swipeSwitchesAgents, let neighbor {
+            let switchAgent = switchAgent
+            let offset = { (swipe: TerminalSwipe) in swipe == .left ? 1 : -1 }
+            view.canSwipe = { neighbor(offset($0)) != nil }
+            view.onSwipe = { if let next = neighbor(offset($0)) { switchAgent(next) } }
         } else {
+            view.canSwipe = nil
             view.onSwipe = nil
         }
         if !ansi.isEmpty {

@@ -95,11 +95,14 @@ struct FlockScreen: View {
                     AgentScreen(
                         core: core, route: route, approvals: approvals, follows: follows,
                         machineLabel: machines.first { $0.id == route.machineId }?.label, showsMachine: machines.count > 1,
-                        switchAgent: { offset in
+                        neighbor: { offset in
+                            // model.entries stops refreshing under a pushed agent; the core's cache follows events.
+                            let entries = core.machines().map { MachineFlockEntry(machine: $0, flock: core.cachedFlock(machineId: $0.id)) }
+                            return FlockOrder.neighbor(of: route, offset: offset, in: entries)
+                        },
+                        switchAgent: { next in
                             // Replaces the top route, so Back still returns to this list.
-                            if path.last == route, let next = FlockOrder.neighbor(of: route, offset: offset, in: model.entries) {
-                                path[path.count - 1] = next
-                            }
+                            if path.last == route { path[path.count - 1] = next }
                         }
                     )
                     // A replaced route must get its own model, not keep the previous agent's.

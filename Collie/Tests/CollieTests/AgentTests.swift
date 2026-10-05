@@ -25,6 +25,7 @@ final class FakeCore: AgentCore {
         var maxAttachmentBytes: UInt64 = 20 * 1024 * 1024
         var uploadPath = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/notes.txt"
         var endedActivities: [String] = []
+        var watches: [String?] = []
     }
 
     let state = Mutex(State())
@@ -75,7 +76,9 @@ final class FakeCore: AgentCore {
         )
         return AgentView(link: .connected, lastError: nil, agent: agent, output: nil, outputRevision: 0)
     }
-    func watchAgent(machineId: String, terminalId: String?) async throws {}
+    func watchAgent(machineId: String, terminalId: String?) async throws {
+        state.withLock { $0.watches.append(terminalId) }
+    }
     func agentRead(machineId: String, terminalId: String, source: TerminalSource) async throws -> TerminalSnapshot {
         TerminalSnapshot(terminalId: terminalId, source: source, ansi: "", truncated: false)
     }
@@ -135,6 +138,29 @@ final class FakeCore: AgentCore {
 @MainActor
 private func agentModel(_ core: FakeCore) -> AgentModel {
     AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil)
+}
+
+@MainActor
+@Test func aScreenReplacedAfterItsSuccessorWatchedLeavesTheWatch() async {
+    let core = FakeCore()
+    let first = AgentModel(core: core, route: AgentRoute(machineId: "replaced", terminalId: "term_1"), prefsFile: nil)
+    let second = AgentModel(core: core, route: AgentRoute(machineId: "replaced", terminalId: "term_2"), prefsFile: nil)
+    func waitWatches(_ count: Int) async {
+        while core.snapshot.watches.count < count {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+    let firstRun = Task { await first.run() }
+    await waitWatches(1)
+    let secondRun = Task { await second.run() }
+    await waitWatches(2)
+    firstRun.cancel()
+    await firstRun.value
+    secondRun.cancel()
+    await secondRun.value
+    await waitWatches(3)
+    try? await Task.sleep(for: .milliseconds(50))
+    #expect(core.snapshot.watches == ["term_1", "term_2", nil])
 }
 
 @MainActor

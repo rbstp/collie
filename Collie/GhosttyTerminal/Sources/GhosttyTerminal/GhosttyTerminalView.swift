@@ -62,6 +62,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     public var onSwipe: ((TerminalSwipe) -> Void)? {
         didSet { gesturesChanged() }
     }
+    public var canSwipe: ((TerminalSwipe) -> Bool)?
     public var dismissesKeyboardOnScrollDown = false
 
     private let screen = TerminalScreen(background: GhosttyTerminalUIView.background, foreground: GhosttyTerminalUIView.foreground)
@@ -132,7 +133,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
         addGestureRecognizer(pinch)
         swipe.maximumNumberOfTouches = 1
         swipe.addTarget(self, action: #selector(swiped(_:)))
-        swipeFilter.scrollView = self
+        swipeFilter.terminal = self
         swipe.delegate = swipeFilter
         addGestureRecognizer(swipe)
         gesturesChanged()
@@ -502,20 +503,26 @@ private final class FlingTapFilter: NSObject, UIGestureRecognizerDelegate {
     }
 }
 
-/// A swipe tracks alongside scrolling rather than holding it off, and leaves touches that start
-/// at the left screen edge to the back swipe.
+/// A swipe tracks alongside scrolling rather than holding it off, and leaves to the back swipe
+/// touches that start at the left screen edge and drags toward a side `canSwipe` refuses.
 @MainActor
 private final class SwipeAlongsideScroll: NSObject, UIGestureRecognizerDelegate {
-    weak var scrollView: UIScrollView?
+    weak var terminal: GhosttyTerminalUIView?
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         touch.location(in: nil).x > 24
     }
 
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer, let terminal, let canSwipe = terminal.canSwipe
+        else { return true }
+        return canSwipe(pan.translation(in: terminal.superview).x < 0 ? .left : .right)
+    }
+
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
     ) -> Bool {
-        other === scrollView?.panGestureRecognizer
+        other === terminal?.panGestureRecognizer
     }
 }
 

@@ -4,7 +4,6 @@ public enum TerminalSwipe: Sendable {
     case left
     case right
 
-    /// A pan that travels mostly sideways, far enough or fast enough, and is not flung back.
     static func ended(translation: CGPoint, velocity: CGPoint) -> TerminalSwipe? {
         let distance = abs(translation.x)
         guard distance > 2 * abs(translation.y), translation.x * velocity.x >= 0,

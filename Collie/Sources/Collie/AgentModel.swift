@@ -62,6 +62,9 @@ final class AgentModel {
     // One chain per machine: a late unwatch from a popped screen must not land after
     // the next screen's watch on the same machine.
     private static var watchChains: [String: Task<Void, Never>] = [:]
+    // A screen replaced in place stops after its successor on the machine has watched, so only
+    // the latest watcher may unwatch.
+    private static var watchers: [String: ObjectIdentifier] = [:]
 
     init(core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file) {
         self.core = core
@@ -93,13 +96,17 @@ final class AgentModel {
 
     /// Runs while the screen is visible: watch, poll the core at 10 Hz, unwatch on cancel.
     func run() async {
+        Self.watchers[route.machineId] = ObjectIdentifier(self)
         watch(route.terminalId)
         async let loaded: Void = loadMacDraft()
         while !Task.isCancelled {
             poll()
             try? await Task.sleep(for: .milliseconds(100))
         }
-        watch(nil)
+        if Self.watchers[route.machineId] == ObjectIdentifier(self) {
+            Self.watchers[route.machineId] = nil
+            watch(nil)
+        }
         await loaded
     }
 
