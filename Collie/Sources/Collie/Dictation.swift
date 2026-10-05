@@ -80,7 +80,7 @@ final class DictationModel {
 
     private(set) var phase = Phase.idle
     private(set) var level: Float = 0
-    private(set) var problem: DictationProblem?
+    var problem: DictationProblem?
     private(set) var language: DictationLanguage
 
     private let engine: any DictationEngine
@@ -93,10 +93,10 @@ final class DictationModel {
     private var volatile = ""
     private var write: (@MainActor (String) -> Void)?
 
-    init(engine: any DictationEngine, prefsFile: URL?) {
+    init(engine: any DictationEngine, language: DictationLanguage, prefsFile: URL?) {
         self.engine = engine
+        self.language = language
         self.prefsFile = prefsFile
-        language = DevicePrefs.load(from: prefsFile).dictationLanguage
     }
 
     var isActive: Bool { phase != .idle }
@@ -113,12 +113,14 @@ final class DictationModel {
         problem = nil
         self.write = write
         phase = .preparing(download: nil)
-        let task = Task { [generation, language] in await run(generation, language) }
+        let previous = self.task
+        let task = Task { [generation, language] in await run(generation, language, after: previous) }
         self.task = task
         return task
     }
 
-    private func run(_ id: Int, _ language: DictationLanguage) async {
+    /// Waits for `previous` to release the shared audio session before opening its own.
+    private func run(_ id: Int, _ language: DictationLanguage, after previous: Task<Void, Never>?) async {
         do {
             guard await engine.requestMicrophone() else {
                 if id == generation {
@@ -132,6 +134,7 @@ final class DictationModel {
                 guard let self, id == self.generation, case .preparing = self.phase else { return }
                 self.phase = .preparing(download: fraction)
             }
+            await previous?.value
             guard id == generation else { return }
             let session = try await engine.start(language)
             guard id == generation else {
@@ -183,7 +186,6 @@ final class DictationModel {
     func cancel() {
         guard phase != .idle else { return }
         generation += 1
-        session?.cancel()
         task?.cancel()
         end()
     }
@@ -209,8 +211,8 @@ final class DictationModel {
     private func end() {
         phase = .idle
         level = 0
+        session?.cancel()
         session = nil
-        task = nil
         write = nil
     }
 

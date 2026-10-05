@@ -75,8 +75,8 @@ final class AgentModel {
         self.core = core
         self.route = route
         self.prefsFile = prefsFile
-        dictation = DictationModel(engine: dictationEngine, prefsFile: prefsFile)
         let prefs = DevicePrefs.load(from: prefsFile)
+        dictation = DictationModel(engine: dictationEngine, language: prefs.dictationLanguage, prefsFile: prefsFile)
         wrapLines = prefs.wrapLines
         fontSize = prefs.fontSize
         gestures = prefs.gestures
@@ -160,6 +160,7 @@ final class AgentModel {
     /// Paths on the Mac never have spaces, so they are set apart by single spaces.
     func sendPrompt() async {
         guard !dictation.isActive else { return }
+        dictation.problem = nil
         if answering {
             await sendAnswer()
             return

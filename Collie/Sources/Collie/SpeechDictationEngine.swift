@@ -12,8 +12,7 @@ final class SpeechDictationEngine: DictationEngine {
 
     func install(_ language: DictationLanguage, progress: @escaping @MainActor (Double) -> Void) async throws {
         let transcriber = try await Self.transcriber(for: language)
-        guard let request = try await Self.unavailableIfUnsupported({ try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) })
-        else { return }
+        guard let request = try await Self.unavailableIfUnsupported({ try await Self.installationRequest(for: transcriber) }) else { return }
         let polling = Task {
             while !Task.isCancelled {
                 progress(request.progress.fractionCompleted)
@@ -37,10 +36,22 @@ final class SpeechDictationEngine: DictationEngine {
         return SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
     }
 
+    /// Each locale installed is reserved for the app, up to a per-device limit; collie only needs the one in use.
+    private static func installationRequest(for transcriber: SpeechTranscriber) async throws -> AssetInstallationRequest? {
+        do {
+            return try await AssetInventory.assetInstallationRequest(supporting: [transcriber])
+        } catch let error as SFSpeechError where error.code == .tooManyAssetLocalesAllocated {
+            for locale in await AssetInventory.reservedLocales {
+                await AssetInventory.release(reservedLocale: locale)
+            }
+            return try await AssetInventory.assetInstallationRequest(supporting: [transcriber])
+        }
+    }
+
     private static func unavailableIfUnsupported<T>(_ body: () async throws -> T) async throws -> T {
         do {
             return try await body()
-        } catch let error as SFSpeechError where [.noModel, .cannotAllocateUnsupportedLocale].contains(error.code) {
+        } catch let error as SFSpeechError where [.noModel, .cannotAllocateUnsupportedLocale, .tooManyAssetLocalesAllocated].contains(error.code) {
             throw DictationError.unavailable
         }
     }
@@ -55,6 +66,7 @@ private final class LiveDictation {
     private let audio = AVAudioEngine()
     private var results: Task<Void, Never>?
     private var listening = false
+    private var observers: [any NSObjectProtocol] = []
 
     init(transcriber: SpeechTranscriber) async throws {
         analyzer = SpeechAnalyzer(modules: [transcriber])
@@ -71,10 +83,12 @@ private final class LiveDictation {
                 throw DictationError.unavailable
             }
             try await analyzer.prepareToAnalyze(in: format)
+            try Task.checkCancellation()
             try Self.tap(audio.inputNode, from: natural, to: format, input: input, output: output)
             audio.prepare()
             try audio.start()
             try await analyzer.start(inputSequence: inputs)
+            observeInterruptions()
         } catch {
             stopAudio()
             await analyzer.cancelAndFinishNow()
@@ -95,6 +109,7 @@ private final class LiveDictation {
     }
 
     func finish() async {
+        guard listening else { return }
         stopAudio()
         do {
             try await analyzer.finalizeAndFinishThroughEndOfInput()
@@ -118,7 +133,21 @@ private final class LiveDictation {
         audio.inputNode.removeTap(onBus: 0)
         audio.stop()
         input.finish()
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    /// A call, Siri or a route change stops the engine; finishing keeps what was heard instead of showing a dead microphone.
+    private func observeInterruptions() {
+        let interrupted: Notification.Name =
+            if #available(iOS 27, *) { AVAudioSession.didBecomeInactiveNotification } else { AVAudioSession.interruptionNotification }
+        let sources: [(Notification.Name, Any?)] = [(interrupted, nil), (.AVAudioEngineConfigurationChange, audio)]
+        observers = sources.map { name, object in
+            NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                Task { await self?.finish() }
+            }
+        }
     }
 
     /// Nonisolated so the tap block, which runs on the audio thread, is not main-actor isolated.

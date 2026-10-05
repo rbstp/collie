@@ -162,10 +162,10 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     #expect(model.draft == "fix bonjour à tous")
     #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, dictationLanguage: .french))
 
-    let reopened = DictationModel(engine: engine, prefsFile: file)
-    #expect(reopened.language == .french)
+    let route = AgentRoute(machineId: "m1", terminalId: "term_1")
+    #expect(AgentModel(core: FakeCore(), route: route, prefsFile: file, dictationEngine: engine).dictation.language == .french)
     try Data(#"{"dictationLanguage":"de-DE"}"#.utf8).write(to: file)
-    #expect(DictationModel(engine: engine, prefsFile: file).language == .english)
+    #expect(AgentModel(core: FakeCore(), route: route, prefsFile: file, dictationEngine: engine).dictation.language == .english)
     model.dictation.cancel()
 }
 
@@ -181,6 +181,8 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     #expect(model.dictation.problem?.message.contains("Settings") == true)
     #expect(engine.started.isEmpty)
     #expect(model.draft == "keep")
+    await model.sendPrompt()
+    #expect(model.dictation.problem == nil)
 
     engine.microphone = true
     model.startDictation()
@@ -193,7 +195,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
 @Test func missingModelIsReportedAndDownloadProgressIsShown() async {
     let engine = FakeDictationEngine()
     engine.unavailable = [.french]
-    let dictation = DictationModel(engine: engine, prefsFile: nil)
+    let dictation = DictationModel(engine: engine, language: .english, prefsFile: nil)
     dictation.select(.french)
     await dictation.start(appendingTo: "") { _ in }?.value
     #expect(dictation.problem == .unavailable(.french))
@@ -217,7 +219,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
 @Test func stoppingWhilePreparingNeverStartsTheMicrophone() async {
     let engine = FakeDictationEngine()
     engine.holdsInstall = true
-    let dictation = DictationModel(engine: engine, prefsFile: nil)
+    let dictation = DictationModel(engine: engine, language: .english, prefsFile: nil)
     let task = dictation.start(appendingTo: "") { _ in }
     await until { engine.installing }
     dictation.stop()
@@ -251,6 +253,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     await until { !model.dictation.isActive }
     #expect(model.draft == "fix done")
     #expect(model.dictation.problem?.message.hasPrefix("Dictation stopped: ") == true)
+    #expect(engine.cancelled == 1)
 }
 
 @MainActor

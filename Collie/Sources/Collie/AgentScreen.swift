@@ -459,7 +459,7 @@ private struct DictationBar: View {
         HStack(spacing: 8) {
             switch dictation.phase {
             case .preparing(let download?):
-                Text("Downloading \(dictation.language.label) speech model").font(.caption).lineLimit(1)
+                Text("Downloading speech model").font(.caption).lineLimit(1)
                 ProgressView(value: download).frame(width: 60)
             case .listening:
                 Text("Dictating…").font(.caption.weight(.semibold))
