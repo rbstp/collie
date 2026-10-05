@@ -13,6 +13,7 @@ struct AgentScreen: View {
     let neighbor: ((Int) -> AgentRoute?)?
     let switchAgent: (AgentRoute) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     init(
         core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel? = nil, follows: FollowModel? = nil,
@@ -115,7 +116,11 @@ struct AgentScreen: View {
         }
         .task { await model.run() }
         .onAppear { model.reloadGestures() }
-        .onDisappear { model.cancelUpload() }
+        .onChange(of: scenePhase) { _, phase in model.dictation.scenePhaseChanged(to: phase) }
+        .onDisappear {
+            model.cancelUpload()
+            model.dictation.cancel()
+        }
     }
 
     private func perform(_ action: GestureAction) {
@@ -323,6 +328,12 @@ private struct PromptBar: View {
             if let upload = model.upload {
                 UploadChip(upload: upload) { model.cancelUpload() }
             }
+            if let problem = model.dictation.problem {
+                DictationProblemRow(problem: problem)
+            }
+            if model.dictation.isActive {
+                DictationBar(dictation: model.dictation)
+            }
             if !model.attachments.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 6) {
@@ -353,6 +364,8 @@ private struct PromptBar: View {
                     .padding(.vertical, 8)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
                     .focused($editing)
+                    .disabled(model.dictation.isActive)
+                DictationButton(model: model) { editing = false }
                 if editing {
                     Button {
                         editing = false
@@ -404,6 +417,104 @@ private struct PromptBar: View {
                 })
             case .failure(let error):
                 model.attachFailed(error)
+            }
+        }
+    }
+}
+
+private struct DictationButton: View {
+    let model: AgentModel
+    let starting: () -> Void
+
+    var body: some View {
+        let dictation = model.dictation
+        Menu {
+            Picker(
+                "Dictation language",
+                selection: Binding(get: { dictation.language }, set: { dictation.select($0) })
+            ) {
+                ForEach(DictationLanguage.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+        } label: {
+            Image(systemName: dictation.isActive ? "mic.fill" : "mic")
+                .font(.system(size: 20))
+                .frame(width: 32, height: 36)
+        } primaryAction: {
+            if dictation.isActive {
+                dictation.stop()
+            } else {
+                starting()
+                model.startDictation()
+            }
+        }
+        .disabled(model.sendingPrompt)
+        .accessibilityLabel(dictation.isActive ? "Stop dictation" : "Dictate in \(dictation.language.label)")
+    }
+}
+
+private struct DictationBar: View {
+    let dictation: DictationModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            switch dictation.phase {
+            case .preparing(let download?):
+                Text("Downloading speech model").font(.caption).lineLimit(1)
+                ProgressView(value: download).frame(width: 60)
+            case .listening:
+                Text("Dictating…").font(.caption.weight(.semibold))
+                LevelMeter(level: dictation.level)
+            case .idle, .preparing(nil), .finishing:
+                ProgressView().controlSize(.mini)
+                Text(dictation.phase == .finishing ? "Finishing…" : "Starting…").font(.caption)
+            }
+            Spacer(minLength: 0)
+            Button(dictation.language.code) { dictation.select(dictation.language.other) }
+                .font(.caption.monospaced().weight(.semibold))
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .disabled(dictation.phase == .finishing)
+                .accessibilityLabel("Dictation language, \(dictation.language.label)")
+                .accessibilityHint("Switches to \(dictation.language.other.label)")
+            Button(action: dictation.stop) {
+                Image(systemName: "stop.circle.fill").font(.title3).foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+            .disabled(dictation.phase == .finishing)
+            .accessibilityLabel("Stop dictation")
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
+        .background(.fill.tertiary, in: Capsule())
+    }
+}
+
+private struct LevelMeter: View {
+    let level: Float
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<8, id: \.self) { index in
+                Capsule()
+                    .fill(Float(index) < level * 8 ? Color.red : Color.secondary.opacity(0.3))
+                    .frame(width: 3, height: 12)
+            }
+        }
+        .animation(.linear(duration: 0.1), value: level)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct DictationProblemRow: View {
+    let problem: DictationProblem
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(problem.message).font(.footnote).foregroundStyle(.red)
+            if problem == .microphoneDenied, let settings = URL(string: UIApplication.openSettingsURLString) {
+                Button("Open Settings") { openURL(settings) }.font(.footnote)
             }
         }
     }

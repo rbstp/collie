@@ -34,6 +34,8 @@ final class AgentModel {
     var close = CloseConfirmation()
     private(set) var closed = false
 
+    let dictation: DictationModel
+
     private let prefsFile: URL?
     var wrapLines: Bool {
         didSet {
@@ -66,11 +68,15 @@ final class AgentModel {
     // the latest watcher may unwatch.
     private static var watchers: [String: ObjectIdentifier] = [:]
 
-    init(core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file) {
+    init(
+        core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file,
+        dictationEngine: any DictationEngine = SpeechDictationEngine()
+    ) {
         self.core = core
         self.route = route
         self.prefsFile = prefsFile
         let prefs = DevicePrefs.load(from: prefsFile)
+        dictation = DictationModel(engine: dictationEngine, language: prefs.dictationLanguage, prefsFile: prefsFile)
         wrapLines = prefs.wrapLines
         fontSize = prefs.fontSize
         gestures = prefs.gestures
@@ -91,7 +97,7 @@ final class AgentModel {
     }
 
     var canSendPrompt: Bool {
-        !sendingPrompt && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
+        !sendingPrompt && !dictation.isActive && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
     }
 
     /// Runs while the screen is visible: watch, poll the core at 10 Hz, unwatch on cancel.
@@ -121,7 +127,7 @@ final class AgentModel {
         else { return }
         if text.isEmpty {
             macDraft = ""
-        } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, attachments.isEmpty {
+        } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, attachments.isEmpty, !dictation.isActive {
             draft = text
             macDraft = text
         }
@@ -153,6 +159,8 @@ final class AgentModel {
     /// Text typed and files attached while the send is in flight stay for the next prompt.
     /// Paths on the Mac never have spaces, so they are set apart by single spaces.
     func sendPrompt() async {
+        guard !dictation.isActive else { return }
+        dictation.problem = nil
         if answering {
             await sendAnswer()
             return
@@ -198,8 +206,15 @@ final class AgentModel {
     }
 
     func paste(_ text: String?) {
-        guard let text else { return }
+        guard let text, !dictation.isActive else { return }
         draft += text
+    }
+
+    /// Dictation owns the field until it stops; a send in flight would trim the text it started from.
+    @discardableResult
+    func startDictation() -> Task<Void, Never>? {
+        guard !sendingPrompt else { return nil }
+        return dictation.start(appendingTo: draft) { [weak self] in self?.draft = $0 }
     }
 
     var attachmentSlots: Int { Attachment.maxPerPrompt - attachments.count }

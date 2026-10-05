@@ -27,6 +27,7 @@ No Tailscale app is needed on either device, and no TCP port is opened outside t
 - **Terminal**: a live view of the last 240 lines of the agent's pane, rendered with libghostty-vt, with optional line wrapping and the MesloLGS NF font so Nerd Font glyphs match the Mac. Long-press to select text, drag the handles to adjust, and copy (Universal Clipboard included), or open an http or https link the selection touches.
 - **Gestures** (Settings > Gestures): double-tap pastes into the prompt field, pinch sets the font size, swiping sideways switches to the previous or next agent, and triple-tap can send Esc (off by default). Gestures stay off while text is selected.
 - **Prompt and keys**: send a prompt, or keys from the key strip (`esc ← ↑ ↓ → ⇥ ⇧⇥ ⏎ ⌃⏎`). A Claude Code prompt typed on the machine but not sent shows up in the phone's prompt field, and sending from the phone replaces it. "Focus on <machine>" brings the agent's pane to the front in herdr.
+- **Dictation**: the mic button dictates into the prompt field on the phone itself (Apple's on-device speech models; audio never leaves the phone), in English (US) or French (Canada). Nothing is sent until you send it.
 - **Attachments**: up to 10 photos or files per prompt, uploaded over the tailnet and shown as pills; the agent receives their paths on the machine.
 - **New task**: start an agent in a new workspace from the phone.
 - **Approvals**: when an agent blocks on a permission prompt, you get a push notification naming the tool call (with the Claude Code hook, the exact command or file; otherwise as read from the screen). Approve or deny from the lock screen (the iPhone must be unlocked first) or in the app (Face ID or the passcode for each decision). In the app you can also add a note to an approval or a denial, send feedback on a plan, and answer Claude Code's question menus by picking an option or typing an answer.
@@ -58,7 +59,7 @@ Details, including what is not covered: [docs/threat-model.md](docs/threat-model
 | 4 | Live Activities and Dynamic Island for agents you follow, approvals on the activity, question menus | done |
 | 5 | Multiple computers (macOS and Linux), Claude Code hooks enrichment | done |
 | 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | done |
-| 7 | Improvements: compact status icons, opening links, gestures (done); a Mac menu bar icon, Codex and Copilot CLI agents, dictation, live terminal previews, remaining context and a sessions inbox, an Apple Watch app | in progress |
+| 7 | Improvements: compact status icons, opening links, gestures, dictation (done); a Mac menu bar icon, Codex and Copilot CLI agents, live terminal previews, more scrollback, remaining context and a sessions inbox, an Apple Watch app | in progress |
 
 Outside the phases: an audit log viewer, and smaller fixes tracked as [issues](https://github.com/rbstp/collie/issues).
 
