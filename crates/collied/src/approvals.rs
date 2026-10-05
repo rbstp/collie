@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use protocol::{
     AgentStatus, Approval, ApprovalDecideParams, ApprovalId, ApprovalOutcome, Decision, ErrorCode,
-    Event, Nonce, Response, TerminalId,
+    Event, Nonce, PendingTool, Response, TerminalId,
 };
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -17,6 +17,7 @@ use crate::audit::Audit;
 use crate::drive::{Authorized, Reply, herdr_fail};
 use crate::flock;
 use crate::herdr::{self, AgentInfo, WorkspaceInfo};
+use crate::hooks;
 use crate::prompt::{self, Menu};
 use crate::push::{self, Push};
 
@@ -37,6 +38,10 @@ const DECIDE_BUDGET: Duration = Duration::from_secs(6);
 // Reissues of a prompt (after a burned nonce) alert at most this often per terminal, so
 // bad attempts cannot flood the phone; the reissued approval still reaches live sessions.
 pub const ALERT_GAP: Duration = Duration::from_secs(30);
+// A hook report whose dialog never showed (answered on the machine before collied looked,
+// or by another hook) is dropped after this.
+const HOOK_UNUSED: Duration = Duration::from_secs(60);
+const MAX_HOOKS: usize = 64;
 
 /// What collied saw on an agent's screen. Never leaves collied except as the snippet and
 /// the sealed alert context.
@@ -74,6 +79,13 @@ struct Pending {
     approval: Approval,
     screen: Screen,
     deciding: bool,
+    session: Option<String>,
+}
+
+struct Hooked {
+    at: Instant,
+    tool: PendingTool,
+    used: bool,
 }
 
 struct Alerted {
@@ -90,9 +102,22 @@ struct Inner {
     resolved: VecDeque<ApprovalId>,
     buckets: HashMap<String, (f64, Instant)>,
     alerted: HashMap<String, Alerted>,
+    hooks: HashMap<String, Hooked>,
 }
 
 impl Inner {
+    /// A report names one dialog: once an approval showed it, the approval's end drops it,
+    /// so a later dialog of that session without a report never inherits it.
+    fn end(&mut self, terminal: &str) -> Option<Pending> {
+        let p = self.pending.remove(terminal)?;
+        if let Some(s) = &p.session
+            && self.hooks.get(s).is_some_and(|h| h.used)
+        {
+            self.hooks.remove(s);
+        }
+        Some(p)
+    }
+
     fn remember(&mut self, id: ApprovalId) {
         if self.resolved.len() == RESOLVED_KEPT {
             self.resolved.pop_front();
@@ -298,6 +323,9 @@ impl Approvals {
         let mut live = Vec::new();
         {
             let mut inner = self.lock();
+            inner
+                .hooks
+                .retain(|_, h| h.used || h.at.elapsed() < HOOK_UNUSED);
             let done: Vec<(String, ApprovalOutcome)> = inner
                 .pending
                 .iter()
@@ -317,7 +345,7 @@ impl Approvals {
                 })
                 .collect();
             for (t, outcome) in done {
-                if let Some(p) = inner.pending.remove(&t) {
+                if let Some(p) = inner.end(&t) {
                     inner.remember(p.approval.approval_id.clone());
                     ended.push((p.approval.approval_id, outcome));
                 }
@@ -335,7 +363,7 @@ impl Approvals {
             if inner.pending.get(&a.terminal_id).is_some_and(|p| {
                 !p.deciding && p.approval.approval_id == id && !p.screen.shows_same(&screen)
             }) {
-                inner.pending.remove(&a.terminal_id);
+                inner.end(&a.terminal_id);
                 inner.remember(id.clone());
                 if let Some(last) = inner.alerted.get_mut(&a.terminal_id) {
                     last.drifted = true;
@@ -418,6 +446,12 @@ impl Approvals {
         if !screen.blocked {
             return Ok(());
         }
+        let session = a.agent_session.as_ref().map(|s| s.value.clone());
+        // Only a dialog with decisions is a permission prompt, the one the hook reports.
+        let tool = session
+            .as_ref()
+            .filter(|_| !screen.offered.is_empty())
+            .and_then(|s| self.lock().hooks.get(s).map(|h| h.tool.clone()));
         let now = crate::now_ms();
         let approval = Approval {
             approval_id: ApprovalId::new(random(16)?)?,
@@ -425,7 +459,7 @@ impl Approvals {
             agent_label: agent_label(a),
             workspace_label: workspace_label(&a.workspace_id, workspaces),
             snippet: screen.snippet.clone(),
-            tool: None,
+            tool: tool.clone(),
             options: screen.offered.iter().map(|(d, _)| *d).collect(),
             choices: screen.menu.as_ref().map_or_else(Vec::new, Menu::choices),
             accepts_input: screen.accepts_input,
@@ -435,11 +469,18 @@ impl Approvals {
             created_at_ms: now,
             expires_at_ms: now + self.ttl.as_millis() as u64,
         };
-        let context = screen.context.clone();
+        let context = tool
+            .as_ref()
+            .map_or_else(|| screen.context.clone(), hooks::context);
         let alert = {
             let mut inner = self.lock();
             if inner.pending.contains_key(&a.terminal_id) {
                 return Ok(());
+            }
+            if let Some(h) = session.as_ref().and_then(|s| inner.hooks.get_mut(s))
+                && Some(&h.tool) == tool.as_ref()
+            {
+                h.used = true;
             }
             let alert = inner.alert_due(&a.terminal_id, &screen, &approval);
             inner.pending.insert(
@@ -448,6 +489,7 @@ impl Approvals {
                     approval: approval.clone(),
                     screen,
                     deciding: false,
+                    session,
                 },
             );
             alert
@@ -462,6 +504,34 @@ impl Approvals {
         }
         let _ = self.events.send(Event::ApprovalNeeded { approval });
         Ok(())
+    }
+
+    /// What Claude Code's PermissionRequest hook reported for a session. The hook runs
+    /// before the dialog is drawn, so the report names the call of that session's next
+    /// permission approval.
+    pub fn hook(&self, session_id: String, tool: PendingTool) {
+        if !hooks::valid_session(&session_id) {
+            return;
+        }
+        let mut inner = self.lock();
+        if inner.hooks.len() >= MAX_HOOKS
+            && !inner.hooks.contains_key(&session_id)
+            && let Some(oldest) = inner
+                .hooks
+                .iter()
+                .min_by_key(|(_, h)| h.at)
+                .map(|(s, _)| s.clone())
+        {
+            inner.hooks.remove(&oldest);
+        }
+        inner.hooks.insert(
+            session_id,
+            Hooked {
+                at: Instant::now(),
+                tool: hooks::bounded(tool),
+                used: false,
+            },
+        );
     }
 
     fn take_token(&self, peer: &str) -> bool {
@@ -490,7 +560,7 @@ impl Approvals {
                 .get(terminal)
                 .is_some_and(|p| p.approval.approval_id == *id)
             {
-                inner.pending.remove(terminal);
+                inner.end(terminal);
             }
             inner.remember(id.clone());
         }

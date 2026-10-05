@@ -16,7 +16,8 @@ use collied::push::{Alert, Delivery, Device, Push, Rejection, Sender};
 use futures_util::future::BoxFuture;
 use protocol::{
     ActivityId, ApnsEnvironment, Approval, ApprovalDecideParams, ApprovalOutcome, Decision,
-    ErrorCode, Event, Nonce, NotificationKey, PromptText, PushToken, Response, TerminalId,
+    ErrorCode, Event, Nonce, NotificationKey, PendingTool, PromptText, PushToken, Response,
+    TerminalId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -814,6 +815,35 @@ async fn a_changed_prompt_supersedes_the_approval() {
         "the cursor moved on the Mac"
     );
     assert!(rig.mutations().is_empty());
+}
+
+#[tokio::test]
+async fn a_hook_report_names_the_tool_call_of_one_prompt() {
+    let mut rig = Rig::start(TTL).await;
+    let bash = |cmd: &str| PendingTool {
+        name: "Bash".into(),
+        summary: cmd.into(),
+    };
+    rig.approvals.hook("sess-2".into(), bash("ls"));
+    rig.approvals.hook("sess-1".into(), bash("rm -rf build"));
+    let a = rig.needed().await;
+    assert_eq!(a.tool, Some(bash("rm -rf build")));
+    let alerts = rig.alerts(1).await;
+    assert_eq!(
+        open_context(&alerts[0].1.payload),
+        json!({"v": 1, "body": "Bash: rm -rf build"})
+    );
+
+    rig.herdr
+        .with(|h| h.text = BASH.replace("rm -rf build", "rm -rf dist"));
+    let b = rig.needed().await;
+    assert_eq!(b.tool, None, "a used report never names the next prompt");
+
+    rig.approvals.hook("sess-1".into(), bash("rm -rf target"));
+    rig.herdr
+        .with(|h| h.text = BASH.replace("rm -rf build", "rm -rf target"));
+    let c = rig.needed().await;
+    assert_eq!(c.tool, Some(bash("rm -rf target")));
 }
 
 #[tokio::test]

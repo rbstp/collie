@@ -23,8 +23,16 @@ pub enum Request {
     Status,
     Pair,
     PeersList,
-    PeersRevoke { target: String },
-    Confirm { accept: bool },
+    PeersRevoke {
+        target: String,
+    },
+    Confirm {
+        accept: bool,
+    },
+    Hook {
+        session_id: String,
+        tool: protocol::PendingTool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -97,6 +105,7 @@ pub enum Reply {
         peer: Peer,
         closed_sessions: usize,
     },
+    Noted,
     Error {
         message: String,
     },
@@ -269,6 +278,10 @@ async fn handle(stream: UnixStream, state: Arc<State>) {
                 message: e.to_string(),
             },
         },
+        Request::Hook { session_id, tool } => {
+            state.approvals.hook(session_id, tool);
+            Reply::Noted
+        }
         Request::Pair => return pair(&state, &mut r, &mut w).await,
         Request::Confirm { .. } => Reply::Error {
             message: "no pairing in progress".into(),

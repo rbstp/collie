@@ -16,6 +16,7 @@ pub mod drive;
 pub mod flock;
 pub mod gate;
 pub mod herdr;
+pub mod hooks;
 #[cfg(target_os = "macos")]
 pub mod keychain;
 pub mod pairing;

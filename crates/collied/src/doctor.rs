@@ -12,7 +12,7 @@ use crate::keychain;
 
 use crate::config::{self, ApnsConfig, ApnsKey, Config};
 use crate::control::{self, Reply, Request};
-use crate::{herdr, push};
+use crate::{herdr, hooks, push};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Status {
@@ -96,13 +96,29 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
         let (s, d) = check_signature();
         r.line(s, "codesign", d);
     }
-    r.line(
-        Status::Warn,
-        "hooks",
-        "Claude Code hooks not installed (phase 5)",
-    );
+    let (s, d) = check_hooks();
+    r.line(s, "hooks", d);
 
     Ok(!r.failed)
+}
+
+fn check_hooks() -> (Status, String) {
+    let missing = "Claude Code PermissionRequest hook `collied hook` not installed; approvals name the tool call from the screen only";
+    let Ok(path) = hooks::settings_path() else {
+        return (Status::Warn, missing.to_owned());
+    };
+    let settings = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if hooks::installed(&settings) {
+        (
+            Status::Ok,
+            format!("PermissionRequest hook in {}", path.display()),
+        )
+    } else {
+        (Status::Warn, missing.to_owned())
+    }
 }
 
 #[cfg(target_os = "macos")]

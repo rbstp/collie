@@ -167,7 +167,7 @@ pub struct State {
     live: Mutex<activity::Live>,
     events: broadcast::Sender<Event>,
     drive: Arc<Driver>,
-    approvals: Arc<Approvals>,
+    pub(crate) approvals: Arc<Approvals>,
     push: Arc<Push>,
     attachments: Arc<Attachments>,
     pub(crate) audit: Arc<Audit>,

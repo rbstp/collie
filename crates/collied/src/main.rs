@@ -6,7 +6,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use collied::config::{self, Config};
 use collied::control::{self, Client, Reply, Request};
-use collied::{daemon, doctor, push, service};
+use collied::{daemon, doctor, hooks, push, service};
 use tracing_subscriber::EnvFilter;
 use zeroize::Zeroizing;
 
@@ -57,6 +57,8 @@ enum Command {
         #[command(subcommand)]
         command: ApnsCommand,
     },
+    /// Claude Code PermissionRequest hook: reports the pending tool call to collied.
+    Hook,
 }
 
 #[derive(Subcommand)]
@@ -152,6 +154,7 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
         Command::Pair { show_uri } => return pair(&control_path, show_uri).await,
         Command::Peers { command } => peers(command, &control_path, &data_dir).await?,
         Command::Status => status(&control_path).await?,
+        Command::Hook => hooks::run(&control_path).await,
         Command::Stop => service::stop()?,
         Command::Start => service::start()?,
         Command::Service { command } => match command {
