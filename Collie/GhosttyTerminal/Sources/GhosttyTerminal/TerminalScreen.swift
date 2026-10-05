@@ -111,8 +111,8 @@ public final class TerminalScreen {
         var bytes: [UInt8]
         if let wrapColumns {
             wantedColumns = UInt16(min(max(wrapColumns, 1), Int(Self.maxColumns)))
-            // Wrapped height is unknown before writing; rows past the content are dropped by
-            // readFrame, and content beyond maxRows scrolls the oldest rows off the top.
+            // Rows past the content are dropped by readFrame. preparedForWrapping keeps the
+            // content within maxRows - 1 rows by an upper bound on each line's wrapped height.
             wantedRows = Self.maxRows
             bytes = Array("\u{1B}[?7h".utf8) + Array(Self.preparedForWrapping(snapshot, columns: Int(wantedColumns)).utf8)
         } else {
@@ -179,10 +179,14 @@ public final class TerminalScreen {
     /// with a label, lose the excess from their longest run when that leaves at least one of it.
     /// Widths follow Ghostty: East Asian wide and emoji presentation characters take two columns,
     /// marks and format characters none, and a tab advances to the next multiple of 8.
+    /// The oldest rows are dropped, all but their SGR sequences, until the rest fits in
+    /// `maxRows - 1` rows, so the screen never scrolls and soft wraps stay tracked.
     static func preparedForWrapping(_ snapshot: String, columns: Int) -> String {
         let scalars = Array(snapshot.unicodeScalars)
-        var out = String.UnicodeScalarView()
+        var out: [Unicode.Scalar] = []
         out.reserveCapacity(scalars.count)
+        var rowStarts: [Int] = []
+        var heights: [Int] = []
         var rowStart = 0
         while rowStart <= scalars.count {
             let newline = scalars[rowStart...].firstIndex(of: "\n") ?? scalars.count
@@ -241,6 +245,11 @@ public final class TerminalScreen {
                     tried += 1
                 }
             }
+            rowStarts.append(out.count)
+            // A wide character that does not fit wraps early, leaving at most one column unused.
+            let shown = contentWidth - cut
+            let perRow = max(columns - 1, 1)
+            heights.append(clip || shown <= columns ? 1 : (shown + perRow - 1) / perRow)
             if clip { out.append(contentsOf: "\u{1B}[?7l".unicodeScalars) }
             if cut > 0 {
                 out.append(contentsOf: scalars[rowStart..<(longestRun.upperBound - cut)])
@@ -253,7 +262,26 @@ public final class TerminalScreen {
             out.append(contentsOf: scalars[rowEnd..<min(newline + 1, scalars.count)])
             rowStart = newline + 1
         }
-        return String(out)
+        var first = heights.count
+        var height = 0
+        while first > 0 && (first == heights.count || height + heights[first - 1] <= Int(maxRows) - 1) {
+            first -= 1
+            height += heights[first]
+        }
+        guard first > 0 else { return String(String.UnicodeScalarView(out)) }
+        let dropped = rowStarts[first]
+        var kept: [Unicode.Scalar] = []
+        var i = 0
+        while i < dropped {
+            if let end = sgrEnd(out, at: i, before: dropped) {
+                kept.append(contentsOf: out[i..<end])
+                i = end
+            } else {
+                i += 1
+            }
+        }
+        kept.append(contentsOf: out[dropped...])
+        return String(String.UnicodeScalarView(kept))
     }
 
     static let horizontalLines: Set<UInt32> = [0x2500, 0x2501, 0x2504, 0x2505, 0x2508, 0x2509, 0x254C, 0x254D, 0x2550]

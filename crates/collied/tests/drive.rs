@@ -227,6 +227,9 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
             1 => h.screens[0].clone(),
             _ => h.screens.pop_front().unwrap(),
         };
+        let lines: Vec<&str> = text.split_inclusive('\n').collect();
+        let keep = p["lines"].as_u64().map_or(lines.len(), |n| n as usize);
+        let text = lines[lines.len().saturating_sub(keep)..].concat();
         json!({"type": "pane_read", "read": {
             "pane_id": pane, "workspace_id": "w6", "tab_id": "w6:t1", "source": p["source"],
             "format": "ansi", "text": text, "revision": 0, "truncated": true,
@@ -1165,6 +1168,51 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
         reads,
         "watch kept polling"
     );
+}
+
+#[tokio::test]
+async fn a_reply_over_herdrs_line_limit_is_read_with_fewer_lines() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    // About 2.2 KB of JSON per line, so 500 lines are still over 1 MiB.
+    let line = format!("{}\r\n", "\u{1b}[31mx".repeat(200));
+    herdr.with(|h| h.text = line.repeat(1000));
+
+    let mut watcher = drive.watch(tid(CLAUDE)).await.unwrap();
+    let Ok(Some(Watched::Output(read))) = next(&mut watcher).await else {
+        panic!("no output");
+    };
+    assert_eq!(read.ansi, line.repeat(250));
+    herdr.with(|h| h.text = line.repeat(999) + "y\r\n");
+    let Ok(Some(Watched::Patch(_))) = next(&mut watcher).await else {
+        panic!("no patch");
+    };
+    drop(watcher);
+    let depths: Vec<Value> = herdr
+        .params("agent.read")
+        .iter()
+        .map(|p| p["lines"].clone())
+        .collect();
+    assert_eq!(
+        depths[..4],
+        [json!(1000), json!(500), json!(250), json!(250)]
+    );
+
+    let reply = drive
+        .read(
+            ReadParams {
+                terminal_id: tid(CLAUDE),
+                source: ReadSource::Recent,
+                lines: Some(1000),
+            },
+            true,
+        )
+        .await;
+    let Ok(Response::Terminal(read)) = reply else {
+        panic!("{reply:?}");
+    };
+    assert_eq!(read.ansi.lines().count(), 250);
 }
 
 async fn next(

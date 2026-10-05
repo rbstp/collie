@@ -233,11 +233,11 @@ impl Driver {
     }
 
     pub async fn read(&self, p: ReadParams, agent: bool) -> Reply {
-        let lines = p.lines.map(u32::from);
+        let mut lines = p.lines.map(u32::from);
         let source = source_name(p.source);
         let read = if agent {
             let a = self.find_agent(&p.terminal_id).await?;
-            herdr::agent_read(&self.herdr, &a.pane_id, source, lines).await
+            self.agent_read(&a.pane_id, source, &mut lines).await
         } else {
             let pane = self.find_pane(&p.terminal_id).await?;
             herdr::pane_read(&self.herdr, &pane.pane_id, source, lines).await
@@ -248,6 +248,24 @@ impl Driver {
             p.source,
             read,
         )))
+    }
+
+    /// A reply longer than herdr's line limit is refused, so a pane dense with escapes is
+    /// read again with half the lines, and `lines` keeps the depth that fit.
+    async fn agent_read(
+        &self,
+        pane_id: &str,
+        source: &str,
+        lines: &mut Option<u32>,
+    ) -> Result<herdr::PaneRead, herdr::Error> {
+        loop {
+            match herdr::agent_read(&self.herdr, pane_id, source, *lines).await {
+                Err(herdr::Error::LineTooLong) if lines.is_some_and(|n| n > 1) => {
+                    *lines = lines.map(|n| n / 2);
+                }
+                read => return read,
+            }
+        }
     }
 
     pub async fn watch(self: &Arc<Self>, terminal_id: TerminalId) -> Result<Watcher, Fail> {
@@ -262,19 +280,16 @@ impl Driver {
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut last = None;
         let mut sent: Option<String> = None;
+        let mut lines = Some(WATCH_LINES);
         loop {
             tick.tick().await;
             let msg = match self.find_agent(&terminal_id).await {
                 Err((ErrorCode::NotFound, _)) => Watched::Gone,
                 Err(_) => continue,
                 Ok(a) => {
-                    let Ok(read) = herdr::agent_read(
-                        &self.herdr,
-                        &a.pane_id,
-                        source_name(ReadSource::Recent),
-                        Some(WATCH_LINES),
-                    )
-                    .await
+                    let Ok(read) = self
+                        .agent_read(&a.pane_id, source_name(ReadSource::Recent), &mut lines)
+                        .await
                     else {
                         continue;
                     };

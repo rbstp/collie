@@ -67,6 +67,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private let screen = TerminalScreen(background: GhosttyTerminalUIView.background, foreground: GhosttyTerminalUIView.foreground)
     private let canvas = TerminalCanvas()
     private var snapshot: String?
+    private var renderDeferred = false
+    private let scrollEnd = ScrollEnd()
     private var frameData: TerminalFrame?
     private var renderedColumns: Int?
     private var followsBottom = true
@@ -137,6 +139,10 @@ public final class GhosttyTerminalUIView: UIScrollView {
         addGestureRecognizer(swipe)
         gesturesChanged()
         panGestureRecognizer.addTarget(self, action: #selector(panned(_:)))
+        scrollEnd.ended = { [weak self] in
+            if self?.renderDeferred == true { self?.render() }
+        }
+        delegate = scrollEnd
         for handle in [startHandle, endHandle] {
             let drag = UILongPressGestureRecognizer(target: self, action: #selector(draggedHandle(_:)))
             // Begins on touch down, so it wins over the scroll view's pan and moves by one cell.
@@ -172,6 +178,12 @@ public final class GhosttyTerminalUIView: UIScrollView {
     public func show(ansiSnapshot: String) {
         guard ansiSnapshot != snapshot else { return }
         snapshot = ansiSnapshot
+        // A full history takes over 10 ms to render on the main thread, which would stutter
+        // a scroll in progress.
+        if isDragging || isDecelerating {
+            renderDeferred = true
+            return
+        }
         render()
     }
 
@@ -183,6 +195,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
 
     private func render() {
         guard let snapshot, let screen else { return }
+        renderDeferred = false
         let columns = wrapColumns
         // Wait for a width: rendering at one column would flash a tall, narrow frame.
         if wraps && columns == nil { return }
@@ -484,6 +497,19 @@ struct TerminalFont: @unchecked Sendable {
             let data = try? Data(contentsOf: url)
         else { return nil }
         return CTFontManagerCreateFontDescriptorFromData(data as CFData)
+    }
+}
+
+@MainActor
+private final class ScrollEnd: NSObject, UIScrollViewDelegate {
+    var ended: (() -> Void)?
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { ended?() }
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        ended?()
     }
 }
 
