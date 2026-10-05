@@ -47,6 +47,19 @@ public final class GhosttyTerminalUIView: UIScrollView {
         }
     }
 
+    /// Off while a selection is active, and while nil.
+    public var onDoubleTap: (() -> Void)? {
+        didSet { gesturesChanged() }
+    }
+    public var onTripleTap: (() -> Void)? {
+        didSet { gesturesChanged() }
+    }
+    /// Pinching sets `fontSize`, then reports it.
+    public var onPinch: ((CGFloat) -> Void)? {
+        didSet { gesturesChanged() }
+    }
+    public var dismissesKeyboardOnScrollDown = false
+
     private let screen = TerminalScreen(background: GhosttyTerminalUIView.background, foreground: GhosttyTerminalUIView.foreground)
     private let canvas = TerminalCanvas()
     private var snapshot: String?
@@ -72,7 +85,12 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private var shownLink: URL?
     private let press = UILongPressGestureRecognizer()
     private let tap = UITapGestureRecognizer()
+    private let doubleTap = UITapGestureRecognizer()
+    private let tripleTap = UITapGestureRecognizer()
     private let tapFilter = FlingTapFilter()
+    private let pinch = UIPinchGestureRecognizer()
+    private let pinchFilter = PinchAlongsidePan()
+    private var pinchStart: CGFloat = 0
 
     public init(fontSize: CGFloat = 12) {
         self.fontSize = fontSize
@@ -92,6 +110,21 @@ public final class GhosttyTerminalUIView: UIScrollView {
         tapFilter.scrollView = self
         tap.delegate = tapFilter
         addGestureRecognizer(tap)
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.addTarget(self, action: #selector(doubleTapped))
+        tripleTap.numberOfTapsRequired = 3
+        tripleTap.addTarget(self, action: #selector(tripleTapped))
+        for multiTap in [doubleTap, tripleTap] {
+            multiTap.delegate = tapFilter
+            addGestureRecognizer(multiTap)
+        }
+        tap.require(toFail: doubleTap)
+        tap.require(toFail: tripleTap)
+        doubleTap.require(toFail: tripleTap)
+        pinch.addTarget(self, action: #selector(pinched(_:)))
+        pinch.delegate = pinchFilter
+        addGestureRecognizer(pinch)
+        gesturesChanged()
         panGestureRecognizer.addTarget(self, action: #selector(panned(_:)))
         for handle in [startHandle, endHandle] {
             let drag = UILongPressGestureRecognizer(target: self, action: #selector(draggedHandle(_:)))
@@ -262,6 +295,10 @@ public final class GhosttyTerminalUIView: UIScrollView {
         switch recognizer.state {
         case .began:
             hideCopy()
+            let moved = recognizer.translation(in: self)
+            if dismissesKeyboardOnScrollDown && selection == nil && moved.y > abs(moved.x) {
+                window?.endEditing(true)
+            }
         case .ended, .cancelled:
             if selection != nil && pressedWord == nil && draggedEdge == nil {
                 showCopy(at: recognizer.location(in: self))
@@ -273,6 +310,35 @@ public final class GhosttyTerminalUIView: UIScrollView {
 
     @objc private func tapped() {
         if selection != nil { selection = nil }
+    }
+
+    @objc private func doubleTapped() {
+        onDoubleTap?()
+    }
+
+    @objc private func tripleTapped() {
+        onTripleTap?()
+    }
+
+    @objc private func pinched(_ recognizer: UIPinchGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            pinchStart = fontSize
+            isScrollEnabled = false
+        case .changed:
+            let size = TerminalFontSize.pinched(pinchStart, scale: recognizer.scale)
+            guard size != fontSize else { return }
+            fontSize = size
+            onPinch?(size)
+        default:
+            isScrollEnabled = true
+        }
+    }
+
+    private func gesturesChanged() {
+        doubleTap.isEnabled = onDoubleTap != nil && selection == nil
+        tripleTap.isEnabled = onTripleTap != nil && selection == nil
+        pinch.isEnabled = onPinch != nil && selection == nil
     }
 
     private func cell(at point: CGPoint) -> TerminalCell? {
@@ -291,6 +357,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private func selectionChanged() {
         canvas.selection = selection
         canvas.setNeedsDisplay()
+        gesturesChanged()
         guard let selection else {
             startHandle.isHidden = true
             endHandle.isHidden = true
@@ -395,6 +462,16 @@ private final class FlingTapFilter: NSObject, UIGestureRecognizerDelegate {
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         scrollView?.isDecelerating != true
+    }
+}
+
+/// Two fingers that already started scrolling can still pinch.
+@MainActor
+private final class PinchAlongsidePan: NSObject, UIGestureRecognizerDelegate {
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        other is UIPanGestureRecognizer
     }
 }
 

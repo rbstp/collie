@@ -25,6 +25,9 @@ struct SettingsView: View {
                 Section("Prompt") {
                     Toggle("Keep keyboard open after sending", isOn: $keepKeyboard)
                 }
+                Section("Terminal") {
+                    NavigationLink("Gestures") { GesturesView() }
+                }
                 Section("Machines") {
                     NavigationLink("Paired machines (\(app.machines.count))") {
                         MachinesList(app: app, removeError: $removeError)
@@ -62,6 +65,33 @@ struct SettingsView: View {
                 await app.refreshNode()
                 report = app.core?.coldStartReport()
             }
+        }
+    }
+}
+
+private struct GesturesView: View {
+    @State private var gestures = DevicePrefs.load(from: DevicePrefs.file).gestures
+
+    var body: some View {
+        List {
+            Section {
+                Picker("Double-tap", selection: $gestures.doubleTap) {
+                    ForEach(GestureAction.allCases, id: \.self) { Text($0.label) }
+                }
+                Picker("Triple-tap", selection: $gestures.tripleTap) {
+                    ForEach(GestureAction.allCases, id: \.self) { Text($0.label) }
+                }
+                Toggle("Scrolling down hides the keyboard", isOn: $gestures.scrollDownHidesKeyboard)
+                Toggle("Pinch to resize text", isOn: $gestures.pinchResizesText)
+            } footer: {
+                Text("Paste only fills the prompt field; it never sends. Gestures are off while text is selected.")
+            }
+        }
+        .navigationTitle("Gestures")
+        .onChange(of: gestures) { _, gestures in
+            var prefs = DevicePrefs.load(from: DevicePrefs.file)
+            prefs.gestures = gestures
+            prefs.save(to: DevicePrefs.file)
         }
     }
 }

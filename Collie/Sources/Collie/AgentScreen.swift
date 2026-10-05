@@ -40,7 +40,10 @@ struct AgentScreen: View {
                     Text(notice).font(.footnote).padding(.horizontal).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            AgentTerminal(ansi: model.ansi, wraps: model.wrapLines) { await model.refresh() }
+            AgentTerminal(
+                ansi: model.ansi, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
+                perform: perform, resized: { model.fontSize = $0 }
+            ) { await model.refresh() }
                 .overlay {
                     if model.ansi.isEmpty {
                         ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
@@ -100,6 +103,14 @@ struct AgentScreen: View {
         }
         .task { await model.run() }
         .onDisappear { model.cancelUpload() }
+    }
+
+    private func perform(_ action: GestureAction) {
+        switch action {
+        case .none: break
+        case .paste: model.paste(UIPasteboard.general.string)
+        case .escape: model.tap(.esc)
+        }
     }
 }
 
@@ -200,10 +211,20 @@ private struct AgentHeader: View {
 private struct AgentTerminal: UIViewRepresentable {
     let ansi: String
     let wraps: Bool
+    let fontSize: Double
+    let gestures: TerminalGestures
+    let perform: @MainActor (GestureAction) -> Void
+    let resized: @MainActor (Double) -> Void
     let refresh: @MainActor () async -> Void
 
     func makeUIView(context: Context) -> GhosttyTerminalUIView {
-        let view = GhosttyTerminalUIView(fontSize: 11)
+        let view = GhosttyTerminalUIView(fontSize: fontSize)
+        let perform = perform
+        let resized = resized
+        if gestures.doubleTap != .none { view.onDoubleTap = { [gestures] in perform(gestures.doubleTap) } }
+        if gestures.tripleTap != .none { view.onTripleTap = { [gestures] in perform(gestures.tripleTap) } }
+        if gestures.pinchResizesText { view.onPinch = { resized($0) } }
+        view.dismissesKeyboardOnScrollDown = gestures.scrollDownHidesKeyboard
         let control = UIRefreshControl()
         control.tintColor = .white
         let coordinator = context.coordinator
@@ -223,6 +244,7 @@ private struct AgentTerminal: UIViewRepresentable {
     func updateUIView(_ view: GhosttyTerminalUIView, context: Context) {
         context.coordinator.refresh = refresh
         view.wraps = wraps
+        view.fontSize = fontSize
         if !ansi.isEmpty {
             view.show(ansiSnapshot: ansi)
         }

@@ -43,6 +43,16 @@ final class AgentModel {
         }
     }
 
+    var fontSize: Double {
+        didSet {
+            var prefs = DevicePrefs.load(from: prefsFile)
+            prefs.fontSize = fontSize
+            prefs.save(to: prefsFile)
+        }
+    }
+
+    let gestures: TerminalGestures
+
     var keepsKeyboard: Bool { DevicePrefs.load(from: prefsFile).keepKeyboard }
 
     // One chain per machine: a late unwatch from a popped screen must not land after
@@ -53,7 +63,10 @@ final class AgentModel {
         self.core = core
         self.route = route
         self.prefsFile = prefsFile
-        wrapLines = DevicePrefs.load(from: prefsFile).wrapLines
+        let prefs = DevicePrefs.load(from: prefsFile)
+        wrapLines = prefs.wrapLines
+        fontSize = prefs.fontSize
+        gestures = prefs.gestures
     }
 
     var acceptsKeys: Bool { blocked != .optionsOnly }
@@ -171,6 +184,11 @@ final class AgentModel {
         } catch {
             promptError = Self.message(for: error)
         }
+    }
+
+    func paste(_ text: String?) {
+        guard let text else { return }
+        draft += text
     }
 
     var attachmentSlots: Int { Attachment.maxPerPrompt - attachments.count }
