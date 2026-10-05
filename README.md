@@ -28,7 +28,7 @@ No Tailscale app is needed on either device, and no TCP port is opened outside t
 - **Prompt and keys**: send a prompt, or keys from the key strip (`esc ← ↑ ↓ → ⇥ ⇧⇥ ⏎ ⌃⏎`). A Claude Code prompt typed on the machine but not sent shows up in the phone's prompt field, and sending from the phone replaces it. "Focus on <machine>" brings the agent's pane to the front in herdr.
 - **Attachments**: up to 10 photos or files per prompt, uploaded over the tailnet and shown as pills; the agent receives their paths on the machine.
 - **New task**: start an agent in a new workspace from the phone.
-- **Approvals**: when an agent blocks on a permission prompt, you get a push notification showing the command. Approve or deny from the lock screen (the iPhone must be unlocked first) or in the app (Face ID or the passcode for each decision). In the app you can also add a note to an approval or a denial, send feedback on a plan, and answer Claude Code's question menus by picking an option or typing an answer.
+- **Approvals**: when an agent blocks on a permission prompt, you get a push notification naming the tool call (with the Claude Code hook, the exact command or file; otherwise as read from the screen). Approve or deny from the lock screen (the iPhone must be unlocked first) or in the app (Face ID or the passcode for each decision). In the app you can also add a note to an approval or a denial, send feedback on a plan, and answer Claude Code's question menus by picking an option or typing an answer.
 - **Follow**: "Follow on Lock Screen" (agent menu or long-press in the list) shows the agent (up to 5) in a Live Activity and the Dynamic Island, with its status and how long it has been in it. When a followed agent blocks, the activity shows the command with Approve and Deny buttons instead of a separate notification. Following is off by default; followed agents get a pin in the list.
 
 ## Security model
@@ -54,7 +54,7 @@ Details, including what is not covered: [docs/threat-model.md](docs/threat-model
 | 2 | Terminal, prompt, keys, new task | done |
 | 3 | Lock-screen approvals with encrypted context, attachments | done |
 | 4 | Live Activities and Dynamic Island for agents you follow, approvals on the activity, question menus | done |
-| 5 | Multiple computers (macOS and Linux), Claude Code hooks enrichment | multiple computers done; hooks in progress |
+| 5 | Multiple computers (macOS and Linux), Claude Code hooks enrichment | done |
 | 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | planned |
 | 7 | Improvements: compact status icons (done); a Mac menu bar icon, Codex and Copilot CLI agents, dictation, live terminal previews, gestures, opening links, remaining context and a sessions inbox, an Apple Watch app | planned |
 
@@ -104,6 +104,18 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
 3. **Install the app** on a connected iPhone with Developer Mode on (`just ios-run-device`). Sign in to Tailscale inside the app with your own account.
 4. **Pair**: run `collied pair` on the computer, scan the QR code with the app, and confirm with `y` on the computer.
 5. **Push notifications** (optional): add an `[apns]` section to `collied.toml` (`~/Library/Application Support/collie/collied.toml` on macOS, in the data directory on Linux), import the key with `collied apns import AuthKey_<KEY_ID>.p8`, then check with `collied apns test`. Each machine uses its own APNs key (its own key ID, revoked on its own) and sends its own pushes. On Linux, `collied apns import` encrypts the key into a systemd user credential (also sealed to the TPM2 when one is usable), with a 0600 file as the fallback where `systemd-creds` cannot encrypt. `collied doctor` reports which one is in use and, for a credential, its seal. The full steps are in [docs/release.md](docs/release.md).
+
+6. **Claude Code hook** (optional): add `collied hook` as a `PermissionRequest` hook in `~/.claude/settings.json`, so approvals name the exact tool call. It only reports the call to collied; Claude Code's dialog is unchanged. `collied doctor` checks it.
+
+   ```json
+   {
+     "hooks": {
+       "PermissionRequest": [
+         { "hooks": [{ "type": "command", "command": "~/.cargo/bin/collied hook", "timeout": 5 }] }
+       ]
+     }
+   }
+   ```
 
 List paired phones with `collied peers list`, revoke one with `collied peers revoke <label or StableID>` (removing the machine in the app does the same when the machine is reachable), and inspect the daemon with `collied status` (its tags and the herdr agents it sees).
 

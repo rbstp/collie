@@ -23,8 +23,17 @@ pub enum Request {
     Status,
     Pair,
     PeersList,
-    PeersRevoke { target: String },
-    Confirm { accept: bool },
+    PeersRevoke {
+        target: String,
+    },
+    Confirm {
+        accept: bool,
+    },
+    Hook {
+        session_id: String,
+        tool_name: String,
+        shown: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -97,6 +106,7 @@ pub enum Reply {
         peer: Peer,
         closed_sessions: usize,
     },
+    Noted,
     Error {
         message: String,
     },
@@ -260,7 +270,7 @@ async fn handle(stream: UnixStream, state: Arc<State>) {
                 peers: store.peers,
             }
         }
-        Request::PeersRevoke { target } => match state.revoke(&target, "revoked") {
+        Request::PeersRevoke { target } => match state.revoke(&target) {
             Ok((peer, closed_sessions)) => Reply::Revoked {
                 peer,
                 closed_sessions,
@@ -269,6 +279,16 @@ async fn handle(stream: UnixStream, state: Arc<State>) {
                 message: e.to_string(),
             },
         },
+        Request::Hook {
+            session_id,
+            tool_name,
+            shown,
+        } => {
+            if let Some(report) = crate::hooks::Report::new(&tool_name, shown) {
+                state.approvals.hook(session_id, report);
+            }
+            Reply::Noted
+        }
         Request::Pair => return pair(&state, &mut r, &mut w).await,
         Request::Confirm { .. } => Reply::Error {
             message: "no pairing in progress".into(),

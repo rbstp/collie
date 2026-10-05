@@ -100,6 +100,8 @@ fn grants(label: &str) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Menu {
     pub body: Vec<String>,
+    /// `body` with its indentation, which tells Claude Code's tips from command lines.
+    raw_body: Vec<String>,
     pub options: Vec<String>,
     /// Each option's first line, the rest of `options[i]` being the lines under it.
     pub heads: Vec<String>,
@@ -160,17 +162,19 @@ impl Menu {
         if cursors.next().is_some() {
             return None;
         }
-        let mut body: Vec<String> = lines[..first]
+        let mut raw_body: Vec<String> = lines[..first]
             .iter()
             .rev()
             .take_while(|l| !is_rule(l))
             .filter(|l| !l.trim().is_empty())
-            .map(|l| l.trim().to_owned())
+            .map(|l| (*l).to_owned())
             .collect();
-        body.reverse();
+        raw_body.reverse();
+        let body = raw_body.iter().map(|l| l.trim().to_owned()).collect();
         let (options, heads) = options.into_iter().map(|(_, l, h)| (l, h)).unzip();
         Some(Self {
             body,
+            raw_body,
             options,
             heads,
             cursor,
@@ -261,7 +265,7 @@ impl Menu {
     }
 
     pub fn tail(&self) -> &[String] {
-        &self.body[self.body.len().saturating_sub(MAX_BODY_LINES)..]
+        &self.raw_body[self.raw_body.len().saturating_sub(MAX_BODY_LINES)..]
     }
 
     /// The arrows that move the cursor to `target`, then the key that answers. Deny is
@@ -473,11 +477,20 @@ pub fn context(text: &str) -> String {
     cut
 }
 
+/// The end of the dialog, whole lines only (a line is cut only when it alone does not
+/// fit), without Claude Code's tips, which are dropped as in [`context`].
 pub fn snippet<'a>(lines: impl DoubleEndedIterator<Item = &'a str>) -> String {
+    let lines: Vec<&str> = lines.collect();
+    let dashed = |i: &usize| is_dashed(lines[*i]);
+    let first = (0..lines.len()).find(dashed);
+    let last = (0..lines.len()).rfind(dashed);
     let mut kept: Vec<String> = Vec::new();
     let mut used = 0;
-    for line in lines.rev() {
-        let line = clean(line);
+    for (i, raw) in lines.iter().enumerate().rev() {
+        if is_tip(raw) && !first.zip(last).is_some_and(|(f, e)| f < i && i < e) {
+            continue;
+        }
+        let line = clean(raw);
         if line.is_empty() || is_border(&line) {
             continue;
         }
@@ -489,7 +502,7 @@ pub fn snippet<'a>(lines: impl DoubleEndedIterator<Item = &'a str>) -> String {
             continue;
         }
         let room = MAX_SNIPPET_CHARS.saturating_sub(used + sep + 1);
-        if room > 0 {
+        if kept.is_empty() && room > 0 {
             let tail: String = line.chars().skip(n - room).collect();
             kept.push(format!("…{tail}"));
         }
@@ -506,6 +519,40 @@ fn splits_options(lines: &[&str], i: usize) -> bool {
         && i > 0
         && option_line(lines[i - 1]).is_some()
         && lines.get(i + 1).is_some_and(|l| option_line(l).is_some())
+}
+
+/// The dialog's non-empty lines with all whitespace removed, for [`shows_whole`].
+pub fn squashed_lines(text: &str) -> Vec<String> {
+    after_last_rule(text)
+        .into_iter()
+        .map(|l| unspaced(&clean(l)))
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// Whether `part` is a run of whole dialog lines. Wrapping only splits a line, so a
+/// command shows as whole lines however it wraps, and a shorter one never matches inside
+/// a longer line.
+pub fn shows_whole(lines: &[String], part: &str) -> bool {
+    let want: String = part.lines().map(|l| unspaced(&clean(l))).collect();
+    !want.is_empty()
+        && (0..lines.len()).any(|i| {
+            let mut got = String::new();
+            for line in &lines[i..] {
+                got.push_str(line);
+                if !want.starts_with(&got) {
+                    return false;
+                }
+                if got.len() == want.len() {
+                    return true;
+                }
+            }
+            false
+        })
+}
+
+fn unspaced(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
 pub fn after_last_rule(text: &str) -> Vec<&str> {
@@ -1304,12 +1351,25 @@ mod tests {
     }
 
     #[test]
-    fn snippets_keep_tips() {
+    fn snippets_drop_tips_but_never_a_command_line() {
         let m =
             Menu::parse(&BASH.replace("   rm -rf build\n", "   rm -rf build\n   Tip: rm -rf ~\n"))
                 .unwrap();
         let s = snippet(m.tail().iter().map(String::as_str));
         assert!(s.contains("Tip: rm -rf ~"), "{s}");
+        let m = Menu::parse(&BASH.replace(
+            "   rm -rf build\n",
+            "   rm -rf build\n Tip: auto mode handles these prompts for you\n",
+        ))
+        .unwrap();
+        let s = snippet(m.tail().iter().map(String::as_str));
+        assert!(!s.contains("Tip:") && s.contains("rm -rf build"), "{s}");
+        assert_eq!(
+            snippet(" ╌╌╌\n Tip: x\n ╌╌╌\n Tip: y\nDo you want to proceed?".lines()),
+            "Tip: x\nDo you want to proceed?"
+        );
+        let s = snippet(format!("{}\n{}", "a".repeat(150), "b".repeat(100)).lines());
+        assert_eq!(s, "b".repeat(100), "no line starts cut off");
     }
 
     #[test]

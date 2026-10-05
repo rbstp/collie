@@ -79,6 +79,15 @@ impl Store {
         Ok(())
     }
 
+    pub fn remove_node(&mut self, stable_id: &str) -> Result<Peer, Error> {
+        let i = self
+            .peers
+            .iter()
+            .position(|p| p.stable_id == stable_id)
+            .ok_or_else(|| Error::NotFound(stable_id.to_owned()))?;
+        Ok(self.peers.remove(i))
+    }
+
     pub fn remove(&mut self, target: &str) -> Result<Peer, Error> {
         let matches: Vec<usize> = self
             .peers

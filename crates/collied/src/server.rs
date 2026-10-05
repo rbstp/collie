@@ -167,7 +167,7 @@ pub struct State {
     live: Mutex<activity::Live>,
     events: broadcast::Sender<Event>,
     drive: Arc<Driver>,
-    approvals: Arc<Approvals>,
+    pub(crate) approvals: Arc<Approvals>,
     push: Arc<Push>,
     attachments: Arc<Attachments>,
     pub(crate) audit: Arc<Audit>,
@@ -221,10 +221,18 @@ impl State {
 
     /// Persists first, then closes every live session of that node. The peers lock is held
     /// across both so a connection cannot pass the gate between them.
-    pub(crate) fn revoke(&self, target: &str, how: &str) -> anyhow::Result<(Peer, usize)> {
+    pub(crate) fn revoke(&self, target: &str) -> anyhow::Result<(Peer, usize)> {
+        self.remove_peer(|s| s.remove(target), "revoked")
+    }
+
+    fn remove_peer(
+        &self,
+        remove: impl FnOnce(&mut Store) -> Result<Peer, peers::Error>,
+        how: &str,
+    ) -> anyhow::Result<(Peer, usize)> {
         let mut store = lock(&self.peers);
         let mut next = store.clone();
-        let peer = next.remove(target)?;
+        let peer = remove(&mut next)?;
         peers::save(&self.peers_path(), &next)?;
         *store = next;
         let mut closed = 0;
@@ -1334,9 +1342,10 @@ impl Session<'_> {
     /// phone afterwards.
     async fn unpair(&mut self, id: u32) -> Flow {
         let flow = self.reply(id, Ok(Response::Ok)).await;
+        let id = self.peer.who.node.stable_id.clone();
         if let Err(e) = self
             .state
-            .revoke(&self.peer.who.node.stable_id, "unpaired by the phone")
+            .remove_peer(|s| s.remove_node(&id), "unpaired by the phone")
         {
             tracing::error!(error = %e, "unpair");
             return flow;

@@ -17,6 +17,7 @@ use crate::audit::Audit;
 use crate::drive::{Authorized, Reply, herdr_fail};
 use crate::flock;
 use crate::herdr::{self, AgentInfo, WorkspaceInfo};
+use crate::hooks;
 use crate::prompt::{self, Menu};
 use crate::push::{self, Push};
 
@@ -37,6 +38,7 @@ const DECIDE_BUDGET: Duration = Duration::from_secs(6);
 // Reissues of a prompt (after a burned nonce) alert at most this often per terminal, so
 // bad attempts cannot flood the phone; the reissued approval still reaches live sessions.
 pub const ALERT_GAP: Duration = Duration::from_secs(30);
+const MAX_HOOKS: usize = 64;
 
 /// What collied saw on an agent's screen. Never leaves collied except as the snippet and
 /// the sealed alert context.
@@ -51,6 +53,8 @@ struct Screen {
     has_text_field: bool,
     supports_note: bool,
     fingerprint: [u8; 32],
+    /// The dialog's lines without whitespace, which a hook report must show on.
+    dialog: Vec<String>,
     /// The fingerprint with the menu cursor on each option in turn.
     cursor_at: Vec<[u8; 32]>,
     snippet: String,
@@ -76,6 +80,11 @@ struct Pending {
     deciding: bool,
 }
 
+struct Hooked {
+    at: Instant,
+    report: hooks::Report,
+}
+
 struct Alerted {
     at: Instant,
     seq: u64,
@@ -90,6 +99,7 @@ struct Inner {
     resolved: VecDeque<ApprovalId>,
     buckets: HashMap<String, (f64, Instant)>,
     alerted: HashMap<String, Alerted>,
+    hooks: HashMap<String, Hooked>,
 }
 
 impl Inner {
@@ -298,6 +308,8 @@ impl Approvals {
         let mut live = Vec::new();
         {
             let mut inner = self.lock();
+            let ttl = self.ttl;
+            inner.hooks.retain(|_, h| h.at.elapsed() < ttl);
             let done: Vec<(String, ApprovalOutcome)> = inner
                 .pending
                 .iter()
@@ -396,6 +408,7 @@ impl Approvals {
             seq: a.state_change_seq,
             blocked: is_blocked(a),
             fingerprint: print(&region),
+            dialog: prompt::squashed_lines(&text),
             cursor_at: menu.as_ref().map_or_else(Vec::new, |m| {
                 (0..m.options.len())
                     .map(|i| print(&m.region_at(i)))
@@ -418,6 +431,19 @@ impl Approvals {
         if !screen.blocked {
             return Ok(());
         }
+        // The hook runs beside the dialog, not before it, and a session's dialogs can come
+        // and go before collied looks: a report names only a dialog that shows its call.
+        let tool = a
+            .agent_session
+            .as_ref()
+            .filter(|_| !screen.offered.is_empty())
+            .and_then(|s| {
+                self.lock()
+                    .hooks
+                    .get(&s.value)
+                    .filter(|h| h.report.on(&screen.dialog))
+                    .map(|h| h.report.tool.clone())
+            });
         let now = crate::now_ms();
         let approval = Approval {
             approval_id: ApprovalId::new(random(16)?)?,
@@ -425,7 +451,7 @@ impl Approvals {
             agent_label: agent_label(a),
             workspace_label: workspace_label(&a.workspace_id, workspaces),
             snippet: screen.snippet.clone(),
-            tool: None,
+            tool: tool.clone(),
             options: screen.offered.iter().map(|(d, _)| *d).collect(),
             choices: screen.menu.as_ref().map_or_else(Vec::new, Menu::choices),
             accepts_input: screen.accepts_input,
@@ -435,7 +461,9 @@ impl Approvals {
             created_at_ms: now,
             expires_at_ms: now + self.ttl.as_millis() as u64,
         };
-        let context = screen.context.clone();
+        let context = tool
+            .as_ref()
+            .map_or_else(|| screen.context.clone(), hooks::context);
         let alert = {
             let mut inner = self.lock();
             if inner.pending.contains_key(&a.terminal_id) {
@@ -462,6 +490,31 @@ impl Approvals {
         }
         let _ = self.events.send(Event::ApprovalNeeded { approval });
         Ok(())
+    }
+
+    /// The last call Claude Code's PermissionRequest hook reported for a session.
+    pub fn hook(&self, session_id: String, report: hooks::Report) {
+        if !hooks::valid_session(&session_id) {
+            return;
+        }
+        let mut inner = self.lock();
+        if inner.hooks.len() >= MAX_HOOKS
+            && !inner.hooks.contains_key(&session_id)
+            && let Some(oldest) = inner
+                .hooks
+                .iter()
+                .min_by_key(|(_, h)| h.at)
+                .map(|(s, _)| s.clone())
+        {
+            inner.hooks.remove(&oldest);
+        }
+        inner.hooks.insert(
+            session_id,
+            Hooked {
+                at: Instant::now(),
+                report,
+            },
+        );
     }
 
     fn take_token(&self, peer: &str) -> bool {

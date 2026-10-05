@@ -518,8 +518,9 @@ impl CollieCore {
     /// Asks a connected machine to revoke this phone first, so it stops sending pushes, and
     /// returns whether it did. The machine is forgotten either way.
     pub async fn remove_machine(&self, id: String) -> Result<bool, CoreError> {
-        let unpaired = match self.conn(&id) {
-            Ok(conn) if lock(&conn.shared.link).phase == LinkPhase::Connected => self
+        let conn = lock(&self.inner.conns).get(&id).cloned();
+        let unpaired = match conn {
+            Some(conn) if lock(&conn.shared.link).phase == LinkPhase::Connected => self
                 .run(async move {
                     let reply = conn.request(Request::Unpair(Empty {}), CALL_TIMEOUT).await;
                     Ok(matches!(reply, Ok(Response::Ok)))
