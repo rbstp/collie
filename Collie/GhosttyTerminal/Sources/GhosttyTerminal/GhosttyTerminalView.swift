@@ -69,6 +69,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     /// Where the pop-up points, relative to the visible area so it stays put while the
     /// content decelerates.
     private var copyAnchor: CGPoint?
+    private var shownLink: URL?
     private let press = UILongPressGestureRecognizer()
     private let tap = UITapGestureRecognizer()
     private let tapFilter = FlingTapFilter()
@@ -318,7 +319,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
         copyAnchor = CGPoint(x: point.x - bounds.minX, y: point.y - bounds.minY)
         copyButton.configuration?.title = "Copy"
         copyButton.isUserInteractionEnabled = true
-        openButton.isHidden = frameData.flatMap { selection?.link(in: $0) } == nil
+        shownLink = frameData.flatMap { selection?.link(in: $0) }
+        openButton.isHidden = shownLink == nil
         menu.isHidden = false
         setNeedsLayout()
     }
@@ -349,8 +351,10 @@ public final class GhosttyTerminalUIView: UIScrollView {
     }
 
     private func openLink() {
-        guard let frameData, let url = selection?.link(in: frameData) else { return }
-        UIApplication.shared.open(url)
+        // Frames keep arriving under an open menu; open only the link it was shown for.
+        if let frameData, let shownLink, selection?.link(in: frameData) == shownLink {
+            UIApplication.shared.open(shownLink)
+        }
         selection = nil
     }
 

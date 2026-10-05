@@ -120,7 +120,8 @@ struct TerminalSelection: Equatable, Sendable {
         return text
     }
 
-    /// The http or https link this selection touches, read whole across soft-wrapped rows.
+    /// The http or https link this selection touches, read whole across soft-wrapped rows. Hidden
+    /// text, invisible or drawn in its background color, reads as spaces.
     func link(in frame: TerminalFrame) -> URL? {
         guard start.row < frame.rows else { return nil }
         var first = start.row
@@ -143,12 +144,16 @@ struct TerminalSelection: Equatable, Sendable {
             }
             var next = 0
             for run in (rows[row] ?? []).sorted(by: { $0.startColumn < $1.startColumn }) {
+                let hidden = run.style.invisible || run.style.foreground == (run.style.background ?? frame.background)
                 for cluster in Cluster.all(in: run) {
                     if cluster.column > next { add(repeatElement(" ", count: cluster.column - next), columns: next..<cluster.column) }
-                    add(cluster.text.unicodeScalars, columns: cluster.column..<cluster.end)
+                    add(hidden ? [" "] : Array(cluster.text.unicodeScalars), columns: cluster.column..<cluster.end)
                     next = max(next, cluster.end)
                 }
             }
+            // A full row may continue on the next one; an unknown character there stops a URL
+            // from being offered cut short.
+            if frame.wrapsUnknown && next >= frame.columns { text.append("\u{FFFD}") }
         }
         return touched.flatMap { TerminalLink.url(in: text, touching: $0) }
     }
