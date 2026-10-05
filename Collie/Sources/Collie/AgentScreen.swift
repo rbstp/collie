@@ -10,17 +10,19 @@ struct AgentScreen: View {
     let follows: FollowModel?
     let machineLabel: String?
     let showsMachine: Bool
+    let switchAgent: ((Int) -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     init(
         core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel? = nil, follows: FollowModel? = nil,
-        machineLabel: String? = nil, showsMachine: Bool = false
+        machineLabel: String? = nil, showsMachine: Bool = false, switchAgent: ((Int) -> Void)? = nil
     ) {
         _model = State(initialValue: AgentModel(core: core, route: route))
         self.approvals = approvals
         self.follows = follows
         self.machineLabel = machineLabel
         self.showsMachine = showsMachine
+        self.switchAgent = switchAgent
     }
 
     private var blocked: BlockedInput? {
@@ -42,7 +44,7 @@ struct AgentScreen: View {
             }
             AgentTerminal(
                 ansi: model.ansi, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
-                perform: perform, resized: { model.fontSize = $0 }
+                perform: perform, resized: { model.fontSize = $0 }, switchAgent: switchAgent
             ) { await model.refresh() }
                 .overlay {
                     if model.ansi.isEmpty {
@@ -216,6 +218,7 @@ private struct AgentTerminal: UIViewRepresentable {
     let gestures: TerminalGestures
     let perform: @MainActor (GestureAction) -> Void
     let resized: @MainActor (Double) -> Void
+    let switchAgent: ((Int) -> Void)?
     let refresh: @MainActor () async -> Void
 
     func makeUIView(context: Context) -> GhosttyTerminalUIView {
@@ -245,6 +248,12 @@ private struct AgentTerminal: UIViewRepresentable {
         view.onTripleTap = gestures.tripleTap == .none ? nil : { perform(gestures.tripleTap) }
         view.onPinch = gestures.pinchResizesText ? { resized($0) } : nil
         view.dismissesKeyboardOnScrollDown = gestures.scrollDownHidesKeyboard
+        if gestures.swipeSwitchesAgents, let switchAgent {
+            // Swiping left brings the next agent in, as with pages.
+            view.onSwipe = { switchAgent($0 == .left ? 1 : -1) }
+        } else {
+            view.onSwipe = nil
+        }
         if !ansi.isEmpty {
             view.show(ansiSnapshot: ansi)
         }

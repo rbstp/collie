@@ -44,6 +44,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
             guard wraps != oldValue else { return }
             contentOffset.x = -adjustedContentInset.left
             render()
+            gesturesChanged()
         }
     }
 
@@ -55,6 +56,10 @@ public final class GhosttyTerminalUIView: UIScrollView {
         didSet { gesturesChanged() }
     }
     public var onPinch: ((CGFloat) -> Void)? {
+        didSet { gesturesChanged() }
+    }
+    /// Also off unless rows wrap: without wrapping, a sideways pan scrolls the terminal.
+    public var onSwipe: ((TerminalSwipe) -> Void)? {
         didSet { gesturesChanged() }
     }
     public var dismissesKeyboardOnScrollDown = false
@@ -90,6 +95,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private let pinch = UIPinchGestureRecognizer()
     private let pinchFilter = PinchAlongsidePan()
     private var pinchStart: CGFloat = 0
+    private let swipe = UIPanGestureRecognizer()
+    private let swipeFilter = SwipeAlongsideScroll()
 
     public init(fontSize: CGFloat = 12) {
         self.fontSize = fontSize
@@ -123,6 +130,11 @@ public final class GhosttyTerminalUIView: UIScrollView {
         pinch.addTarget(self, action: #selector(pinched(_:)))
         pinch.delegate = pinchFilter
         addGestureRecognizer(pinch)
+        swipe.maximumNumberOfTouches = 1
+        swipe.addTarget(self, action: #selector(swiped(_:)))
+        swipeFilter.scrollView = self
+        swipe.delegate = swipeFilter
+        addGestureRecognizer(swipe)
         gesturesChanged()
         panGestureRecognizer.addTarget(self, action: #selector(panned(_:)))
         for handle in [startHandle, endHandle] {
@@ -324,6 +336,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
         case .began:
             pinchStart = fontSize
             isScrollEnabled = false
+            swipe.isEnabled = false
         case .changed:
             let size = TerminalFontSize.pinched(pinchStart, scale: recognizer.scale)
             guard size != fontSize else { return }
@@ -346,13 +359,23 @@ public final class GhosttyTerminalUIView: UIScrollView {
             onPinch?(size)
         default:
             isScrollEnabled = true
+            gesturesChanged()
         }
+    }
+
+    @objc private func swiped(_ recognizer: UIPanGestureRecognizer) {
+        // Measured outside the scroll view: inside, content scrolling under the finger hides vertical travel.
+        guard recognizer.state == .ended,
+            let swipe = TerminalSwipe.ended(translation: recognizer.translation(in: superview), velocity: recognizer.velocity(in: superview))
+        else { return }
+        onSwipe?(swipe)
     }
 
     private func gesturesChanged() {
         doubleTap.isEnabled = onDoubleTap != nil && selection == nil
         tripleTap.isEnabled = onTripleTap != nil && selection == nil
         pinch.isEnabled = onPinch != nil && selection == nil
+        swipe.isEnabled = onSwipe != nil && selection == nil && wraps
     }
 
     private func cell(at point: CGPoint) -> TerminalCell? {
@@ -476,6 +499,23 @@ private final class FlingTapFilter: NSObject, UIGestureRecognizerDelegate {
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         scrollView?.isDecelerating != true
+    }
+}
+
+/// A swipe tracks alongside scrolling rather than holding it off, and leaves touches that start
+/// at the left screen edge to the back swipe.
+@MainActor
+private final class SwipeAlongsideScroll: NSObject, UIGestureRecognizerDelegate {
+    weak var scrollView: UIScrollView?
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        touch.location(in: nil).x > 24
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        other === scrollView?.panGestureRecognizer
     }
 }
 

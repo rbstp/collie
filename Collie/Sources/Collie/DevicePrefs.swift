@@ -36,6 +36,7 @@ struct TerminalGestures: Codable, Equatable {
     var tripleTap = GestureAction.none
     var scrollDownHidesKeyboard = true
     var pinchResizesText = true
+    var swipeSwitchesAgents = true
 }
 
 enum GestureAction: String, Codable, CaseIterable {

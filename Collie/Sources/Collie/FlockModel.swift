@@ -105,6 +105,13 @@ enum FlockOrder {
             (rank($0.status), $0.statusSinceMs, $0.terminalId) < (rank($1.status), $1.statusSinceMs, $1.terminalId)
         }
     }
+
+    /// The agent `offset` rows away in the Agents list, across machines; nil past either end.
+    static func neighbor(of route: AgentRoute, offset: Int, in entries: [MachineFlockEntry]) -> AgentRoute? {
+        let routes = entries.flatMap { entry in entry.agents.map { AgentRoute(machineId: entry.id, terminalId: $0.terminalId) } }
+        guard let index = routes.firstIndex(of: route), routes.indices.contains(index + offset) else { return nil }
+        return routes[index + offset]
+    }
 }
 
 enum Elapsed {
