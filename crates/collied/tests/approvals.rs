@@ -12,6 +12,7 @@ use collied::approvals::Approvals;
 use collied::audit::Audit;
 use collied::drive::{Authorized, Reply};
 use collied::flock::StatusTracker;
+use collied::hooks::Report;
 use collied::push::{Alert, Delivery, Device, Push, Rejection, Sender};
 use futures_util::future::BoxFuture;
 use protocol::{
@@ -818,32 +819,54 @@ async fn a_changed_prompt_supersedes_the_approval() {
 }
 
 #[tokio::test]
-async fn a_hook_report_names_the_tool_call_of_one_prompt() {
+async fn a_hook_report_names_only_the_prompt_that_shows_it() {
     let mut rig = Rig::start(TTL).await;
-    let bash = |cmd: &str| PendingTool {
-        name: "Bash".into(),
-        summary: cmd.into(),
+    let report = |cmd: &str| {
+        Report::new(
+            "Bash",
+            vec![cmd.into(), "Remove the build directory".into()],
+        )
+        .unwrap()
     };
-    rig.approvals.hook("sess-2".into(), bash("ls"));
-    rig.approvals.hook("sess-1".into(), bash("rm -rf build"));
+    let named = |cmd: &str| {
+        Some(PendingTool {
+            name: "Bash".into(),
+            summary: format!("{cmd}\nRemove the build directory"),
+        })
+    };
+    rig.approvals.hook("sess-2".into(), report("rm -rf build"));
+    rig.approvals.hook("sess-1".into(), report("rm -rf"));
     let a = rig.needed().await;
-    assert_eq!(a.tool, Some(bash("rm -rf build")));
-    let alerts = rig.alerts(1).await;
     assert_eq!(
-        open_context(&alerts[0].1.payload),
-        json!({"v": 1, "body": "Bash: rm -rf build"})
+        a.tool, None,
+        "a report for another call, or another session, names nothing"
     );
 
+    rig.approvals.hook("sess-1".into(), report("rm -rf build"));
+    rig.herdr
+        .with(|h| h.text = BASH.replace("Do you want to proceed?", "Do you want to proceed now?"));
+    let b = rig.needed().await;
+    assert_eq!(
+        b.tool,
+        named("rm -rf build"),
+        "a report arriving after the dialog"
+    );
+
+    let mut rig = Rig::start(TTL).await;
+    rig.approvals.hook("sess-1".into(), report("rm -rf build"));
+    let a = rig.needed().await;
+    assert_eq!(a.tool, named("rm -rf build"));
+    assert_eq!(
+        open_context(&rig.alerts(1).await[0].1.payload),
+        json!({"v": 1, "body": "Bash: rm -rf build\nRemove the build directory"})
+    );
     rig.herdr
         .with(|h| h.text = BASH.replace("rm -rf build", "rm -rf dist"));
-    let b = rig.needed().await;
-    assert_eq!(b.tool, None, "a used report never names the next prompt");
-
-    rig.approvals.hook("sess-1".into(), bash("rm -rf target"));
-    rig.herdr
-        .with(|h| h.text = BASH.replace("rm -rf build", "rm -rf target"));
     let c = rig.needed().await;
-    assert_eq!(c.tool, Some(bash("rm -rf target")));
+    assert_eq!(
+        c.tool, None,
+        "a report never names a later prompt with another call"
+    );
 }
 
 #[tokio::test]

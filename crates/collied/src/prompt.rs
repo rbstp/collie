@@ -521,6 +521,40 @@ fn splits_options(lines: &[&str], i: usize) -> bool {
         && lines.get(i + 1).is_some_and(|l| option_line(l).is_some())
 }
 
+/// The dialog's non-empty lines with all whitespace removed, for [`shows_whole`].
+pub fn squashed_lines(text: &str) -> Vec<String> {
+    after_last_rule(text)
+        .into_iter()
+        .map(|l| unspaced(&clean(l)))
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// Whether `part` is a run of whole dialog lines. Wrapping only splits a line, so a
+/// command shows as whole lines however it wraps, and a shorter one never matches inside
+/// a longer line.
+pub fn shows_whole(lines: &[String], part: &str) -> bool {
+    let want: String = part.lines().map(|l| unspaced(&clean(l))).collect();
+    !want.is_empty()
+        && (0..lines.len()).any(|i| {
+            let mut got = String::new();
+            for line in &lines[i..] {
+                got.push_str(line);
+                if !want.starts_with(&got) {
+                    return false;
+                }
+                if got.len() == want.len() {
+                    return true;
+                }
+            }
+            false
+        })
+}
+
+fn unspaced(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
 pub fn after_last_rule(text: &str) -> Vec<&str> {
     let lines: Vec<&str> = text.lines().collect();
     let start = (0..lines.len())

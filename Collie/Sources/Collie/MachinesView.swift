@@ -45,12 +45,13 @@ struct MachinesList: View {
             }
             .onDelete { offsets in
                 let removed = offsets.map { app.machines[$0] }
+                removed.forEach(app.hideMachine)
                 removeError = nil
                 Task {
                     for machine in removed {
                         do {
                             if try await !app.removeMachine(machine) {
-                                removeError = "\(machine.label) was unreachable and still lists this phone. Run collied peers revoke on it to stop its notifications."
+                                removeError = "\(machine.label) did not confirm it removed this phone. If collied peers list there still shows it, run collied peers revoke to stop its notifications."
                             }
                         } catch {
                             removeError = describe(error)

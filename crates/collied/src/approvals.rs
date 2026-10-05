@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use protocol::{
     AgentStatus, Approval, ApprovalDecideParams, ApprovalId, ApprovalOutcome, Decision, ErrorCode,
-    Event, Nonce, PendingTool, Response, TerminalId,
+    Event, Nonce, Response, TerminalId,
 };
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -38,9 +38,6 @@ const DECIDE_BUDGET: Duration = Duration::from_secs(6);
 // Reissues of a prompt (after a burned nonce) alert at most this often per terminal, so
 // bad attempts cannot flood the phone; the reissued approval still reaches live sessions.
 pub const ALERT_GAP: Duration = Duration::from_secs(30);
-// A hook report whose dialog never showed (answered on the machine before collied looked,
-// or by another hook) is dropped after this.
-const HOOK_UNUSED: Duration = Duration::from_secs(60);
 const MAX_HOOKS: usize = 64;
 
 /// What collied saw on an agent's screen. Never leaves collied except as the snippet and
@@ -56,6 +53,8 @@ struct Screen {
     has_text_field: bool,
     supports_note: bool,
     fingerprint: [u8; 32],
+    /// The dialog's lines without whitespace, which a hook report must show on.
+    dialog: Vec<String>,
     /// The fingerprint with the menu cursor on each option in turn.
     cursor_at: Vec<[u8; 32]>,
     snippet: String,
@@ -79,13 +78,11 @@ struct Pending {
     approval: Approval,
     screen: Screen,
     deciding: bool,
-    session: Option<String>,
 }
 
 struct Hooked {
     at: Instant,
-    tool: PendingTool,
-    used: bool,
+    report: hooks::Report,
 }
 
 struct Alerted {
@@ -106,18 +103,6 @@ struct Inner {
 }
 
 impl Inner {
-    /// A report names one dialog: once an approval showed it, the approval's end drops it,
-    /// so a later dialog of that session without a report never inherits it.
-    fn end(&mut self, terminal: &str) -> Option<Pending> {
-        let p = self.pending.remove(terminal)?;
-        if let Some(s) = &p.session
-            && self.hooks.get(s).is_some_and(|h| h.used)
-        {
-            self.hooks.remove(s);
-        }
-        Some(p)
-    }
-
     fn remember(&mut self, id: ApprovalId) {
         if self.resolved.len() == RESOLVED_KEPT {
             self.resolved.pop_front();
@@ -323,9 +308,8 @@ impl Approvals {
         let mut live = Vec::new();
         {
             let mut inner = self.lock();
-            inner
-                .hooks
-                .retain(|_, h| h.used || h.at.elapsed() < HOOK_UNUSED);
+            let ttl = self.ttl;
+            inner.hooks.retain(|_, h| h.at.elapsed() < ttl);
             let done: Vec<(String, ApprovalOutcome)> = inner
                 .pending
                 .iter()
@@ -345,7 +329,7 @@ impl Approvals {
                 })
                 .collect();
             for (t, outcome) in done {
-                if let Some(p) = inner.end(&t) {
+                if let Some(p) = inner.pending.remove(&t) {
                     inner.remember(p.approval.approval_id.clone());
                     ended.push((p.approval.approval_id, outcome));
                 }
@@ -363,7 +347,7 @@ impl Approvals {
             if inner.pending.get(&a.terminal_id).is_some_and(|p| {
                 !p.deciding && p.approval.approval_id == id && !p.screen.shows_same(&screen)
             }) {
-                inner.end(&a.terminal_id);
+                inner.pending.remove(&a.terminal_id);
                 inner.remember(id.clone());
                 if let Some(last) = inner.alerted.get_mut(&a.terminal_id) {
                     last.drifted = true;
@@ -424,6 +408,7 @@ impl Approvals {
             seq: a.state_change_seq,
             blocked: is_blocked(a),
             fingerprint: print(&region),
+            dialog: prompt::squashed_lines(&text),
             cursor_at: menu.as_ref().map_or_else(Vec::new, |m| {
                 (0..m.options.len())
                     .map(|i| print(&m.region_at(i)))
@@ -446,12 +431,19 @@ impl Approvals {
         if !screen.blocked {
             return Ok(());
         }
-        let session = a.agent_session.as_ref().map(|s| s.value.clone());
-        // Only a dialog with decisions is a permission prompt, the one the hook reports.
-        let tool = session
+        // The hook runs beside the dialog, not before it, and a session's dialogs can come
+        // and go before collied looks: a report names only a dialog that shows its call.
+        let tool = a
+            .agent_session
             .as_ref()
             .filter(|_| !screen.offered.is_empty())
-            .and_then(|s| self.lock().hooks.get(s).map(|h| h.tool.clone()));
+            .and_then(|s| {
+                self.lock()
+                    .hooks
+                    .get(&s.value)
+                    .filter(|h| h.report.on(&screen.dialog))
+                    .map(|h| h.report.tool.clone())
+            });
         let now = crate::now_ms();
         let approval = Approval {
             approval_id: ApprovalId::new(random(16)?)?,
@@ -477,11 +469,6 @@ impl Approvals {
             if inner.pending.contains_key(&a.terminal_id) {
                 return Ok(());
             }
-            if let Some(h) = session.as_ref().and_then(|s| inner.hooks.get_mut(s))
-                && Some(&h.tool) == tool.as_ref()
-            {
-                h.used = true;
-            }
             let alert = inner.alert_due(&a.terminal_id, &screen, &approval);
             inner.pending.insert(
                 a.terminal_id.clone(),
@@ -489,7 +476,6 @@ impl Approvals {
                     approval: approval.clone(),
                     screen,
                     deciding: false,
-                    session,
                 },
             );
             alert
@@ -506,10 +492,8 @@ impl Approvals {
         Ok(())
     }
 
-    /// What Claude Code's PermissionRequest hook reported for a session. The hook runs
-    /// before the dialog is drawn, so the report names the call of that session's next
-    /// permission approval.
-    pub fn hook(&self, session_id: String, tool: PendingTool) {
+    /// The last call Claude Code's PermissionRequest hook reported for a session.
+    pub fn hook(&self, session_id: String, report: hooks::Report) {
         if !hooks::valid_session(&session_id) {
             return;
         }
@@ -528,8 +512,7 @@ impl Approvals {
             session_id,
             Hooked {
                 at: Instant::now(),
-                tool: hooks::bounded(tool),
-                used: false,
+                report,
             },
         );
     }
@@ -560,7 +543,7 @@ impl Approvals {
                 .get(terminal)
                 .is_some_and(|p| p.approval.approval_id == *id)
             {
-                inner.end(terminal);
+                inner.pending.remove(terminal);
             }
             inner.remember(id.clone());
         }

@@ -19,6 +19,7 @@ final class AppModel {
     private(set) var nodeError: String?
     private(set) var signInError: String?
     private(set) var machines: [Machine] = []
+    private var removing: Set<String> = []
     private(set) var signingIn = false
     private(set) var pushStatus = "not registered"
     private var pushToken: Data?
@@ -134,13 +135,22 @@ final class AppModel {
     }
 
     func reloadMachines() {
-        machines = core?.machines() ?? []
+        machines = (core?.machines() ?? []).filter { !removing.contains($0.id) }
     }
 
-    /// False when the machine was unreachable and still lists this phone.
+    /// The row leaves the list now; removeMachine finishes the removal.
+    func hideMachine(_ machine: Machine) {
+        removing.insert(machine.id)
+        reloadMachines()
+    }
+
+    /// False when the machine did not confirm it removed this phone.
     func removeMachine(_ machine: Machine) async throws -> Bool {
-        machines.removeAll { $0.id == machine.id }
-        defer { reloadMachines() }
+        hideMachine(machine)
+        defer {
+            removing.remove(machine.id)
+            reloadMachines()
+        }
         let unpaired = try await core?.removeMachine(id: machine.id) ?? false
         if !(core?.machines() ?? []).contains(where: { $0.nodeId == machine.nodeId }) {
             NotificationKey.delete(nodeId: machine.nodeId)

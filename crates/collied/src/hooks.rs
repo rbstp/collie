@@ -13,10 +13,13 @@ const MAX_INPUT: u64 = 1024 * 1024;
 const MAX_SESSION_CHARS: usize = 128;
 const MAX_NAME_CHARS: usize = 64;
 const MAX_SUMMARY_CHARS: usize = prompt::MAX_CONTEXT_CHARS - MAX_NAME_CHARS - 2;
+const MAX_SHOWN_CHARS: usize = 4096;
 const DEADLINE: Duration = Duration::from_secs(2);
 
 #[derive(Deserialize)]
 struct Input {
+    #[serde(default)]
+    hook_event_name: Option<String>,
     session_id: String,
     tool_name: String,
     #[serde(default)]
@@ -27,57 +30,88 @@ struct Input {
 /// daemon and never answers it: it prints nothing and exits 0, so Claude Code shows its
 /// dialog as usual, even when collied is not running.
 pub async fn run(control_path: &Path) {
+    let mut stdin = std::io::stdin();
     let mut raw = Vec::new();
-    if std::io::stdin()
-        .take(MAX_INPUT)
-        .read_to_end(&mut raw)
-        .is_err()
-    {
+    let read = (&mut stdin).take(MAX_INPUT).read_to_end(&mut raw);
+    let _ = std::io::copy(&mut stdin, &mut std::io::sink());
+    if read.is_err() {
         return;
     }
     let Ok(input) = serde_json::from_slice::<Input>(&raw) else {
         return;
     };
+    if input
+        .hook_event_name
+        .is_some_and(|e| e != "PermissionRequest")
+    {
+        return;
+    }
+    let shown = shown(&input.tool_name, &input.tool_input);
+    if Report::new(&input.tool_name, shown.clone()).is_none() {
+        return;
+    }
     let request = Request::Hook {
         session_id: input.session_id,
-        tool: pending_tool(&input.tool_name, &input.tool_input),
+        tool_name: input.tool_name,
+        shown,
     };
     let _ = tokio::time::timeout(DEADLINE, control::request(control_path, &request)).await;
 }
 
-pub fn pending_tool(name: &str, input: &Value) -> PendingTool {
-    let field = |k: &str| input.get(k).and_then(Value::as_str);
-    let summary = match name {
-        "Bash" => [field("command"), field("description")]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("\n"),
-        "Edit" | "MultiEdit" | "Write" | "Read" => field("file_path").unwrap_or_default().into(),
-        "NotebookEdit" => field("notebook_path").unwrap_or_default().into(),
-        "WebFetch" => field("url").unwrap_or_default().into(),
-        "WebSearch" => field("query").unwrap_or_default().into(),
-        "Glob" | "Grep" => field("pattern").unwrap_or_default().into(),
-        _ => String::new(),
+/// What the permission dialog shows of the call: for Bash the command, then Claude's
+/// description; else the file, URL, query or pattern. Empty for other tools.
+pub fn shown(name: &str, input: &Value) -> Vec<String> {
+    let keys: &[&str] = match name {
+        "Bash" => &["command", "description"],
+        "Edit" | "MultiEdit" | "Write" | "Read" => &["file_path"],
+        "NotebookEdit" => &["notebook_path"],
+        "WebFetch" => &["url"],
+        "WebSearch" => &["query"],
+        "Glob" | "Grep" => &["pattern"],
+        _ => &[],
     };
-    bounded(PendingTool {
-        name: name.to_owned(),
-        summary,
-    })
+    keys.iter()
+        .filter_map(|k| input.get(*k).and_then(Value::as_str))
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
-/// Applied again by the daemon: any process of the user can reach the control socket.
-/// Every line of the summary is kept, as in the screen context: the approver acts on it.
-pub fn bounded(tool: PendingTool) -> PendingTool {
-    let lines: Vec<String> = tool
-        .summary
-        .lines()
-        .map(prompt::clean)
-        .filter(|l| !l.is_empty())
-        .collect();
-    PendingTool {
-        name: cut(prompt::clean(&tool.name), MAX_NAME_CHARS),
-        summary: cut(lines.join("\n"), MAX_SUMMARY_CHARS),
+/// A reported call, which names an approval only when its dialog shows it.
+pub struct Report {
+    pub tool: PendingTool,
+    shown: Vec<String>,
+}
+
+impl Report {
+    /// Checked again by the daemon: any process of the user can reach the control socket.
+    pub fn new(name: &str, shown: Vec<String>) -> Option<Self> {
+        let name = prompt::clean(name);
+        if name.is_empty()
+            || shown.is_empty()
+            || shown.len() > 2
+            || shown.iter().any(|s| s.chars().count() > MAX_SHOWN_CHARS)
+        {
+            return None;
+        }
+        // Every line is kept, as in the screen context: the approver acts on it.
+        let lines: Vec<String> = shown
+            .iter()
+            .flat_map(|s| s.lines())
+            .map(prompt::clean)
+            .filter(|l| !l.is_empty())
+            .collect();
+        Some(Self {
+            tool: PendingTool {
+                name: cut(name, MAX_NAME_CHARS),
+                summary: cut(lines.join("\n"), MAX_SUMMARY_CHARS),
+            },
+            shown,
+        })
+    }
+
+    pub fn on(&self, dialog: &[String]) -> bool {
+        self.shown.iter().all(|s| prompt::shows_whole(dialog, s))
     }
 }
 
@@ -85,13 +119,9 @@ pub fn valid_session(id: &str) -> bool {
     !id.is_empty() && id.len() <= MAX_SESSION_CHARS && id.chars().all(|c| c.is_ascii_graphic())
 }
 
-/// The alert context for a hook-reported call, in the screen context's `Tool: target` form.
+/// The alert context for a reported call, in the screen context's `Tool: target` form.
 pub fn context(tool: &PendingTool) -> String {
-    if tool.summary.is_empty() {
-        tool.name.clone()
-    } else {
-        format!("{}: {}", tool.name, tool.summary)
-    }
+    format!("{}: {}", tool.name, tool.summary)
 }
 
 /// Claude Code's user settings file, which honors CLAUDE_CONFIG_DIR.
@@ -127,25 +157,62 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn report(name: &str, input: Value) -> Option<Report> {
+        Report::new(name, shown(name, &input))
+    }
+
+    fn dialog(text: &str) -> Vec<String> {
+        prompt::squashed_lines(text)
+    }
+
     #[test]
-    fn names_the_call_on_one_bounded_line() {
-        let t = pending_tool(
+    fn names_the_call_on_bounded_lines() {
+        let r = report(
             "Bash",
-            &json!({"command": "git push \\\n  --force\u{1b}[2J\n\n", "description": "Force push"}),
+            json!({"command": "git push \\\n  --force\u{1b}[2J\n\n", "description": "Force push"}),
+        )
+        .unwrap();
+        assert_eq!(
+            context(&r.tool),
+            "Bash: git push \\\n--force[2J\nForce push"
         );
-        assert_eq!(context(&t), "Bash: git push \\\n--force[2J\nForce push");
-        let t = pending_tool("Edit", &json!({"file_path": "/a/b.rs", "old_string": "x"}));
-        assert_eq!(context(&t), "Edit: /a/b.rs");
-        let t = pending_tool("mcp__github__create_issue", &json!({"title": "x"}));
-        assert_eq!(context(&t), "mcp__github__create_issue");
-        let t = pending_tool("Bash", &json!({"command": "x".repeat(1000)}));
-        assert_eq!(t.summary.chars().count(), MAX_SUMMARY_CHARS);
-        assert!(t.summary.ends_with('…'));
-        let t = bounded(PendingTool {
-            name: "n".repeat(500),
-            summary: String::new(),
-        });
-        assert_eq!(t.name.chars().count(), MAX_NAME_CHARS);
+        let r = report("Edit", json!({"file_path": "/a/b.rs", "old_string": "x"})).unwrap();
+        assert_eq!(context(&r.tool), "Edit: /a/b.rs");
+        assert!(report("mcp__github__create_issue", json!({"title": "x"})).is_none());
+        assert!(report("Bash", json!({"command": " "})).is_none());
+        assert!(report("Bash", json!({"command": "x".repeat(MAX_SHOWN_CHARS + 1)})).is_none());
+        let r = report("Bash", json!({"command": "x".repeat(1000)})).unwrap();
+        assert_eq!(r.tool.summary.chars().count(), MAX_SUMMARY_CHARS);
+        assert!(r.tool.summary.ends_with('…'));
+        let r = Report::new(&"n".repeat(500), vec!["ls".into()]).unwrap();
+        assert_eq!(r.tool.name.chars().count(), MAX_NAME_CHARS);
+    }
+
+    #[test]
+    fn a_report_names_only_a_dialog_that_shows_it() {
+        let screen = " Bash command\n\n   touch /tmp/collie-test.txt && ls -l\n   /tmp/collie-test.txt\n   Create an empty test file\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No";
+        let ok = report(
+            "Bash",
+            json!({"command": "touch /tmp/collie-test.txt && ls -l /tmp/collie-test.txt", "description": "Create an empty test file"}),
+        )
+        .unwrap();
+        assert!(ok.on(&dialog(screen)), "wrapped lines still match");
+        for (command, description) in [
+            ("ls", "Create an empty test file"),
+            ("touch /tmp/collie-test.txt", "Create an empty test file"),
+            (
+                "touch /tmp/collie-test.txt && ls -l /tmp/collie-test.txt",
+                "Other",
+            ),
+            ("Do you want to", "Create an empty test file"),
+        ] {
+            let r = report(
+                "Bash",
+                json!({"command": command, "description": description}),
+            )
+            .unwrap();
+            assert!(!r.on(&dialog(screen)), "{command} / {description}");
+        }
     }
 
     #[test]

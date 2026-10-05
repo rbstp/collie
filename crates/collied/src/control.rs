@@ -31,7 +31,8 @@ pub enum Request {
     },
     Hook {
         session_id: String,
-        tool: protocol::PendingTool,
+        tool_name: String,
+        shown: Vec<String>,
     },
 }
 
@@ -269,7 +270,7 @@ async fn handle(stream: UnixStream, state: Arc<State>) {
                 peers: store.peers,
             }
         }
-        Request::PeersRevoke { target } => match state.revoke(&target, "revoked") {
+        Request::PeersRevoke { target } => match state.revoke(&target) {
             Ok((peer, closed_sessions)) => Reply::Revoked {
                 peer,
                 closed_sessions,
@@ -278,8 +279,14 @@ async fn handle(stream: UnixStream, state: Arc<State>) {
                 message: e.to_string(),
             },
         },
-        Request::Hook { session_id, tool } => {
-            state.approvals.hook(session_id, tool);
+        Request::Hook {
+            session_id,
+            tool_name,
+            shown,
+        } => {
+            if let Some(report) = crate::hooks::Report::new(&tool_name, shown) {
+                state.approvals.hook(session_id, report);
+            }
             Reply::Noted
         }
         Request::Pair => return pair(&state, &mut r, &mut w).await,
