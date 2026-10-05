@@ -12,8 +12,9 @@ import Observation
 final class PreviewModel {
     static let interval = Duration.seconds(5)
     static let tick = Duration.seconds(1)
-    /// A 120 pt card shows about 20 rows at font size 5.
-    static let lines: UInt16 = 40
+    /// A 120 pt card shows about 20 rows at font size 5. herdr counts rows at the Mac pane
+    /// width, so a card wider than a narrow pane rejoins them into fewer.
+    static let lines: UInt16 = 60
 
     private(set) var screens: [AgentRoute: String] = [:]
 

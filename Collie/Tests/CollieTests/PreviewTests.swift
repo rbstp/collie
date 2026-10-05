@@ -66,7 +66,7 @@ private func running(_ model: PreviewModel, _ core: FakeCore, screens: Int) asyn
     model.update([entry("m1", [("t1", .working)])])
     model.appeared(route("t1"))
     let run = await running(model, core, screens: 1)
-    #expect(core.snapshot.readLines == [40])
+    #expect(core.snapshot.readLines == [60])
     run.cancel()
     await run.value
 }

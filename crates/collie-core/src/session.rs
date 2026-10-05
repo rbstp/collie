@@ -277,7 +277,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                             let (reply, read_mark) = pending.remove(&id).unwrap_or_default();
                             match &result {
                                 Response::Flock(flock) => lock(state).apply_snapshot(flock.clone()),
-                                Response::Terminal(read) => {
+                                Response::Terminal(read) if read_mark.is_some() => {
                                     lock(state).apply_read(read.clone(), read_mark);
                                 }
                                 _ => {}
@@ -324,8 +324,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
 
 type Pending = (Option<Reply>, Option<u64>);
 
+/// `None` for a read of another depth than the screen's: a preview's few lines must not
+/// replace the watched agent's history.
 fn read_mark(state: &Mutex<FlockState>, request: &Request) -> Option<u64> {
-    matches!(request, Request::AgentRead(_)).then(|| lock(state).output_events)
+    matches!(request, Request::AgentRead(p) if p.lines == Some(limits::MAX_READ_LINES))
+        .then(|| lock(state).output_events)
 }
 
 pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
