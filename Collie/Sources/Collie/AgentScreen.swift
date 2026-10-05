@@ -10,17 +10,28 @@ struct AgentScreen: View {
     let follows: FollowModel?
     let machineLabel: String?
     let showsMachine: Bool
+    let neighbor: ((Int) -> AgentRoute?)?
+    let switchAgent: (AgentRoute) -> Void
     @Environment(\.dismiss) private var dismiss
 
     init(
         core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel? = nil, follows: FollowModel? = nil,
-        machineLabel: String? = nil, showsMachine: Bool = false
+        machineLabel: String? = nil, showsMachine: Bool = false, neighbor: ((Int) -> AgentRoute?)? = nil,
+        switchAgent: @escaping (AgentRoute) -> Void = { _ in }
     ) {
         _model = State(initialValue: AgentModel(core: core, route: route))
         self.approvals = approvals
         self.follows = follows
         self.machineLabel = machineLabel
         self.showsMachine = showsMachine
+        self.neighbor = neighbor
+        self.switchAgent = switchAgent
+    }
+
+    // Switching agents drops these, as Back does; text loaded from the Mac's input box loads again.
+    private var holdsUnsent: Bool {
+        let typed = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.draft != model.macDraft
+        return typed || !model.attachments.isEmpty || model.upload != nil
     }
 
     private var blocked: BlockedInput? {
@@ -40,7 +51,11 @@ struct AgentScreen: View {
                     Text(notice).font(.footnote).padding(.horizontal).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            AgentTerminal(ansi: model.ansi, wraps: model.wrapLines) { await model.refresh() }
+            AgentTerminal(
+                ansi: model.ansi, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
+                perform: perform, resized: { model.fontSize = $0 }, neighbor: holdsUnsent ? nil : neighbor,
+                switchAgent: switchAgent
+            ) { await model.refresh() }
                 .overlay {
                     if model.ansi.isEmpty {
                         ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
@@ -99,7 +114,16 @@ struct AgentScreen: View {
             if closed { dismiss() }
         }
         .task { await model.run() }
+        .onAppear { model.reloadGestures() }
         .onDisappear { model.cancelUpload() }
+    }
+
+    private func perform(_ action: GestureAction) {
+        switch action {
+        case .none: break
+        case .paste: if UIPasteboard.general.hasStrings { model.paste(UIPasteboard.general.string) }
+        case .escape: model.tap(.esc)
+        }
     }
 }
 
@@ -200,10 +224,16 @@ private struct AgentHeader: View {
 private struct AgentTerminal: UIViewRepresentable {
     let ansi: String
     let wraps: Bool
+    let fontSize: Double
+    let gestures: TerminalGestures
+    let perform: @MainActor (GestureAction) -> Void
+    let resized: @MainActor (Double) -> Void
+    let neighbor: ((Int) -> AgentRoute?)?
+    let switchAgent: (AgentRoute) -> Void
     let refresh: @MainActor () async -> Void
 
     func makeUIView(context: Context) -> GhosttyTerminalUIView {
-        let view = GhosttyTerminalUIView(fontSize: 11)
+        let view = GhosttyTerminalUIView(fontSize: fontSize)
         let control = UIRefreshControl()
         control.tintColor = .white
         let coordinator = context.coordinator
@@ -223,6 +253,20 @@ private struct AgentTerminal: UIViewRepresentable {
     func updateUIView(_ view: GhosttyTerminalUIView, context: Context) {
         context.coordinator.refresh = refresh
         view.wraps = wraps
+        view.fontSize = fontSize
+        let (gestures, perform, resized) = (gestures, perform, resized)
+        view.onDoubleTap = gestures.doubleTap == .none ? nil : { perform(gestures.doubleTap) }
+        view.onTripleTap = gestures.tripleTap == .none ? nil : { perform(gestures.tripleTap) }
+        view.onPinch = gestures.pinchResizesText ? { resized($0) } : nil
+        if gestures.swipeSwitchesAgents, let neighbor {
+            let switchAgent = switchAgent
+            let offset = { (swipe: TerminalSwipe) in swipe == .left ? 1 : -1 }
+            view.canSwipe = { neighbor(offset($0)) != nil }
+            view.onSwipe = { if let next = neighbor(offset($0)) { switchAgent(next) } }
+        } else {
+            view.canSwipe = nil
+            view.onSwipe = nil
+        }
         if !ansi.isEmpty {
             view.show(ansiSnapshot: ansi)
         }

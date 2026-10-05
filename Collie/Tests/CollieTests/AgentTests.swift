@@ -25,6 +25,7 @@ final class FakeCore: AgentCore {
         var maxAttachmentBytes: UInt64 = 20 * 1024 * 1024
         var uploadPath = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/notes.txt"
         var endedActivities: [String] = []
+        var watches: [String?] = []
     }
 
     let state = Mutex(State())
@@ -75,7 +76,9 @@ final class FakeCore: AgentCore {
         )
         return AgentView(link: .connected, lastError: nil, agent: agent, output: nil, outputRevision: 0)
     }
-    func watchAgent(machineId: String, terminalId: String?) async throws {}
+    func watchAgent(machineId: String, terminalId: String?) async throws {
+        state.withLock { $0.watches.append(terminalId) }
+    }
     func agentRead(machineId: String, terminalId: String, source: TerminalSource) async throws -> TerminalSnapshot {
         TerminalSnapshot(terminalId: terminalId, source: source, ansi: "", truncated: false)
     }
@@ -135,6 +138,29 @@ final class FakeCore: AgentCore {
 @MainActor
 private func agentModel(_ core: FakeCore) -> AgentModel {
     AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil)
+}
+
+@MainActor
+@Test func aScreenReplacedAfterItsSuccessorWatchedLeavesTheWatch() async {
+    let core = FakeCore()
+    let first = AgentModel(core: core, route: AgentRoute(machineId: "replaced", terminalId: "term_1"), prefsFile: nil)
+    let second = AgentModel(core: core, route: AgentRoute(machineId: "replaced", terminalId: "term_2"), prefsFile: nil)
+    func waitWatches(_ count: Int) async {
+        while core.snapshot.watches.count < count {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+    let firstRun = Task { await first.run() }
+    await waitWatches(1)
+    let secondRun = Task { await second.run() }
+    await waitWatches(2)
+    firstRun.cancel()
+    await firstRun.value
+    secondRun.cancel()
+    await secondRun.value
+    await waitWatches(3)
+    try? await Task.sleep(for: .milliseconds(50))
+    #expect(core.snapshot.watches == ["term_1", "term_2", nil])
 }
 
 @MainActor
@@ -613,6 +639,52 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 
     model.wrapLines = true
     #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: true, keepKeyboard: true))
+}
+
+@MainActor
+@Test func gesturesAndTextSizeHaveDefaultsAndAreRememberedOnThisDevice() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appending(path: "prefs.json")
+    let route = AgentRoute(machineId: "m1", terminalId: "term_1")
+
+    try Data(#"{"wrapLines":false,"keepKeyboard":true}"#.utf8).write(to: file)
+    let model = AgentModel(core: FakeCore(), route: route, prefsFile: file)
+    #expect(
+        model.gestures
+            == TerminalGestures(doubleTap: .paste, tripleTap: .none, pinchResizesText: true, swipeSwitchesAgents: true)
+    )
+    #expect(model.fontSize == 11)
+
+    model.fontSize = 14
+    var prefs = DevicePrefs.load(from: file)
+    prefs.gestures.doubleTap = .none
+    prefs.save(to: file)
+    let reopened = AgentModel(core: FakeCore(), route: route, prefsFile: file)
+    #expect(reopened.fontSize == 14)
+    #expect(reopened.gestures.doubleTap == .none)
+    #expect(!reopened.wrapLines && reopened.keepsKeyboard)
+
+    prefs.gestures.tripleTap = .escape
+    prefs.save(to: file)
+    reopened.reloadGestures()
+    #expect(reopened.gestures.tripleTap == .escape)
+
+    try Data(#"{"wrapLines":false,"gestures":{"doubleTap":"later"}}"#.utf8).write(to: file)
+    #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false))
+}
+
+@MainActor
+@Test func pasteFillsThePromptFieldWithoutSending() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    model.draft = "fix "
+    model.paste("the build")
+    model.paste(nil)
+    #expect(model.draft == "fix the build")
+    await Task.yield()
+    #expect(core.snapshot.prompts.isEmpty && core.snapshot.typed.isEmpty && core.snapshot.keys.isEmpty)
 }
 
 @MainActor

@@ -26,6 +26,26 @@ private func agent(_ id: String, _ status: AgentState, since: UInt64, title: Str
     #expect(sorted.map(\.terminalId) == ["d", "b", "c", "a", "e"])
 }
 
+@Test func swipingFollowsTheAgentsListAcrossMachinesAndStopsAtEitherEnd() {
+    func entry(_ id: String, _ agents: [AgentSummary]) -> MachineFlockEntry {
+        let machine = Machine(id: id, label: id, host: "\(id).ts.net", port: 8457, nodeId: "n\(id)", kind: .mac, key: "")
+        let flock = MachineFlock(machine: machine, link: .connected, lastError: nil, details: nil, workspaces: [], agents: agents, approvalsCount: 0)
+        return MachineFlockEntry(machine: machine, flock: flock)
+    }
+    let entries = [
+        entry("m1", [agent("idle", .idle, since: 1), agent("blocked", .blocked, since: 5)]),
+        entry("m2", []),
+        entry("m3", [agent("working", .working, since: 2)]),
+    ]
+    func route(_ machineId: String, _ terminalId: String) -> AgentRoute { AgentRoute(machineId: machineId, terminalId: terminalId) }
+    #expect(FlockOrder.neighbor(of: route("m1", "blocked"), offset: 1, in: entries) == route("m1", "idle"))
+    #expect(FlockOrder.neighbor(of: route("m1", "idle"), offset: 1, in: entries) == route("m3", "working"))
+    #expect(FlockOrder.neighbor(of: route("m3", "working"), offset: -1, in: entries) == route("m1", "idle"))
+    #expect(FlockOrder.neighbor(of: route("m3", "working"), offset: 1, in: entries) == nil)
+    #expect(FlockOrder.neighbor(of: route("m1", "blocked"), offset: -1, in: entries) == nil)
+    #expect(FlockOrder.neighbor(of: route("m3", "idle"), offset: 1, in: entries) == nil)
+}
+
 @Test(arguments: [
     (5.0, "5s"), (59.0, "59s"), (60.0, "1m"), (3599.0, "59m"), (3600.0, "1h 0m"), (3_725.0, "1h 2m"), (90_000.0, "1d"), (-30.0, "0s"),
 ])

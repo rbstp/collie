@@ -94,8 +94,19 @@ struct FlockScreen: View {
                 if let core {
                     AgentScreen(
                         core: core, route: route, approvals: approvals, follows: follows,
-                        machineLabel: machines.first { $0.id == route.machineId }?.label, showsMachine: machines.count > 1
+                        machineLabel: machines.first { $0.id == route.machineId }?.label, showsMachine: machines.count > 1,
+                        neighbor: { offset in
+                            // model.entries stops refreshing under a pushed agent; the core's cache follows events.
+                            let entries = core.machines().map { MachineFlockEntry(machine: $0, flock: core.cachedFlock(machineId: $0.id)) }
+                            return FlockOrder.neighbor(of: route, offset: offset, in: entries)
+                        },
+                        switchAgent: { next in
+                            // Replaces the top route, so Back still returns to this list.
+                            if path.last == route { path[path.count - 1] = next }
+                        }
                     )
+                    // A replaced route must get its own model, not keep the previous agent's.
+                    .id(route)
                 }
             }
             .sheet(isPresented: $newTask) {
