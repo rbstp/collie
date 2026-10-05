@@ -101,6 +101,8 @@ fn grants(label: &str) -> bool {
 pub struct Menu {
     pub body: Vec<String>,
     pub options: Vec<String>,
+    /// Each option's first line, the rest of `options[i]` being the lines under it.
+    pub heads: Vec<String>,
     pub cursor: usize,
     /// The lines right under the last option: where its label wraps, and hints.
     pub after: Vec<String>,
@@ -118,7 +120,7 @@ impl Menu {
             .take(MAX_CONTINUATION_LINES + 1)
             .map(|l| l.trim().to_owned())
             .collect();
-        let mut options: Vec<(bool, String)> = Vec::new();
+        let mut options: Vec<(bool, String, String)> = Vec::new();
         let mut continuation: Vec<&str> = Vec::new();
         let mut expect = None;
         let mut first = None;
@@ -128,12 +130,13 @@ impl Menu {
                 if expect.is_some_and(|e| e != n) {
                     return None;
                 }
-                let mut label = label.to_owned();
+                let head = label.to_owned();
+                let mut label = head.clone();
                 for c in continuation.drain(..).rev() {
                     label.push(' ');
                     label.push_str(c);
                 }
-                options.push((cursor, label));
+                options.push((cursor, label, head));
                 if n == 1 {
                     first = Some(i);
                     break;
@@ -152,7 +155,7 @@ impl Menu {
         }
         let first = first?;
         options.reverse();
-        let mut cursors = options.iter().enumerate().filter(|(_, (c, _))| *c);
+        let mut cursors = options.iter().enumerate().filter(|(_, (c, _, _))| *c);
         let (cursor, _) = cursors.next()?;
         if cursors.next().is_some() {
             return None;
@@ -165,9 +168,11 @@ impl Menu {
             .map(|l| l.trim().to_owned())
             .collect();
         body.reverse();
+        let (options, heads) = options.into_iter().map(|(_, l, h)| (l, h)).unzip();
         Some(Self {
             body,
-            options: options.into_iter().map(|(_, l)| l).collect(),
+            options,
+            heads,
             cursor,
             after,
         })
@@ -203,10 +208,20 @@ impl Menu {
         self.options
             .iter()
             .enumerate()
-            .map(|(i, label)| ApprovalChoice {
-                index: i as u8,
-                label: clean(label).chars().take(MAX_CHOICE_LABEL_CHARS).collect(),
-                current: i == self.cursor,
+            .map(|(i, label)| {
+                let cap = |s: &str| {
+                    clean(s)
+                        .chars()
+                        .take(MAX_CHOICE_LABEL_CHARS)
+                        .collect::<String>()
+                };
+                let detail = label[self.heads[i].len()..].trim();
+                ApprovalChoice {
+                    index: i as u8,
+                    label: cap(&self.heads[i]),
+                    current: i == self.cursor,
+                    detail: (!detail.is_empty()).then(|| cap(detail)),
+                }
             })
             .collect()
     }
@@ -783,9 +798,24 @@ mod tests {
         assert_eq!(
             labels(QUESTION),
             [
-                (0, "SQLite Embedded, no server".into(), true),
-                (1, "Redis Shared across processes".into(), false),
+                (0, "SQLite".into(), true),
+                (1, "Redis".into(), false),
                 (2, "Type something.".into(), false),
+            ]
+        );
+        let details: Vec<Option<String>> = Menu::parse(QUESTION_LIVE)
+            .unwrap()
+            .choices()
+            .into_iter()
+            .map(|c| c.detail)
+            .collect();
+        assert_eq!(
+            details,
+            [
+                Some("File-based database, good for single-instance deployments with local persistence".into()),
+                Some("In-memory data store, better for distributed systems and high-performance scenarios".into()),
+                None,
+                None,
             ]
         );
         assert_eq!(
@@ -809,6 +839,16 @@ mod tests {
         let label = &m.choices()[1].label;
         assert_eq!(label.chars().count(), MAX_CHOICE_LABEL_CHARS);
         assert!(label.starts_with("Redis]52;c;eA==xxx"), "{label}");
+        let hostile = QUESTION.replace(
+            "Shared across processes",
+            &format!("Sha\u{202e}red\u{1b}]52;c;eA==\u{7}{}", "y".repeat(200)),
+        );
+        let detail = Menu::parse(&hostile).unwrap().choices()[1]
+            .detail
+            .clone()
+            .unwrap();
+        assert_eq!(detail.chars().count(), MAX_CHOICE_LABEL_CHARS);
+        assert!(detail.starts_with("Shared]52;c;eA==yyy"), "{detail}");
         let moved = QUESTION
             .replace(" ❯ 1. SQLite", "   1. SQLite")
             .replace("   3. Type", " ❯ 3. Type");

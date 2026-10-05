@@ -99,7 +99,9 @@ struct ApprovalCard: View {
                     .font(.callout.monospaced())
                     .lineLimit(expanded ? nil : 3)
             }
-            if !approval.snippet.isEmpty {
+            if approval.options.isEmpty, !approval.choices.isEmpty {
+                QuestionText(snippet: approval.snippet)
+            } else if !approval.snippet.isEmpty {
                 Text(verbatim: approval.snippet)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
@@ -107,6 +109,7 @@ struct ApprovalCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 8))
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if approval.supportsNote, model.noting.contains(item.id) {
                 NoteField(model: model, item: item)
@@ -220,36 +223,76 @@ private struct DecisionButtons: View {
 }
 
 /// The menu on the Mac, for prompts collied offers no Approve/Deny for; each pick goes through `approval.decide`.
+/// A question's header line (Claude Code draws it after a ☐) above the question itself.
+private struct QuestionText: View {
+    let snippet: String
+
+    var body: some View {
+        let lines = snippet.split(separator: "\n").map(String.init)
+        let header = lines.first.flatMap { $0.hasPrefix("☐") ? String($0.dropFirst()).trimmingCharacters(in: .whitespaces) : nil }
+        let question = (header == nil ? lines : Array(lines.dropFirst())).joined(separator: "\n")
+        VStack(alignment: .leading, spacing: 2) {
+            if let header, !header.isEmpty {
+                Text(verbatim: header).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            }
+            if !question.isEmpty {
+                Text(verbatim: question).font(.subheadline.weight(.semibold))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 private struct ChoiceButtons: View {
     let model: ApprovalsModel
     let item: ApprovalItem
     let expired: Bool
 
+    private var disabled: Bool { expired || item.unreachable || model.steps[item.id] != nil }
+
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 0) {
             ForEach(item.approval.choices, id: \.index) { choice in
                 let decision = ApprovalDecision.choose(choice: choice.index)
+                if choice.index > 0 {
+                    Divider().padding(.leading, 38)
+                }
                 Button {
                     Task { await model.decide(item, decision) }
                 } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(verbatim: "\(Int(choice.index) + 1).").monospacedDigit()
-                        Text(verbatim: choice.label).multilineTextAlignment(.leading)
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(verbatim: "\(Int(choice.index) + 1)")
+                            .font(.subheadline.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(choice.current ? Color.accentColor : .secondary)
+                            .frame(width: 18, alignment: .trailing)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(verbatim: choice.label).font(.subheadline)
+                            if let detail = choice.detail {
+                                Text(verbatim: detail).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .multilineTextAlignment(.leading)
                         Spacer(minLength: 0)
                         if model.steps[item.id] == .sending(decision) {
-                            ProgressView()
-                        } else if choice.current {
-                            Image(systemName: "arrowtriangle.left.fill")
-                                .font(.caption2)
-                                .accessibilityLabel("Under the cursor on the machine")
+                            ProgressView().controlSize(.small)
                         }
                     }
+                    .padding(.vertical, 7)
+                    .padding(.horizontal, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(choice.current ? Color.accentColor.opacity(0.12) : .clear)
+                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
+                .accessibilityValue(choice.current ? "Under the cursor on the machine" : "")
             }
         }
-        .disabled(expired || item.unreachable || model.steps[item.id] != nil)
+        .background(.fill.tertiary)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .fixedSize(horizontal: false, vertical: true)
+        .opacity(disabled ? 0.5 : 1)
+        .disabled(disabled)
     }
 }
 

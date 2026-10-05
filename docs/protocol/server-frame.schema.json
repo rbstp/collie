@@ -158,6 +158,13 @@
         "current": {
           "type": "boolean"
         },
+        "detail": {
+          "description": "The lines under the option's first line: a question option's description, or the\nrest of a label that wrapped. Absent from a collied that predates the field, which\njoins them into `label`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "index": {
           "format": "uint8",
           "maximum": 255,
