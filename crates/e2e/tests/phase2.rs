@@ -110,7 +110,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     println!("agent.read returns sanitized ANSI");
     let t = Instant::now();
     let read = core
-        .agent_read(m.clone(), CLAUDE.into(), TerminalSource::Visible)
+        .agent_read(m.clone(), CLAUDE.into(), TerminalSource::Visible, None)
         .await
         .unwrap();
     assert_eq!(read.ansi, "\u{1b}[1mhello\u{1b}[0m world\r\nline 2");
@@ -608,7 +608,7 @@ async fn live_scenario(
     }
     assert_eq!(workspaces().await, initial);
     let err = core
-        .agent_read(m.clone(), shell.clone(), TerminalSource::Recent)
+        .agent_read(m.clone(), shell.clone(), TerminalSource::Recent, None)
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::NotFound), "{err:?}");
@@ -657,7 +657,7 @@ async fn live_scenario(
         .unwrap();
     wait_output(core, &m, &term, "pi got: y\r\n").await;
     let visible = core
-        .agent_read(m.clone(), term.clone(), TerminalSource::Visible)
+        .agent_read(m.clone(), term.clone(), TerminalSource::Visible, None)
         .await
         .unwrap();
     assert!(

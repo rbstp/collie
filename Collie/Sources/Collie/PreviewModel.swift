@@ -12,6 +12,8 @@ import Observation
 final class PreviewModel {
     static let interval = Duration.seconds(5)
     static let tick = Duration.seconds(1)
+    /// A 120 pt card shows about 20 rows at font size 5.
+    static let lines: UInt16 = 40
 
     private(set) var screens: [AgentRoute: String] = [:]
 
@@ -98,7 +100,7 @@ final class PreviewModel {
             await withTaskGroup(of: (AgentRoute, String?).self) { group in
                 for route in reads {
                     group.addTask {
-                        let read = try? await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent)
+                        let read = try? await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: Self.lines)
                         return (route, read?.ansi)
                     }
                 }

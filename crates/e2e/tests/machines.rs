@@ -68,7 +68,7 @@ fn machines_side_by_side() {
             assert_eq!(flock.details.unwrap().name, name);
         }
         let read = core
-            .agent_read(mac_id.clone(), AGENT.into(), TerminalSource::Recent)
+            .agent_read(mac_id.clone(), AGENT.into(), TerminalSource::Recent, None)
             .await
             .unwrap();
         assert_eq!(read.ansi, "e2e-mac screen");
@@ -102,9 +102,10 @@ fn machines_side_by_side() {
             let linux = timed(core.flock(linux_id.clone())).await.unwrap();
             let mac = timed(core.flock(mac_id.clone())).await.unwrap();
             assert!(connected(&mac), "{mac:?}");
-            let read = timed(core.agent_read(mac_id.clone(), AGENT.into(), TerminalSource::Recent))
-                .await
-                .unwrap();
+            let read =
+                timed(core.agent_read(mac_id.clone(), AGENT.into(), TerminalSource::Recent, None))
+                    .await
+                    .unwrap();
             assert_eq!(read.ansi, "e2e-mac screen");
             if dial_failed(&linux) {
                 return linux;

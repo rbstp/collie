@@ -591,12 +591,13 @@ impl CollieCore {
         machine_id: String,
         terminal_id: String,
         source: TerminalSource,
+        lines: Option<u16>,
     ) -> Result<TerminalSnapshot, CoreError> {
         let source = ReadSource::from(source);
         let request = Request::AgentRead(ReadParams {
             terminal_id: terminal(terminal_id)?,
             source,
-            lines: (source == ReadSource::Recent).then_some(limits::MAX_READ_LINES),
+            lines: lines.or((source == ReadSource::Recent).then_some(limits::MAX_READ_LINES)),
         });
         match self.call(&machine_id, request, CALL_TIMEOUT).await? {
             Response::Terminal(read) => Ok(read.into()),
@@ -2736,7 +2737,7 @@ mod tailnet_tests {
         );
         assert!(core.agent_view(id(), t1(), 2).unwrap().output.is_none());
         let snap = rt
-            .block_on(core.agent_read(id(), t1(), TerminalSource::Recent))
+            .block_on(core.agent_read(id(), t1(), TerminalSource::Recent, None))
             .unwrap();
         assert_eq!((snap.ansi.as_str(), snap.truncated), ("read", false));
 

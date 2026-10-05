@@ -60,6 +60,18 @@ private func running(_ model: PreviewModel, _ core: FakeCore, screens: Int) asyn
 }
 
 @MainActor
+@Test func aCardReadsOnlyTheLinesItCanShow() async {
+    let core = FakeCore()
+    let model = PreviewModel()
+    model.update([entry("m1", [("t1", .working)])])
+    model.appeared(route("t1"))
+    let run = await running(model, core, screens: 1)
+    #expect(core.snapshot.readLines == [40])
+    run.cancel()
+    await run.value
+}
+
+@MainActor
 @Test func aWorkingCardIsReadEveryFiveSeconds() async {
     let core = FakeCore()
     let clock = FakeClock()

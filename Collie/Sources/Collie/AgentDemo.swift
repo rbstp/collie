@@ -112,7 +112,7 @@ final class DemoAgentCore: ActivityCore {
 
     func watchAgent(machineId: String, terminalId: String?) async throws {}
 
-    func agentRead(machineId: String, terminalId: String, source: TerminalSource) async throws -> TerminalSnapshot {
+    func agentRead(machineId: String, terminalId: String, source: TerminalSource, lines: UInt16?) async throws -> TerminalSnapshot {
         read(terminalId)
     }
 
