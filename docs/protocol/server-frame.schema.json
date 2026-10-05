@@ -423,6 +423,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/OutputPatch",
+          "properties": {
+            "name": {
+              "const": "agent.output_patch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "approval": {
               "$ref": "#/$defs/Approval"
@@ -576,6 +589,54 @@
     "Nonce": {
       "pattern": "^[A-Za-z0-9_-]{43}$",
       "type": "string"
+    },
+    "OutputPatch": {
+      "description": "The watched agent's new `recent` text: `head`, then lines `skip..skip + keep` of the\ntext the watch sent last, then `tail`, joined with `\\n`. `base` is [`text_hash`] of\nthat previous text. A client that does not hold it re-issues `agent.watch`, whose\nfirst event is always a full `agent.output`.",
+      "properties": {
+        "base": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "head": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "keep": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skip": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tail": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "base",
+        "head",
+        "skip",
+        "keep",
+        "tail",
+        "truncated"
+      ],
+      "type": "object"
     },
     "PendingTool": {
       "properties": {

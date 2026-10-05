@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentStatus, AgentTypeTextParams, Cwd,
-    ErrorCode, OpId, PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskNewParams,
-    TaskOptions, TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId, limits,
+    ErrorCode, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response,
+    TaskNewParams, TaskOptions, TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId,
+    limits,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -30,7 +31,7 @@ pub type Reply = Result<Response, Fail>;
 pub type Authorized = Arc<dyn Fn() -> bool + Send + Sync>;
 
 const WATCH_EVERY: Duration = Duration::from_millis(250);
-const WATCH_LINES: u32 = 240;
+const WATCH_LINES: u32 = limits::MAX_READ_LINES as u32;
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const START_POLL: Duration = Duration::from_millis(250);
 pub const OP_TTL: Duration = Duration::from_secs(600);
@@ -99,6 +100,7 @@ pub struct Driver {
 
 pub enum Watched {
     Output(TerminalRead),
+    Patch(OutputPatch),
     Gone,
 }
 
@@ -259,6 +261,7 @@ impl Driver {
         let mut tick = tokio::time::interval(WATCH_EVERY);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut last = None;
+        let mut sent: Option<String> = None;
         loop {
             tick.tick().await;
             let msg = match self.find_agent(&terminal_id).await {
@@ -283,7 +286,14 @@ impl Driver {
                         continue;
                     }
                     last = Some(hash);
-                    Watched::Output(read)
+                    let patch = sent
+                        .as_deref()
+                        .and_then(|prev| OutputPatch::between(prev, &read));
+                    sent = Some(read.ansi.clone());
+                    match patch {
+                        Some(patch) => Watched::Patch(patch),
+                        None => Watched::Output(read),
+                    }
                 }
             };
             let gone = matches!(msg, Watched::Gone);

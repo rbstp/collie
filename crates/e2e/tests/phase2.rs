@@ -133,7 +133,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     let mut revision = 0;
     for step in 0..4 {
         herdr.with(|h| h.recent = recent(step));
-        let want = format!("step {step}\r\n");
+        let want = format!("{}step {step}\r\n", history());
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if let Some(view) = core.agent_view(m.clone(), CLAUDE.into(), revision)
@@ -157,7 +157,9 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
-    let expected: Vec<String> = (0..4).map(|s| format!("step {s}\r\n")).collect();
+    let expected: Vec<String> = (0..4)
+        .map(|s| format!("{}step {s}\r\n", history()))
+        .collect();
     assert_eq!(seen, expected, "outputs out of order or unexpected");
     core.watch_agent(m.clone(), None).await.unwrap();
     let polls = herdr.params("agent.read").len();
@@ -772,7 +774,15 @@ fn assert_sgr_only(s: &str) {
 }
 
 fn recent(step: u32) -> String {
-    format!("step {step}\u{1b}]52;c;ZXZpbA==\u{7}\u{1b}[H\r\n")
+    format!(
+        "{}step {step}\u{1b}]52;c;ZXZpbA==\u{7}\u{1b}[H\r\n",
+        history()
+    )
+}
+
+/// Long enough that collied sends each later step as an `agent.output_patch`.
+fn history() -> String {
+    "\u{1b}[2mhistory\u{1b}[0m\r\n".repeat(50)
 }
 
 #[derive(Default)]

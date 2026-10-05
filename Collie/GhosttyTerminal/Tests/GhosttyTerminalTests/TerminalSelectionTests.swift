@@ -80,8 +80,17 @@ private func selection(_ a: TerminalCell, _ b: TerminalCell) -> TerminalSelectio
     #expect(try render("hello world again").wrapContinuations.isEmpty)
 }
 
+@Test func aThousandLineHistoryKeepsEveryWrap() throws {
+    let lines = (0..<1000).map { "\($0) " + String(repeating: "x", count: $0 % 4 == 0 ? 150 : 60) }
+    let frame = try render(lines.joined(separator: "\r\n"), wrapColumns: 98)
+    #expect(frame.rows == 1250)
+    #expect(!frame.wrapsUnknown)
+    #expect(frame.wrapContinuations.count == 250)
+    #expect(selection(cell(0, 0), cell(1, 53)).text(in: frame) == lines[0])
+}
+
 @Test func wrapRowsAreUnknownOnceTheScreenScrolls() throws {
-    let lines = Array(repeating: String(repeating: "x", count: 15), count: 300).joined(separator: "\r\n")
+    let lines = Array(repeating: String(repeating: "x", count: 15), count: 1100).joined(separator: "\r\n")
     let frame = try render(lines, wrapColumns: 10)
     #expect(frame.rows == Int(TerminalScreen.maxRows))
     #expect(frame.wrapContinuations.isEmpty)

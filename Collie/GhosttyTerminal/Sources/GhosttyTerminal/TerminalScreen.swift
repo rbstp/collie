@@ -56,7 +56,7 @@ public struct TerminalFrame: Equatable, Sendable {
 public final class TerminalScreen {
     // Bounds on untrusted snapshot dimensions. Without wrapping, wider rows are clipped.
     static let maxColumns: UInt16 = 500
-    static let maxRows: UInt16 = 500
+    static let maxRows: UInt16 = 2000
 
     private let terminal: OpaquePointer
     private let renderState: OpaquePointer

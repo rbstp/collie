@@ -113,10 +113,10 @@ private func selection(_ row: Int, _ column: Int, _ endRow: Int, _ endColumn: In
 }
 
 @Test func linkEndingOnAFullRowIsNotOfferedOnceWrapsAreUnknown() throws {
-    let filler = Array(repeating: "x", count: 520).joined(separator: "\r\n")
+    let filler = Array(repeating: "x", count: 2020).joined(separator: "\r\n")
     let frame = try render(filler + "\r\nsee https://example.com/a/very/long/path ok\r\nhttps://a.dev ok", wrapColumns: 24)
     #expect(frame.wrapsUnknown)
-    #expect(frame.rows == 500)
-    #expect(selection(497, 10, 497, 10).link(in: frame) == nil)
-    #expect(selection(499, 3, 499, 3).link(in: frame)?.absoluteString == "https://a.dev")
+    #expect(frame.rows == 2000)
+    #expect(selection(1997, 10, 1997, 10).link(in: frame) == nil)
+    #expect(selection(1999, 3, 1999, 3).link(in: frame)?.absoluteString == "https://a.dev")
 }

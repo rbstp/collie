@@ -1116,7 +1116,7 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
     let reads = herdr.params("agent.read");
     assert_eq!(
         reads[0],
-        json!({"target": "w6:p1", "source": "recent_unwrapped", "lines": 240, "format": "ansi"})
+        json!({"target": "w6:p1", "source": "recent_unwrapped", "lines": 1000, "format": "ansi"})
     );
 
     assert!(
@@ -1132,6 +1132,22 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
         panic!("no second output");
     };
     assert_eq!(second.ansi, "next\r\n");
+
+    let history = "\u{1b}[1mline\u{1b}[0m\r\n".repeat(100);
+    herdr.with(|h| h.text = format!("{history}a\r\n"));
+    let Ok(Some(Watched::Output(full))) = next(&mut watcher).await else {
+        panic!("a mostly new screen is sent whole");
+    };
+    herdr.with(|h| h.text = format!("{history}b\r\n"));
+    let Ok(Some(Watched::Patch(patch))) = next(&mut watcher).await else {
+        panic!("unchanged history is not sent again");
+    };
+    assert_eq!((patch.skip, patch.keep), (0, 100));
+    assert_eq!(patch.tail, ["b\r", ""]);
+    assert_eq!(
+        patch.apply(&full.ansi).unwrap().ansi,
+        format!("{history}b\r\n")
+    );
 
     herdr.with(|h| {
         h.snapshot["agents"].as_array_mut().unwrap().remove(0);

@@ -889,6 +889,9 @@ impl Session<'_> {
             }
             Step::Event(Err(broadcast::error::RecvError::Closed)) => Flow::Close,
             Step::Watch(Some(Watched::Output(read))) => self.push(Event::AgentOutput(read)).await,
+            Step::Watch(Some(Watched::Patch(patch))) => {
+                self.push(Event::AgentOutputPatch(patch)).await
+            }
             Step::Watch(Some(Watched::Gone) | None) => {
                 self.watch = None;
                 self.push(Event::FlockChanged {}).await

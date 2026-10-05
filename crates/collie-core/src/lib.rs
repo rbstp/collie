@@ -592,10 +592,11 @@ impl CollieCore {
         terminal_id: String,
         source: TerminalSource,
     ) -> Result<TerminalSnapshot, CoreError> {
+        let source = ReadSource::from(source);
         let request = Request::AgentRead(ReadParams {
             terminal_id: terminal(terminal_id)?,
-            source: source.into(),
-            lines: None,
+            source,
+            lines: (source == ReadSource::Recent).then_some(limits::MAX_READ_LINES),
         });
         match self.call(&machine_id, request, CALL_TIMEOUT).await? {
             Response::Terminal(read) => Ok(read.into()),
@@ -630,7 +631,7 @@ impl CollieCore {
                 let read = Request::AgentRead(ReadParams {
                     terminal_id,
                     source: ReadSource::Recent,
-                    lines: None,
+                    lines: Some(limits::MAX_READ_LINES),
                 });
                 conn.request(read, CALL_TIMEOUT)
                     .await
