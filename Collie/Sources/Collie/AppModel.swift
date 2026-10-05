@@ -137,12 +137,15 @@ final class AppModel {
         machines = core?.machines() ?? []
     }
 
-    func removeMachine(_ machine: Machine) throws {
-        try core?.removeMachine(id: machine.id)
+    /// False when the machine was unreachable and still lists this phone.
+    func removeMachine(_ machine: Machine) async throws -> Bool {
+        machines.removeAll { $0.id == machine.id }
+        defer { reloadMachines() }
+        let unpaired = try await core?.removeMachine(id: machine.id) ?? false
         if !(core?.machines() ?? []).contains(where: { $0.nodeId == machine.nodeId }) {
             NotificationKey.delete(nodeId: machine.nodeId)
         }
-        reloadMachines()
+        return unpaired
     }
 
     /// A pairing or re-pairing rotates that Mac's notification key.

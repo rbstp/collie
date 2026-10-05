@@ -155,7 +155,7 @@ Deleting and reinstalling the app creates a new node with a new `StableID`: pair
 
 Do both steps; each covers what the other cannot.
 
-1. `collied peers revoke <label or StableID>` removes the phone from `peers.json`. With the daemon running, it saves first and then closes every live session of that node; with the daemon stopped, it edits `peers.json` directly. It stops collie access immediately, even if the node stays in the tailnet.
+1. `collied peers revoke <label or StableID>` removes the phone from `peers.json` and drops its push tokens. Removing the machine in the app does the same when the machine is reachable at that moment; otherwise run the command. With the daemon running, it saves first and then closes every live session of that node; with the daemon stopped, it edits `peers.json` directly. It stops collie access immediately, even if the node stays in the tailnet.
 2. Admin console, Machines, the phone node: **Remove**. This deletes its node key from the tailnet, so it can no longer reach anything, collie or not. **Expire key** alone only forces a re-login, which a thief could complete if the phone still holds a signed-in session with your identity provider.
 
 For a compromised Mac: remove the Mac node in the admin console, delete `~/Library/Application Support/collie/tsnet`, and revoke the APNs key in the Apple Developer portal. For a compromised Linux machine: the same with its own node, `~/.local/share/collie/tsnet` (or `$XDG_DATA_HOME/collie/tsnet`) and its own APNs key; each machine's key is revoked on its own.

@@ -221,7 +221,7 @@ impl State {
 
     /// Persists first, then closes every live session of that node. The peers lock is held
     /// across both so a connection cannot pass the gate between them.
-    pub(crate) fn revoke(&self, target: &str) -> anyhow::Result<(Peer, usize)> {
+    pub(crate) fn revoke(&self, target: &str, how: &str) -> anyhow::Result<(Peer, usize)> {
         let mut store = lock(&self.peers);
         let mut next = store.clone();
         let peer = next.remove(target)?;
@@ -242,7 +242,7 @@ impl State {
             &peer.label,
             "peers.revoke",
             Some(&peer.stable_id),
-            &format!("revoked, {closed} session(s) closed"),
+            &format!("{how}, {closed} session(s) closed"),
         );
         Ok((peer, closed))
     }
@@ -954,6 +954,7 @@ impl Session<'_> {
                     None => (err(ErrorCode::PairingFailed, "already paired"), None),
                 }
             }
+            Request::Unpair(_) => return self.unpair(id).await,
             Request::FlockSnapshot(_) => (self.flock().await, None),
             Request::WorkspaceList(_) => (self.workspaces().await, None),
             Request::AgentRead(p) => (drive.read(p, true).await, None),
@@ -1327,6 +1328,20 @@ impl Session<'_> {
         } else {
             err(ErrorCode::PairingFailed, "pairing failed")
         }
+    }
+
+    /// Answers before revoking: the revoke closes this session, and nothing reaches the
+    /// phone afterwards.
+    async fn unpair(&mut self, id: u32) -> Flow {
+        let flow = self.reply(id, Ok(Response::Ok)).await;
+        if let Err(e) = self
+            .state
+            .revoke(&self.peer.who.node.stable_id, "unpaired by the phone")
+        {
+            tracing::error!(error = %e, "unpair");
+            return flow;
+        }
+        Flow::Abort
     }
 
     fn audit_pair(&self, result: &str) {

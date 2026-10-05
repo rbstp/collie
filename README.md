@@ -9,8 +9,6 @@ collie has two parts:
 
 No Tailscale app is needed on either device, and no TCP port is opened outside the tailnet (the only socket on the real network is Tailscale's own WireGuard UDP socket).
 
-collied on Linux is in progress: it logs in and serves, but the app does not pair with a Linux machine yet (see [Getting started](#getting-started)).
-
 ```
  iPhone                                                  Mac or Linux machine
 ┌──────────────────────────┐   tailnet (WireGuard)   ┌──────────────────────────┐
@@ -24,7 +22,8 @@ collied on Linux is in progress: it logs in and serves, but the app does not pai
 
 ## Features
 
-- **Agents**: every herdr agent with its status (`idle`, `working`, `blocked`, `done`), grouped by machine (Mac or Linux) with blocked agents first, and each agent's workspace under its title. Long-press an agent, or use the agent screen's menu, to close its pane or workspace.
+- **Machines**: pair several Macs and Linux machines. Each one sends its own pushes, and one that is asleep or off is shown as offline (gray) without slowing the others. Removing a machine in the app also revokes the phone on that machine when it is reachable.
+- **Agents**: every herdr agent with its status (`idle`, `working`, `blocked`, `done`, as compact icons), grouped by machine (Mac or Linux) with blocked agents first, and each agent's workspace under its title. Long-press an agent, or use the agent screen's menu, to close its pane or workspace.
 - **Terminal**: a live view of the last 240 lines of the agent's pane, rendered with libghostty-vt, with optional line wrapping and the MesloLGS NF font so Nerd Font glyphs match the Mac. Long-press to select text, drag the handles to adjust, and copy (Universal Clipboard included).
 - **Prompt and keys**: send a prompt, or keys from the key strip (`esc ← ↑ ↓ → ⇥ ⇧⇥ ⏎ ⌃⏎`). A Claude Code prompt typed on the machine but not sent shows up in the phone's prompt field, and sending from the phone replaces it. "Focus on <machine>" brings the agent's pane to the front in herdr.
 - **Attachments**: up to 10 photos or files per prompt, uploaded over the tailnet and shown as pills; the agent receives their paths on the machine.
@@ -55,9 +54,11 @@ Details, including what is not covered: [docs/threat-model.md](docs/threat-model
 | 2 | Terminal, prompt, keys, new task | done |
 | 3 | Lock-screen approvals with encrypted context, attachments | done |
 | 4 | Live Activities and Dynamic Island for agents you follow, approvals on the activity, question menus | done |
-| 5 | Claude Code hooks enrichment, audit viewer, multiple computers (macOS and Linux) | planned; Linux daemon in progress |
+| 5 | Multiple computers (macOS and Linux), Claude Code hooks enrichment | multiple computers done; hooks in progress |
 | 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | planned |
-| 7 | Improvements: a Mac menu bar icon (on/off, pairing, pending approvals, quit), compact status icons | planned |
+| 7 | Improvements: compact status icons (done); a Mac menu bar icon, Codex and Copilot CLI agents, dictation, live terminal previews, gestures, opening links, remaining context and a sessions inbox, an Apple Watch app | planned |
+
+Outside the phases: an audit log viewer, and smaller fixes tracked as [issues](https://github.com/rbstp/collie/issues).
 
 ## Requirements
 
@@ -104,7 +105,7 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
 4. **Pair**: run `collied pair` on the computer, scan the QR code with the app, and confirm with `y` on the computer.
 5. **Push notifications** (optional): add an `[apns]` section to `collied.toml` (`~/Library/Application Support/collie/collied.toml` on macOS, in the data directory on Linux), import the key with `collied apns import AuthKey_<KEY_ID>.p8`, then check with `collied apns test`. Each machine uses its own APNs key (its own key ID, revoked on its own) and sends its own pushes. On Linux, `collied apns import` encrypts the key into a systemd user credential (also sealed to the TPM2 when one is usable), with a 0600 file as the fallback where `systemd-creds` cannot encrypt. `collied doctor` reports which one is in use and, for a credential, its seal. The full steps are in [docs/release.md](docs/release.md).
 
-List paired phones with `collied peers list`, revoke one with `collied peers revoke <label or StableID>`, and inspect the daemon with `collied status` (its tags and the herdr agents it sees).
+List paired phones with `collied peers list`, revoke one with `collied peers revoke <label or StableID>` (removing the machine in the app does the same when the machine is reachable), and inspect the daemon with `collied status` (its tags and the herdr agents it sees).
 
 `collied stop` turns collied off and keeps it off, across reboots, until `collied start`. This is the same with the launchd agent and the systemd user unit.
 

@@ -20,6 +20,8 @@ pub enum Request {
     Hello(HelloParams),
     #[serde(rename = "pair.complete")]
     PairComplete(PairCompleteParams),
+    #[serde(rename = "unpair")]
+    Unpair(Empty),
 
     #[serde(rename = "flock.snapshot")]
     FlockSnapshot(Empty),
@@ -77,6 +79,7 @@ impl Request {
     pub const METHODS: &[&str] = &[
         "hello",
         "pair.complete",
+        "unpair",
         "flock.snapshot",
         "workspace.list",
         "agent.read",
@@ -106,6 +109,7 @@ impl Request {
         match self {
             Self::Hello(_) => "hello",
             Self::PairComplete(_) => "pair.complete",
+            Self::Unpair(_) => "unpair",
             Self::FlockSnapshot(_) => "flock.snapshot",
             Self::WorkspaceList(_) => "workspace.list",
             Self::AgentRead(_) => "agent.read",
@@ -134,7 +138,7 @@ impl Request {
 
     pub fn class(&self) -> MethodClass {
         match self {
-            Self::Hello(_) | Self::PairComplete(_) => MethodClass::Session,
+            Self::Hello(_) | Self::PairComplete(_) | Self::Unpair(_) => MethodClass::Session,
             Self::FlockSnapshot(_)
             | Self::WorkspaceList(_)
             | Self::AgentRead(_)
