@@ -7,7 +7,7 @@ struct DevicePrefs: Codable, Equatable {
     var gestures = TerminalGestures()
     var fontSize = 11.0
     var dictationLanguage = DictationLanguage.english
-    var agentsLayout = AgentsLayout.list
+    var agentsLayout = AgentsLayout.grid
     var starred: Set<AgentRoute> = []
     var historyLines: UInt16 = 200
 
@@ -42,23 +42,23 @@ extension DevicePrefs {
 }
 
 enum AgentsLayout: String, Codable, CaseIterable {
-    case list
     case grid
     case inbox
+    case list
 
     var label: String {
         switch self {
-        case .list: "List"
         case .grid: "Grid"
         case .inbox: "Inbox"
+        case .list: "List"
         }
     }
 
     var icon: String {
         switch self {
-        case .list: "list.bullet"
         case .grid: "rectangle.grid.2x2"
         case .inbox: "tray"
+        case .list: "list.bullet"
         }
     }
 }

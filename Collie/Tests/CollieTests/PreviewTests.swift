@@ -404,7 +404,7 @@ private func claude(_ box: String, top: String = rule, above: String = "", foote
 }
 
 @MainActor
-@Test func layoutIsListByDefaultAndRememberedOnThisDevice() throws {
+@Test func layoutIsGridByDefaultAndRememberedOnThisDevice() throws {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -412,7 +412,8 @@ private func claude(_ box: String, top: String = rule, above: String = "", foote
 
     try Data(#"{"wrapLines":false,"agentsLayout":"carousel"}"#.utf8).write(to: file)
     #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false))
-    for layout in [AgentsLayout.grid, .inbox] {
+    #expect(DevicePrefs().agentsLayout == .grid)
+    for layout in [AgentsLayout.inbox, .list] {
         var prefs = DevicePrefs.load(from: file)
         prefs.agentsLayout = layout
         prefs.save(to: file)
