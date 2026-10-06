@@ -20,6 +20,10 @@
 		<string>Collie Push App Store</string>
 		<key>dev.rbstp.collie.widgets</key>
 		<string>Collie Widgets App Store</string>
+		<key>dev.rbstp.collie.watchkitapp</key>
+		<string>Collie Watch App Store</string>
+		<key>dev.rbstp.collie.watchkitapp.widgets</key>
+		<string>Collie Watch Widgets App Store</string>
 	</dict>
 	<key>uploadSymbols</key>
 	<true/>

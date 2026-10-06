@@ -6,6 +6,7 @@ options:
   generateEmptyDirectories: false
   deploymentTarget:
     iOS: "26.0"
+    watchOS: "26.0"
   xcodeVersion: "27.0"
 
 packages:
@@ -38,6 +39,7 @@ targets:
       - package: GhosttyTerminal
       - target: ColliePush
       - target: CollieWidgets
+      - target: CollieWatch
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie
@@ -120,6 +122,31 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
           PROVISIONING_PROFILE_SPECIFIER: "Collie Widgets App Store"
+
+  # Pure Swift: must never link CollieCore; holds no keys and reaches collied only through the phone.
+  CollieWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - path: CollieWatch
+      - path: Resources/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie.watchkitapp
+        PRODUCT_NAME: CollieWatch
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: collie
+        INFOPLIST_KEY_WKCompanionAppBundleIdentifier: dev.rbstp.collie
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: CollieWatch/CollieWatch.entitlements
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "Apple Development"
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "Collie Watch App Store"
 
   CollieTests:
     type: bundle.unit-test
