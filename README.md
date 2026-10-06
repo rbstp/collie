@@ -17,6 +17,7 @@ No Tailscale app is needed on either device, and no TCP port is opened outside t
 │     └ libtailscale node  │                         │  ├ libtailscale node     │
 │ ColliePush (NSE)         │ ◄─ APNs (encrypted ──── │  └ herdr client ─► herdr │
 │ CollieWidgets (Live Act.)│    approval context)    │                          │
+│ CollieWatch (via phone)  │                         │                          │
 └──────────────────────────┘                         └──────────────────────────┘
 ```
 
@@ -35,6 +36,7 @@ No Tailscale app is needed on either device, and no TCP port is opened outside t
 - **New task**: start Claude Code, Codex or GitHub Copilot CLI in a new workspace from the phone. Approvals are for Claude Code only: a blocked Codex or Copilot agent shows up, and its prompt is answered in the terminal on the machine.
 - **Approvals**: when an agent blocks on a permission prompt, you get a push notification naming the tool call (with the Claude Code hook, the exact command or file; otherwise as read from the screen). Approve or deny from the lock screen (the iPhone must be unlocked first) or in the app (Face ID or the passcode for each decision). In the app you can also add a note to an approval or a denial, send feedback on a plan, and answer Claude Code's question menus by picking an option or typing an answer.
 - **Follow**: "Follow on Lock Screen" (agent menu or long-press in the list) shows the agent (up to 5) in a Live Activity and the Dynamic Island, with its status and how long it has been in it. When a followed agent blocks on a permission prompt, the activity shows the command with Approve and Deny buttons instead of a separate notification; other prompts arrive as a notification. Following is off by default; followed agents get a pin in the list.
+- **Apple Watch**: pending approvals with the command and a countdown, the agents as in the inbox, and a complication ring with the 5-hour plan usage. The watch shows what the iPhone app last saw. Approvals are read-only unless Settings > Apple Watch > Decide from Apple Watch is on; then the watch can approve, deny or answer a question menu.
 
 ## Security model
 
@@ -45,6 +47,7 @@ Security is the first requirement. The short version:
 - **Mutual TLS**: inside the tunnel, the phone pins the machine's TLS key from the pairing QR, and collied pins the phone's key, which lives in the iPhone's Secure Enclave and never leaves it. A Tailscale node key copied off the phone, or a node injected by a compromised control plane, gets no session.
 - **Pairing**: a QR code shown by `collied pair`, plus a local y/N confirmation on the computer running collied.
 - **Approvals**: a nonce plus a fingerprint of the prompt on screen. collied moves the cursor, re-reads the screen, and presses Enter only if the fingerprint still matches; a prompt that changed is answered `superseded`. A small gap between that last re-read and Enter remains until herdr supports conditional input.
+- **Apple Watch**: deciding from the watch is off by default, and turning it on needs Face ID or the passcode. A decision then needs the watch unlocked and on the wrist, and goes through the iPhone, which re-reads the setting on each one and only sends an answer it showed the watch, through the lock-screen decide path (nonce and fingerprint on the machine). It works while the iPhone is locked. There is no Approve always on the watch. The watch holds no keys and never talks to collied.
 - **Terminals**: typing into a shell is command execution, so it is off unless `collied.toml` on that machine turns it on (never from the phone), its methods are a separate class in the allowlist, and every unlock is a grant collied verifies: a signature by a second Secure Enclave key on the phone, which signs only after Face ID or the passcode, for one terminal, one session and 5 minutes. collied re-reads the pane before every write and refuses one where an agent now runs. The audit log records each grant and command without its text.
 - **Push notifications**: the cleartext part of the push only says which agent is blocked and where. The command itself is end-to-end encrypted (ChaCha20-Poly1305, under a per-machine key generated on the phone, kept in its Keychain and handed to collied over the tailnet). The phone's notification extension decrypts it, so Apple sees the command only as ciphertext. Apple still sees agent and workspace names, ids and timing.
 - **Transcripts**: for the context ring and the inbox, collied reads the end of each live Claude Code or Codex agent's transcript on the machine. Only the percentage left, one line of the latest reply, one line of the latest prompt and the time of the last change go to the paired phone, over the same session as the terminal view. They are never logged or put in a push.
@@ -65,7 +68,7 @@ Details, including what is not covered: [docs/threat-model.md](docs/threat-model
 | 4 | Live Activities and Dynamic Island for agents you follow, approvals on the activity, question menus | done |
 | 5 | Multiple computers (macOS and Linux), Claude Code hooks enrichment | done |
 | 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | done |
-| 7 | Improvements: compact status icons, opening links, gestures, dictation, live terminal previews with starred cards, more scrollback, Codex and Copilot CLI agents (done); battery, reconnects, a Mac menu bar icon, remaining context and a sessions inbox, an Apple Watch app, and more (see the milestone) | in progress |
+| 7 | Improvements: compact status icons, opening links, gestures, dictation, live terminal previews with starred cards, more scrollback, Codex and Copilot CLI agents, an Apple Watch app (done); battery, reconnects, a Mac menu bar icon, remaining context and a sessions inbox, and more (see the milestone) | in progress |
 
 Outside the phases: an audit log viewer, and smaller fixes tracked as [issues](https://github.com/rbstp/collie/issues).
 
@@ -74,6 +77,7 @@ Outside the phases: an audit log viewer, and smaller fixes tracked as [issues](h
 - An Apple silicon Mac running [herdr](https://github.com/herdrdev/herdr) 0.9.3 (the version collied is tested against). Intel Macs are not supported.
 - Or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.3. The encrypted APNs key needs systemd 256 or later (`systemd-creds --user`); older versions fall back to a 0600 file. collied is built and tested on Arch Linux. aarch64 Linux is mapped in the build but not built or tested.
 - An iPhone on iOS 26 or later.
+- Optional: an Apple Watch on watchOS 26 or later.
 - A Tailscale account whose policy file you can edit.
 - To build on macOS: Rust (see `rust-toolchain.toml`), Go, Xcode 27 with an iPhone 18 Pro simulator, [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, [cargo-nextest](https://nexte.st), and `jq` (for `just ios-run-device`). The libghostty-vt build script downloads its own pinned Zig.
 - To build collied on Linux: Rust (see `rust-toolchain.toml`), Go 1.27.1 or later, a C compiler, libclang (for bindgen), [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st).
@@ -174,7 +178,7 @@ crates/
   collie-core/     The phone's Rust core, exposed to Swift with UniFFI
   uniffi-bindgen/  UniFFI binding generator used by `just ios-framework`
   e2e/             End-to-end tests: phone core against collied over a local test tailnet
-Collie/            iOS app (XcodeGen project.yml), ColliePush and CollieWidgets extensions, GhosttyTerminal package
+Collie/            iOS app (XcodeGen project.yml), ColliePush and CollieWidgets extensions, CollieWatch app and its CollieWatchWidgets complication, GhosttyTerminal package
 docs/              Architecture, threat model, tailnet setup, release, protocol schemas
 scripts/           libghostty-vt xcframework build
 ```

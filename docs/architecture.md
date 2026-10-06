@@ -575,10 +575,18 @@ On both OSes, `collied status` also prints `tags:` (`(none)` for an untagged nod
 
 ## iOS
 
-- Only the app target links CollieCore (Rust + Go). The Go runtime starts at image load through a `__mod_init_func` initializer, so the widget extension and the NSE stay pure Swift and share an App Group container (reachability hint, Live Activity state).
+- Only the app target links CollieCore (Rust + Go). The Go runtime starts at image load through a `__mod_init_func` initializer, so the widget extension and the NSE stay pure Swift and share an App Group container (reachability hint, Live Activity state). The watch targets, CollieWatch and CollieWatchWidgets, are pure Swift too.
 - UniFFI 0.32.2 bindings compile in a Swift 5 language-mode package target (generated async foreign-trait code fails Swift 6 checking, uniffi-rs #2458/#2818); the app itself is Swift 6 strict.
 - One xcframework, one static library per slice (device, simulator): the Rust staticlib bundles the Go c-archive linked by `tailscale-sys`.
 - Terminal font: MesloLGS NF (Apache 2.0, romkatv/powerlevel10k-media at 145eb9fbc2f42ee408dacd9b22d8e6e0e553f83d), bundled in the GhosttyTerminal package and loaded from data without registering it system-wide, so Nerd Font prompt and status-line glyphs render as on the Mac. SHA-256: Regular d97946186e97f8d7c0139e8983abf40a1d2d086924f2c5dbf1c29bd8f2c6e57d, Bold b6c0199cf7c7483c8343ea020658925e6de0aeb318b89908152fcb4d19226003, Italic 6f357bcbe2597704e157a915625928bca38364a89c22a4ac36e7a116dcd392ef, Bold Italic 56b4131adecec052c4b324efb818dd326d586dbc316fc68f98f1cae2eb8d1220. Glyphs it lacks fall back through CoreText's cascade.
+
+## Apple Watch
+
+- CollieWatch (embedded under `Collie.app/Watch`) and its CollieWatchWidgets complication hold no keys, never link CollieCore and never talk to collied. Everything goes through the phone over WatchConnectivity.
+- Phone to watch: `updateApplicationContext(["state": WatchState JSON])`, sent only when it changes, from the app's 1 s poll loop and on going to the background (then `live` is false). It carries at most 5 unexpired approvals (agent, place, the decrypted command, the snippet, Approve/Deny and menu choices, never Approve always, never a nonce), at most 30 agents as in the inbox, the newest 5-hour plan usage and whether watch decisions are allowed. Texts are capped so it fits in an application context. Nothing is sent from a background launch.
+- Watch to phone: `sendMessage(["decide": {nodeId, approvalId, decision}])`, which wakes the iPhone app; the reply is `{title, body}`, the follow-up text. The watch first passes `deviceOwnerAuthenticationWithWristDetection` (a fresh `LAContext` each time).
+- The phone (`AppModel.decideFromWatch`) re-reads `watchDecisions` from `prefs.json` on every request (off by default; turning it on needs `deviceOwnerAuthentication`), and decides only an unexpired approval, with an answer, that is in the last application context it sent (`WCSession.applicationContext`). Then it takes the lock-screen path, `decide_from_notification`, so the nonce, expiry, replay and fingerprint checks on the machine are unchanged.
+- The watch app writes the plan usage to `watch-usage.json` in its own App Group container and reloads the `CollieUsage` complication (`accessoryCircular`).
 
 ## Client runtime (patterns taken from t3code)
 
