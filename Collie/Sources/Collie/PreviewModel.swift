@@ -120,7 +120,7 @@ final class PreviewModel {
         for route in due {
             readAt[route] = now
             if let output = core.agentView(machineId: route.machineId, terminalId: route.terminalId, afterRevision: 0)?.output {
-                show(output.ansi, for: route)
+                show(output.reflowed ?? output.ansi, for: route)
                 fresh.insert(route)
             } else {
                 reads.append((route, starred.contains(route) ? Self.starredLines : Self.lines))
@@ -133,7 +133,7 @@ final class PreviewModel {
                 for (route, lines) in reads {
                     group.addTask {
                         let read = try? await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: lines)
-                        return (route, read?.ansi)
+                        return (route, read.map { $0.reflowed ?? $0.ansi })
                     }
                 }
                 for await (route, ansi) in group {

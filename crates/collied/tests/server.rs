@@ -30,12 +30,13 @@ const ACTIVITY: &str = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
 const ACTIVITY_TOKEN: &str =
     "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
 const WATCHDOG: Duration = Duration::from_secs(300);
-const HERDR_CALLED: [&str; 11] = [
+const HERDR_CALLED: [&str; 12] = [
     "ping",
     "session.snapshot",
     "agent.list",
     "workspace.list",
     "agent.read",
+    "pane.layout",
     "agent.focus",
     "agent.get",
     "agent.explain",

@@ -23,6 +23,7 @@ pub mod pairing;
 pub mod peers;
 pub mod prompt;
 pub mod push;
+pub mod reflow;
 pub mod server;
 pub mod service;
 pub mod terminal;

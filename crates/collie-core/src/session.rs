@@ -505,7 +505,7 @@ impl FlockState {
                     .watched_output
                     .as_ref()
                     .filter(|o| o.terminal_id == patch.terminal_id)
-                    .and_then(|o| patch.apply(&o.ansi));
+                    .and_then(|o| patch.apply(o));
                 match read {
                     Some(read) => self.apply_watched(read),
                     None => {
@@ -837,9 +837,13 @@ mod tests {
         let history = "\u{1b}[1mline\u{1b}[0m\r\n".repeat(50);
         let text = |end: &str| output("t1", &format!("{history}{end}"), ReadSource::Recent);
         let patch = |prev: &TerminalRead, next: &TerminalRead| {
-            Event::AgentOutputPatch(OutputPatch::between(&prev.ansi, next).unwrap())
+            Event::AgentOutputPatch(OutputPatch::between(prev, next).unwrap())
         };
-        let (a, b, c) = (text("a"), text("b"), text("c"));
+        let b = TerminalRead {
+            wraps: vec![50],
+            ..text("b")
+        };
+        let (a, c) = (text("a"), text("c"));
 
         assert_eq!(
             s.apply_event(1, patch(&a, &b)),
@@ -850,6 +854,7 @@ mod tests {
         let mark = s.output_events;
         assert_eq!(s.apply_event(3, patch(&a, &b)), EventOutcome::Applied);
         assert_eq!((shown(&s), s.output_revision), (Some(b.ansi.as_str()), 2));
+        assert_eq!(s.output.as_ref().unwrap().wraps, [50]);
         assert_eq!(s.output_events, mark + 1, "a patch is an output event");
 
         s.apply_read(output("t1", "read", ReadSource::Recent), None);
@@ -876,7 +881,7 @@ mod tests {
 
         let other = OutputPatch {
             terminal_id: TerminalId::new("t2").unwrap(),
-            ..OutputPatch::between(&a.ansi, &b).unwrap()
+            ..OutputPatch::between(&a, &b).unwrap()
         };
         assert_eq!(
             s.apply_event(9, Event::AgentOutputPatch(other)),
@@ -902,6 +907,8 @@ mod tests {
             source,
             ansi: ansi.into(),
             truncated: false,
+            wraps: Vec::new(),
+            splits: Vec::new(),
         }
     }
 
@@ -1346,6 +1353,8 @@ mod tests {
                 keep: 1,
                 tail: vec!["x".into()],
                 truncated: false,
+                wraps: None,
+                splits: None,
             };
             write(
                 &mut ws,
@@ -1417,6 +1426,8 @@ mod tests {
                 keep: 1,
                 tail: vec!["x".into()],
                 truncated: false,
+                wraps: None,
+                splits: None,
             };
             write(
                 &mut ws,

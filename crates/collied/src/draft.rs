@@ -115,7 +115,7 @@ pub fn parse(ansi: &str) -> Option<InputBox> {
 /// wrap is a row the next word did not fit on, or a full row that split a word longer
 /// than a row; a row starting with a space follows a typed newline. A typed newline right
 /// where the next word would not have fit reads as a space.
-fn separator(prev: &str, next: &str, width: usize) -> &'static str {
+pub(crate) fn separator(prev: &str, next: &str, width: usize) -> &'static str {
     if width == 0 || prev.is_empty() || next.is_empty() || next.starts_with(char::is_whitespace) {
         return "\n";
     }
@@ -156,7 +156,7 @@ pub fn clear_keys(lines: usize) -> Vec<&'static str> {
 
 /// Each character with whether SGR dim (2) is on. The input went through
 /// `drive::sanitize_ansi`, so every ESC starts a plain SGR.
-fn cells(row: &str) -> Vec<(char, bool)> {
+pub(crate) fn cells(row: &str) -> Vec<(char, bool)> {
     let mut out = Vec::new();
     let mut dim = false;
     let mut chars = row.chars();

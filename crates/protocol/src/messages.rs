@@ -753,6 +753,93 @@ pub struct TerminalRead {
     pub source: ReadSource,
     pub ansi: String,
     pub truncated: bool,
+    /// Rows of `ansi` (split on `\n`) that continue the row above as one paragraph the agent
+    /// wrapped at the Mac pane's width: after a space (`wraps`) or inside a word (`splits`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wraps: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub splits: Vec<u32>,
+}
+
+impl TerminalRead {
+    /// `ansi` with the rows in `wraps` and `splits` joined onto the row above; `None` when
+    /// there are none.
+    pub fn reflowed(&self) -> Option<String> {
+        if self.wraps.is_empty() && self.splits.is_empty() {
+            return None;
+        }
+        let rows: Vec<&str> = self.ansi.split('\n').collect();
+        let mut sep = vec![None; rows.len()];
+        for (list, s) in [(&self.splits, ""), (&self.wraps, " ")] {
+            for &i in list {
+                if let Some(slot) = sep.get_mut(i as usize) {
+                    *slot = Some(s);
+                }
+            }
+        }
+        let mut out = String::with_capacity(self.ansi.len());
+        for (i, row) in rows.iter().enumerate() {
+            match sep[i] {
+                Some(s) if i > 0 => {
+                    let line = out.rfind('\n').map_or(0, |n| n + 1);
+                    let kept = trim_line_end(&out[line..]);
+                    out.truncate(line);
+                    out.push_str(&kept);
+                    out.push_str(s);
+                    out.push_str(&trim_row_start(row));
+                }
+                _ => {
+                    if i > 0 {
+                        out.push('\n');
+                    }
+                    out.push_str(row);
+                }
+            }
+        }
+        Some(out)
+    }
+}
+
+/// The SGR escape `s` ends with, if any: collied sends no other escapes.
+fn sgr_suffix(s: &str) -> Option<usize> {
+    let start = s.strip_suffix('m')?.rfind('\u{1b}')?;
+    s[start + 1..s.len() - 1]
+        .strip_prefix('[')?
+        .bytes()
+        .all(|b| b.is_ascii_digit() || b == b';' || b == b':')
+        .then_some(start)
+}
+
+/// `line` without its trailing spaces and `\r`, keeping the SGR escapes among them.
+fn trim_line_end(mut line: &str) -> String {
+    let mut sgr = Vec::new();
+    loop {
+        if let Some(rest) = line.strip_suffix([' ', '\r']) {
+            line = rest;
+        } else if let Some(start) = sgr_suffix(line) {
+            sgr.push(&line[start..]);
+            line = &line[..start];
+        } else {
+            break;
+        }
+    }
+    sgr.into_iter().rev().fold(line.to_owned(), |s, e| s + e)
+}
+
+/// `row` without its leading spaces, keeping the SGR escapes among them.
+fn trim_row_start(mut row: &str) -> String {
+    let mut out = String::new();
+    loop {
+        if let Some(rest) = row.strip_prefix(' ') {
+            row = rest;
+        } else if let Some(end) = row.strip_prefix("\u{1b}[").and_then(|r| r.find('m')) {
+            out.push_str(&row[..end + 3]);
+            row = &row[end + 3..];
+        } else {
+            break;
+        }
+    }
+    out + row
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1626,6 +1713,45 @@ mod tests {
         ));
         let status: AgentStatus = serde_json::from_str(r#""sleeping""#).unwrap();
         assert_eq!(status, AgentStatus::Unknown);
+    }
+
+    fn read_with(ansi: &str, wraps: &[u32], splits: &[u32]) -> TerminalRead {
+        TerminalRead {
+            terminal_id: TerminalId::new("t1").unwrap(),
+            source: ReadSource::Recent,
+            ansi: ansi.to_owned(),
+            truncated: false,
+            wraps: wraps.to_vec(),
+            splits: splits.to_vec(),
+        }
+    }
+
+    #[test]
+    fn reflowed_joins_the_listed_rows() {
+        let ansi = "\u{1b}[1m\u{1b}[0m\u{1b}[3mNext is \u{1b}[0m\r\n  \u{1b}[0m\u{1b}[3mwatching CI.\u{1b}[0m\r\n  https://exa\r\n  mple.com\r\n\r\n  end";
+        assert_eq!(read_with(ansi, &[], &[]).reflowed(), None);
+        assert_eq!(
+            read_with(ansi, &[1], &[3]).reflowed().unwrap(),
+            "\u{1b}[1m\u{1b}[0m\u{1b}[3mNext is\u{1b}[0m \u{1b}[0m\u{1b}[3mwatching CI.\u{1b}[0m\r\n  https://example.com\r\n\r\n  end"
+        );
+        assert_eq!(
+            read_with("a \nb\nc", &[2, 0, 1, 1, 9], &[u32::MAX])
+                .reflowed()
+                .unwrap(),
+            "a b c"
+        );
+    }
+
+    #[test]
+    fn wraps_are_additive() {
+        let older = r#"{"terminal_id":"t1","source":"recent","ansi":"a","truncated":false}"#;
+        let r: TerminalRead = serde_json::from_str(older).unwrap();
+        assert_eq!(r, read_with("a", &[], &[]));
+        assert_eq!(serde_json::to_string(&r).unwrap(), older);
+        let with = read_with("a\nb\nc", &[1], &[2]);
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.ends_with(r#""wraps":[1],"splits":[2]}"#), "{json}");
+        assert_eq!(serde_json::from_str::<TerminalRead>(&json).unwrap(), with);
     }
 
     #[test]
