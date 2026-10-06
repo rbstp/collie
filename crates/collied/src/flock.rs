@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 use protocol::{
     Agent, AgentStatus, Flock, MachineInfo, Terminal, TerminalId, Workspace, WorkspaceId,
@@ -7,26 +8,54 @@ use protocol::{
 use crate::herdr::{AgentInfo, PaneInfo, SessionSnapshot, WorkspaceInfo};
 use crate::transcript::{Derived, Transcripts};
 
-/// herdr reports no timestamp for a status, so collied records when it first saw each one.
+/// herdr reports no timestamp for a status, so collied records when it first saw each one,
+/// and keeps it on disk so a restart does not reset it.
 #[derive(Default)]
 pub struct StatusTracker {
     seen: HashMap<String, (AgentStatus, u64)>,
+    path: Option<PathBuf>,
+    dirty: bool,
 }
 
 impl StatusTracker {
+    pub fn load(path: PathBuf) -> Self {
+        let seen = crate::peers::load_json(&path).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "could not read the saved status times");
+            HashMap::new()
+        });
+        Self {
+            seen,
+            path: Some(path),
+            dirty: false,
+        }
+    }
+
+    pub fn save(&mut self) {
+        let Some(path) = self.path.as_deref().filter(|_| self.dirty) else {
+            return;
+        };
+        if let Err(e) = crate::peers::save_json(path, &self.seen) {
+            tracing::warn!(error = %e, "could not save the status times");
+        }
+        self.dirty = false;
+    }
+
     fn observe(&mut self, terminal_id: &str, status: AgentStatus, now_ms: u64) -> u64 {
         match self.seen.get(terminal_id) {
-            Some((s, since)) if *s == status => *since,
+            Some((s, since)) if *s == status => (*since).min(now_ms),
             _ => {
                 self.seen.insert(terminal_id.to_owned(), (status, now_ms));
+                self.dirty = true;
                 now_ms
             }
         }
     }
 
-    fn retain<'a>(&mut self, live: impl Iterator<Item = &'a str>) {
+    pub fn retain<'a>(&mut self, live: impl Iterator<Item = &'a str>) {
         let live: std::collections::HashSet<&str> = live.collect();
+        let before = self.seen.len();
         self.seen.retain(|id, _| live.contains(id.as_str()));
+        self.dirty |= self.seen.len() != before;
     }
 }
 
@@ -369,6 +398,31 @@ mod tests {
         snap.agents.remove(1);
         map_flock(&snap, &mut tracker, 4000, machine(), 0, None);
         assert_eq!(tracker.seen.len(), 1);
+    }
+
+    #[test]
+    fn status_since_survives_a_restart() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("status.json");
+        let mut snap = fixture();
+        let mut tracker = StatusTracker::load(path.clone());
+        map_flock(&snap, &mut tracker, 1000, machine(), 0, None);
+        tracker.save();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+
+        let mut restarted = StatusTracker::load(path.clone());
+        snap.agents[1].agent_status = "idle".into();
+        let f = map_flock(&snap, &mut restarted, 5000, machine(), 0, None);
+        assert_eq!(f.agents[0].status_since_ms, 1000);
+        assert_eq!(f.agents[1].status_since_ms, 5000);
+        restarted.save();
+
+        let mut early = StatusTracker::load(path);
+        let f = map_flock(&snap, &mut early, 500, machine(), 0, None);
+        assert_eq!(f.agents[0].status_since_ms, 500);
+        assert_eq!(f.agents[1].status_since_ms, 500);
     }
 
     #[test]

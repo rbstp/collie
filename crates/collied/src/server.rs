@@ -521,6 +521,7 @@ pub async fn start_with(
     let listener = node.listen("tcp", &format!(":{}", cfg.port))?;
     let transcripts =
         Transcripts::from_env().with_usage(cfg.data_dir.join(crate::usage::USAGE_FILE));
+    let tracker = StatusTracker::load(cfg.data_dir.join(config::STATUS_FILE));
 
     let state = Arc::new(State {
         machine: MachineInfo {
@@ -541,7 +542,7 @@ pub async fn start_with(
         buckets: Mutex::new(HashMap::new()),
         chunk_buckets: Mutex::new(HashMap::new()),
         reject_buckets: Mutex::new(HashMap::new()),
-        tracker: Mutex::new(StatusTracker::default()),
+        tracker: Mutex::new(tracker),
         transcripts: Mutex::new(transcripts),
         live: Mutex::new(activity::Live::default()),
         events,
@@ -1974,6 +1975,9 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             &pending,
             &mut lock(&state.tracker),
         );
+        let mut tracker = lock(&state.tracker);
+        tracker.retain(agents.iter().map(|a| a.terminal_id.as_str()));
+        tracker.save();
     }
 }
 
