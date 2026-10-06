@@ -3,7 +3,6 @@ import Foundation
 import WatchConnectivity
 
 extension WatchState {
-    static let maxApprovals = 5
     static let maxAgents = 30
 
     /// What the phone shows, capped so it fits in an application context.
@@ -115,12 +114,12 @@ extension WatchDecision {
 @MainActor
 final class WatchLink: NSObject, WCSessionDelegate {
     private var decide: (@MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool))?
-    private var refresh: (@MainActor () async -> (WatchState, complete: Bool)?)?
+    private var refresh: (@MainActor () async -> (WatchState, silent: [String])?)?
     private var lastSent: (state: WatchState, at: Date)?
 
     func activate(
         decide: @escaping @MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool),
-        refresh: @escaping @MainActor () async -> (WatchState, complete: Bool)?
+        refresh: @escaping @MainActor () async -> (WatchState, silent: [String])?
     ) {
         self.decide = decide
         self.refresh = refresh
@@ -146,12 +145,16 @@ final class WatchLink: NSObject, WCSessionDelegate {
     }
 
     /// Unthrottled: a refresh answers with what the watch may then decide on.
-    func send(_ state: WatchState, now: Date = .now) {
-        guard let data = try? JSONEncoder().encode(state) else { return }
+    @discardableResult
+    func send(_ state: WatchState, now: Date = .now) -> Bool {
+        guard let data = try? JSONEncoder().encode(state) else { return false }
         do {
             try WCSession.default.updateApplicationContext([WatchMessage.state: data])
             lastSent = (state, now)
-        } catch {}
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// The last state this phone sent to the watch; nil refuses every decision.
@@ -180,10 +183,10 @@ final class WatchLink: NSObject, WCSessionDelegate {
         Task { @MainActor in
             if refreshing {
                 guard let refresh, let refreshed = await refresh(), let data = try? JSONEncoder().encode(refreshed.0) else {
-                    reply.send([WatchMessage.complete: false])
+                    reply.send([:])
                     return
                 }
-                reply.send([WatchMessage.state: data, WatchMessage.complete: refreshed.complete])
+                reply.send([WatchMessage.state: data, WatchMessage.silent: refreshed.silent])
                 return
             }
             guard let decide, let data, let request = try? JSONDecoder().decode(WatchDecisionRequest.self, from: data) else {

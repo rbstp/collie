@@ -474,7 +474,7 @@ async fn open(
     Ok(session)
 }
 
-/// One paired machine's pending approvals; `None` when they could not be listed in time.
+/// One paired machine's pending approvals; `None` when they could not be listed.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct MachineApprovals {
     pub machine_id: String,

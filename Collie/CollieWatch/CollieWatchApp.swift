@@ -16,7 +16,7 @@ struct CollieWatchApp: App {
             NavigationStack { WatchHome(model: model) }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await model.refresh() } }
+            if phase == .active { Task { await model.refreshIfStale() } }
         }
         .backgroundTask(.watchConnectivity) { [model] in await model.drain() }
     }
@@ -30,12 +30,7 @@ final class WatchDelegate: NSObject, WKApplicationDelegate, UNUserNotificationCe
 
     func applicationDidFinishLaunching() {
         let center = UNUserNotificationCenter.current()
-        center.setNotificationCategories([
-            UNNotificationCategory(
-                identifier: "APPROVAL", actions: [UNNotificationAction(identifier: "OPEN", title: "Open", options: [.foreground])],
-                intentIdentifiers: []
-            )
-        ])
+        center.setNotificationCategories([UNNotificationCategory(identifier: "APPROVAL", actions: [], intentIdentifiers: [])])
         center.delegate = self
     }
 
@@ -52,6 +47,18 @@ final class WatchDelegate: NSObject, WKApplicationDelegate, UNUserNotificationCe
             completionHandler()
         }
     }
+
+    /// In front, the alert still shows, and a locked phone publishes nothing: ask it.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
+    ) {
+        let info = notification.request.content.userInfo
+        let approval = info["node_id"] is String && info["approval_id"] is String
+        completionHandler([.banner, .sound, .list])
+        if approval { Task { @MainActor in await self.model.refresh() } }
+    }
 }
 
 @MainActor
@@ -65,6 +72,10 @@ final class WatchModel: NSObject, WCSessionDelegate {
     private(set) var notice: (title: String, body: String)?
     private(set) var refreshing = false
     private(set) var refreshFailed = false
+    /// The Macs the last refresh did not reach; empty with `refreshFailed` when no reply came.
+    private var silent: Set<String> = []
+    private var refreshedAt: Date?
+    private var again = false
     /// The approval an alert opened, shown once the state has it.
     var opened: WatchApprovalKey?
 
@@ -90,29 +101,51 @@ final class WatchModel: NSObject, WCSessionDelegate {
         Task { await refresh() }
     }
 
+    func couldNotRefresh(_ nodeId: String) -> Bool {
+        refreshFailed && (silent.isEmpty || silent.contains(nodeId))
+    }
+
+    /// A raised wrist makes the app active again: each refresh wakes the phone and dials every Mac.
+    func refreshIfStale() async {
+        if let refreshedAt, Date.now.timeIntervalSince(refreshedAt) < 60 { return }
+        await refresh()
+    }
+
     /// Asks the phone, which answers even while locked; on no answer the last state stays.
     func refresh() async {
-        guard !refreshing, WCSession.isSupported() else { return }
+        guard WCSession.isSupported() else { return }
+        guard !refreshing else {
+            again = true
+            return
+        }
         refreshing = true
         defer { refreshing = false }
+        repeat {
+            again = false
+            await ask()
+        } while again
+    }
+
+    private func ask() async {
         let session = WCSession.default
-        for _ in 0..<10 where session.activationState != .activated {
+        for _ in 0..<10 where session.activationState != .activated || !session.isReachable {
             try? await Task.sleep(for: .milliseconds(200))
         }
         guard session.activationState == .activated, session.isReachable else {
+            silent = []
             refreshFailed = true
             return
         }
         let (replies, continuation) = AsyncStream.makeStream(of: RefreshReply?.self)
         session.sendMessage(
             [WatchMessage.refresh: true],
-            replyHandler: { reply in
+            replyHandler: { @Sendable reply in
                 continuation.yield(
-                    RefreshReply(state: reply[WatchMessage.state] as? Data, complete: reply[WatchMessage.complete] as? Bool ?? false)
+                    RefreshReply(state: reply[WatchMessage.state] as? Data, silent: reply[WatchMessage.silent] as? [String] ?? [])
                 )
                 continuation.finish()
             },
-            errorHandler: { _ in
+            errorHandler: { @Sendable _ in
                 continuation.yield(nil)
                 continuation.finish()
             }
@@ -129,11 +162,14 @@ final class WatchModel: NSObject, WCSessionDelegate {
             break
         }
         guard let reply, let data = reply.state, let next = try? JSONDecoder().decode(WatchState.self, from: data) else {
+            silent = []
             refreshFailed = true
             return
         }
         apply(next, received: .now)
-        refreshFailed = !reply.complete
+        silent = Set(reply.silent)
+        refreshFailed = !silent.isEmpty
+        if !refreshFailed { refreshedAt = .now }
     }
 
     /// `received` is nil for the context persisted from an earlier launch, whose age is unknown.
@@ -142,12 +178,17 @@ final class WatchModel: NSObject, WCSessionDelegate {
             let next = try? JSONDecoder().decode(WatchState.self, from: data)
         else { return }
         apply(next, received: received)
+        if received != nil && next.live {
+            silent = []
+            refreshFailed = false
+        }
     }
 
     private func apply(_ next: WatchState, received: Date?) {
         let usageChanged = next.usage != state?.usage
+        // A refresh replaces only the approvals: the agents keep the age they had.
+        receivedAt = !next.live && state?.live == false && next.agents == state?.agents ? receivedAt : received
         state = next
-        receivedAt = received
         answered.formIntersection(next.approvals.map(\.id))
         if usageChanged {
             if let usage = next.usage { usage.save() } else { WatchUsage.clear() }
@@ -180,7 +221,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
         let reply: (title: String, body: String, answered: Bool)? = await withCheckedContinuation { continuation in
             WCSession.default.sendMessage(
                 [WatchMessage.decide: data],
-                replyHandler: { reply in
+                replyHandler: { @Sendable reply in
                     continuation.resume(
                         returning: (
                             reply[WatchMessage.title] as? String ?? agent, reply[WatchMessage.body] as? String ?? "",
@@ -188,7 +229,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
                         )
                     )
                 },
-                errorHandler: { _ in continuation.resume(returning: nil) }
+                errorHandler: { @Sendable _ in continuation.resume(returning: nil) }
             )
         }
         if let reply {
@@ -210,7 +251,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
 
 private struct RefreshReply: Sendable {
     let state: Data?
-    let complete: Bool
+    let silent: [String]
 }
 
 struct WatchApprovalKey: Hashable {
@@ -324,8 +365,10 @@ private struct OpenedApproval: View {
             ApprovalDetail(model: model, approval: approval)
         } else if model.refreshing {
             ProgressView()
-        } else if model.refreshFailed {
+        } else if model.couldNotRefresh(key.nodeId) {
             Text("Couldn't refresh from the iPhone. Open collie on the iPhone to see this approval.").font(.footnote)
+        } else if model.state?.approvals.count ?? 0 >= WatchState.maxApprovals {
+            Text("Not shown on the watch. Open collie on the iPhone.").font(.footnote)
         } else {
             Text("This approval is no longer pending.").font(.footnote)
         }

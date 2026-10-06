@@ -1411,7 +1411,16 @@ impl CollieCore {
     pub async fn approvals_in_background(&self, budget_ms: u64) -> Vec<MachineApprovals> {
         let budget = Duration::from_millis(budget_ms).min(BACKGROUND_BUDGET);
         let fut = approvals::list_in_background(self.inner.clone(), budget);
-        self.runtime.spawn(fut).await.unwrap_or_default()
+        match self.runtime.spawn(fut).await {
+            Ok(listed) => listed,
+            Err(_) => lock(&self.inner.machines)
+                .iter()
+                .map(|m| MachineApprovals {
+                    machine_id: m.id.clone(),
+                    approvals: None,
+                })
+                .collect(),
+        }
     }
 
     /// Sends `push.register` to that machine if it is connected; every later connection

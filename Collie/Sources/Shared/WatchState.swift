@@ -4,6 +4,8 @@ import Foundation
 // never a key, a nonce or a machine address.
 
 struct WatchState: Codable, Equatable, Sendable {
+    static let maxApprovals = 5
+
     var approvals: [WatchApproval]
     var agents: [WatchAgent]
     var usage: WatchUsage?
@@ -103,6 +105,6 @@ enum WatchMessage {
     static let body = "body"
     /// In a reply: the watch need not offer this approval again.
     static let answered = "answered"
-    /// In a refresh reply: every Mac answered.
-    static let complete = "complete"
+    /// In a refresh reply: the node ids of the Macs that did not answer.
+    static let silent = "silent"
 }
