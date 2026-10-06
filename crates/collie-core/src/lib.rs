@@ -2101,6 +2101,10 @@ fn view(conn: &Conn) -> MachineFlock {
     };
     let guard = lock(&conn.shared.flock);
     let state = &*guard;
+    let last_error = last_error.or_else(|| {
+        (link == LinkPhase::Connected && state.herdr_down)
+            .then(|| CoreError::HerdrUnavailable.to_string())
+    });
     let flock = state.flock.as_ref();
     MachineFlock {
         machine: conn.machine.clone(),

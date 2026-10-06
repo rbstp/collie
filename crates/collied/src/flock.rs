@@ -38,6 +38,14 @@ fn non_empty(s: &Option<String>) -> Option<String> {
     s.as_deref().filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
+fn title(a: &AgentInfo) -> Option<String> {
+    non_empty(&a.terminal_title_stripped).or_else(|| non_empty(&a.title))
+}
+
+fn cwd(a: &AgentInfo) -> Option<String> {
+    non_empty(&a.foreground_cwd).or_else(|| non_empty(&a.cwd))
+}
+
 /// `pane_id` is deliberately dropped: it changes on moves and is never sent to the phone.
 pub fn map_agent(
     a: &AgentInfo,
@@ -60,9 +68,9 @@ pub fn map_agent(
         workspace_id,
         kind: non_empty(&a.agent),
         name: non_empty(&a.name),
-        title: non_empty(&a.terminal_title_stripped).or_else(|| non_empty(&a.title)),
+        title: title(a),
         status,
-        cwd: non_empty(&a.foreground_cwd).or_else(|| non_empty(&a.cwd)),
+        cwd: cwd(a),
         last_line: derived.last_line,
         context_left: derived.context_left,
         last_prompt: derived.last_prompt,
@@ -150,43 +158,62 @@ pub fn map_flock(
     }
 }
 
+/// What the phone shows of an agent, so that a change to any of it sends `agent.status`.
+type Shown = (u64, AgentStatus, [Option<String>; 4]);
+/// Context left, last line and last prompt. The activity time is left out: it moves on
+/// every transcript write, and the events and snapshots that are sent carry it anyway.
+type Said = Option<(Option<u8>, Option<String>, Option<String>)>;
+
 #[derive(Debug, Default, PartialEq)]
 pub struct Baseline {
-    agents: BTreeMap<String, (u64, AgentStatus, String)>,
+    agents: BTreeMap<String, (Shown, Said, String)>,
     workspaces: Vec<(String, String, u32)>,
+    /// `Said` is compared only between two baselines that read transcripts, so a phone
+    /// connecting or leaving sends nothing.
+    read: bool,
 }
 
 impl Baseline {
-    pub fn new(agents: &[AgentInfo], workspaces: &[WorkspaceInfo]) -> Self {
+    /// Without `transcripts` the transcript values are not compared, and no transcript is read.
+    pub fn new(
+        agents: &[AgentInfo],
+        workspaces: &[WorkspaceInfo],
+        mut transcripts: Option<&mut Transcripts>,
+    ) -> Self {
+        let read = transcripts.is_some();
         Self {
             agents: agents
                 .iter()
                 .map(|a| {
-                    (
-                        a.terminal_id.clone(),
-                        (
-                            a.state_change_seq,
-                            status(&a.agent_status),
-                            a.workspace_id.clone(),
-                        ),
-                    )
+                    let shown = (
+                        a.state_change_seq,
+                        status(&a.agent_status),
+                        [non_empty(&a.agent), non_empty(&a.name), title(a), cwd(a)],
+                    );
+                    let said = transcripts
+                        .as_deref_mut()
+                        .and_then(|t| t.derive(a, false))
+                        .map(|d| (d.context_left, d.last_line, d.last_prompt));
+                    (a.terminal_id.clone(), (shown, said, a.workspace_id.clone()))
                 })
                 .collect(),
             workspaces: workspaces
                 .iter()
                 .map(|w| (w.workspace_id.clone(), w.label.clone(), w.number))
                 .collect(),
+            read,
         }
     }
 
     pub fn diff(&self, next: &Self) -> (Vec<String>, bool) {
+        let both_read = self.read && next.read;
         let changed = next
             .agents
             .iter()
-            .filter(|(id, (seq, st, _))| {
+            .filter(|(id, (shown, said, _))| {
                 self.agents
                     .get(*id)
-                    .is_some_and(|(s, t, _)| s != seq || t != st)
+                    .is_some_and(|(s, d, _)| s != shown || (both_read && d != said))
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -355,20 +382,105 @@ mod tests {
     #[test]
     fn reconcile_diff() {
         let snap = fixture();
-        let base = Baseline::new(&snap.agents, &snap.workspaces);
+        let base = Baseline::new(&snap.agents, &snap.workspaces, None);
         assert_eq!(base.diff(&base), (vec![], false));
 
         let mut agents = snap.agents.clone();
         agents[1].state_change_seq += 1;
-        let (changed, shape) = base.diff(&Baseline::new(&agents, &snap.workspaces));
+        let (changed, shape) = base.diff(&Baseline::new(&agents, &snap.workspaces, None));
         assert_eq!(changed, vec!["term_0a1b2c3d4e5f60".to_owned()]);
         assert!(!shape);
 
-        let (changed, shape) = base.diff(&Baseline::new(&agents[..1], &snap.workspaces));
+        let (changed, shape) = base.diff(&Baseline::new(&agents[..1], &snap.workspaces, None));
         assert!(changed.is_empty() && shape);
 
         let mut ws = snap.workspaces.clone();
         ws[0].label = "renamed".into();
-        assert_eq!(base.diff(&Baseline::new(&snap.agents, &ws)), (vec![], true));
+        assert_eq!(
+            base.diff(&Baseline::new(&snap.agents, &ws, None)),
+            (vec![], true)
+        );
+    }
+
+    #[test]
+    fn what_the_phone_shows_changes_without_a_status_change() {
+        let snap = fixture();
+        let base = Baseline::new(&snap.agents, &snap.workspaces, None);
+        let diff = |edit: fn(&mut AgentInfo)| {
+            let mut agents = snap.agents.clone();
+            agents.iter_mut().for_each(edit);
+            base.diff(&Baseline::new(&agents, &snap.workspaces, None))
+        };
+        let both = vec![
+            "term_0a1b2c3d4e5f60".to_owned(),
+            "term_65ce7ae4fd5731".to_owned(),
+        ];
+        assert_eq!(
+            diff(|a| a.terminal_title_stripped = Some("Renamed".into())),
+            (both.clone(), false)
+        );
+        assert_eq!(
+            diff(|a| a.name = Some("worker".into())),
+            (both.clone(), false)
+        );
+        assert_eq!(
+            diff(|a| a.agent = Some("copilot".into())),
+            (both.clone(), false)
+        );
+        assert_eq!(
+            diff(|a| a.foreground_cwd = Some("/tmp".into())),
+            (both, false)
+        );
+        // The stripped title wins, so herdr's own title is not shown for the first agent.
+        assert_eq!(
+            diff(|a| a.title = Some("other".into())),
+            (vec!["term_0a1b2c3d4e5f60".to_owned()], false)
+        );
+    }
+
+    #[test]
+    fn transcripts_are_compared_only_when_both_read_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("projects/-Users-me-src-collie");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = project.join("00000000-0000-4000-8000-000000000000.jsonl");
+        std::fs::write(
+            &path,
+            include_str!("../tests/fixtures/transcripts/claude.jsonl"),
+        )
+        .unwrap();
+        let mut transcripts = Transcripts::new(Some(dir.path().join("projects")), None);
+        let snap = fixture();
+        let base = Baseline::new(&snap.agents, &snap.workspaces, Some(&mut transcripts));
+        let same = Baseline::new(&snap.agents, &snap.workspaces, Some(&mut transcripts));
+        assert_eq!(base.diff(&same), (vec![], false));
+        let unread = Baseline::new(&snap.agents, &snap.workspaces, None);
+        assert_eq!(unread.diff(&base), (vec![], false));
+        assert_eq!(base.diff(&unread), (vec![], false));
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+            .unwrap();
+        let touched = Baseline::new(&snap.agents, &snap.workspaces, Some(&mut transcripts));
+        assert_eq!(base.diff(&touched), (vec![], false));
+
+        std::io::Write::write_all(
+            &mut file,
+            br#"{"isSidechain":false,"type":"assistant","message":{"model":"claude-opus-4-7","role":"assistant","content":[{"type":"text","text":"Pushed the fix."}]}}
+"#,
+        )
+        .unwrap();
+        let next = Baseline::new(&snap.agents, &snap.workspaces, Some(&mut transcripts));
+        assert_eq!(
+            base.diff(&next),
+            (vec!["term_65ce7ae4fd5731".to_owned()], false)
+        );
+        assert_eq!(
+            unread.diff(&Baseline::new(&snap.agents, &snap.workspaces, None)),
+            (vec![], false)
+        );
     }
 }

@@ -40,6 +40,9 @@ final class FakeCore: AgentCore {
         var shellWatches: [String] = []
         var commands: [String] = []
         var terminalKeys: [[AgentKey]] = []
+        var machines: [Machine] = []
+        var cachedFlock: MachineFlock?
+        var flocks = 0
     }
 
     let state = Mutex(State())
@@ -190,7 +193,11 @@ final class FakeCore: AgentCore {
         try await call { $0.terminalKeys.append(keys) }
     }
     func flock(machineId: String) async throws -> MachineFlock {
-        guard let started = state.withLock({ $0.started }) else { throw CoreError.MachineNotFound }
+        let started = state.withLock { s in
+            s.flocks += 1
+            return s.started
+        }
+        guard let started else { throw CoreError.MachineNotFound }
         let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
         let agent = AgentSummary(
             terminalId: started.terminalId, workspaceId: started.workspaceId, kind: "claude", name: nil, title: nil,
@@ -402,6 +409,27 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 }
 
 @MainActor
+@Test func macDraftIsReadOnceTheAgentIsKnown() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = nil
+        $0.macDraft = "from the mac"
+    }
+    let model = agentModel(core)
+    let run = Task { await model.run() }
+    try? await Task.sleep(for: .milliseconds(300))
+    #expect(core.snapshot.draftReads == 0)
+    core.state.withLock { $0.kind = "claude" }
+    for _ in 0..<400 where model.macDraft == nil {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    run.cancel()
+    await run.value
+    #expect(core.snapshot.draftReads == 1)
+    #expect(model.draft == "from the mac")
+}
+
+@MainActor
 @Test func macDraftNeverOverwritesThePhoneDraft() async {
     let core = FakeCore()
     let typed = openedAgent(core, macDraft: "from the mac")
@@ -598,6 +626,52 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     #expect(await model.performClose(core: core) == false)
     #expect(core.snapshot.closes.last == "workspace w7 confirm=true")
     #expect(model.closeNotice?.contains("approval") == true)
+}
+
+@MainActor
+@Test func theListReadsTheCacheBetweenSnapshotsAndRetriesAFailedRead() async {
+    let core = FakeCore()
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    func cached(_ title: String) -> MachineFlock {
+        let agent = AgentSummary(
+            terminalId: "term_1", workspaceId: "w1", kind: "claude", name: nil, title: title,
+            status: .working, statusSinceMs: 0, cwd: nil, lastLine: nil
+        )
+        return MachineFlock(machine: machine, link: .connected, lastError: nil, details: nil, workspaces: [], agents: [agent], approvalsCount: 0)
+    }
+    core.state.withLock {
+        $0.machines = [machine]
+        $0.cachedFlock = cached("first")
+    }
+    let model = FlockModel()
+
+    await model.refresh(core: core)
+    #expect(core.snapshot.flocks == 1)
+    #expect(model.entries.first?.error != nil)
+    #expect(model.entries.first?.agents.first?.title == "first")
+
+    core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_2") }
+    await model.refresh(core: core, snapshot: false)
+    #expect(core.snapshot.flocks == 2)
+    #expect(model.entries.first?.error == nil)
+
+    core.state.withLock { $0.cachedFlock = cached("second") }
+    await model.refresh(core: core, snapshot: false)
+    #expect(core.snapshot.flocks == 2)
+    #expect(model.entries.first?.agents.map(\.title) == ["second"])
+
+    await model.refresh(core: core)
+    #expect(core.snapshot.flocks == 3)
+
+    core.state.withLock {
+        $0.cachedFlock?.lastError = "herdr is not running on the machine"
+        $0.started = nil
+    }
+    await model.refresh(core: core, snapshot: false)
+    #expect(core.snapshot.flocks == 3)
+    #expect(model.entries.first?.error == "herdr is not running on the machine")
+    await model.refresh(core: core, snapshot: false)
+    #expect(core.snapshot.flocks == 4)
 }
 
 @MainActor
