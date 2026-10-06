@@ -80,7 +80,9 @@ fn main() {
             "-ldflags=-w",
         ]);
     if go.goos == "ios" {
-        cmd.arg("-tags=ios");
+        // Every netcheck probes the gateway for NAT-PMP/PCP/UPnP, which carriers never
+        // offer. The Mac keeps its port mapper, so a direct path still forms from its side.
+        cmd.arg("-tags=ios,ts_omit_portmapper");
     }
     run(cmd.arg("-o").arg(&archive));
 
