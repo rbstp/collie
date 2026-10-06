@@ -1,13 +1,13 @@
 import SwiftUI
 import WidgetKit
 
-/// The five-hour plan usage the watch app last received. Plan usage rather than context:
-/// one figure per subscription, where context would need one agent picked arbitrarily.
+/// The five-hour plan usage the watch app last received, inside a ring of the time left until it resets.
+/// Plan usage rather than context: one figure per subscription, where context would need one agent picked arbitrarily.
 @main
 struct UsageComplication: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: "CollieUsage", provider: UsageProvider()) { entry in
-            UsageRing(used: entry.used)
+            UsageRing(usage: entry.usage, now: entry.date)
                 .containerBackground(for: .widget) { AccessoryWidgetBackground() }
         }
         .configurationDisplayName("Claude usage")
@@ -17,13 +17,14 @@ struct UsageComplication: Widget {
 
 struct UsageEntry: TimelineEntry {
     let date: Date
-    let used: UInt8?
+    let usage: WatchUsage?
 }
 
-/// The watch app reloads the timeline when the figure changes; the second entry clears it at the reset.
+/// The watch app reloads the timeline when the figure changes; the entries run the ring down to the reset.
 struct UsageProvider: TimelineProvider {
     func placeholder(in context: Context) -> UsageEntry {
-        UsageEntry(date: .now, used: 42)
+        let reset = UInt64((Date.now.timeIntervalSince1970 + 10_800) * 1000)
+        return UsageEntry(date: .now, usage: WatchUsage(fiveHourUsed: 42, fiveHourResetsAtMs: reset))
     }
 
     func getSnapshot(in context: Context, completion: @escaping (UsageEntry) -> Void) {
@@ -32,23 +33,26 @@ struct UsageProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
         let usage = WatchUsage.load()
-        var entries = [UsageEntry(date: .now, used: usage?.fiveHour(now: .now))]
-        if let reset = usage?.fiveHourResetsAtMs.map({ Date(timeIntervalSince1970: TimeInterval($0) / 1000) }), reset > .now {
-            entries.append(UsageEntry(date: reset, used: nil))
-        }
-        completion(Timeline(entries: entries, policy: .never))
+        let entries = (usage?.timelineDates(now: .now) ?? [.now]).map { UsageEntry(date: $0, usage: usage) }
+        completion(Timeline(entries: entries, policy: entries.count > 1 ? .atEnd : .never))
     }
 }
 
 private struct UsageRing: View {
-    let used: UInt8?
+    let usage: WatchUsage?
+    let now: Date
 
     var body: some View {
-        Gauge(value: Double(used ?? 0), in: 0...100) {
+        let used = usage?.fiveHour(now: now)
+        let left = usage?.fiveHourSecondsLeft(now: now)
+        Gauge(value: min(1, max(0, (left ?? 0) / WatchUsage.fiveHourLength))) {
             Text("5h")
         } currentValueLabel: {
             Text(used.map { "\($0)" } ?? "--")
+                .foregroundStyle(used.map(WatchUsage.usedColor) ?? .primary)
         }
         .gaugeStyle(.accessoryCircularCapacity)
+        .tint(left.map(WatchUsage.ringColor))
+        .widgetAccentable()
     }
 }

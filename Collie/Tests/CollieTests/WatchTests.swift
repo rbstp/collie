@@ -116,6 +116,26 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(WatchState(items: [], entries: [entry(mac, [])], allowed: true, live: true, now: now).usage == nil)
 }
 
+@Test func watchComplicationRunsTheRingDownToTheReset() {
+    let usage = WatchUsage(fiveHourUsed: 29, fiveHourResetsAtMs: nowMs + 9_000_000)
+    let dates = usage.timelineDates(now: now)
+    #expect(dates.first == now)
+    #expect(dates.last == now.addingTimeInterval(9_000))
+    #expect(dates.contains(now.addingTimeInterval(9_000 - 7_200)))
+    #expect(dates.contains(now.addingTimeInterval(9_000 - 3_600)))
+    #expect(zip(dates, dates.dropFirst()).allSatisfy { $1 > $0 && $1.timeIntervalSince($0) <= 300 })
+    #expect(usage.fiveHourSecondsLeft(now: now) == 9_000)
+    #expect(usage.fiveHourSecondsLeft(now: now.addingTimeInterval(9_000)) == nil)
+    #expect(usage.timelineDates(now: now.addingTimeInterval(9_000)) == [now.addingTimeInterval(9_000)])
+    #expect(WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nil).timelineDates(now: now) == [now])
+
+    #expect(WatchUsage.ringColor(secondsLeft: 7_201) == .green)
+    #expect(WatchUsage.ringColor(secondsLeft: 7_200) == .yellow)
+    #expect(WatchUsage.ringColor(secondsLeft: 3_601) == .yellow)
+    #expect(WatchUsage.ringColor(secondsLeft: 3_600) == .red)
+    #expect([0, 60, 61, 85, 86, 100].map(WatchUsage.usedColor) == [.green, .green, .yellow, .yellow, .red, .red])
+}
+
 @Test func watchDecisionIsRefusedWhileTheSettingIsOff() {
     let state = WatchState(items: [item(approval("ap_1"))], entries: [], allowed: true, live: true, now: now)
     let request = WatchDecisionRequest(nodeId: "nMAC", approvalId: "ap_1", decision: .approve)

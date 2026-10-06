@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 // Compiled into the app and both watch targets. The watch gets only what the phone shows:
 // never a key, a nonce or a machine address.
@@ -71,6 +72,30 @@ struct WatchUsage: Codable, Equatable, Sendable {
     func fiveHour(now: Date) -> UInt8? {
         guard let fiveHourUsed, let reset = fiveHourResetsAtMs, reset > UInt64(max(0, now.timeIntervalSince1970 * 1000)) else { return nil }
         return fiveHourUsed
+    }
+
+    static let fiveHourLength: TimeInterval = 5 * 3600
+
+    /// Nil, like the figure, once the reset time has passed.
+    func fiveHourSecondsLeft(now: Date) -> TimeInterval? {
+        guard fiveHour(now: now) != nil, let reset = fiveHourResetsAtMs else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(reset) / 1000).timeIntervalSince(now)
+    }
+
+    /// The complication draws each entry as is: every 5 minutes, each ring color change and the reset.
+    func timelineDates(now: Date) -> [Date] {
+        guard let left = fiveHourSecondsLeft(now: now) else { return [now] }
+        let reset = now.addingTimeInterval(left)
+        let marks = [reset.addingTimeInterval(-7200), reset.addingTimeInterval(-3600), reset].filter { $0 > now }
+        return Set(Array(stride(from: now, to: reset, by: 300)) + marks).sorted()
+    }
+
+    static func ringColor(secondsLeft: TimeInterval) -> Color {
+        secondsLeft > 7200 ? .green : secondsLeft > 3600 ? .yellow : .red
+    }
+
+    static func usedColor(_ used: UInt8) -> Color {
+        used <= 60 ? .green : used <= 85 ? .yellow : .red
     }
 
     static var file: URL? { AppGroup.container?.appending(path: "watch-usage.json") }

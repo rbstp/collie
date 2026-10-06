@@ -65,7 +65,6 @@ final class WatchDelegate: NSObject, WKApplicationDelegate, UNUserNotificationCe
 @Observable
 final class WatchModel: NSObject, WCSessionDelegate {
     private(set) var state: WatchState?
-    private(set) var receivedAt: Date?
     private(set) var sending: String?
     /// Decided from this watch: no buttons again while the phone still lists it.
     private(set) var answered: Set<String> = []
@@ -173,28 +172,26 @@ final class WatchModel: NSObject, WCSessionDelegate {
             refreshFailed = true
             return
         }
-        apply(next, received: .now)
+        apply(next)
         silent = Set(reply.silent)
         refreshFailed = !silent.isEmpty
         if !refreshFailed { refreshedAt = .now }
     }
 
-    /// `received` is nil for the context persisted from an earlier launch, whose age is unknown.
-    private func reload(received: Date?) {
+    /// `fresh` is false for the context persisted from an earlier launch.
+    private func reload(fresh: Bool) {
         guard let data = WCSession.default.receivedApplicationContext[WatchMessage.state] as? Data,
             let next = try? JSONDecoder().decode(WatchState.self, from: data)
         else { return }
-        apply(next, received: received)
-        if received != nil && next.live {
+        apply(next)
+        if fresh && next.live {
             silent = []
             refreshFailed = false
         }
     }
 
-    private func apply(_ next: WatchState, received: Date?) {
+    private func apply(_ next: WatchState) {
         let usageChanged = next.usage != state?.usage
-        // A refresh replaces only the approvals: the agents keep the age they had.
-        receivedAt = !next.live && state?.live == false && next.agents == state?.agents ? receivedAt : received
         state = next
         answered.formIntersection(next.approvals.map(\.id))
         if usageChanged {
@@ -253,11 +250,11 @@ final class WatchModel: NSObject, WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: (any Error)?) {
-        Task { @MainActor in self.reload(received: nil) }
+        Task { @MainActor in self.reload(fresh: false) }
     }
 
     nonisolated func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        Task { @MainActor in self.reload(received: .now) }
+        Task { @MainActor in self.reload(fresh: true) }
     }
 }
 
@@ -322,17 +319,6 @@ private struct WatchHome: View {
             List {
                 if model.refreshFailed {
                     Text("Couldn't refresh from the iPhone").font(.footnote).foregroundStyle(.secondary)
-                }
-                if !state.live {
-                    Group {
-                        if let receivedAt = model.receivedAt {
-                            Text("Open collie on the iPhone to update. Received \(receivedAt, format: .relative(presentation: .named)).")
-                        } else {
-                            Text("Open collie on the iPhone to update")
-                        }
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
                 }
                 if let notice = model.notice {
                     Text(verbatim: "\(notice.title): \(notice.body)").font(.footnote)
