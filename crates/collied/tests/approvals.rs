@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use apns_h2::PushType;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chacha20poly1305::aead::{Aead, Payload};
@@ -1202,6 +1203,85 @@ async fn reissues_cannot_flood_the_phone() {
     assert_eq!(alerts.len(), 2, "a new prompt always alerts");
     assert_eq!(alerts[1].1.payload["approval_id"], b.approval_id.as_str());
     assert!(rig.mutations().is_empty());
+}
+
+fn clears(sent: &[(String, Alert)]) -> Vec<(String, Alert)> {
+    sent.iter()
+        .filter(|(_, a)| a.delivery == Delivery::Background)
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+async fn an_alert_is_cleared_once_the_agent_moves_on() {
+    let mut rig = Rig::start(TTL).await;
+    let a = rig.needed().await;
+    rig.observe().await;
+    assert!(clears(&rig.sent().await).is_empty(), "still blocked");
+
+    rig.herdr.set_status("working");
+    rig.observe().await;
+    rig.observe().await;
+    let sent = rig.sent().await;
+    let cleared = clears(&sent);
+    assert_eq!(cleared.len(), 1, "{sent:?}");
+    let (to, clear) = &cleared[0];
+    assert_eq!(to, token().as_str());
+    assert_eq!(
+        clear.payload,
+        json!({
+            "aps": {"content-available": 1},
+            "approval_id": a.approval_id.as_str(),
+            "node_id": "nMAC",
+        })
+    );
+    let headers = clear.headers("dev.rbstp.collie");
+    assert_eq!(headers.push_type, PushType::Background);
+    assert_eq!(headers.topic, "dev.rbstp.collie");
+    assert_eq!(headers.priority, 5);
+    assert_eq!(headers.expiration, Some(0));
+    assert_eq!(headers.collapse_id, None);
+    assert_eq!(sent.last(), cleared.last());
+}
+
+#[tokio::test]
+async fn a_clear_names_only_the_alerted_approval() {
+    let mut rig = Rig::start(TTL).await;
+    let a = rig.needed().await;
+    code(rig.decide(&a, Decision::Deny, &wrong(&a.nonce)).await);
+    let b = rig.needed().await;
+    assert_eq!(alerting(&rig.sent().await).len(), 1, "b is a quiet reissue");
+    rig.herdr.set_status("working");
+    rig.observe().await;
+    let cleared = clears(&rig.sent().await);
+    assert_eq!(cleared.len(), 1);
+    assert_eq!(
+        cleared[0].1.payload["approval_id"],
+        a.approval_id.as_str(),
+        "the phone still shows a's alert, never b's"
+    );
+    assert_ne!(a.approval_id, b.approval_id);
+
+    // A decision from the phone clears too: the watch and the Live Activity decide
+    // without removing the phone's alert.
+    rig.herdr.set_status("blocked");
+    let c = rig.needed().await;
+    resolved(rig.decide(&c, Decision::Approve, &c.nonce).await);
+    rig.observe().await;
+    let cleared = clears(&rig.sent().await);
+    assert_eq!(cleared.len(), 2);
+    assert_eq!(cleared[1].1.payload["approval_id"], c.approval_id.as_str());
+
+    let mut rig = Rig::start(Duration::from_millis(200)).await;
+    rig.needed().await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    rig.needed().await;
+    let sent = rig.sent().await;
+    assert_eq!(alerting(&sent).len(), 2);
+    assert!(
+        clears(&sent).is_empty(),
+        "a fresh alert replaces an expired one"
+    );
 }
 
 fn alerting(sent: &[(String, Alert)]) -> Vec<(String, Alert)> {

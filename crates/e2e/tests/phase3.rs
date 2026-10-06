@@ -1131,16 +1131,27 @@ struct Apns {
 }
 
 impl Apns {
+    /// Everything but the background clears, which follow each agent that moves on.
+    fn alerts(&self) -> Vec<(Device, Alert)> {
+        self.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, a)| a.delivery != Delivery::Background)
+            .cloned()
+            .collect()
+    }
+
     async fn wait(&self, n: usize) -> Vec<(Device, Alert)> {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while self.sent.lock().unwrap().len() < n && Instant::now() < deadline {
+        while self.alerts().len() < n && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        self.sent.lock().unwrap().clone()
+        self.alerts()
     }
 
     fn last(&self) -> Alert {
-        self.sent.lock().unwrap().last().unwrap().1.clone()
+        self.alerts().last().unwrap().1.clone()
     }
 }
 
