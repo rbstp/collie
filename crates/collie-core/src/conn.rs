@@ -106,6 +106,8 @@ pub enum ConnectError {
     Pin(#[from] PinError),
     #[error("not reachable ({0})")]
     Dial(String),
+    #[error("not reachable ({0})")]
+    Status(String),
     #[error("not reachable, it may be off or asleep")]
     PeerOffline,
     #[error("this phone's key is not loaded yet")]
@@ -124,6 +126,20 @@ impl ConnectError {
             Self::Session(e) => e.is_auth(),
             Self::PairAgain => true,
             _ => false,
+        }
+    }
+
+    /// Returned before the machine was dialed: the attempt is not a dial and does not use
+    /// up a forced one.
+    fn before_dial(&self) -> bool {
+        match self {
+            Self::Offline
+            | Self::PeerOffline
+            | Self::NoIdentity
+            | Self::PairAgain
+            | Self::Status(_) => true,
+            Self::Pin(e) => !e.is_violation(),
+            Self::Dial(_) | Self::Session(_) => false,
         }
     }
 }
@@ -155,8 +171,8 @@ pub async fn open(
     let n = node.clone();
     let status = blocking(move || n.status())
         .await
-        .map_err(|e| ConnectError::Dial(e.to_string()))?
-        .map_err(|e| ConnectError::Dial(e.to_string()))?;
+        .map_err(|e| ConnectError::Status(e.to_string()))?
+        .map_err(|e| ConnectError::Status(e.to_string()))?;
     if status.backend_state != BackendState::Running {
         return Err(ConnectError::Offline);
     }
@@ -511,12 +527,15 @@ async fn supervise(
             _ = suspended.wait_for(|s| *s) => continue,
         };
         peer_offline = matches!(opened, Err(ConnectError::PeerOffline));
-        force &= matches!(opened, Err(ConnectError::Offline));
+        let dialed = !opened.as_ref().is_err_and(ConnectError::before_dial);
+        force &= !dialed;
+        if dialed {
+            lock(&shared.link).last_dial = Instant::now();
+        }
         if !matches!(
             opened,
             Err(ConnectError::Offline | ConnectError::PeerOffline)
         ) {
-            lock(&shared.link).last_dial = Instant::now();
             reach.record(
                 &machine.node_id,
                 matches!(&opened, Ok((_, hello, _)) if hello.paired),

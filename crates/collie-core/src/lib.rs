@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -641,13 +641,14 @@ impl CollieCore {
             .iter()
             .map(|c| {
                 let link = lock(&c.shared.link);
-                format!(
+                let line = format!(
                     "{}: {:?}, last dial {} s ago, last error {:?}",
                     c.machine.label,
                     link.phase,
                     link.last_dial.elapsed().as_secs(),
                     link.last_error
-                )
+                );
+                (c.machine.node_id.clone(), line)
             })
             .collect();
         for conn in &conns {
@@ -655,20 +656,24 @@ impl CollieCore {
         }
         let inner = self.inner.clone();
         self.runtime
-            .spawn(inner.resumed(background, suspended, epoch, conns, links));
+            .spawn(inner.resumed(background, suspended, epoch, links));
     }
 
     /// Pull to refresh or a tap on the machine: a live session is probed, any other link
     /// dials at once, even when Tailscale reports the machine offline. When the node runs
-    /// and the machine is online but dials keep failing, the node is restarted instead.
+    /// and the machine is online but dials keep failing, the node is restarted instead, and
+    /// when there is no node (a restart that could not start one) it is started.
     pub fn reconnect(&self, machine_id: String) -> Result<(), CoreError> {
         let conn = self.conn(&machine_id)?;
         let inner = self.inner.clone();
         self.runtime.spawn(async move {
-            if inner.node_suspect(std::slice::from_ref(&conn)).await {
-                inner.restart("reconnect").await;
-            } else {
+            inner.start_missing_node("reconnect").await;
+            if let Some(suspect) = inner.node_suspect(std::slice::from_ref(&conn)).await {
+                inner.restart("reconnect", suspect).await;
+            } else if lock(&conn.shared.link).phase == LinkPhase::Connected {
                 conn.resume(Duration::ZERO, false);
+            } else {
+                conn.reconnect_now();
             }
         });
         Ok(())
@@ -1472,50 +1477,52 @@ impl Inner {
     }
 
     /// Replaces a node that runs but reaches no machine with a fresh one on the same state,
-    /// as a relaunch would. The old node is closed only once nothing holds it (the
-    /// lock-screen decide holds it until it is answered) and no prompt, decision or upload
-    /// is in flight, checked under the busy lock so none can start on a session the close
-    /// cuts.
-    fn restart_node(&self) -> Result<(), CoreError> {
+    /// as a relaunch would, unless another restart already replaced `suspect`. The old node
+    /// is closed once nothing holds it (the lock-screen decide holds it until it is
+    /// answered). It is kept when a machine connects meanwhile, so no session is cut, or when
+    /// the app is suspended, so a lock-screen decide waiting for the node gets it at once.
+    /// Requests queued while no machine is connected wait for the new node.
+    fn restart_node(&self, suspect: &Weak<Node>) -> Result<&'static str, CoreError> {
         let _starting = lock(&self.starting);
-        let mut old = lock(&self.node).take();
-        if old.is_none() {
-            return Ok(());
-        }
+        let Some(old) = lock(&self.node).take_if(|n| Arc::as_ptr(n) == suspect.as_ptr()) else {
+            return Ok("already replaced");
+        };
         let deadline = Instant::now() + RELEASE_TIMEOUT;
         loop {
-            self.busy.send_if_modified(|n| {
-                if *n == 0 && old.as_ref().is_some_and(|o| Arc::strong_count(o) == 1) {
-                    old = None;
-                }
-                false
-            });
-            if old.is_none() {
+            let released = Arc::strong_count(&old) == 1;
+            let kept = if self.connected() {
+                Ok("kept, a machine connected")
+            } else if *self.suspended.borrow() {
+                Ok("kept, suspended")
+            } else if released {
                 break;
-            }
-            if Instant::now() >= deadline {
-                *lock(&self.node) = old;
-                return Err(CoreError::Tailnet {
+            } else if Instant::now() >= deadline {
+                Err(CoreError::Tailnet {
                     message: "the Tailscale session is still in use, try again".into(),
-                });
-            }
-            std::thread::sleep(POLL_INTERVAL);
+                })
+            } else {
+                std::thread::sleep(POLL_INTERVAL);
+                continue;
+            };
+            *lock(&self.node) = Some(old);
+            return kept;
         }
+        drop(old);
         let node = Node::new(&self.config(None))?;
         node.start()?;
         *lock(&self.node) = Some(Arc::new(node));
         for conn in lock(&self.conns).values() {
             conn.resume(FOREGROUND_RECONNECT, false);
         }
-        Ok(())
+        Ok("done")
     }
 
-    async fn restart(self: &Arc<Self>, why: &str) {
+    async fn restart(self: &Arc<Self>, why: &str, suspect: Weak<Node>) {
         let t0 = Instant::now();
         let inner = self.clone();
-        let result = blocking(move || inner.restart_node()).await;
+        let result = blocking(move || inner.restart_node(&suspect)).await;
         let outcome = match result {
-            Ok(Ok(())) => "done".to_owned(),
+            Ok(Ok(outcome)) => outcome.to_owned(),
             Ok(Err(e)) => e.to_string(),
             Err(e) => e.to_string(),
         };
@@ -1525,13 +1532,29 @@ impl Inner {
         ));
     }
 
+    async fn start_missing_node(self: &Arc<Self>, why: &str) {
+        if lock(&self.node).is_some() || !self.tailnet_configured() {
+            return;
+        }
+        let inner = self.clone();
+        let outcome = match blocking(move || inner.node_start(None)).await {
+            Ok(Ok(())) => "done".to_owned(),
+            Ok(Err(e)) => e.to_string(),
+            Err(e) => e.to_string(),
+        };
+        self.log(format!("node start ({why}): {outcome}"));
+    }
+
+    fn connected(&self) -> bool {
+        lock(&self.conns)
+            .values()
+            .any(|c| lock(&c.shared.link).phase == LinkPhase::Connected)
+    }
+
     /// When Tailscale says the node runs and a failing machine is online, yet no machine is
     /// connected, the node itself is the likely fault. A node that cannot report its status
-    /// is too.
-    async fn node_suspect(&self, conns: &[Arc<Conn>]) -> bool {
-        let connected = lock(&self.conns)
-            .values()
-            .any(|c| lock(&c.shared.link).phase == LinkPhase::Connected);
+    /// is too. Returns that node.
+    async fn node_suspect(&self, conns: &[Arc<Conn>]) -> Option<Weak<Node>> {
         let failing: Vec<String> = conns
             .iter()
             .filter(|c| {
@@ -1541,23 +1564,24 @@ impl Inner {
             })
             .map(|c| c.machine.node_id.clone())
             .collect();
-        if connected || failing.is_empty() {
-            return false;
+        if self.connected() || failing.is_empty() {
+            return None;
         }
-        let Some(node) = lock(&self.node).clone() else {
-            return false;
-        };
-        match tokio::time::timeout(KICK_TIMEOUT, blocking(move || node.status())).await {
-            Ok(Ok(Ok(status))) => {
-                status.backend_state == BackendState::Running
-                    && status
-                        .peer
-                        .iter()
-                        .flat_map(|p| p.values())
-                        .any(|p| p.online && failing.contains(&p.stable_id))
-            }
-            _ => true,
-        }
+        let node = lock(&self.node).clone()?;
+        let suspect = Arc::downgrade(&node);
+        let suspected =
+            match tokio::time::timeout(KICK_TIMEOUT, blocking(move || node.status())).await {
+                Ok(Ok(Ok(status))) => {
+                    status.backend_state == BackendState::Running
+                        && status
+                            .peer
+                            .iter()
+                            .flat_map(|p| p.values())
+                            .any(|p| p.online && failing.contains(&p.stable_id))
+                }
+                _ => true,
+            };
+        suspected.then_some(suspect)
     }
 
     async fn resumed(
@@ -1565,9 +1589,9 @@ impl Inner {
         background: Duration,
         suspended: bool,
         epoch: u64,
-        conns: Vec<Arc<Conn>>,
-        links: Vec<String>,
+        links: Vec<(String, String)>,
     ) {
+        self.start_missing_node("resume").await;
         let mut line = format!(
             "resume after {} s{}:",
             background.as_secs(),
@@ -1593,11 +1617,11 @@ impl Inner {
                 }
             }
         }
-        for (conn, link) in conns.iter().zip(links) {
+        for (node_id, link) in links {
             let online = peers
                 .iter()
                 .flat_map(|p| p.values())
-                .find(|p| p.stable_id == conn.machine.node_id)
+                .find(|p| p.stable_id == node_id)
                 .map(|p| p.online);
             line += &format!("; {link}, online {online:?}");
         }
@@ -1607,10 +1631,7 @@ impl Inner {
         }
         let current = || self.resumes.load(Ordering::SeqCst) == epoch && !*self.suspended.borrow();
         tokio::time::sleep(REBIND_AFTER).await;
-        let connected = conns
-            .iter()
-            .any(|c| lock(&c.shared.link).phase == LinkPhase::Connected);
-        if !current() || conns.is_empty() || connected {
+        if !current() || lock(&self.conns).is_empty() || self.connected() {
             return;
         }
         let node = lock(&self.node).clone();
@@ -1627,8 +1648,14 @@ impl Inner {
             ));
         }
         tokio::time::sleep(RESTART_AFTER - REBIND_AFTER).await;
-        if current() && self.node_suspect(&conns).await {
-            self.restart("resume").await;
+        if !current() {
+            return;
+        }
+        let conns: Vec<_> = lock(&self.conns).values().cloned().collect();
+        let suspect = self.node_suspect(&conns).await;
+        drop(conns);
+        if let Some(suspect) = suspect {
+            self.restart("resume", suspect).await;
         }
     }
 
@@ -3647,45 +3674,90 @@ mod tailnet_tests {
                 .any(|l| l == "rebind, nothing connected after the resume: done")
                 .then_some(())
         });
-        *lock(&core.inner.identity) = identity;
-        core.reconnect(id()).unwrap();
-        poll("connected after the rebind", || {
-            (connections() == 4 && link() == LinkPhase::Connected).then_some(())
-        });
-
         let held = lock(&core.inner.node).clone().unwrap();
         let old = Arc::downgrade(&held);
         let busy = Busy::new(&core.inner);
         let restart = std::thread::spawn({
             let inner = core.inner.clone();
+            let old = old.clone();
             move || {
                 let t0 = Instant::now();
-                inner.restart_node().map(|()| t0.elapsed())
+                inner
+                    .restart_node(&old)
+                    .map(|outcome| (outcome, t0.elapsed()))
             }
         });
         std::thread::sleep(Duration::from_secs(1));
         assert!(lock(&core.inner.node).is_none());
-        rt.block_on(core.agent_read(id(), "term_1".into(), TerminalSource::Recent, None))
-            .unwrap();
-        assert_eq!(
-            (link(), connections()),
-            (LinkPhase::Connected, 4),
-            "work in flight keeps the old node and its session"
-        );
-        drop(busy);
-        std::thread::sleep(Duration::from_millis(500));
-        assert_eq!(
-            link(),
-            LinkPhase::Connected,
-            "a holder (the lock-screen decide) keeps it too"
+        assert!(
+            !restart.is_finished(),
+            "a holder (the lock-screen decide) keeps the old node"
         );
         drop(held);
-        let took = restart.join().unwrap().unwrap();
+        let (outcome, took) = restart.join().unwrap().unwrap();
         println!("node restart took {took:?}");
+        assert_eq!(
+            outcome, "done",
+            "a request queued with nothing connected does not hold it up"
+        );
         assert!(took < RELEASE_TIMEOUT);
         assert!(old.upgrade().is_none(), "the old node is closed");
+        assert_eq!(
+            core.inner.restart_node(&old).unwrap(),
+            "already replaced",
+            "a second restart leaves the new node alone"
+        );
+        drop(busy);
+        *lock(&core.inner.identity) = identity;
+        core.reconnect(id()).unwrap();
         poll("connected on the new node", || {
+            (connections() == 4 && link() == LinkPhase::Connected).then_some(())
+        });
+
+        let node = lock(&core.inner.node).clone().unwrap();
+        let current = Arc::downgrade(&node);
+        drop(node);
+        assert_eq!(
+            core.inner.restart_node(&current).unwrap(),
+            "kept, a machine connected"
+        );
+        rt.block_on(core.suspend(core.begin_suspend()));
+        assert_eq!(
+            core.inner.restart_node(&current).unwrap(),
+            "kept, suspended"
+        );
+        assert!(
+            lock(&core.inner.node)
+                .as_ref()
+                .is_some_and(|n| Arc::as_ptr(n) == current.as_ptr())
+        );
+        core.resume(1);
+        poll("connected after the suspend", || {
             (connections() == 5 && link() == LinkPhase::Connected).then_some(())
+        });
+
+        let gone = Arc::downgrade(&lock(&core.inner.node).take().unwrap());
+        poll("the node closed", || gone.upgrade().is_none().then_some(()));
+        core.reconnect(id()).unwrap();
+        poll("a reconnect starts a missing node", || {
+            (connections() == 6 && link() == LinkPhase::Connected).then_some(())
+        });
+        assert!(
+            lock(&logged)
+                .iter()
+                .any(|l| l == "node start (reconnect): done"),
+            "{logged:?}"
+        );
+
+        let identity = lock(&core.inner.identity).take();
+        core.resume(60);
+        poll("the session ended", || {
+            (link() != LinkPhase::Connected).then_some(())
+        });
+        std::thread::sleep(Duration::from_secs(1));
+        *lock(&core.inner.identity) = identity;
+        poll("a failure before the dial keeps the forced dial", || {
+            (connections() == 7 && link() == LinkPhase::Connected).then_some(())
         });
         drop(core);
         drop(server_rt);
