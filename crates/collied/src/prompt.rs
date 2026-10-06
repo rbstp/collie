@@ -93,6 +93,14 @@ pub fn amend(decision: Decision) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// Whether the screen shows a numbered option (`❯` or `›` cursor or none) or folder trust
+/// wording. Codex 0.160.0's update notice is `unknown` to herdr (codex manifest
+/// 2026.10.01.1), and a prompt and Enter would pick "Update now".
+pub fn shows_dialog(text: &str) -> bool {
+    text.lines()
+        .any(|l| trust_wording(l) || option_line(l.trim_start().trim_start_matches('›')).is_some())
+}
+
 fn grants(label: &str) -> bool {
     classify(label).is_some() || label.to_lowercase().starts_with("yes")
 }
@@ -716,9 +724,12 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     pub const PLAN_TYPED_LIVE: &str =
         include_str!("../tests/fixtures/claude-2.1.289/plan-feedback-typed.detection.txt");
 
-    // Reconstructed from Codex CLI and GitHub Copilot CLI permission and folder trust
-    // prompts, each checked with `herdr agent explain --file` (herdr 0.9.3, codex manifest
-    // 2026.10.01.1, copilot manifest 2026.08.29.1) to be `blocked` under the rule named.
+    // Codex CLI and GitHub Copilot CLI permission and folder trust prompts, each checked
+    // with `herdr agent explain --file` (herdr 0.9.3, codex manifest 2026.10.01.1, copilot
+    // manifest 2026.08.29.1) to be `blocked` under the rule named. Codex's trust prompt and
+    // update notice are captured from codex 0.160.0 (`tmux capture-pane`); the others are
+    // reconstructed.
+    pub const CODEX_UPDATE: &str = include_str!("../tests/fixtures/codex/update.detection.txt");
     pub const CODEX: [(&str, &str); 3] = [
         (
             "live_strong_blocker",
@@ -1313,6 +1324,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn startup_dialogs_show_whatever_herdr_rules() {
+        for (_, screen) in CODEX.iter().chain(&COPILOT) {
+            assert!(shows_dialog(screen), "{screen}");
+        }
+        assert!(shows_dialog(CODEX_UPDATE));
+        let idle = "\
+me@mac app % codex
+╭──────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.160.0)                   │
+│                                              │
+│ model:     gpt-5.5 high   /model to change   │
+│ directory: ~/src/app                         │
+╰──────────────────────────────────────────────╯
+
+  Tip: Use /status to see the current model and approvals.
+
+› Explain this codebase
+
+  100% context left · ? for shortcuts
+";
+        assert!(!shows_dialog(idle));
     }
 
     #[test]

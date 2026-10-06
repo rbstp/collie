@@ -335,11 +335,7 @@ impl Approvals {
                 }
             }
         }
-        // Only Claude Code prompts carry choices or take keys.
-        for (a, id) in live
-            .into_iter()
-            .filter(|(a, _)| a.agent.as_deref() == Some("claude"))
-        {
+        for (a, id) in live {
             let Ok(screen) = self.screen(a).await else {
                 continue;
             };

@@ -1106,6 +1106,33 @@ async fn codex_and_copilot_prompts_are_answered_in_the_terminal() {
 }
 
 #[tokio::test]
+async fn a_new_codex_prompt_under_a_still_blocked_agent_supersedes_the_old_one() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| {
+        h.agent["agent"] = json!("codex");
+        h.rule = OTHER_KINDS[0].1.into();
+        h.text = OTHER_KINDS[0].2.into();
+    });
+    let a = rig.needed().await;
+    assert!(a.snippet.contains("cargo test"), "{}", a.snippet);
+    rig.observe().await;
+    rig.no_event();
+
+    rig.herdr.with(|h| h.text = OTHER_KINDS[1].2.into());
+    rig.observe().await;
+    assert!(matches!(
+        rig.event().await,
+        Event::ApprovalResolved { approval_id, outcome: ApprovalOutcome::Superseded }
+            if approval_id == a.approval_id
+    ));
+    let Event::ApprovalNeeded { approval: b } = rig.event().await else {
+        panic!("expected approval.needed");
+    };
+    assert!(!b.snippet.contains("cargo test"), "{}", b.snippet);
+    assert!(rig.mutations().is_empty());
+}
+
+#[tokio::test]
 async fn decide_attempts_are_rate_limited() {
     let mut rig = Rig::start(TTL).await;
     let a = rig.needed().await;

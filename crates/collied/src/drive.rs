@@ -586,6 +586,18 @@ impl Driver {
         self.started_check(&current, &pane, &name, &p.agent)
             .await
             .map_err(left_open)?;
+        // herdr may not rule another kind's startup prompt `blocked`, and the prompt's Enter
+        // would answer it.
+        if p.agent.as_str() != "claude"
+            && herdr::detection_text(&self.herdr, &pane.pane_id)
+                .await
+                .map_or(true, |t| prompt::shows_dialog(&t))
+        {
+            return Err(left_open((
+                ErrorCode::AgentBlocked,
+                "the agent is blocked on a startup prompt; answer it in the terminal".to_owned(),
+            )));
+        }
         authorized(auth).map_err(left_open)?;
         herdr::agent_prompt(&self.herdr, &name, p.prompt.as_str())
             .await

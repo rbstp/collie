@@ -220,9 +220,10 @@ private struct AgentRow: View {
                         if let workspace { Text(workspace) }
                         if let kind = agent.kind {
                             if workspace != nil { Text(verbatim: "·") }
-                            AgentKindLabel(kind: kind)
+                            AgentKindLabel(kind: kind).fixedSize()
                         }
                     }
+                    .lineLimit(1)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }

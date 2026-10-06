@@ -89,8 +89,7 @@ final class AgentModel {
 
     var blockedHint: String? {
         switch blocked {
-        case nil: nil
-        case .terminal: "Answer it in the terminal on the machine."
+        case nil, .terminal: nil
         case .optionsOnly: "Choose an option above."
         case .keys: "Choose an option above or use the arrow keys."
         case .keysAndText: "Choose an option above, use the arrow keys, or type an answer."

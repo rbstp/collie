@@ -710,7 +710,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 
     model.blocked = .terminal
     #expect(!model.acceptsKeys && !model.answering)
-    #expect(model.blockedHint == "Answer it in the terminal on the machine.")
+    #expect(model.blockedHint == nil)
     #expect(model.tap(.enter) == nil)
 
     model.blocked = .optionsOnly
