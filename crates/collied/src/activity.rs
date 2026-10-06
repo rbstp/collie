@@ -59,7 +59,7 @@ pub fn content(
     tracker: &mut StatusTracker,
     now_ms: u64,
 ) -> Option<ContentState> {
-    let agent = flock::map_agent(a, tracker, now_ms)?;
+    let agent = flock::map_agent(a, tracker, now_ms, None)?;
     Some(ContentState {
         status: agent.status,
         status_since: reference_seconds(agent.status_since_ms),

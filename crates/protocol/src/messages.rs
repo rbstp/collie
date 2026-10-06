@@ -577,7 +577,17 @@ pub struct Agent {
     pub status: AgentStatus,
     pub status_since_ms: u64,
     pub cwd: Option<String>,
+    /// The latest line of the agent's reply, from its transcript on the machine.
     pub last_line: Option<String>,
+    /// Percent of the context window left, from the same transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 100))]
+    pub context_left: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_prompt: Option<String>,
+    /// When the transcript last changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -949,6 +959,35 @@ mod tests {
         let draft =
             parse(r#"{"id":2,"method":"agent.draft","params":{"terminal_id":"t"}}"#).unwrap();
         assert_eq!(draft.request.class(), MethodClass::Read);
+    }
+
+    #[test]
+    fn agent_transcript_fields_are_optional() {
+        let older = r#"{"terminal_id":"term_1","workspace_id":"w1","kind":null,"name":null,"title":null,"status":"idle","status_since_ms":1,"cwd":null,"last_line":null}"#;
+        let a: Agent = serde_json::from_str(older).unwrap();
+        assert_eq!(
+            (a.context_left, &a.last_prompt, a.last_activity_ms),
+            (None, &None, None)
+        );
+        assert_eq!(serde_json::to_string(&a).unwrap(), older);
+        let full = Agent {
+            last_line: Some("Done.".into()),
+            context_left: Some(100),
+            last_prompt: Some("go".into()),
+            last_activity_ms: Some(7),
+            ..a
+        };
+        let json = serde_json::to_string(&full).unwrap();
+        assert!(json.ends_with(
+            r#""last_line":"Done.","context_left":100,"last_prompt":"go","last_activity_ms":7}"#
+        ));
+        assert_eq!(serde_json::from_str::<Agent>(&json).unwrap(), full);
+        let event = ServerFrame::Event {
+            seq: 2,
+            event: Event::AgentStatus { agent: full },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(serde_json::from_str::<ServerFrame>(&json).unwrap(), event);
     }
 
     #[test]

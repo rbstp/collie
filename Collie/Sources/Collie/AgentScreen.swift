@@ -206,6 +206,14 @@ private struct AgentHeader: View {
                 if let kind = agent.kind {
                     AgentKindLabel(kind: kind).font(.caption).foregroundStyle(.secondary)
                 }
+                if let left = agent.contextLeft {
+                    HStack(spacing: 4) {
+                        ContextRing(left: left)
+                        Text("\(left)% context").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Context \(left)% left")
+                }
             } else {
                 Text("Agent not in the flock").font(.caption).foregroundStyle(.secondary)
             }

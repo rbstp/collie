@@ -84,15 +84,37 @@ final class DemoAgentCore: ActivityCore {
         agents = [
             AgentSummary(
                 terminalId: "term_demo", workspaceId: "ws_collie", kind: "claude", name: nil, title: "fix the build",
-                status: .working, statusSinceMs: now - 135_000, cwd: "/Users/demo/collie", lastLine: nil
+                status: .working, statusSinceMs: now - 135_000, cwd: "/Users/demo/collie",
+                lastLine: "Running the approval tests again after the settle fix.", contextLeft: 72,
+                lastPrompt: "the approval tests are flaky, fix them", lastActivityMs: now - 4_000
             ),
             AgentSummary(
                 terminalId: "term_2", workspaceId: "ws_collie", kind: "codex", name: nil, title: "add approval tests",
-                status: .blocked, statusSinceMs: now - 42_000, cwd: "/Users/demo/collie", lastLine: nil
+                status: .blocked, statusSinceMs: now - 42_000, cwd: "/Users/demo/collie",
+                lastLine: "I need to run cargo test to check the new cases.", contextLeft: 38,
+                lastPrompt: "add approval tests for the Codex menu", lastActivityMs: now - 42_000
             ),
             AgentSummary(
                 terminalId: "term_3", workspaceId: "ws_site", kind: "claude", name: nil, title: "update the docs",
-                status: .idle, statusSinceMs: now - 900_000, cwd: "/Users/demo/website", lastLine: nil
+                status: .idle, statusSinceMs: now - 900_000, cwd: "/Users/demo/website",
+                lastLine: "The docs now describe the inbox and the context ring.", contextLeft: 12,
+                lastPrompt: "update the docs for the new release", lastActivityMs: now - 900_000
+            ),
+            AgentSummary(
+                terminalId: "term_4", workspaceId: "ws_site", kind: "codex", name: nil, title: "dark mode",
+                status: .done, statusSinceMs: now - 3_600_000, cwd: "/Users/demo/website",
+                lastLine: "Dark mode follows the system setting on every page.", contextLeft: 91,
+                lastPrompt: "add dark mode to the website", lastActivityMs: now - 3_600_000
+            ),
+            AgentSummary(
+                terminalId: "term_5", workspaceId: "ws_api", kind: "claude", name: nil, title: "rate limiter",
+                status: .idle, statusSinceMs: now - 259_200_000, cwd: "/Users/demo/api",
+                lastLine: "The rate limiter is merged.", contextLeft: 55,
+                lastPrompt: "merge the rate limiter PR", lastActivityMs: now - 259_200_000
+            ),
+            AgentSummary(
+                terminalId: "term_6", workspaceId: "ws_api", kind: "copilot", name: nil, title: "triage issues",
+                status: .idle, statusSinceMs: now - 7_200_000, cwd: "/Users/demo/api", lastLine: nil
             ),
         ]
     }
@@ -173,7 +195,8 @@ final class DemoAgentCore: ActivityCore {
             details: MachineDetails(name: "MacBook Pro", nodeId: "nDEMO", herdrSession: "default"),
             workspaces: [
                 WorkspaceSummary(workspaceId: "ws_collie", label: "collie", number: 1, status: .blocked, cwd: "/Users/demo/collie"),
-                WorkspaceSummary(workspaceId: "ws_site", label: "website", number: 2, status: .idle, cwd: "/Users/demo/website"),
+                WorkspaceSummary(workspaceId: "ws_site", label: "website", number: 2, status: .done, cwd: "/Users/demo/website"),
+                WorkspaceSummary(workspaceId: "ws_api", label: "api", number: 3, status: .idle, cwd: "/Users/demo/api"),
             ],
             agents: agents, approvalsCount: 1
         )

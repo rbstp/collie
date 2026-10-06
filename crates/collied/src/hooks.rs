@@ -124,13 +124,16 @@ pub fn context(tool: &PendingTool) -> String {
     format!("{}: {}", tool.name, tool.summary)
 }
 
-/// Claude Code's user settings file, which honors CLAUDE_CONFIG_DIR.
-pub fn settings_path() -> anyhow::Result<PathBuf> {
+/// Claude Code's user config dir, which honors CLAUDE_CONFIG_DIR.
+pub fn claude_dir() -> anyhow::Result<PathBuf> {
     Ok(match std::env::var_os("CLAUDE_CONFIG_DIR") {
         Some(dir) => PathBuf::from(dir),
         None => crate::config::home_dir()?.join(".claude"),
-    }
-    .join("settings.json"))
+    })
+}
+
+pub fn settings_path() -> anyhow::Result<PathBuf> {
+    Ok(claude_dir()?.join("settings.json"))
 }
 
 pub fn installed(settings: &Value) -> bool {

@@ -404,18 +404,21 @@ private func claude(_ box: String, top: String = rule, above: String = "", foote
 }
 
 @MainActor
-@Test func gridChoiceIsOffByDefaultAndRememberedOnThisDevice() throws {
+@Test func layoutIsGridByDefaultAndRememberedOnThisDevice() throws {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
 
-    try Data(#"{"wrapLines":false}"#.utf8).write(to: file)
-    #expect(!DevicePrefs.load(from: file).agentsGrid)
-    var prefs = DevicePrefs.load(from: file)
-    prefs.agentsGrid = true
-    prefs.save(to: file)
-    #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, agentsGrid: true))
+    try Data(#"{"wrapLines":false,"agentsLayout":"carousel"}"#.utf8).write(to: file)
+    #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false))
+    #expect(DevicePrefs().agentsLayout == .grid)
+    for layout in [AgentsLayout.inbox, .list] {
+        var prefs = DevicePrefs.load(from: file)
+        prefs.agentsLayout = layout
+        prefs.save(to: file)
+        #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, agentsLayout: layout))
+    }
 }
 
 private func prefsFile() throws -> (file: URL, dir: URL) {
