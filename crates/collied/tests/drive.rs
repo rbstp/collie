@@ -1048,6 +1048,77 @@ async fn task_new_refusals() {
 }
 
 #[tokio::test]
+async fn codex_and_copilot_startup_prompts_are_left_to_the_terminal() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude", "codex", "copilot"], &base.join("root"));
+    for (kind, text) in [
+        ("codex", include_str!("fixtures/codex/trust.detection.txt")),
+        (
+            "copilot",
+            include_str!("fixtures/copilot/trust.detection.txt"),
+        ),
+    ] {
+        herdr.with(|h| {
+            h.calls.clear();
+            h.text = text.into();
+            let mut blocked = started_agent("blocked", false, true);
+            blocked["agent"] = json!(kind);
+            h.gets.push_back(blocked);
+        });
+        let (code, message) = drive
+            .task_new(task(&base.join("root/a"), kind), &yes())
+            .await
+            .0
+            .unwrap_err();
+        assert_eq!(code, ErrorCode::AgentBlocked);
+        assert!(message.contains("answer it in the terminal"), "{message}");
+        assert_eq!(herdr.params("agent.start")[0]["kind"], kind);
+        assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
+        assert!(herdr.params("pane.read").is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_codex_startup_prompt_herdr_does_not_rule_blocked_gets_no_prompt() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude", "codex"], &base.join("root"));
+    let mut unknown = started_agent("unknown", true, false);
+    unknown["agent"] = json!("codex");
+    herdr.with(|h| {
+        h.text = include_str!("fixtures/codex/update.detection.txt").into();
+        h.gets.extend([unknown.clone(), unknown.clone()]);
+    });
+    let (code, message) = drive
+        .task_new(task(&base.join("root/a"), "codex"), &yes())
+        .await
+        .0
+        .unwrap_err();
+    assert_eq!(code, ErrorCode::AgentBlocked);
+    assert!(message.contains("answer it in the terminal"), "{message}");
+    assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
+
+    herdr.with(|h| {
+        h.calls.clear();
+        h.text = "› Explain this codebase\n\n  100% context left · ? for shortcuts\n".into();
+        h.gets.extend([unknown.clone(), unknown]);
+    });
+    let (reply, _) = drive
+        .task_new(task(&base.join("root/a"), "codex"), &yes())
+        .await;
+    assert!(reply.is_ok(), "{reply:?}");
+    assert_eq!(
+        herdr.params("pane.read"),
+        vec![json!({"pane_id": "w9:p1", "source": "detection", "format": "text"})]
+    );
+    assert_eq!(
+        herdr.mutations(),
+        vec!["workspace.create", "agent.start", "agent.prompt"]
+    );
+}
+
+#[tokio::test]
 async fn closes_need_confirmation() {
     let herdr = Mock::start();
     let (_d, base) = root();

@@ -586,6 +586,18 @@ impl Driver {
         self.started_check(&current, &pane, &name, &p.agent)
             .await
             .map_err(left_open)?;
+        // herdr may not rule another kind's startup prompt `blocked`, and the prompt's Enter
+        // would answer it.
+        if p.agent.as_str() != "claude"
+            && herdr::detection_text(&self.herdr, &pane.pane_id)
+                .await
+                .map_or(true, |t| prompt::shows_dialog(&t))
+        {
+            return Err(left_open((
+                ErrorCode::AgentBlocked,
+                "the agent is blocked on a startup prompt; answer it in the terminal".to_owned(),
+            )));
+        }
         authorized(auth).map_err(left_open)?;
         herdr::agent_prompt(&self.herdr, &name, p.prompt.as_str())
             .await
@@ -660,7 +672,7 @@ impl Driver {
 
     /// The started agent must still be the one in the new pane, and is never answered on
     /// the user's behalf: a startup question such as Claude Code's folder trust prompt
-    /// is left to its approval.
+    /// is left to its approval, and another kind's to the terminal.
     async fn started_check(
         &self,
         a: &AgentInfo,
@@ -680,17 +692,17 @@ impl Driver {
         if flock::status(&a.agent_status) != AgentStatus::Blocked {
             return Ok(());
         }
-        let trust = herdr::detection_text(&self.herdr, &pane.pane_id)
+        let message = if kind.as_str() != "claude" {
+            "the agent is blocked on a startup prompt; answer it in the terminal"
+        } else if herdr::detection_text(&self.herdr, &pane.pane_id)
             .await
-            .is_ok_and(|t| prompt::Menu::parse(&t).is_some_and(|m| m.is_trust_prompt()));
-        fail(
-            ErrorCode::AgentBlocked,
-            if trust {
-                "the agent asks whether to trust this folder; answer it through its approval"
-            } else {
-                "the agent is blocked on a startup prompt; answer it through its approval"
-            },
-        )
+            .is_ok_and(|t| prompt::Menu::parse(&t).is_some_and(|m| m.is_trust_prompt()))
+        {
+            "the agent asks whether to trust this folder; answer it through its approval"
+        } else {
+            "the agent is blocked on a startup prompt; answer it through its approval"
+        };
+        fail(ErrorCode::AgentBlocked, message)
     }
 
     async fn still_new(&self, pane: &PaneInfo) -> bool {

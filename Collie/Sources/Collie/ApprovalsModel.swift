@@ -39,6 +39,8 @@ struct ApprovalItem: Identifiable, Equatable {
 
 /// What collied takes from the phone on the prompt an agent is blocked on.
 enum BlockedInput: Equatable {
+    /// Nothing: the prompt is answered in the terminal on the machine.
+    case terminal
     case optionsOnly
     case keys
     /// Keys, and typed text into the menu's free-text option.
@@ -190,6 +192,7 @@ final class ApprovalsModel {
     func blockedInput(machineId: String, terminalId: String) -> BlockedInput? {
         let blocking = items(machineId: machineId, terminalId: terminalId).map(\.approval)
         guard !blocking.isEmpty else { return nil }
+        guard !blocking.allSatisfy(\.answeredInTerminal) else { return .terminal }
         guard blocking.allSatisfy(\.acceptsInput) else { return .optionsOnly }
         return blocking.allSatisfy(\.hasTextField) ? .keysAndText : .keys
     }
@@ -294,6 +297,9 @@ extension PendingApproval {
 
     /// A plan prompt: options only for keys, but its free-text option takes typed feedback.
     var takesFeedback: Bool { hasTextField && !acceptsInput }
+
+    /// collied takes no answer from the phone: another agent kind (Codex, Copilot) or a prompt it does not read.
+    var answeredInTerminal: Bool { options.isEmpty && choices.isEmpty && !acceptsInput && !hasTextField }
 }
 
 extension DecisionOutcome {

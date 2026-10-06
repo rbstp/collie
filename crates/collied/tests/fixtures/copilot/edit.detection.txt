@@ -1,0 +1,16 @@
+● I'll fix the off-by-one in the parser.
+
+ Edit file
+
+ src/parser.ts
+
+   41 -    const end = start + len;
+   41 +    const end = start + len - 1;
+
+ Do you want to make this edit to src/parser.ts?
+
+ ❯ 1. Yes
+   2. Yes, and approve all file edits for the rest of the running session
+   3. No, and tell Copilot what to do differently (Esc to stop)
+
+ ↑↓ to navigate · Enter to select · Esc to cancel

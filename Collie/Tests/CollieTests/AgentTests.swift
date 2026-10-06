@@ -708,6 +708,11 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     let model = agentModel(core)
     #expect(model.acceptsKeys && !model.answering && model.blockedHint == nil)
 
+    model.blocked = .terminal
+    #expect(!model.acceptsKeys && !model.answering)
+    #expect(model.blockedHint == nil)
+    #expect(model.tap(.enter) == nil)
+
     model.blocked = .optionsOnly
     #expect(!model.acceptsKeys && !model.answering)
     #expect(model.blockedHint == "Choose an option above.")

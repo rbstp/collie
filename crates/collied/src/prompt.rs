@@ -93,6 +93,14 @@ pub fn amend(decision: Decision) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// Whether the screen shows a numbered option (`❯` or `›` cursor or none) or folder trust
+/// wording. Codex 0.160.0's update notice is `unknown` to herdr (codex manifest
+/// 2026.10.01.1), and a prompt and Enter would pick "Update now".
+pub fn shows_dialog(text: &str) -> bool {
+    text.lines()
+        .any(|l| trust_wording(l) || option_line(l.trim_start().trim_start_matches('›')).is_some())
+}
+
 fn grants(label: &str) -> bool {
     classify(label).is_some() || label.to_lowercase().starts_with("yes")
 }
@@ -715,6 +723,41 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     pub const PLAN_LIVE: &str = include_str!("../tests/fixtures/claude-2.1.289/plan.detection.txt");
     pub const PLAN_TYPED_LIVE: &str =
         include_str!("../tests/fixtures/claude-2.1.289/plan-feedback-typed.detection.txt");
+
+    // Codex CLI and GitHub Copilot CLI permission and folder trust prompts, each checked
+    // with `herdr agent explain --file` (herdr 0.9.3, codex manifest 2026.10.01.1, copilot
+    // manifest 2026.08.29.1) to be `blocked` under the rule named. Codex's trust prompt and
+    // update notice are captured from codex 0.160.0 (`tmux capture-pane`); the others are
+    // reconstructed.
+    pub const CODEX_UPDATE: &str = include_str!("../tests/fixtures/codex/update.detection.txt");
+    pub const CODEX: [(&str, &str); 3] = [
+        (
+            "live_strong_blocker",
+            include_str!("../tests/fixtures/codex/exec.detection.txt"),
+        ),
+        (
+            "live_strong_blocker",
+            include_str!("../tests/fixtures/codex/patch.detection.txt"),
+        ),
+        (
+            "trust_directory",
+            include_str!("../tests/fixtures/codex/trust.detection.txt"),
+        ),
+    ];
+    pub const COPILOT: [(&str, &str); 3] = [
+        (
+            "selection_blocker",
+            include_str!("../tests/fixtures/copilot/shell.detection.txt"),
+        ),
+        (
+            "selection_blocker",
+            include_str!("../tests/fixtures/copilot/edit.detection.txt"),
+        ),
+        (
+            "selection_blocker",
+            include_str!("../tests/fixtures/copilot/trust.detection.txt"),
+        ),
+    ];
 }
 
 #[cfg(test)]
@@ -1252,6 +1295,59 @@ mod tests {
         assert!(!uses_menu("claude", None));
         assert!(!uses_menu("codex", Some("live_strong_blocker")));
         assert!(!uses_menu("codex", Some("bash_permission_prompt")));
+    }
+
+    #[test]
+    fn codex_and_copilot_prompts_take_nothing_from_the_phone() {
+        // Copilot draws Claude Code's menu: only the agent kind keeps it from answering.
+        for (_, screen) in COPILOT {
+            assert_eq!(
+                Menu::parse(screen).unwrap().decisions(),
+                [(Approve, 0), (Deny, 2)]
+            );
+        }
+        let claude_rules = CLAUDE_MENU_RULES
+            .iter()
+            .chain(CLAUDE_FORM_RULES)
+            .chain(CLAUDE_PLAN_RULES);
+        for (kind, screens) in [("codex", CODEX), ("copilot", COPILOT)] {
+            for (rule, screen) in screens {
+                for rule in claude_rules
+                    .clone()
+                    .chain([&rule])
+                    .map(|r| Some(*r))
+                    .chain([None])
+                {
+                    assert!(!uses_menu(kind, rule), "{kind} {rule:?}");
+                    assert!(!open_to_keys(kind, rule, screen), "{kind} {rule:?}");
+                    assert!(!open_to_text(kind, rule, screen), "{kind} {rule:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn startup_dialogs_show_whatever_herdr_rules() {
+        for (_, screen) in CODEX.iter().chain(&COPILOT) {
+            assert!(shows_dialog(screen), "{screen}");
+        }
+        assert!(shows_dialog(CODEX_UPDATE));
+        let idle = "\
+me@mac app % codex
+╭──────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.160.0)                   │
+│                                              │
+│ model:     gpt-5.5 high   /model to change   │
+│ directory: ~/src/app                         │
+╰──────────────────────────────────────────────╯
+
+  Tip: Use /status to see the current model and approvals.
+
+› Explain this codebase
+
+  100% context left · ? for shortcuts
+";
+        assert!(!shows_dialog(idle));
     }
 
     #[test]
