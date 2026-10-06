@@ -2,16 +2,18 @@
 [test-groups]
 tailnet = { max-threads = 6 }
 
+# Its 2 s bound on each Mac call while the Linux node is down misses in most runs beside the
+# other tailnet tests, so it runs alone once they are done, as it did under cargo test.
 [[profile.default.overrides]]
-filter = 'test(/end_to_end|machines_side_by_side|phase3_expired_approvals/)'
+filter = 'binary_id(e2e::machines)'
+priority = -100
+threads-required = 'num-test-threads'
+test-group = '@global'
+
+[[profile.default.overrides]]
+filter = 'test(/end_to_end|phase3_expired_approvals/)'
 priority = 100
 
 [[profile.default.overrides]]
 filter = 'binary_id(e2e::*) | binary_id(tailnet::end_to_end) | binary_id(collied::server) | test(tailnet_tests::)'
 test-group = 'tailnet'
-
-# Its 2 s bound on each Mac call while the Linux node is down can miss on a loaded machine
-# (6.4 s once in about 20 runs); a real regression fails the retry too.
-[[profile.default.overrides]]
-filter = 'binary_id(e2e::machines)'
-retries = 1
