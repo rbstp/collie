@@ -26,6 +26,8 @@ final class AgentModel {
     private(set) var unlocking = false
     private var watchingShell = false
     private var lastMode: PaneMode?
+    /// Whether the restored draft was typed into a shell, until the screen sees the pane's mode.
+    private var restoredShell: Bool?
     private(set) var link: LinkPhase?
     private(set) var linkError: String?
     private(set) var ansi = ""
@@ -54,6 +56,7 @@ final class AgentModel {
     let dictation: DictationModel
 
     private let prefsFile: URL?
+    private let draftsFile: URL?
     var wrapLines: Bool {
         didSet {
             var prefs = DevicePrefs.load(from: prefsFile)
@@ -88,7 +91,7 @@ final class AgentModel {
     private static var watchers: [String: ObjectIdentifier] = [:]
 
     init(
-        core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file,
+        core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file, draftsFile: URL? = nil,
         dictationEngine: any DictationEngine = SpeechDictationEngine(),
         unlocker: any TerminalUnlocker = SecureEnclaveUnlocker(), machineLabel: String? = nil
     ) {
@@ -97,11 +100,36 @@ final class AgentModel {
         self.unlocker = unlocker
         self.machineLabel = machineLabel
         self.prefsFile = prefsFile
+        self.draftsFile = draftsFile
         let prefs = DevicePrefs.load(from: prefsFile)
         dictation = DictationModel(engine: dictationEngine, language: prefs.dictationLanguage, prefsFile: prefsFile)
         wrapLines = prefs.wrapLines
         fontSize = prefs.fontSize
         gestures = prefs.gestures
+        if let saved = AgentDrafts.load(from: draftsFile).drafts[route] {
+            draft = saved.text
+            attachments = saved.attachments.filter { $0.uploaded.timeIntervalSinceNow > -Attachment.keptOnMachine }
+            restoredShell = saved.shell
+        }
+    }
+
+    /// A send in flight saves what stays once it succeeds, so a screen opened meanwhile never offers
+    /// the sent prompt again, and saves again when it ends.
+    func saveDraft() {
+        guard !sendingPrompt else { return }
+        saveDraft(draft, attachments)
+    }
+
+    /// Text loaded from the Mac's input box is not kept: it loads again when the screen opens.
+    private func saveDraft(_ text: String, _ files: [AttachedFile]) {
+        guard let draftsFile else { return }
+        var saved = AgentDrafts.load(from: draftsFile)
+        let typed = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && text != macDraft
+        let shell = restoredShell ?? (lastMode == .terminal)
+        let next = typed || !files.isEmpty ? AgentDrafts.Draft(text: typed ? text : "", attachments: files, shell: shell) : nil
+        guard next != nil || saved.drafts[route] != nil else { return }
+        saved.drafts[route] = next
+        saved.save(to: draftsFile)
     }
 
     var mode: PaneMode? {
@@ -211,7 +239,9 @@ final class AgentModel {
         if let now = mode, now != lastMode {
             let previous = lastMode
             lastMode = now
-            if previous != nil, now == .terminal || previous == .terminal { dropInput() }
+            let before = previous ?? restoredShell.map { $0 ? .terminal : .agent }
+            restoredShell = nil
+            if let before, before != now, now == .terminal || before == .terminal { dropInput() }
             if now == .agent, previous == .terminal || previous == .gone {
                 watchingShell = false
                 watch(route.terminalId)
@@ -269,6 +299,7 @@ final class AgentModel {
     /// Text typed and files attached while the send is in flight stay for the next prompt.
     /// Paths on the Mac never have spaces, so they are set apart by single spaces.
     func sendPrompt() async {
+        defer { saveDraft() }
         if isTerminal {
             await sendCommand()
             return
@@ -287,6 +318,7 @@ final class AgentModel {
         sendingPrompt = true
         promptError = nil
         defer { sendingPrompt = false }
+        saveDraft("", [])
         do {
             try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: macDraft)
             if macDraft != nil { macDraft = "" }
@@ -312,6 +344,7 @@ final class AgentModel {
         sendingPrompt = true
         promptError = nil
         defer { sendingPrompt = false }
+        saveDraft("", attachments)
         guard await unlock() else { return }
         do {
             try await core.terminalRun(machineId: route.machineId, terminalId: route.terminalId, text: sent)
@@ -332,6 +365,7 @@ final class AgentModel {
         sendingPrompt = true
         promptError = nil
         defer { sendingPrompt = false }
+        saveDraft("", attachments)
         do {
             try await core.typeText(machineId: route.machineId, terminalId: route.terminalId, text: typed)
             if draft.hasPrefix(sent) {

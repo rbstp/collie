@@ -20,19 +20,13 @@ struct AgentScreen: View {
         machineLabel: String? = nil, showsMachine: Bool = false, neighbor: ((Int) -> AgentRoute?)? = nil,
         switchAgent: @escaping (AgentRoute) -> Void = { _ in }
     ) {
-        _model = State(initialValue: AgentModel(core: core, route: route, machineLabel: machineLabel))
+        _model = State(initialValue: AgentModel(core: core, route: route, draftsFile: AgentDrafts.file, machineLabel: machineLabel))
         self.approvals = approvals
         self.follows = follows
         self.machineLabel = machineLabel
         self.showsMachine = showsMachine
         self.neighbor = neighbor
         self.switchAgent = switchAgent
-    }
-
-    // Switching agents drops these, as Back does; text loaded from the Mac's input box loads again.
-    private var holdsUnsent: Bool {
-        let typed = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.draft != model.macDraft
-        return typed || !model.attachments.isEmpty || model.upload != nil
     }
 
     private var blocked: BlockedInput? {
@@ -57,7 +51,9 @@ struct AgentScreen: View {
             }
             AgentTerminal(
                 ansi: model.ansi, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
-                perform: perform, resized: { model.fontSize = $0 }, neighbor: holdsUnsent ? nil : neighbor,
+                perform: perform, resized: { model.fontSize = $0 },
+                // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
+                neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
                 switchAgent: switchAgent
             ) { await model.refresh() }
                 .overlay {
@@ -121,10 +117,14 @@ struct AgentScreen: View {
         }
         .task { await model.run() }
         .onAppear { model.reloadGestures() }
-        .onChange(of: scenePhase) { _, phase in model.dictation.scenePhaseChanged(to: phase) }
+        .onChange(of: scenePhase) { _, phase in
+            model.dictation.scenePhaseChanged(to: phase)
+            if phase != .active { model.saveDraft() }
+        }
         .onDisappear {
             model.cancelUpload()
             model.dictation.cancel()
+            model.saveDraft()
         }
     }
 

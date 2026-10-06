@@ -117,7 +117,7 @@ private struct GesturesView: View {
                 Toggle("Pinch to resize text", isOn: $gestures.pinchResizesText)
                 Toggle("Swipe sideways to switch agents", isOn: $gestures.swipeSwitchesAgents)
             } footer: {
-                Text("Paste only fills the prompt field; it never sends. iOS asks before each paste unless Paste from Other Apps is set to Allow in the Settings app under collie. Swipe left for the next agent in the list and right for the previous one; it works only while lines wrap, since otherwise a sideways swipe scrolls the terminal, and not while the prompt holds unsent text or files. Gestures are off while text is selected.")
+                Text("Paste only fills the prompt field; it never sends. iOS asks before each paste unless Paste from Other Apps is set to Allow in the Settings app under collie. Swipe left for the next agent in the list and right for the previous one; it works only while lines wrap, since otherwise a sideways swipe scrolls the terminal, and not while a file uploads or a prompt is sending. Gestures are off while text is selected.")
             }
         }
         .navigationTitle("Gestures")
