@@ -200,7 +200,7 @@ struct UsageLimit: Equatable {
 
     func spokenLine(now: Date) -> String {
         let resets = label == "5h" ? "resets at \(resets(now: now))" : "resets in \(PlanUsage.spoken(seconds: seconds))"
-        return "\(spokenLabel) limit, \(used) percent used, \(resets)"
+        return "\(spokenLabel) limit, \(used) percent used, \(Int((elapsed * 100).rounded())) percent of the window elapsed, \(resets)"
     }
 
     private static func paceText(label: String, pace: UsagePace) -> String {

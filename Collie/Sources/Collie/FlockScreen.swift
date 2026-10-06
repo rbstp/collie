@@ -19,14 +19,9 @@ struct FlockScreen: View {
     var body: some View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
-                Picker("View", selection: $showsUsage) {
-                    Text("Agents").tag(false)
-                    Text("Usage").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.horizontal)
-                .padding(.bottom, 8)
+                ViewSwitch(showsUsage: $showsUsage)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
                 if showsUsage {
                     List { UsageSections(entries: model.entries) }
                 } else {
@@ -212,6 +207,51 @@ struct FlockScreen: View {
         Button("Close workspace", systemImage: "xmark.rectangle.portrait", role: .destructive) {
             model.beginClose(.workspace(id: agent.workspaceId), route: route)
         }
+    }
+}
+
+private struct ViewSwitch: View {
+    @Binding var showsUsage: Bool
+    @Namespace private var pill
+
+    var body: some View {
+        GlassEffectContainer {
+            HStack(spacing: 0) {
+                segment("Agents", value: false)
+                segment("Usage", value: true)
+            }
+            .padding(3)
+            .glassEffect(.regular.interactive(), in: .capsule)
+        }
+        .animation(.smooth(duration: 0.3), value: showsUsage)
+        .accessibilityRepresentation {
+            Picker("View", selection: $showsUsage) {
+                Text("Agents").tag(false)
+                Text("Usage").tag(true)
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private func segment(_ title: LocalizedStringKey, value: Bool) -> some View {
+        Button {
+            showsUsage = value
+        } label: {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(showsUsage == value ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background {
+                    if showsUsage == value {
+                        Color.clear
+                            .glassEffect(.regular.tint(.accentColor).interactive(), in: .capsule)
+                            .glassEffectID("pill", in: pill)
+                    }
+                }
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
     }
 }
 
