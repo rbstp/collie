@@ -196,6 +196,21 @@ async fn scenario(
     assert_eq!(usage("codex"), None);
     println!("  flock in {:?}", t.elapsed());
 
+    println!("a newer plan reaches the phone while the agent's status stays the same");
+    let t = Instant::now();
+    collied::usage::record(&data_dir, statusline.replace("23.5", "57.0").as_bytes(), 2).unwrap();
+    let five_hour = || {
+        phone_a
+            .agent_view(machine.id.clone(), "term_65ce7ae4fd5731".into(), 0)
+            .and_then(|v| v.agent?.plan_usage?.five_hour)
+            .map(|w| w.used_percent)
+    };
+    while five_hour() != Some(57) {
+        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", five_hour());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    println!("  plan in {:?}", t.elapsed());
+
     let peers_of_mac = status(&net.mac).await.peer.unwrap_or_default();
     let phone_b_id = peers_of_mac
         .values()

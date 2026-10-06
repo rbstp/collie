@@ -176,6 +176,16 @@ pub fn load_json<T: DeserializeOwned + Default>(path: &Path) -> Result<T, Error>
 }
 
 pub fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
+    write_json(path, value, true)
+}
+
+/// For a cache the next write restores: replaced atomically but never flushed, since
+/// `sync_all` is a full drive cache flush on macOS.
+pub fn replace_json<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
+    write_json(path, value, false)
+}
+
+fn write_json<T: Serialize>(path: &Path, value: &T, durable: bool) -> Result<(), Error> {
     let tmp = path.with_extension("json.tmp");
     let io = |source| Error::Io {
         path: tmp.clone(),
@@ -197,13 +207,15 @@ pub fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
         .map_err(io)?;
     file.write_all(&json).map_err(io)?;
     file.write_all(b"\n").map_err(io)?;
-    file.sync_all().map_err(io)?;
+    if durable {
+        file.sync_all().map_err(io)?;
+    }
     drop(file);
     std::fs::rename(&tmp, path).map_err(|source| Error::Io {
         path: path.to_owned(),
         source,
     })?;
-    if let Some(dir) = path.parent() {
+    if durable && let Some(dir) = path.parent() {
         std::fs::File::open(dir)
             .and_then(|d| d.sync_all())
             .map_err(|source| Error::Io {

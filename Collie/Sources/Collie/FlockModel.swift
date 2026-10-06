@@ -167,7 +167,9 @@ enum Elapsed {
 struct UsageLimit: Equatable {
     let label: String
     let left: UInt8
-    let resetsIn: String
+    let seconds: Int
+
+    var resetsIn: String { PlanUsage.countdown(seconds: seconds) }
 }
 
 extension PlanUsage {
@@ -175,7 +177,8 @@ extension PlanUsage {
     static let staleAfterMs: UInt64 = 5 * 60_000
 
     func isStale(now: Date) -> Bool {
-        UInt64(max(0, now.timeIntervalSince1970 * 1000)) > recordedMs + Self.staleAfterMs
+        let nowMs = UInt64(max(0, now.timeIntervalSince1970 * 1000))
+        return nowMs > recordedMs && nowMs - recordedMs > Self.staleAfterMs
     }
 
     /// A window whose reset time has passed is left out: its figure no longer holds.
@@ -185,7 +188,7 @@ extension PlanUsage {
             guard let window, window.resetsAtMs > nowMs else { return nil }
             return UsageLimit(
                 label: label, left: 100 - min(window.usedPercent, 100),
-                resetsIn: Self.countdown(seconds: Int((window.resetsAtMs - nowMs) / 1000))
+                seconds: Int((window.resetsAtMs - nowMs) / 1000)
             )
         }
     }
@@ -197,6 +200,15 @@ extension PlanUsage {
         case ..<86400: "\(seconds / 3600)h \(seconds % 3600 / 60)m"
         default: "\(seconds / 86400)d \(seconds % 86400 / 3600)h"
         }
+    }
+
+    /// VoiceOver reads "13m" as metres; this spells the units out.
+    static func spoken(seconds: Int) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .full
+        formatter.allowedUnits = seconds < 86400 ? [.hour, .minute] : [.day, .hour]
+        formatter.maximumUnitCount = 2
+        return formatter.string(from: TimeInterval(max(60, seconds))) ?? ""
     }
 }
 

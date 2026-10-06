@@ -66,8 +66,13 @@ impl Transcripts {
     }
 
     pub fn with_usage(mut self, path: PathBuf) -> Self {
-        self.usage = Usage::new(Some(path));
+        self.usage = Usage::new(path);
         self
+    }
+
+    /// For the reconcile tick: one fstat, true when the recorded plan changed since it last said so.
+    pub fn plan_moved(&mut self) -> bool {
+        self.usage.plan_moved()
     }
 
     pub fn from_env() -> Self {

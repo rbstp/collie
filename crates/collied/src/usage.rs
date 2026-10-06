@@ -19,6 +19,9 @@ const USAGE_LOCK: &str = "usage.lock";
 const MAX_INPUT: u64 = 1 << 20;
 const MAX_FILE: u64 = 64 << 10;
 const MAX_SESSIONS: usize = 64;
+/// The status line runs several times a second while a reply streams; an unchanged value
+/// is stamped again (and the file rewritten) at most this often.
+const RESTAMP_MS: u64 = 60_000;
 /// Claude Code's windows are 200K and 1M; anything far outside is not a window size.
 const WINDOW_RANGE: std::ops::RangeInclusive<u64> = 1_000..=100_000_000;
 
@@ -75,10 +78,16 @@ pub fn record(data_dir: &Path, input: &[u8], now_ms: u64) -> anyhow::Result<()> 
         Err(peers::Error::Json { .. }) => Recorded::default(),
         other => other?,
     };
-    if plan.is_some() {
-        recorded.plan = plan;
+    let before = recorded.clone();
+    if let Some(plan) = plan {
+        recorded.plan = Some(merge_plan(recorded.plan.take(), plan, now_ms));
     }
-    if let Some((id, size)) = session {
+    if let Some((id, size)) = session
+        && !recorded
+            .windows
+            .get(id)
+            .is_some_and(|w| w.size == size && now_ms < w.seen_ms + RESTAMP_MS)
+    {
         recorded.windows.insert(
             id.to_owned(),
             SessionWindow {
@@ -98,8 +107,51 @@ pub fn record(data_dir: &Path, input: &[u8], now_ms: u64) -> anyhow::Result<()> 
             recorded.windows.remove(&oldest);
         }
     }
-    peers::save_json(&path, &recorded)?;
+    if recorded != before {
+        peers::replace_json(&path, &recorded)?;
+    }
     Ok(())
+}
+
+/// Each session reports the limits from its own last reply, so a quiet session's older
+/// figures must not replace a newer one's: within a window usage only grows, and a later
+/// reset is a later window.
+fn merge_plan(old: Option<PlanUsage>, new: PlanUsage, now_ms: u64) -> PlanUsage {
+    let Some(old) = old else { return new };
+    let five_hour = merge_window(old.five_hour.clone(), new.five_hour.clone(), now_ms);
+    let seven_day = merge_window(old.seven_day.clone(), new.seven_day.clone(), now_ms);
+    let current = (new.five_hour.is_some() || new.seven_day.is_some())
+        && [(&new.five_hour, &five_hour), (&new.seven_day, &seven_day)]
+            .iter()
+            .all(|(n, m)| n.is_none() || n == m);
+    let changed = five_hour != old.five_hour || seven_day != old.seven_day;
+    let recorded_ms = if current && (changed || now_ms >= old.recorded_ms + RESTAMP_MS) {
+        now_ms
+    } else {
+        old.recorded_ms
+    };
+    PlanUsage {
+        five_hour,
+        seven_day,
+        recorded_ms,
+    }
+}
+
+fn merge_window(
+    old: Option<UsageWindow>,
+    new: Option<UsageWindow>,
+    now_ms: u64,
+) -> Option<UsageWindow> {
+    let live = |w: &UsageWindow| w.resets_at_ms > now_ms;
+    match (old.filter(live), new.filter(live)) {
+        (Some(o), Some(n)) => Some(match o.resets_at_ms.cmp(&n.resets_at_ms) {
+            std::cmp::Ordering::Less => n,
+            std::cmp::Ordering::Greater => o,
+            std::cmp::Ordering::Equal if n.used_percent >= o.used_percent => n,
+            std::cmp::Ordering::Equal => o,
+        }),
+        (o, n) => n.or(o),
+    }
 }
 
 fn window(v: &Value) -> Option<UsageWindow> {
@@ -131,12 +183,13 @@ pub struct Usage {
     path: Option<PathBuf>,
     stamp: Option<(u64, SystemTime)>,
     recorded: Recorded,
+    announced: Option<PlanUsage>,
 }
 
 impl Usage {
-    pub fn new(path: Option<PathBuf>) -> Self {
+    pub fn new(path: PathBuf) -> Self {
         Self {
-            path,
+            path: Some(path),
             ..Self::default()
         }
     }
@@ -169,6 +222,16 @@ impl Usage {
         self.recorded.plan.clone()
     }
 
+    /// True once per change of the recorded plan, its stamp included.
+    pub fn plan_moved(&mut self) -> bool {
+        self.refresh();
+        let moved = self.announced != self.recorded.plan;
+        if moved {
+            self.announced = self.recorded.plan.clone();
+        }
+        moved
+    }
+
     pub fn window(&self, session_id: &str) -> Option<u64> {
         self.recorded
             .windows
@@ -180,7 +243,7 @@ impl Usage {
 
 /// For `collied doctor`: when the tap last recorded plan usage, if it has.
 pub fn last_recorded(data_dir: &Path) -> Option<Recorded> {
-    let mut usage = Usage::new(Some(data_dir.join(USAGE_FILE)));
+    let mut usage = Usage::new(data_dir.join(USAGE_FILE));
     usage.refresh();
     usage.stamp.map(|_| usage.recorded)
 }
@@ -244,13 +307,72 @@ mod tests {
         let r = read(&data);
         assert_eq!(r.plan.unwrap().recorded_ms, 1_000);
         assert_eq!(r.windows.len(), 2);
-        // Claude Code drops a window once it resets.
+        // Claude Code drops a window once it resets; one still open is kept.
         v["rate_limits"] =
-            serde_json::json!({"seven_day": {"used_percentage": 0.4, "resets_at": 1738857600}});
+            serde_json::json!({"seven_day": {"used_percentage": 0.4, "resets_at": 1838857600}});
         record(&data, v.to_string().as_bytes(), 3_000).unwrap();
+        assert_eq!(
+            read(&data).plan.unwrap().five_hour.unwrap().used_percent,
+            24
+        );
+        record(&data, v.to_string().as_bytes(), 1_738_425_600_000).unwrap();
         let plan = read(&data).plan.unwrap();
         assert_eq!(plan.five_hour, None);
         assert_eq!(plan.seven_day.unwrap().used_percent, 0);
+    }
+
+    fn limits(five: f64, five_resets: u64, seven: f64) -> Vec<u8> {
+        serde_json::json!({"rate_limits": {
+            "five_hour": {"used_percentage": five, "resets_at": five_resets},
+            "seven_day": {"used_percentage": seven, "resets_at": 1738857600},
+        }})
+        .to_string()
+        .into_bytes()
+    }
+
+    #[test]
+    fn a_quiet_session_does_not_replace_newer_figures() {
+        let (_dir, data) = data();
+        let plan = || {
+            let p = read(&data).plan.unwrap();
+            (
+                p.five_hour.unwrap().used_percent,
+                p.seven_day.unwrap().used_percent,
+                p.recorded_ms,
+            )
+        };
+        // Session B's reply at 10:00, then session A re-runs with its 09:40 figures.
+        record(&data, &limits(92.0, 1738425600, 45.0), 100_000).unwrap();
+        record(&data, &limits(70.0, 1738425600, 41.0), 160_000).unwrap();
+        assert_eq!(plan(), (92, 45, 100_000));
+        // A later window wins even with less used.
+        record(&data, &limits(3.0, 1738443600, 46.0), 170_000).unwrap();
+        assert_eq!(plan(), (3, 46, 170_000));
+        record(&data, &limits(92.0, 1738425600, 46.0), 400_000).unwrap();
+        assert_eq!(plan(), (3, 46, 170_000));
+    }
+
+    #[test]
+    fn an_unchanged_refresh_leaves_the_file_alone() {
+        let (_dir, data) = data();
+        let path = data.join(USAGE_FILE);
+        record(&data, INPUT.as_bytes(), 1_000).unwrap();
+        let written = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH)
+            .unwrap();
+        record(&data, INPUT.as_bytes(), 1_000 + RESTAMP_MS - 1).unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        assert_eq!(meta.modified().unwrap(), SystemTime::UNIX_EPOCH);
+        assert_ne!(written, SystemTime::UNIX_EPOCH);
+        record(&data, INPUT.as_bytes(), 1_000 + RESTAMP_MS).unwrap();
+        let r = read(&data);
+        assert_eq!(r.plan.unwrap().recorded_ms, 1_000 + RESTAMP_MS);
+        assert_eq!(r.windows[SESSION].seen_ms, 1_000 + RESTAMP_MS);
+        assert!(!data.join("usage.json.tmp").exists());
     }
 
     #[test]
@@ -296,7 +418,7 @@ mod tests {
     #[test]
     fn the_daemon_reads_it_back_by_mtime() {
         let (_dir, data) = data();
-        let mut usage = Usage::new(Some(data.join(USAGE_FILE)));
+        let mut usage = Usage::new(data.join(USAGE_FILE));
         usage.refresh();
         assert_eq!((usage.plan(), usage.window(SESSION)), (None, None));
         assert!(last_recorded(&data).is_none());
@@ -305,6 +427,26 @@ mod tests {
         assert_eq!(usage.plan().unwrap().recorded_ms, 5);
         assert_eq!(usage.window(SESSION), Some(1_000_000));
         assert_eq!(last_recorded(&data).unwrap().plan.unwrap().recorded_ms, 5);
+        assert!(usage.plan_moved());
+        assert!(!usage.plan_moved());
+
+        // Same size and mtime: not read again.
+        let path = data.join(USAGE_FILE);
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let edited = text.replace("\"used_percent\": 24", "\"used_percent\": 25");
+        assert_eq!(edited.len(), text.len());
+        std::fs::write(&path, &edited).unwrap();
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(modified).unwrap();
+        usage.refresh();
+        assert_eq!(usage.plan().unwrap().five_hour.unwrap().used_percent, 24);
+        assert!(!usage.plan_moved());
+        file.set_modified(modified + std::time::Duration::from_secs(1))
+            .unwrap();
+        assert!(usage.plan_moved());
+        assert_eq!(usage.plan().unwrap().five_hour.unwrap().used_percent, 25);
+
         std::fs::remove_file(data.join(USAGE_FILE)).unwrap();
         std::os::unix::fs::symlink(data.join(USAGE_LOCK), data.join(USAGE_FILE)).unwrap();
         usage.refresh();

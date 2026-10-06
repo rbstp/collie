@@ -259,17 +259,10 @@ private struct PlanUsageLine: View {
             let limits = usage.limits(now: context.date)
             let stale = usage.isStale(now: context.date)
             if !limits.isEmpty {
-                HStack(spacing: 10) {
-                    ForEach(limits, id: \.label) { limit in
-                        HStack(spacing: 4) {
-                            ContextRing(left: limit.left)
-                            Text("\(limit.label) \(limit.left)% left · \(limit.resetsIn)")
-                        }
-                    }
-                    if stale {
-                        Label(Elapsed.string(sinceMs: usage.recordedMs, now: context.date), systemImage: "clock")
-                            .labelStyle(.titleAndIcon)
-                    }
+                // One line when it fits, else one limit per line: the reset times must not be cut.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { items(limits, stale: stale, now: context.date) }
+                    VStack(alignment: .leading, spacing: 2) { items(limits, stale: stale, now: context.date) }
                 }
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -281,10 +274,26 @@ private struct PlanUsageLine: View {
         }
     }
 
+    @ViewBuilder
+    private func items(_ limits: [UsageLimit], stale: Bool, now: Date) -> some View {
+        ForEach(limits, id: \.label) { limit in
+            HStack(spacing: 4) {
+                ContextRing(left: limit.left)
+                Text("\(limit.label) \(limit.left)% left · \(limit.resetsIn)")
+            }
+        }
+        if stale {
+            Label(Elapsed.string(sinceMs: usage.recordedMs, now: now), systemImage: "clock")
+                .labelStyle(.titleAndIcon)
+        }
+    }
+
     private static func accessibility(_ limits: [UsageLimit], stale: Bool, recordedMs: UInt64, now: Date) -> String {
-        let windows = limits.map { "\($0.label == "5h" ? "5-hour" : "Weekly") limit \($0.left)% left, resets in \($0.resetsIn)" }
-        let age = stale ? ["as of \(Elapsed.string(sinceMs: recordedMs, now: now)) ago"] : []
-        return (windows + age).joined(separator: ", ")
+        let windows = limits.map {
+            "\($0.label == "5h" ? "5-hour" : "Weekly") limit \($0.left)% left, resets in \(PlanUsage.spoken(seconds: $0.seconds))"
+        }
+        let age = Int(now.timeIntervalSince1970) - Int(recordedMs / 1000)
+        return (windows + (stale ? ["as of \(PlanUsage.spoken(seconds: age)) ago"] : [])).joined(separator: ", ")
     }
 }
 
