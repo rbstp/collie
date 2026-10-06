@@ -173,7 +173,10 @@ struct FlockScreen: View {
                     try? await Task.sleep(for: .seconds(3))
                 }
             }
-            .onChange(of: model.entries, initial: true) { _, entries in previews.update(entries) }
+            .onChange(of: model.entries, initial: true) { _, entries in
+                previews.update(entries)
+                AgentDrafts.prune(entries, file: AgentDrafts.file)
+            }
             .onChange(of: layout) { _, layout in
                 var prefs = DevicePrefs.load(from: DevicePrefs.file)
                 prefs.agentsLayout = layout

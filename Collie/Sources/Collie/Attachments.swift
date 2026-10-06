@@ -18,6 +18,7 @@ struct AttachedFile: Identifiable {
     let name: String
     let kind: Kind
     var thumbnail: UIImage?
+    var uploaded = Date.now
 
     init(path: String, name: String) {
         self.path = path
@@ -34,6 +35,27 @@ struct AttachedFile: Identifiable {
 
     private static func type(of name: String) -> UTType? {
         UTType(filenameExtension: (name as NSString).pathExtension)
+    }
+}
+
+extension AttachedFile: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case path, name, uploaded, thumbnail
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(path: try container.decode(String.self, forKey: .path), name: try container.decode(String.self, forKey: .name))
+        uploaded = try container.decode(Date.self, forKey: .uploaded)
+        thumbnail = try container.decodeIfPresent(Data.self, forKey: .thumbnail).flatMap(UIImage.init(data:))
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(path, forKey: .path)
+        try container.encode(name, forKey: .name)
+        try container.encode(uploaded, forKey: .uploaded)
+        try container.encodeIfPresent(thumbnail?.jpegData(compressionQuality: 0.8), forKey: .thumbnail)
     }
 }
 
@@ -72,6 +94,8 @@ enum Attachment {
     static let photoMaxSide: CGFloat = 2048
     static let photoQuality: CGFloat = 0.85
     static let thumbnailMaxSide: CGFloat = 120
+    /// collied deletes an upload 24 h after it arrives; the hour less allows for clock skew.
+    static let keptOnMachine: TimeInterval = 23 * 60 * 60
 
     static func photoName(at date: Date, index: Int = 1, timeZone: TimeZone = .current) -> String {
         let formatter = DateFormatter()

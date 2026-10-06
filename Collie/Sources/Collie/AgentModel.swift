@@ -54,6 +54,7 @@ final class AgentModel {
     let dictation: DictationModel
 
     private let prefsFile: URL?
+    private let draftsFile: URL?
     var wrapLines: Bool {
         didSet {
             var prefs = DevicePrefs.load(from: prefsFile)
@@ -88,7 +89,7 @@ final class AgentModel {
     private static var watchers: [String: ObjectIdentifier] = [:]
 
     init(
-        core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file,
+        core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file, draftsFile: URL? = nil,
         dictationEngine: any DictationEngine = SpeechDictationEngine(),
         unlocker: any TerminalUnlocker = SecureEnclaveUnlocker(), machineLabel: String? = nil
     ) {
@@ -97,11 +98,27 @@ final class AgentModel {
         self.unlocker = unlocker
         self.machineLabel = machineLabel
         self.prefsFile = prefsFile
+        self.draftsFile = draftsFile
         let prefs = DevicePrefs.load(from: prefsFile)
         dictation = DictationModel(engine: dictationEngine, language: prefs.dictationLanguage, prefsFile: prefsFile)
         wrapLines = prefs.wrapLines
         fontSize = prefs.fontSize
         gestures = prefs.gestures
+        if let saved = AgentDrafts.load(from: draftsFile).drafts[route] {
+            draft = saved.text
+            attachments = saved.attachments.filter { $0.uploaded.timeIntervalSinceNow > -Attachment.keptOnMachine }
+        }
+    }
+
+    /// Text loaded from the Mac's input box is not kept on its own: it loads again when the screen opens.
+    func saveDraft() {
+        guard let draftsFile else { return }
+        var saved = AgentDrafts.load(from: draftsFile)
+        let typed = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft != macDraft
+        let next = typed || !attachments.isEmpty ? AgentDrafts.Draft(text: draft, attachments: attachments) : nil
+        guard next != nil || saved.drafts[route] != nil else { return }
+        saved.drafts[route] = next
+        saved.save(to: draftsFile)
     }
 
     var mode: PaneMode? {
@@ -269,6 +286,7 @@ final class AgentModel {
     /// Text typed and files attached while the send is in flight stay for the next prompt.
     /// Paths on the Mac never have spaces, so they are set apart by single spaces.
     func sendPrompt() async {
+        defer { saveDraft() }
         if isTerminal {
             await sendCommand()
             return
