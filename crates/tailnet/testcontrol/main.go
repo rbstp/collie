@@ -23,6 +23,7 @@ import (
 
 func main() {
 	authKey := flag.String("authkey", "", "auth key every node must present")
+	offline := flag.Bool("offline", false, "report every peer offline, as a stale netmap would")
 	flag.Parse()
 	if *authKey == "" {
 		log.Fatal("-authkey is required")
@@ -57,7 +58,7 @@ func main() {
 		RequireAuthKey: *authKey,
 		// Peers are reported online, as real control does for connected nodes; collie-core
 		// does not dial a peer reported offline.
-		AllOnline: true,
+		AllOnline: !*offline,
 		// Non-nil so a node registering with RequestTags gets those tags.
 		TagOwners: map[string][]string{},
 		Logf:      logger.Discard,

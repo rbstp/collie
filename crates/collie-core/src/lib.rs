@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -34,7 +34,8 @@ pub use approvals::{
 };
 pub use attachments::UploadProgress;
 use conn::{
-    Conn, ConnectError, IdentitySlot, LinkPhase, NodeSlot, PushSlot, RequestError, blocking,
+    Conn, ConnectError, FOREGROUND_RECONNECT, IdentitySlot, LinkPhase, NodeSlot, PushSlot,
+    RequestError, blocking,
 };
 pub use identity::IdentitySigner;
 use reach::Reachability;
@@ -47,7 +48,8 @@ uniffi::setup_scaffolding!();
 const HOSTNAME: &str = "collie-phone";
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const SETTLE_TIMEOUT: Duration = Duration::from_secs(15);
-/// Longer than the dial budget, the longest any caller holds a node.
+/// Longer than the dial budget and the lock-screen decide's budget, the longest any caller
+/// holds a node.
 const RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
 /// collied holds `pair.complete` until the user confirms on the Mac (up to 65 s).
 const PAIR_CONFIRM_TIMEOUT: Duration = Duration::from_secs(75);
@@ -69,6 +71,13 @@ const SUSPEND_GRACE: Duration = Duration::from_secs(5);
 const SUSPEND_UPLOAD_GRACE: Duration = Duration::from_secs(18);
 /// Longer than the 2 s a session takes at most to send its WebSocket close.
 const SUSPEND_CLOSE: Duration = Duration::from_secs(3);
+/// A wedged node must not hold up the diagnostics or the recovery after a resume.
+const KICK_TIMEOUT: Duration = Duration::from_secs(3);
+/// Longer than a healthy reconnect after a resume. A rebind is not done sooner: a dial in
+/// flight during one can stall for its whole attempt.
+const REBIND_AFTER: Duration = Duration::from_secs(3);
+/// A full dial past the resume grace: a rebound node has reached DERP again long before.
+const RESTART_AFTER: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 #[uniffi::export(Display)]
@@ -450,6 +459,13 @@ pub fn build_info() -> BuildInfo {
     }
 }
 
+/// Diagnostics for the device log. Called from a collie-core thread; never carries keys,
+/// tokens or nonces.
+#[uniffi::export(callback_interface)]
+pub trait CoreLog: Send + Sync {
+    fn log(&self, message: String);
+}
+
 #[derive(uniffi::Object)]
 pub struct CollieCore {
     runtime: tokio::runtime::Runtime,
@@ -476,6 +492,7 @@ struct Inner {
     suspended: watch::Sender<bool>,
     resumes: AtomicU64,
     busy: watch::Sender<usize>,
+    log: Mutex<Option<Box<dyn CoreLog>>>,
 }
 
 /// A prompt, upload or decision in flight, which a suspend lets finish.
@@ -512,6 +529,10 @@ impl CollieCore {
         })?;
         *lock(&self.inner.identity) = Some(key);
         Ok(())
+    }
+
+    pub fn set_log(&self, log: Box<dyn CoreLog>) {
+        *lock(&self.inner.log) = Some(log);
     }
 
     pub fn tailnet_configured(&self) -> bool {
@@ -606,14 +627,56 @@ impl CollieCore {
         lock(&self.inner.conns).get(&machine_id).map(|c| view(c))
     }
 
+    /// After a long background (or a suspend), when no machine is connected again
+    /// [`REBIND_AFTER`] later the node is rebound, and when dials still fail
+    /// [`RESTART_AFTER`] after the resume it is restarted.
     pub fn resume(&self, background_secs: u64) {
         // Bumped before the send: a suspend checking it under the watch lock either sees
         // it or is undone by the send.
-        self.inner.resumes.fetch_add(1, Ordering::SeqCst);
+        let epoch = self.inner.resumes.fetch_add(1, Ordering::SeqCst) + 1;
         let suspended = self.inner.suspended.send_replace(false);
-        for conn in lock(&self.inner.conns).values() {
-            conn.resume(Duration::from_secs(background_secs), suspended);
+        let background = Duration::from_secs(background_secs);
+        let conns: Vec<_> = lock(&self.inner.conns).values().cloned().collect();
+        let links: Vec<_> = conns
+            .iter()
+            .map(|c| {
+                let link = lock(&c.shared.link);
+                let line = format!(
+                    "{}: {:?}, last dial {} s ago, last error {:?}",
+                    c.machine.label,
+                    link.phase,
+                    link.last_dial.elapsed().as_secs(),
+                    link.last_error
+                );
+                (c.machine.node_id.clone(), line)
+            })
+            .collect();
+        for conn in &conns {
+            conn.resume(background, suspended);
         }
+        let inner = self.inner.clone();
+        self.runtime
+            .spawn(inner.resumed(background, suspended, epoch, links));
+    }
+
+    /// Pull to refresh or a tap on the machine: a live session is probed, any other link
+    /// dials at once, even when Tailscale reports the machine offline. When the node runs
+    /// and the machine is online but dials keep failing, the node is restarted instead, and
+    /// when there is no node (a restart that could not start one) it is started.
+    pub fn reconnect(&self, machine_id: String) -> Result<(), CoreError> {
+        let conn = self.conn(&machine_id)?;
+        let inner = self.inner.clone();
+        self.runtime.spawn(async move {
+            inner.start_missing_node("reconnect").await;
+            if let Some(suspect) = inner.node_suspect(std::slice::from_ref(&conn)).await {
+                inner.restart("reconnect", suspect).await;
+            } else if lock(&conn.shared.link).phase == LinkPhase::Connected {
+                conn.resume(Duration::ZERO, false);
+            } else {
+                conn.reconnect_now();
+            }
+        });
+        Ok(())
     }
 
     /// Called as the app leaves the foreground, before any await: the epoch to pass to
@@ -1214,6 +1277,7 @@ impl CollieCore {
                 suspended: watch::Sender::new(false),
                 resumes: AtomicU64::default(),
                 busy: watch::Sender::new(0),
+                log: Mutex::default(),
             }),
         }))
     }
@@ -1355,6 +1419,19 @@ impl Inner {
         Some(key)
     }
 
+    fn config(&self, auth_key: Option<Zeroizing<String>>) -> Config {
+        Config {
+            state_dir: self.state_dir.join("tsnet"),
+            hostname: HOSTNAME.into(),
+            auth_key,
+            control_url: self.control_url.clone(),
+            advertise_tags: Vec::new(),
+            // Silences libtailscale's backend logger only. tsnet's UserLogf is still unset
+            // in tailscale-sys, so tsnet prints the login URL to stderr via log.Printf.
+            log_to_stderr: false,
+        }
+    }
+
     fn node_start(self: &Arc<Self>, key: Option<Zeroizing<String>>) -> Result<(), CoreError> {
         let _starting = lock(&self.starting);
         let current = lock(&self.node).clone();
@@ -1368,16 +1445,7 @@ impl Inner {
             }
         }
         let t0 = Instant::now();
-        let node = Node::new(&Config {
-            state_dir: self.state_dir.join("tsnet"),
-            hostname: HOSTNAME.into(),
-            auth_key: key,
-            control_url: self.control_url.clone(),
-            advertise_tags: Vec::new(),
-            // Silences libtailscale's backend logger only. tsnet's UserLogf is still unset
-            // in tailscale-sys, so tsnet prints the login URL to stderr via log.Printf.
-            log_to_stderr: false,
-        })?;
+        let node = Node::new(&self.config(key))?;
         let created = t0.elapsed();
         node.start()?;
         let started = t0.elapsed();
@@ -1406,6 +1474,195 @@ impl Inner {
             std::thread::sleep(POLL_INTERVAL);
         }
         Ok(())
+    }
+
+    /// Replaces a node that runs but reaches no machine with a fresh one on the same state,
+    /// as a relaunch would, unless another restart already replaced `suspect`. The old node
+    /// is closed once nothing holds it (the lock-screen decide holds it until it is
+    /// answered). It is kept when a machine connects meanwhile, so no session is cut, or when
+    /// the app is suspended, so a lock-screen decide waiting for the node gets it at once.
+    /// Requests queued while no machine is connected wait for the new node.
+    fn restart_node(&self, suspect: &Weak<Node>) -> Result<&'static str, CoreError> {
+        let _starting = lock(&self.starting);
+        let Some(old) = lock(&self.node).take_if(|n| Arc::as_ptr(n) == suspect.as_ptr()) else {
+            return Ok("already replaced");
+        };
+        let deadline = Instant::now() + RELEASE_TIMEOUT;
+        loop {
+            let released = Arc::strong_count(&old) == 1;
+            let kept = if self.connected() {
+                Ok("kept, a machine connected")
+            } else if *self.suspended.borrow() {
+                Ok("kept, suspended")
+            } else if released {
+                break;
+            } else if Instant::now() >= deadline {
+                Err(CoreError::Tailnet {
+                    message: "the Tailscale session is still in use, try again".into(),
+                })
+            } else {
+                std::thread::sleep(POLL_INTERVAL);
+                continue;
+            };
+            *lock(&self.node) = Some(old);
+            return kept;
+        }
+        drop(old);
+        let node = Node::new(&self.config(None))?;
+        node.start()?;
+        *lock(&self.node) = Some(Arc::new(node));
+        for conn in lock(&self.conns).values() {
+            conn.resume(FOREGROUND_RECONNECT, false);
+        }
+        Ok("done")
+    }
+
+    async fn restart(self: &Arc<Self>, why: &str, suspect: Weak<Node>) {
+        let t0 = Instant::now();
+        let inner = self.clone();
+        let result = blocking(move || inner.restart_node(&suspect)).await;
+        let outcome = match result {
+            Ok(Ok(outcome)) => outcome.to_owned(),
+            Ok(Err(e)) => e.to_string(),
+            Err(e) => e.to_string(),
+        };
+        self.log(format!(
+            "node restart ({why}): {outcome} in {} ms",
+            ms(t0.elapsed())
+        ));
+    }
+
+    async fn start_missing_node(self: &Arc<Self>, why: &str) {
+        if lock(&self.node).is_some() || !self.tailnet_configured() {
+            return;
+        }
+        let inner = self.clone();
+        let outcome = match blocking(move || inner.node_start(None)).await {
+            Ok(Ok(())) => "done".to_owned(),
+            Ok(Err(e)) => e.to_string(),
+            Err(e) => e.to_string(),
+        };
+        self.log(format!("node start ({why}): {outcome}"));
+    }
+
+    fn connected(&self) -> bool {
+        lock(&self.conns)
+            .values()
+            .any(|c| lock(&c.shared.link).phase == LinkPhase::Connected)
+    }
+
+    /// When Tailscale says the node runs and a failing machine is online, yet no machine is
+    /// connected, the node itself is the likely fault. A node that cannot report its status
+    /// is too. Returns that node.
+    async fn node_suspect(&self, conns: &[Arc<Conn>]) -> Option<Weak<Node>> {
+        let failing: Vec<String> = conns
+            .iter()
+            .filter(|c| {
+                let link = lock(&c.shared.link);
+                matches!(link.phase, LinkPhase::Connecting | LinkPhase::Waiting)
+                    && link.last_error.is_some()
+            })
+            .map(|c| c.machine.node_id.clone())
+            .collect();
+        if self.connected() || failing.is_empty() {
+            return None;
+        }
+        let node = lock(&self.node).clone()?;
+        let suspect = Arc::downgrade(&node);
+        let suspected =
+            match tokio::time::timeout(KICK_TIMEOUT, blocking(move || node.status())).await {
+                Ok(Ok(Ok(status))) => {
+                    status.backend_state == BackendState::Running
+                        && status
+                            .peer
+                            .iter()
+                            .flat_map(|p| p.values())
+                            .any(|p| p.online && failing.contains(&p.stable_id))
+                }
+                _ => true,
+            };
+        suspected.then_some(suspect)
+    }
+
+    async fn resumed(
+        self: Arc<Self>,
+        background: Duration,
+        suspended: bool,
+        epoch: u64,
+        links: Vec<(String, String)>,
+    ) {
+        self.start_missing_node("resume").await;
+        let mut line = format!(
+            "resume after {} s{}:",
+            background.as_secs(),
+            if suspended { ", suspended" } else { "" }
+        );
+        let mut peers = None;
+        let node = lock(&self.node).clone();
+        match node {
+            None => line += " no node",
+            Some(node) => {
+                match tokio::time::timeout(KICK_TIMEOUT, blocking(move || node.status())).await {
+                    Ok(Ok(Ok(status))) => {
+                        line += &format!(
+                            " node {:?}, health {:?}",
+                            status.backend_state,
+                            status.health.unwrap_or_default()
+                        );
+                        peers = status.peer;
+                    }
+                    Ok(Ok(Err(e))) => line += &format!(" node status failed: {e}"),
+                    Ok(Err(e)) => line += &format!(" node status failed: {e}"),
+                    Err(_) => line += " node did not answer",
+                }
+            }
+        }
+        for (node_id, link) in links {
+            let online = peers
+                .iter()
+                .flat_map(|p| p.values())
+                .find(|p| p.stable_id == node_id)
+                .map(|p| p.online);
+            line += &format!("; {link}, online {online:?}");
+        }
+        self.log(line);
+        if !suspended && background < FOREGROUND_RECONNECT {
+            return;
+        }
+        let current = || self.resumes.load(Ordering::SeqCst) == epoch && !*self.suspended.borrow();
+        tokio::time::sleep(REBIND_AFTER).await;
+        if !current() || lock(&self.conns).is_empty() || self.connected() {
+            return;
+        }
+        let node = lock(&self.node).clone();
+        if let Some(node) = node {
+            let rebound = tokio::time::timeout(KICK_TIMEOUT, blocking(move || node.rebind())).await;
+            let outcome = match rebound {
+                Ok(Ok(Ok(()))) => "done".to_owned(),
+                Ok(Ok(Err(e))) => e.to_string(),
+                Ok(Err(e)) => e.to_string(),
+                Err(_) => "no answer".to_owned(),
+            };
+            self.log(format!(
+                "rebind, nothing connected after the resume: {outcome}"
+            ));
+        }
+        tokio::time::sleep(RESTART_AFTER - REBIND_AFTER).await;
+        if !current() {
+            return;
+        }
+        let conns: Vec<_> = lock(&self.conns).values().cloned().collect();
+        let suspect = self.node_suspect(&conns).await;
+        drop(conns);
+        if let Some(suspect) = suspect {
+            self.restart("resume", suspect).await;
+        }
+    }
+
+    fn log(&self, message: String) {
+        if let Some(log) = &*lock(&self.log) {
+            log.log(message);
+        }
     }
 
     fn node_state(&self) -> Result<NodeState, CoreError> {
@@ -2196,7 +2453,7 @@ mod tailnet_tests {
     struct TestControl(Child, String);
 
     impl TestControl {
-        fn start(auth_key: &str, dir: &Path) -> Self {
+        fn start(auth_key: &str, dir: &Path, args: &[&str]) -> Self {
             let bin = dir.join("testcontrol");
             let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tailnet/testcontrol");
             let status = Command::new(std::env::var("GO").unwrap_or_else(|_| "go".into()))
@@ -2211,6 +2468,7 @@ mod tailnet_tests {
             assert!(status.success());
             let mut child = Command::new(&bin)
                 .args(["-authkey", auth_key])
+                .args(args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .spawn()
@@ -2669,7 +2927,7 @@ mod tailnet_tests {
 
         let key = format!("test-authkey-collie-core{}", std::process::id());
         let root = tempfile::tempdir().unwrap();
-        let control = TestControl::start(&key, root.path());
+        let control = TestControl::start(&key, root.path(), &[]);
         let phone_dir = root.path().join("phone");
         std::fs::create_dir(&phone_dir).unwrap();
         std::fs::set_permissions(&phone_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -2930,7 +3188,7 @@ mod tailnet_tests {
         }
         let key = KEY.to_owned();
         let root = tempfile::tempdir().unwrap();
-        let control = TestControl::start(&key, root.path());
+        let control = TestControl::start(&key, root.path(), &[]);
         let phone_dir = root.path().join("phone");
         let group = root.path().join("group");
         std::fs::create_dir(&group).unwrap();
@@ -3291,6 +3549,216 @@ mod tailnet_tests {
             (seen.connections, seen.closed)
         };
         assert_eq!(after, (connections + 2, closed), "the session stays open");
+        drop(core);
+        drop(server_rt);
+        drop(control);
+    }
+
+    #[test]
+    fn recovery_end_to_end() {
+        // The node restart registers the node key again: see approvals_end_to_end.
+        const KEY: &str = "test-authkey-collie-recovery";
+        if ran_in_child("tailnet_tests::recovery_end_to_end", &[("TS_AUTHKEY", KEY)]) {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let control = TestControl::start(KEY, root.path(), &["-offline"]);
+        let phone_dir = root.path().join("phone");
+        std::fs::create_dir(&phone_dir).unwrap();
+        std::fs::set_permissions(&phone_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let core = CollieCore::with_control_url(phone_dir, control.1.clone()).unwrap();
+        set_identity(&core);
+        struct Log(Arc<Mutex<Vec<String>>>);
+        impl CoreLog for Log {
+            fn log(&self, message: String) {
+                lock(&self.0).push(message);
+            }
+        }
+        let logged = Arc::new(Mutex::new(Vec::new()));
+        core.set_log(Box::new(Log(logged.clone())));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(core.node_start(Some(KEY.into()))).unwrap();
+        let mac = Node::new(&Config {
+            state_dir: root.path().join("mac"),
+            hostname: "it-mac".into(),
+            auth_key: Some(Zeroizing::new(KEY.into())),
+            control_url: Some(control.1.clone()),
+            advertise_tags: vec![pin::MAC_TAG.into()],
+            log_to_stderr: false,
+        })
+        .unwrap();
+        mac.start().unwrap();
+        let mac_self = wait_running(&mac, 1).self_node.unwrap();
+        let phone_node = lock(&core.inner.node).clone().unwrap();
+        let phone_st = wait_running(&phone_node, 1);
+        drop(phone_node);
+        assert!(
+            phone_st
+                .peer
+                .iter()
+                .flat_map(|p| p.values())
+                .all(|p| !p.online),
+            "the phone's netmap reports the Mac offline"
+        );
+        let phone_id = phone_st.self_node.unwrap().stable_id;
+        let server_rt = tokio::runtime::Runtime::new().unwrap();
+        let seen = Arc::new(Mutex::new(Seen::default()));
+        server_rt.spawn(serve(
+            mac.clone(),
+            phone_id,
+            mac_self.stable_id.clone(),
+            seen.clone(),
+        ));
+        let invite = PairingInvite {
+            host: mac_self.dns_name.trim_end_matches('.').to_owned(),
+            port: DEFAULT_PORT,
+            node_id: mac_self.stable_id.clone(),
+            key: mac_pin(),
+            code: PairingCode::new(CODE).unwrap(),
+        };
+        let machine = rt
+            .block_on(core.pair(invite.to_uri(), "iPhone".into()))
+            .unwrap();
+        let id = || machine.id.clone();
+        let link = || core.cached_flock(id()).unwrap().link;
+        let connections = || lock(&seen).connections;
+        assert_eq!(connections(), 1, "the pairing");
+
+        rt.block_on(core.flock(id())).unwrap();
+        poll("unavailable", || {
+            (link() == LinkPhase::Unavailable).then_some(())
+        });
+        std::thread::sleep(Duration::from_secs(4));
+        assert_eq!(connections(), 1, "a machine reported offline is not dialed");
+        core.reconnect(id()).unwrap();
+        poll("connected by a manual reconnect", || {
+            (link() == LinkPhase::Connected).then_some(())
+        });
+        assert_eq!(connections(), 2);
+        core.reconnect(id()).unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+        assert_eq!(connections(), 2, "a live session is only probed");
+
+        let node = lock(&core.inner.node).clone().unwrap();
+        node.rebind().unwrap();
+        drop(node);
+        rt.block_on(core.agent_read(id(), "term_1".into(), TerminalSource::Recent, None))
+            .unwrap();
+        assert_eq!(connections(), 2, "a rebind keeps the session");
+
+        core.resume(60);
+        poll("reconnected after a resume", || {
+            (connections() == 3 && link() == LinkPhase::Connected).then_some(())
+        });
+        std::thread::sleep(Duration::from_secs(4));
+        assert_eq!(connections(), 3, "one dial past the offline flag");
+        assert!(
+            lock(&logged)[0]
+                .starts_with("resume after 60 s: node Running, health []; it-mac: Connected"),
+            "{logged:?}"
+        );
+        assert!(
+            lock(&logged)[0].ends_with("online Some(false)"),
+            "{logged:?}"
+        );
+        assert_eq!(lock(&logged).len(), 1, "connected again: no rebind");
+
+        let identity = lock(&core.inner.identity).take();
+        core.resume(60);
+        poll("rebind with nothing connected", || {
+            lock(&logged)
+                .iter()
+                .any(|l| l == "rebind, nothing connected after the resume: done")
+                .then_some(())
+        });
+        let held = lock(&core.inner.node).clone().unwrap();
+        let old = Arc::downgrade(&held);
+        let busy = Busy::new(&core.inner);
+        let restart = std::thread::spawn({
+            let inner = core.inner.clone();
+            let old = old.clone();
+            move || {
+                let t0 = Instant::now();
+                inner
+                    .restart_node(&old)
+                    .map(|outcome| (outcome, t0.elapsed()))
+            }
+        });
+        std::thread::sleep(Duration::from_secs(1));
+        assert!(lock(&core.inner.node).is_none());
+        assert!(
+            !restart.is_finished(),
+            "a holder (the lock-screen decide) keeps the old node"
+        );
+        drop(held);
+        let (outcome, took) = restart.join().unwrap().unwrap();
+        println!("node restart took {took:?}");
+        assert_eq!(
+            outcome, "done",
+            "a request queued with nothing connected does not hold it up"
+        );
+        assert!(took < RELEASE_TIMEOUT);
+        assert!(old.upgrade().is_none(), "the old node is closed");
+        assert_eq!(
+            core.inner.restart_node(&old).unwrap(),
+            "already replaced",
+            "a second restart leaves the new node alone"
+        );
+        drop(busy);
+        *lock(&core.inner.identity) = identity;
+        core.reconnect(id()).unwrap();
+        poll("connected on the new node", || {
+            (connections() == 4 && link() == LinkPhase::Connected).then_some(())
+        });
+
+        let node = lock(&core.inner.node).clone().unwrap();
+        let current = Arc::downgrade(&node);
+        drop(node);
+        assert_eq!(
+            core.inner.restart_node(&current).unwrap(),
+            "kept, a machine connected"
+        );
+        rt.block_on(core.suspend(core.begin_suspend()));
+        assert_eq!(
+            core.inner.restart_node(&current).unwrap(),
+            "kept, suspended"
+        );
+        assert!(
+            lock(&core.inner.node)
+                .as_ref()
+                .is_some_and(|n| Arc::as_ptr(n) == current.as_ptr())
+        );
+        core.resume(1);
+        poll("connected after the suspend", || {
+            (connections() == 5 && link() == LinkPhase::Connected).then_some(())
+        });
+
+        let gone = Arc::downgrade(&lock(&core.inner.node).take().unwrap());
+        poll("the node closed", || gone.upgrade().is_none().then_some(()));
+        core.reconnect(id()).unwrap();
+        poll("a reconnect starts a missing node", || {
+            (connections() == 6 && link() == LinkPhase::Connected).then_some(())
+        });
+        assert!(
+            lock(&logged)
+                .iter()
+                .any(|l| l == "node start (reconnect): done"),
+            "{logged:?}"
+        );
+
+        let identity = lock(&core.inner.identity).take();
+        core.resume(60);
+        poll("the session ended", || {
+            (link() != LinkPhase::Connected).then_some(())
+        });
+        std::thread::sleep(Duration::from_secs(1));
+        *lock(&core.inner.identity) = identity;
+        poll("a failure before the dial keeps the forced dial", || {
+            (connections() == 7 && link() == LinkPhase::Connected).then_some(())
+        });
         drop(core);
         drop(server_rt);
         drop(control);

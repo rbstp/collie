@@ -38,6 +38,7 @@ final class AppModel {
             let core = try CollieCore(stateDir: StateDirectory.prepare().path)
             let identity = try Identity.load()
             try core.setIdentity(publicKey: identity.publicKey, signer: identity.signer)
+            core.setLog(log: CoreLogRelay())
             self.core = core
         } catch {
             core = nil
@@ -348,4 +349,12 @@ func describe(_ error: any Error) -> String {
         return error.description
     }
     return error.localizedDescription
+}
+
+final class CoreLogRelay: CoreLog {
+    private let logger = Logger(subsystem: "dev.rbstp.collie", category: "core")
+
+    func log(message: String) {
+        logger.notice("\(message, privacy: .public)")
+    }
 }

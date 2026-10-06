@@ -101,6 +101,8 @@ final class DemoAgentCore: ActivityCore {
 
     func cachedFlock(machineId: String) -> MachineFlock? { demoFlock }
 
+    func reconnect(machineId: String) throws {}
+
     func agentView(machineId: String, terminalId: String, afterRevision: UInt64) -> AgentView? {
         AgentView(
             link: .connected, lastError: nil,

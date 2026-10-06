@@ -21,7 +21,7 @@ struct FlockScreen: View {
                 if grid {
                     AgentGrid(
                         entries: model.entries, previews: previews, notice: model.closeNotice,
-                        approvalsCount: approvalsCount, showsLink: !tailnetStarting, follows: follows, menu: menu
+                        approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows, menu: menu
                     )
                     .task(id: core != nil && scenePhase == .active && !newTask) {
                         guard let core, scenePhase == .active, !newTask else { return }
@@ -59,7 +59,12 @@ struct FlockScreen: View {
                                 }
                                 .opacity(entry.linkDown ? 0.5 : 1)
                             } header: {
-                                MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting)
+                                Button {
+                                    reconnect(entry)
+                                } label: {
+                                    MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -67,7 +72,10 @@ struct FlockScreen: View {
             }
             .navigationTitle("Agents")
             .navigationBarTitleDisplayMode(.inline)
-            .refreshable { await model.refresh(core: core) }
+            .refreshable {
+                for machine in machines { try? core?.reconnect(machineId: machine.id) }
+                await model.refresh(core: core)
+            }
             .toolbar {
                 if tailnetStarting {
                     ToolbarItem(placement: .principal) {
@@ -143,6 +151,10 @@ struct FlockScreen: View {
 
     private func approvalsCount(_ entry: MachineFlockEntry) -> Int {
         approvals.map { $0.items.filter { $0.machine.id == entry.id }.count } ?? Int(entry.flock?.approvalsCount ?? 0)
+    }
+
+    private func reconnect(_ entry: MachineFlockEntry) {
+        try? core?.reconnect(machineId: entry.id)
     }
 
     @ViewBuilder
