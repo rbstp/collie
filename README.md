@@ -59,7 +59,7 @@ Details, including what is not covered: [docs/threat-model.md](docs/threat-model
 | 4 | Live Activities and Dynamic Island for agents you follow, approvals on the activity, question menus | done |
 | 5 | Multiple computers (macOS and Linux), Claude Code hooks enrichment | done |
 | 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | done |
-| 7 | Improvements: compact status icons, opening links, gestures, dictation, Codex and Copilot CLI agents (done); a Mac menu bar icon, live terminal previews, more scrollback, remaining context and a sessions inbox, an Apple Watch app | in progress |
+| 7 | Improvements: compact status icons, opening links, gestures, dictation, live terminal previews with starred cards, more scrollback, Codex and Copilot CLI agents (done); battery, reconnects, a Mac menu bar icon, remaining context and a sessions inbox, an Apple Watch app, and more (see the milestone) | in progress |
 
 Outside the phases: an audit log viewer, and smaller fixes tracked as [issues](https://github.com/rbstp/collie/issues).
 
