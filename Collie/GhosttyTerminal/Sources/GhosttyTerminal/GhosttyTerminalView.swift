@@ -602,15 +602,11 @@ struct CellMetrics {
 }
 
 private final class TerminalCanvas: UIView {
-    private struct Prepared {
-        let run: TerminalRun
-        let line: CTLine?
-    }
-
     var metrics = CellMetrics(size: 12)
     var selection: TerminalSelection?
     private var frameData: TerminalFrame?
-    private var prepared: [Prepared] = []
+    /// By run index, built on first draw: most runs of a long history are never on screen.
+    private var lines: [Int: CTLine] = [:]
 
     override func tintColorDidChange() {
         super.tintColorDidChange()
@@ -619,16 +615,21 @@ private final class TerminalCanvas: UIView {
 
     func prepare(_ frame: TerminalFrame) {
         frameData = frame
-        prepared = frame.runs.map { run in
-            guard !run.text.isEmpty, !run.style.invisible else { return Prepared(run: run, line: nil) }
-            // Claude Code's ⏺ is in no bundled or system text font, so CoreText falls back to the color
-            // emoji; ● is the same dot in Meslo and the same UTF-16 length, so `utf16Columns` still lines up.
-            let attributed = NSAttributedString(
-                string: run.text.replacingOccurrences(of: "\u{23FA}", with: "\u{25CF}"),
-                attributes: [NSAttributedString.Key(kCTFontAttributeName as String): metrics.font(run.style)]
-            )
-            return Prepared(run: run, line: CTLineCreateWithAttributedString(attributed))
-        }
+        lines = [:]
+    }
+
+    private func ctLine(_ index: Int, _ run: TerminalRun) -> CTLine? {
+        guard !run.text.isEmpty, !run.style.invisible else { return nil }
+        if let line = lines[index] { return line }
+        // Claude Code's ⏺ is in no bundled or system text font, so CoreText falls back to the color
+        // emoji; ● is the same dot in Meslo and the same UTF-16 length, so `utf16Columns` still lines up.
+        let attributed = NSAttributedString(
+            string: run.text.replacingOccurrences(of: "\u{23FA}", with: "\u{25CF}"),
+            attributes: [NSAttributedString.Key(kCTFontAttributeName as String): metrics.font(run.style)]
+        )
+        let line = CTLineCreateWithAttributedString(attributed)
+        lines[index] = line
+        return line
     }
 
     override func draw(_ rect: CGRect) {
@@ -641,15 +642,16 @@ private final class TerminalCanvas: UIView {
         let lastColumn = Int((origin.x + bounds.width - m.inset) / m.width) + 1
 
         ctx.translateBy(x: m.inset - origin.x, y: m.inset - origin.y)
-        let visible = prepared.filter {
-            $0.run.row >= firstRow && $0.run.row <= lastRow
-                && $0.run.endColumn > firstColumn && $0.run.startColumn <= lastColumn
+        let visible = frameData.runs.indices.filter {
+            let run = frameData.runs[$0]
+            return run.row >= firstRow && run.row <= lastRow && run.endColumn > firstColumn && run.startColumn <= lastColumn
         }
 
-        for item in visible {
-            guard let bg = item.run.style.background, bg != frameData.background else { continue }
+        for index in visible {
+            let run = frameData.runs[index]
+            guard let bg = run.style.background, bg != frameData.background else { continue }
             ctx.setFillColor(UIColor(bg).cgColor)
-            ctx.fill(cellRect(item.run, m))
+            ctx.fill(cellRect(run, m))
         }
 
         if let selection {
@@ -667,11 +669,11 @@ private final class TerminalCanvas: UIView {
             }
         }
 
-        for item in visible {
-            let run = item.run
+        for index in visible {
+            let run = frameData.runs[index]
             let color = UIColor(run.style.foreground).withAlphaComponent(run.style.faint ? 0.5 : 1).cgColor
             let baseline = CGFloat(run.row) * m.height + m.ascent
-            if let line = item.line {
+            if let line = ctLine(index, run) {
                 ctx.saveGState()
                 // CoreText draws y-up; flip around this row's baseline.
                 ctx.translateBy(x: 0, y: baseline)

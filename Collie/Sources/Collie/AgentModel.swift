@@ -154,27 +154,28 @@ final class AgentModel {
         return !sendingPrompt && !dictation.isActive && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
     }
 
-    /// Runs while the screen is visible: watch, poll the core at 10 Hz, unwatch on cancel.
+    /// Runs while the screen is visible: watch, poll the core at collied's 4 Hz watch rate, unwatch on cancel.
     func run() async {
         Self.watchers[route.machineId] = ObjectIdentifier(self)
         watch(route.terminalId)
-        async let loaded: Void = loadMacDraft()
+        var loading: Task<Void, Never>?
         while !Task.isCancelled {
             poll()
-            try? await Task.sleep(for: .milliseconds(100))
+            if loading == nil, agent != nil {
+                loading = Task { await loadMacDraft() }
+            }
+            try? await Task.sleep(for: .milliseconds(250))
         }
         if Self.watchers[route.machineId] == ObjectIdentifier(self) {
             Self.watchers[route.machineId] = nil
             watch(nil)
         }
-        await loaded
+        loading?.cancel()
+        await loading?.value
     }
 
     /// Text left unsent in the Mac's input box moves to the phone's field, unless the phone already has a draft.
     func loadMacDraft() async {
-        while agent == nil, !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(100))
-        }
         guard agent?.kind == "claude",
             let text = try? await core.agentDraft(machineId: route.machineId, terminalId: route.terminalId),
             !Task.isCancelled

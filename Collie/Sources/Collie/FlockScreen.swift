@@ -152,9 +152,12 @@ struct FlockScreen: View {
                 }
             }
             .task {
+                // Events keep the cache current; no event lists shells, and an older collied sends no title change.
+                var tick = 0
                 while !Task.isCancelled {
-                    await model.refresh(core: core)
+                    await model.refresh(core: core, snapshot: tick % 20 == 0)
                     follows?.sync()
+                    tick += 1
                     try? await Task.sleep(for: .seconds(3))
                 }
             }
@@ -357,7 +360,8 @@ struct StatusIcon: View {
     var body: some View {
         Group {
             switch state {
-            case .working: SpinningRing(color: state.color)
+            // Core Animation spins it; a SwiftUI repeatForever redraws the app every frame (battery).
+            case .working: ProgressView().controlSize(.small).tint(state.color)
             case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(state.color)
             case .idle: Image(systemName: "circle.fill").font(.system(size: 9)).foregroundStyle(state.color)
             case .blocked: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(state.color)
@@ -397,23 +401,6 @@ struct ContextRing: View {
         case 20...: Color.orange.mix(with: .yellow, by: 0.25)
         default: Color.pink.mix(with: .orange, by: 0.45)
         }
-    }
-}
-
-/// Its own view so every switch to working starts a fresh spin.
-private struct SpinningRing: View {
-    let color: Color
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var spinning = false
-
-    var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.7)
-            .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-            .padding(2)
-            .rotationEffect(.degrees(spinning ? 360 : 0))
-            .animation(reduceMotion ? nil : .linear(duration: 1).repeatForever(autoreverses: false), value: spinning)
-            .onAppear { spinning = true }
     }
 }
 

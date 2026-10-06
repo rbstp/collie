@@ -78,7 +78,7 @@ impl Transcripts {
     }
 
     /// Cached by size and mtime, so an unchanged transcript costs one open and fstat. A
-    /// transcript not found is looked for again only when `relocate` (a status change).
+    /// transcript not found is looked for again only when `relocate` (an `agent.status` event).
     pub fn derive(&mut self, a: &AgentInfo, relocate: bool) -> Option<Derived> {
         let kind = match a.agent.as_deref()? {
             "claude" => Kind::Claude,

@@ -1915,7 +1915,11 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             }
         };
         delay = RECONCILE_EVERY;
-        let next = Baseline::new(&agents, &workspaces);
+        let next = {
+            let mut transcripts = lock(&state.transcripts);
+            let phones = state.events.receiver_count() > 0;
+            Baseline::new(&agents, &workspaces, phones.then_some(&mut *transcripts))
+        };
         match &base {
             None if outage => {
                 tracing::info!("herdr reachable again");

@@ -60,20 +60,25 @@ final class FlockModel {
         }
     }
 
-    func refresh(core: (any FlockCore)?) async {
+    /// Without `snapshot`, a machine is read from the core's cache, unless its last read failed.
+    func refresh(core: (any FlockCore)?, snapshot: Bool = true) async {
         guard let core, !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
         let machines = core.machines()
-        entries = machines.map { machine in
+        let seeded = machines.map { machine in
             entries.first { $0.id == machine.id }.map { MachineFlockEntry(machine: machine, flock: $0.flock, error: $0.error) }
                 ?? MachineFlockEntry(machine: machine)
         }
+        if seeded != entries { entries = seeded }
         await withTaskGroup(of: MachineFlockEntry.self) { group in
-            for machine in machines {
+            for entry in seeded {
+                let machine = entry.machine
+                let cached = snapshot || entry.error != nil ? nil : core.cachedFlock(machineId: machine.id)
                 group.addTask {
                     do {
-                        let flock = try await core.flock(machineId: machine.id)
+                        let flock: MachineFlock
+                        if let cached { flock = cached } else { flock = try await core.flock(machineId: machine.id) }
                         return MachineFlockEntry(machine: machine, flock: flock, error: [.connected, .connecting].contains(flock.link) ? nil : flock.lastError)
                     } catch {
                         return MachineFlockEntry(
@@ -85,7 +90,7 @@ final class FlockModel {
                 }
             }
             for await entry in group {
-                if let index = entries.firstIndex(where: { $0.id == entry.id }) {
+                if let index = entries.firstIndex(where: { $0.id == entry.id }), entries[index] != entry {
                     entries[index] = entry
                 }
             }
