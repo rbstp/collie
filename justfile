@@ -18,7 +18,8 @@ lint:
     cargo deny check
 
 test:
-    cargo test --workspace
+    cargo nextest run --workspace
+    cargo test --workspace --doc
 
 # Release build of collied signed with the team RM3UT3MMSR Developer ID, installed to ~/.cargo/bin.
 [macos]

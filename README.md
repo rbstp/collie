@@ -71,8 +71,8 @@ Outside the phases: an audit log viewer, and smaller fixes tracked as [issues](h
 - Or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.3. The encrypted APNs key needs systemd 256 or later (`systemd-creds --user`); older versions fall back to a 0600 file. collied is built and tested on Arch Linux. aarch64 Linux is mapped in the build but not built or tested.
 - An iPhone on iOS 26 or later.
 - A Tailscale account whose policy file you can edit.
-- To build on macOS: Rust (see `rust-toolchain.toml`), Go, Xcode 27 with an iPhone 18 Pro simulator, [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, and `jq` (for `just ios-run-device`). The libghostty-vt build script downloads its own pinned Zig.
-- To build collied on Linux: Rust (see `rust-toolchain.toml`), Go 1.27.1 or later, a C compiler, libclang (for bindgen), [just](https://github.com/casey/just) and `cargo-deny`.
+- To build on macOS: Rust (see `rust-toolchain.toml`), Go, Xcode 27 with an iPhone 18 Pro simulator, [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, [cargo-nextest](https://nexte.st), and `jq` (for `just ios-run-device`). The libghostty-vt build script downloads its own pinned Zig.
+- To build collied on Linux: Rust (see `rust-toolchain.toml`), Go 1.27.1 or later, a C compiler, libclang (for bindgen), [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st).
 - An Apple Developer account with a Developer ID Application certificate (collied is always signed on macOS; it is not signed on Linux), and an APNs key for push notifications.
 
 The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID and `dev.rbstp` bundle identifiers. Change them to your own before building.
@@ -131,7 +131,7 @@ List paired phones with `collied peers list`, revoke one with `collied peers rev
 | Command | What it does |
 |---|---|
 | `just lint` | `cargo fmt --check`, clippy with `-D warnings`, `cargo deny` |
-| `just test` | All Rust tests, including end-to-end tests over a local test tailnet |
+| `just test` | All Rust tests with cargo-nextest, including end-to-end tests over a local test tailnet |
 | `just schema` | Regenerates the protocol JSON Schemas in `docs/protocol/` |
 | `just ios-framework` | Builds the `CollieCore` xcframework and UniFFI bindings |
 | `just ios-project` | Builds libghostty-vt and generates the Xcode project with XcodeGen |
