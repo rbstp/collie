@@ -575,6 +575,39 @@ async fn scenario(
     assert_eq!(starred, ["term_0a1b2c3d4e5f60", "term_65ce7ae4fd5731"]);
     assert_eq!(mode(&data_dir.join("stars.json")), 0o600);
 
+    println!("the reconcile drops the star of a closed pane with no snapshot asked");
+    let shell = "term_ffffffffffff01";
+    assert_eq!(
+        result(call(&mut ws, "agent.star", star(shell, true)).await),
+        Response::Ok
+    );
+    let saved = || -> Value {
+        serde_json::from_slice(&std::fs::read(data_dir.join("stars.json")).unwrap()).unwrap()
+    };
+    assert!(saved().get(shell).is_some());
+    let closed = {
+        let mut snap = herdr.snapshot.lock().unwrap();
+        let panes = snap["panes"].as_array_mut().unwrap();
+        let at = panes
+            .iter()
+            .position(|p| p["terminal_id"] == shell)
+            .unwrap();
+        panes.remove(at)
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while saved().get(shell).is_some() {
+        assert!(Instant::now() < deadline, "star of a closed pane kept");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    herdr.snapshot.lock().unwrap()["panes"]
+        .as_array_mut()
+        .unwrap()
+        .push(closed);
+    let Response::Flock(flock) = result(call(&mut ws, "flock.snapshot", json!({})).await) else {
+        panic!("no flock");
+    };
+    assert!(!flock.starred.iter().any(|t| t.as_str() == shell));
+
     println!("a fifth session from one node evicts its oldest");
     let mut extra = Vec::new();
     for _ in 0..3 {

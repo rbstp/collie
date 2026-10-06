@@ -129,6 +129,10 @@ impl Stars {
                 self.save();
             }
         }
+        self.list()
+    }
+
+    pub fn list(&self) -> Vec<TerminalId> {
         self.starred
             .keys()
             .filter_map(|t| TerminalId::new(t.clone()).ok())

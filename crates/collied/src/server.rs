@@ -1976,6 +1976,15 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         }
         base = Some(next);
         outage = false;
+        // Also with no phone connected: a closed pane must lose its star before herdr can
+        // give its pane id to a new pane.
+        let starred = lock(&state.stars).list();
+        if !starred.is_empty()
+            && let Ok(snap) = herdr::session_snapshot(&state.herdr).await
+            && lock(&state.stars).reconcile(&snap.panes) != starred
+        {
+            let _ = state.events.send(Event::FlockChanged {});
+        }
         {
             let mut grants = lock(&state.terminals);
             if !grants.is_empty() {
