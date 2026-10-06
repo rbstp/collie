@@ -114,6 +114,12 @@ impl Node {
         self.check(|| unsafe { sys::tailscale_start(self.sd()) })
     }
 
+    /// Re-binds the UDP sockets, checks the DERP connections and re-discovers endpoints,
+    /// as a network change would. iOS reports none after a resume.
+    pub fn rebind(&self) -> Result<()> {
+        self.check(|| unsafe { sys::tailscale_rebind(self.sd()) })
+    }
+
     pub fn status(&self) -> Result<Status> {
         let json = self.json_call(|out| unsafe { sys::tailscale_status_json(self.sd(), out) })?;
         Ok(serde_json::from_str(&json)?)

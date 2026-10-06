@@ -7,6 +7,7 @@ struct AgentGrid<Menu: View>: View {
     let previews: PreviewModel
     let notice: String?
     let approvalsCount: (MachineFlockEntry) -> Int
+    let reconnect: (MachineFlockEntry) -> Void
     let showsLink: Bool
     let follows: FollowModel?
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
@@ -39,9 +40,14 @@ struct AgentGrid<Menu: View>: View {
                         }
                     } header: {
                         VStack(alignment: .leading, spacing: 6) {
-                            MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: showsLink)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                            Button {
+                                reconnect(entry)
+                            } label: {
+                                MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: showsLink)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
                             if let error = entry.error {
                                 Label(error, systemImage: "exclamationmark.triangle")
                                     .font(.footnote)

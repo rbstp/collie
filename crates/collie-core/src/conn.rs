@@ -31,12 +31,13 @@ const BACKOFF: [Duration; 6] = [
 const RESET_AFTER: Duration = Duration::from_secs(30);
 const OFFLINE_POLL: Duration = Duration::from_secs(3);
 /// A machine Tailscale reports offline is not dialed: every 20 s dial to a dead peer runs
-/// on the node all machines share. It is still tried this often, in case control is wrong.
+/// on the node all machines share. It is still tried this often, in case control is wrong,
+/// and once on every reconnect request (a resume or a retry), when its netmap may be stale.
 const OFFLINE_REDIAL: Duration = Duration::from_secs(300);
 const DIAL_ATTEMPT: Duration = Duration::from_secs(5);
 const DIAL_BUDGET: Duration = Duration::from_secs(20);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
-const FOREGROUND_RECONNECT: Duration = Duration::from_secs(10);
+pub(crate) const FOREGROUND_RECONNECT: Duration = Duration::from_secs(10);
 const RESUME_GRACE: Duration = Duration::from_secs(10);
 const GRACE_BACKOFF: [Duration; 3] = [
     Duration::from_millis(500),
@@ -252,6 +253,7 @@ pub struct Link {
     pub phase: LinkPhase,
     pub last_error: Option<String>,
     resumed: Option<Instant>,
+    pub last_dial: Instant,
 }
 
 impl Link {
@@ -274,11 +276,12 @@ impl Shared {
     }
 
     /// The session may have failed before the app saw the resume: that failure gets the
-    /// grace too, so a waiting link goes back to connecting and must be retried at once.
+    /// grace too, so a waiting or unavailable link goes back to connecting and must be
+    /// retried at once.
     fn resume(&self, now: Instant) -> bool {
         let mut link = lock(&self.link);
         link.resumed = Some(now);
-        if link.phase != LinkPhase::Waiting {
+        if !matches!(link.phase, LinkPhase::Waiting | LinkPhase::Unavailable) {
             return false;
         }
         link.phase = LinkPhase::Connecting;
@@ -327,6 +330,7 @@ impl Conn {
                 phase: LinkPhase::Connecting,
                 last_error: None,
                 resumed: None,
+                last_dial: Instant::now(),
             }),
         });
         let (requests, rx) = mpsc::channel(QUEUE);
@@ -475,8 +479,8 @@ async fn supervise(
     mut suspended: watch::Receiver<bool>,
 ) {
     let mut backoff = Backoff::default();
-    let mut last_dial = Instant::now();
     let mut peer_offline = false;
+    let mut force = false;
     loop {
         if suspended.wait_for(|s| !s).await.is_err() {
             return;
@@ -487,9 +491,11 @@ async fn supervise(
             wait(&wake, OFFLINE_POLL).await;
             continue;
         };
-        if !peer_offline {
+        force |= reconnect.borrow_and_update().has_changed();
+        if force || !peer_offline {
             shared.set(LinkPhase::Connecting, None);
         }
+        let dial_offline = force || lock(&shared.link).last_dial.elapsed() >= OFFLINE_REDIAL;
         let key = lock(&identity).clone();
         let opened = tokio::select! {
             opened = open(
@@ -500,16 +506,17 @@ async fn supervise(
                 Some(machine.kind),
                 &machine.key,
                 key,
-                last_dial.elapsed() >= OFFLINE_REDIAL,
+                dial_offline,
             ) => opened,
             _ = suspended.wait_for(|s| *s) => continue,
         };
         peer_offline = matches!(opened, Err(ConnectError::PeerOffline));
+        force &= matches!(opened, Err(ConnectError::Offline));
         if !matches!(
             opened,
             Err(ConnectError::Offline | ConnectError::PeerOffline)
         ) {
-            last_dial = Instant::now();
+            lock(&shared.link).last_dial = Instant::now();
             reach.record(
                 &machine.node_id,
                 matches!(&opened, Ok((_, hello, _)) if hello.paired),
@@ -522,6 +529,8 @@ async fn supervise(
                 shared.set(LinkPhase::Connected, None);
                 let since = Instant::now();
                 reconnect.borrow_and_update();
+                // A clone, so the request that ends the session still forces the next dial.
+                let mut ended = reconnect.clone();
                 let push = lock(&push)
                     .get_mut(&machine.id)
                     .map(Registrations::take_requests)
@@ -529,7 +538,7 @@ async fn supervise(
                 let end = session
                     .run(&mut requests, &shared.flock, push, async {
                         tokio::select! {
-                            _ = reconnect.changed() => false,
+                            _ = ended.changed() => false,
                             _ = suspended.wait_for(|s| *s) => true,
                         }
                     })
@@ -758,6 +767,7 @@ mod tests {
                 phase: LinkPhase::Connected,
                 last_error: None,
                 resumed: None,
+                last_dial: Instant::now(),
             }),
         }
     }
@@ -886,7 +896,7 @@ mod tests {
         let shared = shared();
         let mut backoff = Backoff::default();
         let t0 = Instant::now();
-        shared.resume(t0);
+        assert!(!shared.resume(t0));
         for i in 0..3 {
             assert_eq!(
                 backoff.failed(
@@ -906,6 +916,24 @@ mod tests {
             )
         );
         assert_eq!(backoff.attempt, 0);
+
+        let t1 = t0 + Duration::from_secs(60);
+        assert!(
+            shared.resume(t1),
+            "a resume dials it at once, past the netmap"
+        );
+        assert_eq!(link(&shared), (LinkPhase::Connecting, None));
+        assert_eq!(
+            backoff.failed(&shared, &closed(), t1),
+            Some(GRACE_BACKOFF[0]),
+            "that dial's failure gets the grace"
+        );
+        assert_eq!(
+            backoff.failed(&shared, &ConnectError::PeerOffline, t1),
+            Some(OFFLINE_POLL),
+            "then it waits quietly again"
+        );
+        assert_eq!(link(&shared).0, LinkPhase::Unavailable);
     }
 
     #[test]

@@ -249,6 +249,7 @@ private func followFile() -> URL {
 extension FakeCore: ActivityCore {
     func machines() -> [Machine] { [] }
     func cachedFlock(machineId: String) -> MachineFlock? { nil }
+    func reconnect(machineId: String) throws {}
     func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String) throws {}
     func endActivity(machineId: String, activityId: String) throws {
         state.withLock { $0.endedActivities.append(activityId) }

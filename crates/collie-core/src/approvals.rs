@@ -386,11 +386,13 @@ async fn attempt(
 
     let step = Instant::now();
     let identity = lock(&inner.identity).clone();
+    // Held until the decision is answered: a node restart waits for it rather than cut
+    // this session.
     let opened = within(
         deadline,
         DecideStage::Connect,
         conn::open(
-            node,
+            node.clone(),
             &machine.host,
             machine.port,
             &machine.node_id,

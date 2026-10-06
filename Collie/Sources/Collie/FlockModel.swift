@@ -22,6 +22,7 @@ struct MachineFlockEntry: Identifiable, Equatable {
 protocol FlockCore: AgentCore {
     func machines() -> [Machine]
     func cachedFlock(machineId: String) -> MachineFlock?
+    func reconnect(machineId: String) throws
 }
 
 extension CollieCore: FlockCore {}
