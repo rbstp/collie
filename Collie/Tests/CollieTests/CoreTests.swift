@@ -55,6 +55,27 @@ func elapsedFormatting(seconds: Double, expected: String) {
     #expect(Elapsed.string(sinceMs: since, now: now) == expected)
 }
 
+@Test(arguments: [
+    (59.0, "<1m", "less than a minute"), (60.0, "1m", "1 minute"), (720.0, "12m", "12 minutes"), (3599.0, "59m", "59 minutes"),
+    (3600.0, "1h", "1 hour"), (10_799.0, "2h", "2 hours"), (86_399.0, "23h", "23 hours"), (86_400.0, "1d", "1 day"),
+    (180_000.0, "2d", "2 days"), (-30.0, "<1m", "less than a minute"),
+])
+func compactElapsedFormatting(seconds: Double, compact: String, spoken: String) {
+    let since: UInt64 = 1_700_000_000_000
+    let now = Date(timeIntervalSince1970: Double(since / 1000) + seconds)
+    #expect(Elapsed.compact(sinceMs: since, now: now) == compact)
+    #expect(Elapsed.spoken(sinceMs: since, now: now) == spoken)
+}
+
+@Test func statusAgeReadsInFull() {
+    let since: UInt64 = 1_700_000_000_000
+    let now = Date(timeIntervalSince1970: Double(since / 1000) + 720)
+    #expect(Elapsed.spoken(.working, sinceMs: since, now: now) == "working for 12 minutes")
+    #expect(Elapsed.spoken(.blocked, sinceMs: since, now: now) == "blocked for 12 minutes")
+    #expect(Elapsed.spoken(.idle, sinceMs: since, now: now) == "idle for 12 minutes")
+    #expect(Elapsed.spoken(.done, sinceMs: since, now: now) == "done 12 minutes ago")
+}
+
 @Test func titleFallsBackToNameKindThenTerminal() {
     #expect(agent("t1", .idle, since: 0, title: "fix the build").displayTitle == "fix the build")
     #expect(agent("t1", .idle, since: 0, title: "  ").displayTitle == "claude")
