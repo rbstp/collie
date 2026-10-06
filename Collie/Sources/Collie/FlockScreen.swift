@@ -242,6 +242,7 @@ private struct AgentRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             StatusIcon(state: agent.status)
+                .accessibilityHidden(true)
                 // Centered on the title's first line rather than sitting on its baseline.
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             VStack(alignment: .leading, spacing: 2) {

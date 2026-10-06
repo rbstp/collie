@@ -153,7 +153,7 @@ private struct AgentCard: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             HStack(alignment: .top, spacing: 6) {
-                StatusIcon(state: agent.status)
+                StatusIcon(state: agent.status).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
                         if let kind = agent.kind {
