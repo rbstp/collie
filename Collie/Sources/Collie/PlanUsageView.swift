@@ -4,6 +4,7 @@ import SwiftUI
 /// The Inbox layout's Usage view: one card per machine with the plan usage collied last recorded.
 struct UsageSections: View {
     let entries: [MachineFlockEntry]
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         let recorded = entries.compactMap { entry in entry.flock?.planUsage.map { (entry, $0) } }
@@ -13,9 +14,10 @@ struct UsageSections: View {
         ForEach(recorded, id: \.0.id) { entry, usage in
             Section {
                 TimelineView(.everyMinute) { context in
-                    HStack {
+                    let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout())
+                    layout {
                         MachineName(machine: entry.machine).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                        Spacer()
+                        if !dynamicTypeSize.isAccessibilitySize { Spacer() }
                         Text(usage.age(now: context.date)).font(.caption).foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
