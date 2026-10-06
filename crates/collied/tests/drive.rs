@@ -7,7 +7,7 @@ use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, Cwd, DraftText,
     ErrorCode, Key, Label, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request,
-    Response, TaskNewParams, TerminalId, WorkspaceCloseParams, WorkspaceId,
+    Response, TaskNewParams, TerminalId, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -83,7 +83,7 @@ const PLAN: &str = "\
 const PLAN_LIVE: &str = include_str!("fixtures/claude-2.1.289/plan.detection.txt");
 const PLAN_TYPED_LIVE: &str =
     include_str!("fixtures/claude-2.1.289/plan-feedback-typed.detection.txt");
-const MUTATING: [&str; 9] = [
+const MUTATING: [&str; 10] = [
     "agent.prompt",
     "agent.send_keys",
     "agent.focus",
@@ -93,6 +93,7 @@ const MUTATING: [&str; 9] = [
     "pane.close",
     "pane.send_text",
     "pane.send_input",
+    "pane.send_keys",
 ];
 
 #[derive(Default)]
@@ -108,6 +109,7 @@ struct Herdr {
     shell_busy: bool,
     new_pane_terminal: Option<String>,
     rule: Option<String>,
+    slow: Option<Duration>,
 }
 
 struct Mock {
@@ -142,6 +144,10 @@ impl Mock {
                         .await
                         .unwrap();
                     let req: Value = serde_json::from_str(&line).unwrap();
+                    let slow = state.lock().unwrap().slow;
+                    if let Some(delay) = slow {
+                        tokio::time::sleep(delay).await;
+                    }
                     let body = answer(&mut state.lock().unwrap(), &req);
                     let mut resp = json!({ "id": req["id"] });
                     match body {
@@ -265,7 +271,8 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
         "agent.prompt" => {
             json!({"type": "agent_prompted", "agent": agent_by_pane(h, p["target"].as_str().unwrap()).unwrap_or(json!({}))})
         }
-        "agent.send_keys" | "pane.send_text" | "workspace.close" | "pane.close" => {
+        "agent.send_keys" | "pane.send_text" | "pane.send_input" | "pane.send_keys"
+        | "workspace.close" | "pane.close" => {
             json!({"type": "ok"})
         }
         "pane.get" => {
@@ -409,21 +416,25 @@ async fn reads_resolve_the_pane_and_sanitize() {
         ]
     );
 
-    let reply = drive
-        .read(
-            ReadParams {
-                terminal_id: tid(SHELL),
-                source: ReadSource::Visible,
-                lines: None,
-            },
-            false,
-        )
-        .await;
-    assert!(matches!(reply, Ok(Response::Terminal(_))));
+    let pane = |terminal: &str| ReadParams {
+        terminal_id: tid(terminal),
+        source: ReadSource::Visible,
+        lines: None,
+    };
+    assert!(matches!(
+        drive.read(pane(CODEX_BLOCKED), false).await,
+        Ok(Response::Terminal(_))
+    ));
     assert_eq!(
         herdr.params("pane.read"),
-        vec![json!({"pane_id": "w7:p2", "source": "visible", "format": "ansi"})]
+        vec![json!({"pane_id": "w7:p1", "source": "visible", "format": "ansi"})]
     );
+    assert_eq!(
+        code(drive.read(pane(SHELL), false).await),
+        ErrorCode::NotFound,
+        "a shell is read through terminal.watch, under a grant"
+    );
+    assert_eq!(herdr.params("pane.read").len(), 1);
 
     let not_agent = ReadParams {
         terminal_id: tid(SHELL),
@@ -1289,6 +1300,175 @@ async fn a_reply_over_herdrs_line_limit_is_read_with_fewer_lines() {
         panic!("{reply:?}");
     };
     assert_eq!(read.ansi.lines().count(), 250);
+}
+
+fn run(terminal: &str, text: &str) -> TerminalRunParams {
+    TerminalRunParams {
+        op_id: op('R'),
+        terminal_id: tid(terminal),
+        text: PromptText::new(text).unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn terminal_input_reaches_a_shell_pane_only() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+
+    assert_eq!(
+        drive.terminal_run(run(SHELL, "git pull"), &yes()).await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(herdr.methods(), ["session.snapshot", "pane.send_input"]);
+    assert_eq!(
+        herdr.params("pane.send_input"),
+        vec![json!({"pane_id": "w7:p2", "text": "git pull", "keys": ["enter"]})]
+    );
+    let keys = AgentSendKeysParams {
+        op_id: op('C'),
+        terminal_id: tid(SHELL),
+        keys: vec![Key::CtrlC, Key::Up, Key::Enter],
+    };
+    assert_eq!(
+        drive.terminal_send_keys(keys.clone(), &yes()).await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.params("pane.send_keys"),
+        vec![json!({"pane_id": "w7:p2", "keys": ["ctrl+c", "up", "enter"]})]
+    );
+
+    let refused = |reply: Reply, want: ErrorCode, message: Option<&str>| {
+        let (got, text) = reply.expect_err("refused");
+        assert_eq!(got, want, "{text}");
+        if let Some(m) = message {
+            assert_eq!(text, m);
+        }
+    };
+    refused(
+        drive.terminal_run(run(SHELL, "git pull"), &no()).await,
+        ErrorCode::TerminalLocked,
+        None,
+    );
+    refused(
+        drive.terminal_send_keys(keys.clone(), &no()).await,
+        ErrorCode::TerminalLocked,
+        None,
+    );
+    refused(
+        drive.terminal_run(run(CLAUDE, "y"), &yes()).await,
+        ErrorCode::NotFound,
+        Some(collied::drive::HOSTS_AGENT),
+    );
+    refused(
+        drive.terminal_run(run("term_gone", "ls"), &yes()).await,
+        ErrorCode::NotFound,
+        None,
+    );
+    // herdr lists an agent it is still launching before the pane reports it.
+    let mut launching = herdr.with(|h| h.snapshot["agents"][0].clone());
+    launching["terminal_id"] = json!(SHELL);
+    launching["pane_id"] = json!("w7:p2");
+    launching["launch_pending"] = json!(true);
+    herdr.with(|h| h.snapshot["agents"].as_array_mut().unwrap().push(launching));
+    refused(
+        drive.terminal_send_keys(keys, &yes()).await,
+        ErrorCode::NotFound,
+        Some(collied::drive::HOSTS_AGENT),
+    );
+    assert_eq!(herdr.mutations(), ["pane.send_input", "pane.send_keys"]);
+
+    herdr.fail_next("pane.send_input", &["pane_input_failed"]);
+    herdr.with(|h| {
+        h.snapshot["agents"].as_array_mut().unwrap().pop();
+    });
+    refused(
+        drive.terminal_run(run(SHELL, "secret"), &yes()).await,
+        ErrorCode::Internal,
+        Some("herdr refused: pane_input_failed"),
+    );
+}
+
+/// The op cache is per phone, not per session: a retry from the phone's next session
+/// replays the first attempt, which still checks the grant of the session that sent it.
+#[tokio::test]
+async fn a_retried_terminal_op_writes_only_under_the_session_that_sent_it() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.slow = Some(Duration::from_millis(300)));
+    let first = Arc::new(AtomicBool::new(true));
+    let first_auth: Authorized = {
+        let first = first.clone();
+        Arc::new(move || first.load(Ordering::SeqCst))
+    };
+    let sent = tokio::spawn({
+        let d = drive.clone();
+        async move {
+            let write = {
+                let d = d.clone();
+                async move { d.terminal_run(run(SHELL, "ls"), &first_auth).await }
+            };
+            d.once("nPHONE", &op('R'), 1, write).await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    first.store(false, Ordering::SeqCst);
+    let retry = {
+        let d = drive.clone();
+        async move { d.terminal_run(run(SHELL, "ls"), &yes()).await }
+    };
+    let (reply, origin) = drive.once("nPHONE", &op('R'), 1, retry).await;
+    assert_eq!(origin, Origin::Replayed);
+    assert_eq!(code(reply), ErrorCode::TerminalLocked);
+    assert_eq!(sent.await.unwrap().1, Origin::Ran);
+    assert!(herdr.mutations().is_empty(), "{:?}", herdr.methods());
+}
+
+#[tokio::test]
+async fn a_terminal_watch_reads_only_under_its_grant_and_ends_when_an_agent_starts() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    assert!(matches!(
+        drive.watch_terminal(tid(CLAUDE), 200, yes()).await,
+        Err((ErrorCode::NotFound, _))
+    ));
+    let grant = Arc::new(AtomicBool::new(true));
+    let auth: Authorized = {
+        let grant = grant.clone();
+        Arc::new(move || grant.load(Ordering::SeqCst))
+    };
+    let mut watcher = drive.watch_terminal(tid(SHELL), 300, auth).await.unwrap();
+    let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+        panic!("no first output");
+    };
+    assert_eq!(first.terminal_id.as_str(), SHELL);
+    assert_eq!(
+        herdr.params("pane.read")[0],
+        json!({"pane_id": "w7:p2", "source": "recent_unwrapped", "lines": 300, "format": "ansi"})
+    );
+    assert!(herdr.params("agent.read").is_empty());
+
+    grant.store(false, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let reads = herdr.params("pane.read").len();
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(
+        herdr.params("pane.read").len(),
+        reads,
+        "nothing read without a grant"
+    );
+    grant.store(true, Ordering::SeqCst);
+
+    herdr.with(|h| h.snapshot["panes"][2]["agent"] = json!("claude"));
+    assert!(matches!(next(&mut watcher).await, Ok(Some(Watched::Gone))));
+    assert!(matches!(next(&mut watcher).await, Ok(None)));
+    assert!(herdr.mutations().is_empty());
 }
 
 async fn next(

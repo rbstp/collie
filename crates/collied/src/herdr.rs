@@ -158,6 +158,11 @@ pub struct PaneInfo {
     pub tab_id: String,
     pub cwd: Option<String>,
     pub foreground_cwd: Option<String>,
+    /// Absent on a pane with no agent (herdr 0.9.3).
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -434,6 +439,32 @@ pub async fn pane_send_text(socket: &Path, pane_id: &str, text: &str) -> Result<
         socket,
         "pane.send_text",
         json!({ "pane_id": pane_id, "text": text }),
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn pane_send_keys(socket: &Path, pane_id: &str, keys: &[&str]) -> Result<(), Error> {
+    let OkResult::Ok {} = call(
+        socket,
+        "pane.send_keys",
+        json!({ "pane_id": pane_id, "keys": keys }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// The text, then the keys, in one ordered write (what `herdr pane run` sends).
+pub async fn pane_send_input(
+    socket: &Path,
+    pane_id: &str,
+    text: &str,
+    keys: &[&str],
+) -> Result<(), Error> {
+    let OkResult::Ok {} = call(
+        socket,
+        "pane.send_input",
+        json!({ "pane_id": pane_id, "text": text, "keys": keys }),
     )
     .await?;
     Ok(())

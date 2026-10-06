@@ -72,6 +72,7 @@ mod tests {
             label: "phone".into(),
             paired_at: 1,
             tls_key: Some(key()),
+            terminal_key: None,
         })
         .unwrap();
         s.add(Peer {
@@ -81,6 +82,7 @@ mod tests {
             label: "old phone".into(),
             paired_at: 1,
             tls_key: None,
+            terminal_key: None,
         })
         .unwrap();
         s

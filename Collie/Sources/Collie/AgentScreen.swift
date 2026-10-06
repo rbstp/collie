@@ -20,7 +20,7 @@ struct AgentScreen: View {
         machineLabel: String? = nil, showsMachine: Bool = false, neighbor: ((Int) -> AgentRoute?)? = nil,
         switchAgent: @escaping (AgentRoute) -> Void = { _ in }
     ) {
-        _model = State(initialValue: AgentModel(core: core, route: route))
+        _model = State(initialValue: AgentModel(core: core, route: route, machineLabel: machineLabel))
         self.approvals = approvals
         self.follows = follows
         self.machineLabel = machineLabel
@@ -42,6 +42,9 @@ struct AgentScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil)
+            if let notice = model.paneNotice {
+                PaneCard(model: model, notice: notice)
+            }
             if let approvals {
                 ForEach(approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)) { item in
                     ApprovalCard(model: approvals, item: item)
@@ -58,7 +61,7 @@ struct AgentScreen: View {
                 switchAgent: switchAgent
             ) { await model.refresh() }
                 .overlay {
-                    if model.ansi.isEmpty {
+                    if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
                         ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
                     }
                 }
@@ -73,7 +76,7 @@ struct AgentScreen: View {
             KeyStrip(model: model)
             PromptBar(model: model)
         }
-        .navigationTitle(model.agent?.displayTitle ?? "Agent")
+        .navigationTitle(model.agent?.displayTitle ?? model.terminal?.displayTitle ?? "Agent")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
         .toolbar {
@@ -86,26 +89,28 @@ struct AgentScreen: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu("More", systemImage: "ellipsis") {
-                    Button("Refresh", systemImage: "arrow.clockwise") {
-                        Task { await model.refresh() }
-                    }
-                    .disabled(model.refreshing)
-                    Button("Focus on \(machineLabel ?? "machine")", systemImage: "desktopcomputer") {
-                        Task { await model.focus() }
-                    }
-                    if let follows {
-                        FollowMenuItem(follows: follows, route: model.route)
+                    if !model.isTerminal {
+                        Button("Refresh", systemImage: "arrow.clockwise") {
+                            Task { await model.refresh() }
+                        }
+                        .disabled(model.refreshing)
+                        Button("Focus on \(machineLabel ?? "machine")", systemImage: "desktopcomputer") {
+                            Task { await model.focus() }
+                        }
+                        if let follows {
+                            FollowMenuItem(follows: follows, route: model.route)
+                        }
                     }
                     Divider()
                     Button("Close pane", systemImage: "xmark.square", role: .destructive) {
                         model.close.begin(.pane)
                     }
                     Button("Close workspace", systemImage: "xmark.rectangle.portrait", role: .destructive) {
-                        if let workspaceId = model.agent?.workspaceId {
+                        if let workspaceId = model.agent?.workspaceId ?? model.terminal?.workspaceId {
                             model.close.begin(.workspace(id: workspaceId))
                         }
                     }
-                    .disabled(model.agent == nil)
+                    .disabled(model.agent == nil && model.terminal == nil)
                 }
             }
         }
@@ -214,8 +219,11 @@ private struct AgentHeader: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Context \(left)% left")
                 }
-            } else {
-                Text("Agent not in the flock").font(.caption).foregroundStyle(.secondary)
+            } else if model.isTerminal {
+                AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.secondary)
+                Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             if model.link == .connecting {
@@ -293,12 +301,41 @@ private struct AgentTerminal: UIViewRepresentable {
     }
 }
 
+/// The agent exited, or the pane is a shell: what it is now, and Unlock when it is a locked shell.
+private struct PaneCard: View {
+    let model: AgentModel
+    let notice: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(notice).font(.footnote).frame(maxWidth: .infinity, alignment: .leading)
+            if model.canUnlock || model.unlocking {
+                Button {
+                    Task { await model.unlock() }
+                } label: {
+                    if model.unlocking {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Unlock with Face ID", systemImage: "faceid")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(model.unlocking)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.fill.quaternary)
+    }
+}
+
 private struct KeyStrip: View {
     let model: AgentModel
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(AgentKey.strip, id: \.self) { key in
+            ForEach(model.isTerminal ? AgentKey.terminalStrip : AgentKey.strip, id: \.self) { key in
                 Button {
                     model.tap(key)
                 } label: {
@@ -324,6 +361,7 @@ private struct KeyStrip: View {
 private struct PromptBar: View {
     @Bindable var model: AgentModel
     @FocusState private var editing: Bool
+    @State private var typingCommand = false
     @State private var pickingPhoto = false
     @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
@@ -354,7 +392,7 @@ private struct PromptBar: View {
                 .scrollIndicators(.hidden)
             }
             HStack(alignment: .bottom, spacing: 8) {
-                if !model.answering {
+                if !model.answering && !model.isTerminal {
                     Menu {
                         Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
                         Button("Files", systemImage: "folder") { pickingFile = true }
@@ -366,17 +404,27 @@ private struct PromptBar: View {
                     .disabled(model.upload != nil || model.attachmentSlots <= 0)
                     .accessibilityLabel("Attach")
                 }
-                TextField(model.answering ? "Type an answer" : "Prompt the agent", text: $model.draft, axis: .vertical)
-                    .lineLimit(1...6)
+                if model.isTerminal {
+                    CommandField(text: $model.draft, editing: $typingCommand) {
+                        Task { await model.sendPrompt() }
+                    }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
-                    .focused($editing)
-                    .disabled(model.dictation.isActive)
-                DictationButton(model: model) { editing = false }
-                if editing {
+                } else {
+                    TextField(model.answering ? "Type an answer" : "Prompt the agent", text: $model.draft, axis: .vertical)
+                        .lineLimit(1...6)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
+                        .focused($editing)
+                        .disabled(model.dictation.isActive)
+                    DictationButton(model: model) { editing = false }
+                }
+                if editing || typingCommand {
                     Button {
                         editing = false
+                        typingCommand = false
                     } label: {
                         Image(systemName: "keyboard.chevron.compact.down")
                             .font(.system(size: 20))
@@ -385,7 +433,10 @@ private struct PromptBar: View {
                     .accessibilityLabel("Hide keyboard")
                 }
                 Button {
-                    if !model.keepsKeyboard { editing = false }
+                    if !model.keepsKeyboard {
+                        editing = false
+                        typingCommand = false
+                    }
                     Task { await model.sendPrompt() }
                 } label: {
                     if model.sendingPrompt {
@@ -395,7 +446,7 @@ private struct PromptBar: View {
                     }
                 }
                 .disabled(!model.canSendPrompt)
-                .accessibilityLabel(model.answering ? "Send answer" : "Send prompt")
+                .accessibilityLabel(model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send prompt")
             }
         }
         .padding(.horizontal)
@@ -426,6 +477,65 @@ private struct PromptBar: View {
             case .failure(let error):
                 model.attachFailed(error)
             }
+        }
+    }
+}
+
+/// A shell command goes out exactly as typed: no autocorrection, capitals, smart quotes or
+/// dashes, which would change it (`--force` into a dash), and one line.
+private struct CommandField: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var editing: Bool
+    let submit: () -> Void
+
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField()
+        field.placeholder = "Command"
+        field.autocorrectionType = .no
+        field.autocapitalizationType = .none
+        field.spellCheckingType = .no
+        field.smartQuotesType = .no
+        field.smartDashesType = .no
+        field.smartInsertDeleteType = .no
+        field.inlinePredictionType = .no
+        field.keyboardType = .asciiCapable
+        field.returnKeyType = .go
+        field.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: UIFont.labelFontSize, weight: .regular))
+        field.adjustsFontForContentSizeCategory = true
+        field.setContentHuggingPriority(.required, for: .vertical)
+        let coordinator = context.coordinator
+        field.delegate = coordinator
+        field.addAction(UIAction { [weak field] _ in coordinator.parent.text = field?.text ?? "" }, for: .editingChanged)
+        return field
+    }
+
+    func updateUIView(_ field: UITextField, context: Context) {
+        context.coordinator.parent = self
+        if field.text != text { field.text = text }
+        if !editing, field.isFirstResponder { field.resignFirstResponder() }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    @MainActor
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: CommandField
+
+        init(parent: CommandField) {
+            self.parent = parent
+        }
+
+        func textFieldDidBeginEditing(_ textField: UITextField) {
+            parent.editing = true
+        }
+
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            parent.editing = false
+        }
+
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            parent.submit()
+            return false
         }
     }
 }

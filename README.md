@@ -27,6 +27,7 @@ No Tailscale app is needed on either device, and no TCP port is opened outside t
 - **Inbox**: a third layout of the Agents tab, with agents grouped as Working, Done and Archived. Each shows its latest reply line, "You: <your last prompt>", the workspace, the agent kind and how long ago. Plan usage (5-hour and weekly limits) is not shown: there is no reliable local source for it yet.
 - **Terminal**: a live view of the last 200 lines of the agent's pane, or 500 or 1000 set in Settings > Terminal > History (Claude Code's fullscreen mode, `"tui": "fullscreen"`, keeps its history out of the pane, so only one screen shows), rendered with libghostty-vt, with optional line wrapping and the MesloLGS NF font so Nerd Font glyphs match the Mac. Long-press to select text, drag the handles to adjust, and copy (Universal Clipboard included), or open an http or https link the selection touches.
 - **Gestures** (Settings > Gestures): double-tap pastes into the prompt field, pinch sets the font size, swiping sideways switches to the previous or next agent, and triple-tap can send Esc (off by default). Gestures stay off while text is selected.
+- **Terminals** (off by default, turned on per machine in `collied.toml`): plain shell panes, listed under Terminals with the Ghostty icon. When an agent exits, its screen turns into the pane's shell. Face ID or the passcode unlocks a terminal for 5 minutes, then the command field runs one line at a time and the key strip sends `esc ⇥ ^C ← ↑ ↓ → ⏎`.
 - **Prompt and keys**: send a prompt, or keys from the key strip (`esc ← ↑ ↓ → ⇥ ⇧⇥ ⏎ ⌃⏎`). A Claude Code prompt typed on the machine but not sent shows up in the phone's prompt field, and sending from the phone replaces it. "Focus on <machine>" brings the agent's pane to the front in herdr.
 - **Dictation**: the mic button dictates into the prompt field on the phone itself (Apple's on-device speech models; audio never leaves the phone), in English (US) or French (Canada). Nothing is sent until you send it.
 - **Attachments**: up to 10 photos or files per prompt, uploaded over the tailnet and shown as pills; the agent receives their paths on the machine.
@@ -43,6 +44,7 @@ Security is the first requirement. The short version:
 - **Mutual TLS**: inside the tunnel, the phone pins the machine's TLS key from the pairing QR, and collied pins the phone's key, which lives in the iPhone's Secure Enclave and never leaves it. A Tailscale node key copied off the phone, or a node injected by a compromised control plane, gets no session.
 - **Pairing**: a QR code shown by `collied pair`, plus a local y/N confirmation on the computer running collied.
 - **Approvals**: a nonce plus a fingerprint of the prompt on screen. collied moves the cursor, re-reads the screen, and presses Enter only if the fingerprint still matches; a prompt that changed is answered `superseded`. A small gap between that last re-read and Enter remains until herdr supports conditional input.
+- **Terminals**: typing into a shell is command execution, so it is off unless `collied.toml` on that machine turns it on (never from the phone), its methods are a separate class in the allowlist, and every unlock is a grant collied verifies: a signature by a second Secure Enclave key on the phone, which signs only after Face ID or the passcode, for one terminal, one session and 5 minutes. collied re-reads the pane before every write and refuses one where an agent now runs. The audit log records each grant and command without its text.
 - **Push notifications**: the cleartext part of the push only says which agent is blocked and where. The command itself is end-to-end encrypted (ChaCha20-Poly1305, under a per-machine key generated on the phone, kept in its Keychain and handed to collied over the tailnet). The phone's notification extension decrypts it, so Apple sees the command only as ciphertext. Apple still sees agent and workspace names, ids and timing.
 - **Transcripts**: for the context ring and the inbox, collied reads the end of each live Claude Code or Codex agent's transcript on the machine. Only the percentage left, one line of the latest reply, one line of the latest prompt and the time of the last change go to the paired phone, over the same session as the terminal view. They are never logged or put in a push.
 - **Attachments**: uploads are size-capped (20 MiB per file, 200 MiB in total) and checksummed. Each is stored in a fresh random directory inside a private cache directory (0700 directories, 0600 non-executable files), under a sanitized copy of the file name, and deleted after 24 hours.
@@ -121,6 +123,15 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
      }
    }
    ```
+
+7. **Terminals** (optional): to use plain shell panes from the phone, add this to `collied.toml` and restart collied (`collied stop`, then `collied start`):
+
+   ```toml
+   [terminals]
+   enabled = true
+   ```
+
+   The phone must have a passcode, and must be paired after both sides are updated: the pairing records the phone's terminal key. A phone paired before shows "Pair this phone again to use terminals on this machine".
 
 List paired phones with `collied peers list`, revoke one with `collied peers revoke <label or StableID>` (removing the machine in the app does the same when the machine is reachable), and inspect the daemon with `collied status` (its tags and the herdr agents it sees).
 

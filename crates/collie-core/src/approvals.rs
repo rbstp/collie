@@ -607,6 +607,8 @@ mod tests {
             workspaces: Vec::new(),
             agents: Vec::new(),
             approvals: vec![approval("a0")],
+            terminals: Vec::new(),
+            terminals_enabled: false,
         });
         s
     }

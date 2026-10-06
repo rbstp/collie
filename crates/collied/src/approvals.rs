@@ -299,6 +299,11 @@ impl Approvals {
         out
     }
 
+    /// An agent blocked there: no terminal input may reach that pane.
+    pub fn has_pending(&self, terminal_id: &str) -> bool {
+        self.lock().pending.contains_key(terminal_id)
+    }
+
     /// A pending approval also ends when what it tells the phone no longer matches the
     /// screen: `state_change_seq` does not move on a new question under a still-`blocked`
     /// agent, nor on a dialog that finishes drawing.

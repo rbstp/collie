@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use collie_tls::rustls::sign::CertifiedKey;
 use collie_tls::{Sniff, client::TlsStream};
 use collied::control::{Client, Reply, Request};
@@ -29,7 +30,7 @@ const ACTIVITY: &str = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
 const ACTIVITY_TOKEN: &str =
     "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
 const WATCHDOG: Duration = Duration::from_secs(300);
-const HERDR_CALLED: [&str; 9] = [
+const HERDR_CALLED: [&str; 11] = [
     "ping",
     "session.snapshot",
     "agent.list",
@@ -39,7 +40,11 @@ const HERDR_CALLED: [&str; 9] = [
     "agent.get",
     "agent.explain",
     "pane.read",
+    "pane.send_input",
+    "pane.send_keys",
 ];
+const SHELL: &str = "term_ffffffffffff01";
+const SECRET: &str = "echo do-not-log-this";
 
 type Ws = WebSocketStream<TlsStream<Sniff<UnixStream>>>;
 
@@ -142,7 +147,7 @@ async fn scenario(
     let herdr = MockHerdr::start(&herdr_socket);
     let data_dir = root.join("data");
     let handle = server::start(
-        mac,
+        mac.clone(),
         ServerConfig {
             data_dir: data_dir.clone(),
             port: PORT,
@@ -151,8 +156,10 @@ async fn scenario(
             machine_name: "it-mac".into(),
             approval_ttl: collied::approvals::TTL,
             attachments_dir: data_dir.join("attachments"),
+            terminals: false,
+            terminal_grant_ttl: collied::terminal::GRANT_TTL,
         },
-        herdr_socket,
+        herdr_socket.clone(),
     )
     .await
     .unwrap();
@@ -512,6 +519,38 @@ async fn scenario(
     .await;
     assert!(matches!(result(recv(&mut ws).await), Response::Flock(f) if f.seq == 3));
 
+    println!("terminals are off by default: no shells listed, every terminal method refused");
+    send(
+        &mut ws,
+        json!({"id": 60, "method": "flock.snapshot", "params": {}}),
+    )
+    .await;
+    let Response::Flock(flock) = result(recv(&mut ws).await) else {
+        panic!("no flock");
+    };
+    assert!(flock.terminals.is_empty() && !flock.terminals_enabled);
+    send(
+        &mut ws,
+        json!({"id": 61, "method": "pane.read", "params": {"terminal_id": SHELL, "source": "visible"}}),
+    )
+    .await;
+    assert_error(&recv(&mut ws).await, ErrorCode::NotFound);
+    for (method, params) in terminal_frames(SHELL) {
+        send(
+            &mut ws,
+            json!({"id": 62, "method": method, "params": params}),
+        )
+        .await;
+        assert_error(&recv(&mut ws).await, ErrorCode::TerminalsDisabled);
+    }
+    send(
+        &mut ws,
+        json!({"id": 63, "method": "terminal.lock", "params": {}}),
+    )
+    .await;
+    assert_eq!(result(recv(&mut ws).await), Response::Ok);
+    assert!(!herdr.methods().iter().any(|m| m.starts_with("pane.send")));
+
     println!("a fifth session from one node evicts its oldest");
     let mut extra = Vec::new();
     for _ in 0..3 {
@@ -623,6 +662,10 @@ async fn scenario(
         "\"method\":\"push.activity_token\"",
         "\"target\":\"term_0a1b2c3d4e5f60 activity=3F2504E0-4F89-11D3-9A0C-0305E82C3301\"",
         "\"method\":\"push.activity_end\"",
+        "\"result\":\"terminals_disabled: terminals are off on this machine; set [terminals] enabled = true in collied.toml and restart collied\"",
+        "\"method\":\"terminal.challenge\"",
+        "\"method\":\"terminal.run\"",
+        "\"method\":\"terminal.lock\"",
     ] {
         assert!(audit.contains(needle), "audit log lacks {needle}:\n{audit}");
     }
@@ -651,6 +694,395 @@ async fn scenario(
     );
     handle.shutdown().await;
     assert!(!control.exists());
+
+    terminal_phase(mac, &data_dir, &herdr_socket, &herdr, &phone, &target).await;
+}
+
+fn terminal_frames(terminal: &str) -> Vec<(&'static str, Value)> {
+    let op = "AAAAAAAAAAAAAAAAAAAAAA";
+    vec![
+        ("terminal.challenge", json!({"terminal_id": terminal})),
+        (
+            "terminal.grant",
+            json!({"terminal_id": terminal, "challenge": "A".repeat(43), "signature": "MEUCIQDxyzAB"}),
+        ),
+        ("terminal.watch", json!({"terminal_id": terminal})),
+        (
+            "terminal.run",
+            json!({"op_id": op, "terminal_id": terminal, "text": SECRET}),
+        ),
+        (
+            "terminal.send_keys",
+            json!({"op_id": op, "terminal_id": terminal, "keys": ["ctrl+c"]}),
+        ),
+    ]
+}
+
+struct TerminalKey(Arc<dyn collie_tls::rustls::sign::SigningKey>, String);
+
+impl TerminalKey {
+    fn new() -> Self {
+        let key = collie_tls::load(&collie_tls::generate().unwrap()).unwrap();
+        let spki = key.public_key().unwrap().as_ref().to_vec();
+        Self(key, B64.encode(spki))
+    }
+
+    fn sign(&self, node_id: &str, terminal: &str, challenge: &protocol::Nonce) -> String {
+        let message = protocol::terminal_grant_message(
+            node_id,
+            &protocol::TerminalId::new(terminal).unwrap(),
+            challenge,
+        );
+        let signer = self.0.choose_scheme(&[collie_tls::SCHEME]).unwrap();
+        B64.encode(signer.sign(&message).unwrap())
+    }
+}
+
+/// Pairs the phone again through a window, with `terminal_key`, and returns what the
+/// machine's y/N prompt showed.
+async fn pair_again(
+    control: &Path,
+    phone: &Node,
+    target: &str,
+    terminal_key: Option<&str>,
+) -> collied::control::Candidate {
+    let (mut cli, uri) = open_window(control).await;
+    let invite = PairingInvite::parse(&uri).unwrap();
+    let mut ws = open(phone, target).await;
+    send(&mut ws, hello_frame(protocol::PROTOCOL_VERSION)).await;
+    result(recv(&mut ws).await);
+    let mut frame = pair_frame(invite.code.as_str());
+    if let Some(k) = terminal_key {
+        frame["params"]["terminal_key"] = json!(k);
+    }
+    send(&mut ws, frame).await;
+    let Reply::Confirm(candidate) = cli.recv().await.unwrap() else {
+        panic!("no confirmation request");
+    };
+    cli.send(&Request::Confirm { accept: true }).await.unwrap();
+    assert!(matches!(
+        cli.recv().await.unwrap(),
+        Reply::PairDone { paired: true, .. }
+    ));
+    assert!(matches!(
+        result(recv(&mut ws).await),
+        Response::Paired { .. }
+    ));
+    candidate
+}
+
+async fn hello(phone: &Node, target: &str) -> Ws {
+    let mut ws = open(phone, target).await;
+    send(&mut ws, hello_frame(protocol::PROTOCOL_VERSION)).await;
+    result(recv(&mut ws).await);
+    ws
+}
+
+async fn call(ws: &mut Ws, method: &str, params: Value) -> ServerFrame {
+    send(ws, json!({"id": 70, "method": method, "params": params})).await;
+    loop {
+        match recv(ws).await {
+            ServerFrame::Event { .. } => {}
+            frame => return frame,
+        }
+    }
+}
+
+fn locked(frame: &ServerFrame, why: &str) {
+    assert!(
+        matches!(frame, ServerFrame::Error { error, .. }
+            if error.code == ErrorCode::TerminalLocked && error.message.contains(why)),
+        "expected terminal_locked ({why}), got {frame:?}"
+    );
+}
+
+async fn challenge(ws: &mut Ws, terminal: &str) -> protocol::Nonce {
+    let Response::TerminalChallenge {
+        terminal_id,
+        challenge,
+        ttl_ms,
+    } = result(call(ws, "terminal.challenge", json!({"terminal_id": terminal})).await)
+    else {
+        panic!("no challenge");
+    };
+    assert_eq!((terminal_id.as_str(), ttl_ms), (terminal, 60_000));
+    challenge
+}
+
+async fn grant(ws: &mut Ws, key: &TerminalKey, node_id: &str, terminal: &str) -> ServerFrame {
+    let c = challenge(ws, terminal).await;
+    let signature = key.sign(node_id, terminal, &c);
+    call(
+        ws,
+        "terminal.grant",
+        json!({"terminal_id": terminal, "challenge": c, "signature": signature}),
+    )
+    .await
+}
+
+fn run_frame(op: char, text: &str) -> Value {
+    json!({"op_id": op.to_string().repeat(22), "terminal_id": SHELL, "text": text})
+}
+
+/// The same machine started again with `[terminals] enabled = true` and a short grant.
+async fn terminal_phase(
+    mac: Node,
+    data_dir: &Path,
+    herdr_socket: &Path,
+    herdr: &MockHerdr,
+    phone: &Node,
+    target: &str,
+) {
+    let node_id = mac.status().unwrap().self_node.unwrap().stable_id;
+    let handle = server::start(
+        mac,
+        ServerConfig {
+            data_dir: data_dir.to_owned(),
+            port: PORT,
+            owner_user_id: None,
+            herdr_session: "default".into(),
+            machine_name: "it-mac".into(),
+            approval_ttl: collied::approvals::TTL,
+            attachments_dir: data_dir.join("attachments"),
+            terminals: true,
+            terminal_grant_ttl: Duration::from_secs(3),
+        },
+        herdr_socket.to_owned(),
+    )
+    .await
+    .unwrap();
+    let control = handle.control_path();
+    let key = TerminalKey::new();
+
+    println!("pairing refuses the TLS key as the terminal key");
+    let tls = TLS.get().unwrap().1.cert[0].as_ref().to_vec();
+    let (cli, uri) = open_window(&control).await;
+    let invite = PairingInvite::parse(&uri).unwrap();
+    let mut ws = hello(phone, target).await;
+    let mut frame = pair_frame(invite.code.as_str());
+    frame["params"]["terminal_key"] = json!(B64.encode(tls));
+    send(&mut ws, frame).await;
+    assert_error(&recv(&mut ws).await, ErrorCode::PairingFailed);
+    drop(cli);
+
+    println!("pairing records the terminal key, shown on the machine's prompt");
+    let candidate = pair_again(&control, phone, target, Some(&key.1)).await;
+    assert_eq!(
+        candidate.terminal_key.as_ref().map(|k| k.as_str()),
+        Some(key.1.as_str())
+    );
+    assert_eq!(
+        (candidate.replaces, candidate.terminal_key_change()),
+        (false, "new")
+    );
+    let stored = |control: &Path| {
+        let control = control.to_owned();
+        async move {
+            let Some(Reply::Peers { peers, .. }) =
+                collied::control::request(&control, &Request::PeersList)
+                    .await
+                    .unwrap()
+            else {
+                panic!("no peers");
+            };
+            peers[0]
+                .terminal_key
+                .as_ref()
+                .map(|k| k.as_str().to_owned())
+        }
+    };
+    assert_eq!(stored(&control).await.as_deref(), Some(key.1.as_str()));
+
+    println!("the snapshot lists shell panes, by label or cwd only");
+    let mut ws = hello(phone, target).await;
+    let Response::Flock(flock) = result(call(&mut ws, "flock.snapshot", json!({})).await) else {
+        panic!("no flock");
+    };
+    assert!(flock.terminals_enabled);
+    let shells: Vec<&str> = flock
+        .terminals
+        .iter()
+        .map(|t| t.terminal_id.as_str())
+        .collect();
+    assert_eq!(shells, [SHELL]);
+
+    println!("no input without a grant, and none into an agent's pane");
+    locked(
+        &call(&mut ws, "terminal.run", run_frame('A', SECRET)).await,
+        "locked",
+    );
+    locked(
+        &call(&mut ws, "terminal.watch", json!({"terminal_id": SHELL})).await,
+        "locked",
+    );
+    assert_error(
+        &call(
+            &mut ws,
+            "terminal.challenge",
+            json!({"terminal_id": "term_65ce7ae4fd5731"}),
+        )
+        .await,
+        ErrorCode::NotFound,
+    );
+
+    println!("a challenge is single use, bound to its terminal, and needs the key's signature");
+    let c = challenge(&mut ws, SHELL).await;
+    let other = TerminalKey::new();
+    locked(
+        &call(
+            &mut ws,
+            "terminal.grant",
+            json!({"terminal_id": SHELL, "challenge": c, "signature": other.sign(&node_id, SHELL, &c)}),
+        )
+        .await,
+        "signature did not verify",
+    );
+    locked(
+        &call(
+            &mut ws,
+            "terminal.grant",
+            json!({"terminal_id": SHELL, "challenge": c, "signature": key.sign(&node_id, SHELL, &c)}),
+        )
+        .await,
+        "no challenge was issued",
+    );
+    let c = challenge(&mut ws, SHELL).await;
+    locked(
+        &call(
+            &mut ws,
+            "terminal.grant",
+            json!({"terminal_id": "term_0a1b2c3d4e5f60", "challenge": c,
+                "signature": key.sign(&node_id, "term_0a1b2c3d4e5f60", &c)}),
+        )
+        .await,
+        "does not match",
+    );
+    let c = challenge(&mut ws, SHELL).await;
+    locked(
+        &call(
+            &mut ws,
+            "terminal.grant",
+            json!({"terminal_id": SHELL, "challenge": c, "signature": key.sign("nOTHER", SHELL, &c)}),
+        )
+        .await,
+        "signature did not verify",
+    );
+
+    println!("granted: watch, run and keys");
+    assert!(matches!(
+        result(grant(&mut ws, &key, &node_id, SHELL).await),
+        Response::TerminalGranted { ttl_ms: 3000, .. }
+    ));
+    assert_eq!(
+        result(call(&mut ws, "terminal.watch", json!({"terminal_id": SHELL})).await),
+        Response::Ok
+    );
+    let ServerFrame::Event {
+        event: Event::AgentOutput(read),
+        ..
+    } = recv(&mut ws).await
+    else {
+        panic!("no terminal output");
+    };
+    assert_eq!(read.terminal_id.as_str(), SHELL);
+    let before = herdr.inputs().len();
+    assert_eq!(
+        result(call(&mut ws, "terminal.run", run_frame('B', SECRET)).await),
+        Response::Ok
+    );
+    assert_eq!(
+        result(
+            call(
+                &mut ws,
+                "terminal.send_keys",
+                json!({"op_id": "C".repeat(22), "terminal_id": SHELL, "keys": ["ctrl+c"]})
+            )
+            .await
+        ),
+        Response::Ok
+    );
+    assert_eq!(herdr.inputs()[before..], [json!(SECRET), json!(["ctrl+c"])]);
+
+    println!("a grant belongs to its session");
+    let mut second = hello(phone, target).await;
+    locked(
+        &call(&mut second, "terminal.run", run_frame('D', "ls")).await,
+        "locked",
+    );
+    drop(second);
+
+    println!("terminal.lock ends every grant of the session");
+    assert_eq!(
+        result(call(&mut ws, "terminal.lock", json!({})).await),
+        Response::Ok
+    );
+    locked(
+        &call(&mut ws, "terminal.run", run_frame('E', "ls")).await,
+        "locked",
+    );
+
+    println!("a grant ends after its ttl");
+    result(grant(&mut ws, &key, &node_id, SHELL).await);
+    assert_eq!(
+        result(call(&mut ws, "terminal.run", run_frame('F', "ls")).await),
+        Response::Ok
+    );
+    tokio::time::sleep(Duration::from_millis(3100)).await;
+    locked(
+        &call(&mut ws, "terminal.run", run_frame('G', "ls")).await,
+        "locked",
+    );
+
+    println!("pairing again, even with the same key, ends the grants of live sessions");
+    result(grant(&mut ws, &key, &node_id, SHELL).await);
+    let candidate = pair_again(&control, phone, target, Some(&key.1)).await;
+    assert_eq!(
+        (candidate.replaces, candidate.terminal_key_change()),
+        (true, "unchanged")
+    );
+    locked(
+        &call(&mut ws, "terminal.run", run_frame('I', "ls")).await,
+        "locked",
+    );
+
+    println!("pairing again without a key forgets it: terminal_key_missing");
+    result(grant(&mut ws, &key, &node_id, SHELL).await);
+    let candidate = pair_again(&control, phone, target, None).await;
+    assert_eq!(
+        (candidate.replaces, candidate.terminal_key_change()),
+        (true, "none")
+    );
+    assert_eq!(stored(&control).await, None);
+    locked(
+        &call(&mut ws, "terminal.run", run_frame('H', "ls")).await,
+        "locked",
+    );
+    assert_error(
+        &call(&mut ws, "terminal.challenge", json!({"terminal_id": SHELL})).await,
+        ErrorCode::TerminalKeyMissing,
+    );
+    drop(ws);
+
+    println!("typed text never reaches the audit log");
+    let audit = std::fs::read_to_string(data_dir.join("audit.log")).unwrap();
+    assert!(!audit.contains("do-not-log-this"), "{audit}");
+    for needle in [
+        "\"result\":\"invalid terminal key\"",
+        "\"method\":\"terminal.grant\"",
+        "\"result\":\"granted ttl=3s\"",
+        "\"result\":\"terminal_locked: signature did not verify\"",
+        "\"result\":\"terminal_key_missing: this phone has no terminal key here; pair it again\"",
+        "\"method\":\"terminal.watch\"",
+        "\"target\":\"term_ffffffffffff01 keys=ctrl+c\"",
+    ] {
+        assert!(audit.contains(needle), "audit log lacks {needle}:\n{audit}");
+    }
+    let challenges = audit
+        .lines()
+        .filter(|l| l.contains("\"terminal.challenge\"") && l.contains("\"result\":\"ok\""))
+        .count();
+    assert_eq!(challenges, 0, "a challenge that was issued is not audited");
+    handle.shutdown().await;
 }
 
 fn hello_frame(version: u32) -> Value {
@@ -813,6 +1245,7 @@ fn kernel_tcp_listeners() -> Vec<String> {
 struct MockHerdr {
     snapshot: Arc<Mutex<Value>>,
     methods: Arc<Mutex<Vec<String>>>,
+    inputs: Arc<Mutex<Vec<Value>>>,
     read_lines: Arc<Mutex<Vec<Value>>>,
     snapshot_delay: Arc<Mutex<Duration>>,
 }
@@ -825,19 +1258,26 @@ impl MockHerdr {
         let methods = Arc::new(Mutex::new(Vec::new()));
         let read_lines = Arc::new(Mutex::new(Vec::new()));
         let snapshot_delay = Arc::new(Mutex::new(Duration::ZERO));
+        let inputs = Arc::new(Mutex::new(Vec::new()));
         let listener = UnixListener::bind(path).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let (snap, seen, lines, delay) = (
+        let (snap, seen, lines, delay, typed) = (
             snapshot.clone(),
             methods.clone(),
             read_lines.clone(),
             snapshot_delay.clone(),
+            inputs.clone(),
         );
         tokio::spawn(async move {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
-                let (snap, seen, lines, delay) =
-                    (snap.clone(), seen.clone(), lines.clone(), delay.clone());
+                let (snap, seen, lines, delay, typed) = (
+                    snap.clone(),
+                    seen.clone(),
+                    lines.clone(),
+                    delay.clone(),
+                    typed.clone(),
+                );
                 tokio::spawn(async move {
                     let (r, mut w) = stream.into_split();
                     let mut line = String::new();
@@ -850,6 +1290,13 @@ impl MockHerdr {
                     seen.lock().unwrap().push(method.clone());
                     if method == "agent.read" {
                         lines.lock().unwrap().push(req["params"]["lines"].clone());
+                    }
+                    if method == "pane.send_input" {
+                        assert_eq!(req["params"]["keys"], json!(["enter"]));
+                        typed.lock().unwrap().push(req["params"]["text"].clone());
+                    }
+                    if method == "pane.send_keys" {
+                        typed.lock().unwrap().push(req["params"]["keys"].clone());
                     }
                     if method == "session.snapshot" {
                         let delay = *delay.lock().unwrap();
@@ -879,6 +1326,7 @@ impl MockHerdr {
                             "source": "detection", "format": "text", "revision": 0, "truncated": false,
                             "text": "› run it\n────────\nAllow command?\nrm -rf build\n",
                         }}),
+                        "pane.send_input" | "pane.send_keys" => json!({"type": "ok"}),
                         "agent.read" => json!({"type": "pane_read", "read": {
                             "pane_id": req["params"]["target"], "workspace_id": "w6", "tab_id": "w6:t1",
                             "source": "recent", "format": "ansi", "revision": 0, "truncated": false,
@@ -898,9 +1346,14 @@ impl MockHerdr {
         Self {
             snapshot,
             methods,
+            inputs,
             read_lines,
             snapshot_delay,
         }
+    }
+
+    fn inputs(&self) -> Vec<Value> {
+        self.inputs.lock().unwrap().clone()
     }
 
     fn set_snapshot_delay(&self, delay: Duration) {

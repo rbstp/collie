@@ -893,6 +893,8 @@ async fn start_collied(
             machine_name: "e2e-mac".into(),
             approval_ttl,
             attachments_dir: data_dir.join("attachments"),
+            terminals: false,
+            terminal_grant_ttl: collied::terminal::GRANT_TTL,
         },
         herdr.socket.clone(),
         &TasksConfig::default(),

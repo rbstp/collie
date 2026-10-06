@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 
-use protocol::{Agent, AgentStatus, Flock, MachineInfo, TerminalId, Workspace, WorkspaceId};
+use protocol::{
+    Agent, AgentStatus, Flock, MachineInfo, Terminal, TerminalId, Workspace, WorkspaceId,
+};
 
 use crate::herdr::{AgentInfo, PaneInfo, SessionSnapshot, WorkspaceInfo};
 use crate::transcript::{Derived, Transcripts};
@@ -109,6 +111,26 @@ pub fn map_workspaces(snap: &SessionSnapshot) -> Vec<Workspace> {
         .collect()
 }
 
+/// Panes with no agent, launching ones included. The label is the name given in herdr: a
+/// title the pane's program sets (a shell theme puts the running command there) never
+/// leaves the machine.
+pub fn map_terminals(snap: &SessionSnapshot) -> Vec<Terminal> {
+    snap.panes
+        .iter()
+        .filter(|p| {
+            p.agent.is_none() && !snap.agents.iter().any(|a| a.terminal_id == p.terminal_id)
+        })
+        .filter_map(|p| {
+            Some(Terminal {
+                terminal_id: TerminalId::new(p.terminal_id.clone()).ok()?,
+                workspace_id: WorkspaceId::new(p.workspace_id.clone()).ok()?,
+                label: non_empty(&p.label),
+                cwd: non_empty(&p.foreground_cwd).or_else(|| non_empty(&p.cwd)),
+            })
+        })
+        .collect()
+}
+
 pub fn map_flock(
     snap: &SessionSnapshot,
     tracker: &mut StatusTracker,
@@ -123,6 +145,8 @@ pub fn map_flock(
         workspaces: map_workspaces(snap),
         agents: map_agents(&snap.agents, tracker, now_ms, transcripts),
         approvals: Vec::new(),
+        terminals: Vec::new(),
+        terminals_enabled: false,
     }
 }
 
@@ -227,6 +251,42 @@ mod tests {
 
         let json = serde_json::to_string(&flock).unwrap();
         assert!(!json.contains("w6:p1") && !json.contains("pane_id"));
+    }
+
+    #[test]
+    fn terminals_are_panes_without_an_agent() {
+        let mut snap = fixture();
+        let shells = map_terminals(&snap);
+        assert_eq!(shells.len(), 1);
+        let t = &shells[0];
+        assert_eq!(t.terminal_id.as_str(), "term_ffffffffffff01");
+        assert_eq!(t.workspace_id.as_str(), "w7");
+        assert_eq!(
+            (t.label.as_deref(), t.cwd.as_deref()),
+            (None, Some("/Users/me/src/api"))
+        );
+        snap.panes[2].label = Some("logs".into());
+        snap.panes[2].foreground_cwd = Some("/var/log".into());
+        let t = &map_terminals(&snap)[0];
+        assert_eq!(
+            (t.label.as_deref(), t.cwd.as_deref()),
+            (Some("logs"), Some("/var/log"))
+        );
+
+        // An agent herdr is still launching has no `agent` on its pane yet.
+        let mut pending = snap.agents[0].clone();
+        pending.terminal_id = snap.panes[2].terminal_id.clone();
+        snap.agents.push(pending);
+        assert!(map_terminals(&snap).is_empty());
+        snap.agents.pop();
+        snap.panes[2].agent = Some("claude".into());
+        assert!(map_terminals(&snap).is_empty());
+
+        let json = serde_json::to_string(&map_terminals(&fixture())).unwrap();
+        assert!(
+            !json.contains("pane_id") && !json.contains("title"),
+            "{json}"
+        );
     }
 
     #[test]

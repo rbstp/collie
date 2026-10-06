@@ -412,6 +412,9 @@
         "checksum_mismatch",
         "draft_changed",
         "draft_not_cleared",
+        "terminals_disabled",
+        "terminal_locked",
+        "terminal_key_missing",
         "internal",
         "unrecognized"
       ],
@@ -544,6 +547,17 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "terminals": {
+          "default": [],
+          "description": "Shell panes: only when the machine enables terminals.",
+          "items": {
+            "$ref": "#/$defs/Terminal"
+          },
+          "type": "array"
+        },
+        "terminals_enabled": {
+          "type": "boolean"
         },
         "workspaces": {
           "items": {
@@ -888,6 +902,54 @@
         },
         {
           "properties": {
+            "challenge": {
+              "$ref": "#/$defs/Nonce"
+            },
+            "terminal_id": {
+              "$ref": "#/$defs/TerminalId"
+            },
+            "ttl_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "terminal_challenge",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "terminal_id",
+            "challenge",
+            "ttl_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "terminal_id": {
+              "$ref": "#/$defs/TerminalId"
+            },
+            "ttl_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "terminal_granted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "terminal_id",
+            "ttl_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "type": {
               "const": "ok",
               "type": "string"
@@ -922,6 +984,34 @@
         "agents",
         "default_agent",
         "recent_cwds"
+      ],
+      "type": "object"
+    },
+    "Terminal": {
+      "description": "A pane with no agent. `label` is the name given in herdr, never a title the pane's\nprogram sets.",
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/WorkspaceId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "workspace_id"
       ],
       "type": "object"
     },

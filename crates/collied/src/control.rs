@@ -84,6 +84,26 @@ pub struct Candidate {
     pub login: String,
     pub user_id: i64,
     pub tls_key: protocol::KeyPin,
+    #[serde(default)]
+    pub terminal_key: Option<protocol::TerminalKey>,
+    /// This node is paired already: confirming replaces its record.
+    #[serde(default)]
+    pub replaces: bool,
+    #[serde(default)]
+    pub previous_terminal_key: Option<protocol::TerminalKey>,
+}
+
+impl Candidate {
+    /// For the y/N prompt: a compromised app can only swap the terminal key through a
+    /// pairing confirmed on the machine.
+    pub fn terminal_key_change(&self) -> &'static str {
+        match (&self.terminal_key, &self.previous_terminal_key) {
+            (None, _) => "none",
+            (Some(_), None) => "new",
+            (Some(k), Some(p)) if k == p => "unchanged",
+            (Some(_), Some(_)) => "replaces the existing one",
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -370,6 +390,7 @@ async fn pair(state: &State, r: &mut BufReader<OwnedReadHalf>, w: &mut OwnedWrit
             label: c.device_label.clone(),
             paired_at: crate::now_ms(),
             tls_key: Some(c.tls_key.clone()),
+            terminal_key: c.terminal_key.clone(),
         })
     } else {
         Err(anyhow::anyhow!("not confirmed on the machine"))

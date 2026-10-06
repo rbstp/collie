@@ -2,13 +2,30 @@ import CollieCore
 import Foundation
 import Observation
 
+/// What the pane runs now: its agent, a plain shell once the agent exited, or nothing.
+enum PaneMode: Equatable {
+    case agent, terminal, gone
+}
+
 @MainActor
 @Observable
 final class AgentModel {
     let route: AgentRoute
     private let core: any AgentCore
+    private let unlocker: any TerminalUnlocker
+    private let machineLabel: String?
 
     private(set) var agent: AgentSummary?
+    private(set) var terminal: TerminalSummary?
+    private(set) var terminalLocked = true
+    private(set) var terminalsEnabled = false
+    /// An agent ran in this pane while the screen was open.
+    private(set) var hadAgent = false
+    /// This phone did not pair with the terminal key it has now.
+    private(set) var terminalKeyMissing = false
+    private(set) var unlocking = false
+    private var watchingShell = false
+    private var lastMode: PaneMode?
     private(set) var link: LinkPhase?
     private(set) var linkError: String?
     private(set) var ansi = ""
@@ -72,10 +89,13 @@ final class AgentModel {
 
     init(
         core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file,
-        dictationEngine: any DictationEngine = SpeechDictationEngine()
+        dictationEngine: any DictationEngine = SpeechDictationEngine(),
+        unlocker: any TerminalUnlocker = SecureEnclaveUnlocker(), machineLabel: String? = nil
     ) {
         self.core = core
         self.route = route
+        self.unlocker = unlocker
+        self.machineLabel = machineLabel
         self.prefsFile = prefsFile
         let prefs = DevicePrefs.load(from: prefsFile)
         dictation = DictationModel(engine: dictationEngine, language: prefs.dictationLanguage, prefsFile: prefsFile)
@@ -84,10 +104,41 @@ final class AgentModel {
         gestures = prefs.gestures
     }
 
-    var acceptsKeys: Bool { blocked != .optionsOnly && blocked != .terminal }
+    var mode: PaneMode? {
+        if agent != nil { return .agent }
+        if terminal != nil { return .terminal }
+        return link == .connected ? .gone : nil
+    }
+
+    var isTerminal: Bool { mode == .terminal }
+
+    var acceptsKeys: Bool { isTerminal ? !unlocking : blocked != .optionsOnly && blocked != .terminal }
 
     /// Typed text answers the blocking prompt instead of prompting the agent.
-    var answering: Bool { blocked == .keysAndText }
+    var answering: Bool { !isTerminal && blocked == .keysAndText }
+
+    /// What the screen says in place of the agent's prompt.
+    var paneNotice: String? {
+        switch mode {
+        case .terminal?:
+            if terminalKeyMissing {
+                return unlocker.passcodeSet
+                    ? "Pair this phone again to use terminals on this machine."
+                    : "Set a passcode on this phone, then pair it again to use terminals on this machine."
+            }
+            guard terminalLocked else { return nil }
+            return hadAgent ? "The agent exited. This pane is now a shell." : "This pane is a shell."
+        case .gone?:
+            if hadAgent && !terminalsEnabled {
+                return "The agent exited. Terminals are off on this machine: set [terminals] enabled = true in collied.toml there and restart collied."
+            }
+            return "No longer running"
+        case .agent?, nil:
+            return nil
+        }
+    }
+
+    var canUnlock: Bool { isTerminal && terminalLocked && !terminalKeyMissing && !unlocking }
 
     var blockedHint: String? {
         switch blocked {
@@ -99,7 +150,8 @@ final class AgentModel {
     }
 
     var canSendPrompt: Bool {
-        !sendingPrompt && !dictation.isActive && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
+        if isTerminal { return !sendingPrompt && !unlocking && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return !sendingPrompt && !dictation.isActive && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
     }
 
     /// Runs while the screen is visible: watch, poll the core at 10 Hz, unwatch on cancel.
@@ -140,14 +192,68 @@ final class AgentModel {
         if link != view.link { link = view.link }
         if linkError != view.lastError { linkError = view.lastError }
         if agent != view.agent { agent = view.agent }
+        if terminal != view.terminal { terminal = view.terminal }
+        if terminalLocked != view.terminalLocked { terminalLocked = view.terminalLocked }
+        if terminalsEnabled != view.terminalsEnabled { terminalsEnabled = view.terminalsEnabled }
+        if agent != nil, !hadAgent { hadAgent = true }
         if let output = view.output {
             ansi = output.ansi
             revision = view.outputRevision
         }
+        followMode()
     }
 
+    /// The shell is watched only while unlocked; an agent starting there takes the agent's watch back.
+    /// Input typed or queued for the agent never reaches the shell after it, nor the reverse.
+    private func followMode() {
+        if let now = mode, now != lastMode {
+            let previous = lastMode
+            lastMode = now
+            if previous != nil, now == .terminal || previous == .terminal { dropInput() }
+            if now == .agent, previous == .terminal || previous == .gone {
+                watchingShell = false
+                watch(route.terminalId)
+            }
+        }
+        if mode == .terminal, !terminalLocked, !watchingShell {
+            watchingShell = true
+            watchShell()
+        } else if terminalLocked, watchingShell {
+            watchingShell = false
+        }
+    }
+
+    /// Face ID or the passcode for this terminal, never raised on its own: only from a tap on
+    /// Unlock or an input. The reason names the workspace and the machine, never a title a
+    /// program set.
+    @discardableResult
+    func unlock() async -> Bool {
+        guard canUnlock else { return !terminalLocked && !terminalKeyMissing }
+        unlocking = true
+        defer { unlocking = false }
+        let workspace = terminal?.workspaceLabel ?? "a workspace"
+        let reason = "Open a terminal in \(workspace) on \(machineLabel ?? "the machine")"
+        do {
+            let message = try await core.terminalChallenge(machineId: route.machineId, terminalId: route.terminalId)
+            guard let signature = await unlocker.sign(message, reason: reason) else { return false }
+            try await core.terminalGrant(machineId: route.machineId, terminalId: route.terminalId, signature: signature)
+            terminalLocked = false
+            notice = nil
+            followMode()
+            return true
+        } catch {
+            if case .TerminalKeyMissing = error as? CoreError {
+                terminalKeyMissing = true
+            } else {
+                notice = Self.message(for: error)
+            }
+            return false
+        }
+    }
+
+    /// A shell is only read through its watch, under a grant.
     func refresh() async {
-        guard !refreshing else { return }
+        guard !refreshing, !isTerminal else { return }
         refreshing = true
         defer { refreshing = false }
         do {
@@ -161,6 +267,10 @@ final class AgentModel {
     /// Text typed and files attached while the send is in flight stay for the next prompt.
     /// Paths on the Mac never have spaces, so they are set apart by single spaces.
     func sendPrompt() async {
+        if isTerminal {
+            await sendCommand()
+            return
+        }
         guard !dictation.isActive else { return }
         dictation.problem = nil
         if answering {
@@ -189,6 +299,29 @@ final class AgentModel {
         }
     }
 
+    /// One line, then Enter, into the shell; a locked terminal is unlocked first, in the same action.
+    private func sendCommand() async {
+        let sent = draft
+        guard !sendingPrompt, !sent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if sent.contains(where: \.isNewline) {
+            promptError = "One command at a time"
+            return
+        }
+        sendingPrompt = true
+        promptError = nil
+        defer { sendingPrompt = false }
+        guard await unlock() else { return }
+        do {
+            try await core.terminalRun(machineId: route.machineId, terminalId: route.terminalId, text: sent)
+            if draft.hasPrefix(sent) {
+                draft = String(draft.dropFirst(sent.count))
+            }
+        } catch {
+            if case .TerminalLocked = error as? CoreError { terminalLocked = true }
+            promptError = Self.message(for: error)
+        }
+    }
+
     /// Typed into the prompt's own answer field and submitted with Enter; attachments stay for the next prompt.
     private func sendAnswer() async {
         let sent = draft
@@ -205,6 +338,16 @@ final class AgentModel {
         } catch {
             promptError = Self.message(for: error)
         }
+    }
+
+    private func dropInput() {
+        dictation.cancel()
+        cancelUpload()
+        draft = ""
+        macDraft = nil
+        attachments = []
+        queuedKeys.removeAll()
+        promptError = nil
     }
 
     func paste(_ text: String?) {
@@ -311,12 +454,21 @@ final class AgentModel {
     private func drainKeys() async {
         defer { sendingKeys = false }
         while !queuedKeys.isEmpty {
+            if isTerminal, !(await unlock()) {
+                queuedKeys.removeAll()
+                return
+            }
             let batch = Array(queuedKeys.prefix(16))
             queuedKeys.removeFirst(batch.count)
             do {
-                try await core.sendKeys(machineId: route.machineId, terminalId: route.terminalId, keys: batch)
+                if isTerminal {
+                    try await core.terminalSendKeys(machineId: route.machineId, terminalId: route.terminalId, keys: batch)
+                } else {
+                    try await core.sendKeys(machineId: route.machineId, terminalId: route.terminalId, keys: batch)
+                }
                 notice = nil
             } catch {
+                if case .TerminalLocked = error as? CoreError { terminalLocked = true }
                 queuedKeys.removeAll()
                 notice = Self.message(for: error)
             }
@@ -354,6 +506,17 @@ final class AgentModel {
         }
     }
 
+    private func watchShell() {
+        let (machineId, terminalId) = (route.machineId, route.terminalId)
+        let previous = Self.watchChains[machineId]
+        let core = core
+        let lines = historyLines
+        Self.watchChains[machineId] = Task {
+            await previous?.value
+            try? await core.watchTerminal(machineId: machineId, terminalId: terminalId, lines: lines)
+        }
+    }
+
     static func message(for error: any Error) -> String {
         switch error as? CoreError {
         case .AgentBlocked:
@@ -361,6 +524,8 @@ final class AgentModel {
         case .DraftChanged(let current):
             let shown = current.count > 80 ? String(current.prefix(80)) + "…" : current
             return "The agent's input box has unsent text: “\(shown)”. Send again to replace it."
+        case .TerminalLocked:
+            return "The terminal locked. Unlock it again to continue."
         default:
             return describe(error)
         }
@@ -422,6 +587,7 @@ struct CloseConfirmation: Equatable {
 
 extension AgentKey {
     static let strip: [AgentKey] = [.esc, .left, .up, .down, .right, .tab, .shiftTab, .enter, .ctrlEnter]
+    static let terminalStrip: [AgentKey] = [.esc, .tab, .ctrlC, .left, .up, .down, .right, .enter]
 
     var symbol: String {
         switch self {

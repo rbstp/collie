@@ -97,6 +97,8 @@ async fn scenario(
             machine_name: "e2e-mac".into(),
             approval_ttl: collied::approvals::TTL,
             attachments_dir: data_dir.join("attachments"),
+            terminals: false,
+            terminal_grant_ttl: collied::terminal::GRANT_TTL,
         },
         herdr_socket,
     )
@@ -380,6 +382,8 @@ fn live_herdr_session() {
                 herdr_session: herdr.name.clone(),
                 machine_name: "e2e-mac".into(),
                 approval_ttl: collied::approvals::TTL,
+                terminals: false,
+                terminal_grant_ttl: collied::terminal::GRANT_TTL,
             },
             herdr.socket.clone(),
         )

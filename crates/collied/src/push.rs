@@ -1555,6 +1555,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
                 label: "phone".into(),
                 paired_at: 0,
                 tls_key: None,
+                terminal_key: None,
             })
             .unwrap();
         push.retain_paired(&store).unwrap();

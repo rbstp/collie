@@ -10,6 +10,7 @@ struct AgentGrid<Menu: View>: View {
     let reconnect: (MachineFlockEntry) -> Void
     let showsLink: Bool
     let follows: FollowModel?
+    let closePane: (AgentRoute) -> Void
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -36,6 +37,15 @@ struct AgentGrid<Menu: View>: View {
                                 alignment: .leading, spacing: 16
                             ) {
                                 ForEach(agents.rest, id: \.terminalId) { card($0, in: entry, starred: false) }
+                            }
+                        }
+                        if !entry.terminals.isEmpty {
+                            Text("Terminals").font(.caption).foregroundStyle(.secondary)
+                            LazyVGrid(
+                                columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
+                                alignment: .leading, spacing: 12
+                            ) {
+                                ForEach(entry.terminals, id: \.terminalId) { terminalCard($0, in: entry) }
                             }
                         }
                     } header: {
@@ -82,6 +92,38 @@ struct AgentGrid<Menu: View>: View {
         }
         .onAppear { previews.appeared(route) }
         .onDisappear { previews.disappeared(route) }
+    }
+}
+
+extension AgentGrid {
+    /// No live preview: reading a shell needs a grant.
+    private func terminalCard(_ terminal: TerminalSummary, in entry: MachineFlockEntry) -> some View {
+        let route = AgentRoute(machineId: entry.id, terminalId: terminal.terminalId)
+        return NavigationLink(value: route) {
+            HStack(spacing: 6) {
+                AgentKindLabel(kind: "terminal", iconOnly: true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(terminal.displayTitle).font(.subheadline).lineLimit(1)
+                    Text([terminal.workspaceLabel, entry.machine.label].compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: terminal.locked ? "lock.fill" : "lock.open")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(terminal.locked ? "Locked" : "Unlocked")
+            }
+            .padding(10)
+            .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 10))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(entry.linkDown ? 0.5 : 1)
+        .contextMenu {
+            Button("Close pane", systemImage: "xmark.square", role: .destructive) { closePane(route) }
+        }
     }
 }
 

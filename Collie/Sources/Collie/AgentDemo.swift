@@ -183,6 +183,24 @@ final class DemoAgentCore: ActivityCore {
 
     func cancelUploads(machineId: String) {}
 
+    func terminalChallenge(machineId: String, terminalId: String) async throws -> Data {
+        throw CoreError.TerminalsDisabled
+    }
+
+    func terminalGrant(machineId: String, terminalId: String, signature: Data) async throws {
+        throw CoreError.TerminalsDisabled
+    }
+
+    func watchTerminal(machineId: String, terminalId: String, lines: UInt16) async throws {}
+
+    func terminalRun(machineId: String, terminalId: String, text: String) async throws {
+        throw CoreError.TerminalsDisabled
+    }
+
+    func terminalSendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {
+        throw CoreError.TerminalsDisabled
+    }
+
     func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String) throws {
         print("demo: activity \(activityId) token \(tokenHex.prefix(8))… for \(terminalId)")
     }

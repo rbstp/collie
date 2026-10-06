@@ -43,6 +43,18 @@ pub fn is_p256(spki: &[u8]) -> bool {
     spki.len() == P256_SPKI_LEN && spki.starts_with(&P256_SPKI_PREFIX)
 }
 
+/// ECDSA P-256 with SHA-256, DER encoded, over `message` by the key `spki`. Used for
+/// terminal grants, outside any TLS handshake.
+pub fn verify(spki: &[u8], message: &[u8], signature: &[u8]) -> bool {
+    is_p256(spki)
+        && ring::signature::UnparsedPublicKey::new(
+            &ring::signature::ECDSA_P256_SHA256_ASN1,
+            &spki[P256_SPKI_PREFIX.len()..],
+        )
+        .verify(message, signature)
+        .is_ok()
+}
+
 pub fn certified(key: Arc<dyn rustls::sign::SigningKey>) -> Result<Arc<CertifiedKey>, Error> {
     let spki = key
         .public_key()
@@ -425,6 +437,30 @@ mod tests {
         tokio::spawn(async move { b.write_all(b"garbage that is not TLS").await });
         let broken = connect(a, "collie.example", machine_pin, phone).await;
         assert!(matches!(broken, Err(ConnectError::Tls(_))));
+    }
+
+    #[test]
+    fn verifies_detached_signatures() {
+        let (k, _) = key();
+        let spki = k.cert[0].as_ref().to_vec();
+        let signer = k.key.choose_scheme(&[SCHEME]).unwrap();
+        let good = signer.sign(b"grant").unwrap();
+        assert!(verify(&spki, b"grant", &good));
+        assert!(!verify(&spki, b"grants", &good), "another message");
+        let mut bad = good.clone();
+        let last = bad.len() - 1;
+        bad[last] ^= 1;
+        assert!(!verify(&spki, b"grant", &bad));
+        let (other, _) = key();
+        assert!(
+            !verify(other.cert[0].as_ref(), b"grant", &good),
+            "another key"
+        );
+        assert!(
+            !verify(&spki, b"grant", &good[..good.len() - 3]),
+            "malformed DER"
+        );
+        assert!(!verify(&spki[..90], b"grant", &good), "not a P-256 key");
     }
 
     #[test]
