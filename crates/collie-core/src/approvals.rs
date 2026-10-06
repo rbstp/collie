@@ -609,6 +609,7 @@ mod tests {
             approvals: vec![approval("a0")],
             terminals: Vec::new(),
             terminals_enabled: false,
+            plan_usage: None,
         });
         s
     }

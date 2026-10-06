@@ -8,11 +8,20 @@ struct AgentInbox<Menu: View>: View {
     let reconnect: (MachineFlockEntry) -> Void
     let follows: FollowModel?
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
+    @State private var showsUsage = false
 
     var body: some View {
         let items = InboxItem.items(in: entries)
         TimelineView(.periodic(from: .now, by: 60)) { context in
             List {
+                Picker("View", selection: $showsUsage) {
+                    Text("Inbox").tag(false)
+                    Text("Usage").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
                 if let notice {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
@@ -31,27 +40,36 @@ struct AgentInbox<Menu: View>: View {
                     }
                     .buttonStyle(.plain)
                 }
-                let groups = InboxSection.grouped(items, now: .now)
-                ForEach(InboxSection.allCases, id: \.self) { section in
-                    if let rows = groups[section] {
-                        Section(section.title) {
-                            ForEach(rows) { item in
-                                NavigationLink(value: item.route) {
-                                    InboxRow(
-                                        item: item, machine: showsMachine ? item.machine : nil,
-                                        followed: follows?.isFollowing(item.route) == true, now: context.date
-                                    )
-                                }
-                                .contextMenu { menu(item.agent, item.route) }
-                                .opacity(item.linkDown ? 0.5 : 1)
-                            }
-                        }
-                    }
-                }
-                if items.isEmpty && entries.contains(where: { $0.flock?.details != nil }) {
-                    Text("No agents running").foregroundStyle(.secondary)
+                if showsUsage {
+                    UsageSections(entries: entries)
+                } else {
+                    inbox(items, now: context.date)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func inbox(_ items: [InboxItem], now: Date) -> some View {
+        let groups = InboxSection.grouped(items, now: .now)
+        ForEach(InboxSection.allCases, id: \.self) { section in
+            if let rows = groups[section] {
+                Section(section.title) {
+                    ForEach(rows) { item in
+                        NavigationLink(value: item.route) {
+                            InboxRow(
+                                item: item, machine: showsMachine ? item.machine : nil,
+                                followed: follows?.isFollowing(item.route) == true, now: now
+                            )
+                        }
+                        .contextMenu { menu(item.agent, item.route) }
+                        .opacity(item.linkDown ? 0.5 : 1)
+                    }
+                }
+            }
+        }
+        if items.isEmpty && entries.contains(where: { $0.flock?.details != nil }) {
+            Text("No agents running").foregroundStyle(.secondary)
         }
     }
 }

@@ -164,12 +164,52 @@ enum Elapsed {
     }
 }
 
+enum UsagePace: Equatable {
+    case slower
+    case onPace
+    case faster
+}
+
 struct UsageLimit: Equatable {
     let label: String
-    let left: UInt8
+    let used: UInt8
     let seconds: Int
+    let length: Int
 
-    var resetsIn: String { PlanUsage.countdown(seconds: seconds) }
+    var left: UInt8 { 100 - used }
+
+    var spokenLabel: String { label == "5h" ? "5-hour" : "Weekly" }
+
+    /// The share of the window that has passed, from its reset time and its length.
+    var elapsed: Double { min(1, max(0, 1 - Double(seconds) / Double(length))) }
+
+    /// Within 5 points of the elapsed share counts as on pace.
+    var pace: UsagePace {
+        let gap = Double(used) / 100 - elapsed
+        return gap < -0.05 ? .slower : gap > 0.05 ? .faster : .onPace
+    }
+
+    var paceText: String { Self.paceText(label: label, pace: pace) }
+
+    var spokenPace: String { Self.paceText(label: spokenLabel, pace: pace) }
+
+    /// A clock time for the 5-hour window, a countdown for the weekly one.
+    func resets(now: Date, style: Date.FormatStyle = .init(date: .omitted, time: .shortened)) -> String {
+        label == "5h" ? now.addingTimeInterval(TimeInterval(seconds)).formatted(style) : PlanUsage.countdown(seconds: seconds)
+    }
+
+    func spokenLine(now: Date) -> String {
+        let resets = label == "5h" ? "resets at \(resets(now: now))" : "resets in \(PlanUsage.spoken(seconds: seconds))"
+        return "\(spokenLabel) limit, \(used) percent used, \(resets)"
+    }
+
+    private static func paceText(label: String, pace: UsagePace) -> String {
+        switch pace {
+        case .slower: "\(label) usage pace slower"
+        case .onPace: "\(label) usage on pace"
+        case .faster: "\(label) usage pace faster"
+        }
+    }
 }
 
 extension PlanUsage {
@@ -184,13 +224,26 @@ extension PlanUsage {
     /// A window whose reset time has passed is left out: its figure no longer holds.
     func limits(now: Date) -> [UsageLimit] {
         let nowMs = UInt64(max(0, now.timeIntervalSince1970 * 1000))
-        return [("5h", fiveHour), ("7d", sevenDay)].compactMap { label, window in
+        return [("5h", fiveHour, 5 * 3600), ("7d", sevenDay, 7 * 86400)].compactMap { label, window, length in
             guard let window, window.resetsAtMs > nowMs else { return nil }
             return UsageLimit(
-                label: label, left: 100 - min(window.usedPercent, 100),
-                seconds: Int((window.resetsAtMs - nowMs) / 1000)
+                label: label, used: min(window.usedPercent, 100),
+                seconds: Int((window.resetsAtMs - nowMs) / 1000), length: length
             )
         }
+    }
+
+    func age(now: Date) -> String {
+        Self.ageSeconds(recordedMs, now: now) < 60 ? "just now" : "\(Elapsed.string(sinceMs: recordedMs, now: now)) ago"
+    }
+
+    func spokenAge(now: Date) -> String {
+        let seconds = Self.ageSeconds(recordedMs, now: now)
+        return seconds < 60 ? "recorded just now" : "recorded \(Self.spoken(seconds: seconds)) ago"
+    }
+
+    private static func ageSeconds(_ ms: UInt64, now: Date) -> Int {
+        max(0, Int(now.timeIntervalSince1970) - Int(ms / 1000))
     }
 
     static func countdown(seconds: Int) -> String {

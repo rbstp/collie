@@ -28,7 +28,6 @@ pub struct Derived {
     pub last_line: Option<String>,
     pub last_prompt: Option<String>,
     pub last_activity_ms: Option<u64>,
-    pub plan_usage: Option<protocol::PlanUsage>,
 }
 
 #[derive(Clone, Copy)]
@@ -70,9 +69,14 @@ impl Transcripts {
         self
     }
 
-    /// For the reconcile tick: one fstat, true when the recorded plan changed since it last said so.
-    pub fn plan_moved(&mut self) -> bool {
-        self.usage.plan_moved()
+    /// For the reconcile tick: one fstat, the recorded plan when it changed since it last said so.
+    pub fn plan_moved(&mut self) -> Option<protocol::PlanUsage> {
+        self.usage.plan_moved().then(|| self.usage.plan()).flatten()
+    }
+
+    pub fn plan(&mut self) -> Option<protocol::PlanUsage> {
+        self.usage.refresh();
+        self.usage.plan()
     }
 
     pub fn from_env() -> Self {
@@ -92,22 +96,9 @@ impl Transcripts {
         self.missed.retain(live);
     }
 
-    /// A Claude Code agent also carries the plan usage `collied statusline` recorded.
-    pub fn derive(&mut self, a: &AgentInfo, relocate: bool) -> Option<Derived> {
-        let claude = a.agent.as_deref() == Some("claude");
-        if claude {
-            self.usage.refresh();
-        }
-        let mut derived = self.read_transcript(a, relocate);
-        if let Some(plan) = self.usage.plan().filter(|_| claude) {
-            derived.get_or_insert_default().plan_usage = Some(plan);
-        }
-        derived
-    }
-
     /// Cached by size and mtime, so an unchanged transcript costs one open and fstat. A
     /// transcript not found is looked for again only when `relocate` (an `agent.status` event).
-    fn read_transcript(&mut self, a: &AgentInfo, relocate: bool) -> Option<Derived> {
+    pub fn derive(&mut self, a: &AgentInfo, relocate: bool) -> Option<Derived> {
         let kind = match a.agent.as_deref()? {
             "claude" => Kind::Claude,
             "codex" => Kind::Codex,
@@ -132,7 +123,10 @@ impl Transcripts {
         };
         self.missed.remove(id);
         let window = match kind {
-            Kind::Claude => self.usage.window(id),
+            Kind::Claude => {
+                self.usage.refresh();
+                self.usage.window(id)
+            }
             Kind::Codex => None,
         };
         if let Some(c) = self
@@ -709,8 +703,8 @@ mod tests {
         let project = dir.path().join("claude/projects/-Users-me-src-collie");
         write(&project.join(format!("{CLAUDE_ID}.jsonl")), CLAUDE);
         let a = agent("claude", CLAUDE_ID, "/Users/me/src/collie");
-        let d = t.derive(&a, false).unwrap();
-        assert_eq!((d.context_left, d.plan_usage), (Some(94), None));
+        assert_eq!(t.derive(&a, false).unwrap().context_left, Some(94));
+        assert_eq!((t.plan(), t.plan_moved()), (None, None));
 
         // The status line says this session's window is 200K, not the model's 1M.
         let input = include_str!("../tests/fixtures/statusline.json").replace(
@@ -718,17 +712,14 @@ mod tests {
             r#""context_window_size": 200000"#,
         );
         crate::usage::record(&data, input.as_bytes(), 7).unwrap();
-        let d = t.derive(&a, false).unwrap();
-        assert_eq!(d.context_left, Some(72));
-        let plan = d.plan_usage.unwrap();
+        assert_eq!(t.derive(&a, false).unwrap().context_left, Some(72));
+        let plan = t.plan_moved().unwrap();
         assert_eq!(plan.recorded_ms, 7);
-        assert_eq!(plan.five_hour.unwrap().used_percent, 24);
+        assert_eq!(plan.five_hour.as_ref().unwrap().used_percent, 24);
+        assert_eq!((t.plan_moved(), t.plan()), (None, Some(plan)));
 
         let c = agent("codex", CODEX_ID, "/Users/me/src/collie");
         assert_eq!(t.derive(&c, false), None);
-        let mut no_session = agent("claude", CLAUDE_ID, "/");
-        no_session.agent_session = None;
-        assert!(t.derive(&no_session, false).unwrap().plan_usage.is_some());
     }
 
     #[test]

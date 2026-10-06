@@ -1934,18 +1934,16 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                 let (changed, shape) = prev.diff(&next);
                 let mut tracker = lock(&state.tracker);
                 let mut transcripts = lock(&state.transcripts);
-                // The plan is the machine's, so every Claude agent carries the new one, and a
-                // watched agent that stays working does not show it aging. Checked with no phone
-                // too, so a phone that connects later is not sent a change its snapshot holds.
-                let plan_moved = transcripts.plan_moved() && phones;
-                if !changed.is_empty() || plan_moved {
+                // Checked with no phone too, so a phone that connects later is not sent a
+                // change its snapshot holds.
+                if let Some(plan_usage) = transcripts.plan_moved().filter(|_| phones) {
+                    let _ = state.events.send(Event::PlanUsage { plan_usage });
+                }
+                if !changed.is_empty() {
                     transcripts.retain(&agents);
                     let now = crate::now_ms();
-                    for a in agents.iter().filter(|a| {
-                        changed.contains(&a.terminal_id)
-                            || (plan_moved && a.agent.as_deref() == Some("claude"))
-                    }) {
-                        let derived = transcripts.derive(a, changed.contains(&a.terminal_id));
+                    for a in agents.iter().filter(|a| changed.contains(&a.terminal_id)) {
+                        let derived = transcripts.derive(a, true);
                         if let Some(agent) = flock::map_agent(a, &mut tracker, now, derived) {
                             let _ = state.events.send(Event::AgentStatus { agent });
                         }

@@ -180,29 +180,23 @@ async fn scenario(
         .map(|w| (w.workspace_id.as_str(), w.label.as_str()))
         .collect();
     assert_eq!(workspaces, [("w6", "collie"), ("w7", "api")]);
-    let usage = |kind: &str| {
-        flock
-            .agents
-            .iter()
-            .find(|a| a.kind.as_deref() == Some(kind))
-            .and_then(|a| a.plan_usage.clone())
-    };
-    let plan = usage("claude").expect("the Claude Code agent carries the plan usage");
+    let plan = flock
+        .plan_usage
+        .expect("the snapshot carries the machine's plan usage");
     assert_eq!(plan.five_hour.map(|w| w.used_percent), Some(24));
     assert_eq!(
         plan.seven_day.map(|w| w.resets_at_ms),
         Some(1_738_857_600_000)
     );
-    assert_eq!(usage("codex"), None);
     println!("  flock in {:?}", t.elapsed());
 
-    println!("a newer plan reaches the phone while the agent's status stays the same");
+    println!("a newer plan reaches the phone while no agent's status changes");
     let t = Instant::now();
     collied::usage::record(&data_dir, statusline.replace("23.5", "57.0").as_bytes(), 2).unwrap();
     let five_hour = || {
         phone_a
-            .agent_view(machine.id.clone(), "term_65ce7ae4fd5731".into(), 0)
-            .and_then(|v| v.agent?.plan_usage?.five_hour)
+            .cached_flock(machine.id.clone())
+            .and_then(|f| f.plan_usage?.five_hour)
             .map(|w| w.used_percent)
     };
     while five_hour() != Some(57) {

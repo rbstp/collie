@@ -77,11 +77,12 @@ final class DemoAgentCore: ActivityCore {
 
     let snapshot: String
     private let agents: [AgentSummary]
+    private let usage: PlanUsage
 
     init(snapshot: String) {
         self.snapshot = snapshot
         let now = UInt64(Date.now.timeIntervalSince1970 * 1000)
-        let usage = PlanUsage(
+        usage = PlanUsage(
             fiveHour: UsageWindow(usedPercent: 38, resetsAtMs: now + 7_980_000),
             sevenDay: UsageWindow(usedPercent: 61, resetsAtMs: now + 277_200_000),
             recordedMs: now - 20_000
@@ -91,7 +92,7 @@ final class DemoAgentCore: ActivityCore {
                 terminalId: "term_demo", workspaceId: "ws_collie", kind: "claude", name: nil, title: "fix the build",
                 status: .working, statusSinceMs: now - 135_000, cwd: "/Users/demo/collie",
                 lastLine: "Running the approval tests again after the settle fix.", contextLeft: 72,
-                lastPrompt: "the approval tests are flaky, fix them", lastActivityMs: now - 4_000, planUsage: usage
+                lastPrompt: "the approval tests are flaky, fix them", lastActivityMs: now - 4_000
             ),
             AgentSummary(
                 terminalId: "term_2", workspaceId: "ws_collie", kind: "codex", name: nil, title: "add approval tests",
@@ -103,7 +104,7 @@ final class DemoAgentCore: ActivityCore {
                 terminalId: "term_3", workspaceId: "ws_site", kind: "claude", name: nil, title: "update the docs",
                 status: .idle, statusSinceMs: now - 900_000, cwd: "/Users/demo/website",
                 lastLine: "The docs now describe the inbox and the context ring.", contextLeft: 12,
-                lastPrompt: "update the docs for the new release", lastActivityMs: now - 900_000, planUsage: usage
+                lastPrompt: "update the docs for the new release", lastActivityMs: now - 900_000
             ),
             AgentSummary(
                 terminalId: "term_4", workspaceId: "ws_site", kind: "codex", name: nil, title: "dark mode",
@@ -115,7 +116,7 @@ final class DemoAgentCore: ActivityCore {
                 terminalId: "term_5", workspaceId: "ws_api", kind: "claude", name: nil, title: "rate limiter",
                 status: .idle, statusSinceMs: now - 259_200_000, cwd: "/Users/demo/api",
                 lastLine: "The rate limiter is merged.", contextLeft: 55,
-                lastPrompt: "merge the rate limiter PR", lastActivityMs: now - 259_200_000, planUsage: usage
+                lastPrompt: "merge the rate limiter PR", lastActivityMs: now - 259_200_000
             ),
             AgentSummary(
                 terminalId: "term_6", workspaceId: "ws_api", kind: "copilot", name: nil, title: "triage issues",
@@ -221,7 +222,7 @@ final class DemoAgentCore: ActivityCore {
                 WorkspaceSummary(workspaceId: "ws_site", label: "website", number: 2, status: .done, cwd: "/Users/demo/website"),
                 WorkspaceSummary(workspaceId: "ws_api", label: "api", number: 3, status: .idle, cwd: "/Users/demo/api"),
             ],
-            agents: agents, approvalsCount: 1
+            agents: agents, approvalsCount: 1, planUsage: usage
         )
     }
 

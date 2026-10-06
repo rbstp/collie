@@ -52,17 +52,6 @@
             "null"
           ]
         },
-        "plan_usage": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PlanUsage"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The plan usage of the agent's subscription on the machine."
-        },
         "status": {
           "$ref": "#/$defs/AgentStatus"
         },
@@ -526,6 +515,22 @@
         {
           "properties": {
             "name": {
+              "const": "plan.usage",
+              "type": "string"
+            },
+            "plan_usage": {
+              "$ref": "#/$defs/PlanUsage"
+            }
+          },
+          "required": [
+            "name",
+            "plan_usage"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
               "const": "Unrecognized",
               "type": "string"
             }
@@ -553,6 +558,17 @@
         },
         "machine": {
           "$ref": "#/$defs/MachineInfo"
+        },
+        "plan_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The machine's plan usage, with or without a Claude Code agent open."
         },
         "seq": {
           "format": "uint64",

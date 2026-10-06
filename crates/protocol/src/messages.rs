@@ -701,9 +701,6 @@ pub struct Agent {
     /// When the transcript last changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_activity_ms: Option<u64>,
-    /// The plan usage of the agent's subscription on the machine.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan_usage: Option<PlanUsage>,
 }
 
 /// From Claude Code's status line input, as `collied statusline` last recorded it.
@@ -735,6 +732,9 @@ pub struct Flock {
     pub terminals: Vec<Terminal>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub terminals_enabled: bool,
+    /// The machine's plan usage, with or without a Claude Code agent open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_usage: Option<PlanUsage>,
 }
 
 /// A pane with no agent. `label` is the name given in herdr, never a title the pane's
@@ -860,6 +860,8 @@ pub enum Event {
     },
     #[serde(rename = "flock.changed")]
     FlockChanged {},
+    #[serde(rename = "plan.usage")]
+    PlanUsage { plan_usage: PlanUsage },
     #[serde(other)]
     Unrecognized,
 }
@@ -1144,11 +1146,11 @@ mod tests {
     }
 
     #[test]
-    fn agent_plan_usage_is_optional() {
-        let older = r#"{"terminal_id":"term_1","workspace_id":"w1","kind":"claude","name":null,"title":null,"status":"idle","status_since_ms":1,"cwd":null,"last_line":null}"#;
-        let a: Agent = serde_json::from_str(older).unwrap();
-        assert_eq!(a.plan_usage, None);
-        assert_eq!(serde_json::to_string(&a).unwrap(), older);
+    fn plan_usage_is_additive() {
+        let older = r#"{"seq":1,"machine":{"name":"m","node_id":"n","herdr_session":"default"},"workspaces":[],"agents":[],"approvals":[],"terminals":[]}"#;
+        let f: Flock = serde_json::from_str(older).unwrap();
+        assert_eq!(f.plan_usage, None);
+        assert_eq!(serde_json::to_string(&f).unwrap(), older);
         let usage = PlanUsage {
             five_hour: Some(UsageWindow {
                 used_percent: 24,
@@ -1157,15 +1159,22 @@ mod tests {
             seven_day: None,
             recorded_ms: 1_738_420_000_000,
         };
-        let with = Agent {
-            plan_usage: Some(usage),
-            ..a
+        let with = Flock {
+            plan_usage: Some(usage.clone()),
+            ..f
         };
         let json = serde_json::to_string(&with).unwrap();
         assert!(json.ends_with(
             r#""plan_usage":{"five_hour":{"used_percent":24,"resets_at_ms":1738425600000},"recorded_ms":1738420000000}}"#
         ));
-        assert_eq!(serde_json::from_str::<Agent>(&json).unwrap(), with);
+        assert_eq!(serde_json::from_str::<Flock>(&json).unwrap(), with);
+        let event = ServerFrame::Event {
+            seq: 2,
+            event: Event::PlanUsage { plan_usage: usage },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""name":"plan.usage""#), "{json}");
+        assert_eq!(serde_json::from_str::<ServerFrame>(&json).unwrap(), event);
     }
 
     #[test]

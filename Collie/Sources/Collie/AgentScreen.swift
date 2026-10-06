@@ -197,17 +197,6 @@ private struct AgentHeader: View {
     let machineLabel: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            row
-            if let usage = model.agent?.planUsage {
-                PlanUsageLine(usage: usage)
-            }
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 6)
-    }
-
-    private var row: some View {
         HStack(spacing: 8) {
             if let machineLabel {
                 Text(verbatim: machineLabel).font(.caption.weight(.semibold)).lineLimit(1)
@@ -247,53 +236,8 @@ private struct AgentHeader: View {
                     .lineLimit(1)
             }
         }
-    }
-}
-
-/// What is left of the subscription's 5-hour and weekly limits, and when each resets.
-private struct PlanUsageLine: View {
-    let usage: PlanUsage
-
-    var body: some View {
-        TimelineView(.everyMinute) { context in
-            let limits = usage.limits(now: context.date)
-            let stale = usage.isStale(now: context.date)
-            if !limits.isEmpty {
-                // One line when it fits, else one limit per line: the reset times must not be cut.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { items(limits, stale: stale, now: context.date) }
-                    VStack(alignment: .leading, spacing: 2) { items(limits, stale: stale, now: context.date) }
-                }
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .opacity(stale ? 0.6 : 1)
-                .lineLimit(1)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Self.accessibility(limits, stale: stale, recordedMs: usage.recordedMs, now: context.date))
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func items(_ limits: [UsageLimit], stale: Bool, now: Date) -> some View {
-        ForEach(limits, id: \.label) { limit in
-            HStack(spacing: 4) {
-                ContextRing(left: limit.left)
-                Text("\(limit.label) \(limit.left)% left · \(limit.resetsIn)")
-            }
-        }
-        if stale {
-            Label(Elapsed.string(sinceMs: usage.recordedMs, now: now), systemImage: "clock")
-                .labelStyle(.titleAndIcon)
-        }
-    }
-
-    private static func accessibility(_ limits: [UsageLimit], stale: Bool, recordedMs: UInt64, now: Date) -> String {
-        let windows = limits.map {
-            "\($0.label == "5h" ? "5-hour" : "Weekly") limit \($0.left)% left, resets in \(PlanUsage.spoken(seconds: $0.seconds))"
-        }
-        let age = Int(now.timeIntervalSince1970) - Int(recordedMs / 1000)
-        return (windows + (stale ? ["as of \(PlanUsage.spoken(seconds: age)) ago"] : [])).joined(separator: ", ")
+        .padding(.horizontal)
+        .padding(.vertical, 6)
     }
 }
 
