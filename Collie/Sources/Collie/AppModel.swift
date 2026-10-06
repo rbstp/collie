@@ -204,6 +204,7 @@ final class AppModel {
             }
         case .active:
             loadTerminalKey()
+            Task { await refreshNode() }
             if let since = backgroundedAt {
                 core?.resume(backgroundSecs: UInt64(max(0, Date.now.timeIntervalSince(since))))
             }
