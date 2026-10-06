@@ -181,7 +181,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         .unwrap();
     wait_output(core, &m, CLAUDE, "step 9").await;
     let t = Instant::now();
-    core.suspend().await;
+    core.suspend(core.begin_suspend()).await;
     let deadline = Instant::now() + Duration::from_secs(2);
     while sessions(&control).await > 0 {
         assert!(

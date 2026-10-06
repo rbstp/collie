@@ -474,6 +474,7 @@ struct Inner {
     uploads: Mutex<HashMap<u64, (String, watch::Sender<bool>)>>,
     next_upload: AtomicU64,
     suspended: watch::Sender<bool>,
+    resumes: AtomicU64,
     busy: watch::Sender<usize>,
 }
 
@@ -606,22 +607,31 @@ impl CollieCore {
     }
 
     pub fn resume(&self, background_secs: u64) {
+        // Bumped before the send: a suspend checking it under the watch lock either sees
+        // it or is undone by the send.
+        self.inner.resumes.fetch_add(1, Ordering::SeqCst);
         let suspended = self.inner.suspended.send_replace(false);
         for conn in lock(&self.inner.conns).values() {
             conn.resume(Duration::from_secs(background_secs), suspended);
         }
     }
 
+    /// Called as the app leaves the foreground, before any await: the epoch to pass to
+    /// [`Self::suspend`].
+    pub fn begin_suspend(&self) -> u64 {
+        self.inner.resumes.load(Ordering::SeqCst)
+    }
+
     /// For the app leaving the foreground, inside a background task. Once the work in
     /// flight is done (5 s at most), every session is closed, so collied drops it and its
     /// watch at once, and no supervisor dials again until [`Self::resume`], even when iOS
-    /// wakes the app for a lock-screen decide, which opens its own connection.
-    pub async fn suspend(&self) {
+    /// wakes the app for a lock-screen decide, which opens its own connection. Does nothing
+    /// when a resume came after the [`Self::begin_suspend`] that returned `epoch`.
+    pub async fn suspend(&self, epoch: u64) {
         let inner = self.inner.clone();
         let _ = self
             .runtime
             .spawn(async move {
-                let resumed = inner.suspended.subscribe();
                 let mut busy = inner.busy.subscribe();
                 let grace = if lock(&inner.uploads).is_empty() {
                     SUSPEND_GRACE
@@ -630,7 +640,7 @@ impl CollieCore {
                 };
                 let _ = tokio::time::timeout(grace, busy.wait_for(|n| *n == 0)).await;
                 let suspending = inner.suspended.send_if_modified(|s| {
-                    let now = !*s && matches!(resumed.has_changed(), Ok(false));
+                    let now = !*s && inner.resumes.load(Ordering::SeqCst) == epoch;
                     *s |= now;
                     now
                 });
@@ -1202,6 +1212,7 @@ impl CollieCore {
                 uploads: Mutex::default(),
                 next_upload: AtomicU64::default(),
                 suspended: watch::Sender::new(false),
+                resumes: AtomicU64::default(),
                 busy: watch::Sender::new(0),
             }),
         }))
@@ -3221,7 +3232,7 @@ mod tailnet_tests {
         };
         core.register_activity_token(id(), ACTIVITY.into(), "term_1".into(), token.clone())
             .unwrap();
-        rt.block_on(core.suspend());
+        rt.block_on(core.suspend(core.begin_suspend()));
         assert_eq!(
             lock(&seen).activities.last(),
             Some(&registered),
@@ -3264,6 +3275,22 @@ mod tailnet_tests {
             (link() == LinkPhase::Connected).then_some(())
         });
         assert_eq!(lock(&seen).connections, connections + 2);
+
+        let closed = lock(&seen).closed;
+        let epoch = core.begin_suspend();
+        core.resume(1);
+        rt.block_on(core.suspend(epoch));
+        std::thread::sleep(Duration::from_secs(1));
+        assert_eq!(
+            link(),
+            LinkPhase::Connected,
+            "a resume cancels a late suspend"
+        );
+        let after = {
+            let seen = lock(&seen);
+            (seen.connections, seen.closed)
+        };
+        assert_eq!(after, (connections + 2, closed), "the session stays open");
         drop(core);
         drop(server_rt);
         drop(control);
