@@ -12,7 +12,7 @@ private func agentModel(_ core: FakeCore) -> AgentModel {
 
 private let path = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/notes.txt"
 
-private func png(width: CGFloat, height: CGFloat) -> Data {
+func png(width: CGFloat, height: CGFloat) -> Data {
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
     return UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).pngData { context in
