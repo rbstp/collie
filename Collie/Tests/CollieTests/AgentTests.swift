@@ -742,6 +742,23 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 }
 
 @MainActor
+@Test func wrappedLinesShowTheAgentsProseRejoined() {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "⏺ a\n  b", truncated: false, reflowed: "⏺ a b")
+    }
+    let model = AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil)
+    model.poll()
+    #expect(model.screen == "⏺ a b")
+    model.wrapLines = false
+    #expect(model.screen == "⏺ a\n  b")
+    model.wrapLines = true
+    core.state.withLock { $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "$ ls", truncated: false) }
+    model.poll()
+    #expect(model.screen == "$ ls")
+}
+
+@MainActor
 @Test func wrapLinesIsOnByDefaultAndRememberedOnThisDevice() throws {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

@@ -19,12 +19,18 @@ pub struct OutputPatch {
     pub keep: u32,
     pub tail: Vec<String>,
     pub truncated: bool,
+    /// [`TerminalRead::wraps`] and [`TerminalRead::splits`] of the new text, absent when
+    /// they are those of the previous text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wraps: Option<Vec<u32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub splits: Option<Vec<u32>>,
 }
 
 impl OutputPatch {
     /// `None` unless the patch carries at most half of `next`'s bytes.
-    pub fn between(prev: &str, next: &TerminalRead) -> Option<Self> {
-        let old: Vec<&str> = prev.split('\n').collect();
+    pub fn between(prev: &TerminalRead, next: &TerminalRead) -> Option<Self> {
+        let old: Vec<&str> = prev.ansi.split('\n').collect();
         let new: Vec<&str> = next.ansi.split('\n').collect();
         let (start, skip, keep) = longest_run(&old, &new);
         let head = &new[..start];
@@ -35,23 +41,25 @@ impl OutputPatch {
         }
         Some(Self {
             terminal_id: next.terminal_id.clone(),
-            base: text_hash(prev),
+            base: text_hash(&prev.ansi),
             head: head.iter().map(|&l| l.to_owned()).collect(),
             skip: u32::try_from(skip).ok()?,
             keep: u32::try_from(keep).ok()?,
             tail: tail.iter().map(|&l| l.to_owned()).collect(),
             truncated: next.truncated,
+            wraps: (next.wraps != prev.wraps).then(|| next.wraps.clone()),
+            splits: (next.splits != prev.splits).then(|| next.splits.clone()),
         })
     }
 
     /// `None` when `prev` is not the text the patch was made against.
-    pub fn apply(&self, prev: &str) -> Option<TerminalRead> {
-        if text_hash(prev) != self.base {
+    pub fn apply(&self, prev: &TerminalRead) -> Option<TerminalRead> {
+        if text_hash(&prev.ansi) != self.base {
             return None;
         }
         let skip = usize::try_from(self.skip).ok()?;
         let end = skip.checked_add(usize::try_from(self.keep).ok()?)?;
-        let old: Vec<&str> = prev.split('\n').collect();
+        let old: Vec<&str> = prev.ansi.split('\n').collect();
         let kept = old.get(skip..end)?;
         let lines: Vec<&str> = self
             .head
@@ -65,6 +73,8 @@ impl OutputPatch {
             source: ReadSource::Recent,
             ansi: lines.join("\n"),
             truncated: self.truncated,
+            wraps: self.wraps.clone().unwrap_or_else(|| prev.wraps.clone()),
+            splits: self.splits.clone().unwrap_or_else(|| prev.splits.clone()),
         })
     }
 }
@@ -116,6 +126,8 @@ mod tests {
             source: ReadSource::Recent,
             ansi: ansi.to_owned(),
             truncated: false,
+            wraps: Vec::new(),
+            splits: Vec::new(),
         }
     }
 
@@ -126,8 +138,8 @@ mod tests {
     }
 
     fn round_trip(prev: &str, next: &str) -> OutputPatch {
-        let patch = OutputPatch::between(prev, &read(next)).expect("a patch");
-        assert_eq!(patch.apply(prev), Some(read(next)));
+        let patch = OutputPatch::between(&read(prev), &read(next)).expect("a patch");
+        assert_eq!(patch.apply(&read(prev)), Some(read(next)));
         let json = serde_json::to_string(&patch).unwrap();
         assert_eq!(serde_json::from_str::<OutputPatch>(&json).unwrap(), patch);
         patch
@@ -162,9 +174,38 @@ mod tests {
     }
 
     #[test]
+    fn wraps_ride_along_when_they_change() {
+        let prev = TerminalRead {
+            wraps: vec![7],
+            splits: vec![9],
+            ..read(&(history(0..100) + "a"))
+        };
+        let next = TerminalRead {
+            wraps: vec![7, 100],
+            ..read(&(history(0..100) + "a\r\nb\r\nc"))
+        };
+        let patch = OutputPatch::between(&prev, &next).unwrap();
+        assert_eq!(
+            (patch.wraps.as_deref(), patch.splits.as_deref()),
+            (Some(&[7, 100][..]), Some(&[][..]))
+        );
+        assert_eq!(patch.apply(&prev), Some(next.clone()));
+
+        let tick = TerminalRead {
+            ansi: next.ansi.clone() + "d",
+            ..next.clone()
+        };
+        let patch = OutputPatch::between(&next, &tick).unwrap();
+        assert_eq!((&patch.wraps, &patch.splits), (&None, &None));
+        assert!(!serde_json::to_string(&patch).unwrap().contains("wraps"));
+        assert_eq!(patch.apply(&next), Some(tick));
+    }
+
+    #[test]
     fn mostly_new_text_is_sent_whole() {
-        assert!(OutputPatch::between(&history(0..10), &read(&history(100..110))).is_none());
-        assert!(OutputPatch::between(&history(0..10), &read(&history(6..16))).is_none());
+        let prev = read(&history(0..10));
+        assert!(OutputPatch::between(&prev, &read(&history(100..110))).is_none());
+        assert!(OutputPatch::between(&prev, &read(&history(6..16))).is_none());
     }
 
     #[test]
@@ -180,18 +221,18 @@ mod tests {
     fn apply_needs_the_base_text() {
         let prev = history(0..100) + "a";
         let patch = round_trip(&prev, &(history(0..100) + "b"));
-        assert_eq!(patch.apply(&(history(0..100) + "c")), None);
+        assert_eq!(patch.apply(&read(&(history(0..100) + "c"))), None);
         let past_end = OutputPatch {
             keep: 1000,
             ..patch.clone()
         };
-        assert_eq!(past_end.apply(&prev), None);
+        assert_eq!(past_end.apply(&read(&prev)), None);
         let overflow = OutputPatch {
             skip: u32::MAX,
             keep: u32::MAX,
             ..patch
         };
-        assert_eq!(overflow.apply(&prev), None);
+        assert_eq!(overflow.apply(&read(&prev)), None);
     }
 
     #[test]

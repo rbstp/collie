@@ -50,7 +50,7 @@ struct AgentScreen: View {
                 }
             }
             AgentTerminal(
-                ansi: model.ansi, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
+                ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
                 perform: perform, resized: { model.fontSize = $0 },
                 // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
                 neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,

@@ -110,6 +110,8 @@ struct Herdr {
     new_pane_terminal: Option<String>,
     rule: Option<String>,
     slow: Option<Duration>,
+    columns: Option<u16>,
+    zoomed: bool,
 }
 
 struct Mock {
@@ -268,6 +270,16 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
         }}),
         "agent.read" => read(h, &p["target"]),
         "pane.read" => read(h, &p["pane_id"]),
+        "pane.layout" => {
+            let pane = match h.columns {
+                Some(_) => p["pane_id"].clone(),
+                None => json!("w1:p1"),
+            };
+            json!({"type": "pane_layout", "layout": {"workspace_id": "w6", "tab_id": "w6:t1",
+                "zoomed": h.zoomed, "focused_pane_id": pane, "splits": [], "panes": [
+                {"pane_id": "w6:p9", "focused": false, "rect": {"x": 0, "y": 0, "width": 30, "height": 60}},
+                {"pane_id": pane, "focused": true, "rect": {"x": 31, "y": 0, "width": h.columns.unwrap_or(80), "height": 60}}]}})
+        }
         "agent.prompt" => {
             json!({"type": "agent_prompted", "agent": agent_by_pane(h, p["target"].as_str().unwrap()).unwrap_or(json!({}))})
         }
@@ -1234,10 +1246,7 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
     };
     assert_eq!((patch.skip, patch.keep), (0, 100));
     assert_eq!(patch.tail, ["b\r", ""]);
-    assert_eq!(
-        patch.apply(&full.ansi).unwrap().ansi,
-        format!("{history}b\r\n")
-    );
+    assert_eq!(patch.apply(&full).unwrap().ansi, format!("{history}b\r\n"));
 
     herdr.with(|h| {
         h.snapshot["agents"].as_array_mut().unwrap().remove(0);
@@ -1425,6 +1434,87 @@ async fn a_retried_terminal_op_writes_only_under_the_session_that_sent_it() {
     assert_eq!(code(reply), ErrorCode::TerminalLocked);
     assert_eq!(sent.await.unwrap().1, Origin::Ran);
     assert!(herdr.mutations().is_empty(), "{:?}", herdr.methods());
+}
+
+#[tokio::test]
+async fn claude_prose_wrapped_at_the_pane_width_is_marked() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| {
+        h.text = "⏺ The quick brown fox jumps over the\r\n  lazy dog.\r\n".into();
+        h.columns = Some(40);
+    });
+    let recent = |terminal: &str| ReadParams {
+        terminal_id: tid(terminal),
+        source: ReadSource::Recent,
+        lines: None,
+    };
+    let joins = |reply: Reply| match reply {
+        Ok(Response::Terminal(read)) => (read.wraps, read.splits),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        joins(drive.read(recent(CLAUDE), true).await),
+        (vec![1], vec![])
+    );
+    assert_eq!(
+        herdr.params("pane.layout"),
+        vec![json!({"pane_id": "w6:p1"})]
+    );
+
+    let mut watcher = drive.watch(tid(CLAUDE), 200).await.unwrap();
+    let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+        panic!("no first output");
+    };
+    assert_eq!((first.wraps, first.splits), (vec![1], vec![]));
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert_eq!(herdr.params("pane.layout").len(), 2, "unchanged ticks");
+    herdr.with(|h| {
+        h.text.push_str("\r\n");
+        h.errors
+            .insert("pane.layout".into(), VecDeque::from(["x".to_owned()]));
+    });
+    let Ok(Some(Watched::Patch(failed))) = next(&mut watcher).await else {
+        panic!("no patch");
+    };
+    assert_eq!((failed.wraps, failed.splits), (Some(vec![]), None));
+    let Ok(Some(Watched::Patch(retried))) = next(&mut watcher).await else {
+        panic!("a failed width is not read again");
+    };
+    assert_eq!((retried.wraps, retried.tail), (Some(vec![1]), vec![]));
+    drop(watcher);
+
+    herdr.with(|h| h.zoomed = true);
+    assert_eq!(
+        joins(drive.read(recent(CLAUDE), true).await),
+        (vec![], vec![]),
+        "a zoomed tab"
+    );
+    herdr.with(|h| h.zoomed = false);
+
+    herdr.with(|h| h.columns = None);
+    assert_eq!(
+        joins(drive.read(recent(CLAUDE), true).await),
+        (vec![], vec![]),
+        "a pane missing from the layout"
+    );
+    herdr.with(|h| h.columns = Some(40));
+    let layouts = herdr.params("pane.layout").len();
+    assert_eq!(
+        joins(drive.read(recent(CODEX_BLOCKED), true).await),
+        (vec![], vec![])
+    );
+    assert_eq!(
+        joins(drive.read(recent(CLAUDE), false).await),
+        (vec![], vec![])
+    );
+    let mut watcher = drive.watch_terminal(tid(SHELL), 200, yes()).await.unwrap();
+    let Ok(Some(Watched::Output(shell))) = next(&mut watcher).await else {
+        panic!("no shell output");
+    };
+    assert_eq!((shell.wraps, shell.splits), (vec![], vec![]));
+    assert_eq!(herdr.params("pane.layout").len(), layouts);
 }
 
 #[tokio::test]

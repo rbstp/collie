@@ -31,6 +31,7 @@ final class AgentModel {
     private(set) var link: LinkPhase?
     private(set) var linkError: String?
     private(set) var ansi = ""
+    private(set) var reflowed: String?
     private(set) var refreshing = false
     private var revision: UInt64 = 0
 
@@ -57,6 +58,8 @@ final class AgentModel {
 
     private let prefsFile: URL?
     private let draftsFile: URL?
+    var screen: String { wrapLines ? reflowed ?? ansi : ansi }
+
     var wrapLines: Bool {
         didSet {
             var prefs = DevicePrefs.load(from: prefsFile)
@@ -228,6 +231,7 @@ final class AgentModel {
         if agent != nil, !hadAgent { hadAgent = true }
         if let output = view.output {
             ansi = output.ansi
+            reflowed = output.reflowed
             revision = view.outputRevision
         }
         followMode()
@@ -289,7 +293,9 @@ final class AgentModel {
         refreshing = true
         defer { refreshing = false }
         do {
-            ansi = try await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: historyLines).ansi
+            let read = try await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: historyLines)
+            ansi = read.ansi
+            reflowed = read.reflowed
             notice = nil
         } catch {
             notice = Self.message(for: error)

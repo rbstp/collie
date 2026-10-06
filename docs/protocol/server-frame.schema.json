@@ -681,6 +681,17 @@
           "minimum": 0,
           "type": "integer"
         },
+        "splits": {
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "tail": {
           "items": {
             "type": "string"
@@ -692,6 +703,18 @@
         },
         "truncated": {
           "type": "boolean"
+        },
+        "wraps": {
+          "description": "[`TerminalRead::wraps`] and [`TerminalRead::splits`] of the new text, absent when\nthey are those of the previous text.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1088,11 +1111,28 @@
         "source": {
           "$ref": "#/$defs/ReadSource"
         },
+        "splits": {
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"
         },
         "truncated": {
           "type": "boolean"
+        },
+        "wraps": {
+          "description": "Rows of `ansi` (split on `\\n`) that continue the row above as one paragraph the agent\nwrapped at the Mac pane's width: after a space (`wraps`) or inside a word (`splits`).",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
         }
       },
       "required": [

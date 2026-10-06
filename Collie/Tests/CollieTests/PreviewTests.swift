@@ -202,7 +202,9 @@ private func running(_ model: PreviewModel, _ core: FakeCore, screens: Int) asyn
 @MainActor
 @Test func aWatchedAgentsOutputIsUsedInsteadOfARead() async {
     let core = FakeCore()
-    core.state.withLock { $0.output = TerminalSnapshot(terminalId: "t1", source: .recent, ansi: "watched", truncated: false) }
+    core.state.withLock {
+        $0.output = TerminalSnapshot(terminalId: "t1", source: .recent, ansi: "watched\n  row", truncated: false, reflowed: "watched row")
+    }
     let clock = FakeClock()
     let model = PreviewModel { clock.now }
     model.update([entry("m1", [("t1", .working), ("t2", .working)])])
@@ -210,7 +212,7 @@ private func running(_ model: PreviewModel, _ core: FakeCore, screens: Int) asyn
     model.appeared(route("t2"))
     let run = await running(model, core, screens: 2)
     #expect(core.snapshot.reads == ["t2"])
-    #expect(model.screens[route("t1")] == "watched")
+    #expect(model.screens[route("t1")] == "watched row")
     run.cancel()
     await run.value
 }

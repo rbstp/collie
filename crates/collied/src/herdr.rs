@@ -271,6 +271,29 @@ enum PaneInfoResult {
     PaneInfo { pane: PaneInfo },
 }
 
+#[derive(Deserialize)]
+struct LayoutRect {
+    width: u16,
+}
+
+#[derive(Deserialize)]
+struct LayoutPane {
+    pane_id: String,
+    rect: LayoutRect,
+}
+
+#[derive(Deserialize)]
+struct PaneLayout {
+    panes: Vec<LayoutPane>,
+    zoomed: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PaneLayoutResult {
+    PaneLayout { layout: PaneLayout },
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProcessInfo {
     pub shell_pid: Option<u32>,
@@ -365,6 +388,22 @@ pub async fn pane_process_info(socket: &Path, pane_id: &str) -> Result<ProcessIn
     let ProcessInfoResult::PaneProcessInfo { process_info } =
         call(socket, "pane.process_info", json!({ "pane_id": pane_id })).await?;
     Ok(process_info)
+}
+
+/// The pane's width in columns. herdr answers with the focused tab's layout when it does not
+/// know `pane_id`, so the pane is matched by id. `None` in a zoomed tab, where `rect` is not
+/// known to be the width the pane is drawn at.
+pub async fn pane_columns(socket: &Path, pane_id: &str) -> Result<Option<u16>, Error> {
+    let PaneLayoutResult::PaneLayout { layout } =
+        call(socket, "pane.layout", json!({ "pane_id": pane_id })).await?;
+    if layout.zoomed {
+        return Ok(None);
+    }
+    Ok(layout
+        .panes
+        .into_iter()
+        .find(|p| p.pane_id == pane_id)
+        .map(|p| p.rect.width))
 }
 
 pub async fn agent_read(

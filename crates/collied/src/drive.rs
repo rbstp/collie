@@ -20,7 +20,7 @@ use tokio::time::MissedTickBehavior;
 use crate::draft::{self, InputBox};
 use crate::herdr::{self, AgentInfo, PaneInfo};
 use crate::prompt::Menu;
-use crate::{approvals, flock, prompt};
+use crate::{approvals, flock, prompt, reflow};
 
 /// For `draft_changed` the message is the Mac's current draft: it goes to the phone in
 /// `ErrorBody.draft` and is never written to the audit log.
@@ -281,8 +281,12 @@ impl Driver {
     pub async fn read(&self, p: ReadParams, agent: bool) -> Reply {
         let mut lines = p.lines.map(u32::from);
         let source = source_name(p.source);
+        let mut claude = None;
         let read = if agent {
             let a = self.find_agent(&p.terminal_id).await?;
+            if a.agent.as_deref() == Some("claude") {
+                claude = Some(a.pane_id.clone());
+            }
             self.agent_read(&a.pane_id, source, &mut lines).await
         } else {
             let (pane, agent) = self.pane_and_agent(&p.terminal_id).await?;
@@ -295,11 +299,21 @@ impl Driver {
             herdr::pane_read(&self.herdr, &pane.pane_id, source, lines).await
         }
         .map_err(herdr_fail)?;
-        Ok(Response::Terminal(terminal_read(
-            p.terminal_id,
-            p.source,
-            read,
-        )))
+        let mut read = terminal_read(p.terminal_id, p.source, read);
+        if let Some(pane_id) = claude {
+            self.reflow(&pane_id, &mut read).await;
+        }
+        Ok(Response::Terminal(read))
+    }
+
+    /// Leaves `read` unjoined when herdr does not give the pane's width; `false` when herdr
+    /// failed.
+    async fn reflow(&self, pane_id: &str, read: &mut TerminalRead) -> bool {
+        let cols = herdr::pane_columns(&self.herdr, pane_id).await;
+        if let Ok(Some(cols)) = cols {
+            (read.wraps, read.splits) = reflow::soft_wraps(&read.ansi, cols.into());
+        }
+        cols.is_ok()
     }
 
     /// A reply longer than herdr's line limit is refused, so a pane dense with escapes is
@@ -371,19 +385,25 @@ impl Driver {
         let mut tick = tokio::time::interval(WATCH_EVERY);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut last = None;
-        let mut sent: Option<String> = None;
+        let mut sent: Option<TerminalRead> = None;
         let mut lines = Some(u32::from(lines));
         loop {
             tick.tick().await;
-            let pane_id = match &grant {
+            let pane = match &grant {
                 Some(auth) if !auth() => continue,
-                Some(_) => self.shell_pane(&terminal_id).await.map(|p| p.pane_id),
-                None => self.find_agent(&terminal_id).await.map(|a| a.pane_id),
+                Some(_) => self
+                    .shell_pane(&terminal_id)
+                    .await
+                    .map(|p| (p.pane_id, false)),
+                None => self
+                    .find_agent(&terminal_id)
+                    .await
+                    .map(|a| (a.pane_id, a.agent.as_deref() == Some("claude"))),
             };
-            let msg = match pane_id {
+            let msg = match pane {
                 Err((ErrorCode::NotFound, _)) => Watched::Gone,
                 Err(_) => continue,
-                Ok(pane_id) => {
+                Ok((pane_id, claude)) => {
                     let Ok(read) = self
                         .halving_read(
                             &pane_id,
@@ -395,7 +415,7 @@ impl Driver {
                     else {
                         continue;
                     };
-                    let read = terminal_read(terminal_id.clone(), ReadSource::Recent, read);
+                    let mut read = terminal_read(terminal_id.clone(), ReadSource::Recent, read);
                     let mut h = DefaultHasher::new();
                     (&read.ansi, read.truncated).hash(&mut h);
                     let hash = h.finish();
@@ -403,10 +423,16 @@ impl Driver {
                         continue;
                     }
                     last = Some(hash);
+                    if claude && !self.reflow(&pane_id, &mut read).await {
+                        last = None;
+                    }
+                    if sent.as_ref() == Some(&read) {
+                        continue;
+                    }
                     let patch = sent
-                        .as_deref()
+                        .as_ref()
                         .and_then(|prev| OutputPatch::between(prev, &read));
-                    sent = Some(read.ansi.clone());
+                    sent = Some(read.clone());
                     match patch {
                         Some(patch) => Watched::Patch(patch),
                         None => Watched::Output(read),
@@ -952,6 +978,8 @@ fn terminal_read(
         source,
         ansi: sanitize_ansi(&read.text),
         truncated: read.truncated,
+        wraps: Vec::new(),
+        splits: Vec::new(),
     }
 }
 

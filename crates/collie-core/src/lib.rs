@@ -389,11 +389,15 @@ pub struct TerminalSnapshot {
     pub source: TerminalSource,
     pub ansi: String,
     pub truncated: bool,
+    /// `ansi` with the agent's wrapped prose rejoined, for a screen that wraps at its own width.
+    #[uniffi(default = None)]
+    pub reflowed: Option<String>,
 }
 
 impl From<TerminalRead> for TerminalSnapshot {
     fn from(r: TerminalRead) -> Self {
         Self {
+            reflowed: r.reflowed(),
             terminal_id: r.terminal_id.into(),
             source: r.source.into(),
             ansi: r.ansi,
@@ -3192,12 +3196,30 @@ mod tailnet_tests {
         }
     }
 
+    #[test]
+    fn snapshots_carry_the_reflowed_text() {
+        assert_eq!(
+            TerminalSnapshot::from(terminal_read("⏺ a\n  b")).reflowed,
+            None
+        );
+        let read = TerminalRead {
+            wraps: vec![1],
+            ..terminal_read("⏺ a\n  b")
+        };
+        assert_eq!(
+            TerminalSnapshot::from(read).reflowed.as_deref(),
+            Some("⏺ a b")
+        );
+    }
+
     fn terminal_read(ansi: &str) -> TerminalRead {
         TerminalRead {
             terminal_id: TerminalId::new("term_1").unwrap(),
             source: ReadSource::Recent,
             ansi: ansi.into(),
             truncated: false,
+            wraps: Vec::new(),
+            splits: Vec::new(),
         }
     }
 
