@@ -101,6 +101,15 @@
       "additionalProperties": false,
       "description": "One watched agent per connection; `None` stops `agent.output` events.",
       "properties": {
+        "lines": {
+          "format": "uint16",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "terminal_id": {
           "anyOf": [
             {

@@ -12,8 +12,8 @@ use collie_tls::rustls::sign::CertifiedKey;
 use collie_tls::server::TlsStream;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
-    AttachmentChunkParams, ErrorBody, ErrorCode, Event, HelloResult, KeyPin, MachineInfo,
-    PairCompleteParams, PairingCode, PairingInvite, Request, Response, ServerFrame, TerminalId,
+    AgentWatchParams, AttachmentChunkParams, ErrorBody, ErrorCode, Event, HelloResult, KeyPin,
+    MachineInfo, PairCompleteParams, PairingCode, PairingInvite, Request, Response, ServerFrame,
 };
 use serde::{Deserialize, Serialize};
 use tailnet::{Accepted, BackendState, Node, WhoIs};
@@ -1015,7 +1015,7 @@ impl Session<'_> {
             Request::WorkspaceList(_) => (self.workspaces().await, None),
             Request::AgentRead(p) => (drive.read(p, true).await, None),
             Request::PaneRead(p) => (drive.read(p, false).await, None),
-            Request::AgentWatch(p) => (self.watch(p.terminal_id).await, None),
+            Request::AgentWatch(p) => (self.watch(p).await, None),
             Request::TaskOptions(_) => (drive.task_options().await, None),
             Request::AgentDraft(p) => (drive.draft(&p.terminal_id).await, None),
             Request::AgentPrompt(p) => {
@@ -1248,10 +1248,11 @@ impl Session<'_> {
         Ok(Response::Ok)
     }
 
-    async fn watch(&mut self, terminal_id: Option<TerminalId>) -> Reply {
+    async fn watch(&mut self, p: AgentWatchParams) -> Reply {
         self.watch = None;
-        if let Some(t) = terminal_id {
-            self.watch = Some(self.state.drive.watch(t).await?);
+        let lines = p.lines();
+        if let Some(t) = p.terminal_id {
+            self.watch = Some(self.state.drive.watch(t, lines).await?);
         }
         Ok(Response::Ok)
     }
@@ -1712,6 +1713,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::TerminalId;
 
     #[tokio::test]
     async fn detached_mutations_audit_themselves() {

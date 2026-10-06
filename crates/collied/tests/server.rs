@@ -470,6 +470,21 @@ async fn scenario(
         matches!(&event, Event::AgentOutput(read) if read.ansi == "\u{1b}[1mhi\u{1b}[0m\r\n"),
         "{event:?}"
     );
+    assert_eq!(herdr.read_lines()[0], json!(200), "default watch depth");
+    send(
+        &mut ws,
+        json!({"id": 55, "method": "agent.watch", "params": {"terminal_id": "term_65ce7ae4fd5731", "lines": 5000}}),
+    )
+    .await;
+    assert_eq!(result(recv(&mut ws).await), Response::Ok);
+    assert!(matches!(
+        recv(&mut ws).await,
+        ServerFrame::Event {
+            seq: 2,
+            event: Event::AgentOutput(_)
+        }
+    ));
+    assert_eq!(herdr.read_lines().last(), Some(&json!(1000)), "clamped");
     send(
         &mut ws,
         json!({"id": 52, "method": "agent.watch", "params": {"terminal_id": null}}),
@@ -485,7 +500,7 @@ async fn scenario(
     let ServerFrame::Event { seq, event } = recv(&mut ws).await else {
         panic!("expected an event");
     };
-    assert_eq!(seq, 2);
+    assert_eq!(seq, 3);
     assert!(matches!(
         event,
         Event::AgentStatus { agent } if agent.terminal_id.as_str() == "term_65ce7ae4fd5731" && agent.status == AgentStatus::Idle
@@ -495,7 +510,7 @@ async fn scenario(
         json!({"id": 6, "method": "flock.snapshot", "params": {}}),
     )
     .await;
-    assert!(matches!(result(recv(&mut ws).await), Response::Flock(f) if f.seq == 2));
+    assert!(matches!(result(recv(&mut ws).await), Response::Flock(f) if f.seq == 3));
 
     println!("a fifth session from one node evicts its oldest");
     let mut extra = Vec::new();
@@ -798,6 +813,7 @@ fn kernel_tcp_listeners() -> Vec<String> {
 struct MockHerdr {
     snapshot: Arc<Mutex<Value>>,
     methods: Arc<Mutex<Vec<String>>>,
+    read_lines: Arc<Mutex<Vec<Value>>>,
     snapshot_delay: Arc<Mutex<Duration>>,
 }
 
@@ -807,14 +823,21 @@ impl MockHerdr {
             serde_json::from_str(include_str!("fixtures/session.snapshot.json")).unwrap();
         let snapshot = Arc::new(Mutex::new(fixture["result"]["snapshot"].clone()));
         let methods = Arc::new(Mutex::new(Vec::new()));
+        let read_lines = Arc::new(Mutex::new(Vec::new()));
         let snapshot_delay = Arc::new(Mutex::new(Duration::ZERO));
         let listener = UnixListener::bind(path).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let (snap, seen, delay) = (snapshot.clone(), methods.clone(), snapshot_delay.clone());
+        let (snap, seen, lines, delay) = (
+            snapshot.clone(),
+            methods.clone(),
+            read_lines.clone(),
+            snapshot_delay.clone(),
+        );
         tokio::spawn(async move {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
-                let (snap, seen, delay) = (snap.clone(), seen.clone(), delay.clone());
+                let (snap, seen, lines, delay) =
+                    (snap.clone(), seen.clone(), lines.clone(), delay.clone());
                 tokio::spawn(async move {
                     let (r, mut w) = stream.into_split();
                     let mut line = String::new();
@@ -825,6 +848,9 @@ impl MockHerdr {
                     let req: Value = serde_json::from_str(&line).unwrap();
                     let method = req["method"].as_str().unwrap().to_owned();
                     seen.lock().unwrap().push(method.clone());
+                    if method == "agent.read" {
+                        lines.lock().unwrap().push(req["params"]["lines"].clone());
+                    }
                     if method == "session.snapshot" {
                         let delay = *delay.lock().unwrap();
                         tokio::time::sleep(delay).await;
@@ -872,6 +898,7 @@ impl MockHerdr {
         Self {
             snapshot,
             methods,
+            read_lines,
             snapshot_delay,
         }
     }
@@ -890,6 +917,10 @@ impl MockHerdr {
 
     fn methods(&self) -> Vec<String> {
         self.methods.lock().unwrap().clone()
+    }
+
+    fn read_lines(&self) -> Vec<Value> {
+        self.read_lines.lock().unwrap().clone()
     }
 }
 

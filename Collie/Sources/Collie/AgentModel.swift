@@ -57,6 +57,8 @@ final class AgentModel {
 
     var keepsKeyboard: Bool { DevicePrefs.load(from: prefsFile).keepKeyboard }
 
+    var historyLines: UInt16 { DevicePrefs.load(from: prefsFile).historyLines }
+
     func reloadGestures() {
         gestures = DevicePrefs.load(from: prefsFile).gestures
     }
@@ -149,7 +151,7 @@ final class AgentModel {
         refreshing = true
         defer { refreshing = false }
         do {
-            ansi = try await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: nil).ansi
+            ansi = try await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: historyLines).ansi
             notice = nil
         } catch {
             notice = Self.message(for: error)
@@ -345,9 +347,10 @@ final class AgentModel {
         let machineId = route.machineId
         let previous = Self.watchChains[machineId]
         let core = core
+        let lines = historyLines
         Self.watchChains[machineId] = Task {
             await previous?.value
-            try? await core.watchAgent(machineId: machineId, terminalId: terminalId)
+            try? await core.watchAgent(machineId: machineId, terminalId: terminalId, lines: lines)
         }
     }
 

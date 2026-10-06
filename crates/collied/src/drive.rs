@@ -31,7 +31,6 @@ pub type Reply = Result<Response, Fail>;
 pub type Authorized = Arc<dyn Fn() -> bool + Send + Sync>;
 
 const WATCH_EVERY: Duration = Duration::from_millis(250);
-const WATCH_LINES: u32 = limits::MAX_READ_LINES as u32;
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const START_POLL: Duration = Duration::from_millis(250);
 pub const OP_TTL: Duration = Duration::from_secs(600);
@@ -268,19 +267,28 @@ impl Driver {
         }
     }
 
-    pub async fn watch(self: &Arc<Self>, terminal_id: TerminalId) -> Result<Watcher, Fail> {
+    pub async fn watch(
+        self: &Arc<Self>,
+        terminal_id: TerminalId,
+        lines: u16,
+    ) -> Result<Watcher, Fail> {
         self.find_agent(&terminal_id).await?;
         let (tx, rx) = mpsc::channel(1);
-        let task = tokio::spawn(self.clone().watch_loop(terminal_id, tx));
+        let task = tokio::spawn(self.clone().watch_loop(terminal_id, lines, tx));
         Ok(Watcher { rx, task })
     }
 
-    async fn watch_loop(self: Arc<Self>, terminal_id: TerminalId, tx: mpsc::Sender<Watched>) {
+    async fn watch_loop(
+        self: Arc<Self>,
+        terminal_id: TerminalId,
+        lines: u16,
+        tx: mpsc::Sender<Watched>,
+    ) {
         let mut tick = tokio::time::interval(WATCH_EVERY);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut last = None;
         let mut sent: Option<String> = None;
-        let mut lines = Some(WATCH_LINES);
+        let mut lines = Some(u32::from(lines));
         loop {
             tick.tick().await;
             let msg = match self.find_agent(&terminal_id).await {

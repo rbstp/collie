@@ -1177,11 +1177,11 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
     assert!(matches!(
-        drive.watch(tid("term_gone")).await,
+        drive.watch(tid("term_gone"), 200).await,
         Err((ErrorCode::NotFound, _))
     ));
 
-    let mut watcher = drive.watch(tid(CLAUDE)).await.unwrap();
+    let mut watcher = drive.watch(tid(CLAUDE), 200).await.unwrap();
     let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
         panic!("no first output");
     };
@@ -1190,7 +1190,7 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
     let reads = herdr.params("agent.read");
     assert_eq!(
         reads[0],
-        json!({"target": "w6:p1", "source": "recent_unwrapped", "lines": 1000, "format": "ansi"})
+        json!({"target": "w6:p1", "source": "recent_unwrapped", "lines": 200, "format": "ansi"})
     );
 
     assert!(
@@ -1229,7 +1229,7 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
     assert!(matches!(next(&mut watcher).await, Ok(Some(Watched::Gone))));
     assert!(matches!(next(&mut watcher).await, Ok(None)));
 
-    let watcher = drive.watch(tid(CODEX_BLOCKED)).await.unwrap();
+    let watcher = drive.watch(tid(CODEX_BLOCKED), 200).await.unwrap();
     drop(watcher);
     tokio::time::sleep(Duration::from_millis(100)).await;
     let reads = herdr.params("agent.read").len();
@@ -1250,7 +1250,7 @@ async fn a_reply_over_herdrs_line_limit_is_read_with_fewer_lines() {
     let line = format!("{}\r\n", "\u{1b}[31mx".repeat(200));
     herdr.with(|h| h.text = line.repeat(1000));
 
-    let mut watcher = drive.watch(tid(CLAUDE)).await.unwrap();
+    let mut watcher = drive.watch(tid(CLAUDE), 1000).await.unwrap();
     let Ok(Some(Watched::Output(read))) = next(&mut watcher).await else {
         panic!("no output");
     };

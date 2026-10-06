@@ -9,6 +9,9 @@ struct DevicePrefs: Codable, Equatable {
     var dictationLanguage = DictationLanguage.english
     var agentsGrid = false
     var starred: Set<AgentRoute> = []
+    var historyLines: UInt16 = 200
+
+    static let historyChoices: [UInt16] = [200, 500, 1000]
 
     static let file: URL? = try? StateDirectory.prepare().appending(path: "prefs.json")
 
@@ -34,6 +37,7 @@ extension DevicePrefs {
         dictationLanguage = (try? container.decodeIfPresent(DictationLanguage.self, forKey: .dictationLanguage)) ?? defaults.dictationLanguage
         agentsGrid = try container.decodeIfPresent(Bool.self, forKey: .agentsGrid) ?? defaults.agentsGrid
         starred = (try? container.decodeIfPresent(Set<AgentRoute>.self, forKey: .starred)) ?? defaults.starred
+        historyLines = try container.decodeIfPresent(UInt16.self, forKey: .historyLines) ?? defaults.historyLines
     }
 }
 

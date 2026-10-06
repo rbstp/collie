@@ -734,7 +734,7 @@ impl CollieCore {
         let request = Request::AgentRead(ReadParams {
             terminal_id: terminal(terminal_id)?,
             source,
-            lines: lines.or((source == ReadSource::Recent).then_some(limits::MAX_READ_LINES)),
+            lines: lines.or((source == ReadSource::Recent).then_some(limits::DEFAULT_WATCH_LINES)),
         });
         match self.call(&machine_id, request, CALL_TIMEOUT).await? {
             Response::Terminal(read) => Ok(read.into()),
@@ -750,15 +750,23 @@ impl CollieCore {
         &self,
         machine_id: String,
         terminal_id: Option<String>,
+        lines: u16,
     ) -> Result<(), CoreError> {
         let terminal_id = terminal_id.map(terminal).transpose()?;
         let conn = self.conn(&machine_id)?;
-        lock(&conn.shared.flock).watch(terminal_id.clone());
+        {
+            let mut state = lock(&conn.shared.flock);
+            state.watch(terminal_id.clone());
+            state.watch_lines = Some(lines);
+        }
         if lock(&conn.shared.link).phase != LinkPhase::Connected {
             return Ok(());
         }
         self.run(async move {
-            let watch = Request::AgentWatch(AgentWatchParams { terminal_id });
+            let watch = Request::AgentWatch(AgentWatchParams {
+                terminal_id,
+                lines: Some(lines),
+            });
             let response = conn
                 .request(watch, CALL_TIMEOUT)
                 .await
@@ -2523,6 +2531,7 @@ mod tailnet_tests {
     struct Seen {
         watches: Vec<Option<String>>,
         reads: Vec<Option<u16>>,
+        lines: Vec<Option<u16>>,
         prompt_ops: Vec<String>,
         executed: HashMap<String, Response>,
         task_ops: Vec<String>,
@@ -2706,11 +2715,13 @@ mod tailnet_tests {
                                     ),
                                 ];
                             }
+                            lock(&seen).lines.push(p.lines);
                             lock(&seen).watches.push(p.terminal_id.map(String::from));
                             Ok(Response::Ok)
                         }
                         Request::AgentRead(p) => {
                             assert_eq!(p.terminal_id.as_str(), "term_1");
+                            lock(&seen).lines.push(p.lines);
                             lock(&seen).reads.push(p.lines);
                             Ok(Response::Terminal(terminal_read("read")))
                         }
@@ -3067,7 +3078,8 @@ mod tailnet_tests {
                 })
                 .unwrap_or_else(|| panic!("no output {want:?}"))
         };
-        rt.block_on(core.watch_agent(id(), Some(t1()))).unwrap();
+        rt.block_on(core.watch_agent(id(), Some(t1()), 500))
+            .unwrap();
         let view = poll(0, "live");
         assert_eq!(view.agent.unwrap().status, AgentState::Blocked);
         assert_eq!(view.output_revision, 1, "the replay is dropped");
@@ -3077,7 +3089,7 @@ mod tailnet_tests {
             "the watch's output is not read again"
         );
         let snap = rt
-            .block_on(core.agent_read(id(), t1(), TerminalSource::Recent, None))
+            .block_on(core.agent_read(id(), t1(), TerminalSource::Recent, Some(500)))
             .unwrap();
         assert_eq!((snap.ansi.as_str(), snap.truncated), ("read", false));
         let read = poll(view.output_revision, "read").output_revision;
@@ -3089,10 +3101,7 @@ mod tailnet_tests {
             core.agent_view(id(), t1(), read).unwrap().output.is_none(),
             "a preview read does not replace the watched screen"
         );
-        assert_eq!(
-            lock(&seen).reads,
-            vec![Some(limits::MAX_READ_LINES), Some(60)]
-        );
+        assert_eq!(lock(&seen).reads, vec![Some(500), Some(60)]);
 
         rt.block_on(core.prompt(id(), t1(), "fix the build".into(), None))
             .unwrap();
@@ -3108,8 +3117,13 @@ mod tailnet_tests {
             );
             assert_eq!(
                 seen.reads,
-                vec![Some(limits::MAX_READ_LINES), Some(60)],
+                vec![Some(500), Some(60)],
                 "only the explicit agent_read calls"
+            );
+            assert_eq!(
+                seen.lines,
+                [Some(500), Some(500), Some(60), Some(500)],
+                "watch, read, preview read, re-issued watch"
             );
         }
         poll(view.output_revision, "live");
@@ -3151,7 +3165,7 @@ mod tailnet_tests {
             .block_on(core.close_pane(id(), "term_2".into(), false))
             .unwrap_err();
         assert!(matches!(err, CoreError::ConfirmRequired), "{err:?}");
-        rt.block_on(core.watch_agent(id(), None)).unwrap();
+        rt.block_on(core.watch_agent(id(), None, 500)).unwrap();
         assert_eq!(lock(&seen).watches.last(), Some(&None));
         assert!(core.agent_view(id(), t1(), 0).unwrap().output.is_none());
 
