@@ -557,6 +557,9 @@ mod tests {
             status_since_ms: 1,
             cwd: None,
             last_line: None,
+            context_left: None,
+            last_prompt: None,
+            last_activity_ms: None,
         }
     }
 

@@ -2,6 +2,16 @@
   "$defs": {
     "Agent": {
       "properties": {
+        "context_left": {
+          "description": "Percent of the context window left, from the same transcript.",
+          "format": "uint8",
+          "maximum": 100,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "cwd": {
           "type": [
             "string",
@@ -14,7 +24,23 @@
             "null"
           ]
         },
+        "last_activity_ms": {
+          "description": "When the transcript last changed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "last_line": {
+          "description": "The latest line of the agent's reply, from its transcript on the machine.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_prompt": {
           "type": [
             "string",
             "null"

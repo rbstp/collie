@@ -12,13 +12,14 @@ struct FlockScreen: View {
     @State private var path: [AgentRoute] = []
     @State private var newTask = false
     @State private var previews = PreviewModel()
-    @State private var grid = DevicePrefs.load(from: DevicePrefs.file).agentsGrid
+    @State private var layout = DevicePrefs.load(from: DevicePrefs.file).agentsLayout
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack(path: $path) {
             Group {
-                if grid {
+                switch layout {
+                case .grid:
                     AgentGrid(
                         entries: model.entries, previews: previews, notice: model.closeNotice,
                         approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows, menu: menu
@@ -27,7 +28,12 @@ struct FlockScreen: View {
                         guard let core, scenePhase == .active, !newTask else { return }
                         await previews.run(core: core)
                     }
-                } else {
+                case .inbox:
+                    AgentInbox(
+                        entries: model.entries, notice: model.closeNotice, showsMachine: machines.count > 1,
+                        reconnect: reconnect, follows: follows, menu: menu
+                    )
+                case .list:
                     List {
                         if let notice = model.closeNotice {
                             Label(notice, systemImage: "exclamationmark.triangle")
@@ -86,8 +92,10 @@ struct FlockScreen: View {
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button(grid ? "Show list" : "Show grid", systemImage: grid ? "list.bullet" : "rectangle.grid.2x2") {
-                        grid.toggle()
+                    Menu("Layout", systemImage: layout.icon) {
+                        Picker("Layout", selection: $layout) {
+                            ForEach(AgentsLayout.allCases, id: \.self) { Label($0.label, systemImage: $0.icon) }
+                        }
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -135,9 +143,9 @@ struct FlockScreen: View {
                 }
             }
             .onChange(of: model.entries, initial: true) { _, entries in previews.update(entries) }
-            .onChange(of: grid) { _, grid in
+            .onChange(of: layout) { _, layout in
                 var prefs = DevicePrefs.load(from: DevicePrefs.file)
-                prefs.agentsGrid = grid
+                prefs.agentsLayout = layout
                 prefs.save(to: DevicePrefs.file)
             }
             .onChange(of: opening, initial: true) { _, route in
@@ -246,6 +254,11 @@ private struct AgentRow: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+            // A fixed slot, so times line up whether or not a row has a ring.
+            Group {
+                if let left = agent.contextLeft { ContextRing(left: left) }
+            }
+            .frame(width: ContextRing.size)
         }
     }
 }
@@ -316,6 +329,35 @@ struct StatusIcon: View {
         .frame(width: 20, height: 20)
         .accessibilityElement()
         .accessibilityLabel(state.label)
+    }
+}
+
+/// Context left in the agent's window: a static arc, unlike the working spinner.
+struct ContextRing: View {
+    static let size: CGFloat = 14
+    let left: UInt8
+
+    var body: some View {
+        let tone = Self.tone(left)
+        ZStack {
+            Circle().stroke(tone.opacity(0.25), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: Double(min(left, 100)) / 100)
+                .stroke(tone, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .padding(1)
+        .frame(width: Self.size, height: Self.size)
+        .accessibilityElement()
+        .accessibilityLabel("Context \(left)% left")
+    }
+
+    static func tone(_ left: UInt8) -> Color {
+        switch left {
+        case 51...: Color.teal.mix(with: .gray, by: 0.45)
+        case 20...: Color.orange.mix(with: .yellow, by: 0.25)
+        default: Color.pink.mix(with: .orange, by: 0.45)
+        }
     }
 }
 

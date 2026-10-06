@@ -7,7 +7,7 @@ struct DevicePrefs: Codable, Equatable {
     var gestures = TerminalGestures()
     var fontSize = 11.0
     var dictationLanguage = DictationLanguage.english
-    var agentsGrid = false
+    var agentsLayout = AgentsLayout.list
     var starred: Set<AgentRoute> = []
     var historyLines: UInt16 = 200
 
@@ -35,9 +35,31 @@ extension DevicePrefs {
         gestures = (try? container.decodeIfPresent(TerminalGestures.self, forKey: .gestures)) ?? defaults.gestures
         fontSize = try container.decodeIfPresent(Double.self, forKey: .fontSize) ?? defaults.fontSize
         dictationLanguage = (try? container.decodeIfPresent(DictationLanguage.self, forKey: .dictationLanguage)) ?? defaults.dictationLanguage
-        agentsGrid = try container.decodeIfPresent(Bool.self, forKey: .agentsGrid) ?? defaults.agentsGrid
+        agentsLayout = (try? container.decodeIfPresent(AgentsLayout.self, forKey: .agentsLayout)) ?? defaults.agentsLayout
         starred = (try? container.decodeIfPresent(Set<AgentRoute>.self, forKey: .starred)) ?? defaults.starred
         historyLines = try container.decodeIfPresent(UInt16.self, forKey: .historyLines) ?? defaults.historyLines
+    }
+}
+
+enum AgentsLayout: String, Codable, CaseIterable {
+    case list
+    case grid
+    case inbox
+
+    var label: String {
+        switch self {
+        case .list: "List"
+        case .grid: "Grid"
+        case .inbox: "Inbox"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .list: "list.bullet"
+        case .grid: "rectangle.grid.2x2"
+        case .inbox: "tray"
+        }
     }
 }
 

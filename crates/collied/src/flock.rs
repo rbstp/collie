@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use protocol::{Agent, AgentStatus, Flock, MachineInfo, TerminalId, Workspace, WorkspaceId};
 
 use crate::herdr::{AgentInfo, PaneInfo, SessionSnapshot, WorkspaceInfo};
+use crate::transcript::{Derived, Transcripts};
 
 /// herdr reports no timestamp for a status, so collied records when it first saw each one.
 #[derive(Default)]
@@ -36,7 +37,12 @@ fn non_empty(s: &Option<String>) -> Option<String> {
 }
 
 /// `pane_id` is deliberately dropped: it changes on moves and is never sent to the phone.
-pub fn map_agent(a: &AgentInfo, tracker: &mut StatusTracker, now_ms: u64) -> Option<Agent> {
+pub fn map_agent(
+    a: &AgentInfo,
+    tracker: &mut StatusTracker,
+    now_ms: u64,
+    derived: Option<Derived>,
+) -> Option<Agent> {
     let (Ok(terminal_id), Ok(workspace_id)) = (
         TerminalId::new(a.terminal_id.clone()),
         WorkspaceId::new(a.workspace_id.clone()),
@@ -45,6 +51,7 @@ pub fn map_agent(a: &AgentInfo, tracker: &mut StatusTracker, now_ms: u64) -> Opt
         return None;
     };
     let status = status(&a.agent_status);
+    let derived = derived.unwrap_or_default();
     Some(Agent {
         status_since_ms: tracker.observe(&a.terminal_id, status, now_ms),
         terminal_id,
@@ -54,15 +61,29 @@ pub fn map_agent(a: &AgentInfo, tracker: &mut StatusTracker, now_ms: u64) -> Opt
         title: non_empty(&a.terminal_title_stripped).or_else(|| non_empty(&a.title)),
         status,
         cwd: non_empty(&a.foreground_cwd).or_else(|| non_empty(&a.cwd)),
-        last_line: None,
+        last_line: derived.last_line,
+        context_left: derived.context_left,
+        last_prompt: derived.last_prompt,
+        last_activity_ms: derived.last_activity_ms,
     })
 }
 
-pub fn map_agents(agents: &[AgentInfo], tracker: &mut StatusTracker, now_ms: u64) -> Vec<Agent> {
+pub fn map_agents(
+    agents: &[AgentInfo],
+    tracker: &mut StatusTracker,
+    now_ms: u64,
+    mut transcripts: Option<&mut Transcripts>,
+) -> Vec<Agent> {
     tracker.retain(agents.iter().map(|a| a.terminal_id.as_str()));
+    if let Some(t) = transcripts.as_deref_mut() {
+        t.retain(agents);
+    }
     agents
         .iter()
-        .filter_map(|a| map_agent(a, tracker, now_ms))
+        .filter_map(|a| {
+            let derived = transcripts.as_deref_mut().and_then(|t| t.derive(a));
+            map_agent(a, tracker, now_ms, derived)
+        })
         .collect()
 }
 
@@ -94,12 +115,13 @@ pub fn map_flock(
     now_ms: u64,
     machine: MachineInfo,
     seq: u64,
+    transcripts: Option<&mut Transcripts>,
 ) -> Flock {
     Flock {
         seq,
         machine,
         workspaces: map_workspaces(snap),
-        agents: map_agents(&snap.agents, tracker, now_ms),
+        agents: map_agents(&snap.agents, tracker, now_ms, transcripts),
         approvals: Vec::new(),
     }
 }
@@ -177,7 +199,7 @@ mod tests {
     fn maps_session_snapshot() {
         let snap = fixture();
         let mut tracker = StatusTracker::default();
-        let flock = map_flock(&snap, &mut tracker, 1000, machine(), 3);
+        let flock = map_flock(&snap, &mut tracker, 1000, machine(), 3, None);
         assert_eq!(flock.seq, 3);
         assert!(flock.approvals.is_empty());
         assert_eq!(flock.workspaces.len(), 2);
@@ -208,18 +230,56 @@ mod tests {
     }
 
     #[test]
+    fn agents_carry_what_their_transcript_derives() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("projects/-Users-me-src-collie");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("00000000-0000-4000-8000-000000000000.jsonl"),
+            include_str!("../tests/fixtures/transcripts/claude.jsonl"),
+        )
+        .unwrap();
+        let mut transcripts = Transcripts::new(Some(dir.path().join("projects")), None);
+        let flock = map_flock(
+            &fixture(),
+            &mut StatusTracker::default(),
+            0,
+            machine(),
+            0,
+            Some(&mut transcripts),
+        );
+        let a = &flock.agents[0];
+        assert_eq!(a.context_left, Some(94));
+        assert_eq!(a.last_line.as_deref(), Some("**Fixed** the flaky test."));
+        assert!(
+            a.last_prompt
+                .as_deref()
+                .unwrap()
+                .starts_with("fix the flaky")
+        );
+        assert!(a.last_activity_ms.is_some());
+        let b = &flock.agents[1];
+        assert_eq!(
+            (b.context_left, &b.last_line, b.last_activity_ms),
+            (None, &None, None)
+        );
+        let json = serde_json::to_string(b).unwrap();
+        assert!(!json.contains("context_left") && !json.contains("last_prompt"));
+    }
+
+    #[test]
     fn status_since_moves_only_on_change() {
         let mut snap = fixture();
         let mut tracker = StatusTracker::default();
-        map_flock(&snap, &mut tracker, 1000, machine(), 0);
-        let again = map_flock(&snap, &mut tracker, 2000, machine(), 0);
+        map_flock(&snap, &mut tracker, 1000, machine(), 0, None);
+        let again = map_flock(&snap, &mut tracker, 2000, machine(), 0, None);
         assert_eq!(again.agents[0].status_since_ms, 1000);
         snap.agents[0].agent_status = "idle".into();
-        let changed = map_flock(&snap, &mut tracker, 3000, machine(), 0);
+        let changed = map_flock(&snap, &mut tracker, 3000, machine(), 0, None);
         assert_eq!(changed.agents[0].status_since_ms, 3000);
         assert_eq!(changed.agents[1].status_since_ms, 1000);
         snap.agents.remove(1);
-        map_flock(&snap, &mut tracker, 4000, machine(), 0);
+        map_flock(&snap, &mut tracker, 4000, machine(), 0, None);
         assert_eq!(tracker.seen.len(), 1);
     }
 
@@ -228,7 +288,7 @@ mod tests {
         assert_eq!(status("sleeping"), AgentStatus::Unknown);
         let mut snap = fixture();
         snap.agents[0].terminal_id = "bad id".into();
-        let flock = map_flock(&snap, &mut StatusTracker::default(), 0, machine(), 0);
+        let flock = map_flock(&snap, &mut StatusTracker::default(), 0, machine(), 0, None);
         assert_eq!(flock.agents.len(), 1);
     }
 

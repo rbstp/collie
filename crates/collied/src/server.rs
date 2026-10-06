@@ -40,6 +40,7 @@ use crate::gate::{self, Decision};
 use crate::pairing::{Attempt, Pairing};
 use crate::peers::{self, Peer, Store};
 use crate::push::{self, ActivityError, Push};
+use crate::transcript::Transcripts;
 use crate::{config, herdr};
 
 const MAX_CONNECTIONS: usize = 64;
@@ -167,6 +168,7 @@ pub struct State {
     chunk_buckets: Mutex<HashMap<String, TokenBucket>>,
     reject_buckets: Mutex<HashMap<IpAddr, TokenBucket>>,
     tracker: Mutex<StatusTracker>,
+    transcripts: Mutex<Transcripts>,
     live: Mutex<activity::Live>,
     events: broadcast::Sender<Event>,
     drive: Arc<Driver>,
@@ -285,6 +287,7 @@ impl State {
                 crate::now_ms(),
                 self.machine.clone(),
                 0,
+                None,
             );
             crate::control::StatusFlock {
                 workspaces: f.workspaces,
@@ -477,6 +480,7 @@ pub async fn start_with(
         chunk_buckets: Mutex::new(HashMap::new()),
         reject_buckets: Mutex::new(HashMap::new()),
         tracker: Mutex::new(StatusTracker::default()),
+        transcripts: Mutex::new(Transcripts::from_env()),
         live: Mutex::new(activity::Live::default()),
         events,
         drive,
@@ -1314,6 +1318,7 @@ impl Session<'_> {
             crate::now_ms(),
             self.state.machine.clone(),
             self.seq,
+            Some(&mut lock(&self.state.transcripts)),
         );
         flock.approvals = self.state.approvals.pending();
         Ok(Response::Flock(flock))
@@ -1683,9 +1688,12 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                 let (changed, shape) = prev.diff(&next);
                 if !changed.is_empty() {
                     let mut tracker = lock(&state.tracker);
+                    let mut transcripts = lock(&state.transcripts);
+                    transcripts.retain(&agents);
                     let now = crate::now_ms();
                     for a in agents.iter().filter(|a| changed.contains(&a.terminal_id)) {
-                        if let Some(agent) = flock::map_agent(a, &mut tracker, now) {
+                        let derived = transcripts.derive(a);
+                        if let Some(agent) = flock::map_agent(a, &mut tracker, now, derived) {
                             let _ = state.events.send(Event::AgentStatus { agent });
                         }
                     }

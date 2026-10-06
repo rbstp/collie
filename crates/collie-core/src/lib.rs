@@ -288,6 +288,12 @@ pub struct AgentSummary {
     pub status_since_ms: u64,
     pub cwd: Option<String>,
     pub last_line: Option<String>,
+    #[uniffi(default = None)]
+    pub context_left: Option<u8>,
+    #[uniffi(default = None)]
+    pub last_prompt: Option<String>,
+    #[uniffi(default = None)]
+    pub last_activity_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -1866,6 +1872,9 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
         status_since_ms: a.status_since_ms,
         cwd: a.cwd.clone(),
         last_line: a.last_line.clone(),
+        context_left: a.context_left,
+        last_prompt: a.last_prompt.clone(),
+        last_activity_ms: a.last_activity_ms,
     }
 }
 
@@ -2032,6 +2041,26 @@ mod tests {
             CoreError::from(SessionError::Closed),
             CoreError::Unreachable { .. }
         ));
+    }
+
+    #[test]
+    fn agent_summary_carries_transcript_values() {
+        let older = r#"{"terminal_id":"term_1","workspace_id":"w1","kind":"claude","name":null,"title":"t","status":"done","status_since_ms":5,"cwd":null,"last_line":null}"#;
+        let a: protocol::Agent = serde_json::from_str(older).unwrap();
+        let s = agent_summary(&a);
+        assert_eq!(
+            (s.context_left, s.last_prompt, s.last_activity_ms),
+            (None, None, None)
+        );
+        let newer = older.replace(
+            r#""last_line":null"#,
+            r#""last_line":"Fixed it.","context_left":42,"last_prompt":"fix it","last_activity_ms":9"#,
+        );
+        let s = agent_summary(&serde_json::from_str(&newer).unwrap());
+        assert_eq!(s.last_line.as_deref(), Some("Fixed it."));
+        assert_eq!(s.context_left, Some(42));
+        assert_eq!(s.last_prompt.as_deref(), Some("fix it"));
+        assert_eq!(s.last_activity_ms, Some(9));
     }
 
     #[test]
@@ -2512,6 +2541,9 @@ mod tailnet_tests {
                 status_since_ms: 1,
                 cwd: None,
                 last_line: None,
+                context_left: None,
+                last_prompt: None,
+                last_activity_ms: None,
             }],
             approvals: Vec::new(),
         }

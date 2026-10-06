@@ -134,6 +134,10 @@ private struct AgentCard: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                if let left = agent.contextLeft {
+                    Spacer(minLength: 0)
+                    ContextRing(left: left).padding(.top, 3)
+                }
             }
         }
         .contentShape(Rectangle())
