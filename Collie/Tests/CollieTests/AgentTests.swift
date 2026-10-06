@@ -26,6 +26,10 @@ final class FakeCore: AgentCore {
         var uploadPath = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/notes.txt"
         var endedActivities: [String] = []
         var watches: [String?] = []
+        var reads: [String] = []
+        var readLines: [UInt16?] = []
+        var readError: CoreError?
+        var output: TerminalSnapshot?
     }
 
     let state = Mutex(State())
@@ -69,6 +73,11 @@ final class FakeCore: AgentCore {
     }
 
     func agentView(machineId: String, terminalId: String, afterRevision: UInt64) -> AgentView? {
+        if let output = state.withLock({ $0.output }) {
+            return AgentView(
+                link: .connected, lastError: nil, agent: nil, output: output.terminalId == terminalId ? output : nil, outputRevision: 1
+            )
+        }
         guard let kind = state.withLock({ $0.kind }) else { return nil }
         let agent = AgentSummary(
             terminalId: terminalId, workspaceId: "w1", kind: kind, name: nil, title: nil,
@@ -79,8 +88,14 @@ final class FakeCore: AgentCore {
     func watchAgent(machineId: String, terminalId: String?) async throws {
         state.withLock { $0.watches.append(terminalId) }
     }
-    func agentRead(machineId: String, terminalId: String, source: TerminalSource) async throws -> TerminalSnapshot {
-        TerminalSnapshot(terminalId: terminalId, source: source, ansi: "", truncated: false)
+    func agentRead(machineId: String, terminalId: String, source: TerminalSource, lines: UInt16?) async throws -> TerminalSnapshot {
+        let (read, error) = state.withLock { s in
+            s.reads.append(terminalId)
+            s.readLines.append(lines)
+            return (s.reads.count, s.readError)
+        }
+        if let error { throw error }
+        return TerminalSnapshot(terminalId: terminalId, source: source, ansi: "read \(read)", truncated: false)
     }
     func agentDraft(machineId: String, terminalId: String) async throws -> String? {
         state.withLock { s in

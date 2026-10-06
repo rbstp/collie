@@ -591,12 +591,13 @@ impl CollieCore {
         machine_id: String,
         terminal_id: String,
         source: TerminalSource,
+        lines: Option<u16>,
     ) -> Result<TerminalSnapshot, CoreError> {
         let source = ReadSource::from(source);
         let request = Request::AgentRead(ReadParams {
             terminal_id: terminal(terminal_id)?,
             source,
-            lines: (source == ReadSource::Recent).then_some(limits::MAX_READ_LINES),
+            lines: lines.or((source == ReadSource::Recent).then_some(limits::MAX_READ_LINES)),
         });
         match self.call(&machine_id, request, CALL_TIMEOUT).await? {
             Response::Terminal(read) => Ok(read.into()),
@@ -2191,6 +2192,7 @@ mod tailnet_tests {
     #[derive(Default)]
     struct Seen {
         watches: Vec<Option<String>>,
+        reads: Vec<Option<u16>>,
         prompt_ops: Vec<String>,
         executed: HashMap<String, Response>,
         task_ops: Vec<String>,
@@ -2366,6 +2368,7 @@ mod tailnet_tests {
                         }
                         Request::AgentRead(p) => {
                             assert_eq!(p.terminal_id.as_str(), "term_1");
+                            lock(&seen).reads.push(p.lines);
                             events = vec![
                                 (seq + 1, protocol::Event::AgentOutput(terminal_read("live"))),
                                 (
@@ -2736,9 +2739,27 @@ mod tailnet_tests {
         );
         assert!(core.agent_view(id(), t1(), 2).unwrap().output.is_none());
         let snap = rt
-            .block_on(core.agent_read(id(), t1(), TerminalSource::Recent))
+            .block_on(core.agent_read(id(), t1(), TerminalSource::Recent, None))
             .unwrap();
         assert_eq!((snap.ansi.as_str(), snap.truncated), ("read", false));
+        let live = poll(view.output_revision + 1, "live").output_revision;
+        let snap = rt
+            .block_on(core.agent_read(id(), t1(), TerminalSource::Recent, Some(60)))
+            .unwrap();
+        assert_eq!(snap.ansi, "read");
+        assert_eq!(
+            poll(live, "live").output_revision,
+            live + 1,
+            "a preview read does not replace the watched screen"
+        );
+        assert_eq!(
+            lock(&seen).reads,
+            vec![
+                Some(limits::MAX_READ_LINES),
+                Some(limits::MAX_READ_LINES),
+                Some(60)
+            ]
+        );
 
         rt.block_on(core.prompt(id(), t1(), "fix the build".into(), None))
             .unwrap();

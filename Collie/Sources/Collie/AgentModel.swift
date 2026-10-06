@@ -149,7 +149,7 @@ final class AgentModel {
         refreshing = true
         defer { refreshing = false }
         do {
-            ansi = try await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent).ansi
+            ansi = try await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: nil).ansi
             notice = nil
         } catch {
             notice = Self.message(for: error)
