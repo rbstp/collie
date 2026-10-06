@@ -408,8 +408,8 @@ private struct PromptBar: View {
                     CommandField(text: $model.draft, editing: $typingCommand) {
                         Task { await model.sendPrompt() }
                     }
-                    .frame(minHeight: 36)
                     .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
                 } else {
                     TextField(model.answering ? "Type an answer" : "Prompt the agent", text: $model.draft, axis: .vertical)
@@ -502,6 +502,7 @@ private struct CommandField: UIViewRepresentable {
         field.returnKeyType = .go
         field.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: UIFont.labelFontSize, weight: .regular))
         field.adjustsFontForContentSizeCategory = true
+        field.setContentHuggingPriority(.required, for: .vertical)
         let coordinator = context.coordinator
         field.delegate = coordinator
         field.addAction(UIAction { [weak field] _ in coordinator.parent.text = field?.text ?? "" }, for: .editingChanged)
