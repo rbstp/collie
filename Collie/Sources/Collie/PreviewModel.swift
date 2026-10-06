@@ -145,8 +145,8 @@ final class PreviewModel {
         guard case let (top, bottom)? = box else { return ansi }
         // Claude Code draws its notifications right-aligned, two columns short of the rule, over the
         // blank row above the box.
-        let notification = top > 1 && plain[top - 1].hasPrefix("  ") && !blank(plain[top - 1])
-            && (blank(plain[top - 2]) || plain[top - 1].count == plain[top].count - 2)
+        let notification = top > 0 && plain[top - 1].hasPrefix("  ") && !blank(plain[top - 1])
+            && plain[top - 1].count == plain[top].count - 2
         guard let last = plain[..<(notification ? top - 1 : top)].lastIndex(where: { !blank($0) }) else { return ansi }
         let card = String(ansi[..<lines[last].endIndex])
         // The progress list sits a blank row below the status lines, its rows like "  ◯ name  ▰▱  1/2 · 3m".

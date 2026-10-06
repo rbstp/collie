@@ -260,7 +260,6 @@ private func claude(_ box: String, top: String = rule, above: String = "", foote
     for above in [
         notice("✔ Update installed · Restart to update"),
         "\n\n" + notice("new task? /clear to save 108.1k tokens"),
-        "\n  \u{1b}[2mnew task? \u{1b}[0m/clear\u{1b}[2m to save 108.1k tokens\u{1b}[0m",
     ] {
         #expect(PreviewModel.card(claude("❯ ", above: above)) == output, "\(above)")
     }
@@ -268,7 +267,7 @@ private func claude(_ box: String, top: String = rule, above: String = "", foote
 }
 
 @Test func outputDirectlyAboveTheInputBoxStaysOnTheCard() {
-    for above in ["✻ Worked for 7s · done 5:58 PM", "  ⎿  Updated 2 files", "\n⏺ Started.\n  Waiting on the build."] {
+    for above in ["✻ Worked for 7s · done 5:58 PM", "  ⎿  Updated 2 files", "\n⏺ Started.\n  Waiting on the build.", "\n  Waiting for permission…"] {
         #expect(PreviewModel.card(claude("❯ ", above: above)) == "\(output)\n\(above)", "\(above)")
     }
 }
