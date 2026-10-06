@@ -101,21 +101,23 @@ struct FlockScreen: View {
             }
             .navigationTitle("Agents")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(removing: .title)
             .refreshable {
                 for machine in machines { try? core?.reconnect(machineId: machine.id) }
                 await model.refresh(core: core)
             }
             .toolbar {
-                ToolbarItem(placement: .principal) {
+                ToolbarItem(placement: .topBarLeading) {
                     if tailnetStarting {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.small)
                             Text("Connecting…").font(.headline)
                         }
                     } else {
-                        ViewSwitch(showsUsage: $showsUsage)
+                        ViewSwitch(showsUsage: $showsUsage).fixedSize()
                     }
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .primaryAction) {
                     Menu("Layout", systemImage: layout.icon) {
                         Picker("Layout", selection: $layout) {
