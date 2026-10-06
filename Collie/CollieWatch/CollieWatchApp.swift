@@ -124,6 +124,13 @@ final class WatchModel: NSObject, WCSessionDelegate {
             again = false
             await ask()
         } while again
+        // As on the phone, back to the list: a rebuilt approval for that agent shows there.
+        if let key = opened, let state, !couldNotRefresh(key.nodeId), state.approvals.count < WatchState.maxApprovals,
+            !state.approvals.contains(where: { $0.nodeId == key.nodeId && $0.approvalId == key.approvalId })
+        {
+            opened = nil
+            notice = ("collie", "This approval is no longer pending.")
+        }
     }
 
     private func ask() async {
@@ -235,7 +242,10 @@ final class WatchModel: NSObject, WCSessionDelegate {
         }
         if let reply {
             notice = (reply.title, reply.body)
-            if reply.answered { answered.insert(approval.id) }
+            if reply.answered {
+                answered.insert(approval.id)
+                if opened == WatchApprovalKey(nodeId: approval.nodeId, approvalId: approval.approvalId) { opened = nil }
+            }
         } else {
             notice = (agent, "No answer from the iPhone. The decision may have been sent; check collie on the iPhone.")
         }
