@@ -32,14 +32,11 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     // 5h: 60% of the window has passed. 7d: 50%.
     let slower = usage(fiveHour: 54, resetsIn: 7_200, sevenDay: 20, resetsIn: 302_400).limits(now: now)
     #expect(slower.map(\.pace) == [.slower, .slower])
-    #expect(slower.map(\.paceText) == ["5h usage pace slower", "7d usage pace slower"])
-    #expect(slower.map(\.spokenPace) == ["5-hour usage pace slower", "Weekly usage pace slower"])
     let faster = usage(fiveHour: 66, resetsIn: 7_200, sevenDay: 90, resetsIn: 302_400).limits(now: now)
     #expect(faster.map(\.pace) == [.faster, .faster])
-    #expect(faster.map(\.paceText) == ["5h usage pace faster", "7d usage pace faster"])
     let onPace = usage(fiveHour: 57, resetsIn: 7_200, sevenDay: 47, resetsIn: 302_400).limits(now: now)
     #expect(onPace.map(\.pace) == [.onPace, .onPace])
-    #expect(onPace.map(\.paceText) == ["5h usage on pace", "7d usage on pace"])
+    #expect(onPace[1].spokenLine(now: now).contains("50 percent of the window elapsed, usage on pace, resets in"))
 }
 
 @Test func planUsageLeavesOutAWindowPastItsReset() {
@@ -65,8 +62,8 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     // 2_000_000_000 is 14:33:20 at UTC+11; 2h 13m later is 16:46.
     #expect(limits[0].resets(now: now, style: style) == "16:46")
     #expect(limits[1].resets(now: now, style: style) == "3d 16h")
-    #expect(limits[1].spokenLine(now: now) == "Weekly limit, 22 percent used, 48 percent of the window elapsed, resets in 3 days, 16 hours")
-    #expect(limits[0].spokenLine(now: now).hasPrefix("5-hour limit, 75 percent used, 56 percent of the window elapsed, resets at "))
+    #expect(limits[1].spokenLine(now: now) == "Weekly limit, 22 percent used, 48 percent of the window elapsed, usage pace slower, resets in 3 days, 16 hours")
+    #expect(limits[0].spokenLine(now: now).hasPrefix("5-hour limit, 75 percent used, 56 percent of the window elapsed, usage pace faster, resets at "))
     #expect(PlanUsage.countdown(seconds: 45 * 60) == "45m")
     let recorded = { (ago: UInt64) in PlanUsage(fiveHour: nil, sevenDay: nil, recordedMs: nowMs - ago * 1000) }
     #expect(recorded(20).age(now: now) == "just now")

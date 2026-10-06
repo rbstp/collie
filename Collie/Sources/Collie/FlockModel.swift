@@ -189,10 +189,6 @@ struct UsageLimit: Equatable {
         return gap < -0.05 ? .slower : gap > 0.05 ? .faster : .onPace
     }
 
-    var paceText: String { Self.paceText(label: label, pace: pace) }
-
-    var spokenPace: String { Self.paceText(label: spokenLabel, pace: pace) }
-
     /// A clock time for the 5-hour window, a countdown for the weekly one.
     func resets(now: Date, style: Date.FormatStyle = .init(date: .omitted, time: .shortened)) -> String {
         label == "5h" ? now.addingTimeInterval(TimeInterval(seconds)).formatted(style) : PlanUsage.countdown(seconds: seconds)
@@ -200,15 +196,12 @@ struct UsageLimit: Equatable {
 
     func spokenLine(now: Date) -> String {
         let resets = label == "5h" ? "resets at \(resets(now: now))" : "resets in \(PlanUsage.spoken(seconds: seconds))"
-        return "\(spokenLabel) limit, \(used) percent used, \(Int((elapsed * 100).rounded())) percent of the window elapsed, \(resets)"
-    }
-
-    private static func paceText(label: String, pace: UsagePace) -> String {
-        switch pace {
-        case .slower: "\(label) usage pace slower"
-        case .onPace: "\(label) usage on pace"
-        case .faster: "\(label) usage pace faster"
+        let trend = switch pace {
+        case .slower: "usage pace slower"
+        case .onPace: "usage on pace"
+        case .faster: "usage pace faster"
         }
+        return "\(spokenLabel) limit, \(used) percent used, \(Int((elapsed * 100).rounded())) percent of the window elapsed, \(trend), \(resets)"
     }
 }
 

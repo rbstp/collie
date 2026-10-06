@@ -84,10 +84,6 @@ private struct SubscriptionUsage: View {
                 .font(.subheadline.monospacedDigit())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(limits.map { $0.spokenLine(now: now) }.joined(separator: ". "))
-                Text(limits.map(\.paceText).joined(separator: " · "))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel(limits.map(\.spokenPace).joined(separator: ", "))
             }
         }
         .padding(.vertical, 4)
