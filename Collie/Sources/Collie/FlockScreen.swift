@@ -243,15 +243,24 @@ struct AgentKindLabel: View {
     let kind: String
 
     var body: some View {
-        let (name, icon, color): (String, String, Color) =
+        Group {
             switch kind {
-            case "claude": ("Claude", "sparkle", .orange)
-            case "codex": ("Codex", "chevron.left.forwardslash.chevron.right", .teal)
-            case "copilot": ("Copilot", "airplane", .purple)
-            default: (kind, "terminal", .secondary)
+            case "claude": Label("Claude", image: "Claude")
+            case "codex": Label("Codex", image: "Codex")
+            case "copilot": Label("Copilot", image: "Copilot")
+            default: Label(kind, systemImage: "terminal")
             }
-        Text("\(Text(Image(systemName: icon)).foregroundStyle(color)) \(name)")
-            .accessibilityLabel(name)
+        }
+        .labelStyle(KindLabelStyle())
+    }
+}
+
+private struct KindLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.icon
+            configuration.title
+        }
     }
 }
 
