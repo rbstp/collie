@@ -1,0 +1,19 @@
+# Each of these starts its own test tailnet; too many at once breaks their timing windows.
+[test-groups]
+tailnet = { max-threads = 6 }
+
+# Its 2 s bound on each Mac call while the Linux node is down misses in most runs beside the
+# other tailnet tests, so it runs alone once they are done, as it did under cargo test.
+[[profile.default.overrides]]
+filter = 'binary_id(e2e::machines)'
+priority = -100
+threads-required = 'num-test-threads'
+test-group = '@global'
+
+[[profile.default.overrides]]
+filter = 'test(/end_to_end|phase3_expired_approvals/)'
+priority = 100
+
+[[profile.default.overrides]]
+filter = 'binary_id(e2e::*) | binary_id(tailnet::end_to_end) | binary_id(collied::server) | test(tailnet_tests::)'
+test-group = 'tailnet'

@@ -20,6 +20,9 @@ jobs:
   rust:
     runs-on: xcode-27
 
+    env:
+      CARGO_INCREMENTAL: 0
+
     steps:
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,10 +49,11 @@ jobs:
             ~/go/pkg/mod
             ~/Library/Caches/go-build
             target
-          key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/*.patch', 'crates/tailnet/testcontrol/go.sum') }}
+            !target/debug/incremental
+          key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/*.patch', 'crates/tailnet/testcontrol/go.sum', 'crates/e2e/testcontrol/go.sum') }}
           restore-keys: rust-
 
-      - name: install just and cargo-deny
+      - name: install just, cargo-deny and cargo-nextest
         run: |
           bin="$RUNNER_TEMP/bin"
           mkdir -p "$bin"
@@ -61,6 +65,10 @@ jobs:
             https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-aarch64-apple-darwin.tar.gz
           echo "fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3  $RUNNER_TEMP/cargo-deny.tar.gz" | shasum -a 256 -c
           tar -xzf "$RUNNER_TEMP/cargo-deny.tar.gz" -C "$bin" --strip-components 1 cargo-deny-0.20.2-aarch64-apple-darwin/cargo-deny
+          curl -sSfL -o "$RUNNER_TEMP/cargo-nextest.tar.gz" \
+            https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.146/cargo-nextest-0.9.146-universal-apple-darwin.tar.gz
+          echo "39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8  $RUNNER_TEMP/cargo-nextest.tar.gz" | shasum -a 256 -c
+          tar -xzf "$RUNNER_TEMP/cargo-nextest.tar.gz" -C "$bin" cargo-nextest
           echo "$bin" >> "$GITHUB_PATH"
 
       - name: lint
@@ -78,6 +86,10 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+
+      # Overlaps the simulator's first boot on a fresh runner with the builds below.
+      - name: boot the simulator
+        run: xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
 
       - name: set up go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
