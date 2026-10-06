@@ -313,6 +313,22 @@ pub struct AgentSummary {
     pub last_prompt: Option<String>,
     #[uniffi(default = None)]
     pub last_activity_ms: Option<u64>,
+    #[uniffi(default = None)]
+    pub plan_usage: Option<PlanUsage>,
+}
+
+/// The subscription's plan usage on the agent's machine; `recorded_ms` dates it.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct PlanUsage {
+    pub five_hour: Option<UsageWindow>,
+    pub seven_day: Option<UsageWindow>,
+    pub recorded_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct UsageWindow {
+    pub used_percent: u8,
+    pub resets_at_ms: u64,
 }
 
 /// A shell pane. `label` is the name given in herdr; the phone never sees a title the
@@ -2272,6 +2288,17 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
         context_left: a.context_left,
         last_prompt: a.last_prompt.clone(),
         last_activity_ms: a.last_activity_ms,
+        plan_usage: a.plan_usage.as_ref().map(|u| {
+            let window = |w: &protocol::UsageWindow| UsageWindow {
+                used_percent: w.used_percent,
+                resets_at_ms: w.resets_at_ms,
+            };
+            PlanUsage {
+                five_hour: u.five_hour.as_ref().map(window),
+                seven_day: u.seven_day.as_ref().map(window),
+                recorded_ms: u.recorded_ms,
+            }
+        }),
     }
 }
 
@@ -2470,6 +2497,27 @@ mod tests {
         assert_eq!(s.context_left, Some(42));
         assert_eq!(s.last_prompt.as_deref(), Some("fix it"));
         assert_eq!(s.last_activity_ms, Some(9));
+        assert_eq!(s.plan_usage, None);
+    }
+
+    #[test]
+    fn agent_summary_carries_plan_usage() {
+        let json = r#"{"terminal_id":"term_1","workspace_id":"w1","kind":"claude","name":null,"title":"t","status":"working","status_since_ms":5,"cwd":null,"last_line":null,"plan_usage":{"five_hour":{"used_percent":24,"resets_at_ms":1738425600000},"seven_day":{"used_percent":41,"resets_at_ms":1738857600000},"recorded_ms":1738420000000}}"#;
+        let s = agent_summary(&serde_json::from_str(json).unwrap());
+        assert_eq!(
+            s.plan_usage,
+            Some(PlanUsage {
+                five_hour: Some(UsageWindow {
+                    used_percent: 24,
+                    resets_at_ms: 1_738_425_600_000
+                }),
+                seven_day: Some(UsageWindow {
+                    used_percent: 41,
+                    resets_at_ms: 1_738_857_600_000
+                }),
+                recorded_ms: 1_738_420_000_000,
+            })
+        );
     }
 
     #[test]
@@ -3047,6 +3095,7 @@ mod tailnet_tests {
                 context_left: None,
                 last_prompt: None,
                 last_activity_ms: None,
+                plan_usage: None,
             }],
             approvals: Vec::new(),
             terminals: Vec::new(),

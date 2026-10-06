@@ -519,6 +519,8 @@ pub async fn start_with(
     let tls_pin = collie_tls::pin(tls.cert[0].as_ref());
     let control = control::bind(&cfg.data_dir.join(config::CONTROL_SOCKET)).await?;
     let listener = node.listen("tcp", &format!(":{}", cfg.port))?;
+    let transcripts =
+        Transcripts::from_env().with_usage(cfg.data_dir.join(crate::usage::USAGE_FILE));
 
     let state = Arc::new(State {
         machine: MachineInfo {
@@ -540,7 +542,7 @@ pub async fn start_with(
         chunk_buckets: Mutex::new(HashMap::new()),
         reject_buckets: Mutex::new(HashMap::new()),
         tracker: Mutex::new(StatusTracker::default()),
-        transcripts: Mutex::new(Transcripts::from_env()),
+        transcripts: Mutex::new(transcripts),
         live: Mutex::new(activity::Live::default()),
         events,
         drive,

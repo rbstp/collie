@@ -75,6 +75,7 @@ pub fn map_agent(
         context_left: derived.context_left,
         last_prompt: derived.last_prompt,
         last_activity_ms: derived.last_activity_ms,
+        plan_usage: derived.plan_usage,
     })
 }
 

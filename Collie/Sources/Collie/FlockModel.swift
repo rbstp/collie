@@ -164,6 +164,42 @@ enum Elapsed {
     }
 }
 
+struct UsageLimit: Equatable {
+    let label: String
+    let left: UInt8
+    let resetsIn: String
+}
+
+extension PlanUsage {
+    /// The status line runs only while Claude Code is in use, so a quiet Mac's figures age.
+    static let staleAfterMs: UInt64 = 5 * 60_000
+
+    func isStale(now: Date) -> Bool {
+        UInt64(max(0, now.timeIntervalSince1970 * 1000)) > recordedMs + Self.staleAfterMs
+    }
+
+    /// A window whose reset time has passed is left out: its figure no longer holds.
+    func limits(now: Date) -> [UsageLimit] {
+        let nowMs = UInt64(max(0, now.timeIntervalSince1970 * 1000))
+        return [("5h", fiveHour), ("7d", sevenDay)].compactMap { label, window in
+            guard let window, window.resetsAtMs > nowMs else { return nil }
+            return UsageLimit(
+                label: label, left: 100 - min(window.usedPercent, 100),
+                resetsIn: Self.countdown(seconds: Int((window.resetsAtMs - nowMs) / 1000))
+            )
+        }
+    }
+
+    static func countdown(seconds: Int) -> String {
+        switch seconds {
+        case ..<60: "<1m"
+        case ..<3600: "\(seconds / 60)m"
+        case ..<86400: "\(seconds / 3600)h \(seconds % 3600 / 60)m"
+        default: "\(seconds / 86400)d \(seconds % 86400 / 3600)h"
+        }
+    }
+}
+
 extension TerminalSummary {
     /// The name given in herdr, else the folder: never a title a program set.
     var displayTitle: String {

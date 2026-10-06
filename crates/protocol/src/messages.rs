@@ -701,6 +701,26 @@ pub struct Agent {
     /// When the transcript last changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_activity_ms: Option<u64>,
+    /// The plan usage of the agent's subscription on the machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_usage: Option<PlanUsage>,
+}
+
+/// From Claude Code's status line input, as `collied statusline` last recorded it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub five_hour: Option<UsageWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seven_day: Option<UsageWindow>,
+    pub recorded_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct UsageWindow {
+    #[schemars(range(max = 100))]
+    pub used_percent: u8,
+    pub resets_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1121,6 +1141,31 @@ mod tests {
         };
         let json = serde_json::to_string(&event).unwrap();
         assert_eq!(serde_json::from_str::<ServerFrame>(&json).unwrap(), event);
+    }
+
+    #[test]
+    fn agent_plan_usage_is_optional() {
+        let older = r#"{"terminal_id":"term_1","workspace_id":"w1","kind":"claude","name":null,"title":null,"status":"idle","status_since_ms":1,"cwd":null,"last_line":null}"#;
+        let a: Agent = serde_json::from_str(older).unwrap();
+        assert_eq!(a.plan_usage, None);
+        assert_eq!(serde_json::to_string(&a).unwrap(), older);
+        let usage = PlanUsage {
+            five_hour: Some(UsageWindow {
+                used_percent: 24,
+                resets_at_ms: 1_738_425_600_000,
+            }),
+            seven_day: None,
+            recorded_ms: 1_738_420_000_000,
+        };
+        let with = Agent {
+            plan_usage: Some(usage),
+            ..a
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.ends_with(
+            r#""plan_usage":{"five_hour":{"used_percent":24,"resets_at_ms":1738425600000},"recorded_ms":1738420000000}}"#
+        ));
+        assert_eq!(serde_json::from_str::<Agent>(&json).unwrap(), with);
     }
 
     #[test]

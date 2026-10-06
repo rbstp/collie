@@ -24,7 +24,8 @@ No Tailscale app is needed on either device, and no TCP port is opened outside t
 
 - **Machines**: pair several Macs and Linux machines. Each one sends its own pushes, and one that is asleep or off is shown as offline (gray) without slowing the others. Removing a machine in the app also revokes the phone on that machine when it is reachable.
 - **Agents**: every herdr agent with its status (`idle`, `working`, `blocked`, `done`, as compact icons), grouped by machine (Mac or Linux) with blocked agents first, and each agent's workspace under its title. A small ring shows how much context a Claude Code or Codex agent has left, read from its transcript on the machine. Long-press an agent, or use the agent screen's menu, to close its pane or workspace.
-- **Inbox**: a third layout of the Agents tab, with agents grouped as Working, Done and Archived. Each shows its latest reply line, "You: <your last prompt>", the workspace, the agent kind and how long ago. Plan usage (5-hour and weekly limits) is not shown: there is no reliable local source for it yet.
+- **Inbox**: a third layout of the Agents tab, with agents grouped as Working, Done and Archived. Each shows its latest reply line, "You: <your last prompt>", the workspace, the agent kind and how long ago.
+- **Plan usage**: a Claude Code agent's screen shows what is left of the subscription's 5-hour and weekly limits and when each resets, dimmed with its age once it is more than 5 minutes old. It comes from Claude Code's status line, through a one-line tap (step 7 below). Codex records no limits for this plan, so a Codex agent shows none.
 - **Terminal**: a live view of the last 200 lines of the agent's pane, or 500 or 1000 set in Settings > Terminal > History (Claude Code's fullscreen mode, `"tui": "fullscreen"`, keeps its history out of the pane, so only one screen shows), rendered with libghostty-vt, with optional line wrapping and the MesloLGS NF font so Nerd Font glyphs match the Mac. Long-press to select text, drag the handles to adjust, and copy (Universal Clipboard included), or open an http or https link the selection touches.
 - **Gestures** (Settings > Gestures): double-tap pastes into the prompt field, pinch sets the font size, swiping sideways switches to the previous or next agent, and triple-tap can send Esc (off by default). Gestures stay off while text is selected.
 - **Terminals** (off by default, turned on per machine in `collied.toml`): plain shell panes, listed under Terminals with the Ghostty icon. When an agent exits, its screen turns into the pane's shell. Face ID or the passcode unlocks a terminal for 5 minutes, then the command field runs one line at a time and the key strip sends `esc ⇥ ^C ← ↑ ↓ → ⏎`.
@@ -47,6 +48,7 @@ Security is the first requirement. The short version:
 - **Terminals**: typing into a shell is command execution, so it is off unless `collied.toml` on that machine turns it on (never from the phone), its methods are a separate class in the allowlist, and every unlock is a grant collied verifies: a signature by a second Secure Enclave key on the phone, which signs only after Face ID or the passcode, for one terminal, one session and 5 minutes. collied re-reads the pane before every write and refuses one where an agent now runs. The audit log records each grant and command without its text.
 - **Push notifications**: the cleartext part of the push only says which agent is blocked and where. The command itself is end-to-end encrypted (ChaCha20-Poly1305, under a per-machine key generated on the phone, kept in its Keychain and handed to collied over the tailnet). The phone's notification extension decrypts it, so Apple sees the command only as ciphertext. Apple still sees agent and workspace names, ids and timing.
 - **Transcripts**: for the context ring and the inbox, collied reads the end of each live Claude Code or Codex agent's transcript on the machine. Only the percentage left, one line of the latest reply, one line of the latest prompt and the time of the last change go to the paired phone, over the same session as the terminal view. They are never logged or put in a push.
+- **Plan usage**: `collied statusline` keeps only the two limits' percentages and reset times, and each session's context window size, in a 0600 `usage.json` in collied's data directory; the rest of the status line input is dropped. Only the percentages, the reset times and when they were recorded go to the paired phone, never to a log or a push.
 - **Attachments**: uploads are size-capped (20 MiB per file, 200 MiB in total) and checksummed. Each is stored in a fresh random directory inside a private cache directory (0700 directories, 0600 non-executable files), under a sanitized copy of the file name, and deleted after 24 hours.
 - **Secrets**: `collied apns import` stores the APNs signing key in the Mac's login Keychain. The item's ACL lets only the Developer ID-signed collied read it without a Keychain prompt. On Linux it stores the key as a systemd user credential: encrypted with the host key, and also sealed to the TPM2 when one is usable. Where `systemd-creds` cannot encrypt, it falls back to a 0600 file. This is weaker than the Keychain: any process running as your user can decrypt the credential, not only collied ([docs/threat-model.md](docs/threat-model.md)).
 
@@ -124,7 +126,15 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
    }
    ```
 
-7. **Terminals** (optional): to use plain shell panes from the phone, add this to `collied.toml` and restart collied (`collied stop`, then `collied start`):
+7. **Plan usage** (optional): Claude Code hands the plan's limits only to the status line command, on its stdin. Add this line to your status line script, after it reads its input into `input` (for example `input=$(cat)`):
+
+   ```sh
+   printf '%s' "$input" | ~/.cargo/bin/collied statusline >/dev/null 2>&1 &
+   ```
+
+   It records the limits and the session's context window (so the context ring uses the exact window instead of the model's) and prints nothing, so the status line is unchanged. A `statusLine.command` without a script can call one that does `input=$(cat)`, the line above, then the old command with `printf '%s' "$input" |`. The limits exist for claude.ai Pro and Max plans only, after the session's first reply. `collied doctor` reports when the tap last recorded them.
+
+8. **Terminals** (optional): to use plain shell panes from the phone, add this to `collied.toml` and restart collied (`collied stop`, then `collied start`):
 
    ```toml
    [terminals]

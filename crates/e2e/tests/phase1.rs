@@ -87,6 +87,8 @@ async fn scenario(
     let herdr_socket = root.join("herdr.sock");
     let herdr_calls = mock_herdr(&herdr_socket);
     let data_dir = root.join("collied");
+    let statusline = include_str!("../../collied/tests/fixtures/statusline.json");
+    collied::usage::record(&data_dir, statusline.as_bytes(), 1).unwrap();
     let handle = server::start(
         net.mac.clone(),
         ServerConfig {
@@ -178,6 +180,20 @@ async fn scenario(
         .map(|w| (w.workspace_id.as_str(), w.label.as_str()))
         .collect();
     assert_eq!(workspaces, [("w6", "collie"), ("w7", "api")]);
+    let usage = |kind: &str| {
+        flock
+            .agents
+            .iter()
+            .find(|a| a.kind.as_deref() == Some(kind))
+            .and_then(|a| a.plan_usage.clone())
+    };
+    let plan = usage("claude").expect("the Claude Code agent carries the plan usage");
+    assert_eq!(plan.five_hour.map(|w| w.used_percent), Some(24));
+    assert_eq!(
+        plan.seven_day.map(|w| w.resets_at_ms),
+        Some(1_738_857_600_000)
+    );
+    assert_eq!(usage("codex"), None);
     println!("  flock in {:?}", t.elapsed());
 
     let peers_of_mac = status(&net.mac).await.peer.unwrap_or_default();
