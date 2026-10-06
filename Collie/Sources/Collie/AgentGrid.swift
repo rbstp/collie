@@ -80,7 +80,6 @@ struct AgentGrid<Menu: View>: View {
 }
 
 extension MachineFlockEntry {
-    /// Starred agents first, both parts in flock order.
     func gridAgents(starred: Set<AgentRoute>) -> (starred: [AgentSummary], rest: [AgentSummary]) {
         let isStarred = { (agent: AgentSummary) in starred.contains(AgentRoute(machineId: id, terminalId: agent.terminalId)) }
         return (agents.filter(isStarred), agents.filter { !isStarred($0) })

@@ -481,10 +481,14 @@ private func prefsFile() throws -> (file: URL, dir: URL) {
     #expect(Set(core.snapshot.readLines.dropFirst(3)) == [60])
 
     // A card moving to the starred row can show there before its grid card goes.
-    model.appeared(route("t2"))
-    model.disappeared(route("t2"))
     await model.toggleStar(route("t2"))?.value
     #expect(core.snapshot.reads.last == "t2" && core.snapshot.readLines.last == 120)
+    model.appeared(route("t2"))
+    model.disappeared(route("t2"))
+    let reads = core.snapshot.reads.count
+    clock.advance(.seconds(5))
+    await model.tick()?.value
+    #expect(core.snapshot.reads.count == reads + 1 && core.snapshot.reads.last == "t2" && core.snapshot.readLines.last == 120)
     model.disappeared(route("t2"))
     clock.advance(.seconds(5))
     #expect(model.tick() == nil)
