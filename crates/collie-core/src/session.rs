@@ -229,9 +229,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         let mut pending: HashMap<RequestId, Pending> = HashMap::new();
         let mut seed = vec![Request::FlockSnapshot(Empty {})];
         seed.extend(push);
-        if let Some(terminal_id) = lock(state).watched.clone() {
+        let watched = lock(state).watched.clone();
+        if let Some(terminal_id) = watched {
             seed.push(Request::AgentWatch(AgentWatchParams {
                 terminal_id: Some(terminal_id),
+                lines: lock(state).watch_lines,
             }));
         }
         for request in seed {
@@ -298,11 +300,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                         }
                         ServerFrame::Error { id: None, error } => break error.into(),
                         ServerFrame::Event { seq, event } => {
-                            let request = match lock(state).apply_event(seq, event) {
+                            let outcome = lock(state).apply_event(seq, event);
+                            let request = match outcome {
                                 EventOutcome::NeedsSnapshot => Request::FlockSnapshot(Empty {}),
                                 EventOutcome::NeedsWatch(terminal_id) => {
                                     Request::AgentWatch(AgentWatchParams {
                                         terminal_id: Some(terminal_id),
+                                        lines: lock(state).watch_lines,
                                     })
                                 }
                                 EventOutcome::Dropped | EventOutcome::Applied => continue,
@@ -328,11 +332,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
 
 type Pending = (Option<Reply>, Option<u64>);
 
-/// `None` for a read of another depth than the screen's: a preview's few lines must not
-/// replace the watched agent's history.
+/// `None` for a read of another depth than the screen's watch: a preview's few lines must
+/// not replace the watched agent's history.
 fn read_mark(state: &Mutex<FlockState>, request: &Request) -> Option<u64> {
-    matches!(request, Request::AgentRead(p) if p.lines == Some(limits::MAX_READ_LINES))
-        .then(|| lock(state).output_events)
+    let Request::AgentRead(p) = request else {
+        return None;
+    };
+    let state = lock(state);
+    let depth = state.watch_lines.unwrap_or(limits::DEFAULT_WATCH_LINES);
+    (p.lines == Some(depth)).then_some(state.output_events)
 }
 
 pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -377,6 +385,7 @@ pub enum EventOutcome {
 pub struct FlockState {
     pub flock: Option<Flock>,
     pub watched: Option<TerminalId>,
+    pub watch_lines: Option<u16>,
     pub output: Option<TerminalRead>,
     pub output_revision: u64,
     /// The text the watch sent last, the base of its next patch. A read reply can replace
@@ -1143,6 +1152,7 @@ mod tests {
         let (session, mut ws) = (session.unwrap(), server.unwrap());
         let state = Mutex::new(FlockState::default());
         lock(&state).watch(Some(TerminalId::new("t1").unwrap()));
+        lock(&state).watch_lines = Some(300);
         let (_tx, mut rx) = mpsc::channel(8);
         let server = tokio::spawn(async move {
             assert!(matches!(
@@ -1153,6 +1163,7 @@ mod tests {
             let Request::AgentWatch(p) = watch.request else {
                 panic!("{watch:?}")
             };
+            assert_eq!(p.lines, Some(300));
             assert_eq!(p.terminal_id.unwrap().as_str(), "t1");
             write(
                 &mut ws,
@@ -1195,6 +1206,7 @@ mod tests {
             let Request::AgentWatch(p) = rewatch.request else {
                 panic!("no agent.read after the watch: {rewatch:?}")
             };
+            assert_eq!(p.lines, Some(300));
             assert_eq!(p.terminal_id.unwrap().as_str(), "t1");
         });
         let end = session

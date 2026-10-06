@@ -6,6 +6,7 @@ struct SettingsView: View {
     @State private var removeError: String?
     @State private var report: ColdStartReport?
     @State private var keepKeyboard = DevicePrefs.load(from: DevicePrefs.file).keepKeyboard
+    @State private var historyLines = DevicePrefs.load(from: DevicePrefs.file).historyLines
     private let build = buildInfo()
 
     var body: some View {
@@ -26,6 +27,9 @@ struct SettingsView: View {
                     Toggle("Keep keyboard open after sending", isOn: $keepKeyboard)
                 }
                 Section("Terminal") {
+                    Picker("History", selection: $historyLines) {
+                        ForEach(DevicePrefs.historyChoices, id: \.self) { Text("\($0) lines") }
+                    }
                     NavigationLink("Gestures") { GesturesView() }
                 }
                 Section("Machines") {
@@ -58,6 +62,11 @@ struct SettingsView: View {
             .onChange(of: keepKeyboard) { _, keep in
                 var prefs = DevicePrefs.load(from: DevicePrefs.file)
                 prefs.keepKeyboard = keep
+                prefs.save(to: DevicePrefs.file)
+            }
+            .onChange(of: historyLines) { _, lines in
+                var prefs = DevicePrefs.load(from: DevicePrefs.file)
+                prefs.historyLines = lines
                 prefs.save(to: DevicePrefs.file)
             }
             .refreshable { await app.refreshNode() }

@@ -224,6 +224,17 @@ impl ReadParams {
 #[serde(deny_unknown_fields)]
 pub struct AgentWatchParams {
     pub terminal_id: Option<TerminalId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 1000))]
+    pub lines: Option<u16>,
+}
+
+impl AgentWatchParams {
+    pub fn lines(&self) -> u16 {
+        self.lines.map_or(limits::DEFAULT_WATCH_LINES, |n| {
+            n.clamp(1, limits::MAX_READ_LINES)
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -873,6 +884,31 @@ mod tests {
             r#"{"id":3,"method":"agent.send_keys","params":{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"term_1","keys":["shift+tab","enter"]}}"#
         );
         assert_eq!(parse(&json).unwrap(), frame);
+    }
+
+    #[test]
+    fn watch_lines_are_optional_and_clamped() {
+        let watch = |params: &str| {
+            let frame = parse(&format!(
+                r#"{{"id":1,"method":"agent.watch","params":{params}}}"#
+            ))
+            .unwrap();
+            let Request::AgentWatch(p) = frame.request.clone() else {
+                panic!("not a watch");
+            };
+            let json = serde_json::to_string(&frame).unwrap();
+            assert_eq!(parse(&json).unwrap(), frame);
+            (p.lines(), json)
+        };
+        let (lines, json) = watch(r#"{"terminal_id":"t"}"#);
+        assert_eq!(lines, 200);
+        assert!(!json.contains("lines"));
+        let (lines, json) = watch(r#"{"terminal_id":"t","lines":500}"#);
+        assert_eq!(lines, 500);
+        assert!(json.contains(r#""lines":500"#));
+        assert_eq!(watch(r#"{"terminal_id":"t","lines":0}"#).0, 1);
+        assert_eq!(watch(r#"{"terminal_id":"t","lines":65535}"#).0, 1000);
+        assert_eq!(watch(r#"{"terminal_id":null,"lines":1}"#).0, 1);
     }
 
     #[test]

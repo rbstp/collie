@@ -126,7 +126,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     println!("agent.watch delivers agent.output in order, and stops after unwatch");
     let t = Instant::now();
     herdr.with(|h| h.recent = recent(0));
-    core.watch_agent(m.clone(), Some(CLAUDE.into()))
+    core.watch_agent(m.clone(), Some(CLAUDE.into()), 300)
         .await
         .unwrap();
     let mut seen: Vec<String> = Vec::new();
@@ -161,7 +161,8 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         .map(|s| format!("{}step {s}\r\n", history()))
         .collect();
     assert_eq!(seen, expected, "outputs out of order or unexpected");
-    core.watch_agent(m.clone(), None).await.unwrap();
+    assert_eq!(herdr.params("agent.read").last().unwrap()["lines"], 300);
+    core.watch_agent(m.clone(), None, 200).await.unwrap();
     let polls = herdr.params("agent.read").len();
     herdr.with(|h| h.recent = recent(9));
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -176,7 +177,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     println!("  watched in {:?}", t.elapsed());
 
     println!("suspend drops the session and its watch at once, resume brings both back");
-    core.watch_agent(m.clone(), Some(CLAUDE.into()))
+    core.watch_agent(m.clone(), Some(CLAUDE.into()), 300)
         .await
         .unwrap();
     wait_output(core, &m, CLAUDE, "step 9").await;
@@ -203,7 +204,8 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     herdr.with(|h| h.recent = recent(10));
     wait_output(core, &m, CLAUDE, "step 10").await;
     assert_eq!(sessions(&control).await, 1);
-    core.watch_agent(m.clone(), None).await.unwrap();
+    assert_eq!(herdr.params("agent.read").last().unwrap()["lines"], 300);
+    core.watch_agent(m.clone(), None, 200).await.unwrap();
 
     println!("agent.prompt reaches herdr with the exact text");
     let text = "Fix the flaky test\nthen run `cargo test` \"quoted\"\tand say ✓ é";
@@ -674,7 +676,7 @@ async fn live_scenario(
         .unwrap();
     println!("  started in {:?}", t.elapsed());
     let term = started.terminal_id.clone();
-    core.watch_agent(m.clone(), Some(term.clone()))
+    core.watch_agent(m.clone(), Some(term.clone()), 200)
         .await
         .unwrap();
     wait_output(core, &m, &term, "pi got: hello from collie").await;
@@ -695,7 +697,7 @@ async fn live_scenario(
         "{visible:?}"
     );
     assert_sgr_only(&visible.ansi);
-    core.watch_agent(m.clone(), None).await.unwrap();
+    core.watch_agent(m.clone(), None, 200).await.unwrap();
 
     println!("confirmed workspace.close removes the task workspace");
     assert!(workspaces().await.contains(&started.workspace_id));

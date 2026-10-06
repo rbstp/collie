@@ -30,6 +30,7 @@ final class FakeCore: AgentCore {
         var readLines: [UInt16?] = []
         var readError: CoreError?
         var output: TerminalSnapshot?
+        var depths: [UInt16?] = []
     }
 
     let state = Mutex(State())
@@ -85,13 +86,17 @@ final class FakeCore: AgentCore {
         )
         return AgentView(link: .connected, lastError: nil, agent: agent, output: nil, outputRevision: 0)
     }
-    func watchAgent(machineId: String, terminalId: String?) async throws {
-        state.withLock { $0.watches.append(terminalId) }
+    func watchAgent(machineId: String, terminalId: String?, lines: UInt16) async throws {
+        state.withLock {
+            $0.watches.append(terminalId)
+            $0.depths.append(lines)
+        }
     }
     func agentRead(machineId: String, terminalId: String, source: TerminalSource, lines: UInt16?) async throws -> TerminalSnapshot {
         let (read, error) = state.withLock { s in
             s.reads.append(terminalId)
             s.readLines.append(lines)
+            s.depths.append(lines)
             return (s.reads.count, s.readError)
         }
         if let error { throw error }
@@ -654,6 +659,41 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 
     model.wrapLines = true
     #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: true, keepKeyboard: true))
+}
+
+@MainActor
+@Test func terminalHistoryIs200LinesByDefaultAndRememberedOnThisDevice() async throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appending(path: "prefs.json")
+    let core = FakeCore()
+    let model = AgentModel(core: core, route: AgentRoute(machineId: "history", terminalId: "term_1"), prefsFile: file)
+    func runOnce(_ watches: Int) async {
+        let run = Task { await model.run() }
+        while core.snapshot.watches.count < watches {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        run.cancel()
+        await run.value
+    }
+
+    try Data(#"{"wrapLines":false}"#.utf8).write(to: file)
+    #expect(DevicePrefs.load(from: file).historyLines == 200)
+    await runOnce(1)
+    await model.refresh()
+
+    var prefs = DevicePrefs.load(from: file)
+    prefs.historyLines = 1000
+    prefs.save(to: file)
+    await runOnce(3)
+    await model.refresh()
+    while core.snapshot.watches.count < 4 {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(core.snapshot.watches == ["term_1", nil, "term_1", nil])
+    #expect(core.snapshot.depths == [200, 200, 200, 1000, 1000, 1000])
+    #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, historyLines: 1000))
 }
 
 @MainActor

@@ -4,7 +4,7 @@ import Foundation
 /// The slice of CollieCore the agent screens use, so view models can run against a fake.
 protocol AgentCore: AnyObject, Sendable {
     func agentView(machineId: String, terminalId: String, afterRevision: UInt64) -> AgentView?
-    func watchAgent(machineId: String, terminalId: String?) async throws
+    func watchAgent(machineId: String, terminalId: String?, lines: UInt16) async throws
     func agentRead(machineId: String, terminalId: String, source: TerminalSource, lines: UInt16?) async throws -> TerminalSnapshot
     func agentDraft(machineId: String, terminalId: String) async throws -> String?
     func prompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws
