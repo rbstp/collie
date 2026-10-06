@@ -15,6 +15,7 @@ final class FakeCore: AgentCore {
         var keys: [[AgentKey]] = []
         var typed: [String] = []
         var closes: [String] = []
+        var stars: [String] = []
         var hold = false
         var held: [CheckedContinuation<Void, Never>] = []
         var error: CoreError?
@@ -146,6 +147,9 @@ final class FakeCore: AgentCore {
         try await call { $0.typed.append(text) }
     }
     func focus(machineId: String, terminalId: String) async throws {}
+    func star(machineId: String, terminalId: String, starred: Bool) async throws {
+        try await call { $0.stars.append("\(machineId) \(terminalId) \(starred)") }
+    }
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
         try await call { $0.closes.append("workspace \(workspaceId) confirm=\(confirm)") }
     }

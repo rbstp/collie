@@ -682,6 +682,7 @@ mod tests {
             terminals: Vec::new(),
             terminals_enabled: false,
             plan_usage: None,
+            starred: Vec::new(),
         });
         s
     }

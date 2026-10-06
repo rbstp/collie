@@ -60,6 +60,82 @@ impl StatusTracker {
     }
 }
 
+/// Starred panes, by terminal id, with the pane id each was last seen in: herdr gives a
+/// restored pane a new terminal id but keeps its pane id.
+pub struct Stars {
+    starred: BTreeMap<String, String>,
+    path: Option<PathBuf>,
+}
+
+impl Stars {
+    pub fn load(path: PathBuf) -> Self {
+        let starred = crate::peers::load_json(&path).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "could not read the saved stars");
+            BTreeMap::new()
+        });
+        Self {
+            starred,
+            path: Some(path),
+        }
+    }
+
+    fn save(&self) {
+        let Some(path) = self.path.as_deref() else {
+            return;
+        };
+        if let Err(e) = crate::peers::save_json(path, &self.starred) {
+            tracing::warn!(error = %e, "could not save the stars");
+        }
+    }
+
+    pub fn star(&mut self, pane: &PaneInfo) {
+        let old = self
+            .starred
+            .insert(pane.terminal_id.clone(), pane.pane_id.clone());
+        if old.as_ref() != Some(&pane.pane_id) {
+            self.save();
+        }
+    }
+
+    pub fn unstar(&mut self, terminal_id: &str) {
+        if self.starred.remove(terminal_id).is_some() {
+            self.save();
+        }
+    }
+
+    pub fn clear(&mut self) {
+        if !self.starred.is_empty() {
+            self.starred.clear();
+            self.save();
+        }
+    }
+
+    pub fn reconcile(&mut self, panes: &[PaneInfo]) -> Vec<TerminalId> {
+        // herdr answers before it restores its panes, so a list with none is not trusted.
+        if !panes.is_empty() {
+            let next: BTreeMap<String, String> = self
+                .starred
+                .iter()
+                .filter_map(|(terminal_id, pane_id)| {
+                    panes
+                        .iter()
+                        .find(|p| &p.terminal_id == terminal_id)
+                        .or_else(|| panes.iter().find(|p| &p.pane_id == pane_id))
+                })
+                .map(|p| (p.terminal_id.clone(), p.pane_id.clone()))
+                .collect();
+            if next != self.starred {
+                self.starred = next;
+                self.save();
+            }
+        }
+        self.starred
+            .keys()
+            .filter_map(|t| TerminalId::new(t.clone()).ok())
+            .collect()
+    }
+}
+
 pub fn status(s: &str) -> AgentStatus {
     serde_json::from_value(serde_json::Value::String(s.to_owned())).unwrap_or(AgentStatus::Unknown)
 }
@@ -186,6 +262,7 @@ pub fn map_flock(
         approvals: Vec::new(),
         terminals: Vec::new(),
         terminals_enabled: false,
+        starred: Vec::new(),
     }
 }
 
@@ -431,6 +508,80 @@ mod tests {
         let f = map_flock(&snap, &mut again, 6000, machine(), 0, None);
         assert_eq!(f.agents[0].status_since_ms, 6000);
         assert_eq!(f.agents[1].status_since_ms, 500);
+    }
+
+    fn pane(terminal_id: &str, pane_id: &str) -> PaneInfo {
+        PaneInfo {
+            pane_id: pane_id.into(),
+            terminal_id: terminal_id.into(),
+            workspace_id: "w1".into(),
+            tab_id: "w1:t1".into(),
+            cwd: None,
+            foreground_cwd: None,
+            agent: Some("claude".into()),
+            label: None,
+        }
+    }
+
+    fn ids(ids: Vec<TerminalId>) -> Vec<String> {
+        ids.into_iter().map(String::from).collect()
+    }
+
+    #[test]
+    fn a_star_follows_its_pane_until_it_closes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stars.json");
+        let mut stars = Stars::load(path.clone());
+        stars.star(&pane("t1", "w1:p1"));
+        stars.star(&pane("t2", "w1:p2"));
+        stars.star(&pane("t3", "w1:p3"));
+        stars.unstar("t3");
+        assert_eq!(
+            ids(stars.reconcile(&[pane("t1", "w1:p1"), pane("t2", "w1:p2")])),
+            ["t1", "t2"]
+        );
+
+        // An agent that exits leaves its pane, and its star, as a shell.
+        let mut shell = pane("t2", "w1:p2");
+        shell.agent = None;
+        let listed = [pane("t1", "w1:p1"), shell];
+        assert_eq!(ids(stars.reconcile(&listed)), ["t1", "t2"]);
+
+        // herdr answering before it restored its panes.
+        assert_eq!(ids(stars.reconcile(&[])), ["t1", "t2"]);
+
+        // A herdr restore: same panes, new terminal ids.
+        let restored = [pane("t8", "w1:p1"), pane("t9", "w1:p2")];
+        assert_eq!(ids(stars.reconcile(&restored)), ["t8", "t9"]);
+
+        // A collied restart reads them back.
+        let mut stars = Stars::load(path.clone());
+        assert_eq!(ids(stars.reconcile(&restored)), ["t8", "t9"]);
+
+        // A cross-workspace move keeps the terminal id, and a later restore follows the
+        // new pane id.
+        let moved = [pane("t8", "w2:p1"), pane("t9", "w1:p2")];
+        assert_eq!(ids(stars.reconcile(&moved)), ["t8", "t9"]);
+        let again = [
+            pane("t5", "w2:p1"),
+            pane("t6", "w1:p1"),
+            pane("t7", "w1:p2"),
+        ];
+        assert_eq!(ids(stars.reconcile(&again)), ["t5", "t7"]);
+
+        // A closed pane loses its star, on disk too.
+        assert_eq!(ids(stars.reconcile(&[pane("t5", "w2:p1")])), ["t5"]);
+        assert_eq!(
+            ids(Stars::load(path.clone()).reconcile(&[pane("t5", "w2:p1")])),
+            ["t5"]
+        );
+
+        stars.clear();
+        assert!(
+            Stars::load(path)
+                .reconcile(&[pane("t5", "w2:p1")])
+                .is_empty()
+        );
     }
 
     #[test]

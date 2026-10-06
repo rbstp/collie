@@ -552,6 +552,29 @@ async fn scenario(
     assert_eq!(result(recv(&mut ws).await), Response::Ok);
     assert!(!herdr.methods().iter().any(|m| m.starts_with("pane.send")));
 
+    println!("stars are kept by collied and listed in the snapshot");
+    let star = |terminal: &str, starred: bool| json!({"terminal_id": terminal, "starred": starred});
+    assert_error(
+        &call(&mut ws, "agent.star", star("term_nope", true)).await,
+        ErrorCode::NotFound,
+    );
+    for terminal in ["term_0a1b2c3d4e5f60", "term_65ce7ae4fd5731"] {
+        assert_eq!(
+            result(call(&mut ws, "agent.star", star(terminal, true)).await),
+            Response::Ok
+        );
+    }
+    assert_eq!(
+        result(call(&mut ws, "agent.star", star("term_closed", false)).await),
+        Response::Ok
+    );
+    let Response::Flock(flock) = result(call(&mut ws, "flock.snapshot", json!({})).await) else {
+        panic!("no flock");
+    };
+    let starred: Vec<&str> = flock.starred.iter().map(|t| t.as_str()).collect();
+    assert_eq!(starred, ["term_0a1b2c3d4e5f60", "term_65ce7ae4fd5731"]);
+    assert_eq!(mode(&data_dir.join("stars.json")), 0o600);
+
     println!("a fifth session from one node evicts its oldest");
     let mut extra = Vec::new();
     for _ in 0..3 {
@@ -652,6 +675,7 @@ async fn scenario(
         "\"result\":\"wrong code\"",
         "\"method\":\"peers.revoke\"",
         "\"method\":\"agent.focus\"",
+        "\"method\":\"agent.star\"",
         "\"target\":\"term_65ce7ae4fd5731\"",
         "\"method\":\"agent.watch\"",
         "\"result\":\"agent_blocked: agent is blocked; answer it through an approval (replayed)\"",
@@ -906,6 +930,12 @@ async fn terminal_phase(
         .map(|t| t.terminal_id.as_str())
         .collect();
     assert_eq!(shells, [SHELL]);
+    let starred: Vec<&str> = flock.starred.iter().map(|t| t.as_str()).collect();
+    assert_eq!(
+        starred,
+        ["term_0a1b2c3d4e5f60", "term_65ce7ae4fd5731"],
+        "stars survive a restart and pairing again"
+    );
 
     println!("no input without a grant, and none into an agent's pane");
     locked(
@@ -1083,6 +1113,16 @@ async fn terminal_phase(
         .filter(|l| l.contains("\"terminal.challenge\"") && l.contains("\"result\":\"ok\""))
         .count();
     assert_eq!(challenges, 0, "a challenge that was issued is not audited");
+
+    println!("removing the machine from the phone clears its stars");
+    let mut ws = hello(phone, target).await;
+    assert_eq!(
+        result(call(&mut ws, "unpair", json!({})).await),
+        Response::Ok
+    );
+    let stars: Value =
+        serde_json::from_slice(&std::fs::read(data_dir.join("stars.json")).unwrap()).unwrap();
+    assert_eq!(stars, json!({}));
     handle.shutdown().await;
 }
 

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
-    ActivityId, AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTarget,
+    ActivityId, AgentKind, AgentPromptParams, AgentSendKeysParams, AgentStarParams, AgentTarget,
     AgentTypeTextParams, AgentWatchParams, ApprovalId, Cwd, DraftText, Empty, ErrorCode, Key,
     Label, NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
     PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
@@ -357,6 +357,8 @@ pub struct MachineFlock {
     pub terminals_enabled: bool,
     #[uniffi(default = None)]
     pub plan_usage: Option<PlanUsage>,
+    #[uniffi(default = [])]
+    pub starred: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -1228,6 +1230,31 @@ impl CollieCore {
             terminal_id: terminal(terminal_id)?,
         });
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    /// The machine keeps the stars, for every phone paired with it.
+    pub async fn star(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        starred: bool,
+    ) -> Result<(), CoreError> {
+        let terminal_id = terminal(terminal_id)?;
+        let request = Request::AgentStar(AgentStarParams {
+            terminal_id: terminal_id.clone(),
+            starred,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)?;
+        let Some(conn) = lock(&self.inner.conns).get(&machine_id).cloned() else {
+            return Ok(());
+        };
+        if let Some(f) = lock(&conn.shared.flock).flock.as_mut() {
+            f.starred.retain(|t| *t != terminal_id);
+            if starred {
+                f.starred.push(terminal_id);
+            }
+        }
+        Ok(())
     }
 
     pub async fn task_options(&self, machine_id: String) -> Result<TaskOptions, CoreError> {
@@ -2275,6 +2302,11 @@ fn view(conn: &Conn) -> MachineFlock {
             .collect(),
         terminals_enabled: flock.is_some_and(|f| f.terminals_enabled),
         plan_usage: flock.and_then(|f| f.plan_usage.as_ref()).map(plan_usage),
+        starred: flock
+            .into_iter()
+            .flat_map(|f| &f.starred)
+            .map(|t| t.as_str().into())
+            .collect(),
     }
 }
 
@@ -3122,6 +3154,7 @@ mod tailnet_tests {
             terminals: Vec::new(),
             terminals_enabled: false,
             plan_usage: None,
+            starred: Vec::new(),
         }
     }
 
@@ -3150,6 +3183,7 @@ mod tailnet_tests {
         pushes: Vec<String>,
         activities: Vec<String>,
         unpaired: bool,
+        stars: Vec<(String, bool)>,
         connections: usize,
         closed: usize,
     }
@@ -3391,6 +3425,12 @@ mod tailnet_tests {
                             })
                         }
                         Request::PaneClose(p) if !p.confirm => Err(ErrorCode::ConfirmRequired),
+                        Request::AgentStar(p) => {
+                            lock(&seen)
+                                .stars
+                                .push((p.terminal_id.as_str().into(), p.starred));
+                            Ok(Response::Ok)
+                        }
                         Request::ApprovalList(_) => {
                             let mut seen = lock(&seen);
                             seen.lists += 1;
@@ -3791,6 +3831,11 @@ mod tailnet_tests {
             .block_on(core.close_pane(id(), "term_2".into(), false))
             .unwrap_err();
         assert!(matches!(err, CoreError::ConfirmRequired), "{err:?}");
+        rt.block_on(core.star(id(), t1(), true)).unwrap();
+        assert_eq!(core.cached_flock(id()).unwrap().starred, [t1()]);
+        rt.block_on(core.star(id(), t1(), false)).unwrap();
+        assert!(core.cached_flock(id()).unwrap().starred.is_empty());
+        assert_eq!(lock(&seen).stars, [(t1(), true), (t1(), false)]);
         rt.block_on(core.watch_agent(id(), None, 500)).unwrap();
         assert_eq!(lock(&seen).watches.last(), Some(&None));
         assert!(core.agent_view(id(), t1(), 0).unwrap().output.is_none());

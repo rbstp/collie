@@ -15,7 +15,7 @@ private final class FakeClock {
 
 private func entry(
     _ machineId: String, link: LinkPhase = .connected, since: UInt64 = 0, kind: String = "claude", loaded: Bool = false,
-    _ agents: [(String, AgentState)]
+    starred: [String] = [], _ agents: [(String, AgentState)]
 ) -> MachineFlockEntry {
     let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
     let summaries = agents.map {
@@ -25,7 +25,9 @@ private func entry(
         )
     }
     let details = loaded ? MachineDetails(name: "Mac", nodeId: "n1", herdrSession: "default") : nil
-    let flock = MachineFlock(machine: machine, link: link, lastError: nil, details: details, workspaces: [], agents: summaries, approvalsCount: 0)
+    let flock = MachineFlock(
+        machine: machine, link: link, lastError: nil, details: details, workspaces: [], agents: summaries, approvalsCount: 0, starred: starred
+    )
     return MachineFlockEntry(machine: machine, flock: flock)
 }
 
@@ -423,12 +425,6 @@ private func claude(_ box: String, top: String = rule, above: String = "", foote
     }
 }
 
-private func prefsFile() throws -> (file: URL, dir: URL) {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    return (dir.appending(path: "prefs.json"), dir)
-}
-
 @Test func starredCardsLeadTheirMachinesSectionInFlockOrder() {
     let flock = entry("m1", [("t1", .blocked), ("t2", .working), ("t3", .idle), ("t4", .done)])
     let agents = flock.gridAgents(starred: [route("t4"), route("t2"), route("t1", on: "m2")])
@@ -438,45 +434,59 @@ private func prefsFile() throws -> (file: URL, dir: URL) {
 }
 
 @MainActor
-@Test func aStarIsRememberedOnThisDeviceUntilItsAgentCloses() throws {
-    let (file, dir) = try prefsFile()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    try Data(#"{"wrapLines":false}"#.utf8).write(to: file)
-
-    let model = PreviewModel(prefsFile: file)
-    #expect(model.starred.isEmpty)
-    model.toggleStar(route("t1"))
-    model.toggleStar(route("t2"))
-    model.toggleStar(route("t3", on: "m2"))
-    model.toggleStar(route("t2"))
-    #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, starred: [route("t1"), route("t3", on: "m2")]))
-    #expect(PreviewModel(prefsFile: file).starred == [route("t1"), route("t3", on: "m2")])
-
-    // Not yet loaded, offline or still listing it: the star stays.
-    model.update([])
-    model.update([entry("m1", [("t2", .idle)]), entry("m2", link: .unavailable, loaded: true, [])])
-    model.update([entry("m1", loaded: true, [("t1", .idle)])])
+@Test func starsComeFromEachMachinesListing() {
+    let model = PreviewModel()
+    model.update([entry("m1", loaded: true, starred: ["t1"], [("t1", .idle), ("t2", .idle)]), entry("m2", starred: ["t3"], [])])
     #expect(model.starred == [route("t1"), route("t3", on: "m2")])
 
-    model.update([entry("m1", loaded: true, [("t2", .idle)]), entry("m2", loaded: true, [("t3", .idle)])])
-    #expect(model.starred == [route("t3", on: "m2")])
-    #expect(DevicePrefs.load(from: file).starred == [route("t3", on: "m2")])
+    // Offline or still loading, the cached listing keeps them: the phone never prunes a star.
+    model.update([entry("m1", link: .unavailable, loaded: true, starred: ["t1"], []), entry("m2", link: .connecting, starred: ["t3"], [])])
+    #expect(model.starred == [route("t1"), route("t3", on: "m2")])
+
+    // After a herdr restart the machine lists the same pane under its new terminal id.
+    model.update([entry("m1", loaded: true, starred: ["t9"], [("t9", .idle)]), entry("m2", loaded: true, [("t3", .idle)])])
+    #expect(model.starred == [route("t9")])
 }
 
 @MainActor
-@Test func aStarredCardReadsMoreLinesAtOnceAndOnlyWhenItCanChange() async throws {
-    let (file, dir) = try prefsFile()
-    defer { try? FileManager.default.removeItem(at: dir) }
+@Test func aStarIsSetOnTheMachine() async {
+    let core = FakeCore()
+    let model = PreviewModel()
+    model.update([entry("m1", [("t1", .idle), ("t2", .idle)])])
+    let run = Task { await model.run(core: core) }
+    // Until `run` has the core, a toggle does nothing.
+    while core.snapshot.stars.isEmpty {
+        await Task.yield()
+        await model.toggleStar(route("t1"))
+    }
+    #expect(core.snapshot.stars == ["m1 t1 true"])
+    #expect(model.starred == [route("t1")])
+
+    core.set(error: .MachineNotFound)
+    await model.toggleStar(route("t1"))
+    await model.toggleStar(route("t2"))
+    #expect(model.starred == [route("t1")])
+
+    core.set()
+    await model.toggleStar(route("t1"))
+    #expect(model.starred.isEmpty)
+    #expect(core.snapshot.stars == ["m1 t1 true", "m1 t1 false", "m1 t2 true", "m1 t1 false"])
+    run.cancel()
+    await run.value
+}
+
+@MainActor
+@Test func aStarredCardReadsMoreLinesAtOnceAndOnlyWhenItCanChange() async {
     let core = FakeCore()
     let clock = FakeClock()
-    let model = PreviewModel(now: { clock.now }, prefsFile: file)
+    let model = PreviewModel(now: { clock.now })
     model.update([entry("m1", [("t1", .done), ("t2", .working)])])
     model.appeared(route("t1"))
     model.appeared(route("t2"))
     let run = await running(model, core, screens: 2)
     #expect(core.snapshot.readLines == [60, 60])
 
-    await model.toggleStar(route("t1"))?.value
+    await model.toggleStar(route("t1"))
     #expect(core.snapshot.reads.last == "t1" && core.snapshot.readLines.last == 120)
     for _ in 0..<10 {
         clock.advance(.seconds(1))
@@ -486,7 +496,7 @@ private func prefsFile() throws -> (file: URL, dir: URL) {
     #expect(Set(core.snapshot.readLines.dropFirst(3)) == [60])
 
     // A card moving to the starred row can show there before its grid card goes.
-    await model.toggleStar(route("t2"))?.value
+    await model.toggleStar(route("t2"))
     #expect(core.snapshot.reads.last == "t2" && core.snapshot.readLines.last == 120)
     model.appeared(route("t2"))
     model.disappeared(route("t2"))

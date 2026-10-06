@@ -47,6 +47,8 @@ pub enum Request {
     AgentTypeText(AgentTypeTextParams),
     #[serde(rename = "agent.focus")]
     AgentFocus(AgentTarget),
+    #[serde(rename = "agent.star")]
+    AgentStar(AgentStarParams),
     #[serde(rename = "task.new")]
     TaskNew(TaskNewParams),
     #[serde(rename = "workspace.close")]
@@ -105,6 +107,7 @@ impl Request {
         "agent.send_keys",
         "agent.type_text",
         "agent.focus",
+        "agent.star",
         "task.new",
         "workspace.close",
         "pane.close",
@@ -141,6 +144,7 @@ impl Request {
             Self::AgentSendKeys(_) => "agent.send_keys",
             Self::AgentTypeText(_) => "agent.type_text",
             Self::AgentFocus(_) => "agent.focus",
+            Self::AgentStar(_) => "agent.star",
             Self::TaskNew(_) => "task.new",
             Self::WorkspaceClose(_) => "workspace.close",
             Self::PaneClose(_) => "pane.close",
@@ -177,6 +181,7 @@ impl Request {
             | Self::AgentSendKeys(_)
             | Self::AgentTypeText(_)
             | Self::AgentFocus(_)
+            | Self::AgentStar(_)
             | Self::TaskNew(_)
             | Self::WorkspaceClose(_)
             | Self::PaneClose(_)
@@ -277,6 +282,14 @@ impl AgentWatchParams {
 #[serde(deny_unknown_fields)]
 pub struct AgentTarget {
     pub terminal_id: TerminalId,
+}
+
+/// Stars are the machine's, shared by every paired phone. Unstarring needs no live pane.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentStarParams {
+    pub terminal_id: TerminalId,
+    pub starred: bool,
 }
 
 /// `signature` is over [`terminal_grant_message`] for the challenge this session was given.
@@ -735,6 +748,9 @@ pub struct Flock {
     /// The machine's plan usage, with or without a Claude Code agent open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_usage: Option<PlanUsage>,
+    /// Starred panes, which collied follows across a herdr restart until they close.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub starred: Vec<TerminalId>,
 }
 
 /// A pane with no agent. `label` is the name given in herdr, never a title the pane's
@@ -1262,6 +1278,38 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains(r#""name":"plan.usage""#), "{json}");
         assert_eq!(serde_json::from_str::<ServerFrame>(&json).unwrap(), event);
+    }
+
+    #[test]
+    fn stars_are_additive() {
+        let json =
+            r#"{"id":2,"method":"agent.star","params":{"terminal_id":"term_1","starred":true}}"#;
+        let frame = parse(json).unwrap();
+        assert_eq!(
+            frame.request,
+            Request::AgentStar(AgentStarParams {
+                terminal_id: TerminalId::new("term_1").unwrap(),
+                starred: true,
+            })
+        );
+        assert_eq!(frame.request.class(), MethodClass::Drive);
+        assert_eq!(serde_json::to_string(&frame).unwrap(), json);
+        let extra = r#"{"id":2,"method":"agent.star","params":{"terminal_id":"t","starred":false,"pane_id":"w1:p1"}}"#;
+        assert_eq!(parse(extra).unwrap_err().code, ErrorCode::InvalidParams);
+        let missing = r#"{"id":2,"method":"agent.star","params":{"terminal_id":"t"}}"#;
+        assert_eq!(parse(missing).unwrap_err().code, ErrorCode::InvalidParams);
+
+        let older = r#"{"seq":1,"machine":{"name":"m","node_id":"n","herdr_session":"default"},"workspaces":[],"agents":[],"approvals":[],"terminals":[]}"#;
+        let f: Flock = serde_json::from_str(older).unwrap();
+        assert!(f.starred.is_empty());
+        assert_eq!(serde_json::to_string(&f).unwrap(), older);
+        let with = Flock {
+            starred: vec![TerminalId::new("term_1").unwrap()],
+            ..f
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.ends_with(r#""starred":["term_1"]}"#), "{json}");
+        assert_eq!(serde_json::from_str::<Flock>(&json).unwrap(), with);
     }
 
     #[test]

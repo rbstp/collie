@@ -575,6 +575,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "starred": {
+          "description": "Starred panes, which collied follows across a herdr restart until they close.",
+          "items": {
+            "$ref": "#/$defs/TerminalId"
+          },
+          "type": "array"
+        },
         "terminals": {
           "default": [],
           "description": "Shell panes: only when the machine enables terminals.",
