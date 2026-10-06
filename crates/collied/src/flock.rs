@@ -12,7 +12,7 @@ use crate::transcript::{Derived, Transcripts};
 /// and keeps it on disk so a restart does not reset it.
 #[derive(Default)]
 pub struct StatusTracker {
-    seen: HashMap<String, (AgentStatus, u64)>,
+    seen: HashMap<String, (AgentStatus, u64, u64)>,
     path: Option<PathBuf>,
     dirty: bool,
 }
@@ -40,11 +40,12 @@ impl StatusTracker {
         self.dirty = false;
     }
 
-    fn observe(&mut self, terminal_id: &str, status: AgentStatus, now_ms: u64) -> u64 {
+    fn observe(&mut self, terminal_id: &str, status: AgentStatus, seq: u64, now_ms: u64) -> u64 {
         match self.seen.get(terminal_id) {
-            Some((s, since)) if *s == status => (*since).min(now_ms),
+            Some(&(s, q, since)) if s == status && q == seq && since <= now_ms => since,
             _ => {
-                self.seen.insert(terminal_id.to_owned(), (status, now_ms));
+                self.seen
+                    .insert(terminal_id.to_owned(), (status, seq, now_ms));
                 self.dirty = true;
                 now_ms
             }
@@ -92,7 +93,7 @@ pub fn map_agent(
     let status = status(&a.agent_status);
     let derived = derived.unwrap_or_default();
     Some(Agent {
-        status_since_ms: tracker.observe(&a.terminal_id, status, now_ms),
+        status_since_ms: tracker.observe(&a.terminal_id, status, a.state_change_seq, now_ms),
         terminal_id,
         workspace_id,
         kind: non_empty(&a.agent),
@@ -419,9 +420,16 @@ mod tests {
         assert_eq!(f.agents[1].status_since_ms, 5000);
         restarted.save();
 
-        let mut early = StatusTracker::load(path);
+        let mut early = StatusTracker::load(path.clone());
         let f = map_flock(&snap, &mut early, 500, machine(), 0, None);
         assert_eq!(f.agents[0].status_since_ms, 500);
+        assert_eq!(f.agents[1].status_since_ms, 500);
+        early.save();
+
+        let mut again = StatusTracker::load(path);
+        snap.agents[0].state_change_seq += 1;
+        let f = map_flock(&snap, &mut again, 6000, machine(), 0, None);
+        assert_eq!(f.agents[0].status_since_ms, 6000);
         assert_eq!(f.agents[1].status_since_ms, 500);
     }
 
