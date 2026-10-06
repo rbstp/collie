@@ -80,7 +80,10 @@ fn main() {
             "-ldflags=-w",
         ]);
     if go.goos == "ios" {
-        cmd.arg("-tags=ios");
+        // Every netcheck probes the Wi-Fi gateway for NAT-PMP/PCP/UPnP. Without a mapping, a
+        // phone behind a hard NAT gets a direct path only through the Mac's port mapper,
+        // else it goes through DERP.
+        cmd.arg("-tags=ios,ts_omit_portmapper");
     }
     run(cmd.arg("-o").arg(&archive));
 

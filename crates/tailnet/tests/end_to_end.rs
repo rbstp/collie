@@ -86,6 +86,7 @@ fn end_to_end() {
     let dialer_st: Vec<Status> = dialers.iter().map(|d| wait_ready(d, peers)).collect();
     let tagged_st = wait_ready(&tagged, peers);
     println!("4 nodes Running with full netmaps in {:?}", t1.elapsed());
+    let listener_logs = tsnet_logs(&root.0.join("it-listener"));
     assert_eq!(
         kernel_tcp_listeners(),
         Vec::<String>::new(),
@@ -205,9 +206,27 @@ fn end_to_end() {
         "socketpair proxy leaked fds"
     );
 
+    assert_eq!(
+        tsnet_logs(&root.0.join("it-listener")),
+        listener_logs,
+        "logtail must never write its buffer"
+    );
+    assert!(listener_logs.iter().all(|(len, _)| *len == 0));
     drop(listener);
     drop(control);
     println!("total {:?}", t0.elapsed());
+}
+
+// Uploads already go nowhere, but without logtail.Disable() every log line is still
+// written, read back, compressed and truncated.
+fn tsnet_logs(state_dir: &Path) -> Vec<(u64, std::time::SystemTime)> {
+    ["tailscaled.log1.txt", "tailscaled.log2.txt"]
+        .iter()
+        .map(|f| {
+            let meta = std::fs::metadata(state_dir.join(f)).unwrap();
+            (meta.len(), meta.modified().unwrap())
+        })
+        .collect()
 }
 
 // The listener closes first, so it holds each 4-tuple in TIME-WAIT. gVisor

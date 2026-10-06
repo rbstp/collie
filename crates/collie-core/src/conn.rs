@@ -30,10 +30,16 @@ const BACKOFF: [Duration; 6] = [
 ];
 const RESET_AFTER: Duration = Duration::from_secs(30);
 const OFFLINE_POLL: Duration = Duration::from_secs(3);
+const PEER_OFFLINE_POLL: [Duration; 4] = [
+    Duration::from_secs(3),
+    Duration::from_secs(6),
+    Duration::from_secs(12),
+    Duration::from_secs(15),
+];
 /// A machine Tailscale reports offline is not dialed: every 20 s dial to a dead peer runs
 /// on the node all machines share. It is still tried this often, in case control is wrong,
 /// and once on every reconnect request (a resume or a retry), when its netmap may be stale.
-const OFFLINE_REDIAL: Duration = Duration::from_secs(300);
+const OFFLINE_REDIAL: Duration = Duration::from_secs(15 * 60);
 const DIAL_ATTEMPT: Duration = Duration::from_secs(5);
 const DIAL_BUDGET: Duration = Duration::from_secs(20);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -583,12 +589,14 @@ async fn supervise(
 /// After a foreground resume the node needs a moment to rebuild its paths, and the old
 /// session ends (or is ended) as `Closed`. Failures within `RESUME_GRACE` retry quickly
 /// and stay `Connecting` without an error; auth failures still stop at once. A resume
-/// also restarts the normal backoff.
+/// also restarts the normal backoff, and until [`crate::RESTART_AFTER`] a machine
+/// Tailscale reports offline is polled at the quickest rate, while the node recovers.
 #[derive(Default)]
 struct Backoff {
     attempt: usize,
     resumed: Option<Instant>,
     grace_attempt: usize,
+    offline_attempt: usize,
 }
 
 impl Backoff {
@@ -607,8 +615,17 @@ impl Backoff {
         }
         if matches!(err, ConnectError::PeerOffline) {
             link.set(LinkPhase::Unavailable, Some(err.to_string()));
-            return Some(OFFLINE_POLL);
+            if link
+                .resumed
+                .is_some_and(|at| now.saturating_duration_since(at) < crate::RESTART_AFTER)
+            {
+                self.offline_attempt = 0;
+            }
+            let delay = PEER_OFFLINE_POLL[self.offline_attempt.min(PEER_OFFLINE_POLL.len() - 1)];
+            self.offline_attempt += 1;
+            return Some(delay);
         }
+        self.offline_attempt = 0;
         if link
             .resumed
             .is_some_and(|at| now.saturating_duration_since(at) < RESUME_GRACE)
@@ -916,17 +933,23 @@ mod tests {
         let mut backoff = Backoff::default();
         let t0 = Instant::now();
         assert!(!shared.resume(t0));
-        for i in 0..3 {
-            assert_eq!(
-                backoff.failed(
-                    &shared,
-                    &ConnectError::PeerOffline,
-                    t0 + Duration::from_secs(i)
-                ),
-                Some(OFFLINE_POLL),
-                "no grace retries and no growing backoff"
-            );
-        }
+        let polls: Vec<_> = (0..5)
+            .map(|i| {
+                backoff
+                    .failed(
+                        &shared,
+                        &ConnectError::PeerOffline,
+                        t0 + crate::RESTART_AFTER + Duration::from_secs(i),
+                    )
+                    .unwrap()
+                    .as_secs()
+            })
+            .collect();
+        assert_eq!(
+            polls,
+            [3, 6, 12, 15, 15],
+            "no grace retries, and a slower poll while it stays offline"
+        );
         assert_eq!(
             link(&shared),
             (
@@ -947,12 +970,26 @@ mod tests {
             Some(GRACE_BACKOFF[0]),
             "that dial's failure gets the grace"
         );
-        assert_eq!(
-            backoff.failed(&shared, &ConnectError::PeerOffline, t1),
-            Some(OFFLINE_POLL),
-            "then it waits quietly again"
-        );
+        for _ in 0..3 {
+            assert_eq!(
+                backoff.failed(&shared, &ConnectError::PeerOffline, t1 + RESUME_GRACE),
+                Some(PEER_OFFLINE_POLL[0]),
+                "then it waits quietly again, polled quickly while the node recovers"
+            );
+        }
         assert_eq!(link(&shared).0, LinkPhase::Unavailable);
+        let t2 = t1 + crate::RESTART_AFTER;
+        assert_eq!(
+            backoff.failed(&shared, &ConnectError::PeerOffline, t2),
+            Some(PEER_OFFLINE_POLL[1]),
+            "and more slowly after that"
+        );
+        assert_eq!(backoff.failed(&shared, &closed(), t2), Some(BACKOFF[0]));
+        assert_eq!(
+            backoff.failed(&shared, &ConnectError::PeerOffline, t2),
+            Some(PEER_OFFLINE_POLL[0]),
+            "a session or a dial in between restarts the offline poll"
+        );
     }
 
     #[test]
