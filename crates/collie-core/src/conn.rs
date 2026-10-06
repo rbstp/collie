@@ -319,6 +319,7 @@ impl Conn {
         identity: IdentitySlot,
         push: PushSlot,
         reach: Arc<Reachability>,
+        suspended: watch::Receiver<bool>,
     ) -> Self {
         let shared = Arc::new(Shared {
             flock: Mutex::default(),
@@ -341,6 +342,7 @@ impl Conn {
             rx,
             reconnect_rx,
             wake.clone(),
+            suspended,
         ));
         Self {
             machine,
@@ -385,10 +387,11 @@ impl Conn {
     }
 
     /// iOS suspends sockets without closing them: after a long background period the
-    /// connection is assumed dead, after a short one it is probed.
-    pub fn resume(self: &Arc<Self>, background: Duration) {
+    /// connection is assumed dead, after a short one it is probed. A suspended core has
+    /// no session left to probe.
+    pub fn resume(self: &Arc<Self>, background: Duration, suspended: bool) {
         let waiting = self.shared.resume(Instant::now());
-        if waiting || background >= FOREGROUND_RECONNECT {
+        if waiting || suspended || background >= FOREGROUND_RECONNECT {
             self.reconnect_now();
             return;
         }
@@ -469,11 +472,15 @@ async fn supervise(
     mut requests: mpsc::Receiver<(Request, Reply)>,
     mut reconnect: watch::Receiver<u64>,
     wake: Arc<Notify>,
+    mut suspended: watch::Receiver<bool>,
 ) {
     let mut backoff = Backoff::default();
     let mut last_dial = Instant::now();
     let mut peer_offline = false;
     loop {
+        if suspended.wait_for(|s| !s).await.is_err() {
+            return;
+        }
         let running = lock(&node).clone();
         let Some(node) = running else {
             shared.set(LinkPhase::Offline, None);
@@ -484,17 +491,19 @@ async fn supervise(
             shared.set(LinkPhase::Connecting, None);
         }
         let key = lock(&identity).clone();
-        let opened = open(
-            node,
-            &machine.host,
-            machine.port,
-            &machine.node_id,
-            Some(machine.kind),
-            &machine.key,
-            key,
-            last_dial.elapsed() >= OFFLINE_REDIAL,
-        )
-        .await;
+        let opened = tokio::select! {
+            opened = open(
+                node,
+                &machine.host,
+                machine.port,
+                &machine.node_id,
+                Some(machine.kind),
+                &machine.key,
+                key,
+                last_dial.elapsed() >= OFFLINE_REDIAL,
+            ) => opened,
+            _ = suspended.wait_for(|s| *s) => continue,
+        };
         peer_offline = matches!(opened, Err(ConnectError::PeerOffline));
         if !matches!(
             opened,
@@ -519,11 +528,18 @@ async fn supervise(
                     .unwrap_or_default();
                 let end = session
                     .run(&mut requests, &shared.flock, push, async {
-                        let _ = reconnect.changed().await;
+                        tokio::select! {
+                            _ = reconnect.changed() => false,
+                            _ = suspended.wait_for(|s| *s) => true,
+                        }
                     })
                     .await;
                 if since.elapsed() >= RESET_AFTER {
                     backoff.attempt = 0;
+                }
+                if *suspended.borrow() {
+                    shared.set(LinkPhase::Connecting, None);
+                    continue;
                 }
                 ConnectError::Session(end)
             }

@@ -172,6 +172,19 @@ final class AppModel {
         switch phase {
         case .background:
             backgroundedAt = .now
+            if let core {
+                let assertion = BackgroundAssertion(name: "core.suspend")
+                let epoch = core.beginSuspend()
+                Task {
+                    // Follow then lock: the activity's token must reach its Mac before the sessions close.
+                    let deadline = ContinuousClock.now + .seconds(3)
+                    while follows.awaitingToken, ContinuousClock.now < deadline {
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                    await core.suspend(epoch: epoch)
+                    assertion.end()
+                }
+            }
         case .active:
             if let since = backgroundedAt {
                 core?.resume(backgroundSecs: UInt64(max(0, Date.now.timeIntervalSince(since))))

@@ -62,6 +62,13 @@ const OP_REUSE_WINDOW: Duration = Duration::from_secs(180);
 const DECIDE_TIMEOUT: Duration = Duration::from_secs(20);
 /// Of the roughly 25 s iOS gives a background action, leaving time to post a fallback.
 const BACKGROUND_BUDGET: Duration = Duration::from_secs(20);
+/// How long a suspend lets prompts, uploads and decisions in flight finish.
+const SUSPEND_GRACE: Duration = Duration::from_secs(5);
+/// While an upload runs: the rest of the roughly 25 s background task, after the app's
+/// wait for Live Activity tokens (3 s at most) and before `SUSPEND_CLOSE`.
+const SUSPEND_UPLOAD_GRACE: Duration = Duration::from_secs(18);
+/// Longer than the 2 s a session takes at most to send its WebSocket close.
+const SUSPEND_CLOSE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 #[uniffi::export(Display)]
@@ -466,6 +473,25 @@ struct Inner {
     ops: Mutex<HashMap<String, (OpId, Instant)>>,
     uploads: Mutex<HashMap<u64, (String, watch::Sender<bool>)>>,
     next_upload: AtomicU64,
+    suspended: watch::Sender<bool>,
+    resumes: AtomicU64,
+    busy: watch::Sender<usize>,
+}
+
+/// A prompt, upload or decision in flight, which a suspend lets finish.
+struct Busy(Arc<Inner>);
+
+impl Busy {
+    fn new(inner: &Arc<Inner>) -> Self {
+        inner.busy.send_modify(|n| *n += 1);
+        Self(inner.clone())
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.busy.send_modify(|n| *n -= 1);
+    }
 }
 
 #[uniffi::export]
@@ -581,9 +607,57 @@ impl CollieCore {
     }
 
     pub fn resume(&self, background_secs: u64) {
+        // Bumped before the send: a suspend checking it under the watch lock either sees
+        // it or is undone by the send.
+        self.inner.resumes.fetch_add(1, Ordering::SeqCst);
+        let suspended = self.inner.suspended.send_replace(false);
         for conn in lock(&self.inner.conns).values() {
-            conn.resume(Duration::from_secs(background_secs));
+            conn.resume(Duration::from_secs(background_secs), suspended);
         }
+    }
+
+    /// Called as the app leaves the foreground, before any await: the epoch to pass to
+    /// [`Self::suspend`].
+    pub fn begin_suspend(&self) -> u64 {
+        self.inner.resumes.load(Ordering::SeqCst)
+    }
+
+    /// For the app leaving the foreground, inside a background task. Once the work in
+    /// flight is done (5 s at most), every session is closed, so collied drops it and its
+    /// watch at once, and no supervisor dials again until [`Self::resume`], even when iOS
+    /// wakes the app for a lock-screen decide, which opens its own connection. Does nothing
+    /// when a resume came after the [`Self::begin_suspend`] that returned `epoch`.
+    pub async fn suspend(&self, epoch: u64) {
+        let inner = self.inner.clone();
+        let _ = self
+            .runtime
+            .spawn(async move {
+                let mut busy = inner.busy.subscribe();
+                let grace = if lock(&inner.uploads).is_empty() {
+                    SUSPEND_GRACE
+                } else {
+                    SUSPEND_UPLOAD_GRACE
+                };
+                let _ = tokio::time::timeout(grace, busy.wait_for(|n| *n == 0)).await;
+                let suspending = inner.suspended.send_if_modified(|s| {
+                    let now = !*s && inner.resumes.load(Ordering::SeqCst) == epoch;
+                    *s |= now;
+                    now
+                });
+                if !suspending {
+                    return;
+                }
+                let conns: Vec<_> = lock(&inner.conns).values().cloned().collect();
+                let deadline = Instant::now() + SUSPEND_CLOSE;
+                while Instant::now() < deadline
+                    && conns
+                        .iter()
+                        .any(|c| lock(&c.shared.link).phase == LinkPhase::Connected)
+                {
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                }
+            })
+            .await;
     }
 
     pub async fn agent_read(
@@ -606,8 +680,9 @@ impl CollieCore {
     }
 
     /// One watched agent per machine; `None` stops the watch. The choice outlives the
-    /// connection: every new session re-issues `agent.watch` and a `recent` read, so
-    /// while the link is down this only records it. Poll [`Self::agent_view`] for output.
+    /// connection: every new session re-issues `agent.watch`, so while the link is down
+    /// this only records it. Poll [`Self::agent_view`] for output, which starts with the
+    /// watch's first full `agent.output`.
     pub async fn watch_agent(
         &self,
         machine_id: String,
@@ -620,25 +695,12 @@ impl CollieCore {
             return Ok(());
         }
         self.run(async move {
-            let watch = Request::AgentWatch(AgentWatchParams {
-                terminal_id: terminal_id.clone(),
-            });
+            let watch = Request::AgentWatch(AgentWatchParams { terminal_id });
             let response = conn
                 .request(watch, CALL_TIMEOUT)
                 .await
                 .map_err(|e| request_error(&conn, e))?;
-            expect_ok(response)?;
-            if let Some(terminal_id) = terminal_id {
-                let read = Request::AgentRead(ReadParams {
-                    terminal_id,
-                    source: ReadSource::Recent,
-                    lines: Some(limits::MAX_READ_LINES),
-                });
-                conn.request(read, CALL_TIMEOUT)
-                    .await
-                    .map_err(|e| request_error(&conn, e))?;
-            }
-            Ok(())
+            expect_ok(response)
         })
         .await
     }
@@ -882,6 +944,7 @@ impl CollieCore {
             ),
         };
         let conn = self.conn(&machine_id)?;
+        let _busy = Busy::new(&self.inner);
         self.run(async move {
             let cached = approvals::cached_nonce(&lock(&conn.shared.flock), &approval_id);
             let nonce = match cached {
@@ -1055,6 +1118,7 @@ impl CollieCore {
     ) -> Result<String, CoreError> {
         let name = attachments::check(&name, &data)?;
         let conn = self.conn(&machine_id)?;
+        let _busy = Busy::new(&self.inner);
         let (cancel, mut cancelled) = watch::channel(false);
         let key = self.inner.next_upload.fetch_add(1, Ordering::Relaxed);
         lock(&self.inner.uploads).insert(key, (machine_id, cancel));
@@ -1147,6 +1211,9 @@ impl CollieCore {
                 ops: Mutex::default(),
                 uploads: Mutex::default(),
                 next_upload: AtomicU64::default(),
+                suspended: watch::Sender::new(false),
+                resumes: AtomicU64::default(),
+                busy: watch::Sender::new(0),
             }),
         }))
     }
@@ -1171,6 +1238,7 @@ impl CollieCore {
         timeout: Duration,
     ) -> Result<Response, CoreError> {
         let conn = self.conn(machine_id)?;
+        let _busy = Busy::new(&self.inner);
         self.run(async move {
             conn.request(request, timeout)
                 .await
@@ -1190,6 +1258,7 @@ impl CollieCore {
         timeout: Duration,
     ) -> Result<Response, CoreError> {
         let conn = self.conn(machine_id)?;
+        let _busy = Busy::new(&self.inner);
         let key = self.inner.claim_op(machine_id, &mut request);
         let inner = self.inner.clone();
         self.run(async move {
@@ -1223,8 +1292,10 @@ impl CollieCore {
         let push = self.inner.push.clone();
         let machine_id = machine_id.to_owned();
         let sent = conn.request_in_order(request, CALL_TIMEOUT);
+        let busy = Busy::new(&self.inner);
         self.runtime.spawn(async move {
             let sent = sent.await;
+            drop(busy);
             if let (Ok(_), Some(ended)) = (sent, ends)
                 && let Some(reg) = lock(&push).get_mut(&machine_id)
             {
@@ -1252,6 +1323,7 @@ impl CollieCore {
                     self.inner.identity.clone(),
                     self.inner.push.clone(),
                     self.inner.reach.clone(),
+                    self.inner.suspended.subscribe(),
                 ))
             })
             .clone())
@@ -2203,6 +2275,8 @@ mod tailnet_tests {
         pushes: Vec<String>,
         activities: Vec<String>,
         unpaired: bool,
+        connections: usize,
+        closed: usize,
     }
 
     const NONCE: &str = "Tm9uY2VOb25jZU5vbmNlTm9uY2VOb25jZU5vbmNlTm9";
@@ -2292,7 +2366,8 @@ mod tailnet_tests {
     }
 
     /// Stand-in for collied: whois-checks the peer, then answers hello, pair.complete,
-    /// flock.snapshot and the Phase 2 methods. The first prompt of an op_id is
+    /// flock.snapshot and the Phase 2 methods. A watch starts with the full output, as
+    /// collied's first watch tick does. The first prompt of an op_id is
     /// "executed" and its connection dropped before the reply, like a phone losing its
     /// socket mid-call; a resend gets the stored outcome, as collied's op_id cache does.
     /// The handshake callback's error type is fixed by tungstenite.
@@ -2322,6 +2397,7 @@ mod tailnet_tests {
                 )
                 .await
                 .unwrap();
+                lock(&seen).connections += 1;
                 let mut seq = flock().seq;
                 let mut announced = std::collections::HashSet::new();
                 while let Some(Ok(Message::Text(text))) = ws.next().await {
@@ -2363,19 +2439,21 @@ mod tailnet_tests {
                             Ok(Response::Flock(Flock { machine, ..flock() }))
                         }
                         Request::AgentWatch(p) => {
+                            if p.terminal_id.is_some() {
+                                events = vec![
+                                    (seq + 1, protocol::Event::AgentOutput(terminal_read("live"))),
+                                    (
+                                        seq + 1,
+                                        protocol::Event::AgentOutput(terminal_read("replayed")),
+                                    ),
+                                ];
+                            }
                             lock(&seen).watches.push(p.terminal_id.map(String::from));
                             Ok(Response::Ok)
                         }
                         Request::AgentRead(p) => {
                             assert_eq!(p.terminal_id.as_str(), "term_1");
                             lock(&seen).reads.push(p.lines);
-                            events = vec![
-                                (seq + 1, protocol::Event::AgentOutput(terminal_read("live"))),
-                                (
-                                    seq + 1,
-                                    protocol::Event::AgentOutput(terminal_read("replayed")),
-                                ),
-                            ];
                             Ok(Response::Terminal(terminal_read("read")))
                         }
                         Request::AgentPrompt(p) => {
@@ -2514,6 +2592,7 @@ mod tailnet_tests {
                         ws.send(Message::text(text)).await.unwrap();
                     }
                 }
+                lock(&seen).closed += 1;
             });
         }
     }
@@ -2733,32 +2812,28 @@ mod tailnet_tests {
         rt.block_on(core.watch_agent(id(), Some(t1()))).unwrap();
         let view = poll(0, "live");
         assert_eq!(view.agent.unwrap().status, AgentState::Blocked);
-        assert_eq!(
-            view.output_revision, 2,
-            "read, then the event; the replay is dropped"
+        assert_eq!(view.output_revision, 1, "the replay is dropped");
+        assert!(core.agent_view(id(), t1(), 1).unwrap().output.is_none());
+        assert!(
+            lock(&seen).reads.is_empty(),
+            "the watch's output is not read again"
         );
-        assert!(core.agent_view(id(), t1(), 2).unwrap().output.is_none());
         let snap = rt
             .block_on(core.agent_read(id(), t1(), TerminalSource::Recent, None))
             .unwrap();
         assert_eq!((snap.ansi.as_str(), snap.truncated), ("read", false));
-        let live = poll(view.output_revision + 1, "live").output_revision;
+        let read = poll(view.output_revision, "read").output_revision;
         let snap = rt
             .block_on(core.agent_read(id(), t1(), TerminalSource::Recent, Some(60)))
             .unwrap();
         assert_eq!(snap.ansi, "read");
-        assert_eq!(
-            poll(live, "live").output_revision,
-            live + 1,
+        assert!(
+            core.agent_view(id(), t1(), read).unwrap().output.is_none(),
             "a preview read does not replace the watched screen"
         );
         assert_eq!(
             lock(&seen).reads,
-            vec![
-                Some(limits::MAX_READ_LINES),
-                Some(limits::MAX_READ_LINES),
-                Some(60)
-            ]
+            vec![Some(limits::MAX_READ_LINES), Some(60)]
         );
 
         rt.block_on(core.prompt(id(), t1(), "fix the build".into(), None))
@@ -2772,6 +2847,11 @@ mod tailnet_tests {
                 seen.watches,
                 vec![Some(t1()), Some(t1())],
                 "the watch is re-issued on the new connection"
+            );
+            assert_eq!(
+                seen.reads,
+                vec![Some(limits::MAX_READ_LINES), Some(60)],
+                "only the explicit agent_read calls"
             );
         }
         poll(view.output_revision, "live");
@@ -3144,6 +3224,73 @@ mod tailnet_tests {
             (lock(&seen).pushes.len() == 4).then_some(())
         });
         assert!(lock(&seen).pushes.iter().all(|t| t == TOKEN));
+
+        let link = || core.cached_flock(id()).unwrap().link;
+        let (connections, closed) = {
+            let seen = lock(&seen);
+            (seen.connections, seen.closed)
+        };
+        core.register_activity_token(id(), ACTIVITY.into(), "term_1".into(), token.clone())
+            .unwrap();
+        rt.block_on(core.suspend(core.begin_suspend()));
+        assert_eq!(
+            lock(&seen).activities.last(),
+            Some(&registered),
+            "a token sent as the app leaves still reaches the Mac"
+        );
+        let flock = core.cached_flock(id()).unwrap();
+        assert_eq!(
+            (flock.link, flock.last_error),
+            (LinkPhase::Connecting, None),
+            "a suspend is not a failure"
+        );
+        poll("collied sees the session close", || {
+            (lock(&seen).closed == closed + 1).then_some(())
+        });
+        lock(&seen).approvals.push(approval("a3"));
+        let report = rt.block_on(core.decide_from_notification(
+            mac_id.clone(),
+            "a3".into(),
+            ApprovalDecision::Approve,
+            None,
+        ));
+        assert_eq!(
+            report.outcome,
+            BackgroundOutcome::Applied {
+                decision: ApprovalDecision::Approve
+            },
+            "the lock-screen decide works while suspended"
+        );
+        // A wake permit cuts any backoff short: the supervisor must still stay parked.
+        lock(&core.inner.conns)[&id()].reconnect_now();
+        std::thread::sleep(Duration::from_secs(1));
+        assert_eq!(
+            lock(&seen).connections,
+            connections + 1,
+            "only the decide's own connection while suspended"
+        );
+        assert_ne!(link(), LinkPhase::Connected);
+        core.resume(1);
+        poll("reconnected after a short switch", || {
+            (link() == LinkPhase::Connected).then_some(())
+        });
+        assert_eq!(lock(&seen).connections, connections + 2);
+
+        let closed = lock(&seen).closed;
+        let epoch = core.begin_suspend();
+        core.resume(1);
+        rt.block_on(core.suspend(epoch));
+        std::thread::sleep(Duration::from_secs(1));
+        assert_eq!(
+            link(),
+            LinkPhase::Connected,
+            "a resume cancels a late suspend"
+        );
+        let after = {
+            let seen = lock(&seen);
+            (seen.connections, seen.closed)
+        };
+        assert_eq!(after, (connections + 2, closed), "the session stays open");
         drop(core);
         drop(server_rt);
         drop(control);
