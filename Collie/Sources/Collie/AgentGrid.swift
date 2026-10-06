@@ -106,6 +106,9 @@ private struct AgentCard: View {
                 StatusIcon(state: agent.status)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
+                        if let kind = agent.kind {
+                            AgentKindLabel(kind: kind, iconOnly: true)
+                        }
                         if starred {
                             Image(systemName: "star.fill")
                                 .font(.caption2)

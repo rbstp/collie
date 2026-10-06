@@ -241,9 +241,10 @@ private struct AgentRow: View {
 /// The agent kind as herdr names it, with its own icon for the kinds New Task starts.
 struct AgentKindLabel: View {
     let kind: String
+    var iconOnly = false
 
     var body: some View {
-        Group {
+        let label = Group {
             switch kind {
             case "claude": Label("Claude", image: "Claude")
             case "codex": Label("Codex", image: "Codex")
@@ -251,7 +252,11 @@ struct AgentKindLabel: View {
             default: Label(kind, systemImage: "terminal")
             }
         }
-        .labelStyle(KindLabelStyle())
+        if iconOnly {
+            label.labelStyle(.iconOnly)
+        } else {
+            label.labelStyle(KindLabelStyle())
+        }
     }
 }
 
