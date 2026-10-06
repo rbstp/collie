@@ -393,7 +393,7 @@ final class AgentModel {
         let limit = core.maxAttachmentBytes()
         let first = UUID()
         upload = AttachmentUpload(id: first, name: batch[0].name, count: batch.count)
-        let task = Task {
+        let task = Task { [self] in
             for (offset, item) in batch.enumerated() {
                 if Task.isCancelled { break }
                 let id = offset == 0 ? first : UUID()

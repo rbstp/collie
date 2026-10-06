@@ -286,7 +286,7 @@ private func agentModel(_ core: FakeCore) -> AgentModel {
 private func attach(_ model: AgentModel, _ core: FakeCore, _ names: String...) async {
     for name in names {
         core.state.withLock { $0.uploadPath = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/\(name)/\(name)" }
-        await model.attach(name: name) { _ in Data([1]) }?.value
+        await model.attach(name: name) { _ in png(width: 1, height: 1) }?.value
     }
 }
 
