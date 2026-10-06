@@ -537,6 +537,10 @@ async fn supervise(
                 if since.elapsed() >= RESET_AFTER {
                     backoff.attempt = 0;
                 }
+                if *suspended.borrow() {
+                    shared.set(LinkPhase::Connecting, None);
+                    continue;
+                }
                 ConnectError::Session(end)
             }
             Err(e) => e,

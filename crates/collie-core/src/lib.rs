@@ -64,6 +64,9 @@ const DECIDE_TIMEOUT: Duration = Duration::from_secs(20);
 const BACKGROUND_BUDGET: Duration = Duration::from_secs(20);
 /// How long a suspend lets prompts, uploads and decisions in flight finish.
 const SUSPEND_GRACE: Duration = Duration::from_secs(5);
+/// While an upload runs: the rest of the roughly 25 s background task, after the app's
+/// wait for Live Activity tokens (3 s at most) and before `SUSPEND_CLOSE`.
+const SUSPEND_UPLOAD_GRACE: Duration = Duration::from_secs(18);
 /// Longer than the 2 s a session takes at most to send its WebSocket close.
 const SUSPEND_CLOSE: Duration = Duration::from_secs(3);
 
@@ -620,7 +623,12 @@ impl CollieCore {
             .spawn(async move {
                 let resumed = inner.suspended.subscribe();
                 let mut busy = inner.busy.subscribe();
-                let _ = tokio::time::timeout(SUSPEND_GRACE, busy.wait_for(|n| *n == 0)).await;
+                let grace = if lock(&inner.uploads).is_empty() {
+                    SUSPEND_GRACE
+                } else {
+                    SUSPEND_UPLOAD_GRACE
+                };
+                let _ = tokio::time::timeout(grace, busy.wait_for(|n| *n == 0)).await;
                 let suspending = inner.suspended.send_if_modified(|s| {
                     let now = !*s && matches!(resumed.has_changed(), Ok(false));
                     *s |= now;
@@ -677,9 +685,7 @@ impl CollieCore {
             return Ok(());
         }
         self.run(async move {
-            let watch = Request::AgentWatch(AgentWatchParams {
-                terminal_id: terminal_id.clone(),
-            });
+            let watch = Request::AgentWatch(AgentWatchParams { terminal_id });
             let response = conn
                 .request(watch, CALL_TIMEOUT)
                 .await
@@ -1275,8 +1281,10 @@ impl CollieCore {
         let push = self.inner.push.clone();
         let machine_id = machine_id.to_owned();
         let sent = conn.request_in_order(request, CALL_TIMEOUT);
+        let busy = Busy::new(&self.inner);
         self.runtime.spawn(async move {
             let sent = sent.await;
+            drop(busy);
             if let (Ok(_), Some(ended)) = (sent, ends)
                 && let Some(reg) = lock(&push).get_mut(&machine_id)
             {
@@ -3211,8 +3219,20 @@ mod tailnet_tests {
             let seen = lock(&seen);
             (seen.connections, seen.closed)
         };
+        core.register_activity_token(id(), ACTIVITY.into(), "term_1".into(), token.clone())
+            .unwrap();
         rt.block_on(core.suspend());
-        assert_ne!(link(), LinkPhase::Connected);
+        assert_eq!(
+            lock(&seen).activities.last(),
+            Some(&registered),
+            "a token sent as the app leaves still reaches the Mac"
+        );
+        let flock = core.cached_flock(id()).unwrap();
+        assert_eq!(
+            (flock.link, flock.last_error),
+            (LinkPhase::Connecting, None),
+            "a suspend is not a failure"
+        );
         poll("collied sees the session close", || {
             (lock(&seen).closed == closed + 1).then_some(())
         });

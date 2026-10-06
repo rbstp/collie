@@ -113,6 +113,11 @@ final class FollowModel {
         list.contains(FollowedAgent(route))
     }
 
+    /// An activity started or watched in this run has no push token for its Mac yet.
+    var awaitingToken: Bool {
+        watchers.keys.contains { id in !list.registered.contains { $0.activityId == id } }
+    }
+
     func follow(_ route: AgentRoute) {
         let agent = FollowedAgent(route)
         guard !list.contains(agent) else { return }
