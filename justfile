@@ -83,8 +83,15 @@ ios-framework:
     cargo build --release -p collie-core --target aarch64-apple-ios
     cargo build --release -p collie-core --target aarch64-apple-ios-sim
     cargo build --release -p uniffi-bindgen
-    rm -rf "$headers" "$pkg/CollieCore.xcframework"
     lib=target/aarch64-apple-ios/release/libcollie_core.a
+    # Rewriting unchanged outputs makes Xcode recompile CollieCore and the app.
+    stamp="$pkg/CollieCore.xcframework/.collie-build"
+    want="$(shasum -a 256 "$lib" target/aarch64-apple-ios-sim/release/libcollie_core.a target/release/uniffi-bindgen)"
+    if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -f "$pkg/Sources/CollieCore/collie_core.swift" ]; then
+        echo "CollieCore.xcframework is up to date"
+        exit 0
+    fi
+    rm -rf "$headers" "$pkg/CollieCore.xcframework"
     target/release/uniffi-bindgen "$lib" "$pkg/Sources/CollieCore" --swift-sources
     target/release/uniffi-bindgen "$lib" "$headers/collie_coreFFI" --headers --modulemap \
         --module-name collie_coreFFI --modulemap-filename module.modulemap
@@ -92,6 +99,7 @@ ios-framework:
         -library "$lib" -headers "$headers" \
         -library target/aarch64-apple-ios-sim/release/libcollie_core.a -headers "$headers" \
         -output "$pkg/CollieCore.xcframework"
+    echo "$want" > "$stamp"
 
 # libghostty-vt from a pinned Ghostty commit; skipped when already built for that pin.
 ios-ghostty:
