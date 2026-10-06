@@ -21,7 +21,8 @@ use protocol::{
     AgentTypeTextParams, AgentWatchParams, ApprovalId, Cwd, DraftText, Empty, ErrorCode, Key,
     Label, NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
     PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
-    ReadSource, Request, Response, TaskNewParams, TerminalId, TerminalRead, WorkspaceCloseParams,
+    ReadSource, Request, Response, Signature, TaskNewParams, TerminalGrantParams, TerminalId,
+    TerminalKey, TerminalRead, TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams,
     WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
@@ -71,6 +72,8 @@ const SUSPEND_GRACE: Duration = Duration::from_secs(5);
 const SUSPEND_UPLOAD_GRACE: Duration = Duration::from_secs(18);
 /// Longer than the 2 s a session takes at most to send its WebSocket close.
 const SUSPEND_CLOSE: Duration = Duration::from_secs(3);
+/// `terminal.lock` as the app leaves: a session that does not confirm it is closed.
+const LOCK_TIMEOUT: Duration = Duration::from_secs(3);
 /// A wedged node must not hold up the diagnostics or the recovery after a resume.
 const KICK_TIMEOUT: Duration = Duration::from_secs(3);
 /// Longer than a healthy reconnect after a resume. A rebind is not done sooner: a dial in
@@ -133,6 +136,14 @@ pub enum CoreError {
     DraftChanged { current: String },
     #[error("Could not clear the agent's input box; nothing was sent.")]
     DraftNotCleared,
+    #[error(
+        "terminals are off on this machine: set [terminals] enabled = true in collied.toml there and restart collied"
+    )]
+    TerminalsDisabled,
+    #[error("the terminal is locked")]
+    TerminalLocked,
+    #[error("pair this phone again to use terminals on this machine")]
+    TerminalKeyMissing,
     #[error("stopped retrying: {message}. Pair this machine again.")]
     Unauthorized { message: String },
     #[error("tailnet: {message}")]
@@ -197,6 +208,9 @@ impl From<SessionError> for CoreError {
                 ErrorCode::TooLarge => Self::TooLarge { message },
                 ErrorCode::ChecksumMismatch => Self::ChecksumMismatch,
                 ErrorCode::DraftNotCleared => Self::DraftNotCleared,
+                ErrorCode::TerminalsDisabled => Self::TerminalsDisabled,
+                ErrorCode::TerminalLocked => Self::TerminalLocked,
+                ErrorCode::TerminalKeyMissing => Self::TerminalKeyMissing,
                 _ => Self::Rejected { message },
             },
             SessionError::DraftChanged { current } => Self::DraftChanged { current },
@@ -296,6 +310,19 @@ pub struct AgentSummary {
     pub last_activity_ms: Option<u64>,
 }
 
+/// A shell pane. `label` is the name given in herdr; the phone never sees a title the
+/// pane's program sets.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TerminalSummary {
+    pub terminal_id: String,
+    pub workspace_id: String,
+    pub workspace_label: Option<String>,
+    pub label: Option<String>,
+    pub cwd: Option<String>,
+    /// This phone holds no grant for it on the current session.
+    pub locked: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct MachineFlock {
     pub machine: Machine,
@@ -305,6 +332,10 @@ pub struct MachineFlock {
     pub workspaces: Vec<WorkspaceSummary>,
     pub agents: Vec<AgentSummary>,
     pub approvals_count: u32,
+    #[uniffi(default = [])]
+    pub terminals: Vec<TerminalSummary>,
+    #[uniffi(default = false)]
+    pub terminals_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -359,6 +390,13 @@ pub struct AgentView {
     pub agent: Option<AgentSummary>,
     pub output: Option<TerminalSnapshot>,
     pub output_revision: u64,
+    /// Set when the pane has no agent and the machine enables terminals.
+    #[uniffi(default = None)]
+    pub terminal: Option<TerminalSummary>,
+    #[uniffi(default = true)]
+    pub terminal_locked: bool,
+    #[uniffi(default = false)]
+    pub terminals_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -483,6 +521,7 @@ struct Inner {
     control_url: Option<String>,
     node: NodeSlot,
     identity: IdentitySlot,
+    terminal_key: Mutex<Option<TerminalKey>>,
     starting: Mutex<()>,
     store: MachineStore,
     machines: Mutex<Vec<Machine>>,
@@ -534,6 +573,21 @@ impl CollieCore {
             message: e.to_string(),
         })?;
         *lock(&self.inner.identity) = Some(key);
+        Ok(())
+    }
+
+    /// The phone's terminal key (a P-256 SubjectPublicKeyInfo), sent with every pairing.
+    /// Its private half signs grants, each behind Face ID or the passcode.
+    pub fn set_terminal_key(&self, public_key: Vec<u8>) -> Result<(), CoreError> {
+        if !collie_tls::is_p256(&public_key) {
+            return Err(invalid(
+                "public_key",
+                "the terminal key must be a P-256 public key",
+            ));
+        }
+        let key = TerminalKey::new(URL_SAFE_NO_PAD.encode(&public_key))
+            .map_err(|_| invalid("public_key", "the terminal key must be a P-256 public key"))?;
+        *lock(&self.inner.terminal_key) = Some(key);
         Ok(())
     }
 
@@ -796,12 +850,12 @@ impl CollieCore {
             (link.phase, link.last_error.clone())
         };
         let state = lock(&conn.shared.flock);
+        let flock = state.flock.as_ref();
         Some(AgentView {
             link,
             last_error,
-            agent: state
-                .flock
-                .iter()
+            agent: flock
+                .into_iter()
                 .flat_map(|f| &f.agents)
                 .find(|a| a.terminal_id.as_str() == terminal_id)
                 .map(agent_summary),
@@ -813,7 +867,208 @@ impl CollieCore {
                 })
                 .map(|o| o.clone().into()),
             output_revision: state.output_revision,
+            terminal: flock.and_then(|f| {
+                let t = f
+                    .terminals
+                    .iter()
+                    .find(|t| t.terminal_id.as_str() == terminal_id)?;
+                Some(terminal_summary(f, t, &state))
+            }),
+            terminal_locked: !state.unlocked(&terminal_id, Instant::now()),
+            terminals_enabled: flock.is_some_and(|f| f.terminals_enabled),
         })
+    }
+
+    /// Asks the machine for a challenge to unlock a shell pane and returns the bytes the
+    /// terminal key signs: the machine's node ID as pinned at pairing, the terminal and the
+    /// challenge. Fails with `TerminalKeyMissing`, before any Face ID, when this phone did not
+    /// pair with its current terminal key.
+    pub async fn terminal_challenge(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+    ) -> Result<Vec<u8>, CoreError> {
+        let terminal_id = terminal(terminal_id)?;
+        let conn = self.conn(&machine_id)?;
+        let key = lock(&self.inner.terminal_key).clone();
+        if key.is_none_or(|k| k.as_str() != conn.machine.terminal_key) {
+            return Err(CoreError::TerminalKeyMissing);
+        }
+        let _busy = Busy::new(&self.inner);
+        self.run(async move {
+            let request = Request::TerminalChallenge(AgentTarget {
+                terminal_id: terminal_id.clone(),
+            });
+            let response = conn
+                .request(request, CALL_TIMEOUT)
+                .await
+                .map_err(|e| request_error(&conn, e))?;
+            match response {
+                Response::TerminalChallenge {
+                    terminal_id: t,
+                    challenge,
+                    ..
+                } if t == terminal_id => {
+                    let message = protocol::terminal_grant_message(
+                        &conn.machine.node_id,
+                        &terminal_id,
+                        &challenge,
+                    );
+                    lock(&conn.shared.flock).challenge = Some((terminal_id, challenge));
+                    Ok(message)
+                }
+                other => Err(unexpected(&other).into()),
+            }
+        })
+        .await
+    }
+
+    /// `signature`: ECDSA P-256 with SHA-256, DER, by the terminal key over what
+    /// [`Self::terminal_challenge`] returned, on the same connection.
+    pub async fn terminal_grant(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        signature: Vec<u8>,
+    ) -> Result<(), CoreError> {
+        let terminal_id = terminal(terminal_id)?;
+        let signature = Signature::new(URL_SAFE_NO_PAD.encode(&signature))
+            .map_err(|_| invalid("signature", "not an ECDSA signature"))?;
+        let conn = self.conn(&machine_id)?;
+        let challenge = lock(&conn.shared.flock)
+            .challenge
+            .take()
+            .filter(|(t, _)| *t == terminal_id)
+            .map(|(_, c)| c)
+            .ok_or(CoreError::TerminalLocked)?;
+        let _busy = Busy::new(&self.inner);
+        self.run(async move {
+            let request = Request::TerminalGrant(TerminalGrantParams {
+                terminal_id: terminal_id.clone(),
+                challenge,
+                signature,
+            });
+            let response = conn
+                .request(request, CALL_TIMEOUT)
+                .await
+                .map_err(|e| request_error(&conn, e))?;
+            match response {
+                Response::TerminalGranted {
+                    terminal_id: t,
+                    ttl_ms,
+                } if t == terminal_id => {
+                    let until = Instant::now() + Duration::from_millis(ttl_ms);
+                    lock(&conn.shared.flock).unlocked.insert(terminal_id, until);
+                    Ok(())
+                }
+                other => Err(unexpected(&other).into()),
+            }
+        })
+        .await
+    }
+
+    /// Watches a shell pane, under a grant. Shares the machine's one watch with
+    /// [`Self::watch_agent`], whose `None` stops it. A new connection does not watch it again:
+    /// it starts locked.
+    pub async fn watch_terminal(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        lines: u16,
+    ) -> Result<(), CoreError> {
+        let terminal_id = terminal(terminal_id)?;
+        let conn = self.conn(&machine_id)?;
+        {
+            let mut state = lock(&conn.shared.flock);
+            state.watch_terminal(terminal_id.clone());
+            state.watch_lines = Some(lines);
+        }
+        let response = self
+            .call(
+                &machine_id,
+                Request::TerminalWatch(TerminalWatchParams {
+                    terminal_id,
+                    lines: Some(lines),
+                }),
+                CALL_TIMEOUT,
+            )
+            .await;
+        self.locked_on(&conn, &response);
+        expect_ok(response?)
+    }
+
+    /// One line, then Enter, into a shell pane this phone unlocked.
+    pub async fn terminal_run(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        text: String,
+    ) -> Result<(), CoreError> {
+        let text = PromptText::new(text)
+            .ok()
+            .filter(|t| !t.as_str().contains(['\n', '\t']))
+            .ok_or_else(|| {
+                invalid(
+                    "text",
+                    "a command must be one non-empty line of at most 32 KiB, without control characters",
+                )
+            })?;
+        let request = Request::TerminalRun(TerminalRunParams {
+            op_id: new_op_id(),
+            terminal_id: terminal(terminal_id)?,
+            text,
+        });
+        let conn = self.conn(&machine_id)?;
+        let response = self.mutate(&machine_id, request, DRIVE_TIMEOUT).await;
+        self.locked_on(&conn, &response);
+        expect_ok(response?)
+    }
+
+    pub async fn terminal_send_keys(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        keys: Vec<AgentKey>,
+    ) -> Result<(), CoreError> {
+        if !(1..=limits::MAX_KEYS_PER_CALL).contains(&keys.len()) {
+            return Err(invalid("keys", "send 1 to 16 keys at a time"));
+        }
+        let request = Request::TerminalSendKeys(AgentSendKeysParams {
+            op_id: new_op_id(),
+            terminal_id: terminal(terminal_id)?,
+            keys: keys.into_iter().map(Key::from).collect(),
+        });
+        let conn = self.conn(&machine_id)?;
+        let response = self.mutate(&machine_id, request, DRIVE_TIMEOUT).await;
+        self.locked_on(&conn, &response);
+        expect_ok(response?)
+    }
+
+    /// For the app leaving the foreground: every terminal is locked here at once, then on each
+    /// connected machine. A machine that does not confirm has its session closed, which ends
+    /// its grants there too.
+    pub async fn lock_terminals(&self) {
+        let conns: Vec<_> = lock(&self.inner.conns).values().cloned().collect();
+        for conn in &conns {
+            lock(&conn.shared.flock).lock_terminals();
+        }
+        let _ = self
+            .run(async move {
+                let locks = conns
+                    .into_iter()
+                    .filter(|c| lock(&c.shared.link).phase == LinkPhase::Connected)
+                    .map(|conn| async move {
+                        let reply = conn
+                            .request(Request::TerminalLock(Empty {}), LOCK_TIMEOUT)
+                            .await;
+                        if !matches!(reply, Ok(Response::Ok)) {
+                            conn.reconnect_now();
+                        }
+                    });
+                futures_util::future::join_all(locks).await;
+                Ok(())
+            })
+            .await;
     }
 
     /// The unsent text in a Claude Code agent's input box on the Mac: `None` when it
@@ -1250,6 +1505,13 @@ impl CollieCore {
 }
 
 impl CollieCore {
+    /// A grant collied no longer holds (expired, or dropped as an agent started there).
+    fn locked_on<T>(&self, conn: &Conn, response: &Result<T, CoreError>) {
+        if matches!(response, Err(CoreError::TerminalLocked)) {
+            lock(&conn.shared.flock).unlocked.clear();
+        }
+    }
+
     /// Rust-only entry point for tests against a local control server.
     pub fn with_control_url(
         state_dir: PathBuf,
@@ -1276,6 +1538,7 @@ impl CollieCore {
                 control_url,
                 node: NodeSlot::default(),
                 identity: IdentitySlot::default(),
+                terminal_key: Mutex::default(),
                 starting: Mutex::default(),
                 store,
                 machines: Mutex::new(machines),
@@ -1715,6 +1978,7 @@ impl Inner {
         let device_label = Label::new(device_label.trim()).map_err(|_| CoreError::InvalidLabel)?;
         let node = lock(&self.node).clone().ok_or(CoreError::NotRunning)?;
         let identity = lock(&self.identity).clone();
+        let terminal_key = lock(&self.terminal_key).clone();
         let (mut session, _, kind) = conn::open(
             node,
             &invite.host,
@@ -1732,6 +1996,7 @@ impl Inner {
                     Request::PairComplete(PairCompleteParams {
                         pairing_code: invite.code,
                         device_label,
+                        terminal_key: terminal_key.clone(),
                     }),
                     PAIR_CONFIRM_TIMEOUT,
                 )
@@ -1746,6 +2011,7 @@ impl Inner {
             node_id: invite.node_id,
             kind,
             key: invite.key.as_str().to_owned(),
+            terminal_key: terminal_key.map(String::from).unwrap_or_default(),
         };
         let node_id = machine.node_id.clone();
         self.update_machines(|m| m.node_id == node_id, Some(machine.clone()))?;
@@ -1830,7 +2096,8 @@ fn view(conn: &Conn) -> MachineFlock {
         let link = lock(&conn.shared.link);
         (link.phase, link.last_error.clone())
     };
-    let state = lock(&conn.shared.flock);
+    let guard = lock(&conn.shared.flock);
+    let state = &*guard;
     let flock = state.flock.as_ref();
     MachineFlock {
         machine: conn.machine.clone(),
@@ -1858,6 +2125,30 @@ fn view(conn: &Conn) -> MachineFlock {
             .map(agent_summary)
             .collect(),
         approvals_count: flock.map_or(0, |f| f.approvals.len() as u32),
+        terminals: flock
+            .into_iter()
+            .flat_map(|f| f.terminals.iter().map(|t| terminal_summary(f, t, state)))
+            .collect(),
+        terminals_enabled: flock.is_some_and(|f| f.terminals_enabled),
+    }
+}
+
+fn terminal_summary(
+    f: &protocol::Flock,
+    t: &protocol::Terminal,
+    state: &session::FlockState,
+) -> TerminalSummary {
+    TerminalSummary {
+        terminal_id: t.terminal_id.as_str().into(),
+        workspace_id: t.workspace_id.as_str().into(),
+        workspace_label: f
+            .workspaces
+            .iter()
+            .find(|w| w.workspace_id == t.workspace_id)
+            .map(|w| w.label.clone()),
+        label: t.label.clone(),
+        cwd: t.cwd.clone(),
+        locked: !state.unlocked(t.terminal_id.as_str(), Instant::now()),
     }
 }
 
@@ -1884,6 +2175,8 @@ fn op_id_mut(request: &mut Request) -> Option<&mut OpId> {
         Request::AgentSendKeys(p) => Some(&mut p.op_id),
         Request::AgentTypeText(p) => Some(&mut p.op_id),
         Request::TaskNew(p) => Some(&mut p.op_id),
+        Request::TerminalRun(p) => Some(&mut p.op_id),
+        Request::TerminalSendKeys(p) => Some(&mut p.op_id),
         _ => None,
     }
 }
@@ -1908,6 +2201,8 @@ fn invalid_field(message: &str) -> Option<String> {
             "UploadId" => "upload_id",
             "Sha256Hex" => "sha256",
             "ChunkData" => "data",
+            "Signature" => "signature",
+            "TerminalKey" => "terminal_key",
             _ => return None,
         };
         return Some(field.into());
@@ -2186,6 +2481,7 @@ mod tests {
             node_id: format!("n{id}"),
             kind: MachineKind::Mac,
             key: String::new(),
+            terminal_key: String::new(),
         };
         MachineStore::new(state.clone())
             .save(&[mac("m1"), mac("m2")])
@@ -2285,6 +2581,7 @@ mod tests {
                 node_id: "nm1".into(),
                 kind: MachineKind::Mac,
                 key: String::new(),
+                terminal_key: String::new(),
             }])
             .unwrap();
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
@@ -2389,6 +2686,81 @@ mod tests {
     }
 
     #[test]
+    fn terminal_errors_map_to_variants() {
+        assert!(matches!(
+            server(ErrorCode::TerminalsDisabled, ""),
+            CoreError::TerminalsDisabled
+        ));
+        assert!(matches!(
+            server(ErrorCode::TerminalLocked, "challenge expired"),
+            CoreError::TerminalLocked
+        ));
+        let e = server(ErrorCode::TerminalKeyMissing, "");
+        assert!(matches!(e, CoreError::TerminalKeyMissing));
+        assert!(
+            !SessionError::Server {
+                code: ErrorCode::TerminalLocked,
+                message: String::new()
+            }
+            .is_auth()
+        );
+    }
+
+    #[test]
+    fn a_terminal_needs_the_key_this_phone_paired_with() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("s");
+        ensure_private_dir(&state).unwrap();
+        let spki = || {
+            let key = collie_tls::load(&collie_tls::generate().unwrap()).unwrap();
+            key.public_key().unwrap().as_ref().to_vec()
+        };
+        let (paired, current) = (spki(), spki());
+        MachineStore::new(state.clone())
+            .save(&[Machine {
+                id: "m1".into(),
+                label: "mac".into(),
+                host: "m1.tail1234.ts.net".into(),
+                port: 8457,
+                node_id: "nm1".into(),
+                kind: MachineKind::Mac,
+                key: String::new(),
+                terminal_key: URL_SAFE_NO_PAD.encode(&paired),
+            }])
+            .unwrap();
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        let challenge = |core: &CollieCore| {
+            core.runtime
+                .block_on(core.terminal_challenge("m1".into(), "term_1".into()))
+        };
+        assert!(matches!(
+            challenge(&core),
+            Err(CoreError::TerminalKeyMissing)
+        ));
+        assert!(matches!(
+            core.set_terminal_key(vec![4; 65]),
+            Err(CoreError::InvalidInput { .. })
+        ));
+        core.set_terminal_key(current).unwrap();
+        assert!(
+            matches!(challenge(&core), Err(CoreError::TerminalKeyMissing)),
+            "a key replaced since the pairing (the passcode was removed) means pairing again"
+        );
+        core.set_terminal_key(paired).unwrap();
+        assert!(
+            matches!(
+                core.runtime.block_on(core.terminal_grant(
+                    "m1".into(),
+                    "term_1".into(),
+                    vec![0x30; 70]
+                )),
+                Err(CoreError::TerminalLocked)
+            ),
+            "no challenge on this connection"
+        );
+    }
+
+    #[test]
     fn op_ids_are_fresh_and_valid() {
         let (a, b) = (new_op_id(), new_op_id());
         assert_eq!(a.as_str().len(), 22);
@@ -2434,7 +2806,20 @@ mod tests {
                 Some("text".into()),
                 "{bad:?}"
             );
+            assert_eq!(
+                field(rt.block_on(core.terminal_run(m(), t(), bad.into()))),
+                Some("text".into()),
+                "{bad:?}"
+            );
         }
+        assert_eq!(
+            field(rt.block_on(core.terminal_send_keys(m(), t(), vec![AgentKey::Enter; 17]))),
+            Some("keys".into())
+        );
+        assert_eq!(
+            field(rt.block_on(core.terminal_grant(m(), t(), vec![1; 3]))),
+            Some("signature".into())
+        );
         let task = |cwd: &str, agent: &str, label: Option<&str>| {
             rt.block_on(core.task_new(
                 m(),
@@ -2546,6 +2931,8 @@ mod tailnet_tests {
                 last_activity_ms: None,
             }],
             approvals: Vec::new(),
+            terminals: Vec::new(),
+            terminals_enabled: false,
         }
     }
 

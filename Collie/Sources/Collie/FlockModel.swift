@@ -11,6 +11,9 @@ struct MachineFlockEntry: Identifiable, Equatable {
 
     var agents: [AgentSummary] { FlockOrder.sorted(flock?.agents ?? []) }
 
+    /// Shell panes, only from a machine that enables terminals.
+    var terminals: [TerminalSummary] { flock?.terminalsEnabled == true ? flock?.terminals ?? [] : [] }
+
     var linkDown: Bool { flock.map { ![.connected, .connecting].contains($0.link) } ?? false }
 
     func workspaceLabel(for agent: AgentSummary) -> String? {
@@ -123,6 +126,15 @@ enum Elapsed {
         case ..<86400: return "\(seconds / 3600)h \(seconds % 3600 / 60)m"
         default: return "\(seconds / 86400)d"
         }
+    }
+}
+
+extension TerminalSummary {
+    /// The name given in herdr, else the folder: never a title a program set.
+    var displayTitle: String {
+        if let label = label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty { return label }
+        if let cwd, let folder = cwd.split(separator: "/").last { return String(folder) }
+        return "Terminal"
     }
 }
 

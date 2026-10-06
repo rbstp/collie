@@ -212,6 +212,23 @@ validated_string!(
 );
 
 validated_string!(
+    /// The phone's terminal key: a P-256 SubjectPublicKeyInfo (91 bytes), base64url without
+    /// padding (canonical: the last character carries 2 bits).
+    TerminalKey,
+    debug = plain,
+    check = |s| base64url_len(s, 122) && b"AQgw".contains(&s.as_bytes()[121]),
+    schema = { "pattern": "^[A-Za-z0-9_-]{121}[AQgw]$" }
+);
+
+validated_string!(
+    /// An ECDSA P-256 signature, DER encoded (8 to 72 bytes), base64url without padding.
+    Signature,
+    debug = plain,
+    check = |s| (11..=96).contains(&s.len()) && s.len() % 4 != 1 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+    schema = { "pattern": "^[A-Za-z0-9_-]{11,96}$" }
+);
+
+validated_string!(
     /// 16 random bytes, base64url without padding. Lets collied replay the stored
     /// outcome instead of re-running a mutation the client retried after a drop.
     OpId,
@@ -407,6 +424,28 @@ mod tests {
         assert!(ChunkData::new("A".repeat(43692)).is_err(), "32769 bytes");
         let data = ChunkData::new("c2VjcmV0").unwrap();
         assert_eq!(format!("{data:?}"), "ChunkData(<redacted>)");
+    }
+
+    #[test]
+    fn terminal_keys_and_signatures() {
+        let key = format!("{}w", "M".repeat(121));
+        assert!(TerminalKey::new(key.clone()).is_ok());
+        assert!(
+            TerminalKey::new(format!("{}B", "M".repeat(121))).is_err(),
+            "not canonical"
+        );
+        assert!(TerminalKey::new(&key[1..]).is_err());
+        assert!(TerminalKey::new(format!("{key}A")).is_err());
+        assert!(TerminalKey::new(key.replace('M', "+")).is_err());
+        assert!(Signature::new("M".repeat(11)).is_ok());
+        assert!(Signature::new("M".repeat(96)).is_ok());
+        assert!(Signature::new("M".repeat(10)).is_err());
+        assert!(Signature::new("M".repeat(97)).is_err());
+        assert!(
+            Signature::new("M".repeat(13)).is_err(),
+            "no byte count encodes to 13"
+        );
+        assert!(Signature::new("MEUCIQ==").is_err());
     }
 
     #[test]

@@ -7,13 +7,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use collie_tls::rustls::sign::CertifiedKey;
 use collie_tls::server::TlsStream;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
     AgentWatchParams, AttachmentChunkParams, ErrorBody, ErrorCode, Event, HelloResult, KeyPin,
-    MachineInfo, PairCompleteParams, PairingCode, PairingInvite, Request, Response, ServerFrame,
+    MachineInfo, MethodClass, PairCompleteParams, PairingCode, PairingInvite, Request, Response,
+    ServerFrame, TerminalGrantParams, TerminalId, TerminalKey, TerminalWatchParams,
 };
 use serde::{Deserialize, Serialize};
 use tailnet::{Accepted, BackendState, Node, WhoIs};
@@ -40,6 +41,7 @@ use crate::gate::{self, Decision};
 use crate::pairing::{Attempt, Pairing};
 use crate::peers::{self, Peer, Store};
 use crate::push::{self, ActivityError, Push};
+use crate::terminal::{self, Grants};
 use crate::transcript::Transcripts;
 use crate::{config, herdr};
 
@@ -61,6 +63,9 @@ const REJECT_AUDIT_BURST: f64 = 10.0;
 const CHUNK_RATE_PER_SEC: f64 = 128.0;
 const CHUNK_RATE_BURST: f64 = 128.0;
 const UPKEEP_EVERY: Duration = Duration::from_secs(10);
+const TERMINALS_OFF: &str = "terminals are off on this machine; set [terminals] enabled = true in collied.toml and restart collied";
+const TERMINAL_KEY_MISSING: &str = "this phone has no terminal key here; pair it again";
+const TERMINAL_LOCKED: &str = "the terminal is locked; unlock it again";
 
 pub struct ServerConfig {
     pub data_dir: PathBuf,
@@ -70,6 +75,9 @@ pub struct ServerConfig {
     pub machine_name: String,
     pub approval_ttl: Duration,
     pub attachments_dir: PathBuf,
+    /// `[terminals] enabled`, read at start: no method changes it.
+    pub terminals: bool,
+    pub terminal_grant_ttl: Duration,
 }
 
 pub struct ServerHandle {
@@ -178,6 +186,8 @@ pub struct State {
     pub(crate) audit: Arc<Audit>,
     tls: Arc<CertifiedKey>,
     tls_pin: KeyPin,
+    /// Lock order: peers, then sessions, then terminals.
+    terminals: Mutex<Grants>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -221,10 +231,26 @@ impl State {
             );
         }
         let mut next = store.clone();
+        let stable_id = peer.stable_id.clone();
         next.add(peer)?;
         peers::save(&self.peers_path(), &next)?;
+        let replaced = store.get(&stable_id).is_some();
         *store = next;
+        if replaced {
+            self.end_grants(|l| l.stable_id == stable_id);
+        }
         Ok(())
+    }
+
+    /// Holds the sessions lock while it clears, so no session of the peer is missed.
+    fn end_grants(&self, of: impl Fn(&Live) -> bool) {
+        let sessions = self.lock_sessions();
+        let mut grants = lock(&self.terminals);
+        for (id, live) in &sessions.live {
+            if of(live) {
+                grants.end_session(*id);
+            }
+        }
     }
 
     /// Persists first, then closes every live session of that node. The peers lock is held
@@ -244,10 +270,15 @@ impl State {
         peers::save(&self.peers_path(), &next)?;
         *store = next;
         let mut closed = 0;
-        for live in self.lock_sessions().live.values() {
-            if live.stable_id == peer.stable_id {
-                let _ = live.kill.send(true);
-                closed += 1;
+        {
+            let sessions = self.lock_sessions();
+            let mut grants = lock(&self.terminals);
+            for (id, live) in &sessions.live {
+                if live.stable_id == peer.stable_id {
+                    grants.end_session(*id);
+                    let _ = live.kill.send(true);
+                    closed += 1;
+                }
             }
         }
         drop(store);
@@ -329,6 +360,35 @@ impl State {
         lock(&self.peers)
             .get(stable_id)
             .is_some_and(|p| p.user_id == user)
+    }
+
+    fn terminal_key(&self, stable_id: &str, user: i64) -> Option<TerminalKey> {
+        lock(&self.peers)
+            .get(stable_id)
+            .filter(|p| p.user_id == user)
+            .and_then(|p| p.terminal_key.clone())
+    }
+
+    /// Checked before every write to a shell: the peer, its grant for this terminal in this
+    /// session under its current key, and no agent blocked on that pane.
+    fn terminal_authorized(
+        &self,
+        session: u64,
+        stable_id: &str,
+        user: i64,
+        terminal_id: &TerminalId,
+    ) -> bool {
+        let Some(key) = self.terminal_key(stable_id, user) else {
+            return false;
+        };
+        lock(&self.terminals).granted(session, terminal_id, &key, Instant::now())
+            && !self.approvals.has_pending(terminal_id.as_str())
+    }
+
+    fn drop_if_agent(&self, terminal_id: &TerminalId, reply: &Reply) {
+        if matches!(reply, Err((ErrorCode::NotFound, m)) if m == drive::HOSTS_AGENT) {
+            lock(&self.terminals).drop_terminal(terminal_id.as_str());
+        }
     }
 
     fn rate(&self, key: &str, chunk: bool) -> Rate {
@@ -490,6 +550,7 @@ pub async fn start_with(
         audit,
         tls,
         tls_pin,
+        terminals: Mutex::new(Grants::default()),
     });
     let (shutdown, rx) = watch::channel(false);
     let (dead_tx, listener_dead) = watch::channel(false);
@@ -574,6 +635,7 @@ struct Registration {
 impl Drop for Registration {
     fn drop(&mut self) {
         self.state.lock_sessions().live.remove(&self.id);
+        lock(&self.state.terminals).end_session(self.id);
         self.state.attachments.end_session(self.id);
     }
 }
@@ -753,6 +815,7 @@ async fn connection(
         peer: &peer,
         seq: 0,
         watch: None,
+        terminal_watch: None,
         tasks: JoinSet::new(),
         starting: None,
     }
@@ -796,6 +859,8 @@ struct Session<'a> {
     peer: &'a Remote,
     seq: u64,
     watch: Option<Watcher>,
+    /// The watch is of this shell pane.
+    terminal_watch: Option<TerminalId>,
     // Dropping the set only stops waiting: the operations run detached in the op cache
     // and audit their own outcome.
     tasks: JoinSet<Finished>,
@@ -898,6 +963,9 @@ impl Session<'_> {
             }
             Step::Watch(Some(Watched::Gone) | None) => {
                 self.watch = None;
+                if let Some(t) = self.terminal_watch.take() {
+                    lock(&self.state.terminals).drop_terminal(t.as_str());
+                }
                 self.push(Event::FlockChanged {}).await
             }
             Step::Finished(Some(Ok(done))) => {
@@ -996,6 +1064,19 @@ impl Session<'_> {
             return Flow::Close;
         }
         let target = audit_target(&frame.request);
+        if frame.request.class() == MethodClass::Terminal
+            && !self.state.cfg.terminals
+            && !matches!(frame.request, Request::TerminalLock(_))
+        {
+            let reply = err(ErrorCode::TerminalsDisabled, TERMINALS_OFF);
+            let done = Finished {
+                id,
+                target,
+                reply,
+                origin: None,
+            };
+            return self.finish(method, done).await;
+        }
         let fingerprint = drive::fingerprint(&frame.request);
         let drive = self.state.drive.clone();
         let peer = self.peer.who.node.stable_id.clone();
@@ -1186,6 +1267,46 @@ impl Session<'_> {
                 let _ = tokio::task::spawn_blocking(move || drop(upload)).await;
                 (Ok(Response::Ok), None)
             }
+            Request::TerminalChallenge(p) => (self.terminal_challenge(p.terminal_id).await, None),
+            Request::TerminalGrant(p) => (self.terminal_grant(p), None),
+            Request::TerminalWatch(p) => (self.terminal_watch(p).await, None),
+            Request::TerminalRun(p) => {
+                let (op_id, d, state) = (p.op_id.clone(), drive.clone(), self.state.clone());
+                let (t, auth) = (
+                    p.terminal_id.clone(),
+                    self.terminal_authorizer(&p.terminal_id),
+                );
+                let op = self.audited(method, target.clone(), async move {
+                    let reply = d.terminal_run(p, &auth).await;
+                    state.drop_if_agent(&t, &reply);
+                    (reply, None)
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
+            Request::TerminalSendKeys(p) => {
+                let (op_id, d, state) = (p.op_id.clone(), drive.clone(), self.state.clone());
+                let (t, auth) = (
+                    p.terminal_id.clone(),
+                    self.terminal_authorizer(&p.terminal_id),
+                );
+                let op = self.audited(method, target.clone(), async move {
+                    let reply = d.terminal_send_keys(p, &auth).await;
+                    state.drop_if_agent(&t, &reply);
+                    (reply, None)
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
+            // Answers ok whatever the setting or the grants: the phone treats anything else
+            // as a failure and closes the session.
+            Request::TerminalLock(_) => {
+                lock(&self.state.terminals).end_session(self.id);
+                if self.terminal_watch.take().is_some() {
+                    self.watch = None;
+                }
+                (Ok(Response::Ok), None)
+            }
         };
         self.finish(
             method,
@@ -1209,7 +1330,7 @@ impl Session<'_> {
                 | "approval.list"
                 | "attachment.chunk"
                 | "attachment.abort"
-        );
+        ) || (method == "terminal.challenge" && done.reply.is_ok());
         if !quiet && done.origin != Some(Origin::Ran) {
             let mut result = outcome(&done.reply);
             if done.origin == Some(Origin::Replayed) {
@@ -1254,6 +1375,7 @@ impl Session<'_> {
 
     async fn watch(&mut self, p: AgentWatchParams) -> Reply {
         self.watch = None;
+        self.terminal_watch = None;
         let lines = p.lines();
         if let Some(t) = p.terminal_id {
             self.watch = Some(self.state.drive.watch(t, lines).await?);
@@ -1286,6 +1408,93 @@ impl Session<'_> {
             self.peer.who.node.user,
         );
         Arc::new(move || state.peer_authorized(&stable_id, user))
+    }
+
+    /// Captures this session: an operation still running after it ends, or replayed to the
+    /// phone's next session, finds no grant and writes nothing.
+    fn terminal_authorizer(&self, terminal_id: &TerminalId) -> Authorized {
+        let state = self.state.clone();
+        let (session, terminal_id) = (self.id, terminal_id.clone());
+        let (stable_id, user) = (
+            self.peer.who.node.stable_id.clone(),
+            self.peer.who.node.user,
+        );
+        Arc::new(move || state.terminal_authorized(session, &stable_id, user, &terminal_id))
+    }
+
+    fn terminal_key(&self) -> Option<TerminalKey> {
+        let node = &self.peer.who.node;
+        self.state.terminal_key(&node.stable_id, node.user)
+    }
+
+    /// Checked when issued, so the phone asks for Face ID only for a grant it can get.
+    async fn terminal_challenge(&self, terminal_id: TerminalId) -> Reply {
+        if self.terminal_key().is_none() {
+            return err(ErrorCode::TerminalKeyMissing, TERMINAL_KEY_MISSING);
+        }
+        if let Err(e) = self.state.drive.shell_pane(&terminal_id).await {
+            let failed = Err(e);
+            self.state.drop_if_agent(&terminal_id, &failed);
+            return failed;
+        }
+        let challenge = lock(&self.state.terminals)
+            .challenge(self.id, &terminal_id, Instant::now())
+            .map_err(|_| (ErrorCode::Internal, "no randomness".to_owned()))?;
+        Ok(Response::TerminalChallenge {
+            terminal_id,
+            challenge,
+            ttl_ms: terminal::CHALLENGE_TTL.as_millis() as u64,
+        })
+    }
+
+    /// Any attempt burns the session's challenge.
+    fn terminal_grant(&self, p: TerminalGrantParams) -> Reply {
+        let now = Instant::now();
+        let taken =
+            lock(&self.state.terminals).take_challenge(self.id, &p.terminal_id, &p.challenge, now);
+        let Some(key) = self.terminal_key() else {
+            return err(ErrorCode::TerminalKeyMissing, TERMINAL_KEY_MISSING);
+        };
+        if let Err(reason) = taken {
+            return err(ErrorCode::TerminalLocked, reason);
+        }
+        let node_id = &self.state.machine.node_id;
+        if !terminal::verify(&key, node_id, &p.terminal_id, &p.challenge, &p.signature) {
+            return err(ErrorCode::TerminalLocked, "signature did not verify");
+        }
+        let ttl = self.state.cfg.terminal_grant_ttl;
+        lock(&self.state.terminals).grant(self.id, &p.terminal_id, &key, now, ttl);
+        Ok(Response::TerminalGranted {
+            terminal_id: p.terminal_id,
+            ttl_ms: ttl.as_millis() as u64,
+        })
+    }
+
+    /// New reads need a live grant; a watch already running continues past its expiry.
+    async fn terminal_watch(&mut self, p: TerminalWatchParams) -> Reply {
+        self.watch = None;
+        self.terminal_watch = None;
+        if !self.terminal_authorizer(&p.terminal_id)() {
+            return err(ErrorCode::TerminalLocked, TERMINAL_LOCKED);
+        }
+        let lines = p.lines();
+        match self
+            .state
+            .drive
+            .watch_terminal(p.terminal_id.clone(), lines)
+            .await
+        {
+            Ok(w) => {
+                self.watch = Some(w);
+                self.terminal_watch = Some(p.terminal_id);
+                Ok(Response::Ok)
+            }
+            Err(e) => {
+                let failed = Err(e);
+                self.state.drop_if_agent(&p.terminal_id, &failed);
+                failed
+            }
+        }
     }
 
     fn audit(&self, method: &str, result: &str) {
@@ -1321,6 +1530,10 @@ impl Session<'_> {
             Some(&mut lock(&self.state.transcripts)),
         );
         flock.approvals = self.state.approvals.pending();
+        if self.state.cfg.terminals {
+            flock.terminals = flock::map_terminals(&snap);
+            flock.terminals_enabled = true;
+        }
         Ok(Response::Flock(flock))
     }
 
@@ -1333,6 +1546,15 @@ impl Session<'_> {
 
     async fn pair_complete(&self, window: u64, p: PairCompleteParams) -> Reply {
         let who = &self.peer.who;
+        // A buggy or instrumented app could send its TLS key, which signs without Face ID.
+        if let Some(k) = &p.terminal_key {
+            let spki = URL_SAFE_NO_PAD.decode(k.as_str()).unwrap_or_default();
+            if !collie_tls::is_p256(&spki) || collie_tls::pin(&spki) == self.peer.key {
+                self.audit_pair("invalid terminal key");
+                return err(ErrorCode::PairingFailed, "pairing failed");
+            }
+        }
+        let previous = self.state.peers().get(&who.node.stable_id).cloned();
         let attempt = {
             let mut pairing = self.state.lock_pairing();
             let attempt = pairing.attempt(window, &p.pairing_code, Instant::now());
@@ -1356,6 +1578,9 @@ impl Session<'_> {
                 .unwrap_or_default(),
             user_id: who.node.user,
             tls_key: self.peer.key.clone(),
+            terminal_key: p.terminal_key,
+            replaces: previous.is_some(),
+            previous_terminal_key: previous.and_then(|p| p.terminal_key),
         };
         let (tx, code_ok) = match attempt {
             Attempt::NoWindow => {
@@ -1508,6 +1733,18 @@ fn audit_target(request: &Request) -> Option<String> {
             return Some(activity::target(&p.terminal_id, &p.activity_id));
         }
         Request::PushActivityEnd(p) => p.activity_id.as_str(),
+        Request::TerminalChallenge(p) => p.terminal_id.as_str(),
+        Request::TerminalGrant(p) => p.terminal_id.as_str(),
+        Request::TerminalWatch(p) => p.terminal_id.as_str(),
+        Request::TerminalRun(p) => p.terminal_id.as_str(),
+        Request::TerminalSendKeys(p) => {
+            let keys: Vec<&str> = p.keys.iter().map(|k| k.herdr_name()).collect();
+            return Some(format!(
+                "{} keys={}",
+                p.terminal_id.as_str(),
+                keys.join(",")
+            ));
+        }
         _ => return None,
     };
     Some(target.to_owned())
@@ -1616,6 +1853,7 @@ fn outcome(reply: &Reply) -> String {
             workspace_id.as_str(),
             terminal_id.as_str()
         ),
+        Ok(Response::TerminalGranted { ttl_ms, .. }) => format!("granted ttl={}s", ttl_ms / 1000),
         Ok(_) => "ok".to_owned(),
         Err((ErrorCode::DraftChanged, _)) => code_name(ErrorCode::DraftChanged),
         Err((code, message)) => format!("{}: {message}", code_name(*code)),
@@ -1705,6 +1943,14 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         }
         base = Some(next);
         outage = false;
+        {
+            let mut grants = lock(&state.terminals);
+            if !grants.is_empty() {
+                for a in &agents {
+                    grants.drop_terminal(&a.terminal_id);
+                }
+            }
+        }
         state.approvals.observe(&agents, &workspaces).await;
         let pending = state.approvals.pending();
         lock(&state.live).observe(

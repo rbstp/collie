@@ -22,7 +22,8 @@ struct FlockScreen: View {
                 case .grid:
                     AgentGrid(
                         entries: model.entries, previews: previews, notice: model.closeNotice,
-                        approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows, menu: menu
+                        approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows,
+                        closePane: { model.beginClose(.pane, route: $0) }, menu: menu
                     )
                     .task(id: core != nil && scenePhase == .active && !newTask) {
                         guard let core, scenePhase == .active, !newTask else { return }
@@ -64,6 +65,21 @@ struct FlockScreen: View {
                                     .contextMenu { menu(agent, route) }
                                 }
                                 .opacity(entry.linkDown ? 0.5 : 1)
+                                if !entry.terminals.isEmpty {
+                                    Text("Terminals").font(.caption).foregroundStyle(.secondary)
+                                    ForEach(entry.terminals, id: \.terminalId) { terminal in
+                                        let route = AgentRoute(machineId: entry.id, terminalId: terminal.terminalId)
+                                        NavigationLink(value: route) {
+                                            TerminalRow(terminal: terminal)
+                                        }
+                                        .contextMenu {
+                                            Button("Close pane", systemImage: "xmark.square", role: .destructive) {
+                                                model.beginClose(.pane, route: route)
+                                            }
+                                        }
+                                    }
+                                    .opacity(entry.linkDown ? 0.5 : 1)
+                                }
                             } header: {
                                 Button {
                                     reconnect(entry)
@@ -263,7 +279,29 @@ private struct AgentRow: View {
     }
 }
 
+private struct TerminalRow: View {
+    let terminal: TerminalSummary
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AgentKindLabel(kind: "terminal", iconOnly: true).frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(terminal.displayTitle).lineLimit(1)
+                if let workspace = terminal.workspaceLabel {
+                    Text(workspace).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer()
+            Image(systemName: terminal.locked ? "lock.fill" : "lock.open")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(terminal.locked ? "Locked" : "Unlocked")
+        }
+    }
+}
+
 /// The agent kind as herdr names it, with its own icon for the kinds New Task starts.
+/// "terminal" is a plain shell pane.
 struct AgentKindLabel: View {
     let kind: String
     var iconOnly = false
@@ -274,6 +312,7 @@ struct AgentKindLabel: View {
             case "claude": Label("Claude", image: "Claude")
             case "codex": Label("Codex", image: "Codex")
             case "copilot": Label("Copilot", image: "Copilot")
+            case "terminal": Label("Terminal", image: "Ghostty")
             default: Label(kind, systemImage: "terminal")
             }
         }

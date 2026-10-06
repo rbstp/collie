@@ -27,6 +27,7 @@ On Linux, collied is a systemd user unit, its node is `tag:collie-linux` and the
 - 2026-10-04: the node tag is per OS: `tag:collie-mac` on macOS, `tag:collie-linux` on Linux. `collied login` and `collied run` refuse a node without it, on both.
 - 2026-10-04: on Linux the service is a systemd user unit with the launchd agent's semantics: kept alive, and `collied stop` keeps it off across reboots until `collied start`.
 - 2026-10-04: each machine sends its own pushes with its own APNs key (own key ID, revoked on its own). On Linux the key is a systemd user credential (host key, plus the TPM2 when systemd finds one usable), or a 0600 file when systemd-creds is unavailable.
+- 2026-10-06: plain shell panes from the phone ([Terminals](#terminals)): off by default, turned on per machine in `collied.toml` only, never from the phone; their own allowlist class, audited like prompts; opening one and typing into it need a grant that collied verifies, signed by a second Secure Enclave key on the phone that signs only after Face ID or the passcode. One grant covers one terminal for 5 minutes in one session.
 
 ## herdr integration (verified against 0.9.3 source and live socket)
 
@@ -80,7 +81,7 @@ Inside the tunnel, after the whois gate and before the WebSocket upgrade: TLS 1.
 - The phone's key is a Secure Enclave key (`Identity.swift`), non-exportable, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, so lock-screen decisions can connect. collie-core holds only its public key and asks the app to sign each handshake (`IdentitySigner`). The simulator uses a software key.
 - A full session needs the phone's pinned key (`peers.json` `tls_key`). A pairing session takes any P-256 key, and confirming the pairing records it. A phone paired before mutual TLS has no key: the gate treats it as unpaired, so it pairs again through a window (`collied pair`, scan), which replaces its record.
 - A peer the gate rejects still gets the fixed clear `403` before any TLS, so nothing from it is parsed. The phone recognizes it from the first bytes it read (`Sniff`) and stops retrying. A machine that presents another key is a pin violation; collied refusing the phone's key arrives on the phone's first read (TLS 1.3 checks the client after the client's side is done) as `KeyRefused`. Both stop retrying and ask to pair again.
-- `PROTOCOL_VERSION` 3: an app and a collied from before mutual TLS cannot talk to the new ones. 4 adds `agent.output_patch`, which an older app would drop and so freeze its terminal view. 5 adds `lines` to `agent.watch`, which an older collied refuses as an unknown field.
+- `PROTOCOL_VERSION` 3: an app and a collied from before mutual TLS cannot talk to the new ones. 4 adds `agent.output_patch`, which an older app would drop and so freeze its terminal view. 5 adds `lines` to `agent.watch`, which an older collied refuses as an unknown field. 6 adds `terminal_key` to `pair.complete` and the terminal methods.
 
 ## Approvals
 
@@ -261,6 +262,61 @@ herdr reports each agent's session id (`agent_session.value` in `agent.list` and
 - **Plan usage** (5-hour and weekly limits) is left out: Claude Code passes them only to the single status line command and stores them nowhere on disk except a cache refreshed by `/usage` (in `~/.claude.json`, which also holds account data collied should not read), and Codex records no limits for this account's plan.
 
 Security: [Agent transcripts on the Mac](threat-model.md#agent-transcripts-on-the-mac).
+
+## Terminals
+
+A pane with no agent is a plain shell: herdr keeps the pane, with its `terminal_id`, when the agent in it exits (verified on 0.9.3). The phone lists such panes, shows their screen and types into them, under the rules below. Security: [Shell input from the phone](threat-model.md#shell-input-from-the-phone).
+
+### Opt-in
+
+```toml
+[terminals]
+enabled = true   # false, the default, when the section or the key is absent
+```
+
+- Read at start (`ServerConfig.terminals`); a change needs a restart, which ends every session. No method changes it, and `collied.toml` is rewritten only by `collied apns import`.
+- Off: `flock.snapshot` has `terminals: []` and no `terminals_enabled`; every `terminal.*` request but `terminal.lock` answers `terminals_disabled` ("terminals are off on this machine; set [terminals] enabled = true in collied.toml and restart collied") before any herdr call, audited. `terminal.lock` answers `ok` whatever the setting.
+- `pane.read` reads agent panes only, whatever the setting: a shell is read through `terminal.watch`, under a grant.
+
+### What is a shell
+
+- A pane is a shell when its `PaneInfo.agent` is absent and its `terminal_id` is not in `session.snapshot.agents` (which lists an agent herdr is still launching before its pane reports it). collied reads this from a fresh `session.snapshot` before every write, never from a cache, and also refuses while an approval is pending on that `terminal_id` (hook-driven approvals are keyed by it, and report sooner than herdr's process detection).
+- `flock.snapshot` lists shells as `Terminal {terminal_id, workspace_id, label, cwd}`: `label` is the name given in herdr (`herdr pane rename`), `cwd` the foreground process's, else the pane's. Titles a program sets (`terminal_title`, which a zsh theme fills with the running command) never leave the machine. The phone titles a shell by its label, else its folder, else "Terminal". A shell created on the machine appears with the next snapshot; an agent exiting changes the flock and sends `flock.changed`.
+
+### Grants
+
+- **Terminal key.** The phone has a second Secure Enclave P-256 key besides its TLS key (`TerminalKey.swift`, Keychain item `dev.rbstp.collie.identity`/`terminal`), created with `[.privateKeyUsage, .userPresence]` and `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`: every signature needs Face ID or the passcode, and removing the passcode destroys it. The simulator uses a software key behind a LocalAuthentication prompt; a device never falls back to one.
+- **Registration.** `pair.complete` carries `terminal_key` (base64url of the 91-byte SubjectPublicKeyInfo). collied checks it is a P-256 key and not the session's TLS key (an app sending its TLS key would sign without Face ID), else the pairing fails (audited `invalid terminal key`). The y/N prompt on the machine shows `terminal key: none | new | unchanged | replaces the existing one`, and "replaces an existing pairing of this node" for a paired phone. The key is stored in `peers.json` (`terminal_key`); pairing again replaces the whole record, so a pairing without a key forgets it. The phone keeps the key it paired with in `machines.json` (`terminal_key`) and answers `TerminalKeyMissing` (pair again) without asking for Face ID when its current key differs: paired before this feature, the passcode removed since, or no Secure Enclave key at pairing.
+- **Challenge.** `terminal.challenge {terminal_id}` answers `{terminal_id, challenge, ttl_ms: 60000}` once the peer has a key (`terminal_key_missing` otherwise) and the pane is a shell. 32 random bytes, one outstanding per session (a new one replaces it), 60 s. It is quiet in the audit log when issued.
+- **Grant.** `terminal.grant {terminal_id, challenge, signature}`: any attempt burns the session's challenge. The signature is ECDSA P-256 with SHA-256, DER, base64url, over `u32be(len) || bytes` of `"collie terminal grant v1"`, the machine's node ID, the `terminal_id` and the challenge (`protocol::terminal_grant_message`, built the same way by collied and collie-core; collie-core takes the node ID from the machine pinned at pairing). collied verifies it with the stored key (`collie_tls::verify`, ring) and answers `{terminal_id, ttl_ms: 300000}`; otherwise `terminal_locked` with the reason (`no challenge was issued`, `challenge expired`, `challenge does not match`, `signature did not verify`).
+- A grant covers one terminal in one session for 5 minutes from its issue (`ServerConfig.terminal_grant_ttl`, `terminal::GRANT_TTL`; not a `collied.toml` key), and is bound to the key it was verified against. At most 16 per session. Grants and challenges are in collied's memory only (`State.terminals`, lock order peers, sessions, terminals). They end with `terminal.lock`, the session, a revoke or unpair, a re-pairing of the phone (its record replaced), an agent seen on that terminal (by a write's check, the watch, or the 1 s reconcile), and a collied restart.
+
+### Watch and input
+
+- `terminal.watch {terminal_id, lines?}` needs a live grant and shares the session's one watch with `agent.watch`: it emits the same `agent.output` and `agent.output_patch` events, reading `pane.read source=recent_unwrapped` with the same halving on herdr's line limit, and ends (`flock.changed`) when the pane closes or an agent starts in it. A watch already running continues past its grant's expiry. `agent.watch {terminal_id: null}` stops either kind.
+- `terminal.run {op_id, terminal_id, text}`: one line of `PromptText` (no newline, tab, ESC or other control, checked by the decoder), sent with herdr's `pane.send_input {pane_id, text, keys: ["enter"]}`, the one ordered write `herdr pane run` makes (verified on 0.9.3 with sh and zsh: the line runs).
+- `terminal.send_keys {op_id, terminal_id, keys}`: the closed `Key` list (at most 16) through `pane.send_keys`. ctrl+d, ctrl+z and ctrl+r are not in it: adding them would widen `agent.send_keys` too.
+- Both go through the `op_id` outcome cache. Right before the herdr write collied reads the snapshot again (still a shell, else `not_found` "the pane now hosts an agent", and the terminal's grants are dropped), then checks the peer, its grant in the session that sent the operation under the peer's current key, and no pending approval (`terminal_locked` otherwise; never `not_paired`, which would stop the phone reconnecting). A retry from the phone's next session replays the first attempt, which still checks the first session's grant. herdr targets panes by `pane_id` only (a `terminal_id` is refused as `pane_not_found`) and reuses pane ids, so the snapshot is read again before each write. A herdr error from these writes keeps its code only, since its message may quote the input. There is no foreground-process check: ctrl+c and answers reach the program running in the shell.
+- `terminal.lock` ends every grant of the session and a terminal watch, and answers `ok`.
+- New shell panes (`tab.create`) are not offered: a follow-up.
+
+### Audit
+
+| Method | Target | Result |
+|---|---|---|
+| `terminal.challenge` | `<terminal_id>` | not logged when issued; refusals are |
+| `terminal.grant` | `<terminal_id>` | `granted ttl=300s`, or the error with its reason; every attempt |
+| `terminal.watch` | `<terminal_id>` | `ok` or the error |
+| `terminal.run` | `<terminal_id>` | `ok` or the error; never the text or its length |
+| `terminal.send_keys` | `<terminal_id> keys=ctrl+c,enter` | `ok` or the error |
+| `terminal.lock` | none | `ok` |
+
+### Phone
+
+- collie-core: `set_terminal_key(public_key)` (the app calls it at start and on every foreground, since the Keychain item is readable only while unlocked), `terminal_challenge(machine_id, terminal_id) -> bytes to sign`, `terminal_grant(machine_id, terminal_id, signature)`, `watch_terminal(machine_id, terminal_id, lines)`, `terminal_run`, `terminal_send_keys`, `lock_terminals()`. `MachineFlock.terminals` and `terminals_enabled`; `AgentView.terminal`, `terminal_locked` and `terminals_enabled`. A new connection starts locked and never watches a shell again by itself: grants are per session.
+- `lock_terminals` locks every terminal on the phone at once, then sends `terminal.lock` to each connected machine; any other answer (rate limited, a timeout, a drop) closes that machine's session, which ends its grants. The app calls it on `.background` only (the Face ID sheet itself makes the app inactive), before the sessions are suspended.
+- The agent screen turns into the pane's terminal when its agent exits: the header shows the Ghostty "Terminal" label and Locked or Unlocked, and a card says "The agent exited. This pane is now a shell." with "Unlock with Face ID" (or the off and pair-again messages). Face ID runs only from that button or an input, never on its own, with the reason "Open a terminal in <workspace> on <machine>" and a fresh `LAContext` (never one another prompt evaluated, no reuse duration). A Send or a key while locked unlocks first, in the same action; a cancelled prompt sends nothing. The prompt field becomes a one-line "Command" field without autocorrection, capitals, smart quotes or dashes, or dictation, and refuses a newline ("One command at a time"). The key strip is `esc ⇥ ^C ← ↑ ↓ → ⏎`. When an agent starts there again, the screen goes back to the agent.
+- The Agents list and grid list a machine's shells under "Terminals" (no live preview on the grid: it would need a grant), with Close pane on a long press. The inbox, swiping and Live Activities stay agents only. Notification actions, the Live Activity intent and the lock-screen decide never send `terminal.*`.
 
 ## ColliePush (notification service extension)
 
@@ -541,3 +597,4 @@ On both OSes, `collied status` also prints `tags:` (`(none)` for an untagged nod
 | Retried mutations | duplicate prompts/tasks | `op_id` outcome cache |
 | A paired phone writes files on the Mac | disk use, files an agent may read | size, rate, in-flight, 200 MiB and 1000 entry caps; private 0600 non-executable files in a 0700 cache dir; 24 h retention; [threat-model.md](threat-model.md#attachment-uploads) |
 | Older app vs newer collied | decode failures | additive events/errors/statuses decode to `Unrecognized`; anything else bumps `PROTOCOL_VERSION` |
+| Shell input from a paired phone | command execution as the user | off by default, `collied.toml` only; its own method class; a grant signed by a Secure Enclave key behind Face ID, per terminal, session and 5 minutes; the pane re-read before every write; audited without the text; [threat-model.md](threat-model.md#shell-input-from-the-phone) |

@@ -31,6 +31,15 @@ final class FakeCore: AgentCore {
         var readError: CoreError?
         var output: TerminalSnapshot?
         var depths: [UInt16?] = []
+        var shell: TerminalSummary?
+        var shellLocked = true
+        var terminalsEnabled = true
+        var challenges = 0
+        var grants: [Data] = []
+        var terminalError: CoreError?
+        var shellWatches: [String] = []
+        var commands: [String] = []
+        var terminalKeys: [[AgentKey]] = []
     }
 
     let state = Mutex(State())
@@ -74,6 +83,19 @@ final class FakeCore: AgentCore {
     }
 
     func agentView(machineId: String, terminalId: String, afterRevision: UInt64) -> AgentView? {
+        let s = state.withLock { $0 }
+        if s.shell != nil || !s.terminalsEnabled {
+            let agent = s.kind.map {
+                AgentSummary(
+                    terminalId: terminalId, workspaceId: "w1", kind: $0, name: nil, title: nil,
+                    status: .idle, statusSinceMs: 0, cwd: nil, lastLine: nil
+                )
+            }
+            return AgentView(
+                link: .connected, lastError: nil, agent: agent, output: nil, outputRevision: 0,
+                terminal: agent == nil ? s.shell : nil, terminalLocked: s.shellLocked, terminalsEnabled: s.terminalsEnabled
+            )
+        }
         if let output = state.withLock({ $0.output }) {
             return AgentView(
                 link: .connected, lastError: nil, agent: nil, output: output.terminalId == terminalId ? output : nil, outputRevision: 1
@@ -144,6 +166,29 @@ final class FakeCore: AgentCore {
     }
     func maxAttachmentBytes() -> UInt64 { state.withLock { $0.maxAttachmentBytes } }
     func cancelUploads(machineId: String) { state.withLock { $0.cancelledUploads.append(machineId) } }
+    func terminalChallenge(machineId: String, terminalId: String) async throws -> Data {
+        let error = state.withLock { s in
+            s.challenges += 1
+            return s.terminalError
+        }
+        if let error { throw error }
+        return Data("challenge \(terminalId)".utf8)
+    }
+    func terminalGrant(machineId: String, terminalId: String, signature: Data) async throws {
+        state.withLock {
+            $0.grants.append(signature)
+            $0.shellLocked = false
+        }
+    }
+    func watchTerminal(machineId: String, terminalId: String, lines: UInt16) async throws {
+        state.withLock { $0.shellWatches.append(terminalId) }
+    }
+    func terminalRun(machineId: String, terminalId: String, text: String) async throws {
+        try await call { $0.commands.append(text) }
+    }
+    func terminalSendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {
+        try await call { $0.terminalKeys.append(keys) }
+    }
     func flock(machineId: String) async throws -> MachineFlock {
         guard let started = state.withLock({ $0.started }) else { throw CoreError.MachineNotFound }
         let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
@@ -800,4 +845,178 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     await model.sendPrompt()
     #expect(core.snapshot.typed == ["use the staging cluster", "again"])
     #expect(core.snapshot.prompts == ["/Users/me/Library/Caches/dev.rbstp.collied/attachments/a.png/a.png again"])
+}
+
+private final class FakeUnlocker: TerminalUnlocker {
+    let signs: Bool
+    let reasons = Mutex<[String]>([])
+
+    init(signs: Bool) {
+        self.signs = signs
+    }
+
+    func sign(_ message: Data, reason: String) async -> Data? {
+        reasons.withLock { $0.append(reason) }
+        return signs ? Data("signed \(String(decoding: message, as: UTF8.self))".utf8) : nil
+    }
+}
+
+private let shellPane = TerminalSummary(
+    terminalId: "term_1", workspaceId: "w1", workspaceLabel: "api", label: nil, cwd: "/Users/me/api", locked: true
+)
+
+@MainActor
+private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentModel {
+    AgentModel(
+        core: core, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil,
+        unlocker: unlocker, machineLabel: "Mac Studio"
+    )
+}
+
+@MainActor
+@Test func anExitedAgentTurnsIntoALockedShellAndBack() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let unlocker = FakeUnlocker(signs: true)
+    let model = terminalModel(core, unlocker)
+    model.poll()
+    #expect(model.mode == .agent)
+    #expect(model.paneNotice == nil)
+
+    core.state.withLock {
+        $0.kind = nil
+        $0.shell = shellPane
+    }
+    model.poll()
+    #expect(model.mode == .terminal)
+    #expect(model.terminalLocked)
+    #expect(model.paneNotice == "The agent exited. This pane is now a shell.")
+    #expect(model.canUnlock)
+    #expect(!model.answering)
+    #expect(core.snapshot.challenges == 0, "Face ID is never raised on its own")
+
+    #expect(await model.unlock())
+    #expect(unlocker.reasons.withLock { $0 } == ["Open a terminal in api on Mac Studio"])
+    #expect(core.snapshot.grants == [Data("signed challenge term_1".utf8)])
+    model.poll()
+    #expect(!model.terminalLocked)
+    #expect(model.paneNotice == nil)
+    while core.snapshot.shellWatches.isEmpty {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(core.snapshot.shellWatches == ["term_1"])
+
+    core.state.withLock { $0.kind = "claude" }
+    model.poll()
+    #expect(model.mode == .agent)
+    while core.snapshot.watches.isEmpty {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(core.snapshot.watches == ["term_1"], "back to the agent's watch")
+}
+
+@MainActor
+@Test func aLockedSendUnlocksFirstAndACancelledFaceIDSendsNothing() async {
+    let core = FakeCore()
+    core.state.withLock { $0.shell = shellPane }
+    let cancelled = terminalModel(core, FakeUnlocker(signs: false))
+    cancelled.poll()
+    cancelled.draft = "git pull"
+    #expect(cancelled.canSendPrompt)
+    await cancelled.sendPrompt()
+    cancelled.tap(.ctrlC)
+    try? await Task.sleep(for: .milliseconds(50))
+    #expect(core.snapshot.challenges == 2)
+    #expect(core.snapshot.grants.isEmpty)
+    #expect(core.snapshot.commands.isEmpty && core.snapshot.terminalKeys.isEmpty)
+    #expect(cancelled.draft == "git pull")
+
+    let unlocker = FakeUnlocker(signs: true)
+    let model = terminalModel(core, unlocker)
+    model.poll()
+    model.draft = "git pull --force"
+    await model.sendPrompt()
+    #expect(unlocker.reasons.withLock { $0.count } == 1)
+    #expect(core.snapshot.grants.count == 1)
+    #expect(core.snapshot.commands == ["git pull --force"])
+    #expect(model.draft.isEmpty)
+    #expect(core.snapshot.prompts.isEmpty, "a shell is never prompted")
+
+    await model.tap(.ctrlC)?.value
+    #expect(core.snapshot.terminalKeys == [[.ctrlC]])
+    #expect(core.snapshot.keys.isEmpty)
+    #expect(unlocker.reasons.withLock { $0.count } == 1, "one Face ID covers the grant")
+
+    core.set(error: .TerminalLocked)
+    model.draft = "ls"
+    await model.sendPrompt()
+    #expect(model.terminalLocked)
+    #expect(model.promptError == "The terminal locked. Unlock it again to continue.")
+}
+
+@MainActor
+@Test func aShellTakesOneCommandAtATime() async {
+    let core = FakeCore()
+    core.state.withLock { $0.shell = shellPane }
+    let unlocker = FakeUnlocker(signs: true)
+    let model = terminalModel(core, unlocker)
+    model.poll()
+    model.draft = "cd api\ngit pull"
+    await model.sendPrompt()
+    #expect(model.promptError == "One command at a time")
+    #expect(core.snapshot.challenges == 0)
+    #expect(core.snapshot.commands.isEmpty)
+    #expect(AgentKey.terminalStrip == [.esc, .tab, .ctrlC, .left, .up, .down, .right, .enter])
+}
+
+@MainActor
+@Test func theScreenSaysWhyNoTerminalOpens() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = terminalModel(core, FakeUnlocker(signs: true))
+    model.poll()
+    core.state.withLock {
+        $0.kind = nil
+        $0.terminalsEnabled = false
+    }
+    model.poll()
+    #expect(model.mode == .gone)
+    #expect(
+        model.paneNotice
+            == "The agent exited. Terminals are off on this machine: set [terminals] enabled = true in collied.toml there and restart collied."
+    )
+
+    core.state.withLock { $0.terminalsEnabled = true }
+    let opened = terminalModel(core, FakeUnlocker(signs: true))
+    opened.poll()
+    #expect(opened.mode == nil, "nothing to show for a machine that never answered")
+
+    core.state.withLock {
+        $0.shell = shellPane
+        $0.terminalError = .TerminalKeyMissing
+    }
+    let unpaired = terminalModel(core, FakeUnlocker(signs: true))
+    unpaired.poll()
+    #expect(unpaired.paneNotice == "This pane is a shell.")
+    #expect(!(await unpaired.unlock()))
+    #expect(unpaired.paneNotice == "Pair this phone again to use terminals on this machine.")
+    #expect(!unpaired.canUnlock)
+}
+
+@Test func terminalsAreListedOnlyFromAMachineThatEnablesThem() {
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let named = TerminalSummary(terminalId: "t2", workspaceId: "w1", workspaceLabel: "api", label: " logs ", cwd: "/var/log", locked: true)
+    func entry(enabled: Bool) -> MachineFlockEntry {
+        MachineFlockEntry(
+            machine: machine,
+            flock: MachineFlock(
+                machine: machine, link: .connected, lastError: nil, details: nil, workspaces: [], agents: [],
+                approvalsCount: 0, terminals: [shellPane, named], terminalsEnabled: enabled
+            )
+        )
+    }
+    #expect(entry(enabled: false).terminals.isEmpty)
+    #expect(entry(enabled: true).terminals.map(\.displayTitle) == ["api", "logs"])
+    let bare = TerminalSummary(terminalId: "t3", workspaceId: "w1", workspaceLabel: nil, label: nil, cwd: nil, locked: true)
+    #expect(bare.displayTitle == "Terminal")
 }

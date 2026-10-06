@@ -19,6 +19,10 @@ pub struct Machine {
     /// Empty for a pairing made before mutual TLS, which must pair again.
     #[serde(default)]
     pub key: String,
+    /// The terminal key this phone sent at pairing, base64url; empty when it sent none.
+    #[serde(default)]
+    #[uniffi(default = "")]
+    pub terminal_key: String,
 }
 
 #[derive(
@@ -120,6 +124,7 @@ mod tests {
             node_id: "nMAC".into(),
             kind: MachineKind::Mac,
             key: String::new(),
+            terminal_key: String::new(),
         }
     }
 

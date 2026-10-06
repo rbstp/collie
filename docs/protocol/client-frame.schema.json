@@ -354,6 +354,17 @@
         },
         "pairing_code": {
           "$ref": "#/$defs/PairingCode"
+        },
+        "terminal_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalKey"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The phone's terminal key, recorded with the pairing: it signs terminal grants."
         }
       },
       "required": [
@@ -494,6 +505,10 @@
       "pattern": "^[0-9a-f]{64}$",
       "type": "string"
     },
+    "Signature": {
+      "pattern": "^[A-Za-z0-9_-]{11,96}$",
+      "type": "string"
+    },
     "TaskNewParams": {
       "additionalProperties": false,
       "properties": {
@@ -528,9 +543,77 @@
       ],
       "type": "object"
     },
+    "TerminalGrantParams": {
+      "additionalProperties": false,
+      "description": "`signature` is over [`terminal_grant_message`] for the challenge this session was given.",
+      "properties": {
+        "challenge": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "signature": {
+          "$ref": "#/$defs/Signature"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "challenge",
+        "signature"
+      ],
+      "type": "object"
+    },
     "TerminalId": {
       "pattern": "^[A-Za-z0-9_:.-]{1,64}$",
       "type": "string"
+    },
+    "TerminalKey": {
+      "pattern": "^[A-Za-z0-9_-]{121}[AQgw]$",
+      "type": "string"
+    },
+    "TerminalRunParams": {
+      "additionalProperties": false,
+      "description": "One line typed into a shell pane, then Enter.",
+      "properties": {
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "text": {
+          "$ref": "#/$defs/PromptText"
+        }
+      },
+      "required": [
+        "op_id",
+        "terminal_id",
+        "text"
+      ],
+      "type": "object"
+    },
+    "TerminalWatchParams": {
+      "additionalProperties": false,
+      "description": "Shares the session's single watch with `agent.watch`; `agent.watch {terminal_id: null}`\nstops either.",
+      "properties": {
+        "lines": {
+          "format": "uint16",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id"
+      ],
+      "type": "object"
     },
     "UploadId": {
       "pattern": "^[0-9a-f]{32}$",
@@ -968,6 +1051,102 @@
         },
         "params": {
           "$ref": "#/$defs/AttachmentAbortParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "terminal.challenge",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentTarget"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "terminal.grant",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TerminalGrantParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "terminal.watch",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TerminalWatchParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "terminal.run",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TerminalRunParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "terminal.send_keys",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentSendKeysParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "terminal.lock",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Empty"
         }
       },
       "required": [

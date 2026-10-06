@@ -13,8 +13,8 @@ use collied::herdr;
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, ApprovalDecideParams,
     ApprovalOutcome, Cwd, Decision, ErrorCode, Event, Key, Label, OpId, PaneCloseParams,
-    PromptText, ReadParams, ReadSource, Response, TaskNewParams, TerminalId, WorkspaceCloseParams,
-    WorkspaceId,
+    PromptText, ReadParams, ReadSource, Response, TaskNewParams, TerminalId, TerminalRunParams,
+    WorkspaceCloseParams, WorkspaceId,
 };
 use tokio::sync::broadcast;
 
@@ -304,28 +304,48 @@ async fn scenario(session: &HerdrSession) {
         source: ReadSource::Visible,
         lines: Some(20),
     };
-    let Ok(Response::Terminal(screen)) = drive.read(read.clone(), false).await else {
-        panic!("pane.read failed");
-    };
-    assert_eq!(screen.terminal_id, terminal);
-    assert!(
-        !screen
-            .ansi
-            .chars()
-            .any(|c| c.is_control() && !matches!(c, '\u{1b}' | '\r' | '\n' | '\t'))
+    assert_eq!(
+        drive.read(read.clone(), false).await.unwrap_err().0,
+        ErrorCode::NotFound,
+        "a shell is read through terminal.watch only"
     );
-    let recent = ReadParams {
-        source: ReadSource::Recent,
-        ..read.clone()
-    };
-    let Ok(Response::Terminal(recent)) = drive.read(recent, false).await else {
-        panic!("pane.read recent_unwrapped failed");
-    };
-    assert_eq!(recent.source, ReadSource::Recent);
     assert_eq!(
         drive.read(read, true).await.unwrap_err().0,
         ErrorCode::NotFound
     );
+
+    // pane.send_input with Enter runs the line in the shell, as `herdr pane run` does.
+    let ran = TerminalRunParams {
+        op_id: OpId::new("R".repeat(22)).unwrap(),
+        terminal_id: terminal.clone(),
+        text: PromptText::new("echo collie-$((6 * 7))").unwrap(),
+    };
+    assert_eq!(drive.terminal_run(ran, &yes).await, Ok(Response::Ok));
+    let mut watcher = drive.watch_terminal(terminal.clone(), 50).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let Ok(Some(watched)) = tokio::time::timeout(Duration::from_secs(5), watcher.recv()).await
+        else {
+            panic!("the terminal watch ended");
+        };
+        if let collied::drive::Watched::Output(screen) = watched {
+            assert_eq!(
+                (&screen.terminal_id, screen.source),
+                (&terminal, ReadSource::Recent)
+            );
+            assert!(
+                !screen
+                    .ansi
+                    .chars()
+                    .any(|c| c.is_control() && !matches!(c, '\u{1b}' | '\r' | '\n' | '\t'))
+            );
+            if screen.ansi.contains("collie-42") {
+                break;
+            }
+        }
+        assert!(Instant::now() < deadline, "the command never ran");
+    }
+    drop(watcher);
     let prompt = AgentPromptParams {
         op_id: OpId::new("P".repeat(22)).unwrap(),
         terminal_id: terminal.clone(),

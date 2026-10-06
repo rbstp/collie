@@ -308,6 +308,10 @@ async fn pair(control_path: &Path, show_uri: bool) -> anyhow::Result<bool> {
                 println!("  device:    {}", p(&c.device_label));
                 println!("  node:      {} ({})", p(&c.node_name), p(&c.stable_id));
                 println!("  user:      {} ({})", p(&c.login), c.user_id);
+                println!("  terminal key: {}", c.terminal_key_change());
+                if c.replaces {
+                    println!("  replaces an existing pairing of this node");
+                }
                 // Discard anything typed before the candidate was shown, so a stray
                 // "y" cannot approve a phone the human never saw.
                 let _ = rustix::termios::tcflush(

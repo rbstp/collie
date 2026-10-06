@@ -74,6 +74,19 @@ pub enum Request {
     AttachmentCommit(AttachmentCommitParams),
     #[serde(rename = "attachment.abort")]
     AttachmentAbort(AttachmentAbortParams),
+
+    #[serde(rename = "terminal.challenge")]
+    TerminalChallenge(AgentTarget),
+    #[serde(rename = "terminal.grant")]
+    TerminalGrant(TerminalGrantParams),
+    #[serde(rename = "terminal.watch")]
+    TerminalWatch(TerminalWatchParams),
+    #[serde(rename = "terminal.run")]
+    TerminalRun(TerminalRunParams),
+    #[serde(rename = "terminal.send_keys")]
+    TerminalSendKeys(AgentSendKeysParams),
+    #[serde(rename = "terminal.lock")]
+    TerminalLock(Empty),
 }
 
 impl Request {
@@ -104,6 +117,12 @@ impl Request {
         "attachment.chunk",
         "attachment.commit",
         "attachment.abort",
+        "terminal.challenge",
+        "terminal.grant",
+        "terminal.watch",
+        "terminal.run",
+        "terminal.send_keys",
+        "terminal.lock",
     ];
 
     pub fn method(&self) -> &'static str {
@@ -134,6 +153,12 @@ impl Request {
             Self::AttachmentChunk(_) => "attachment.chunk",
             Self::AttachmentCommit(_) => "attachment.commit",
             Self::AttachmentAbort(_) => "attachment.abort",
+            Self::TerminalChallenge(_) => "terminal.challenge",
+            Self::TerminalGrant(_) => "terminal.grant",
+            Self::TerminalWatch(_) => "terminal.watch",
+            Self::TerminalRun(_) => "terminal.run",
+            Self::TerminalSendKeys(_) => "terminal.send_keys",
+            Self::TerminalLock(_) => "terminal.lock",
         }
     }
 
@@ -163,11 +188,18 @@ impl Request {
             Self::PushRegister(_) | Self::PushActivityToken(_) | Self::PushActivityEnd(_) => {
                 MethodClass::Push
             }
+            Self::TerminalChallenge(_)
+            | Self::TerminalGrant(_)
+            | Self::TerminalWatch(_)
+            | Self::TerminalRun(_)
+            | Self::TerminalSendKeys(_)
+            | Self::TerminalLock(_) => MethodClass::Terminal,
         }
     }
 }
 
 /// Drive and Approval calls are written to the audit log and rate limited per peer.
+/// Terminal calls reach plain shells: collied refuses them unless the machine enables them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MethodClass {
     Session,
@@ -175,6 +207,7 @@ pub enum MethodClass {
     Drive,
     Approval,
     Push,
+    Terminal,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -193,6 +226,9 @@ pub struct HelloParams {
 pub struct PairCompleteParams {
     pub pairing_code: PairingCode,
     pub device_label: Label,
+    /// The phone's terminal key, recorded with the pairing: it signs terminal grants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_key: Option<TerminalKey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -241,6 +277,69 @@ impl AgentWatchParams {
 #[serde(deny_unknown_fields)]
 pub struct AgentTarget {
     pub terminal_id: TerminalId,
+}
+
+/// `signature` is over [`terminal_grant_message`] for the challenge this session was given.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalGrantParams {
+    pub terminal_id: TerminalId,
+    pub challenge: Nonce,
+    pub signature: Signature,
+}
+
+/// Shares the session's single watch with `agent.watch`; `agent.watch {terminal_id: null}`
+/// stops either.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalWatchParams {
+    pub terminal_id: TerminalId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 1000))]
+    pub lines: Option<u16>,
+}
+
+impl TerminalWatchParams {
+    pub fn lines(&self) -> u16 {
+        self.lines.map_or(limits::DEFAULT_WATCH_LINES, |n| {
+            n.clamp(1, limits::MAX_READ_LINES)
+        })
+    }
+}
+
+/// One line typed into a shell pane, then Enter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalRunParams {
+    pub op_id: OpId,
+    pub terminal_id: TerminalId,
+    pub text: PromptText,
+}
+
+impl TerminalRunParams {
+    pub fn is_valid(&self) -> bool {
+        !self.text.as_str().contains(['\n', '\t'])
+    }
+}
+
+/// What the phone's terminal key signs to unlock one terminal on one machine: each part
+/// length-prefixed (u32 big-endian), so no two inputs give the same bytes.
+pub fn terminal_grant_message(
+    node_id: &str,
+    terminal_id: &TerminalId,
+    challenge: &Nonce,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    for part in [
+        "collie terminal grant v1",
+        node_id,
+        terminal_id.as_str(),
+        challenge.as_str(),
+    ] {
+        out.extend_from_slice(&(part.len() as u32).to_be_bytes());
+        out.extend_from_slice(part.as_bytes());
+    }
+    out
 }
 
 /// For a Claude Code agent, collied replaces an unsent draft in the Mac's input box only
@@ -527,6 +626,15 @@ pub enum Response {
     Draft {
         text: Option<String>,
     },
+    TerminalChallenge {
+        terminal_id: TerminalId,
+        challenge: Nonce,
+        ttl_ms: u64,
+    },
+    TerminalGranted {
+        terminal_id: TerminalId,
+        ttl_ms: u64,
+    },
     Ok,
 }
 
@@ -597,6 +705,21 @@ pub struct Flock {
     pub workspaces: Vec<Workspace>,
     pub agents: Vec<Agent>,
     pub approvals: Vec<Approval>,
+    /// Shell panes: only when the machine enables terminals.
+    #[serde(default)]
+    pub terminals: Vec<Terminal>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub terminals_enabled: bool,
+}
+
+/// A pane with no agent. `label` is the name given in herdr, never a title the pane's
+/// program sets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Terminal {
+    pub terminal_id: TerminalId,
+    pub workspace_id: WorkspaceId,
+    pub label: Option<String>,
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -742,6 +865,9 @@ pub enum ErrorCode {
     ChecksumMismatch,
     DraftChanged,
     DraftNotCleared,
+    TerminalsDisabled,
+    TerminalLocked,
+    TerminalKeyMissing,
     Internal,
     #[serde(other)]
     Unrecognized,
@@ -819,6 +945,8 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
         Request::AgentRead(p) | Request::PaneRead(p) => p.is_valid(),
         Request::AgentSendKeys(p) => p.is_valid(),
         Request::AgentTypeText(p) => p.is_valid(),
+        Request::TerminalRun(p) => p.is_valid(),
+        Request::TerminalSendKeys(p) => p.is_valid(),
         Request::ApprovalDecide(p) => p.is_valid(),
         Request::AttachmentBegin(p) => p.is_valid(),
         _ => true,
@@ -1185,6 +1313,168 @@ mod tests {
             !approval.accepts_input && !approval.has_text_field && !approval.supports_note,
             "an older collied takes no input the phone can count on"
         );
+    }
+
+    #[test]
+    fn terminal_methods_are_their_own_class() {
+        let op = "AAAAAAAAAAAAAAAAAAAAAA";
+        let nonce = "A".repeat(43);
+        for (method, params) in [
+            (
+                "terminal.challenge",
+                r#"{"terminal_id":"term_1"}"#.to_owned(),
+            ),
+            (
+                "terminal.grant",
+                format!(
+                    r#"{{"terminal_id":"term_1","challenge":"{nonce}","signature":"MEUCIQDxyzAB"}}"#
+                ),
+            ),
+            (
+                "terminal.watch",
+                r#"{"terminal_id":"term_1","lines":300}"#.to_owned(),
+            ),
+            (
+                "terminal.run",
+                format!(r#"{{"op_id":"{op}","terminal_id":"term_1","text":"git pull"}}"#),
+            ),
+            (
+                "terminal.send_keys",
+                format!(r#"{{"op_id":"{op}","terminal_id":"term_1","keys":["ctrl+c","enter"]}}"#),
+            ),
+            ("terminal.lock", "{}".to_owned()),
+        ] {
+            let frame = parse(&format!(
+                r#"{{"id":1,"method":"{method}","params":{params}}}"#
+            ))
+            .unwrap();
+            assert_eq!(frame.request.class(), MethodClass::Terminal, "{method}");
+            assert_eq!(frame.request.method(), method);
+            let json = serde_json::to_string(&frame).unwrap();
+            assert_eq!(parse(&json).unwrap(), frame, "{method}");
+        }
+        let watch =
+            parse(r#"{"id":1,"method":"terminal.watch","params":{"terminal_id":"t"}}"#).unwrap();
+        let Request::TerminalWatch(p) = watch.request else {
+            panic!("not a terminal watch");
+        };
+        assert_eq!(p.lines(), limits::DEFAULT_WATCH_LINES);
+        let null = r#"{"id":1,"method":"terminal.watch","params":{"terminal_id":null}}"#;
+        assert_eq!(parse(null).unwrap_err().code, ErrorCode::InvalidParams);
+    }
+
+    #[test]
+    fn terminal_input_is_one_line_and_listed_keys() {
+        let run = |text: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"terminal.run","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"t","text":{}}}}}"#,
+                serde_json::to_string(text).unwrap()
+            ))
+        };
+        assert!(run("claude --resume 1234 && git pull").is_ok());
+        for bad in ["a\nb", "a\tb", "a\u{1b}[201~", "  ", "a\rb"] {
+            assert_eq!(
+                run(bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{bad:?}"
+            );
+        }
+        let keys = |keys: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"terminal.send_keys","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"t","keys":{keys}}}}}"#
+            ))
+        };
+        assert!(keys(r#"["ctrl+c"]"#).is_ok());
+        for bad in [
+            r#"["ctrl+d"]"#.to_owned(),
+            r#"["ctrl+z"]"#.to_owned(),
+            "[]".to_owned(),
+            serde_json::to_string(&vec!["enter"; 17]).unwrap(),
+        ] {
+            assert_eq!(
+                keys(&bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn pairing_carries_an_optional_terminal_key() {
+        let key = format!("{}Q", "M".repeat(121));
+        let base = r#"{"id":2,"method":"pair.complete","params":{"pairing_code":"Zm9vYmFyYmF6cXV4cXV1dQ","device_label":"iPhone""#;
+        let Request::PairComplete(p) = parse(&format!("{base}}}}}")).unwrap().request else {
+            panic!("not a pairing");
+        };
+        assert_eq!(p.terminal_key, None);
+        assert!(!serde_json::to_string(&p).unwrap().contains("terminal_key"));
+        let Request::PairComplete(p) = parse(&format!(r#"{base},"terminal_key":"{key}"}}}}"#))
+            .unwrap()
+            .request
+        else {
+            panic!("not a pairing");
+        };
+        assert_eq!(p.terminal_key.unwrap().as_str(), key);
+        let short = format!(r#"{base},"terminal_key":"{}"}}}}"#, &key[1..]);
+        assert_eq!(parse(&short).unwrap_err().code, ErrorCode::InvalidParams);
+    }
+
+    #[test]
+    fn flock_terminals_are_additive() {
+        let older = r#"{"seq":1,"machine":{"name":"m","node_id":"n","herdr_session":"default"},"workspaces":[],"agents":[],"approvals":[]}"#;
+        let f: Flock = serde_json::from_str(older).unwrap();
+        assert!(f.terminals.is_empty() && !f.terminals_enabled);
+        let json = serde_json::to_string(&f).unwrap();
+        assert!(
+            json.ends_with(r#""approvals":[],"terminals":[]}"#),
+            "{json}"
+        );
+        let on = Flock {
+            terminals_enabled: true,
+            terminals: vec![Terminal {
+                terminal_id: TerminalId::new("term_1").unwrap(),
+                workspace_id: WorkspaceId::new("w1").unwrap(),
+                label: None,
+                cwd: Some("/src".into()),
+            }],
+            ..f
+        };
+        let json = serde_json::to_string(&on).unwrap();
+        assert!(json.contains(r#""terminals_enabled":true"#));
+        assert_eq!(serde_json::from_str::<Flock>(&json).unwrap(), on);
+        let granted = ServerFrame::Result {
+            id: 8,
+            result: Response::TerminalGranted {
+                terminal_id: TerminalId::new("term_1").unwrap(),
+                ttl_ms: 300_000,
+            },
+        };
+        assert_eq!(
+            serde_json::to_string(&granted).unwrap(),
+            r#"{"kind":"result","id":8,"result":{"type":"terminal_granted","terminal_id":"term_1","ttl_ms":300000}}"#
+        );
+    }
+
+    #[test]
+    fn grant_message_vector() {
+        let message = terminal_grant_message(
+            "nMAC",
+            &TerminalId::new("term_1").unwrap(),
+            &Nonce::new("A".repeat(43)).unwrap(),
+        );
+        let mut want = Vec::new();
+        want.extend_from_slice(b"\0\0\0\x18collie terminal grant v1");
+        want.extend_from_slice(b"\0\0\0\x04nMAC");
+        want.extend_from_slice(b"\0\0\0\x06term_1");
+        want.extend_from_slice(b"\0\0\0\x2b");
+        want.extend_from_slice("A".repeat(43).as_bytes());
+        assert_eq!(message, want);
+        let other = terminal_grant_message(
+            "nMACt",
+            &TerminalId::new("erm_1").unwrap(),
+            &Nonce::new("A".repeat(43)).unwrap(),
+        );
+        assert_ne!(message, other, "length prefixes keep the parts apart");
     }
 
     #[test]

@@ -46,6 +46,9 @@ pub struct Peer {
     /// None for a phone paired before mutual TLS, which pairs again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_key: Option<protocol::KeyPin>,
+    /// Signs terminal grants. None for a phone that sent none at pairing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_key: Option<protocol::TerminalKey>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -225,6 +228,7 @@ mod tests {
             label: label.into(),
             paired_at: 1,
             tls_key: None,
+            terminal_key: None,
         }
     }
 

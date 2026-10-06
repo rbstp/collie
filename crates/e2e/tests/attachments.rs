@@ -106,6 +106,8 @@ async fn scenario(root: &Path, core: &Arc<CollieCore>, probe: &Probe, net: &Net)
             machine_name: "e2e-mac".into(),
             approval_ttl: collied::approvals::TTL,
             attachments_dir: store.clone(),
+            terminals: false,
+            terminal_grant_ttl: collied::terminal::GRANT_TTL,
         },
         root.join("herdr.sock"),
     )

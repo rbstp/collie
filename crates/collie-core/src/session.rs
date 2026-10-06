@@ -5,12 +5,14 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
     AgentWatchParams, ClientFrame, Empty, ErrorBody, ErrorCode, Event, Flock, HelloParams,
-    HelloResult, Label, PROTOCOL_VERSION, ReadSource, Request, RequestId, Response, ServerFrame,
-    TerminalId, TerminalRead, WS_PATH, WS_SUBPROTOCOL, limits,
+    HelloResult, Label, Nonce, PROTOCOL_VERSION, ReadSource, Request, RequestId, Response,
+    ServerFrame, TerminalId, TerminalRead, TerminalWatchParams, WS_PATH, WS_SUBPROTOCOL, limits,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
+
+type StdInstant = std::time::Instant;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -229,11 +231,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         let mut pending: HashMap<RequestId, Pending> = HashMap::new();
         let mut seed = vec![Request::FlockSnapshot(Empty {})];
         seed.extend(push);
-        let watched = lock(state).watched.clone();
-        if let Some(terminal_id) = watched {
+        // A shell's watch needs a grant, which no new session has.
+        let watch = {
+            let s = lock(state);
+            s.watched
+                .clone()
+                .filter(|_| !s.watch_shell)
+                .map(|terminal_id| (terminal_id, s.watch_lines))
+        };
+        if let Some((terminal_id, lines)) = watch {
             seed.push(Request::AgentWatch(AgentWatchParams {
                 terminal_id: Some(terminal_id),
-                lines: lock(state).watch_lines,
+                lines,
             }));
         }
         for request in seed {
@@ -304,10 +313,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                             let request = match outcome {
                                 EventOutcome::NeedsSnapshot => Request::FlockSnapshot(Empty {}),
                                 EventOutcome::NeedsWatch(terminal_id) => {
-                                    Request::AgentWatch(AgentWatchParams {
-                                        terminal_id: Some(terminal_id),
-                                        lines: lock(state).watch_lines,
-                                    })
+                                    let state = lock(state);
+                                    if state.watch_shell {
+                                        Request::TerminalWatch(TerminalWatchParams {
+                                            terminal_id,
+                                            lines: state.watch_lines,
+                                        })
+                                    } else {
+                                        Request::AgentWatch(AgentWatchParams {
+                                            terminal_id: Some(terminal_id),
+                                            lines: state.watch_lines,
+                                        })
+                                    }
                                 }
                                 EventOutcome::Dropped | EventOutcome::Applied => continue,
                             };
@@ -385,7 +402,13 @@ pub enum EventOutcome {
 pub struct FlockState {
     pub flock: Option<Flock>,
     pub watched: Option<TerminalId>,
+    /// `watched` is a shell pane, watched with `terminal.watch`.
+    pub watch_shell: bool,
     pub watch_lines: Option<u16>,
+    /// The challenge collied gave this session, for the grant that answers it.
+    pub challenge: Option<(TerminalId, Nonce)>,
+    /// Terminals this session holds a grant for, until when.
+    pub unlocked: HashMap<TerminalId, StdInstant>,
     pub output: Option<TerminalRead>,
     pub output_revision: u64,
     /// The text the watch sent last, the base of its next patch. A read reply can replace
@@ -400,10 +423,23 @@ pub struct FlockState {
 }
 
 impl FlockState {
+    /// Grants are per session on the machine, so a new one starts locked.
     pub fn new_connection(&mut self) {
         self.last_seq = 0;
         self.since_snapshot.clear();
         self.watched_output = None;
+        self.lock_terminals();
+    }
+
+    pub fn lock_terminals(&mut self) {
+        self.challenge = None;
+        self.unlocked.clear();
+    }
+
+    pub fn unlocked(&self, terminal_id: &str, now: StdInstant) -> bool {
+        self.unlocked
+            .iter()
+            .any(|(t, until)| t.as_str() == terminal_id && now < *until)
     }
 
     pub fn watch(&mut self, terminal_id: Option<TerminalId>) {
@@ -412,6 +448,12 @@ impl FlockState {
             self.watched_output = None;
         }
         self.watched = terminal_id;
+        self.watch_shell = false;
+    }
+
+    pub fn watch_terminal(&mut self, terminal_id: TerminalId) {
+        self.watch(Some(terminal_id));
+        self.watch_shell = true;
     }
 
     /// Only `recent` reads of the watched agent are kept: that is what `agent.output`
@@ -578,6 +620,8 @@ mod tests {
             workspaces: Vec::new(),
             agents,
             approvals: Vec::new(),
+            terminals: Vec::new(),
+            terminals_enabled: false,
         }
     }
 
@@ -990,6 +1034,7 @@ mod tests {
             Request::PairComplete(protocol::PairCompleteParams {
                 pairing_code: protocol::PairingCode::new("Zm9vYmFyYmF6cXV4cXV1dQ").unwrap(),
                 device_label: Label::new("iPhone").unwrap(),
+                terminal_key: None,
             })
         };
         assert_eq!(
@@ -1222,6 +1267,69 @@ mod tests {
         server.await.unwrap();
         let s = lock(&state);
         assert_eq!((shown(&s), s.output_revision), (Some("hello world"), 1));
+    }
+
+    #[tokio::test]
+    async fn a_new_session_never_reissues_a_terminal_watch() {
+        let (session, server) = pair_of(Some(WS_SUBPROTOCOL)).await;
+        let (session, mut ws) = (session.unwrap(), server.unwrap());
+        let state = Mutex::new(FlockState::default());
+        {
+            let mut s = lock(&state);
+            s.watch_terminal(TerminalId::new("t1").unwrap());
+            s.watch_lines = Some(300);
+            s.unlocked.insert(
+                TerminalId::new("t1").unwrap(),
+                StdInstant::now() + Duration::from_secs(60),
+            );
+            s.new_connection();
+            assert!(
+                !s.unlocked("t1", StdInstant::now()),
+                "a new session is locked"
+            );
+        }
+        let (_tx, mut rx) = mpsc::channel(8);
+        let server = tokio::spawn(async move {
+            assert!(matches!(
+                read(&mut ws).await.request,
+                Request::FlockSnapshot(_)
+            ));
+            write(
+                &mut ws,
+                ServerFrame::Event {
+                    seq: 1,
+                    event: Event::AgentOutput(output("t1", "$ ls", ReadSource::Recent)),
+                },
+            )
+            .await;
+            let stale = OutputPatch {
+                terminal_id: TerminalId::new("t1").unwrap(),
+                base: 0,
+                head: Vec::new(),
+                skip: 0,
+                keep: 1,
+                tail: vec!["x".into()],
+                truncated: false,
+            };
+            write(
+                &mut ws,
+                ServerFrame::Event {
+                    seq: 2,
+                    event: Event::AgentOutputPatch(stale),
+                },
+            )
+            .await;
+            let rewatch = read(&mut ws).await;
+            let Request::TerminalWatch(p) = rewatch.request else {
+                panic!("the snapshot is the only seed: {rewatch:?}")
+            };
+            assert_eq!((p.terminal_id.as_str(), p.lines), ("t1", Some(300)));
+        });
+        let end = session
+            .run(&mut rx, &state, Vec::new(), std::future::pending())
+            .await;
+        assert!(!end.is_auth());
+        server.await.unwrap();
     }
 
     #[tokio::test]

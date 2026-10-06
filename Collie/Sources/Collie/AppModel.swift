@@ -30,6 +30,7 @@ final class AppModel {
     var openingAgent: AgentRoute?
     private var backgroundedAt: Date?
     @ObservationIgnored private var activityDecisions: Set<String> = []
+    @ObservationIgnored private var terminalKeySet = false
 
     private let log = Logger(subsystem: "dev.rbstp.collie", category: "app")
 
@@ -54,6 +55,7 @@ final class AppModel {
                 log.error("app group: \(describe(error), privacy: .public)")
             }
         }
+        loadTerminalKey()
     }
 
     var isRunning: Bool { node?.backendState == .running }
@@ -169,6 +171,18 @@ final class AppModel {
         if let pushToken { registerPush(token: pushToken) }
     }
 
+    /// The key is in the Keychain only while the phone is unlocked, so a launch in the background
+    /// (a lock-screen decision) loads it on the next foreground.
+    private func loadTerminalKey() {
+        guard let core, !terminalKeySet, let key = TerminalKey.publicKey() else { return }
+        do {
+            try core.setTerminalKey(publicKey: key)
+            terminalKeySet = true
+        } catch {
+            log.error("terminal key: \(describe(error), privacy: .public)")
+        }
+    }
+
     func scenePhaseChanged(to phase: ScenePhase) {
         switch phase {
         case .background:
@@ -177,6 +191,8 @@ final class AppModel {
                 let assertion = BackgroundAssertion(name: "core.suspend")
                 let epoch = core.beginSuspend()
                 Task {
+                    // Not on .inactive: the Face ID sheet itself makes the app inactive.
+                    await core.lockTerminals()
                     // Follow then lock: the activity's token must reach its Mac before the sessions close.
                     let deadline = ContinuousClock.now + .seconds(3)
                     while follows.awaitingToken, ContinuousClock.now < deadline {
@@ -187,6 +203,7 @@ final class AppModel {
                 }
             }
         case .active:
+            loadTerminalKey()
             if let since = backgroundedAt {
                 core?.resume(backgroundSecs: UInt64(max(0, Date.now.timeIntervalSince(since))))
             }

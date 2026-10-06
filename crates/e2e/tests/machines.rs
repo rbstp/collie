@@ -161,6 +161,8 @@ async fn start_collied(root: &Path, node: &Node, name: &str) -> ServerHandle {
             herdr_session: "e2e".into(),
             machine_name: format!("e2e-{name}"),
             approval_ttl: collied::approvals::TTL,
+            terminals: false,
+            terminal_grant_ttl: collied::terminal::GRANT_TTL,
         },
         herdr_socket,
     )

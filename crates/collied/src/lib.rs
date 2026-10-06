@@ -25,6 +25,7 @@ pub mod prompt;
 pub mod push;
 pub mod server;
 pub mod service;
+pub mod terminal;
 pub mod transcript;
 
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};

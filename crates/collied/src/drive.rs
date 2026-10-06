@@ -10,8 +10,8 @@ use anyhow::Context;
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentStatus, AgentTypeTextParams, Cwd,
     ErrorCode, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response,
-    TaskNewParams, TaskOptions, TerminalId, TerminalRead, WorkspaceCloseParams, WorkspaceId,
-    limits,
+    TaskNewParams, TaskOptions, TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams,
+    WorkspaceId, limits,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -41,6 +41,8 @@ const SCREEN_POLL: Duration = Duration::from_millis(100);
 pub const DRAFT_CHANGED: &str = "the agent's input box has unsent text";
 const BLOCKED: &str = "agent is blocked; answer it through an approval";
 const TYPED_NOT_SENT: &str = "the prompt did not take the text; Enter was not sent";
+pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
+const LOCKED: &str = "the terminal is locked; unlock it again";
 
 fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, Fail> {
     Err((code, message.into()))
@@ -79,6 +81,27 @@ fn authorized(auth: &Authorized) -> Result<(), Fail> {
         Ok(())
     } else {
         fail(ErrorCode::NotPaired, "peer is no longer authorized")
+    }
+}
+
+/// For terminal input the check is the grant: refusing with `not_paired` would make the
+/// phone stop reconnecting.
+fn granted(auth: &Authorized) -> Result<(), Fail> {
+    if auth() {
+        Ok(())
+    } else {
+        fail(ErrorCode::TerminalLocked, LOCKED)
+    }
+}
+
+/// herdr's error message may quote the input, so only its code is kept.
+fn quiet_fail(e: herdr::Error) -> Fail {
+    match e {
+        herdr::Error::Herdr { code, .. } => herdr_fail(herdr::Error::Herdr {
+            code,
+            message: String::new(),
+        }),
+        other => herdr_fail(other),
     }
 }
 
@@ -161,13 +184,35 @@ impl Driver {
     }
 
     async fn find_pane(&self, terminal_id: &TerminalId) -> Result<PaneInfo, Fail> {
-        herdr::session_snapshot(&self.herdr)
+        Ok(self.pane_and_agent(terminal_id).await?.0)
+    }
+
+    /// Read now, never from a cache: an agent herdr is still launching counts, though its
+    /// pane has no `agent` yet.
+    async fn pane_and_agent(&self, terminal_id: &TerminalId) -> Result<(PaneInfo, bool), Fail> {
+        let snap = herdr::session_snapshot(&self.herdr)
             .await
-            .map_err(herdr_fail)?
+            .map_err(herdr_fail)?;
+        let pane = snap
             .panes
             .into_iter()
             .find(|p| p.terminal_id == terminal_id.as_str())
-            .ok_or_else(|| (ErrorCode::NotFound, "no such terminal".to_owned()))
+            .ok_or_else(|| (ErrorCode::NotFound, "no such terminal".to_owned()))?;
+        let agent = pane.agent.is_some()
+            || snap
+                .agents
+                .iter()
+                .any(|a| a.terminal_id == pane.terminal_id);
+        Ok((pane, agent))
+    }
+
+    /// A pane with no agent at this moment. herdr targets panes by `pane_id` only, which it
+    /// reuses: this is re-read right before every write.
+    pub async fn shell_pane(&self, terminal_id: &TerminalId) -> Result<PaneInfo, Fail> {
+        match self.pane_and_agent(terminal_id).await? {
+            (_, true) => fail(ErrorCode::NotFound, HOSTS_AGENT),
+            (pane, false) => Ok(pane),
+        }
     }
 
     async fn ready_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
@@ -231,6 +276,8 @@ impl Driver {
         }
     }
 
+    /// `pane.read` reads agent panes only: a shell is read through `terminal.watch`, under
+    /// a grant.
     pub async fn read(&self, p: ReadParams, agent: bool) -> Reply {
         let mut lines = p.lines.map(u32::from);
         let source = source_name(p.source);
@@ -238,7 +285,13 @@ impl Driver {
             let a = self.find_agent(&p.terminal_id).await?;
             self.agent_read(&a.pane_id, source, &mut lines).await
         } else {
-            let pane = self.find_pane(&p.terminal_id).await?;
+            let (pane, agent) = self.pane_and_agent(&p.terminal_id).await?;
+            if !agent {
+                return fail(
+                    ErrorCode::NotFound,
+                    "no agent in this pane; open it as a terminal",
+                );
+            }
             herdr::pane_read(&self.herdr, &pane.pane_id, source, lines).await
         }
         .map_err(herdr_fail)?;
@@ -257,8 +310,23 @@ impl Driver {
         source: &str,
         lines: &mut Option<u32>,
     ) -> Result<herdr::PaneRead, herdr::Error> {
+        self.halving_read(pane_id, source, lines, true).await
+    }
+
+    async fn halving_read(
+        &self,
+        pane_id: &str,
+        source: &str,
+        lines: &mut Option<u32>,
+        agent: bool,
+    ) -> Result<herdr::PaneRead, herdr::Error> {
         loop {
-            match herdr::agent_read(&self.herdr, pane_id, source, *lines).await {
+            let read = if agent {
+                herdr::agent_read(&self.herdr, pane_id, source, *lines).await
+            } else {
+                herdr::pane_read(&self.herdr, pane_id, source, *lines).await
+            };
+            match read {
                 Err(herdr::Error::LineTooLong) if lines.is_some_and(|n| n > 1) => {
                     *lines = lines.map(|n| n / 2);
                 }
@@ -274,7 +342,19 @@ impl Driver {
     ) -> Result<Watcher, Fail> {
         self.find_agent(&terminal_id).await?;
         let (tx, rx) = mpsc::channel(1);
-        let task = tokio::spawn(self.clone().watch_loop(terminal_id, lines, tx));
+        let task = tokio::spawn(self.clone().watch_loop(terminal_id, lines, false, tx));
+        Ok(Watcher { rx, task })
+    }
+
+    /// Ends with `Gone` once the pane closes or an agent starts in it.
+    pub async fn watch_terminal(
+        self: &Arc<Self>,
+        terminal_id: TerminalId,
+        lines: u16,
+    ) -> Result<Watcher, Fail> {
+        self.shell_pane(&terminal_id).await?;
+        let (tx, rx) = mpsc::channel(1);
+        let task = tokio::spawn(self.clone().watch_loop(terminal_id, lines, true, tx));
         Ok(Watcher { rx, task })
     }
 
@@ -282,6 +362,7 @@ impl Driver {
         self: Arc<Self>,
         terminal_id: TerminalId,
         lines: u16,
+        shell: bool,
         tx: mpsc::Sender<Watched>,
     ) {
         let mut tick = tokio::time::interval(WATCH_EVERY);
@@ -291,12 +372,22 @@ impl Driver {
         let mut lines = Some(u32::from(lines));
         loop {
             tick.tick().await;
-            let msg = match self.find_agent(&terminal_id).await {
+            let pane_id = if shell {
+                self.shell_pane(&terminal_id).await.map(|p| p.pane_id)
+            } else {
+                self.find_agent(&terminal_id).await.map(|a| a.pane_id)
+            };
+            let msg = match pane_id {
                 Err((ErrorCode::NotFound, _)) => Watched::Gone,
                 Err(_) => continue,
-                Ok(a) => {
+                Ok(pane_id) => {
                     let Ok(read) = self
-                        .agent_read(&a.pane_id, source_name(ReadSource::Recent), &mut lines)
+                        .halving_read(
+                            &pane_id,
+                            source_name(ReadSource::Recent),
+                            &mut lines,
+                            !shell,
+                        )
                         .await
                     else {
                         continue;
@@ -484,6 +575,27 @@ impl Driver {
         herdr::agent_send_keys(&self.herdr, &a.pane_id, &["enter"])
             .await
             .map_err(herdr_fail)?;
+        Ok(Response::Ok)
+    }
+
+    /// One line, then Enter, into a pane that has no agent at this moment. herdr sends the
+    /// text and the key in one ordered write, as `herdr pane run` does.
+    pub async fn terminal_run(&self, p: TerminalRunParams, auth: &Authorized) -> Reply {
+        let pane = self.shell_pane(&p.terminal_id).await?;
+        granted(auth)?;
+        herdr::pane_send_input(&self.herdr, &pane.pane_id, p.text.as_str(), &["enter"])
+            .await
+            .map_err(quiet_fail)?;
+        Ok(Response::Ok)
+    }
+
+    pub async fn terminal_send_keys(&self, p: AgentSendKeysParams, auth: &Authorized) -> Reply {
+        let keys: Vec<&str> = p.keys.iter().map(|k| k.herdr_name()).collect();
+        let pane = self.shell_pane(&p.terminal_id).await?;
+        granted(auth)?;
+        herdr::pane_send_keys(&self.herdr, &pane.pane_id, &keys)
+            .await
+            .map_err(quiet_fail)?;
         Ok(Response::Ok)
     }
 

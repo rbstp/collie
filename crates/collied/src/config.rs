@@ -15,7 +15,16 @@ pub struct Config {
     pub tailnet: TailnetConfig,
     #[serde(default)]
     pub tasks: TasksConfig,
+    #[serde(default)]
+    pub terminals: TerminalsConfig,
     pub apns: Option<ApnsConfig>,
+}
+
+/// Plain shell panes from the phone. Off unless set here; read at start only.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerminalsConfig {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -368,6 +377,7 @@ mod tests {
         let agents: Vec<&str> = c.tasks.agents.iter().map(AgentKind::as_str).collect();
         assert_eq!(agents, ["claude", "codex", "copilot"]);
         assert_eq!(c.tasks.roots, None);
+        assert!(!c.terminals.enabled, "terminals are off by default");
         assert!(c.apns.is_none());
     }
 
@@ -384,6 +394,8 @@ mod tests {
             [tasks]
             agents = ["claude", "codex"]
             roots = ["/Users/me/src"]
+            [terminals]
+            enabled = true
             [apns]
             key_path = "/k.p8"
             key_id = "ABC"
@@ -398,6 +410,7 @@ mod tests {
         assert_eq!(c.tailnet.owner_user_id, Some(123456789012));
         assert_eq!(c.tasks.agents.len(), 2);
         assert_eq!(c.tasks.roots, Some(vec![PathBuf::from("/Users/me/src")]));
+        assert!(c.terminals.enabled);
         assert_eq!(c.apns.unwrap().key, ApnsKey::File(PathBuf::from("/k.p8")));
     }
 
@@ -414,6 +427,9 @@ mod tests {
         assert!(parse("[tailnet]\nprt = 1").is_err());
         assert!(parse("[tasks]\nagent = []").is_err());
         assert!(parse("[tasks]\nagents = [\"Claude\"]").is_err());
+        assert!(parse("[terminals]\nenable = true").is_err());
+        assert!(parse("[terminals]\nenabled = \"yes\"").is_err());
+        assert!(!parse("[terminals]\n").unwrap().terminals.enabled);
         assert!(parse("[apns]\nkey_path = \"/k\"\nkey_id = \"a\"\nteam_id = \"b\"\nbundle_id = \"c\"\nx = 1").is_err());
     }
 
