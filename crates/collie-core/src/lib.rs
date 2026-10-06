@@ -942,6 +942,8 @@ impl CollieCore {
             .map(|(_, c)| c)
             .ok_or(CoreError::TerminalLocked)?;
         let _busy = Busy::new(&self.inner);
+        // Before collied starts its own clock, so this phone's grant never outlives the machine's.
+        let asked = Instant::now();
         self.run(async move {
             let request = Request::TerminalGrant(TerminalGrantParams {
                 terminal_id: terminal_id.clone(),
@@ -957,7 +959,7 @@ impl CollieCore {
                     terminal_id: t,
                     ttl_ms,
                 } if t == terminal_id => {
-                    let until = Instant::now() + Duration::from_millis(ttl_ms);
+                    let until = asked + Duration::from_millis(ttl_ms);
                     lock(&conn.shared.flock).unlocked.insert(terminal_id, until);
                     Ok(())
                 }
@@ -1004,20 +1006,21 @@ impl CollieCore {
         terminal_id: String,
         text: String,
     ) -> Result<(), CoreError> {
-        let text = PromptText::new(text)
-            .ok()
-            .filter(|t| !t.as_str().contains(['\n', '\t']))
-            .ok_or_else(|| {
-                invalid(
-                    "text",
-                    "a command must be one non-empty line of at most 32 KiB, without control characters",
-                )
-            })?;
-        let request = Request::TerminalRun(TerminalRunParams {
+        let refused = || {
+            invalid(
+                "text",
+                "a command must be one non-empty line of at most 32 KiB, without control or invisible characters",
+            )
+        };
+        let params = TerminalRunParams {
             op_id: new_op_id(),
             terminal_id: terminal(terminal_id)?,
-            text,
-        });
+            text: PromptText::new(text).map_err(|_| refused())?,
+        };
+        if !params.is_valid() {
+            return Err(refused());
+        }
+        let request = Request::TerminalRun(params);
         let conn = self.conn(&machine_id)?;
         let response = self.mutate(&machine_id, request, DRIVE_TIMEOUT).await;
         self.locked_on(&conn, &response);
@@ -2812,6 +2815,10 @@ mod tests {
                 "{bad:?}"
             );
         }
+        assert_eq!(
+            field(rt.block_on(core.terminal_run(m(), t(), "echo ok \u{202E}x".into()))),
+            Some("text".into())
+        );
         assert_eq!(
             field(rt.block_on(core.terminal_send_keys(m(), t(), vec![AgentKey::Enter; 17]))),
             Some("keys".into())

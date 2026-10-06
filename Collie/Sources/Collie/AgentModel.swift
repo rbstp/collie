@@ -25,6 +25,7 @@ final class AgentModel {
     private(set) var terminalKeyMissing = false
     private(set) var unlocking = false
     private var watchingShell = false
+    private var lastMode: PaneMode?
     private(set) var link: LinkPhase?
     private(set) var linkError: String?
     private(set) var ansi = ""
@@ -120,7 +121,11 @@ final class AgentModel {
     var paneNotice: String? {
         switch mode {
         case .terminal?:
-            if terminalKeyMissing { return "Pair this phone again to use terminals on this machine." }
+            if terminalKeyMissing {
+                return unlocker.passcodeSet
+                    ? "Pair this phone again to use terminals on this machine."
+                    : "Set a passcode on this phone, then pair it again to use terminals on this machine."
+            }
             guard terminalLocked else { return nil }
             return hadAgent ? "The agent exited. This pane is now a shell." : "This pane is a shell."
         case .gone?:
@@ -199,11 +204,18 @@ final class AgentModel {
     }
 
     /// The shell is watched only while unlocked; an agent starting there takes the agent's watch back.
+    /// Input typed or queued for the agent never reaches the shell after it, nor the reverse.
     private func followMode() {
-        if mode == .agent, watchingShell {
-            watchingShell = false
-            watch(route.terminalId)
-        } else if mode == .terminal, !terminalLocked, !watchingShell {
+        if let now = mode, now != lastMode {
+            let previous = lastMode
+            lastMode = now
+            if previous != nil, now == .terminal || previous == .terminal { dropInput() }
+            if now == .agent, previous == .terminal || previous == .gone {
+                watchingShell = false
+                watch(route.terminalId)
+            }
+        }
+        if mode == .terminal, !terminalLocked, !watchingShell {
             watchingShell = true
             watchShell()
         } else if terminalLocked, watchingShell {
@@ -230,14 +242,18 @@ final class AgentModel {
             followMode()
             return true
         } catch {
-            if case .TerminalKeyMissing = error as? CoreError { terminalKeyMissing = true }
-            notice = Self.message(for: error)
+            if case .TerminalKeyMissing = error as? CoreError {
+                terminalKeyMissing = true
+            } else {
+                notice = Self.message(for: error)
+            }
             return false
         }
     }
 
+    /// A shell is only read through its watch, under a grant.
     func refresh() async {
-        guard !refreshing else { return }
+        guard !refreshing, !isTerminal else { return }
         refreshing = true
         defer { refreshing = false }
         do {
@@ -322,6 +338,16 @@ final class AgentModel {
         } catch {
             promptError = Self.message(for: error)
         }
+    }
+
+    private func dropInput() {
+        dictation.cancel()
+        cancelUpload()
+        draft = ""
+        macDraft = nil
+        attachments = []
+        queuedKeys.removeAll()
+        promptError = nil
     }
 
     func paste(_ text: String?) {

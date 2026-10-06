@@ -94,10 +94,14 @@ enum TerminalKey {
 
 /// Face ID or the passcode, then a signature by the terminal key; a seam for tests.
 protocol TerminalUnlocker: Sendable {
+    /// Without a passcode the phone has no terminal key, and pairing again cannot give it one.
+    var passcodeSet: Bool { get }
     func sign(_ message: Data, reason: String) async -> Data?
 }
 
 struct SecureEnclaveUnlocker: TerminalUnlocker {
+    var passcodeSet: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) }
+
     func sign(_ message: Data, reason: String) async -> Data? {
         await TerminalKey.sign(message, reason: reason)
     }

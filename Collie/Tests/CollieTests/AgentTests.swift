@@ -849,10 +849,12 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 
 private final class FakeUnlocker: TerminalUnlocker {
     let signs: Bool
+    let passcodeSet: Bool
     let reasons = Mutex<[String]>([])
 
-    init(signs: Bool) {
+    init(signs: Bool, passcodeSet: Bool = true) {
         self.signs = signs
+        self.passcodeSet = passcodeSet
     }
 
     func sign(_ message: Data, reason: String) async -> Data? {
@@ -1000,7 +1002,75 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
     #expect(unpaired.paneNotice == "This pane is a shell.")
     #expect(!(await unpaired.unlock()))
     #expect(unpaired.paneNotice == "Pair this phone again to use terminals on this machine.")
+    #expect(unpaired.notice == nil, "the card says it once")
     #expect(!unpaired.canUnlock)
+
+    let noPasscode = terminalModel(core, FakeUnlocker(signs: true, passcodeSet: false))
+    noPasscode.poll()
+    await noPasscode.unlock()
+    #expect(noPasscode.paneNotice == "Set a passcode on this phone, then pair it again to use terminals on this machine.")
+}
+
+@MainActor
+@Test func inputForTheAgentNeverReachesTheShellItLeaves() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let unlocker = FakeUnlocker(signs: true)
+    let model = terminalModel(core, unlocker)
+    model.poll()
+    model.draft = "rm the old logs and rebuild"
+    core.set(hold: true)
+    let draining = model.tap(.y)
+    await core.waitHeld(1)
+    model.tap(.enter)
+
+    core.state.withLock {
+        $0.kind = nil
+        $0.shell = shellPane
+        $0.shellLocked = false
+    }
+    model.poll()
+    #expect(model.mode == .terminal)
+    #expect(model.draft.isEmpty)
+    #expect(!model.canSendPrompt)
+    core.release()
+    await draining?.value
+    #expect(core.snapshot.keys == [[.y]], "the key queued for the agent is dropped")
+    #expect(core.snapshot.terminalKeys.isEmpty && core.snapshot.commands.isEmpty)
+    #expect(unlocker.reasons.withLock { $0.isEmpty })
+
+    model.draft = "ls"
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.shell = nil
+    }
+    model.poll()
+    #expect(model.mode == .agent)
+    #expect(model.draft.isEmpty, "nor a command the agent")
+}
+
+@MainActor
+@Test func anAgentBackInALockedShellIsWatchedAgain() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = terminalModel(core, FakeUnlocker(signs: true))
+    model.poll()
+    core.state.withLock {
+        $0.kind = nil
+        $0.shell = shellPane
+    }
+    model.poll()
+    #expect(model.mode == .terminal && model.terminalLocked)
+    await model.refresh()
+    #expect(core.snapshot.reads.isEmpty, "a shell is not read as an agent")
+
+    core.state.withLock { $0.kind = "claude" }
+    model.poll()
+    while core.snapshot.watches.isEmpty {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(core.snapshot.watches == ["term_1"])
+    #expect(core.snapshot.shellWatches.isEmpty)
 }
 
 @Test func terminalsAreListedOnlyFromAMachineThatEnablesThem() {

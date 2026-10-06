@@ -321,7 +321,10 @@ async fn scenario(session: &HerdrSession) {
         text: PromptText::new("echo collie-$((6 * 7))").unwrap(),
     };
     assert_eq!(drive.terminal_run(ran, &yes).await, Ok(Response::Ok));
-    let mut watcher = drive.watch_terminal(terminal.clone(), 50).await.unwrap();
+    let mut watcher = drive
+        .watch_terminal(terminal.clone(), 50, yes.clone())
+        .await
+        .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let Ok(Some(watched)) = tokio::time::timeout(Duration::from_secs(5), watcher.recv()).await

@@ -317,8 +317,13 @@ pub struct TerminalRunParams {
 }
 
 impl TerminalRunParams {
+    /// Bidi and invisible characters would let a pasted command read as another.
     pub fn is_valid(&self) -> bool {
-        !self.text.as_str().contains(['\n', '\t'])
+        !self
+            .text
+            .as_str()
+            .chars()
+            .any(|c| c == '\n' || c == '\t' || crate::ids::is_format(c))
     }
 }
 
@@ -1372,7 +1377,15 @@ mod tests {
             ))
         };
         assert!(run("claude --resume 1234 && git pull").is_ok());
-        for bad in ["a\nb", "a\tb", "a\u{1b}[201~", "  ", "a\rb"] {
+        for bad in [
+            "a\nb",
+            "a\tb",
+            "a\u{1b}[201~",
+            "  ",
+            "a\rb",
+            "echo ok \u{202E}fr- mr",
+            "rm\u{200B} -rf",
+        ] {
             assert_eq!(
                 run(bad).unwrap_err().code,
                 ErrorCode::InvalidParams,

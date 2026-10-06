@@ -1470,18 +1470,18 @@ impl Session<'_> {
         })
     }
 
-    /// New reads need a live grant; a watch already running continues past its expiry.
     async fn terminal_watch(&mut self, p: TerminalWatchParams) -> Reply {
         self.watch = None;
         self.terminal_watch = None;
-        if !self.terminal_authorizer(&p.terminal_id)() {
+        let auth = self.terminal_authorizer(&p.terminal_id);
+        if !auth() {
             return err(ErrorCode::TerminalLocked, TERMINAL_LOCKED);
         }
         let lines = p.lines();
         match self
             .state
             .drive
-            .watch_terminal(p.terminal_id.clone(), lines)
+            .watch_terminal(p.terminal_id.clone(), lines, auth)
             .await
         {
             Ok(w) => {

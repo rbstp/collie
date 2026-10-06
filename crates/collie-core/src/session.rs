@@ -11,13 +11,13 @@ use protocol::{
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
-
-type StdInstant = std::time::Instant;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{self, Message};
+
+type StdInstant = std::time::Instant;
 
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// collied pings every 15 s: three missed pings mean the machine is gone without a FIN.
@@ -1294,6 +1294,8 @@ mod tests {
                 read(&mut ws).await.request,
                 Request::FlockSnapshot(_)
             ));
+            let seeded = tokio::time::timeout(Duration::from_millis(200), read(&mut ws)).await;
+            assert!(seeded.is_err(), "the snapshot is the only seed: {seeded:?}");
             write(
                 &mut ws,
                 ServerFrame::Event {
@@ -1321,7 +1323,7 @@ mod tests {
             .await;
             let rewatch = read(&mut ws).await;
             let Request::TerminalWatch(p) = rewatch.request else {
-                panic!("the snapshot is the only seed: {rewatch:?}")
+                panic!("a broken patch watches the shell again: {rewatch:?}")
             };
             assert_eq!((p.terminal_id.as_str(), p.lines), ("t1", Some(300)));
         });

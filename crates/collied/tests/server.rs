@@ -1033,6 +1033,18 @@ async fn terminal_phase(
         "locked",
     );
 
+    println!("pairing again, even with the same key, ends the grants of live sessions");
+    result(grant(&mut ws, &key, &node_id, SHELL).await);
+    let candidate = pair_again(&control, phone, target, Some(&key.1)).await;
+    assert_eq!(
+        (candidate.replaces, candidate.terminal_key_change()),
+        (true, "unchanged")
+    );
+    locked(
+        &call(&mut ws, "terminal.run", run_frame('I', "ls")).await,
+        "locked",
+    );
+
     println!("pairing again without a key forgets it: terminal_key_missing");
     result(grant(&mut ws, &key, &node_id, SHELL).await);
     let candidate = pair_again(&control, phone, target, None).await;

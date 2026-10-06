@@ -342,19 +342,21 @@ impl Driver {
     ) -> Result<Watcher, Fail> {
         self.find_agent(&terminal_id).await?;
         let (tx, rx) = mpsc::channel(1);
-        let task = tokio::spawn(self.clone().watch_loop(terminal_id, lines, false, tx));
+        let task = tokio::spawn(self.clone().watch_loop(terminal_id, lines, None, tx));
         Ok(Watcher { rx, task })
     }
 
-    /// Ends with `Gone` once the pane closes or an agent starts in it.
+    /// Ends with `Gone` once the pane closes or an agent starts in it, and reads nothing
+    /// while `auth` (the grant) does not hold.
     pub async fn watch_terminal(
         self: &Arc<Self>,
         terminal_id: TerminalId,
         lines: u16,
+        auth: Authorized,
     ) -> Result<Watcher, Fail> {
         self.shell_pane(&terminal_id).await?;
         let (tx, rx) = mpsc::channel(1);
-        let task = tokio::spawn(self.clone().watch_loop(terminal_id, lines, true, tx));
+        let task = tokio::spawn(self.clone().watch_loop(terminal_id, lines, Some(auth), tx));
         Ok(Watcher { rx, task })
     }
 
@@ -362,9 +364,10 @@ impl Driver {
         self: Arc<Self>,
         terminal_id: TerminalId,
         lines: u16,
-        shell: bool,
+        grant: Option<Authorized>,
         tx: mpsc::Sender<Watched>,
     ) {
+        let shell = grant.is_some();
         let mut tick = tokio::time::interval(WATCH_EVERY);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut last = None;
@@ -372,10 +375,10 @@ impl Driver {
         let mut lines = Some(u32::from(lines));
         loop {
             tick.tick().await;
-            let pane_id = if shell {
-                self.shell_pane(&terminal_id).await.map(|p| p.pane_id)
-            } else {
-                self.find_agent(&terminal_id).await.map(|a| a.pane_id)
+            let pane_id = match &grant {
+                Some(auth) if !auth() => continue,
+                Some(_) => self.shell_pane(&terminal_id).await.map(|p| p.pane_id),
+                None => self.find_agent(&terminal_id).await.map(|a| a.pane_id),
             };
             let msg = match pane_id {
                 Err((ErrorCode::NotFound, _)) => Watched::Gone,

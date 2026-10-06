@@ -61,7 +61,7 @@ struct AgentScreen: View {
                 switchAgent: switchAgent
             ) { await model.refresh() }
                 .overlay {
-                    if model.ansi.isEmpty {
+                    if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
                         ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
                     }
                 }
@@ -89,15 +89,17 @@ struct AgentScreen: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu("More", systemImage: "ellipsis") {
-                    Button("Refresh", systemImage: "arrow.clockwise") {
-                        Task { await model.refresh() }
-                    }
-                    .disabled(model.refreshing)
-                    Button("Focus on \(machineLabel ?? "machine")", systemImage: "desktopcomputer") {
-                        Task { await model.focus() }
-                    }
-                    if let follows, !model.isTerminal {
-                        FollowMenuItem(follows: follows, route: model.route)
+                    if !model.isTerminal {
+                        Button("Refresh", systemImage: "arrow.clockwise") {
+                            Task { await model.refresh() }
+                        }
+                        .disabled(model.refreshing)
+                        Button("Focus on \(machineLabel ?? "machine")", systemImage: "desktopcomputer") {
+                            Task { await model.focus() }
+                        }
+                        if let follows {
+                            FollowMenuItem(follows: follows, route: model.route)
+                        }
                     }
                     Divider()
                     Button("Close pane", systemImage: "xmark.square", role: .destructive) {
@@ -222,8 +224,6 @@ private struct AgentHeader: View {
                 Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if model.mode == .gone {
-                Text("No longer running").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             if model.link == .connecting {
@@ -408,7 +408,7 @@ private struct PromptBar: View {
                     CommandField(text: $model.draft, editing: $typingCommand) {
                         Task { await model.sendPrompt() }
                     }
-                    .frame(height: 36)
+                    .frame(minHeight: 36)
                     .padding(.horizontal, 12)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
                 } else {
@@ -500,7 +500,8 @@ private struct CommandField: UIViewRepresentable {
         field.inlinePredictionType = .no
         field.keyboardType = .asciiCapable
         field.returnKeyType = .go
-        field.font = .monospacedSystemFont(ofSize: UIFont.labelFontSize, weight: .regular)
+        field.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: UIFont.labelFontSize, weight: .regular))
+        field.adjustsFontForContentSizeCategory = true
         let coordinator = context.coordinator
         field.delegate = coordinator
         field.addAction(UIAction { [weak field] _ in coordinator.parent.text = field?.text ?? "" }, for: .editingChanged)

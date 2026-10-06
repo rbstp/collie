@@ -1423,15 +1423,22 @@ async fn a_retried_terminal_op_writes_only_under_the_session_that_sent_it() {
 }
 
 #[tokio::test]
-async fn a_terminal_watch_ends_when_an_agent_starts_in_the_pane() {
+async fn a_terminal_watch_reads_only_under_its_grant_and_ends_when_an_agent_starts() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
     assert!(matches!(
-        drive.watch_terminal(tid(CLAUDE), 200).await,
+        drive.watch_terminal(tid(CLAUDE), 200, yes()).await,
         Err((ErrorCode::NotFound, _))
     ));
-    let mut watcher = drive.watch_terminal(tid(SHELL), 300).await.unwrap();
+    let grant = Arc::new(AtomicBool::new(true));
+    let auth: Authorized = {
+        let grant = grant.clone();
+        Arc::new(move || grant.load(Ordering::SeqCst))
+    };
+    let mut watcher = drive.watch_terminal(tid(SHELL), 300, auth).await.unwrap();
     let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
         panic!("no first output");
     };
@@ -1441,6 +1448,18 @@ async fn a_terminal_watch_ends_when_an_agent_starts_in_the_pane() {
         json!({"pane_id": "w7:p2", "source": "recent_unwrapped", "lines": 300, "format": "ansi"})
     );
     assert!(herdr.params("agent.read").is_empty());
+
+    grant.store(false, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let reads = herdr.params("pane.read").len();
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(
+        herdr.params("pane.read").len(),
+        reads,
+        "nothing read without a grant"
+    );
+    grant.store(true, Ordering::SeqCst);
+
     herdr.with(|h| h.snapshot["panes"][2]["agent"] = json!("claude"));
     assert!(matches!(next(&mut watcher).await, Ok(Some(Watched::Gone))));
     assert!(matches!(next(&mut watcher).await, Ok(None)));
