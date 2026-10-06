@@ -206,6 +206,18 @@ fn end_to_end() {
         "socketpair proxy leaked fds"
     );
 
+    // No test host has a pdp_ip0, so on macOS the sockets keep netmon's default.
+    listener.rebind("pdp_ip0").unwrap();
+    listener.rebind("").unwrap();
+    assert!(matches!(
+        listener.rebind("en\0"),
+        Err(Error::InvalidArgument(_))
+    ));
+    assert_eq!(
+        listener.status().unwrap().backend_state,
+        BackendState::Running
+    );
+
     assert_eq!(
         tsnet_logs(&root.0.join("it-listener")),
         listener_logs,

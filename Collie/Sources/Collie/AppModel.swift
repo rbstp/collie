@@ -1,5 +1,6 @@
 import CollieCore
 import Foundation
+import Network
 import Observation
 import SwiftUI
 import UIKit
@@ -31,6 +32,7 @@ final class AppModel {
     private var backgroundedAt: Date?
     @ObservationIgnored private var activityDecisions: Set<String> = []
     @ObservationIgnored private var terminalKeySet = false
+    @ObservationIgnored private let pathMonitor = NWPathMonitor()
 
     private let log = Logger(subsystem: "dev.rbstp.collie", category: "app")
 
@@ -55,7 +57,17 @@ final class AppModel {
                 log.error("app group: \(describe(error), privacy: .public)")
             }
         }
+        if let core {
+            pathMonitor.pathUpdateHandler = { core.networkChanged(interface: Self.interface(of: $0)) }
+            pathMonitor.start(queue: DispatchQueue(label: "dev.rbstp.collie.path"))
+        }
         loadTerminalKey()
+    }
+
+    /// The interface iOS routes through, never a VPN tunnel; empty when there is no path.
+    nonisolated static func interface(of path: NWPath) -> String {
+        guard path.status == .satisfied else { return "" }
+        return path.availableInterfaces.first { [.wifi, .cellular, .wiredEthernet].contains($0.type) }?.name ?? ""
     }
 
     var isRunning: Bool { node?.backendState == .running }

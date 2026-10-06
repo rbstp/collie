@@ -114,10 +114,13 @@ impl Node {
         self.check(|| unsafe { sys::tailscale_start(self.sd()) })
     }
 
-    /// Re-binds the UDP sockets, checks the DERP connections and re-discovers endpoints,
-    /// as a network change would. iOS reports none after a resume.
-    pub fn rebind(&self) -> Result<()> {
-        self.check(|| unsafe { sys::tailscale_rebind(self.sd()) })
+    /// Re-reads the network, re-binds the UDP sockets, checks the DERP connections and
+    /// re-discovers endpoints, as a network change would. iOS reports none after a resume,
+    /// nor any once the app has been suspended. `default_interface`, when not empty, is the
+    /// interface the OS routes through; on Apple platforms new sockets bind to it.
+    pub fn rebind(&self, default_interface: &str) -> Result<()> {
+        let default_interface = cstring(default_interface)?;
+        self.check(|| unsafe { sys::tailscale_rebind(self.sd(), default_interface.as_ptr()) })
     }
 
     pub fn status(&self) -> Result<Status> {
