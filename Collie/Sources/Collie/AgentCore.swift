@@ -23,7 +23,7 @@ protocol AgentCore: AnyObject, Sendable {
 
 extension CollieCore: AgentCore {}
 
-struct AgentRoute: Hashable {
+struct AgentRoute: Hashable, Codable {
     let machineId: String
     let terminalId: String
 }

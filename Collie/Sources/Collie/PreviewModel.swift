@@ -4,8 +4,9 @@ import Observation
 
 /// Screens for the Agents grid. Only while `run` runs (grid on screen, app active), each visible
 /// card of a connected machine gets one `agent.read` when it first shows and at once when its
-/// status changes; only a working or unknown agent, or one whose last read failed, is read again
-/// every `interval`. collied audits every read, so a screen that cannot change is not re-read.
+/// status changes or it is starred; only a working or unknown agent, or one whose last read
+/// failed, is read again every `interval`. collied audits every read, so a screen that cannot
+/// change is not re-read.
 /// A watched agent's output already in the core is used instead of a read.
 @MainActor
 @Observable
@@ -16,12 +17,18 @@ final class PreviewModel {
     /// width, so a card wider than a narrow pane rejoins them into fewer. The input box and
     /// status lines `card` crops off take about 10 more.
     static let lines: UInt16 = 60
+    /// A starred card is twice as tall.
+    static let starredLines: UInt16 = 120
 
     private(set) var screens: [AgentRoute: String] = [:]
+    /// Kept on this device; a star goes with its agent's pane.
+    private(set) var starred: Set<AgentRoute>
 
     @ObservationIgnored private var core: (any AgentCore)?
     @ObservationIgnored private let now: () -> ContinuousClock.Instant
-    @ObservationIgnored private var visible: Set<AgentRoute> = []
+    @ObservationIgnored private let prefsFile: URL?
+    /// Counted: a card moving between the starred row and the grid can appear before it disappears.
+    @ObservationIgnored private var visible: [AgentRoute: Int] = [:]
     @ObservationIgnored private var connected: Set<String> = []
     @ObservationIgnored private var statuses: [AgentRoute: (status: AgentState, since: UInt64)] = [:]
     @ObservationIgnored private var claude: Set<AgentRoute> = []
@@ -30,8 +37,10 @@ final class PreviewModel {
     @ObservationIgnored private var reading: Set<AgentRoute> = []
     @ObservationIgnored private var runs = 0
 
-    init(now: @escaping () -> ContinuousClock.Instant = { .now }) {
+    init(now: @escaping () -> ContinuousClock.Instant = { .now }, prefsFile: URL? = DevicePrefs.file) {
         self.now = now
+        self.prefsFile = prefsFile
+        starred = DevicePrefs.load(from: prefsFile).starred
     }
 
     func run(core: any AgentCore) async {
@@ -47,11 +56,22 @@ final class PreviewModel {
     }
 
     func appeared(_ route: AgentRoute) {
-        visible.insert(route)
+        visible[route, default: 0] += 1
     }
 
     func disappeared(_ route: AgentRoute) {
-        visible.remove(route)
+        visible[route] = visible[route].flatMap { $0 > 1 ? $0 - 1 : nil }
+    }
+
+    @discardableResult
+    func toggleStar(_ route: AgentRoute) -> Task<Void, Never>? {
+        if starred.remove(route) == nil {
+            starred.insert(route)
+            readAt[route] = nil
+            fresh.remove(route)
+        }
+        saveStarred()
+        return tick()
     }
 
     @discardableResult
@@ -72,6 +92,12 @@ final class PreviewModel {
             fresh.remove(route)
         }
         statuses = next
+        let loaded = Set(entries.filter { $0.flock?.link == .connected && $0.flock?.details != nil }.map(\.id))
+        let closed = starred.filter { loaded.contains($0.machineId) && next[$0] == nil }
+        if !closed.isEmpty {
+            starred.subtract(closed)
+            saveStarred()
+        }
         readAt = readAt.filter { next[$0.key] != nil }
         fresh = fresh.filter { next[$0] != nil }
         if screens.keys.contains(where: { next[$0] == nil }) {
@@ -85,28 +111,28 @@ final class PreviewModel {
     func tick() -> Task<Void, Never>? {
         guard let core else { return nil }
         let now = now()
-        let due = visible.filter { route in
+        let due = visible.keys.filter { route in
             guard connected.contains(route.machineId), let status = statuses[route]?.status, !reading.contains(route) else { return false }
             guard let at = readAt[route] else { return true }
             return now - at >= Self.interval && ([.working, .unknown].contains(status) || !fresh.contains(route))
         }
-        var reads: [AgentRoute] = []
+        var reads: [(route: AgentRoute, lines: UInt16)] = []
         for route in due {
             readAt[route] = now
             if let output = core.agentView(machineId: route.machineId, terminalId: route.terminalId, afterRevision: 0)?.output {
                 show(output.ansi, for: route)
                 fresh.insert(route)
             } else {
-                reads.append(route)
+                reads.append((route, starred.contains(route) ? Self.starredLines : Self.lines))
             }
         }
         guard !reads.isEmpty else { return nil }
-        reading.formUnion(reads)
+        reading.formUnion(reads.map(\.route))
         return Task {
             await withTaskGroup(of: (AgentRoute, String?).self) { group in
-                for route in reads {
+                for (route, lines) in reads {
                     group.addTask {
-                        let read = try? await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: Self.lines)
+                        let read = try? await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: lines)
                         return (route, read?.ansi)
                     }
                 }
@@ -119,6 +145,12 @@ final class PreviewModel {
                 }
             }
         }
+    }
+
+    private func saveStarred() {
+        var prefs = DevicePrefs.load(from: prefsFile)
+        prefs.starred = starred
+        prefs.save(to: prefsFile)
     }
 
     private func show(_ ansi: String, for route: AgentRoute) {
