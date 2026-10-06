@@ -362,6 +362,27 @@ final class AppModel {
         )
     }
 
+    /// From the paired watch as it opens. Out of the foreground (locked, suspended or not
+    /// running), the approvals are listed from each Mac over the lock-screen path and sent as
+    /// the state the watch may decide on; the agents and usage stay as last shown.
+    func refreshForWatch() async -> (WatchState, complete: Bool)? {
+        guard let core, watch.ready else { return nil }
+        if UIApplication.shared.applicationState == .active {
+            publishWatchState()
+            return WatchLink.shown().map { ($0, true) }
+        }
+        let assertion = BackgroundAssertion(name: "watch.refresh")
+        defer { assertion.end() }
+        let listed = await core.approvalsInBackground(budgetMs: 15_000)
+        let state = WatchState.refreshed(
+            WatchLink.shown(), listed: listed, machines: core.machines(),
+            allowed: DevicePrefs.load(from: DevicePrefs.file).watchDecisions, now: .now
+        )
+        watch.send(state)
+        log.notice("watch refresh: machines=\(listed.count, privacy: .public) unanswered=\(listed.filter { $0.approvals == nil }.count, privacy: .public)")
+        return (state, listed.allSatisfy { $0.approvals != nil })
+    }
+
     /// From the paired watch: its wrist check stands in for Face ID only while this phone's
     /// setting allows it, re-read here on every request, and only for an answer this phone sent
     /// to the watch.

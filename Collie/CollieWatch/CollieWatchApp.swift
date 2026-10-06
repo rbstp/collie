@@ -2,24 +2,55 @@ import LocalAuthentication
 import SwiftUI
 import UserNotifications
 import WatchConnectivity
+import WatchKit
 import WidgetKit
 
 @main
 struct CollieWatchApp: App {
-    @State private var model = WatchModel()
-
-    init() {
-        // Mirrored approval alerts would otherwise offer the iPhone's Approve and Deny here, around the phone's watch setting.
-        UNUserNotificationCenter.current().setNotificationCategories([
-            UNNotificationCategory(identifier: "APPROVAL", actions: [], intentIdentifiers: [])
-        ])
-    }
+    @WKApplicationDelegateAdaptor(WatchDelegate.self) private var delegate
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
+        let model = delegate.model
         WindowGroup {
             NavigationStack { WatchHome(model: model) }
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.refresh() } }
+        }
         .backgroundTask(.watchConnectivity) { [model] in await model.drain() }
+    }
+}
+
+/// Any response to an alert naming an approval, whichever button, only opens it here: a
+/// decision always goes through the watch path, gated by the phone's setting.
+@MainActor
+final class WatchDelegate: NSObject, WKApplicationDelegate, UNUserNotificationCenterDelegate {
+    let model = WatchModel()
+
+    func applicationDidFinishLaunching() {
+        let center = UNUserNotificationCenter.current()
+        center.setNotificationCategories([
+            UNNotificationCategory(
+                identifier: "APPROVAL", actions: [UNNotificationAction(identifier: "OPEN", title: "Open", options: [.foreground])],
+                intentIdentifiers: []
+            )
+        ])
+        center.delegate = self
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
+    ) {
+        let info = response.notification.request.content.userInfo
+        let nodeId = info["node_id"] as? String
+        let approvalId = info["approval_id"] as? String
+        Task { @MainActor in
+            if let nodeId, let approvalId { self.model.open(nodeId: nodeId, approvalId: approvalId) }
+            completionHandler()
+        }
     }
 }
 
@@ -32,6 +63,10 @@ final class WatchModel: NSObject, WCSessionDelegate {
     /// Decided from this watch: no buttons again while the phone still lists it.
     private(set) var answered: Set<String> = []
     private(set) var notice: (title: String, body: String)?
+    private(set) var refreshing = false
+    private(set) var refreshFailed = false
+    /// The approval an alert opened, shown once the state has it.
+    var opened: WatchApprovalKey?
 
     override init() {
         super.init()
@@ -50,11 +85,66 @@ final class WatchModel: NSObject, WCSessionDelegate {
         }
     }
 
+    func open(nodeId: String, approvalId: String) {
+        opened = WatchApprovalKey(nodeId: nodeId, approvalId: approvalId)
+        Task { await refresh() }
+    }
+
+    /// Asks the phone, which answers even while locked; on no answer the last state stays.
+    func refresh() async {
+        guard !refreshing, WCSession.isSupported() else { return }
+        refreshing = true
+        defer { refreshing = false }
+        let session = WCSession.default
+        for _ in 0..<10 where session.activationState != .activated {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        guard session.activationState == .activated, session.isReachable else {
+            refreshFailed = true
+            return
+        }
+        let (replies, continuation) = AsyncStream.makeStream(of: RefreshReply?.self)
+        session.sendMessage(
+            [WatchMessage.refresh: true],
+            replyHandler: { reply in
+                continuation.yield(
+                    RefreshReply(state: reply[WatchMessage.state] as? Data, complete: reply[WatchMessage.complete] as? Bool ?? false)
+                )
+                continuation.finish()
+            },
+            errorHandler: { _ in
+                continuation.yield(nil)
+                continuation.finish()
+            }
+        )
+        let timeout = Task {
+            try? await Task.sleep(for: .seconds(25))
+            continuation.yield(nil)
+            continuation.finish()
+        }
+        defer { timeout.cancel() }
+        var reply: RefreshReply?
+        for await first in replies {
+            reply = first
+            break
+        }
+        guard let reply, let data = reply.state, let next = try? JSONDecoder().decode(WatchState.self, from: data) else {
+            refreshFailed = true
+            return
+        }
+        apply(next, received: .now)
+        refreshFailed = !reply.complete
+    }
+
     /// `received` is nil for the context persisted from an earlier launch, whose age is unknown.
     private func reload(received: Date?) {
         guard let data = WCSession.default.receivedApplicationContext[WatchMessage.state] as? Data,
             let next = try? JSONDecoder().decode(WatchState.self, from: data)
         else { return }
+        apply(next, received: received)
+    }
+
+    private func apply(_ next: WatchState, received: Date?) {
         let usageChanged = next.usage != state?.usage
         state = next
         receivedAt = received
@@ -118,6 +208,16 @@ final class WatchModel: NSObject, WCSessionDelegate {
     }
 }
 
+private struct RefreshReply: Sendable {
+    let state: Data?
+    let complete: Bool
+}
+
+struct WatchApprovalKey: Hashable {
+    let nodeId: String
+    let approvalId: String
+}
+
 extension WatchDecision {
     fileprivate var title: String {
         switch self {
@@ -158,8 +258,18 @@ private struct WatchHome: View {
     let model: WatchModel
 
     var body: some View {
+        content.navigationDestination(item: Binding(get: { model.opened }, set: { model.opened = $0 })) { key in
+            OpenedApproval(model: model, key: key)
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if let state = model.state {
             List {
+                if model.refreshFailed {
+                    Text("Couldn't refresh from the iPhone").font(.footnote).foregroundStyle(.secondary)
+                }
                 if !state.live {
                     Group {
                         if let receivedAt = model.receivedAt {
@@ -197,8 +307,27 @@ private struct WatchHome: View {
                 AgentSection(title: "Done", agents: state.agents.filter(\.done))
             }
             .navigationTitle("collie")
+        } else if model.refreshing {
+            ProgressView()
         } else {
             ContentUnavailableView("Open collie on the iPhone", systemImage: "iphone")
+        }
+    }
+}
+
+private struct OpenedApproval: View {
+    let model: WatchModel
+    let key: WatchApprovalKey
+
+    var body: some View {
+        if let approval = model.state?.approvals.first(where: { $0.nodeId == key.nodeId && $0.approvalId == key.approvalId }) {
+            ApprovalDetail(model: model, approval: approval)
+        } else if model.refreshing {
+            ProgressView()
+        } else if model.refreshFailed {
+            Text("Couldn't refresh from the iPhone. Open collie on the iPhone to see this approval.").font(.footnote)
+        } else {
+            Text("This approval is no longer pending.").font(.footnote)
         }
     }
 }

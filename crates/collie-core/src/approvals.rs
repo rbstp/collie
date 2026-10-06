@@ -385,44 +385,9 @@ async fn attempt(
     report.node_up_ms = Some(ms(step.elapsed()));
 
     let step = Instant::now();
-    let identity = lock(&inner.identity).clone();
     // Held until the decision is answered: a node restart waits for it rather than cut
     // this session.
-    let opened = within(
-        deadline,
-        DecideStage::Connect,
-        conn::open(
-            node.clone(),
-            &machine.host,
-            machine.port,
-            &machine.node_id,
-            Some(machine.kind),
-            &machine.key,
-            identity,
-            true,
-        ),
-    )
-    .await?;
-    let mut session = match opened {
-        Ok((_, hello, _)) if !hello.paired => {
-            return Err(BackgroundOutcome::Unauthorized {
-                message: SessionError::NotPaired.to_string(),
-            });
-        }
-        Ok((session, _, _)) => session,
-        Err(e) if e.is_auth() => {
-            return Err(BackgroundOutcome::Unauthorized {
-                message: e.to_string(),
-            });
-        }
-        Err(e) => {
-            return Err(BackgroundOutcome::Unreachable {
-                stage: DecideStage::Connect,
-                message: e.to_string(),
-            });
-        }
-    };
-    inner.reach.record(&machine.node_id, true);
+    let mut session = open(inner, &machine, node.clone(), deadline).await?;
     report.connect_ms = Some(ms(step.elapsed()));
 
     let step = Instant::now();
@@ -462,6 +427,113 @@ async fn attempt(
             message: "unrecognized outcome, open Collie".into(),
         },
     })
+}
+
+async fn open(
+    inner: &Arc<Inner>,
+    machine: &Machine,
+    node: Arc<Node>,
+    deadline: Instant,
+) -> Result<Session<conn::Stream>, BackgroundOutcome> {
+    let identity = lock(&inner.identity).clone();
+    let opened = within(
+        deadline,
+        DecideStage::Connect,
+        conn::open(
+            node,
+            &machine.host,
+            machine.port,
+            &machine.node_id,
+            Some(machine.kind),
+            &machine.key,
+            identity,
+            true,
+        ),
+    )
+    .await?;
+    let session = match opened {
+        Ok((_, hello, _)) if !hello.paired => {
+            return Err(BackgroundOutcome::Unauthorized {
+                message: SessionError::NotPaired.to_string(),
+            });
+        }
+        Ok((session, _, _)) => session,
+        Err(e) if e.is_auth() => {
+            return Err(BackgroundOutcome::Unauthorized {
+                message: e.to_string(),
+            });
+        }
+        Err(e) => {
+            return Err(BackgroundOutcome::Unreachable {
+                stage: DecideStage::Connect,
+                message: e.to_string(),
+            });
+        }
+    };
+    inner.reach.record(&machine.node_id, true);
+    Ok(session)
+}
+
+/// One paired machine's pending approvals; `None` when they could not be listed in time.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct MachineApprovals {
+    pub machine_id: String,
+    pub approvals: Option<Vec<PendingApproval>>,
+}
+
+/// `approval.list` on every paired machine over the same one-shot sessions as
+/// `decide_in_background`, for a watch asking while the app is suspended or not running.
+pub(crate) async fn list_in_background(
+    inner: Arc<Inner>,
+    budget: Duration,
+) -> Vec<MachineApprovals> {
+    let deadline = Instant::now() + budget;
+    let machines = lock(&inner.machines).clone();
+    let mut lists = tokio::task::JoinSet::new();
+    for (index, machine) in machines.iter().cloned().enumerate() {
+        let inner = inner.clone();
+        lists.spawn(async move {
+            let listed = list(&inner, &machine, deadline).await;
+            if let Err(BackgroundOutcome::Unreachable { .. }) = listed {
+                inner.reach.record(&machine.node_id, false);
+            }
+            (index, listed.ok())
+        });
+    }
+    let mut out: Vec<MachineApprovals> = machines
+        .iter()
+        .map(|m| MachineApprovals {
+            machine_id: m.id.clone(),
+            approvals: None,
+        })
+        .collect();
+    while let Some(joined) = lists.join_next().await {
+        if let Ok((index, approvals)) = joined {
+            out[index].approvals = approvals;
+        }
+    }
+    out
+}
+
+async fn list(
+    inner: &Arc<Inner>,
+    machine: &Machine,
+    deadline: Instant,
+) -> Result<Vec<PendingApproval>, BackgroundOutcome> {
+    let node = node_up(inner, machine, deadline).await?;
+    let mut session = open(inner, machine, node.clone(), deadline).await?;
+    let response = call(
+        &mut session,
+        Request::ApprovalList(Empty {}),
+        deadline,
+        DecideStage::Lookup,
+    )
+    .await?;
+    tokio::spawn(session.close());
+    match response {
+        Response::Approvals { approvals } => Ok(approvals.iter().map(Into::into).collect()),
+        other => Err(failed(unexpected(&other), DecideStage::Lookup)),
+    }
 }
 
 /// Starts the node from its cached state (never a login) and waits until the pinned

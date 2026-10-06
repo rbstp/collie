@@ -31,7 +31,7 @@ use zeroize::Zeroizing;
 
 pub use approvals::{
     ApprovalChoice, ApprovalDecision, ApprovalEvent, ApprovalFeed, BackgroundDecideReport,
-    BackgroundOutcome, DecideStage, DecisionOutcome, PendingApproval,
+    BackgroundOutcome, DecideStage, DecisionOutcome, MachineApprovals, PendingApproval,
 };
 pub use attachments::UploadProgress;
 use conn::{
@@ -1403,6 +1403,15 @@ impl CollieCore {
             Ok(report) => report,
             Err(e) => BackgroundDecideReport::failed(e.to_string()),
         }
+    }
+
+    /// Every paired machine's pending approvals, from the lock-screen path: the tailnet
+    /// started from cached state if needed, each pinned Mac dialed on a one-shot session,
+    /// all within `budget_ms` (at most 20 s).
+    pub async fn approvals_in_background(&self, budget_ms: u64) -> Vec<MachineApprovals> {
+        let budget = Duration::from_millis(budget_ms).min(BACKGROUND_BUDGET);
+        let fut = approvals::list_in_background(self.inner.clone(), budget);
+        self.runtime.spawn(fut).await.unwrap_or_default()
     }
 
     /// Sends `push.register` to that machine if it is connected; every later connection
@@ -4033,6 +4042,16 @@ mod tailnet_tests {
             lock(&seen).decisions.last(),
             Some(&("a2".to_owned(), protocol::Decision::Deny))
         );
+        let listed = rt.block_on(core.approvals_in_background(15_000));
+        let pending: Vec<PendingApproval> = lock(&seen).approvals.iter().map(Into::into).collect();
+        assert_eq!(
+            listed,
+            [MachineApprovals {
+                machine_id: id(),
+                approvals: Some(pending)
+            }]
+        );
+        assert_eq!(lock(&seen).lists, 4);
 
         let again = rt.block_on(core.decide_from_notification(
             mac_id.clone(),
@@ -4071,6 +4090,9 @@ mod tailnet_tests {
             "{late:?}"
         );
         assert!(reachability(&group, &mac_id).last_fail_ms.is_some());
+        let late = rt.block_on(core.approvals_in_background(1));
+        assert_eq!(late.len(), 1);
+        assert_eq!(late[0].approvals, None, "out of time");
 
         poll("connected after cold start", || {
             let f = rt.block_on(core.flock(id())).unwrap();

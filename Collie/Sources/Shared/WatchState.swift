@@ -97,8 +97,12 @@ struct WatchDecisionRequest: Codable, Sendable {
 enum WatchMessage {
     static let state = "state"
     static let decide = "decide"
+    /// From the watch: answer with the current state, listed from each Mac when the app is not in the foreground.
+    static let refresh = "refresh"
     static let title = "title"
     static let body = "body"
     /// In a reply: the watch need not offer this approval again.
     static let answered = "answered"
+    /// In a refresh reply: every Mac answered.
+    static let complete = "complete"
 }

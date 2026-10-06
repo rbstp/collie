@@ -152,6 +152,33 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     )
 }
 
+@Test func watchRefreshListsApprovalsFromEachMacAndKeepsTheSilentOnes() {
+    let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
+    let before = WatchState(
+        items: [item(approval("ap_old")), item(approval("ap_linux"), machine: linux), item(approval("ap_gone"), machine: linux)],
+        entries: [entry(mac, [agent("t1", .working, activity: nowMs)])], allowed: false, live: true, now: now
+    )
+    let listed = [
+        MachineApprovals(machineId: "m1", approvals: [approval("ap_new"), approval("ap_expired", expiresAtMs: nowMs)]),
+        MachineApprovals(machineId: "m2", approvals: nil),
+    ]
+    let state = WatchState.refreshed(before, listed: listed, machines: [mac, linux], allowed: true, now: now)
+    #expect(state.approvals.map(\.id) == ["ap_new", "ap_linux", "ap_gone"])
+    #expect(state.approvals[0].command == "Bash: ls")
+    #expect(state.agents == before.agents)
+    #expect(state.decisionsAllowed)
+    #expect(!state.live)
+    #expect(WatchLink.refusal(WatchDecisionRequest(nodeId: "nMAC", approvalId: "ap_new", decision: .approve), allowed: true, shown: state, now: now) == nil)
+    #expect(WatchLink.refusal(WatchDecisionRequest(nodeId: "nMAC", approvalId: "ap_old", decision: .approve), allowed: true, shown: state, now: now) != nil)
+
+    let off = WatchState.refreshed(nil, listed: [MachineApprovals(machineId: "m1", approvals: [approval("ap_1")])], machines: [mac], allowed: false, now: now)
+    #expect(off.approvals.map(\.id) == ["ap_1"])
+    #expect(!off.decisionsAllowed)
+    #expect(off.agents.isEmpty)
+    let unpaired = WatchState.refreshed(before, listed: [MachineApprovals(machineId: "m9", approvals: nil)], machines: [mac], allowed: true, now: now)
+    #expect(unpaired.approvals.isEmpty)
+}
+
 @Test func watchDecisionsMapToCoreDecisions() {
     #expect(WatchDecision.approve.core == .approve)
     #expect(WatchDecision.deny.core == .deny)

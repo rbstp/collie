@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         center.setNotificationCategories(ApprovalNotification.categories)
         center.delegate = self
         DecideApprovalIntent.decide = { [app] link, decision in await app.decideFromActivity(link, decision) }
-        app.watch.activate { [app] in await app.decideFromWatch($0) }
+        app.watch.activate(decide: { [app] in await app.decideFromWatch($0) }, refresh: { [app] in await app.refreshForWatch() })
         return true
     }
 

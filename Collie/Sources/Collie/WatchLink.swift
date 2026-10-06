@@ -49,6 +49,30 @@ extension WatchApproval {
     }
 }
 
+extension WatchState {
+    /// `shown` with the approvals just listed from each Mac; a Mac that did not answer keeps
+    /// those last shown for it.
+    static func refreshed(_ shown: WatchState?, listed: [MachineApprovals], machines: [Machine], allowed: Bool, now: Date) -> WatchState {
+        let nowMs = UInt64(max(0, now.timeIntervalSince1970 * 1000))
+        var state = shown ?? WatchState(approvals: [], agents: [], usage: nil, decisionsAllowed: allowed, live: false)
+        var silent: Set<String> = []
+        let items = listed.flatMap { entry -> [ApprovalItem] in
+            guard let machine = machines.first(where: { $0.id == entry.machineId }) else { return [] }
+            guard let approvals = entry.approvals else {
+                silent.insert(machine.nodeId)
+                return []
+            }
+            return approvals.map { ApprovalItem(machine: machine, approval: $0, link: .connected) }
+        }
+        let fresh = items.sorted { ($0.approval.createdAtMs, $0.id) < ($1.approval.createdAtMs, $1.id) }.map(WatchApproval.init)
+        let kept = state.approvals.filter { silent.contains($0.nodeId) }
+        state.approvals = Array((fresh + kept).filter { $0.expiresAtMs > nowMs }.prefix(Self.maxApprovals))
+        state.decisionsAllowed = allowed
+        state.live = false
+        return state
+    }
+}
+
 extension WatchAgent {
     init(item: InboxItem, done: Bool) {
         let agent = item.agent
@@ -91,10 +115,15 @@ extension WatchDecision {
 @MainActor
 final class WatchLink: NSObject, WCSessionDelegate {
     private var decide: (@MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool))?
+    private var refresh: (@MainActor () async -> (WatchState, complete: Bool)?)?
     private var lastSent: (state: WatchState, at: Date)?
 
-    func activate(decide: @escaping @MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool)) {
+    func activate(
+        decide: @escaping @MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool),
+        refresh: @escaping @MainActor () async -> (WatchState, complete: Bool)?
+    ) {
         self.decide = decide
+        self.refresh = refresh
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
         WCSession.default.activate()
@@ -113,6 +142,11 @@ final class WatchLink: NSObject, WCSessionDelegate {
             agentsOnly.agents = lastSent.state.agents
             guard lastSent.state != state, agentsOnly != lastSent.state || now.timeIntervalSince(lastSent.at) >= 60 else { return }
         }
+        send(state, now: now)
+    }
+
+    /// Unthrottled: a refresh answers with what the watch may then decide on.
+    func send(_ state: WatchState, now: Date = .now) {
         guard let data = try? JSONEncoder().encode(state) else { return }
         do {
             try WCSession.default.updateApplicationContext([WatchMessage.state: data])
@@ -141,8 +175,17 @@ final class WatchLink: NSObject, WCSessionDelegate {
 
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         let data = message[WatchMessage.decide] as? Data
+        let refreshing = message[WatchMessage.refresh] as? Bool == true
         let reply = Reply(send: replyHandler)
         Task { @MainActor in
+            if refreshing {
+                guard let refresh, let refreshed = await refresh(), let data = try? JSONEncoder().encode(refreshed.0) else {
+                    reply.send([WatchMessage.complete: false])
+                    return
+                }
+                reply.send([WatchMessage.state: data, WatchMessage.complete: refreshed.complete])
+                return
+            }
             guard let decide, let data, let request = try? JSONDecoder().decode(WatchDecisionRequest.self, from: data) else {
                 reply.send([WatchMessage.title: "collie", WatchMessage.body: "Nothing was sent.", WatchMessage.answered: false])
                 return
