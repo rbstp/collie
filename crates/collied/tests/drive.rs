@@ -1048,6 +1048,32 @@ async fn task_new_refusals() {
 }
 
 #[tokio::test]
+async fn codex_and_copilot_startup_prompts_are_left_to_the_terminal() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude", "codex", "copilot"], &base.join("root"));
+    for kind in ["codex", "copilot"] {
+        herdr.with(|h| {
+            h.calls.clear();
+            h.text = include_str!("fixtures/copilot/trust.detection.txt").into();
+            let mut blocked = started_agent("blocked", false, true);
+            blocked["agent"] = json!(kind);
+            h.gets.push_back(blocked);
+        });
+        let (code, message) = drive
+            .task_new(task(&base.join("root/a"), kind), &yes())
+            .await
+            .0
+            .unwrap_err();
+        assert_eq!(code, ErrorCode::AgentBlocked);
+        assert!(message.contains("answer it in the terminal"), "{message}");
+        assert_eq!(herdr.params("agent.start")[0]["kind"], kind);
+        assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
+        assert!(herdr.params("pane.read").is_empty());
+    }
+}
+
+#[tokio::test]
 async fn closes_need_confirmation() {
     let herdr = Mock::start();
     let (_d, base) = root();

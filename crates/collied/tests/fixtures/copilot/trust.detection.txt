@@ -1,0 +1,15 @@
+ Confirm folder trust
+
+ /Users/me/src/app
+
+ Copilot may read files in this folder. Reading untrusted files may lead Copilot
+ to behave in unexpected ways. With your permission, Copilot may execute code or
+ bash commands in this folder. Executing untrusted code is unsafe.
+
+ Do you trust the files in this folder?
+
+ ❯ 1. Yes
+   2. Yes, and remember this folder for future sessions
+   3. No (Esc)
+
+ ↑↓ to navigate · Enter to select · Esc to cancel

@@ -215,8 +215,16 @@ private struct AgentRow: View {
                     }
                     Text(agent.displayTitle).lineLimit(2)
                 }
-                if let subtitle = [workspace, agent.kind].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                if workspace != nil || agent.kind != nil {
+                    HStack(spacing: 4) {
+                        if let workspace { Text(workspace) }
+                        if let kind = agent.kind {
+                            if workspace != nil { Text(verbatim: "·") }
+                            AgentKindLabel(kind: kind)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
             Spacer()
@@ -226,6 +234,23 @@ private struct AgentRow: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// The agent kind as herdr names it, with its own icon for the kinds New Task starts.
+struct AgentKindLabel: View {
+    let kind: String
+
+    var body: some View {
+        let (name, icon, color): (String, String, Color) =
+            switch kind {
+            case "claude": ("Claude", "sparkle", .orange)
+            case "codex": ("Codex", "chevron.left.forwardslash.chevron.right", .teal)
+            case "copilot": ("Copilot", "airplane", .purple)
+            default: (kind, "terminal", .secondary)
+            }
+        Text("\(Text(Image(systemName: icon)).foregroundStyle(color)) \(name)")
+            .accessibilityLabel(name)
     }
 }
 

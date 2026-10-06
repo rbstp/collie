@@ -1,0 +1,17 @@
+● I'll run the test suite to check the change.
+
+ Run shell command
+
+ ╭──────────────────────────────────────────────────────────────────────────╮
+ │ npm test                                                                 │
+ ╰──────────────────────────────────────────────────────────────────────────╯
+
+ Run the project's tests
+
+ Do you want to run this command?
+
+ ❯ 1. Yes
+   2. Yes, and approve `npm` for the rest of the running session
+   3. No, and tell Copilot what to do differently (Esc to stop)
+
+ ↑↓ to navigate · Enter to select · Esc to cancel

@@ -113,6 +113,40 @@ const TRUST_LIVE: &str = "\
 const BASH_LIVE: &str = include_str!("fixtures/claude-2.1.289/bash.detection.txt");
 const PLAN_LIVE: &str = include_str!("fixtures/claude-2.1.289/plan.detection.txt");
 
+// Codex CLI and Copilot CLI prompts as herdr rules them; see `prompt::fixtures`.
+const OTHER_KINDS: [(&str, &str, &str); 6] = [
+    (
+        "codex",
+        "live_strong_blocker",
+        include_str!("fixtures/codex/exec.detection.txt"),
+    ),
+    (
+        "codex",
+        "live_strong_blocker",
+        include_str!("fixtures/codex/patch.detection.txt"),
+    ),
+    (
+        "codex",
+        "trust_directory",
+        include_str!("fixtures/codex/trust.detection.txt"),
+    ),
+    (
+        "copilot",
+        "selection_blocker",
+        include_str!("fixtures/copilot/shell.detection.txt"),
+    ),
+    (
+        "copilot",
+        "selection_blocker",
+        include_str!("fixtures/copilot/edit.detection.txt"),
+    ),
+    (
+        "copilot",
+        "selection_blocker",
+        include_str!("fixtures/copilot/trust.detection.txt"),
+    ),
+];
+
 const MUTATING: [&str; 6] = [
     "agent.prompt",
     "agent.send_keys",
@@ -1022,6 +1056,53 @@ async fn unknown_prompts_get_a_notification_without_actions() {
         ErrorCode::InvalidParams
     );
     assert!(rig.mutations().is_empty());
+}
+
+#[tokio::test]
+async fn codex_and_copilot_prompts_are_answered_in_the_terminal() {
+    for (kind, rule, text) in OTHER_KINDS {
+        let mut rig = Rig::start(TTL).await;
+        rig.follow();
+        rig.herdr.with(|h| {
+            h.agent["agent"] = json!(kind);
+            h.agent["agent_session"] = json!({"source": format!("herdr:{kind}"), "agent": kind, "kind": "id", "value": "sess-1"});
+            h.rule = rule.into();
+            h.text = text.into();
+        });
+        let a = rig.ticked_needed().await;
+        assert!(
+            a.options.is_empty() && a.choices.is_empty() && a.tool.is_none(),
+            "{kind} {rule}"
+        );
+        assert!(!a.accepts_input && !a.has_text_field && !a.supports_note);
+        let sent = rig.sent().await;
+        let alerts = alerting(&sent);
+        assert_eq!(alerts.len(), 1, "{sent:?}");
+        assert_eq!(alerts[0].0, token().as_str(), "not on the activity");
+        assert_eq!(alerts[0].1.delivery, Delivery::Alert);
+        assert!(alerts[0].1.payload["aps"].get("category").is_none());
+        assert!(sent.iter().all(|(_, s)| {
+            s.payload["aps"]["content-state"]
+                .get("approvalId")
+                .is_none()
+        }));
+
+        assert_eq!(
+            code(rig.decide(&a, Decision::Approve, &a.nonce).await),
+            ErrorCode::InvalidParams
+        );
+        let b = rig.ticked_needed().await;
+        assert_eq!(
+            code(rig.decide(&b, Decision::Deny, &b.nonce).await),
+            ErrorCode::InvalidParams
+        );
+        let c = rig.ticked_needed().await;
+        assert_eq!(
+            code(rig.choose(&c, 0, &c.nonce).await),
+            ErrorCode::InvalidParams
+        );
+        assert!(rig.mutations().is_empty(), "{kind} {rule}");
+    }
 }
 
 #[tokio::test]

@@ -1,0 +1,15 @@
+• I'll fix the off-by-one in the parser.
+
+  Would you like to make the following edits?
+
+  Reason: Fix the off-by-one in the parser
+
+  src/parser.rs (+1 -1)
+    41 -        let end = start + len;
+    41 +        let end = start + len - 1;
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for these files (a)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

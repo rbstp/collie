@@ -502,6 +502,13 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     core.state.withLock { $0.pending["m1"] = [approval("ap_k", options: [], choices: questionChoices, acceptsInput: true)] }
     model.poll()
     #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .keys)
+
+    core.state.withLock { $0.pending["m1"] = [approval("ap_codex", options: [])] }
+    model.poll()
+    let codex = model.items.first
+    #expect(codex?.approval.answeredInTerminal == true)
+    #expect(codex?.approval.offers(.approve) == false && codex?.approval.offers(.choose(choice: 0)) == false)
+    #expect(model.blockedInput(machineId: "m1", terminalId: "term_1") == .terminal)
 }
 
 @MainActor

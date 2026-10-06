@@ -60,13 +60,19 @@ struct NewTaskSheet: View {
                     }
                 }
 
-                Section("Agent") {
+                Section {
                     if let agents = model.options?.agents {
                         Picker("Agent", selection: $model.agent) {
-                            ForEach(agents, id: \.self) { Text($0).tag($0) }
+                            ForEach(agents, id: \.self) { AgentKindLabel(kind: $0).tag($0) }
                         }
                     } else if model.optionsError == nil {
                         ProgressView()
+                    }
+                } header: {
+                    Text("Agent")
+                } footer: {
+                    if !model.agent.isEmpty, model.agent != "claude" {
+                        Text("Approve and Deny are for Claude Code: this agent's prompts are answered in the terminal on the machine.")
                     }
                 }
 

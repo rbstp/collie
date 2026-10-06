@@ -233,6 +233,12 @@ pub trait Sender: Send + Sync {
     ) -> BoxFuture<'a, Result<(), Rejection>>;
 }
 
+/// The notification and the Live Activity carry Approve and Deny only for an approval
+/// that offers both.
+fn approve_or_deny(a: &Approval) -> bool {
+    a.options.contains(&Decision::Approve) && a.options.contains(&Decision::Deny)
+}
+
 /// Carries labels only in clear: never the snippet, the nonce or any terminal text, since
 /// the payload transits Apple. `title` must not come from a terminal title either.
 /// `context` only leaves sealed to each device's notification key.
@@ -245,7 +251,7 @@ pub fn approval_alert(a: &Approval, title: &str, node_id: &str, context: &str) -
         "thread-id": a.terminal_id.as_str(),
         "mutable-content": 1,
     });
-    if a.options.contains(&Decision::Approve) && a.options.contains(&Decision::Deny) {
+    if approve_or_deny(a) {
         aps["category"] = json!(CATEGORY);
     }
     Alert {
@@ -485,11 +491,13 @@ impl Push {
         let mut regular = Vec::new();
         let mut routed = Vec::new();
         for device in devices {
-            if activities.iter().any(|a| {
-                a.shows_approvals
-                    && a.stable_id == device.stable_id
-                    && a.terminal_id == approval.terminal_id
-            }) {
+            if approve_or_deny(approval)
+                && activities.iter().any(|a| {
+                    a.shows_approvals
+                        && a.stable_id == device.stable_id
+                        && a.terminal_id == approval.terminal_id
+                })
+            {
                 routed.push(Routed {
                     device,
                     terminal_id: approval.terminal_id.clone(),

@@ -204,7 +204,7 @@ private struct AgentHeader: View {
                         .foregroundStyle(.secondary)
                 }
                 if let kind = agent.kind {
-                    Text(kind).font(.caption).foregroundStyle(.secondary)
+                    AgentKindLabel(kind: kind).font(.caption).foregroundStyle(.secondary)
                 }
             } else {
                 Text("Agent not in the flock").font(.caption).foregroundStyle(.secondary)

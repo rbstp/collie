@@ -82,7 +82,7 @@ final class AgentModel {
         gestures = prefs.gestures
     }
 
-    var acceptsKeys: Bool { blocked != .optionsOnly }
+    var acceptsKeys: Bool { blocked != .optionsOnly && blocked != .terminal }
 
     /// Typed text answers the blocking prompt instead of prompting the agent.
     var answering: Bool { blocked == .keysAndText }
@@ -90,6 +90,7 @@ final class AgentModel {
     var blockedHint: String? {
         switch blocked {
         case nil: nil
+        case .terminal: "Answer it in the terminal on the machine."
         case .optionsOnly: "Choose an option above."
         case .keys: "Choose an option above or use the arrow keys."
         case .keysAndText: "Choose an option above, use the arrow keys, or type an answer."

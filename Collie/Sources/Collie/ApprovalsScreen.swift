@@ -114,12 +114,18 @@ struct ApprovalCard: View {
             if approval.supportsNote, model.noting.contains(item.id) {
                 NoteField(model: model, item: item)
             }
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let expired = approval.expiresAtMs <= UInt64(context.date.timeIntervalSince1970 * 1000)
-                if approval.options.isEmpty {
-                    ChoiceButtons(model: model, item: item, expired: expired)
-                } else {
-                    DecisionButtons(model: model, item: item, expired: expired)
+            if approval.answeredInTerminal {
+                Label("Answer it in the terminal on \(item.machine.label)", systemImage: "terminal")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let expired = approval.expiresAtMs <= UInt64(context.date.timeIntervalSince1970 * 1000)
+                    if approval.options.isEmpty {
+                        ChoiceButtons(model: model, item: item, expired: expired)
+                    } else {
+                        DecisionButtons(model: model, item: item, expired: expired)
+                    }
                 }
             }
             if item.unreachable {
