@@ -167,16 +167,15 @@ struct FlockScreen: View {
                 // Events keep the cache current; no event lists shells, and an older collied sends no title change.
                 var tick = 0
                 while !Task.isCancelled {
-                    await model.refresh(core: core, snapshot: tick % 20 == 0)
+                    let snapshot = tick % 20 == 0
+                    await model.refresh(core: core, snapshot: snapshot)
+                    if snapshot { AgentDrafts.prune(model.entries, file: AgentDrafts.file) }
                     follows?.sync()
                     tick += 1
                     try? await Task.sleep(for: .seconds(3))
                 }
             }
-            .onChange(of: model.entries, initial: true) { _, entries in
-                previews.update(entries)
-                AgentDrafts.prune(entries, file: AgentDrafts.file)
-            }
+            .onChange(of: model.entries, initial: true) { _, entries in previews.update(entries) }
             .onChange(of: layout) { _, layout in
                 var prefs = DevicePrefs.load(from: DevicePrefs.file)
                 prefs.agentsLayout = layout

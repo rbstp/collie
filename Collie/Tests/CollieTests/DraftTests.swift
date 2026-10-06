@@ -20,10 +20,14 @@ private func route(_ terminalId: String, on machineId: String = "m1") -> AgentRo
     AgentRoute(machineId: machineId, terminalId: terminalId)
 }
 
-private func entry(_ machineId: String, loaded: Bool = true, agents: [String] = [], terminals: [String] = []) -> MachineFlockEntry {
+private let shell = TerminalSummary(terminalId: "term_1", workspaceId: "w1", workspaceLabel: nil, label: nil, cwd: nil, locked: true)
+
+private func entry(
+    _ machineId: String, loaded: Bool = true, link: LinkPhase = .connected, error: String? = nil, agents: [String] = [], terminals: [String] = []
+) -> MachineFlockEntry {
     let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
     let flock = MachineFlock(
-        machine: machine, link: .connected, lastError: nil,
+        machine: machine, link: link, lastError: nil,
         details: loaded ? MachineDetails(name: "Mac", nodeId: "n1", herdrSession: "default") : nil, workspaces: [],
         agents: agents.map {
             AgentSummary(terminalId: $0, workspaceId: "w1", kind: "claude", name: nil, title: nil, status: .idle, statusSinceMs: 0, cwd: nil, lastLine: nil)
@@ -32,7 +36,7 @@ private func entry(_ machineId: String, loaded: Bool = true, agents: [String] = 
         terminals: terminals.map { TerminalSummary(terminalId: $0, workspaceId: "w1", workspaceLabel: nil, label: nil, cwd: nil, locked: true) },
         terminalsEnabled: true
     )
-    return MachineFlockEntry(machine: machine, flock: flock)
+    return MachineFlockEntry(machine: machine, flock: flock, error: error)
 }
 
 @MainActor
@@ -97,7 +101,7 @@ private func entry(_ machineId: String, loaded: Bool = true, agents: [String] = 
     }
     var stale = AttachedFile(path: "/tmp/b/old.txt", name: "old.txt")
     stale.uploaded = .now - Attachment.keptOnMachine - 60
-    AgentDrafts(drafts: [route("term_1"): .init(text: "", attachments: [stale, fresh])]).save(to: file)
+    AgentDrafts(drafts: [route("term_1"): .init(text: "", attachments: [stale, fresh], shell: false)]).save(to: file)
 
     let model = screen(FakeCore(), file)
     #expect(model.attachments.map(\.name) == ["photo.jpg"])
@@ -109,7 +113,7 @@ private func entry(_ machineId: String, loaded: Bool = true, agents: [String] = 
 @Test func aDraftGoesOnceItsPaneOrMachineIsGone() throws {
     let (file, dir) = try draftsFile()
     defer { try? FileManager.default.removeItem(at: dir) }
-    let draft = AgentDrafts.Draft(text: "x", attachments: [])
+    let draft = AgentDrafts.Draft(text: "x", attachments: [], shell: false)
     AgentDrafts(drafts: [
         route("agent"): draft, route("shell"): draft, route("closed"): draft,
         route("offline", on: "m2"): draft, route("unpaired", on: "m3"): draft,
@@ -122,8 +126,82 @@ private func entry(_ machineId: String, loaded: Bool = true, agents: [String] = 
     AgentDrafts.prune([entry("m1", loaded: false), entry("m2", loaded: false), entry("m3", loaded: false)], file: file)
     #expect(routes() == all)
 
-    AgentDrafts.prune([entry("m1", agents: ["agent"], terminals: ["shell"]), entry("m2", loaded: false)], file: file)
+    // Offline with its details still cached, or a snapshot that failed: the lists may be stale.
+    AgentDrafts.prune([entry("m1", error: "timed out"), entry("m2", link: .offline), entry("m3", loaded: false)], file: file)
+    #expect(routes() == all)
+
+    AgentDrafts.prune([entry("m1", agents: ["agent"], terminals: ["shell"]), entry("m2", link: .offline)], file: file)
     #expect(routes() == [route("agent"), route("shell"), route("offline", on: "m2")])
+
+    AgentDrafts.forget(machineId: "m2", file: file)
+    #expect(routes() == [route("agent"), route("shell")])
+}
+
+@MainActor
+@Test func aDraftNeverCrossesFromAnAgentToTheShellAfterItNorTheReverse() async throws {
+    let (file, dir) = try draftsFile()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.shell = shell
+    }
+
+    let agent = screen(core, file)
+    agent.poll()
+    agent.draft = "refactor the parser"
+    agent.saveDraft()
+    let reopenedAsAgent = screen(core, file)
+    reopenedAsAgent.poll()
+    #expect(reopenedAsAgent.draft == "refactor the parser")
+
+    core.state.withLock { $0.kind = nil }
+    let shellScreen = screen(core, file)
+    #expect(shellScreen.draft == "refactor the parser")
+    shellScreen.poll()
+    #expect(shellScreen.isTerminal)
+    #expect(shellScreen.draft.isEmpty)
+    shellScreen.saveDraft()
+    #expect(AgentDrafts.load(from: file).drafts.isEmpty)
+
+    shellScreen.draft = "git status"
+    shellScreen.saveDraft()
+    let reopenedAsShell = screen(core, file)
+    reopenedAsShell.poll()
+    #expect(reopenedAsShell.draft == "git status")
+
+    core.state.withLock { $0.kind = "claude" }
+    let agentAgain = screen(core, file)
+    agentAgain.poll()
+    #expect(agentAgain.draft.isEmpty)
+}
+
+@MainActor
+@Test func aScreenOpenedDuringASendNeverOffersTheSentPromptAgain() async throws {
+    let (file, dir) = try draftsFile()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let core = FakeCore()
+
+    let model = screen(core, file)
+    model.draft = "deploy"
+    model.saveDraft()
+    core.set(hold: true)
+    let send = Task { await model.sendPrompt() }
+    await core.waitHeld(1)
+    model.saveDraft()
+    #expect(screen(core, file).draft.isEmpty)
+    core.release()
+    await send.value
+    #expect(AgentDrafts.load(from: file).drafts.isEmpty)
+
+    model.draft = "deploy again"
+    core.set(hold: true, error: .AgentBlocked)
+    let failed = Task { await model.sendPrompt() }
+    await core.waitHeld(1)
+    #expect(screen(core, file).draft.isEmpty)
+    core.release()
+    await failed.value
+    #expect(screen(core, file).draft == "deploy again")
 }
 
 @MainActor
@@ -142,6 +220,11 @@ private func entry(_ machineId: String, loaded: Bool = true, agents: [String] = 
     #expect(fromMac.draft == "from the mac")
     fromMac.saveDraft()
     #expect(AgentDrafts.load(from: file).drafts.isEmpty)
+    await fromMac.attach(name: "notes.txt") { _ in Data([1]) }?.value
+    fromMac.saveDraft()
+    #expect(AgentDrafts.load(from: file).drafts[route("term_1")]?.text == "")
+    #expect(AgentDrafts.load(from: file).drafts[route("term_1")]?.attachments.count == 1)
+    AgentDrafts().save(to: file)
 
     let typed = screen(core, file)
     typed.draft = "from the phone"
