@@ -124,15 +124,17 @@ final class PreviewModel {
 
     /// Ends at the last line above Claude Code's input box, found as collied's `draft::parse`
     /// finds it: the last block between two rules drawn from column 0 whose first row starts at
-    /// column 0 and whose other rows are indented by two spaces. A screen without one, such as
-    /// a dialog in its place or another agent, is kept whole.
+    /// column 0 and whose other rows are indented by two spaces. Only indented status lines may
+    /// follow it, so a box an earlier session left above a newer screen does not count. A screen
+    /// without one, such as a dialog in its place or another agent, is kept whole.
     nonisolated static func card(_ ansi: String) -> String {
         let lines = ansi.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
         let plain = lines.map(plainText)
         let rules = plain.indices.filter { plain[$0].hasPrefix("─") && isRule(plain[$0]) }
+        let indented = { (line: String) in line.hasPrefix("  ") || line.allSatisfy(\.isWhitespace) }
         let box = Array(zip(rules, rules.dropFirst())).last { top, bottom in
             bottom > top + 1 && plain[top + 1].first.map { !$0.isWhitespace } == true
-                && plain[top + 2..<bottom].allSatisfy { $0.hasPrefix("  ") || $0.allSatisfy(\.isWhitespace) }
+                && plain[top + 2..<bottom].allSatisfy(indented) && plain[(bottom + 1)...].allSatisfy(indented)
         }
         guard let top = box?.0, let last = plain[..<top].lastIndex(where: { !$0.allSatisfy(\.isWhitespace) }) else { return ansi }
         return String(ansi[..<lines[last].endIndex])

@@ -303,7 +303,8 @@ private func claude(_ box: String, top: String = rule) -> String {
              3. Tell Claude what to change
 
         """
-    for screen in [bash, question, plan] {
+    let rerun = "\(claude("❯ "))$ claude --continue\n\(bash)"
+    for screen in [bash, question, plan, rerun] {
         #expect(PreviewModel.card(screen) == screen)
     }
 }
@@ -316,6 +317,7 @@ private func claude(_ box: String, top: String = rule) -> String {
         "\(rule)\n\n\(rule)\n  status",
         "  rows of a draft\n  taller than the screen\n\(rule)\n\(status)",
         "\u{1b}[1m›\u{1b}[22m Explain this codebase\n\n  ⏎ send   ⇧⏎ newline   ⌃T transcript   ⌃C quit",
+        "\(claude("❯ "))$ ",
     ] {
         #expect(PreviewModel.card(screen) == screen)
     }
