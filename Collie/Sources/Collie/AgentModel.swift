@@ -154,7 +154,8 @@ final class AgentModel {
         return !sendingPrompt && !dictation.isActive && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
     }
 
-    /// Runs while the screen is visible: watch, poll the core at collied's 4 Hz watch rate, unwatch on cancel.
+    /// Runs while the screen is visible: watch, poll the core, unwatch on cancel. collied pushes at about
+    /// 4 Hz; a shell polls at 10 Hz so its echo does not wait up to another 250 ms.
     func run() async {
         Self.watchers[route.machineId] = ObjectIdentifier(self)
         watch(route.terminalId)
@@ -164,7 +165,7 @@ final class AgentModel {
             if loading == nil, agent != nil {
                 loading = Task { await loadMacDraft() }
             }
-            try? await Task.sleep(for: .milliseconds(250))
+            try? await Task.sleep(for: .milliseconds(isTerminal ? 100 : 250))
         }
         if Self.watchers[route.machineId] == ObjectIdentifier(self) {
             Self.watchers[route.machineId] = nil

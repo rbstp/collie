@@ -356,11 +356,17 @@ struct StatusPill: View {
 
 struct StatusIcon: View {
     let state: AgentState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
             switch state {
             // Core Animation spins it; a SwiftUI repeatForever redraws the app every frame (battery).
+            case .working where reduceMotion:
+                Circle()
+                    .trim(from: 0, to: 0.7)
+                    .stroke(state.color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .padding(2)
             case .working: ProgressView().controlSize(.small).tint(state.color)
             case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(state.color)
             case .idle: Image(systemName: "circle.fill").font(.system(size: 9)).foregroundStyle(state.color)

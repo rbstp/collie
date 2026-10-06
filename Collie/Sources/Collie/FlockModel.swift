@@ -79,7 +79,7 @@ final class FlockModel {
                     do {
                         let flock: MachineFlock
                         if let cached { flock = cached } else { flock = try await core.flock(machineId: machine.id) }
-                        return MachineFlockEntry(machine: machine, flock: flock, error: [.connected, .connecting].contains(flock.link) ? nil : flock.lastError)
+                        return MachineFlockEntry(machine: machine, flock: flock, error: flock.link == .connecting ? nil : flock.lastError)
                     } catch {
                         return MachineFlockEntry(
                             machine: machine,

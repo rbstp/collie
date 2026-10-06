@@ -420,7 +420,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     try? await Task.sleep(for: .milliseconds(300))
     #expect(core.snapshot.draftReads == 0)
     core.state.withLock { $0.kind = "claude" }
-    while model.macDraft == nil {
+    for _ in 0..<400 where model.macDraft == nil {
         try? await Task.sleep(for: .milliseconds(5))
     }
     run.cancel()
@@ -662,6 +662,16 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 
     await model.refresh(core: core)
     #expect(core.snapshot.flocks == 3)
+
+    core.state.withLock {
+        $0.cachedFlock?.lastError = "herdr is not running on the machine"
+        $0.started = nil
+    }
+    await model.refresh(core: core, snapshot: false)
+    #expect(core.snapshot.flocks == 3)
+    #expect(model.entries.first?.error == "herdr is not running on the machine")
+    await model.refresh(core: core, snapshot: false)
+    #expect(core.snapshot.flocks == 4)
 }
 
 @MainActor

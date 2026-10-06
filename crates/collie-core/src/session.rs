@@ -299,6 +299,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                             }
                         }
                         ServerFrame::Error { id: Some(id), error } => {
+                            if error.code == ErrorCode::HerdrUnavailable {
+                                lock(state).herdr_down = true;
+                            }
                             let err = SessionError::from(error);
                             if err.is_auth() {
                                 break err;
@@ -411,6 +414,8 @@ pub struct FlockState {
     pub unlocked: HashMap<TerminalId, StdInstant>,
     pub output: Option<TerminalRead>,
     pub output_revision: u64,
+    /// A request on this session found herdr not running, and no snapshot has worked since.
+    pub herdr_down: bool,
     /// The text the watch sent last, the base of its next patch. A read reply can replace
     /// `output` but not this.
     watched_output: Option<TerminalRead>,
@@ -427,6 +432,7 @@ impl FlockState {
     pub fn new_connection(&mut self) {
         self.last_seq = 0;
         self.since_snapshot.clear();
+        self.herdr_down = false;
         self.watched_output = None;
         self.lock_terminals();
     }
@@ -543,6 +549,7 @@ impl FlockState {
         }
         self.last_seq = self.last_seq.max(snapshot.seq);
         self.flock = Some(snapshot);
+        self.herdr_down = false;
     }
 }
 
@@ -1191,6 +1198,75 @@ mod tests {
         ));
         assert_eq!(status_of(&lock(&state), "t1"), Some(AgentStatus::Blocked));
         assert_eq!(status_of(&lock(&state), "t2"), Some(AgentStatus::Working));
+        drop(server.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_failed_seed_snapshot_marks_herdr_down_until_a_snapshot_works() {
+        let (session, server) = pair_of(Some(WS_SUBPROTOCOL)).await;
+        let (session, mut ws) = (session.unwrap(), server.unwrap());
+        let state = Mutex::new(FlockState::default());
+        let (_tx, mut rx) = mpsc::channel(8);
+        let (down_tx, down_rx) = oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let seed = read(&mut ws).await;
+            write(
+                &mut ws,
+                ServerFrame::Error {
+                    id: Some(seed.id),
+                    error: ErrorBody {
+                        code: ErrorCode::HerdrUnavailable,
+                        message: "herdr unavailable".into(),
+                        draft: None,
+                    },
+                },
+            )
+            .await;
+            down_rx.await.unwrap();
+            write(
+                &mut ws,
+                ServerFrame::Event {
+                    seq: 1,
+                    event: Event::FlockChanged {},
+                },
+            )
+            .await;
+            let refetch = read(&mut ws).await;
+            write(
+                &mut ws,
+                ServerFrame::Result {
+                    id: refetch.id,
+                    result: Response::Flock(flock(1, vec![agent("t1", AgentStatus::Idle)])),
+                },
+            )
+            .await;
+            write(
+                &mut ws,
+                ServerFrame::Error {
+                    id: None,
+                    error: ErrorBody {
+                        code: ErrorCode::NotPaired,
+                        message: "not paired".into(),
+                        draft: None,
+                    },
+                },
+            )
+            .await;
+            ws
+        });
+        let client = async {
+            while !lock(&state).herdr_down {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            down_tx.send(()).unwrap();
+        };
+        let (end, ()) = tokio::join!(
+            session.run(&mut rx, &state, Vec::new(), std::future::pending()),
+            client
+        );
+        assert!(end.is_auth(), "{end:?}");
+        assert!(!lock(&state).herdr_down);
+        assert_eq!(status_of(&lock(&state), "t1"), Some(AgentStatus::Idle));
         drop(server.await.unwrap());
     }
 
