@@ -22,6 +22,39 @@ index 0000000..d80f89e
 +package main
 +
 +func setDefaultRouteInterface(string) {}
+diff --git a/rebind.go b/rebind.go
+new file mode 100644
+index 0000000..49620a9
+--- /dev/null
++++ b/rebind.go
+@@ -0,0 +1,27 @@
++package main
++
++import (
++	"time"
++
++	"tailscale.com/net/netmon"
++)
++
++// injectNetworkChange makes nm re-read the network and returns once it has
++// published the change, or after 1.5 s. InjectEvent only queues the event,
++// netmon's debounce can hold it for a second, and the debug rebind that
++// follows reads nm's interface state to decide which DERP connections to close.
++func injectNetworkChange(nm *netmon.Monitor) {
++	changed := make(chan struct{}, 1)
++	unregister := nm.RegisterChangeCallback(func(*netmon.ChangeDelta) {
++		select {
++		case changed <- struct{}{}:
++		default:
++		}
++	})
++	defer unregister()
++	nm.InjectEvent()
++	select {
++	case <-changed:
++	case <-time.After(1500 * time.Millisecond):
++	}
++}
 diff --git a/tailscale.c b/tailscale.c
 index 0caaa26..a333952 100644
 --- a/tailscale.c
@@ -64,7 +97,7 @@ index e9ca43c..ac2a179 100644
 +	}
 +	if sys := s.s.Sys(); sys != nil {
 +		if nm, ok := sys.NetMon.GetOK(); ok {
-+			nm.InjectEvent()
++			injectNetworkChange(nm)
 +		}
 +	}
 +	lc, err := s.s.LocalClient()

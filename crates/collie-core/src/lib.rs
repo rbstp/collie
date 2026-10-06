@@ -81,6 +81,8 @@ const KICK_TIMEOUT: Duration = Duration::from_secs(3);
 const REBIND_AFTER: Duration = Duration::from_secs(3);
 /// A full dial past the resume grace: a rebound node has reached DERP again long before.
 const RESTART_AFTER: Duration = Duration::from_secs(30);
+/// netmon's own debounce: at the edge of Wi-Fi the path can flap several times a second.
+const NETWORK_SETTLE: Duration = Duration::from_secs(1);
 /// Three dial attempts: a node rebound to the new interface reaches DERP again within a
 /// second or two.
 const NETWORK_RESTART_AFTER: Duration = Duration::from_secs(15);
@@ -541,6 +543,8 @@ struct Inner {
     resumes: AtomicU64,
     /// The interface last reported by [`CollieCore::network_changed`], empty for no path.
     path: Mutex<Option<String>>,
+    /// Bumped on every change of `path`.
+    paths: AtomicU64,
     /// A change of interface not acted on yet.
     moved: AtomicBool,
     busy: watch::Sender<usize>,
@@ -724,19 +728,23 @@ impl CollieCore {
         let inner = self.inner.clone();
         self.runtime
             .spawn(inner.resumed(background, suspended, epoch, links));
-        self.runtime.spawn(self.inner.clone().network_moved());
+        self.runtime
+            .spawn(self.inner.clone().network_moved(Duration::ZERO));
     }
 
     /// The interface the phone routes through (from NWPathMonitor), empty when there is no
     /// path. The first report is only recorded. On a move to another interface, or back
-    /// after no path, the node re-reads the network and rebinds at once, every link redials,
-    /// and the node is restarted when nothing connects within [`NETWORK_RESTART_AFTER`]. A
-    /// move while suspended is acted on at the next [`Self::resume`].
+    /// after no path, once the path has held for [`NETWORK_SETTLE`], the node re-reads the
+    /// network and rebinds, a live session is probed and any other link redials, and the
+    /// node is restarted when nothing connects within [`NETWORK_RESTART_AFTER`]. A move
+    /// while suspended only rebinds the node, for a lock-screen decide, and the rest waits
+    /// for the next [`Self::resume`].
     pub fn network_changed(&self, interface: String) {
         let old = lock(&self.inner.path).replace(interface.clone());
         if old.as_ref() == Some(&interface) {
             return;
         }
+        self.inner.paths.fetch_add(1, Ordering::SeqCst);
         self.inner.log(format!(
             "network path: {} to {}",
             old.as_deref().map_or("unknown", path_name),
@@ -747,8 +755,12 @@ impl CollieCore {
         }
         // Set before the check: a resume after it sees the move.
         self.inner.moved.store(true, Ordering::SeqCst);
-        if !*self.inner.suspended.borrow() {
-            self.runtime.spawn(self.inner.clone().network_moved());
+        let inner = self.inner.clone();
+        if *self.inner.suspended.borrow() {
+            self.runtime
+                .spawn(async move { inner.rebind("network change while suspended").await });
+        } else {
+            self.runtime.spawn(inner.network_moved(NETWORK_SETTLE));
         }
     }
 
@@ -1590,6 +1602,7 @@ impl CollieCore {
                 suspended: watch::Sender::new(false),
                 resumes: AtomicU64::default(),
                 path: Mutex::default(),
+                paths: AtomicU64::default(),
                 moved: AtomicBool::default(),
                 busy: watch::Sender::new(0),
                 log: Mutex::default(),
@@ -1916,6 +1929,7 @@ impl Inner {
         );
         let mut peers = None;
         let node = lock(&self.node).clone();
+        let started = node.as_ref().map(Arc::downgrade).unwrap_or_default();
         match node {
             None => line += " no node",
             Some(node) => {
@@ -1959,31 +1973,52 @@ impl Inner {
         let conns: Vec<_> = lock(&self.conns).values().cloned().collect();
         let suspect = self.node_suspect(&conns, false).await;
         drop(conns);
-        if let Some(suspect) = suspect {
-            self.restart("resume", suspect).await;
+        // Only the node this resume found: a newer one gets its own grace.
+        if suspect.is_some() {
+            self.restart("resume", started).await;
         }
     }
 
     /// The node's sockets and DERP connection may still be bound to the interface the phone
-    /// left, and a session's TCP runs inside the node, so iOS reports no error for it.
-    async fn network_moved(self: Arc<Self>) {
-        if !self.moved.swap(false, Ordering::SeqCst) {
+    /// left. A session's TCP runs inside the node and outlives the move once the node
+    /// reaches the machine again, so iOS reports no error for it and it is probed.
+    async fn network_moved(self: Arc<Self>, settle: Duration) {
+        let paths = self.paths.load(Ordering::SeqCst);
+        let resumes = self.resumes.load(Ordering::SeqCst);
+        let current = || {
+            self.paths.load(Ordering::SeqCst) == paths
+                && self.resumes.load(Ordering::SeqCst) == resumes
+                && !*self.suspended.borrow()
+        };
+        tokio::time::sleep(settle).await;
+        if !current() || !self.moved.swap(false, Ordering::SeqCst) {
             return;
         }
-        let path = lock(&self.path).clone();
+        let started = lock(&self.node)
+            .as_ref()
+            .map(Arc::downgrade)
+            .unwrap_or_default();
         self.rebind("network change").await;
         for conn in lock(&self.conns).values() {
-            conn.resume(FOREGROUND_RECONNECT, false);
+            let connected = lock(&conn.shared.link).phase == LinkPhase::Connected;
+            conn.resume(
+                if connected {
+                    Duration::ZERO
+                } else {
+                    FOREGROUND_RECONNECT
+                },
+                false,
+            );
         }
         tokio::time::sleep(NETWORK_RESTART_AFTER).await;
-        if *lock(&self.path) != path || *self.suspended.borrow() {
+        if !current() {
             return;
         }
         let conns: Vec<_> = lock(&self.conns).values().cloned().collect();
         let suspect = self.node_suspect(&conns, true).await;
         drop(conns);
-        if let Some(suspect) = suspect {
-            self.restart("network change", suspect).await;
+        if suspect.is_some() {
+            self.restart("network change", started).await;
         }
     }
 
@@ -4287,14 +4322,17 @@ mod tailnet_tests {
         core.network_changed("en0".into());
         std::thread::sleep(Duration::from_secs(1));
         assert_eq!(
-            lock(&logged)[seen_lines..],
+            lock(&logged)[seen_lines..]
+                .iter()
+                .filter(|l| l.contains("network"))
+                .collect::<Vec<_>>(),
             ["network path: unknown to en0"],
             "the first path is only recorded"
         );
         assert_eq!(connections(), 7);
         core.network_changed("pdp_ip0".into());
-        poll("redialed after a move to cellular", || {
-            (connections() == 8 && link() == LinkPhase::Connected).then_some(())
+        poll("rebound after a move to cellular", || {
+            (rebinds() == 1).then_some(())
         });
         assert!(
             lock(&logged)
@@ -4302,25 +4340,47 @@ mod tailnet_tests {
                 .any(|l| l == "network path: en0 to pdp_ip0"),
             "{logged:?}"
         );
-        assert_eq!(rebinds(), 1);
+        // The probe answers within 3 s or reconnects; a cut would show at once.
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(connections(), 7, "a live session is only probed");
+        assert_eq!(link(), LinkPhase::Connected);
+        core.network_changed("en0".into());
         core.network_changed(String::new());
-        std::thread::sleep(Duration::from_secs(1));
-        assert_eq!(connections(), 8, "no path: nothing to redial on");
         core.network_changed("pdp_ip0".into());
-        poll("redialed when the path is back", || {
-            (connections() == 9 && link() == LinkPhase::Connected).then_some(())
+        poll("rebound once after a flap", || {
+            (rebinds() == 2).then_some(())
         });
+        std::thread::sleep(Duration::from_secs(2));
         assert_eq!(rebinds(), 2);
+        poll("connected after the flap", || {
+            (link() == LinkPhase::Connected).then_some(())
+        });
 
         rt.block_on(core.suspend(core.begin_suspend()));
+        let dialed = connections();
         core.network_changed("pdp_ip1".into());
-        std::thread::sleep(Duration::from_secs(1));
-        assert_eq!(rebinds(), 2, "a move while suspended waits for the resume");
-        assert_eq!(connections(), 9);
+        poll(
+            "a move while suspended rebinds for a lock-screen decide",
+            || {
+                lock(&logged)
+                    .iter()
+                    .any(|l| l == "rebind, network change while suspended: done")
+                    .then_some(())
+            },
+        );
+        assert_eq!(rebinds(), 2);
+        assert_eq!(connections(), dialed, "the redial waits for the resume");
         core.resume(1);
         poll("the resume acts on the move", || {
             (rebinds() == 3 && link() == LinkPhase::Connected).then_some(())
         });
+        let dialed = connections();
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            (connections(), link()),
+            (dialed, LinkPhase::Connected),
+            "the session the resume opened is only probed"
+        );
         assert!(
             !lock(&logged)
                 .iter()
