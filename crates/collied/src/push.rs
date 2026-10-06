@@ -88,6 +88,7 @@ pub struct Devices {
 pub enum Delivery {
     Alert,
     LiveActivity { urgent: bool },
+    Background,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -184,6 +185,7 @@ impl Alert {
                 format!("{bundle_id}.push-type.liveactivity"),
                 if urgent { 10 } else { 5 },
             ),
+            Delivery::Background => (PushType::Background, bundle_id.to_owned(), 5),
         };
         Headers {
             push_type,
@@ -266,6 +268,24 @@ pub fn approval_alert(a: &Approval, title: &str, node_id: &str, context: &str) -
         context: (!context.is_empty())
             .then(|| (a.approval_id.as_str().to_owned(), context.to_owned())),
         delivery: Delivery::Alert,
+    }
+}
+
+/// Tells the app to remove the delivered alert for an approval resolved without it: the two
+/// lookup keys only.
+pub fn approval_clear(node_id: &str, approval_id: &ApprovalId) -> Alert {
+    Alert {
+        payload: json!({
+            "aps": {"content-available": 1},
+            "approval_id": approval_id.as_str(),
+            "node_id": node_id,
+        }),
+        collapse_id: None,
+        // Never stored: APNs keeps one undelivered push per app, so a stored clear would
+        // displace a pending approval alert.
+        expiration: Some(0),
+        context: None,
+        delivery: Delivery::Background,
     }
 }
 
@@ -1246,6 +1266,30 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
                 .get("category")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn approval_clear_carries_the_lookup_keys_only() {
+        let clear = approval_clear("nMAC", &ApprovalId::new("A".repeat(22)).unwrap());
+        assert_eq!(
+            clear.payload,
+            json!({
+                "aps": {"content-available": 1},
+                "approval_id": "A".repeat(22),
+                "node_id": "nMAC",
+            })
+        );
+        assert_eq!(
+            clear.headers("dev.rbstp.collie"),
+            Headers {
+                push_type: PushType::Background,
+                topic: "dev.rbstp.collie".into(),
+                priority: 5,
+                expiration: Some(0),
+                collapse_id: None,
+            }
+        );
+        assert_eq!(clear.for_device(&device(Some(key()))), clear);
     }
 
     pub fn key() -> NotificationKey {

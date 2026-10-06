@@ -27,6 +27,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         app.pushRegistrationFailed(error)
     }
 
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        guard let link = ApprovalClear.link(userInfo) else {
+            completionHandler(.noData)
+            return
+        }
+        Task {
+            await ApprovalClear.remove(link)
+            completionHandler(.noData)
+        }
+    }
+
     // The completion handlers must run on the main thread: with the async variants the
     // system calls them from the cooperative pool and UIKit aborts (state restoration assert).
     nonisolated func userNotificationCenter(

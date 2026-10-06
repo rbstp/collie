@@ -31,6 +31,28 @@ struct ApprovalLink: Hashable, Sendable {
     }
 }
 
+/// collied's background push once an alerted approval is over: it only removes that
+/// approval's delivered alert, never decides or reaches the Mac.
+enum ApprovalClear {
+    /// Nil for anything with an alert: an approval alert can reach the app too while it runs.
+    static func link(_ userInfo: [AnyHashable: Any]) -> ApprovalLink? {
+        guard let aps = userInfo["aps"] as? [String: Any], aps["alert"] == nil, aps["content-available"] as? Int == 1 else {
+            return nil
+        }
+        return ApprovalLink(userInfo: userInfo)
+    }
+
+    static func identifiers(_ delivered: [(id: String, userInfo: [AnyHashable: Any])], naming link: ApprovalLink) -> [String] {
+        delivered.filter { ApprovalLink(userInfo: $0.userInfo) == link }.map(\.id)
+    }
+
+    static func remove(_ link: ApprovalLink) async {
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications().map { (id: $0.request.identifier, userInfo: $0.request.content.userInfo) }
+        center.removeDeliveredNotifications(withIdentifiers: identifiers(delivered, naming: link))
+    }
+}
+
 enum ApprovalNotification {
     static let category = "APPROVAL"
     static let approveAction = "APPROVE"

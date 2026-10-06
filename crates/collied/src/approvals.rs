@@ -99,6 +99,9 @@ struct Inner {
     resolved: VecDeque<ApprovalId>,
     buckets: HashMap<String, (f64, Instant)>,
     alerted: HashMap<String, Alerted>,
+    /// The approval id the phone's alert for a terminal carries: a quiet reissue keeps it, a
+    /// later alert replaces it, and it is cleared once the agent there is no longer blocked.
+    notified: HashMap<String, ApprovalId>,
     hooks: HashMap<String, Hooked>,
 }
 
@@ -374,6 +377,26 @@ impl Approvals {
                 tracing::debug!(terminal = %a.terminal_id, error = %e, "no approval yet");
             }
         }
+        let mut cleared = Vec::new();
+        {
+            let mut inner = self.lock();
+            let Inner {
+                pending, notified, ..
+            } = &mut *inner;
+            notified.retain(|t, id| {
+                let ended = !pending.contains_key(t)
+                    && !agents.iter().any(|a| a.terminal_id == *t && is_blocked(a));
+                if ended {
+                    cleared.push(id.clone());
+                }
+                !ended
+            });
+        }
+        if let Some(push) = &self.push {
+            for id in cleared {
+                push.notify(push::approval_clear(&self.node_id, &id));
+            }
+        }
     }
 
     async fn screen(&self, a: &AgentInfo) -> Result<Screen, herdr::Error> {
@@ -471,6 +494,11 @@ impl Approvals {
                 return Ok(());
             }
             let alert = inner.alert_due(&a.terminal_id, &screen, &approval);
+            if alert {
+                inner
+                    .notified
+                    .insert(a.terminal_id.clone(), approval.approval_id.clone());
+            }
             inner.pending.insert(
                 a.terminal_id.clone(),
                 Pending {

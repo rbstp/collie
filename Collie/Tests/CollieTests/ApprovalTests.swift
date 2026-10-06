@@ -51,6 +51,28 @@ import UserNotifications
     #expect(ApprovalLink(userInfo: ["node_id": "nABC", "approval_id": String(repeating: "a", count: 64)]) != nil)
 }
 
+@Test func clearPushRemovesOnlyThatApprovalsAlert() throws {
+    let clear: [AnyHashable: Any] = ["aps": ["content-available": 1], "node_id": "nMAC", "approval_id": "ap_1"]
+    let link = try #require(ApprovalClear.link(clear))
+    #expect(link == ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+
+    let alert: [AnyHashable: Any] = ["aps": ["alert": ["title": "t", "body": "b"], "mutable-content": 1], "node_id": "nMAC", "approval_id": "ap_1"]
+    #expect(ApprovalClear.link(alert) == nil)
+    #expect(ApprovalClear.link(["aps": ["content-available": 1, "alert": "x"], "node_id": "nMAC", "approval_id": "ap_1"]) == nil)
+    #expect(ApprovalClear.link(["node_id": "nMAC", "approval_id": "ap_1"]) == nil)
+    #expect(ApprovalClear.link(["aps": [:], "node_id": "nMAC", "approval_id": "ap_1"]) == nil)
+    #expect(ApprovalClear.link(["aps": ["content-available": 1], "node_id": "nMAC", "approval_id": "../ap"]) == nil)
+
+    let delivered: [(id: String, userInfo: [AnyHashable: Any])] = [
+        ("a", alert),
+        ("other-approval", ["node_id": "nMAC", "approval_id": "ap_2"]),
+        ("other-mac", ["node_id": "nOTHER", "approval_id": "ap_1"]),
+        ("follow-up", ["node_id": "nMAC"]),
+        ("b", ["node_id": "nMAC", "approval_id": "ap_1"]),
+    ]
+    #expect(ApprovalClear.identifiers(delivered, naming: link) == ["a", "b"])
+}
+
 @Test func reachabilityParsing() {
     let json = Data(
         #"{"nUP":{"last_ok_ms":200,"last_fail_ms":100},"nDOWN":{"last_ok_ms":100,"last_fail_ms":200},"nNEVER":{"last_ok_ms":null,"last_fail_ms":5},"nNEW":{"last_ok_ms":7,"last_fail_ms":null}}"#.utf8
