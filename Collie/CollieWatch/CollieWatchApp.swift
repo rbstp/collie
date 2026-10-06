@@ -453,6 +453,7 @@ private struct ApprovalDetail: View {
             if approval.offers(.approve) {
                 Button("Approve") { decide(.approve) }
                     .buttonStyle(.borderedProminent)
+                    .tint(.green)
                     .disabled(expired || model.sending != nil)
             }
             if approval.offers(.deny) {
