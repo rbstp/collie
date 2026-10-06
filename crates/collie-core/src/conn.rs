@@ -39,7 +39,7 @@ const PEER_OFFLINE_POLL: [Duration; 4] = [
 /// A machine Tailscale reports offline is not dialed: every 20 s dial to a dead peer runs
 /// on the node all machines share. It is still tried this often, in case control is wrong,
 /// and once on every reconnect request (a resume or a retry), when its netmap may be stale.
-const OFFLINE_REDIAL: Duration = Duration::from_secs(300);
+const OFFLINE_REDIAL: Duration = Duration::from_secs(15 * 60);
 const DIAL_ATTEMPT: Duration = Duration::from_secs(5);
 const DIAL_BUDGET: Duration = Duration::from_secs(20);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
