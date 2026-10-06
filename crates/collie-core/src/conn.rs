@@ -589,7 +589,8 @@ async fn supervise(
 /// After a foreground resume the node needs a moment to rebuild its paths, and the old
 /// session ends (or is ended) as `Closed`. Failures within `RESUME_GRACE` retry quickly
 /// and stay `Connecting` without an error; auth failures still stop at once. A resume
-/// also restarts the normal backoff and the offline poll.
+/// also restarts the normal backoff, and until [`crate::RESTART_AFTER`] a machine
+/// Tailscale reports offline is polled at the quickest rate, while the node recovers.
 #[derive(Default)]
 struct Backoff {
     attempt: usize,
@@ -611,10 +612,15 @@ impl Backoff {
             self.resumed = link.resumed;
             self.attempt = 0;
             self.grace_attempt = 0;
-            self.offline_attempt = 0;
         }
         if matches!(err, ConnectError::PeerOffline) {
             link.set(LinkPhase::Unavailable, Some(err.to_string()));
+            if link
+                .resumed
+                .is_some_and(|at| now.saturating_duration_since(at) < crate::RESTART_AFTER)
+            {
+                self.offline_attempt = 0;
+            }
             let delay = PEER_OFFLINE_POLL[self.offline_attempt.min(PEER_OFFLINE_POLL.len() - 1)];
             self.offline_attempt += 1;
             return Some(delay);
@@ -933,7 +939,7 @@ mod tests {
                     .failed(
                         &shared,
                         &ConnectError::PeerOffline,
-                        t0 + Duration::from_secs(i),
+                        t0 + crate::RESTART_AFTER + Duration::from_secs(i),
                     )
                     .unwrap()
                     .as_secs()
@@ -964,19 +970,23 @@ mod tests {
             Some(GRACE_BACKOFF[0]),
             "that dial's failure gets the grace"
         );
-        assert_eq!(
-            backoff.failed(&shared, &ConnectError::PeerOffline, t1),
-            Some(PEER_OFFLINE_POLL[0]),
-            "then it waits quietly again, polled quickly at first"
-        );
+        for _ in 0..3 {
+            assert_eq!(
+                backoff.failed(&shared, &ConnectError::PeerOffline, t1 + RESUME_GRACE),
+                Some(PEER_OFFLINE_POLL[0]),
+                "then it waits quietly again, polled quickly while the node recovers"
+            );
+        }
         assert_eq!(link(&shared).0, LinkPhase::Unavailable);
-        backoff.failed(&shared, &ConnectError::PeerOffline, t1);
+        let t2 = t1 + crate::RESTART_AFTER;
         assert_eq!(
-            backoff.failed(&shared, &closed(), t1 + RESUME_GRACE),
-            Some(BACKOFF[0])
+            backoff.failed(&shared, &ConnectError::PeerOffline, t2),
+            Some(PEER_OFFLINE_POLL[1]),
+            "and more slowly after that"
         );
+        assert_eq!(backoff.failed(&shared, &closed(), t2), Some(BACKOFF[0]));
         assert_eq!(
-            backoff.failed(&shared, &ConnectError::PeerOffline, t1 + RESUME_GRACE),
+            backoff.failed(&shared, &ConnectError::PeerOffline, t2),
             Some(PEER_OFFLINE_POLL[0]),
             "a session or a dial in between restarts the offline poll"
         );

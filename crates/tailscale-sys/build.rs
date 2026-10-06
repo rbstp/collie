@@ -80,8 +80,9 @@ fn main() {
             "-ldflags=-w",
         ]);
     if go.goos == "ios" {
-        // Every netcheck probes the gateway for NAT-PMP/PCP/UPnP, which carriers never
-        // offer. The Mac keeps its port mapper, so a direct path still forms from its side.
+        // Every netcheck probes the Wi-Fi gateway for NAT-PMP/PCP/UPnP. Without a mapping, a
+        // phone behind a hard NAT gets a direct path only through the Mac's port mapper,
+        // else it goes through DERP.
         cmd.arg("-tags=ios,ts_omit_portmapper");
     }
     run(cmd.arg("-o").arg(&archive));

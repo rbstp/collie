@@ -61,7 +61,7 @@ struct RootView: View {
                     try? await Task.sleep(for: .seconds(1))
                 }
             }
-            .task {
+            .task(id: app.isRunning) {
                 while !Task.isCancelled && app.showsMain {
                     try? await Task.sleep(for: .seconds(app.isRunning ? 30 : 1))
                     await app.refreshNode()
