@@ -87,6 +87,10 @@ jobs:
           persist-credentials: false
           submodules: true
 
+      # Overlaps the simulator's first boot on a fresh runner with the builds below.
+      - name: boot the simulator
+        run: xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
+
       - name: set up go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
