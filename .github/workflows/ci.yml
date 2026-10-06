@@ -20,6 +20,9 @@ jobs:
   rust:
     runs-on: xcode-27
 
+    env:
+      CARGO_INCREMENTAL: 0
+
     steps:
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,7 +49,8 @@ jobs:
             ~/go/pkg/mod
             ~/Library/Caches/go-build
             target
-          key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/*.patch', 'crates/tailnet/testcontrol/go.sum') }}
+            !target/debug/incremental
+          key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/*.patch', 'crates/tailnet/testcontrol/go.sum', 'crates/e2e/testcontrol/go.sum') }}
           restore-keys: rust-
 
       - name: install just, cargo-deny and cargo-nextest
