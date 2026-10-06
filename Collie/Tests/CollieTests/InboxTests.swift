@@ -33,6 +33,7 @@ private func entry(_ machineId: String, _ agents: [AgentSummary]) -> MachineFloc
     #expect(InboxSection.of(agent("a", .unknown, activity: nowMs - hour), now: now) == .done)
     #expect(InboxSection.of(agent("a", .idle, activity: nowMs - 25 * hour), now: now) == .archived)
     #expect(InboxSection.of(agent("a", .unknown, activity: nil), now: now) == .archived)
+    #expect(InboxSection.of(agent("a", .idle, activity: nil, since: nowMs - hour), now: now) == .done)
 }
 
 @Test func inboxPutsBlockedFirstThenTheMostRecentAcrossMachines() {

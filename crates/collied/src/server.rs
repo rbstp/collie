@@ -1692,7 +1692,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                     transcripts.retain(&agents);
                     let now = crate::now_ms();
                     for a in agents.iter().filter(|a| changed.contains(&a.terminal_id)) {
-                        let derived = transcripts.derive(a);
+                        let derived = transcripts.derive(a, true);
                         if let Some(agent) = flock::map_agent(a, &mut tracker, now, derived) {
                             let _ = state.events.send(Event::AgentStatus { agent });
                         }

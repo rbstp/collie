@@ -94,8 +94,7 @@ enum InboxSection: CaseIterable {
         case .working, .blocked: return .working
         case .done: return .done
         case .idle, .unknown:
-            guard let ms = agent.lastActivityMs else { return .archived }
-            let age = now.timeIntervalSince1970 - TimeInterval(ms) / 1000
+            let age = now.timeIntervalSince1970 - TimeInterval(agent.lastActivityMs ?? agent.statusSinceMs) / 1000
             return age < archiveAfter ? .done : .archived
         }
     }

@@ -255,7 +255,7 @@ private struct AgentRow: View {
                     .foregroundStyle(.secondary)
             }
             // A fixed slot, so times line up whether or not a row has a ring.
-            Group {
+            ZStack {
                 if let left = agent.contextLeft { ContextRing(left: left) }
             }
             .frame(width: ContextRing.size)

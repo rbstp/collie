@@ -81,7 +81,7 @@ pub fn map_agents(
     agents
         .iter()
         .filter_map(|a| {
-            let derived = transcripts.as_deref_mut().and_then(|t| t.derive(a));
+            let derived = transcripts.as_deref_mut().and_then(|t| t.derive(a, false));
             map_agent(a, tracker, now_ms, derived)
         })
         .collect()

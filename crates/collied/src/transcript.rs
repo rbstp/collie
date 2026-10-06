@@ -1,7 +1,7 @@
 //! What collied derives from an agent's own transcript on this machine. The transcript
 //! holds the whole conversation; only the `Derived` values ever leave the machine.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::OpenOptionsExt;
@@ -47,6 +47,7 @@ pub struct Transcripts {
     claude_projects: Option<PathBuf>,
     codex_sessions: Option<PathBuf>,
     cache: HashMap<String, Cached>,
+    missed: HashSet<String>,
 }
 
 impl Transcripts {
@@ -55,6 +56,7 @@ impl Transcripts {
             claude_projects,
             codex_sessions,
             cache: HashMap::new(),
+            missed: HashSet::new(),
         }
     }
 
@@ -70,12 +72,14 @@ impl Transcripts {
     }
 
     pub fn retain(&mut self, agents: &[AgentInfo]) {
-        self.cache
-            .retain(|id, _| agents.iter().any(|a| session_id(a) == Some(id.as_str())));
+        let live = |id: &String| agents.iter().any(|a| session_id(a) == Some(id.as_str()));
+        self.cache.retain(|id, _| live(id));
+        self.missed.retain(live);
     }
 
-    /// Cached by size and mtime, so an unchanged transcript costs one open and fstat.
-    pub fn derive(&mut self, a: &AgentInfo) -> Option<Derived> {
+    /// Cached by size and mtime, so an unchanged transcript costs one open and fstat. A
+    /// transcript not found is looked for again only when `relocate` (a status change).
+    pub fn derive(&mut self, a: &AgentInfo, relocate: bool) -> Option<Derived> {
         let kind = match a.agent.as_deref()? {
             "claude" => Kind::Claude,
             "codex" => Kind::Codex,
@@ -84,12 +88,21 @@ impl Transcripts {
         let id = session_id(a)?;
         let path = match self.cache.get(id) {
             Some(c) => c.path.clone(),
-            None => self.locate(kind, id, a)?,
+            None if !relocate && self.missed.contains(id) => return None,
+            None => match self.locate(kind, id, a) {
+                Some(path) => path,
+                None => {
+                    self.missed.insert(id.to_owned());
+                    return None;
+                }
+            },
         };
         let Some((file, len, modified)) = open(&path) else {
             self.cache.remove(id);
+            self.missed.insert(id.to_owned());
             return None;
         };
+        self.missed.remove(id);
         if let Some(c) = self
             .cache
             .get(id)
@@ -102,6 +115,12 @@ impl Transcripts {
             Kind::Claude => claude(&text),
             Kind::Codex => codex(&text),
         };
+        // A line longer than the tail (a large tool result) can hide the older values.
+        if let Some(prev) = self.cache.get(id).map(|c| &c.derived) {
+            derived.context_left = derived.context_left.or(prev.context_left);
+            derived.last_line = derived.last_line.or_else(|| prev.last_line.clone());
+            derived.last_prompt = derived.last_prompt.or_else(|| prev.last_prompt.clone());
+        }
         derived.last_activity_ms = modified
             .duration_since(UNIX_EPOCH)
             .ok()
@@ -276,10 +295,16 @@ fn claude_window(model: &str, used: u64) -> u64 {
 
 fn claude(text: &str) -> Derived {
     let mut d = Derived::default();
+    let mut compacted = None;
     let lines = text
         .lines()
         .rev()
-        .filter(|l| l.contains("assistant") || l.contains("human") || l.contains("last-prompt"))
+        .filter(|l| {
+            l.contains("assistant")
+                || l.contains("human")
+                || l.contains("last-prompt")
+                || l.contains("compact_boundary")
+        })
         .filter_map(|l| serde_json::from_str::<Value>(l).ok());
     for v in lines {
         if done(&d) {
@@ -287,16 +312,26 @@ fn claude(text: &str) -> Derived {
         }
         let main = v["isSidechain"] != true;
         match v["type"].as_str() {
+            // No assistant usage follows a compaction until the next reply: its size is here.
+            Some("system")
+                if main
+                    && v["subtype"] == "compact_boundary"
+                    && d.context_left.is_none()
+                    && compacted.is_none() =>
+            {
+                compacted = Some(v["compactMetadata"]["postTokens"].as_u64().unwrap_or(0));
+            }
             Some("assistant") if main && v["message"]["model"] != "<synthetic>" => {
                 let m = &v["message"];
                 let u = &m["usage"];
                 if d.context_left.is_none()
                     && let Some(input) = u["input_tokens"].as_u64()
                 {
-                    let used = input
+                    let seen = input
                         + u["cache_creation_input_tokens"].as_u64().unwrap_or(0)
                         + u["cache_read_input_tokens"].as_u64().unwrap_or(0);
-                    let window = claude_window(m["model"].as_str().unwrap_or_default(), used);
+                    let window = claude_window(m["model"].as_str().unwrap_or_default(), seen);
+                    let used = compacted.unwrap_or(seen);
                     d.context_left = Some(percent(window.saturating_sub(used), window));
                 }
                 if d.last_line.is_none() {
@@ -425,6 +460,26 @@ mod tests {
             d.last_prompt.as_deref(),
             Some("fix the flaky approval test it fails one run in ten")
         );
+        let sidechain = r#"{"isSidechain":true,"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Subagent done."}],"usage":{"input_tokens":900000}}}"#;
+        let d = claude(&[CLAUDE, sidechain].join("\n"));
+        assert_eq!(
+            (d.context_left, d.last_line.as_deref()),
+            (Some(94), Some("**Fixed** the flaky test."))
+        );
+    }
+
+    #[test]
+    fn claude_compaction_sets_the_context_until_the_next_reply() {
+        let boundary = r#"{"isSidechain":false,"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":749477,"postTokens":20000}}"#;
+        let summary = r#"{"isSidechain":false,"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation."}}"#;
+        let d = claude(&[CLAUDE, boundary, summary].join("\n"));
+        assert_eq!(d.context_left, Some(98));
+        assert_eq!(d.last_line.as_deref(), Some("**Fixed** the flaky test."));
+        let reply = r#"{"isSidechain":false,"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Back."}],"usage":{"input_tokens":100000}}}"#;
+        assert_eq!(
+            claude(&[CLAUDE, boundary, summary, reply].join("\n")).context_left,
+            Some(90)
+        );
     }
 
     #[test]
@@ -484,6 +539,9 @@ mod tests {
             d.last_prompt.as_deref(),
             Some("add approval tests for the codex menu")
         );
+        // Codex counts reasoning tokens as in the window (codex-rs 0.160.1 `tokens_in_context_window`).
+        let reasoning = r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100000,"output_tokens":100000,"reasoning_output_tokens":100000,"total_tokens":200000},"model_context_window":258400}}}"#;
+        assert_eq!(codex(reasoning).context_left, Some(24));
         assert_eq!(codex_left(12_000, 258_400), 100);
         assert_eq!(codex_left(300_000, 258_400), 0);
         assert_eq!(codex_left(1, 10_000), 0);
@@ -536,46 +594,70 @@ mod tests {
         let project = dir.path().join("claude/projects/-Users-me-src-collie");
         write(&project.join(format!("{CLAUDE_ID}.jsonl")), CLAUDE);
         let a = agent("claude", CLAUDE_ID, "/Users/me/src/collie");
-        let d = t.derive(&a).unwrap();
+        let d = t.derive(&a, false).unwrap();
         assert_eq!(d.context_left, Some(94));
         assert!(d.last_activity_ms.unwrap() > 0);
 
         // Started elsewhere: found by name under any project.
         let moved = agent("claude", CLAUDE_ID, "/Users/me/src/other");
         t.cache.clear();
-        assert_eq!(t.derive(&moved).unwrap().context_left, Some(94));
+        assert_eq!(t.derive(&moved, false).unwrap().context_left, Some(94));
 
         let rollout = dir.path().join(format!(
             "codex/sessions/2026/10/05/rollout-2026-10-05T22-25-26-{CODEX_ID}.jsonl"
         ));
         write(&rollout, CODEX);
         let c = agent("codex", CODEX_ID, "/Users/me/src/collie");
-        assert_eq!(t.derive(&c).unwrap().context_left, Some(82));
+        assert_eq!(t.derive(&c, false).unwrap().context_left, Some(82));
 
-        assert_eq!(t.derive(&agent("copilot", CLAUDE_ID, "/")), None);
+        assert_eq!(t.derive(&agent("copilot", CLAUDE_ID, "/"), false), None);
         assert_eq!(
-            t.derive(&agent(
-                "claude",
-                "11111111-2222-4333-8444-555555555555",
-                "/"
-            )),
+            t.derive(
+                &agent("claude", "11111111-2222-4333-8444-555555555555", "/"),
+                false
+            ),
             None
         );
+
+        // Not found yet: looked for again only on a status change.
+        let late_id = "22222222-3333-4444-8555-666666666666";
+        let late = agent("claude", late_id, "/Users/me/src/collie");
+        assert_eq!(t.derive(&late, false), None);
+        write(&project.join(format!("{late_id}.jsonl")), CLAUDE);
+        assert_eq!(t.derive(&late, false), None);
+        assert_eq!(t.derive(&late, true).unwrap().context_left, Some(94));
 
         // Appending changes the size, so the cache is read again.
         let mut more = CLAUDE.to_owned();
         more.push_str(r#"{"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Pushed."}],"usage":{"input_tokens":500000}}}"#);
         more.push('\n');
         write(&project.join(format!("{CLAUDE_ID}.jsonl")), &more);
-        let d = t.derive(&a).unwrap();
+        let d = t.derive(&a, false).unwrap();
         assert_eq!(
             (d.context_left, d.last_line.as_deref()),
             (Some(50), Some("Pushed."))
         );
 
+        // A tool result longer than the tail hides the reply and prompt: the last ones are kept.
+        more.push_str(&format!(
+            r#"{{"type":"user","isSidechain":false,"message":{{"role":"user","content":[{{"type":"tool_result","content":"{}"}}]}}}}"#,
+            "x".repeat(TAIL_BYTES as usize)
+        ));
+        more.push('\n');
+        more.push_str(r#"{"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-5-5","content":[{"type":"tool_use","name":"Bash"}],"usage":{"input_tokens":600000}}}"#);
+        more.push('\n');
+        write(&project.join(format!("{CLAUDE_ID}.jsonl")), &more);
+        let d = t.derive(&a, false).unwrap();
+        assert_eq!(
+            (d.context_left, d.last_line.as_deref()),
+            (Some(40), Some("Pushed."))
+        );
+        assert!(d.last_prompt.unwrap().starts_with("fix the flaky"));
+
         t.retain(&[c]);
         assert_eq!(t.cache.len(), 1);
         assert!(t.cache.contains_key(CODEX_ID));
+        assert!(t.missed.is_empty());
     }
 
     #[test]
@@ -587,7 +669,7 @@ mod tests {
         let project = dir.path().join("claude/projects/-");
         std::fs::create_dir_all(&project).unwrap();
         std::os::unix::fs::symlink(&real, project.join(format!("{CLAUDE_ID}.jsonl"))).unwrap();
-        assert_eq!(t.derive(&agent("claude", CLAUDE_ID, "/")), None);
+        assert_eq!(t.derive(&agent("claude", CLAUDE_ID, "/"), true), None);
         assert!(open(&project.join(format!("{CLAUDE_ID}.jsonl"))).is_none());
 
         let big = dir.path().join("big.jsonl");
