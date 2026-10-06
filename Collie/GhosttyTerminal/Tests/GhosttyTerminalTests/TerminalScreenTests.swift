@@ -146,7 +146,7 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
             "\u{256D}" + line(3) + " \u{1B}[1mTitle\u{1B}[22m " + line(28) + "\u{256E}"
         ),
         (line(30) + " fits " + line(4), line(30) + " fits " + line(4)),
-        (line(25) + " " + String(repeating: "x", count: 39), line(25) + " " + String(repeating: "x", count: 39)),
+        (line(25) + " " + String(repeating: "x", count: 39), line(25) + " \u{1B}E" + String(repeating: "x", count: 39)),
         (line(26) + " " + String(repeating: "x", count: 38) + "   \r\nb", line(1) + " " + String(repeating: "x", count: 38) + "\r\nb"),
         (line(100) + " \u{26A1} ultracode " + line(1), line(25) + " \u{26A1} ultracode " + line(1)),
         (line(100) + " \u{65E5}\u{672C} " + line(1), line(33) + " \u{65E5}\u{672C} " + line(1)),
@@ -157,6 +157,58 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
     for (input, prepared) in cases {
         #expect(TerminalScreen.preparedForWrapping(input, columns: 40) == prepared, "\(input.debugDescription)")
     }
+}
+
+@Test func longLinesBreakAtWords() {
+    let cases = [
+        ("the quick brown fox jumps", 10, "the quick \u{1B}Ebrown fox \u{1B}Ejumps"),
+        ("ab abcdefghijklmnop", 8, "ab \u{1B}Eabcdefgh\u{1B}Eijklmnop"),
+        ("abcde fg", 5, "abcde\u{1B}E fg"),
+        ("ab \u{4E2D}\u{6587}\u{5B57}", 6, "ab \u{1B}E\u{4E2D}\u{6587}\u{5B57}"),
+        ("\u{4E2D}\u{6587}\u{5B57}\u{4E2D}", 7, "\u{4E2D}\u{6587}\u{5B57}\u{1B}E\u{4E2D}"),
+        ("\u{1B}[1mhello \u{1B}[31mworld\u{1B}[0m", 8, "\u{1B}[1mhello \u{1B}E\u{1B}[31mworld\u{1B}[0m"),
+        ("  - one two three four", 12, "  - one two \u{1B}E\u{1B}[4Cthree \u{1B}E\u{1B}[4Cfour"),
+        ("\u{23FA} said hello there", 13, "\u{23FA} said hello \u{1B}E\u{1B}[2Cthere"),
+        ("        deep in it", 14, "        deep \u{1B}Ein it"),
+        ("a\tbcdefgh ij", 12, "a\t\u{1B}Ebcdefgh ij"),
+    ]
+    for (input, columns, prepared) in cases {
+        #expect(TerminalScreen.preparedForWrapping(input, columns: columns) == prepared, "\(input.debugDescription)")
+    }
+}
+
+@Test func boxPaddingShrinksToFitTheWrapWidth() {
+    let pad = { (count: Int) in String(repeating: " ", count: count) }
+    let cases = [
+        (
+            "\u{2502} Phases" + pad(40) + "\u{2502} agent" + pad(30) + "7m45s \u{2502}",
+            "\u{2502} Phases  \u{2502} agent  7m45s \u{2502}"
+        ),
+        (
+            "  \u{2502} \u{1B}[1mPhases\u{1B}[0m" + pad(50) + "\u{1B}[2m\u{2502}\u{1B}[0m",
+            "  \u{2502} \u{1B}[1mPhases\u{1B}[0m  \u{1B}[2m\u{2502}\u{1B}[0m"
+        ),
+        ("\u{2502} a" + pad(30) + "\u{2502}", "\u{2502} a" + pad(30) + "\u{2502}"),
+        ("Phases" + pad(40) + "agent", "Phases" + pad(34) + "\u{1B}E" + pad(6) + "agent"),
+    ]
+    for (input, prepared) in cases {
+        #expect(TerminalScreen.preparedForWrapping(input, columns: 40) == prepared, "\(input.debugDescription)")
+    }
+}
+
+@Test func paddedPanelsKeepOneRowPerLine() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let line = { (count: Int) in String(repeating: "\u{2500}", count: count) }
+    let pad = { (count: Int) in String(repeating: " ", count: count) }
+    let row = "\u{2502} \u{2713} plan" + pad(60) + "7m45s \u{2502} reviewer" + pad(90) + "\u{2502}"
+    let panel = [
+        "\u{256D}" + line(20) + " Workflow " + line(150) + "\u{256E}", row, "\u{2570}" + line(180) + "\u{256F}",
+    ]
+    let frame = screen.render(ansiSnapshot: panel.joined(separator: "\r\n"), wrapColumns: 40)
+    #expect(frame.rows == 3)
+    let rows = Dictionary(grouping: frame.runs, by: \.row).mapValues { $0.map(\.text).joined() }
+    #expect(rows[1] == "\u{2502} \u{2713} plan  7m45s \u{2502} reviewer  \u{2502}")
+    #expect(screen.render(ansiSnapshot: row).runs.map(\.text) == [row])
 }
 
 @Test func cellWidthsMatchGhostty() throws {
