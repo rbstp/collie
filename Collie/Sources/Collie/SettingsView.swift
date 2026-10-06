@@ -1,5 +1,6 @@
 import CollieCore
 import SwiftUI
+import WatchConnectivity
 
 struct SettingsView: View {
     let app: AppModel
@@ -7,6 +8,7 @@ struct SettingsView: View {
     @State private var report: ColdStartReport?
     @State private var keepKeyboard = DevicePrefs.load(from: DevicePrefs.file).keepKeyboard
     @State private var historyLines = DevicePrefs.load(from: DevicePrefs.file).historyLines
+    @State private var watchDecisions = DevicePrefs.load(from: DevicePrefs.file).watchDecisions
     private let build = buildInfo()
 
     var body: some View {
@@ -22,6 +24,18 @@ struct SettingsView: View {
                 }
                 Section("Notifications") {
                     LabeledContent("Push", value: app.pushStatus)
+                }
+                if watchDecisions || (WCSession.isSupported() && WCSession.default.isPaired) {
+                    Section {
+                        Toggle(
+                            "Decide from Apple Watch",
+                            isOn: Binding(get: { watchDecisions }, set: { on in Task { await setWatchDecisions(on) } })
+                        )
+                    } header: {
+                        Text("Apple Watch")
+                    } footer: {
+                        Text("Off by default: the watch shows approvals read-only. When on, the watch can approve, deny or answer a menu while it is unlocked and on your wrist. Turning it on asks for Face ID or the passcode.")
+                    }
                 }
                 Section("Prompt") {
                     Toggle("Keep keyboard open after sending", isOn: $keepKeyboard)
@@ -75,6 +89,16 @@ struct SettingsView: View {
                 report = app.core?.coldStartReport()
             }
         }
+    }
+
+    /// Turning it off needs no authentication.
+    private func setWatchDecisions(_ on: Bool) async {
+        if on, !(await DeviceOwnerAuthenticator().authenticate(reason: "Allow decisions from Apple Watch")) { return }
+        var prefs = DevicePrefs.load(from: DevicePrefs.file)
+        prefs.watchDecisions = on
+        prefs.save(to: DevicePrefs.file)
+        watchDecisions = DevicePrefs.load(from: DevicePrefs.file).watchDecisions
+        app.publishWatchState()
     }
 }
 

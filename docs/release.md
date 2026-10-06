@@ -10,10 +10,13 @@ Team `RM3UT3MMSR`, in the Apple Developer portal and App Store Connect:
 2. **App IDs** (explicit):
    - `dev.rbstp.collie`, the app, and `dev.rbstp.collie.push`, the ColliePush notification service extension, each with **Push Notifications** and **App Groups** (assign `group.dev.rbstp.collie`) enabled;
    - `dev.rbstp.collie.widgets`, the CollieWidgets extension (Live Activities), with **App Groups** (assign `group.dev.rbstp.collie`; the widget reads the notification key mirror there). No push capability: Live Activity pushes are addressed to the app's topic and use the same APNs key.
+   - `dev.rbstp.collie.watchkitapp`, the CollieWatch app, and `dev.rbstp.collie.watchkitapp.widgets`, its usage complication, each with **App Groups** (assign `group.dev.rbstp.collie`; on the watch it is the watch's own container). No push capability and no keychain group.
 3. **Provisioning profiles**: App Store Connect distribution, the team's Apple Distribution certificate, named exactly as `Collie/project.yml` and `Collie/ExportOptions.plist` refer to them:
    - **`Collie App Store`** for `dev.rbstp.collie`;
    - **`Collie Push App Store`** for `dev.rbstp.collie.push`;
-   - **`Collie Widgets App Store`** for `dev.rbstp.collie.widgets`.
+   - **`Collie Widgets App Store`** for `dev.rbstp.collie.widgets`;
+   - **`Collie Watch App Store`** for `dev.rbstp.collie.watchkitapp`;
+   - **`Collie Watch Widgets App Store`** for `dev.rbstp.collie.watchkitapp.widgets`.
 
    A profile is a snapshot of its App ID's capabilities: after any capability change, regenerate the profile (Edit, Save) and update its secret.
 4. **App Store Connect app record** for `dev.rbstp.collie`, with an internal TestFlight group.
@@ -85,6 +88,8 @@ All repository-level, base64 values encoded with `base64 -i <file> | gh secret s
 | `APPLE_PROVISIONING_PROFILE` | `Collie App Store` profile, `.mobileprovision`, base64 |
 | `APPLE_PROVISIONING_PROFILE_PUSH` | `Collie Push App Store` profile, `.mobileprovision`, base64 |
 | `APPLE_PROVISIONING_PROFILE_WIDGETS` | `Collie Widgets App Store` profile, `.mobileprovision`, base64 |
+| `APPLE_PROVISIONING_PROFILE_WATCH` | `Collie Watch App Store` profile, `.mobileprovision`, base64 |
+| `APPLE_PROVISIONING_PROFILE_WATCH_WIDGETS` | `Collie Watch Widgets App Store` profile, `.mobileprovision`, base64 |
 | `APPLE_KEY_P8` | App Store Connect API key (Developer role), `.p8`, base64 |
 | `APPLE_KEY_ID` | that key's ID |
 | `APPLE_ISSUER_ID` | App Store Connect issuer ID |
@@ -102,6 +107,8 @@ The certificate and the profiles expire after a year; renew them and update thei
 
 - The icon is a single 1024x1024 universal image, `Collie/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png`; Xcode derives every other size. The app's `Info.plist` sets `CFBundleIconName` to `AppIcon` and `project.yml` sets `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`: App Store validation rejects an upload whose icon is only in the asset catalog without `CFBundleIconName`.
 - `Info.plist` does not set `ITSAppUsesNonExemptEncryption`, so App Store Connect asks the export compliance question for every uploaded build, and the build waits as "Missing Compliance" until it is answered (TestFlight, the build, Manage). The app uses encryption beyond Apple's own: WireGuard and TLS inside the embedded Tailscale node.
+
+The iOS app embeds the watch app, so every iOS build, test and archive also builds for watchOS: both workflows install the watchOS platform on the `xcode-27` runner when it is missing. The watch app has its own copy of the icon, `Collie/CollieWatch/Assets.xcassets/AppIcon.appiconset/AppIcon.png`.
 
 ## Adding a signed extension target
 

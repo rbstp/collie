@@ -27,6 +27,7 @@ final class AppModel {
     private var alertsOff = false
     let approvals: ApprovalsModel
     let follows: FollowModel
+    let watch = WatchLink()
     var tab = AppTab.agents
     var openingAgent: AgentRoute?
     private var backgroundedAt: Date?
@@ -199,6 +200,7 @@ final class AppModel {
         switch phase {
         case .background:
             backgroundedAt = .now
+            publishWatchState(leaving: true)
             if let core {
                 let assertion = BackgroundAssertion(name: "core.suspend")
                 let epoch = core.beginSuspend()
@@ -344,6 +346,70 @@ final class AppModel {
         } else {
             await FollowModel.show(progress: nil, on: link)
         }
+    }
+
+    /// Never in the background, where only `refreshForWatch` lists approvals, except `leaving` as
+    /// the app goes there; nor before each machine has a snapshot or is known down: an empty list
+    /// would clear the watch.
+    func publishWatchState(leaving: Bool = false) {
+        guard let core, watch.ready, leaving || UIApplication.shared.applicationState != .background else { return }
+        let entries = core.machines().map { MachineFlockEntry(machine: $0, flock: core.cachedFlock(machineId: $0.id)) }
+        guard entries.allSatisfy({ $0.flock?.details != nil || $0.linkDown }) else { return }
+        watch.publish(
+            WatchState.published(
+                WatchLink.shown(), items: approvals.items, entries: entries,
+                allowed: DevicePrefs.load(from: DevicePrefs.file).watchDecisions, live: !leaving, now: .now
+            )
+        )
+    }
+
+    /// From the paired watch as it opens. Out of the foreground (locked, suspended or not
+    /// running), the approvals are listed from each Mac over the lock-screen path and sent as
+    /// the state the watch may decide on; the agents and usage stay as last shown.
+    func refreshForWatch() async -> (WatchState, silent: [String])? {
+        guard let core, watch.ready else { return nil }
+        if UIApplication.shared.applicationState == .active {
+            publishWatchState()
+            return WatchLink.shown().map { ($0, []) }
+        }
+        let assertion = BackgroundAssertion(name: "watch.refresh")
+        defer { assertion.end() }
+        let listed = await core.approvalsInBackground(budgetMs: 15_000)
+        let machines = core.machines()
+        let state = WatchState.refreshed(
+            WatchLink.shown(), listed: listed, machines: machines,
+            allowed: DevicePrefs.load(from: DevicePrefs.file).watchDecisions, now: .now
+        )
+        let silent = listed.filter { $0.approvals == nil }.compactMap { entry in machines.first { $0.id == entry.machineId }?.nodeId }
+        let counts = listed.map { $0.approvals.map { String($0.count) } ?? "none" }.joined(separator: ",")
+        WatchLink.log.notice("refresh: listed=\(counts, privacy: .public) sent=\(state.approvals.count, privacy: .public)")
+        guard watch.send(state) else { return nil }
+        return (state, silent)
+    }
+
+    /// From the paired watch: its wrist check stands in for Face ID only while this phone's
+    /// setting allows it, re-read here on every request, and only for an answer this phone sent
+    /// to the watch.
+    func decideFromWatch(_ request: WatchDecisionRequest) async -> (FollowUp, answered: Bool) {
+        let shown = WatchLink.shown()
+        let agent = shown?.approvals.first { $0.approvalId == request.approvalId }?.agent ?? "collie"
+        let allowed = DevicePrefs.load(from: DevicePrefs.file).watchDecisions
+        if let refusal = WatchLink.refusal(request, allowed: allowed, shown: shown, now: .now) {
+            return (FollowUp(title: agent, body: refusal, opensApproval: false), false)
+        }
+        guard let core else { return (FollowUp(title: agent, body: FollowUp.unreachable, opensApproval: true), false) }
+        guard activityDecisions.insert(request.approvalId).inserted else {
+            return (FollowUp(title: agent, body: "Already sending.", opensApproval: false), false)
+        }
+        defer { activityDecisions.remove(request.approvalId) }
+        let assertion = BackgroundAssertion(name: "watch.decide")
+        defer { assertion.end() }
+        let decision = request.decision.core
+        let report = await core.decideFromNotification(
+            machineNodeId: request.nodeId, approvalId: request.approvalId, decision: decision, budgetMs: 20_000
+        )
+        log.notice("watch decide: outcome=\(String(describing: report.outcome), privacy: .public) total=\(report.totalMs, privacy: .public)ms")
+        return (FollowUp.after(report.outcome, decision: decision, agent: agent), report.outcome.watchAnswered)
     }
 
     private func logColdStart() async {

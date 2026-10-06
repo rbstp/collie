@@ -89,6 +89,8 @@ jobs:
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
           APPLE_PROVISIONING_PROFILE_PUSH: ${{ secrets.APPLE_PROVISIONING_PROFILE_PUSH }}
           APPLE_PROVISIONING_PROFILE_WIDGETS: ${{ secrets.APPLE_PROVISIONING_PROFILE_WIDGETS }}
+          APPLE_PROVISIONING_PROFILE_WATCH: ${{ secrets.APPLE_PROVISIONING_PROFILE_WATCH }}
+          APPLE_PROVISIONING_PROFILE_WATCH_WIDGETS: ${{ secrets.APPLE_PROVISIONING_PROFILE_WATCH_WIDGETS }}
           APPLE_KEY_P8: ${{ secrets.APPLE_KEY_P8 }}
           APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
           APPLE_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
@@ -127,6 +129,10 @@ jobs:
 
       - name: generate the project
         run: just --no-deps ios-project
+
+      # The iOS app embeds the watch app, so every iOS build also builds for watchOS.
+      - name: install the watchOS platform
+        run: xcrun simctl list runtimes | grep -q watchOS || xcodebuild -downloadPlatform watchOS
 
       # ci.yml tests the pull request, not the revision shipped, and a manual dispatch skips it.
       - name: test the revision being shipped
@@ -174,6 +180,8 @@ jobs:
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
           APPLE_PROVISIONING_PROFILE_PUSH: ${{ secrets.APPLE_PROVISIONING_PROFILE_PUSH }}
           APPLE_PROVISIONING_PROFILE_WIDGETS: ${{ secrets.APPLE_PROVISIONING_PROFILE_WIDGETS }}
+          APPLE_PROVISIONING_PROFILE_WATCH: ${{ secrets.APPLE_PROVISIONING_PROFILE_WATCH }}
+          APPLE_PROVISIONING_PROFILE_WATCH_WIDGETS: ${{ secrets.APPLE_PROVISIONING_PROFILE_WATCH_WIDGETS }}
           APPLE_KEY_P8: ${{ secrets.APPLE_KEY_P8 }}
 
       # No PROVISIONING_PROFILE_SPECIFIER here: a command-line setting applies to every target, so each target names its profile in project.yml.
