@@ -4,6 +4,7 @@ import CollieCore
 import CryptoKit
 import Foundation
 import SwiftUI
+import Synchronization
 import UserNotifications
 
 /// `--terminal-demo <file>`: the Agents list over fake agents, each agent screen showing the
@@ -78,6 +79,7 @@ final class DemoAgentCore: ActivityCore {
     let snapshot: String
     private let agents: [AgentSummary]
     private let usage: PlanUsage
+    private let stars = Mutex<[String]>([])
 
     init(snapshot: String) {
         self.snapshot = snapshot
@@ -158,6 +160,13 @@ final class DemoAgentCore: ActivityCore {
 
     func focus(machineId: String, terminalId: String) async throws {}
 
+    func star(machineId: String, terminalId: String, starred: Bool) async throws {
+        stars.withLock { stars in
+            stars.removeAll { $0 == terminalId }
+            if starred { stars.append(terminalId) }
+        }
+    }
+
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
         throw CoreError.NotImplemented
     }
@@ -222,7 +231,7 @@ final class DemoAgentCore: ActivityCore {
                 WorkspaceSummary(workspaceId: "ws_site", label: "website", number: 2, status: .done, cwd: "/Users/demo/website"),
                 WorkspaceSummary(workspaceId: "ws_api", label: "api", number: 3, status: .idle, cwd: "/Users/demo/api"),
             ],
-            agents: agents, approvalsCount: 1, planUsage: usage
+            agents: agents, approvalsCount: 1, planUsage: usage, starred: stars.withLock { $0 }
         )
     }
 

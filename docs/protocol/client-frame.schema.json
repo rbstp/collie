@@ -64,6 +64,23 @@
       ],
       "type": "object"
     },
+    "AgentStarParams": {
+      "additionalProperties": false,
+      "description": "Stars are the machine's, shared by every paired phone. Unstarring needs no live pane.",
+      "properties": {
+        "starred": {
+          "type": "boolean"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "starred"
+      ],
+      "type": "object"
+    },
     "AgentTarget": {
       "additionalProperties": false,
       "properties": {
@@ -859,6 +876,22 @@
         },
         "params": {
           "$ref": "#/$defs/AgentTarget"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.star",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentStarParams"
         }
       },
       "required": [

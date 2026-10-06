@@ -183,7 +183,7 @@ impl Driver {
             .ok_or_else(|| (ErrorCode::NotFound, "no such agent".to_owned()))
     }
 
-    async fn find_pane(&self, terminal_id: &TerminalId) -> Result<PaneInfo, Fail> {
+    pub async fn find_pane(&self, terminal_id: &TerminalId) -> Result<PaneInfo, Fail> {
         Ok(self.pane_and_agent(terminal_id).await?.0)
     }
 

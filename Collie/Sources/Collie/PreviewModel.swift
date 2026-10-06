@@ -21,12 +21,11 @@ final class PreviewModel {
     static let starredLines: UInt16 = 120
 
     private(set) var screens: [AgentRoute: String] = [:]
-    /// Kept on this device; a star goes with its agent's pane.
-    private(set) var starred: Set<AgentRoute>
+    /// From each machine's listing: the machine keeps them, and drops one when its pane closes.
+    private(set) var starred: Set<AgentRoute> = []
 
     @ObservationIgnored private var core: (any AgentCore)?
     @ObservationIgnored private let now: () -> ContinuousClock.Instant
-    @ObservationIgnored private let prefsFile: URL?
     /// Counted: a card moving between the starred row and the grid can appear before it disappears.
     @ObservationIgnored private var visible: [AgentRoute: Int] = [:]
     @ObservationIgnored private var connected: Set<String> = []
@@ -37,10 +36,8 @@ final class PreviewModel {
     @ObservationIgnored private var reading: Set<AgentRoute> = []
     @ObservationIgnored private var runs = 0
 
-    init(now: @escaping () -> ContinuousClock.Instant = { .now }, prefsFile: URL? = DevicePrefs.file) {
+    init(now: @escaping () -> ContinuousClock.Instant = { .now }) {
         self.now = now
-        self.prefsFile = prefsFile
-        starred = DevicePrefs.load(from: prefsFile).starred
     }
 
     func run(core: any AgentCore) async {
@@ -63,15 +60,22 @@ final class PreviewModel {
         visible[route] = visible[route].flatMap { $0 > 1 ? $0 - 1 : nil }
     }
 
-    @discardableResult
-    func toggleStar(_ route: AgentRoute) -> Task<Void, Never>? {
-        if starred.remove(route) == nil {
+    func toggleStar(_ route: AgentRoute) async {
+        guard let core else { return }
+        let star = !starred.contains(route)
+        do {
+            try await core.star(machineId: route.machineId, terminalId: route.terminalId, starred: star)
+        } catch {
+            return
+        }
+        if star {
             starred.insert(route)
             readAt[route] = nil
             fresh.remove(route)
+        } else {
+            starred.remove(route)
         }
-        saveStarred()
-        return tick()
+        await tick()?.value
     }
 
     @discardableResult
@@ -92,12 +96,12 @@ final class PreviewModel {
             fresh.remove(route)
         }
         statuses = next
-        let loaded = Set(entries.filter { $0.flock?.link == .connected && $0.flock?.details != nil }.map(\.id))
-        let closed = starred.filter { loaded.contains($0.machineId) && next[$0] == nil }
-        if !closed.isEmpty {
-            starred.subtract(closed)
-            saveStarred()
+        let listed = Set(entries.flatMap { entry in (entry.flock?.starred ?? []).map { AgentRoute(machineId: entry.id, terminalId: $0) } })
+        for route in listed.subtracting(starred) {
+            readAt[route] = nil
+            fresh.remove(route)
         }
+        if listed != starred { starred = listed }
         readAt = readAt.filter { next[$0.key] != nil }
         fresh = fresh.filter { next[$0] != nil }
         if screens.keys.contains(where: { next[$0] == nil }) {
@@ -145,12 +149,6 @@ final class PreviewModel {
                 }
             }
         }
-    }
-
-    private func saveStarred() {
-        var prefs = DevicePrefs.load(from: prefsFile)
-        prefs.starred = starred
-        prefs.save(to: prefsFile)
     }
 
     private func show(_ ansi: String, for route: AgentRoute) {

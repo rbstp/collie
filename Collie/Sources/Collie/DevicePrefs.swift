@@ -8,7 +8,6 @@ struct DevicePrefs: Codable, Equatable {
     var fontSize = 11.0
     var dictationLanguage = DictationLanguage.english
     var agentsLayout = AgentsLayout.grid
-    var starred: Set<AgentRoute> = []
     var historyLines: UInt16 = 200
     var watchDecisions = false
 
@@ -37,7 +36,6 @@ extension DevicePrefs {
         fontSize = try container.decodeIfPresent(Double.self, forKey: .fontSize) ?? defaults.fontSize
         dictationLanguage = (try? container.decodeIfPresent(DictationLanguage.self, forKey: .dictationLanguage)) ?? defaults.dictationLanguage
         agentsLayout = (try? container.decodeIfPresent(AgentsLayout.self, forKey: .agentsLayout)) ?? defaults.agentsLayout
-        starred = (try? container.decodeIfPresent(Set<AgentRoute>.self, forKey: .starred)) ?? defaults.starred
         historyLines = try container.decodeIfPresent(UInt16.self, forKey: .historyLines) ?? defaults.historyLines
         watchDecisions = try container.decodeIfPresent(Bool.self, forKey: .watchDecisions) ?? defaults.watchDecisions
     }

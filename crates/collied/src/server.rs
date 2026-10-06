@@ -12,9 +12,10 @@ use collie_tls::rustls::sign::CertifiedKey;
 use collie_tls::server::TlsStream;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
-    AgentWatchParams, AttachmentChunkParams, ErrorBody, ErrorCode, Event, HelloResult, KeyPin,
-    MachineInfo, MethodClass, PairCompleteParams, PairingCode, PairingInvite, Request, Response,
-    ServerFrame, TerminalGrantParams, TerminalId, TerminalKey, TerminalWatchParams,
+    AgentStarParams, AgentWatchParams, AttachmentChunkParams, ErrorBody, ErrorCode, Event,
+    HelloResult, KeyPin, MachineInfo, MethodClass, PairCompleteParams, PairingCode, PairingInvite,
+    Request, Response, ServerFrame, TerminalGrantParams, TerminalId, TerminalKey,
+    TerminalWatchParams,
 };
 use serde::{Deserialize, Serialize};
 use tailnet::{Accepted, BackendState, Node, WhoIs};
@@ -36,7 +37,7 @@ use crate::attachments::{self, Attachments};
 use crate::audit::Audit;
 use crate::control::{self, Candidate, PairAttempt, StatusInfo};
 use crate::drive::{self, Authorized, Driver, Origin, Reply, Watched, Watcher};
-use crate::flock::{self, Baseline, StatusTracker};
+use crate::flock::{self, Baseline, Stars, StatusTracker};
 use crate::gate::{self, Decision};
 use crate::pairing::{Attempt, Pairing};
 use crate::peers::{self, Peer, Store};
@@ -176,6 +177,7 @@ pub struct State {
     chunk_buckets: Mutex<HashMap<String, TokenBucket>>,
     reject_buckets: Mutex<HashMap<IpAddr, TokenBucket>>,
     tracker: Mutex<StatusTracker>,
+    stars: Mutex<Stars>,
     transcripts: Mutex<Transcripts>,
     live: Mutex<activity::Live>,
     events: broadcast::Sender<Event>,
@@ -522,6 +524,7 @@ pub async fn start_with(
     let transcripts =
         Transcripts::from_env().with_usage(cfg.data_dir.join(crate::usage::USAGE_FILE));
     let tracker = StatusTracker::load(cfg.data_dir.join(config::STATUS_FILE));
+    let stars = Stars::load(cfg.data_dir.join(config::STARS_FILE));
 
     let state = Arc::new(State {
         machine: MachineInfo {
@@ -543,6 +546,7 @@ pub async fn start_with(
         chunk_buckets: Mutex::new(HashMap::new()),
         reject_buckets: Mutex::new(HashMap::new()),
         tracker: Mutex::new(tracker),
+        stars: Mutex::new(stars),
         transcripts: Mutex::new(transcripts),
         live: Mutex::new(activity::Live::default()),
         events,
@@ -1131,6 +1135,7 @@ impl Session<'_> {
                 (reply, Some(origin))
             }
             Request::AgentFocus(p) => (drive.focus(&p.terminal_id, &auth).await, None),
+            Request::AgentStar(p) => (self.star(p).await, None),
             // Starting an agent takes up to 30 s; the session keeps serving meanwhile.
             Request::TaskNew(_) if !self.tasks.is_empty() => (
                 err(ErrorCode::RateLimited, "a task is already starting"),
@@ -1533,11 +1538,23 @@ impl Session<'_> {
             Some(&mut lock(&self.state.transcripts)),
         );
         flock.approvals = self.state.approvals.pending();
+        flock.starred = lock(&self.state.stars).reconcile(&snap.panes);
         if self.state.cfg.terminals {
             flock.terminals = flock::map_terminals(&snap);
             flock.terminals_enabled = true;
         }
         Ok(Response::Flock(flock))
+    }
+
+    async fn star(&self, p: AgentStarParams) -> Reply {
+        if p.starred {
+            let pane = self.state.drive.find_pane(&p.terminal_id).await?;
+            lock(&self.state.stars).star(&pane);
+        } else {
+            lock(&self.state.stars).unstar(p.terminal_id.as_str());
+        }
+        let _ = self.state.events.send(Event::FlockChanged {});
+        Ok(Response::Ok)
     }
 
     async fn workspaces(&self) -> Reply {
@@ -1624,6 +1641,7 @@ impl Session<'_> {
     /// Answers before revoking: the revoke closes this session, and nothing reaches the
     /// phone afterwards.
     async fn unpair(&mut self, id: u32) -> Flow {
+        lock(&self.state.stars).clear();
         let flow = self.reply(id, Ok(Response::Ok)).await;
         let id = self.peer.who.node.stable_id.clone();
         if let Err(e) = self
@@ -1729,6 +1747,7 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::AgentSendKeys(p) => p.terminal_id.as_str(),
         Request::AgentTypeText(p) => p.terminal_id.as_str(),
         Request::AgentFocus(p) => p.terminal_id.as_str(),
+        Request::AgentStar(p) => p.terminal_id.as_str(),
         Request::PaneClose(p) => p.terminal_id.as_str(),
         Request::WorkspaceClose(p) => p.workspace_id.as_str(),
         Request::TaskNew(p) => p.cwd.as_str(),
@@ -1957,6 +1976,15 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         }
         base = Some(next);
         outage = false;
+        // Also with no phone connected: a closed pane must lose its star before herdr can
+        // give its pane id to a new pane.
+        let starred = lock(&state.stars).list();
+        if !starred.is_empty()
+            && let Ok(snap) = herdr::session_snapshot(&state.herdr).await
+            && lock(&state.stars).reconcile(&snap.panes) != starred
+        {
+            let _ = state.events.send(Event::FlockChanged {});
+        }
         {
             let mut grants = lock(&state.terminals);
             if !grants.is_empty() {

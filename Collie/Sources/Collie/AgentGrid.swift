@@ -89,7 +89,8 @@ struct AgentGrid<Menu: View>: View {
         .buttonStyle(.plain)
         .opacity(entry.linkDown ? 0.5 : 1)
         .contextMenu {
-            Button(starred ? "Unstar" : "Star", systemImage: starred ? "star.slash" : "star") { previews.toggleStar(route) }
+            Button(starred ? "Unstar" : "Star", systemImage: starred ? "star.slash" : "star") { Task { await previews.toggleStar(route) } }
+                .disabled(entry.flock?.link != .connected)
             menu(agent, route)
         }
         .onAppear { previews.appeared(route) }
