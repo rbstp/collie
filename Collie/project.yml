@@ -133,6 +133,8 @@ targets:
       - path: Sources/Shared/WatchState.swift
       - path: Sources/Shared/PushHint.swift
       - path: Resources/Assets.xcassets
+    dependencies:
+      - target: CollieWatchWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie.watchkitapp
@@ -150,6 +152,31 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
           PROVISIONING_PROFILE_SPECIFIER: "Collie Watch App Store"
+
+  # Usage ring complication. Pure Swift, like CollieWatch.
+  CollieWatchWidgets:
+    type: app-extension
+    platform: watchOS
+    sources:
+      - path: CollieWatchWidgets
+      - path: Sources/Shared/WatchState.swift
+      - path: Sources/Shared/PushHint.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie.watchkitapp.widgets
+        PRODUCT_NAME: CollieWatchWidgets
+        INFOPLIST_FILE: CollieWatchWidgets/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: CollieWatchWidgets/CollieWatchWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "Apple Development"
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "Collie Watch Widgets App Store"
 
   CollieTests:
     type: bundle.unit-test
