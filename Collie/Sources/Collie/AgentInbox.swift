@@ -11,41 +11,46 @@ struct AgentInbox<Menu: View>: View {
 
     var body: some View {
         let items = InboxItem.items(in: entries)
-        List {
-            if let notice {
-                Label(notice, systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-            }
-            if entries.isEmpty {
-                NoMachines()
-            }
-            ForEach(entries.filter { $0.error != nil }) { entry in
-                Button {
-                    reconnect(entry)
-                } label: {
-                    Label("\(entry.machine.label): \(entry.error ?? "")", systemImage: "exclamationmark.triangle")
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            List {
+                if let notice {
+                    Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
-                .buttonStyle(.plain)
-            }
-            let groups = InboxSection.grouped(items, now: .now)
-            ForEach(InboxSection.allCases, id: \.self) { section in
-                if let rows = groups[section] {
-                    Section(section.title) {
-                        ForEach(rows) { item in
-                            NavigationLink(value: item.route) {
-                                InboxRow(item: item, machine: showsMachine ? item.machine : nil, followed: follows?.isFollowing(item.route) == true)
+                if entries.isEmpty {
+                    NoMachines()
+                }
+                ForEach(entries.filter { $0.error != nil }) { entry in
+                    Button {
+                        reconnect(entry)
+                    } label: {
+                        Label("\(entry.machine.label): \(entry.error ?? "")", systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                    .buttonStyle(.plain)
+                }
+                let groups = InboxSection.grouped(items, now: .now)
+                ForEach(InboxSection.allCases, id: \.self) { section in
+                    if let rows = groups[section] {
+                        Section(section.title) {
+                            ForEach(rows) { item in
+                                NavigationLink(value: item.route) {
+                                    InboxRow(
+                                        item: item, machine: showsMachine ? item.machine : nil,
+                                        followed: follows?.isFollowing(item.route) == true, now: context.date
+                                    )
+                                }
+                                .contextMenu { menu(item.agent, item.route) }
+                                .opacity(item.linkDown ? 0.5 : 1)
                             }
-                            .contextMenu { menu(item.agent, item.route) }
-                            .opacity(item.linkDown ? 0.5 : 1)
                         }
                     }
                 }
-            }
-            if items.isEmpty && entries.contains(where: { $0.flock?.details != nil }) {
-                Text("No agents running").foregroundStyle(.secondary)
+                if items.isEmpty && entries.contains(where: { $0.flock?.details != nil }) {
+                    Text("No agents running").foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -114,6 +119,7 @@ private struct InboxRow: View {
     let item: InboxItem
     let machine: String?
     let followed: Bool
+    let now: Date
 
     var body: some View {
         let agent = item.agent
@@ -157,11 +163,10 @@ private struct InboxRow: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 6) {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(Elapsed.string(sinceMs: item.activityMs, now: context.date))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
+                Text(Elapsed.compact(sinceMs: item.activityMs, now: now))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("active \(Elapsed.spoken(sinceMs: item.activityMs, now: now)) ago")
                 if let left = agent.contextLeft {
                     ContextRing(left: left)
                 }

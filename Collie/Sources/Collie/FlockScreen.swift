@@ -35,58 +35,60 @@ struct FlockScreen: View {
                         reconnect: reconnect, follows: follows, menu: menu
                     )
                 case .list:
-                    List {
-                        if let notice = model.closeNotice {
-                            Label(notice, systemImage: "exclamationmark.triangle")
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                        }
-                        if model.entries.isEmpty {
-                            NoMachines()
-                        }
-                        ForEach(model.entries) { entry in
-                            Section {
-                                if let error = entry.error {
-                                    Label(error, systemImage: "exclamationmark.triangle")
-                                        .font(.footnote)
-                                        .foregroundStyle(.orange)
-                                }
-                                if entry.flock?.details != nil && entry.agents.isEmpty {
-                                    Text("No agents running").foregroundStyle(.secondary)
-                                }
-                                ForEach(entry.agents, id: \.terminalId) { agent in
-                                    let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
-                                    NavigationLink(value: route) {
-                                        AgentRow(
-                                            agent: agent, workspace: entry.workspaceLabel(for: agent),
-                                            followed: follows?.isFollowing(route) == true
-                                        )
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        List {
+                            if let notice = model.closeNotice {
+                                Label(notice, systemImage: "exclamationmark.triangle")
+                                    .font(.footnote)
+                                    .foregroundStyle(.orange)
+                            }
+                            if model.entries.isEmpty {
+                                NoMachines()
+                            }
+                            ForEach(model.entries) { entry in
+                                Section {
+                                    if let error = entry.error {
+                                        Label(error, systemImage: "exclamationmark.triangle")
+                                            .font(.footnote)
+                                            .foregroundStyle(.orange)
                                     }
-                                    .contextMenu { menu(agent, route) }
-                                }
-                                .opacity(entry.linkDown ? 0.5 : 1)
-                                if !entry.terminals.isEmpty {
-                                    Text("Terminals").font(.caption).foregroundStyle(.secondary)
-                                    ForEach(entry.terminals, id: \.terminalId) { terminal in
-                                        let route = AgentRoute(machineId: entry.id, terminalId: terminal.terminalId)
+                                    if entry.flock?.details != nil && entry.agents.isEmpty {
+                                        Text("No agents running").foregroundStyle(.secondary)
+                                    }
+                                    ForEach(entry.agents, id: \.terminalId) { agent in
+                                        let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
                                         NavigationLink(value: route) {
-                                            TerminalRow(terminal: terminal)
+                                            AgentRow(
+                                                agent: agent, workspace: entry.workspaceLabel(for: agent),
+                                                followed: follows?.isFollowing(route) == true, now: context.date
+                                            )
                                         }
-                                        .contextMenu {
-                                            Button("Close pane", systemImage: "xmark.square", role: .destructive) {
-                                                model.beginClose(.pane, route: route)
-                                            }
-                                        }
+                                        .contextMenu { menu(agent, route) }
                                     }
                                     .opacity(entry.linkDown ? 0.5 : 1)
+                                    if !entry.terminals.isEmpty {
+                                        Text("Terminals").font(.caption).foregroundStyle(.secondary)
+                                        ForEach(entry.terminals, id: \.terminalId) { terminal in
+                                            let route = AgentRoute(machineId: entry.id, terminalId: terminal.terminalId)
+                                            NavigationLink(value: route) {
+                                                TerminalRow(terminal: terminal)
+                                            }
+                                            .contextMenu {
+                                                Button("Close pane", systemImage: "xmark.square", role: .destructive) {
+                                                    model.beginClose(.pane, route: route)
+                                                }
+                                            }
+                                        }
+                                        .opacity(entry.linkDown ? 0.5 : 1)
+                                    }
+                                } header: {
+                                    Button {
+                                        reconnect(entry)
+                                    } label: {
+                                        MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                            } header: {
-                                Button {
-                                    reconnect(entry)
-                                } label: {
-                                    MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting)
-                                }
-                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -238,10 +240,12 @@ private struct AgentRow: View {
     let agent: AgentSummary
     let workspace: String?
     let followed: Bool
+    let now: Date
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             StatusIcon(state: agent.status)
+                .accessibilityHidden(true)
                 // Centered on the title's first line rather than sitting on its baseline.
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             VStack(alignment: .leading, spacing: 2) {
@@ -268,11 +272,9 @@ private struct AgentRow: View {
                 }
             }
             Spacer()
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
+            StatusAge(agent: agent, now: now)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             // A fixed slot, so times line up whether or not a row has a ring.
             ZStack {
                 if let left = agent.contextLeft { ContextRing(left: left) }
@@ -351,6 +353,18 @@ struct StatusPill: View {
             .padding(.vertical, 3)
             .background(state.color.opacity(0.18), in: Capsule())
             .foregroundStyle(state.color)
+    }
+}
+
+/// How long the agent has been in its status, compact, read in full by VoiceOver.
+struct StatusAge: View {
+    let agent: AgentSummary
+    let now: Date
+
+    var body: some View {
+        Text(Elapsed.compact(sinceMs: agent.statusSinceMs, now: now))
+            .monospacedDigit()
+            .accessibilityLabel(Elapsed.spoken(agent.status, sinceMs: agent.statusSinceMs, now: now))
     }
 }
 

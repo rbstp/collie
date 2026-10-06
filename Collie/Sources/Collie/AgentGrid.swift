@@ -15,73 +15,75 @@ struct AgentGrid<Menu: View>: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        ScrollView {
-            if let notice {
-                Label(notice, systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
-            }
-            if entries.isEmpty {
-                NoMachines()
-            }
-            LazyVStack(alignment: .leading, spacing: 16) {
-                ForEach(entries) { entry in
-                    Section {
-                        let agents = entry.gridAgents(starred: previews.starred)
-                        ForEach(agents.starred, id: \.terminalId) { card($0, in: entry, starred: true) }
-                        if !agents.rest.isEmpty {
-                            LazyVGrid(
-                                columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
-                                alignment: .leading, spacing: 16
-                            ) {
-                                ForEach(agents.rest, id: \.terminalId) { card($0, in: entry, starred: false) }
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            ScrollView {
+                if let notice {
+                    Label(notice, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                }
+                if entries.isEmpty {
+                    NoMachines()
+                }
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    ForEach(entries) { entry in
+                        Section {
+                            let agents = entry.gridAgents(starred: previews.starred)
+                            ForEach(agents.starred, id: \.terminalId) { card($0, in: entry, starred: true, now: context.date) }
+                            if !agents.rest.isEmpty {
+                                LazyVGrid(
+                                    columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
+                                    alignment: .leading, spacing: 16
+                                ) {
+                                    ForEach(agents.rest, id: \.terminalId) { card($0, in: entry, starred: false, now: context.date) }
+                                }
                             }
+                            if !entry.terminals.isEmpty {
+                                Text("Terminals").font(.caption).foregroundStyle(.secondary)
+                                LazyVGrid(
+                                    columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
+                                    alignment: .leading, spacing: 12
+                                ) {
+                                    ForEach(entry.terminals, id: \.terminalId) { terminalCard($0, in: entry) }
+                                }
+                            }
+                        } header: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Button {
+                                    reconnect(entry)
+                                } label: {
+                                    MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: showsLink)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                if let error = entry.error {
+                                    Label(error, systemImage: "exclamationmark.triangle")
+                                        .font(.footnote)
+                                        .foregroundStyle(.orange)
+                                }
+                                if entry.flock?.details != nil && entry.agents.isEmpty {
+                                    Text("No agents running").foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.top, 8)
                         }
-                        if !entry.terminals.isEmpty {
-                            Text("Terminals").font(.caption).foregroundStyle(.secondary)
-                            LazyVGrid(
-                                columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
-                                alignment: .leading, spacing: 12
-                            ) {
-                                ForEach(entry.terminals, id: \.terminalId) { terminalCard($0, in: entry) }
-                            }
-                        }
-                    } header: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Button {
-                                reconnect(entry)
-                            } label: {
-                                MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: showsLink)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            if let error = entry.error {
-                                Label(error, systemImage: "exclamationmark.triangle")
-                                    .font(.footnote)
-                                    .foregroundStyle(.orange)
-                            }
-                            if entry.flock?.details != nil && entry.agents.isEmpty {
-                                Text("No agents running").foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.top, 8)
                     }
                 }
+                .padding(.horizontal)
+                .padding(.bottom)
             }
-            .padding(.horizontal)
-            .padding(.bottom)
         }
     }
 
-    private func card(_ agent: AgentSummary, in entry: MachineFlockEntry, starred: Bool) -> some View {
+    private func card(_ agent: AgentSummary, in entry: MachineFlockEntry, starred: Bool, now: Date) -> some View {
         let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
         return NavigationLink(value: route) {
             AgentCard(
                 agent: agent, screen: previews.screens[route], workspace: entry.workspaceLabel(for: agent),
-                machine: entry.machine.label, followed: follows?.isFollowing(route) == true, starred: starred
+                followed: follows?.isFollowing(route) == true, starred: starred, now: now
             )
         }
         .buttonStyle(.plain)
@@ -138,9 +140,9 @@ private struct AgentCard: View {
     let agent: AgentSummary
     let screen: String?
     let workspace: String?
-    let machine: String
     let followed: Bool
     let starred: Bool
+    let now: Date
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -151,7 +153,7 @@ private struct AgentCard: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             HStack(alignment: .top, spacing: 6) {
-                StatusIcon(state: agent.status)
+                StatusIcon(state: agent.status).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
                         if let kind = agent.kind {
@@ -171,10 +173,16 @@ private struct AgentCard: View {
                         }
                         Text(agent.displayTitle).font(.subheadline).lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                     }
-                    Text([workspace, machine].compactMap { $0 }.joined(separator: " · "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        if let workspace {
+                            Text(workspace)
+                            Text(verbatim: "·")
+                        }
+                        StatusAge(agent: agent, now: now).fixedSize()
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 }
                 if let left = agent.contextLeft {
                     Spacer(minLength: 0)

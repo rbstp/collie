@@ -132,6 +132,36 @@ enum Elapsed {
         default: return "\(seconds / 86400)d"
         }
     }
+
+    static func compact(sinceMs: UInt64, now: Date) -> String {
+        let minutes = wholeMinutes(sinceMs: sinceMs, now: now)
+        switch minutes {
+        case ..<1: return "<1m"
+        case ..<60: return "\(minutes)m"
+        case ..<1440: return "\(minutes / 60)h"
+        default: return "\(minutes / 1440)d"
+        }
+    }
+
+    static func spoken(sinceMs: UInt64, now: Date) -> String {
+        let minutes = wholeMinutes(sinceMs: sinceMs, now: now)
+        let count = { (n: Int, unit: String) in "\(n) \(unit)\(n == 1 ? "" : "s")" }
+        switch minutes {
+        case ..<1: return "less than a minute"
+        case ..<60: return count(minutes, "minute")
+        case ..<1440: return count(minutes / 60, "hour")
+        default: return count(minutes / 1440, "day")
+        }
+    }
+
+    static func spoken(_ status: AgentState, sinceMs: UInt64, now: Date) -> String {
+        let amount = spoken(sinceMs: sinceMs, now: now)
+        return status == .done ? "done \(amount) ago" : "\(status.label) for \(amount)"
+    }
+
+    private static func wholeMinutes(sinceMs: UInt64, now: Date) -> Int {
+        max(0, Int(now.timeIntervalSince1970) - Int(sinceMs / 1000)) / 60
+    }
 }
 
 extension TerminalSummary {
