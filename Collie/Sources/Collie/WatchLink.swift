@@ -1,6 +1,7 @@
 import CollieCore
 import Foundation
 import WatchConnectivity
+import os
 
 extension WatchState {
     static let maxAgents = 30
@@ -70,6 +71,20 @@ extension WatchState {
         state.live = false
         return state
     }
+
+    /// What the phone shows, but a Mac's approvals change only through its connected link: any
+    /// other Mac keeps those last shown for it, as a closed connection's cache is no listing.
+    static func published(_ shown: WatchState?, items: [ApprovalItem], entries: [MachineFlockEntry], allowed: Bool, live: Bool, now: Date) -> WatchState {
+        let listed = entries.map { entry in
+            MachineApprovals(
+                machineId: entry.id,
+                approvals: entry.flock?.link == .connected ? items.filter { $0.machine.id == entry.id }.map(\.approval) : nil
+            )
+        }
+        var state = WatchState(items: [], entries: entries, allowed: allowed, live: live, now: now)
+        state.approvals = refreshed(shown, listed: listed, machines: entries.map(\.machine), allowed: allowed, now: now).approvals
+        return state
+    }
 }
 
 extension WatchAgent {
@@ -116,6 +131,7 @@ final class WatchLink: NSObject, WCSessionDelegate {
     private var decide: (@MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool))?
     private var refresh: (@MainActor () async -> (WatchState, silent: [String])?)?
     private var lastSent: (state: WatchState, at: Date)?
+    static let log = Logger(subsystem: "dev.rbstp.collie", category: "watch")
 
     func activate(
         decide: @escaping @MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool),
@@ -151,6 +167,7 @@ final class WatchLink: NSObject, WCSessionDelegate {
         do {
             try WCSession.default.updateApplicationContext([WatchMessage.state: data])
             lastSent = (state, now)
+            Self.log.notice("context: approvals=\(state.approvals.count, privacy: .public) live=\(state.live, privacy: .public)")
             return true
         } catch {
             return false

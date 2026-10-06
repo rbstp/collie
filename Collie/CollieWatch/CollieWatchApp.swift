@@ -196,10 +196,11 @@ final class WatchModel: NSObject, WCSessionDelegate {
         }
     }
 
-    func decide(_ approval: WatchApproval, _ decision: WatchDecision) async {
+    /// True once the phone answered that this approval need not be offered again.
+    func decide(_ approval: WatchApproval, _ decision: WatchDecision) async -> Bool {
         guard state?.decisionsAllowed == true, sending == nil, !answered.contains(approval.id), approval.offers(decision),
             approval.expiresAtMs > UInt64(Date.now.timeIntervalSince1970 * 1000)
-        else { return }
+        else { return false }
         sending = approval.id
         defer { sending = nil }
         notice = nil
@@ -209,14 +210,14 @@ final class WatchModel: NSObject, WCSessionDelegate {
         )) ?? false
         guard passed else {
             notice = (approval.agent, "Needs this watch unlocked, on your wrist, with a passcode and Wrist Detection on. Nothing was sent.")
-            return
+            return false
         }
         guard WCSession.default.isReachable else {
             notice = (approval.agent, "The iPhone is not reachable. Nothing was sent.")
-            return
+            return false
         }
         let request = WatchDecisionRequest(nodeId: approval.nodeId, approvalId: approval.approvalId, decision: decision)
-        guard let data = try? JSONEncoder().encode(request) else { return }
+        guard let data = try? JSONEncoder().encode(request) else { return false }
         let agent = approval.agent
         let reply: (title: String, body: String, answered: Bool)? = await withCheckedContinuation { continuation in
             WCSession.default.sendMessage(
@@ -238,6 +239,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
         } else {
             notice = (agent, "No answer from the iPhone. The decision may have been sent; check collie on the iPhone.")
         }
+        return reply?.answered == true
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: (any Error)?) {
@@ -412,6 +414,7 @@ private struct AgentSection: View {
 private struct ApprovalDetail: View {
     let model: WatchModel
     let approval: WatchApproval
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         let expiry = date(ms: approval.expiresAtMs)
@@ -452,23 +455,28 @@ private struct ApprovalDetail: View {
             Text("Answer it on the iPhone").font(.footnote).foregroundStyle(.secondary)
         } else if !approval.options.isEmpty {
             if approval.offers(.approve) {
-                Button("Approve") { Task { await model.decide(approval, .approve) } }
+                Button("Approve") { decide(.approve) }
                     .buttonStyle(.borderedProminent)
                     .disabled(expired || model.sending != nil)
             }
             if approval.offers(.deny) {
-                Button("Deny", role: .destructive) { Task { await model.decide(approval, .deny) } }
+                Button("Deny", role: .destructive) { decide(.deny) }
                     .disabled(expired || model.sending != nil)
             }
         } else {
             ForEach(approval.choices, id: \.index) { choice in
                 Button {
-                    Task { await model.decide(approval, .choose(choice.index)) }
+                    decide(.choose(choice.index))
                 } label: {
                     Text(verbatim: "\(Int(choice.index) + 1). \(choice.label)")
                 }
                 .disabled(expired || model.sending != nil)
             }
         }
+    }
+
+    /// Back to the list once answered, where the notice reports it; on failure the buttons stay.
+    private func decide(_ decision: WatchDecision) {
+        Task { if await model.decide(approval, decision) { dismiss() } }
     }
 }

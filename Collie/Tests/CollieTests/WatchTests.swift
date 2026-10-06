@@ -32,10 +32,12 @@ private func agent(_ id: String, _ status: AgentState, activity: UInt64?, line: 
     )
 }
 
-private func entry(_ machine: Machine, _ agents: [AgentSummary], usage: PlanUsage? = nil, workspace: String = "collie") -> MachineFlockEntry {
+private func entry(
+    _ machine: Machine, _ agents: [AgentSummary], usage: PlanUsage? = nil, workspace: String = "collie", link: LinkPhase = .connected
+) -> MachineFlockEntry {
     let workspaces = [WorkspaceSummary(workspaceId: "w1", label: workspace, number: 1, status: .idle, cwd: nil)]
     let flock = MachineFlock(
-        machine: machine, link: .connected, lastError: nil, details: nil, workspaces: workspaces, agents: agents,
+        machine: machine, link: link, lastError: nil, details: nil, workspaces: workspaces, agents: agents,
         approvalsCount: 0, planUsage: usage
     )
     return MachineFlockEntry(machine: machine, flock: flock)
@@ -177,6 +179,30 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(off.agents.isEmpty)
     let unpaired = WatchState.refreshed(before, listed: [MachineApprovals(machineId: "m9", approvals: nil)], machines: [mac], allowed: true, now: now)
     #expect(unpaired.approvals.isEmpty)
+}
+
+@Test func watchApprovalsChangeOnlyThroughAConnectedLink() {
+    let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
+    // A refresh from a locked phone listed ap_new; the cache, frozen when the sessions closed, predates it.
+    let refreshed = WatchState.refreshed(
+        nil, listed: [MachineApprovals(machineId: "m1", approvals: [approval("ap_new")])], machines: [mac], allowed: true, now: now
+    )
+    let stale = [item(approval("ap_old"))]
+    for link in [LinkPhase.connecting, .waiting, .offline] {
+        let state = WatchState.published(refreshed, items: stale, entries: [entry(mac, [], link: link)], allowed: true, live: false, now: now)
+        #expect(state.approvals.map(\.id) == ["ap_new"])
+        #expect(WatchLink.refusal(WatchDecisionRequest(nodeId: "nMAC", approvalId: "ap_new", decision: .approve), allowed: true, shown: state, now: now) == nil)
+    }
+
+    let entries = [entry(mac, [agent("t1", .working, activity: nowMs)]), entry(linux, [], link: .connecting)]
+    let before = WatchState(items: [item(approval("ap_linux"), machine: linux)], entries: [], allowed: true, live: true, now: now)
+    let state = WatchState.published(before, items: [item(approval("ap_mac"))], entries: entries, allowed: false, live: true, now: now)
+    #expect(state.approvals.map(\.id) == ["ap_mac", "ap_linux"])
+    #expect(state.agents.map(\.id) == ["m1/t1"])
+    #expect(!state.decisionsAllowed)
+    #expect(state.live)
+    let cleared = WatchState.published(state, items: [], entries: [entry(mac, []), entry(linux, [])], allowed: true, live: true, now: now)
+    #expect(cleared.approvals.isEmpty)
 }
 
 @Test func watchDecisionsMapToCoreDecisions() {

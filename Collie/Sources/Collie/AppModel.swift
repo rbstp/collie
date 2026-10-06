@@ -200,7 +200,7 @@ final class AppModel {
         switch phase {
         case .background:
             backgroundedAt = .now
-            publishWatchState()
+            publishWatchState(leaving: true)
             if let core {
                 let assertion = BackgroundAssertion(name: "core.suspend")
                 let epoch = core.beginSuspend()
@@ -348,16 +348,17 @@ final class AppModel {
         }
     }
 
-    /// Never from a background launch, nor before each machine has a snapshot or is known down:
-    /// an empty list would clear the watch.
-    func publishWatchState() {
-        guard let core, watch.ready else { return }
+    /// Never in the background, where only `refreshForWatch` lists approvals, except `leaving` as
+    /// the app goes there; nor before each machine has a snapshot or is known down: an empty list
+    /// would clear the watch.
+    func publishWatchState(leaving: Bool = false) {
+        guard let core, watch.ready, leaving || UIApplication.shared.applicationState != .background else { return }
         let entries = core.machines().map { MachineFlockEntry(machine: $0, flock: core.cachedFlock(machineId: $0.id)) }
         guard entries.allSatisfy({ $0.flock?.details != nil || $0.linkDown }) else { return }
         watch.publish(
-            WatchState(
-                items: approvals.items, entries: entries, allowed: DevicePrefs.load(from: DevicePrefs.file).watchDecisions,
-                live: backgroundedAt == nil, now: .now
+            WatchState.published(
+                WatchLink.shown(), items: approvals.items, entries: entries,
+                allowed: DevicePrefs.load(from: DevicePrefs.file).watchDecisions, live: !leaving, now: .now
             )
         )
     }
@@ -380,7 +381,8 @@ final class AppModel {
             allowed: DevicePrefs.load(from: DevicePrefs.file).watchDecisions, now: .now
         )
         let silent = listed.filter { $0.approvals == nil }.compactMap { entry in machines.first { $0.id == entry.machineId }?.nodeId }
-        log.notice("watch refresh: machines=\(listed.count, privacy: .public) unanswered=\(silent.count, privacy: .public)")
+        let counts = listed.map { $0.approvals.map { String($0.count) } ?? "none" }.joined(separator: ",")
+        WatchLink.log.notice("refresh: listed=\(counts, privacy: .public) sent=\(state.approvals.count, privacy: .public)")
         guard watch.send(state) else { return nil }
         return (state, silent)
     }
