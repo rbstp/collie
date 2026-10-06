@@ -24,6 +24,7 @@ final class PreviewModel {
     @ObservationIgnored private var visible: Set<AgentRoute> = []
     @ObservationIgnored private var connected: Set<String> = []
     @ObservationIgnored private var statuses: [AgentRoute: (status: AgentState, since: UInt64)] = [:]
+    @ObservationIgnored private var claude: Set<AgentRoute> = []
     @ObservationIgnored private var readAt: [AgentRoute: ContinuousClock.Instant] = [:]
     @ObservationIgnored private var fresh: Set<AgentRoute> = []
     @ObservationIgnored private var reading: Set<AgentRoute> = []
@@ -57,9 +58,12 @@ final class PreviewModel {
     func update(_ entries: [MachineFlockEntry]) -> Task<Void, Never>? {
         connected = Set(entries.filter { $0.flock?.link == .connected }.map(\.id))
         var next: [AgentRoute: (status: AgentState, since: UInt64)] = [:]
+        claude = []
         for entry in entries {
             for agent in entry.flock?.agents ?? [] {
-                next[AgentRoute(machineId: entry.id, terminalId: agent.terminalId)] = (agent.status, agent.statusSinceMs)
+                let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
+                next[route] = (agent.status, agent.statusSinceMs)
+                if agent.kind == "claude" { claude.insert(route) }
             }
         }
         // `since` also moves on a change that came and went between two flock polls.
@@ -118,26 +122,39 @@ final class PreviewModel {
     }
 
     private func show(_ ansi: String, for route: AgentRoute) {
-        let ansi = Self.card(ansi)
+        let ansi = claude.contains(route) ? Self.card(ansi) : ansi
         if screens[route] != ansi { screens[route] = ansi }
     }
 
-    /// Ends at the last line above Claude Code's input box, found as collied's `draft::parse`
-    /// finds it: the last block between two rules drawn from column 0 whose first row starts at
-    /// column 0 and whose other rows are indented by two spaces. Only indented status lines may
+    /// Drops Claude Code's input box, the notification row above it and the status lines under it, and
+    /// keeps the task and workflow progress list below those. The box is found as collied's
+    /// `draft::parse` finds it: the last block between two rules drawn from column 0 whose first row
+    /// starts at column 0 and whose other rows are indented by two spaces. Only indented lines may
     /// follow it, so a box an earlier session left above a newer screen does not count. A screen
-    /// without one, such as a dialog in its place or another agent, is kept whole.
+    /// without one, such as a dialog in its place, is kept whole.
     nonisolated static func card(_ ansi: String) -> String {
         let lines = ansi.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
         let plain = lines.map(plainText)
         let rules = plain.indices.filter { plain[$0].hasPrefix("─") && isRule(plain[$0]) }
-        let indented = { (line: String) in line.hasPrefix("  ") || line.allSatisfy(\.isWhitespace) }
+        let blank = { (line: String) in line.allSatisfy(\.isWhitespace) }
+        let indented = { (line: String) in line.hasPrefix("  ") || blank(line) }
         let box = Array(zip(rules, rules.dropFirst())).last { top, bottom in
             bottom > top + 1 && plain[top + 1].first.map { !$0.isWhitespace } == true
                 && plain[top + 2..<bottom].allSatisfy(indented) && plain[(bottom + 1)...].allSatisfy(indented)
         }
-        guard let top = box?.0, let last = plain[..<top].lastIndex(where: { !$0.allSatisfy(\.isWhitespace) }) else { return ansi }
-        return String(ansi[..<lines[last].endIndex])
+        guard case let (top, bottom)? = box else { return ansi }
+        // Claude Code draws its notifications right-aligned, two columns short of the rule, over the
+        // blank row above the box.
+        let notification = top > 1 && plain[top - 1].hasPrefix("  ") && !blank(plain[top - 1])
+            && (blank(plain[top - 2]) || plain[top - 1].count == plain[top].count - 2)
+        guard let last = plain[..<(notification ? top - 1 : top)].lastIndex(where: { !blank($0) }) else { return ansi }
+        let card = String(ansi[..<lines[last].endIndex])
+        // The progress list sits a blank row below the status lines, its rows like "  ◯ name  ▰▱  1/2 · 3m".
+        let tail = plain.indices[(bottom + 1)...]
+        guard let first = tail.first(where: { (blank(plain[$0 - 1]) && !blank(plain[$0])) || plain[$0].contains(#/^  \S \S.* \d+/\d+ · /#) }),
+            let final = tail.last(where: { !blank(plain[$0]) })
+        else { return card }
+        return card + ansi[lines[last].endIndex..<lines[last + 1].startIndex] + ansi[lines[first].startIndex..<lines[final].endIndex]
     }
 
     /// collied sends only plain SGR escapes.

@@ -13,11 +13,13 @@ private final class FakeClock {
     }
 }
 
-private func entry(_ machineId: String, link: LinkPhase = .connected, since: UInt64 = 0, _ agents: [(String, AgentState)]) -> MachineFlockEntry {
+private func entry(
+    _ machineId: String, link: LinkPhase = .connected, since: UInt64 = 0, kind: String = "claude", _ agents: [(String, AgentState)]
+) -> MachineFlockEntry {
     let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
     let summaries = agents.map {
         AgentSummary(
-            terminalId: $0.0, workspaceId: "w1", kind: "claude", name: nil, title: nil,
+            terminalId: $0.0, workspaceId: "w1", kind: kind, name: nil, title: nil,
             status: $0.1, statusSinceMs: since, cwd: nil, lastLine: nil
         )
     }
@@ -222,11 +224,20 @@ private let labeledRule = "\u{1b}[38;2;136;136;136m" + String(repeating: "─", 
 private let status = """
       \u{1b}[38;2;153;153;153mOpus 5.5 high · ~/GitHub/collie (agent-previews) · 42% used\u{1b}[39m
       \u{1b}[38;2;215;119;87m⏵⏵ auto mode on\u{1b}[39m \u{1b}[2m(shift+tab to cycle)\u{1b}[22m
-      ◼ wf_90782106 · implement 2/4 · 3m 12s
     """
+private let progress = [
+    "\u{1b}[0m\u{1b}[38;2;153;153;153m  ◯ phase7-55-history-depth\u{1b}[0m  ▰▰▰▰▰▰\u{1b}[38;2;153;153;153m▱▱▱▱\u{1b}[0m  1/2 · 14m35s · ↓ 258.5k tokens",
+    "  ○ phase7-53-battery-batches-0… ━━━━ 5/7 · 25m39s · ↓ 787.9k tokens",
+    "  ◼ wf_90782106 · implement 2/4 · 3m 12s",
+]
 
-private func claude(_ box: String, top: String = rule) -> String {
-    "\(output)\n\n\(top)\n\(box)\n\(rule)\n\(status)\n"
+/// A notification right-aligned two columns short of the 60-column rule, as Claude Code draws it.
+private func notice(_ text: String) -> String {
+    String(repeating: " ", count: 58 - text.count) + "\u{1b}[38;2;78;186;101m\(text)\u{1b}[0m"
+}
+
+private func claude(_ box: String, top: String = rule, above: String = "", footer: String = status, below: String = "") -> String {
+    "\(output)\n\(above)\n\(top)\n\(box)\n\(rule)\n\(footer)\n\(below)"
 }
 
 @Test func aCardEndsAboveClaudeCodesInputBox() {
@@ -243,6 +254,46 @@ private func claude(_ box: String, top: String = rule) -> String {
     #expect(PreviewModel.card(crlf) == output.replacing("\n", with: "\r\n"))
     let typedRule = "❯ one\n  ────────────\n  two"
     #expect(PreviewModel.card(claude(typedRule)) == output, "a typed rule is indented, so it does not close the box")
+}
+
+@Test func aCardDropsTheNotificationAboveTheInputBox() {
+    for above in [
+        notice("✔ Update installed · Restart to update"),
+        "\n\n" + notice("new task? /clear to save 108.1k tokens"),
+        "\n  \u{1b}[2mnew task? \u{1b}[0m/clear\u{1b}[2m to save 108.1k tokens\u{1b}[0m",
+    ] {
+        #expect(PreviewModel.card(claude("❯ ", above: above)) == output, "\(above)")
+    }
+    #expect(PreviewModel.card(claude("❯ ", top: labeledRule, above: notice("new task? /clear to save 3k tokens"))) == output)
+}
+
+@Test func outputDirectlyAboveTheInputBoxStaysOnTheCard() {
+    for above in ["✻ Worked for 7s · done 5:58 PM", "  ⎿  Updated 2 files", "\n⏺ Started.\n  Waiting on the build."] {
+        #expect(PreviewModel.card(claude("❯ ", above: above)) == "\(output)\n\(above)", "\(above)")
+    }
+}
+
+@Test func aCardKeepsTheProgressListUnderTheStatusLines() {
+    let one = progress[0]
+    let all = progress.joined(separator: "\n")
+    for (below, kept) in [("\n\(one)\n", one), ("\n\(all)\n\n", all), ("\(one)\n", one), ("\(all)", all)] {
+        #expect(PreviewModel.card(claude("❯ ", below: below)) == "\(output)\n\(kept)", "\(below)")
+    }
+    let crlf = claude("❯ ", above: notice("✔ Update installed"), below: "\n\(all)\n").replacing("\n", with: "\r\n")
+    #expect(PreviewModel.card(crlf) == "\(output)\n\(all)".replacing("\n", with: "\r\n"))
+}
+
+@Test func aCardDropsWrappedStatusLines() {
+    let wrapped = """
+          Opus 5.5 high   agent-previews ⇕⇡7 ⇣2  █░░░░24% 2d20h23m32s | 5h 50% (0h55m) ·
+          7d 9% | Est. usage: $675.00
+          ⏵⏵ auto mode on (shift+tab to cycle) · PR #54 ·
+          ← for agents
+        """
+    #expect(PreviewModel.card(claude("❯ ", footer: wrapped)) == output)
+    #expect(PreviewModel.card(claude("❯ ", footer: wrapped, below: "\n\(progress[1])\n")) == "\(output)\n\(progress[1])")
+    let manual = "  Opus 5.5 high   dictation +134 -5 !?\n  ⏸ manual mode on · PR #49 · ← for agents"
+    #expect(PreviewModel.card(claude("❯ ", footer: manual, below: progress[2])) == "\(output)\n\(progress[2])")
 }
 
 @Test func aCardEndsAboveTheLastInputBox() {
@@ -304,7 +355,9 @@ private func claude(_ box: String, top: String = rule) -> String {
 
         """
     let rerun = "\(claude("❯ "))$ claude --continue\n\(bash)"
-    for screen in [bash, question, plan, rerun] {
+    let busy = bash.replacing("\n\n\(String(repeating: "─", count: 60))", with: "\n\(notice("✔ Update installed"))\n\(String(repeating: "─", count: 60))")
+        + "\n\(progress.joined(separator: "\n"))"
+    for screen in [bash, question, plan, rerun, busy] {
         #expect(PreviewModel.card(screen) == screen)
     }
 }
@@ -332,6 +385,19 @@ private func claude(_ box: String, top: String = rule) -> String {
     model.appeared(route("t1"))
     let run = await running(model, core, screens: 1)
     #expect(model.screens[route("t1")] == output)
+    run.cancel()
+    await run.value
+}
+
+@MainActor
+@Test func anotherAgentsCardKeepsItsWholeScreen() async {
+    let core = FakeCore()
+    core.state.withLock { $0.output = TerminalSnapshot(terminalId: "t1", source: .recent, ansi: claude("❯ "), truncated: false) }
+    let model = PreviewModel()
+    model.update([entry("m1", kind: "codex", [("t1", .working)])])
+    model.appeared(route("t1"))
+    let run = await running(model, core, screens: 1)
+    #expect(model.screens[route("t1")] == claude("❯ "))
     run.cancel()
     await run.value
 }
