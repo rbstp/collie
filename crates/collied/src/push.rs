@@ -271,7 +271,7 @@ pub fn approval_alert(a: &Approval, title: &str, node_id: &str, context: &str) -
     }
 }
 
-/// Tells the app to remove the delivered alert for an approval resolved without it: the two
+/// Tells the app to remove an approval's delivered alert once its agent moved on: the two
 /// lookup keys only.
 pub fn approval_clear(node_id: &str, approval_id: &ApprovalId) -> Alert {
     Alert {
