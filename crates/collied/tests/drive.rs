@@ -1021,11 +1021,16 @@ async fn task_new_refusals() {
         h.calls.clear();
         h.shell_busy = true;
         h.new_pane_terminal = None;
+        h.gets.extend([
+            started_agent("idle", true, false),
+            started_agent("idle", true, false),
+        ]);
     });
     herdr.fail_next("agent.start", &["agent_pane_busy"]);
-    let _ = drive
+    let (reply, _) = drive
         .task_new(task(&base.join("root/a"), "claude"), &yes())
         .await;
+    assert!(reply.is_ok(), "{reply:?}");
     assert_eq!(
         herdr.mutations()[..3],
         ["workspace.create", "agent.start", "agent.start"]
