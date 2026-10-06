@@ -8,20 +8,11 @@ struct AgentInbox<Menu: View>: View {
     let reconnect: (MachineFlockEntry) -> Void
     let follows: FollowModel?
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
-    @State private var showsUsage = false
 
     var body: some View {
         let items = InboxItem.items(in: entries)
         TimelineView(.periodic(from: .now, by: 60)) { context in
             List {
-                Picker("View", selection: $showsUsage) {
-                    Text("Inbox").tag(false)
-                    Text("Usage").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
                 if let notice {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
@@ -40,11 +31,7 @@ struct AgentInbox<Menu: View>: View {
                     }
                     .buttonStyle(.plain)
                 }
-                if showsUsage {
-                    UsageSections(entries: entries)
-                } else {
-                    inbox(items, now: context.date)
-                }
+                inbox(items, now: context.date)
             }
         }
     }

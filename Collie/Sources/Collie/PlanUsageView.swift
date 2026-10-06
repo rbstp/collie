@@ -1,7 +1,7 @@
 import CollieCore
 import SwiftUI
 
-/// The Inbox layout's Usage view: one card per machine with the plan usage collied last recorded.
+/// The Agents tab's Usage view: one card per machine with the plan usage collied last recorded.
 struct UsageSections: View {
     let entries: [MachineFlockEntry]
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize

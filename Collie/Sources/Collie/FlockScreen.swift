@@ -13,81 +13,94 @@ struct FlockScreen: View {
     @State private var newTask = false
     @State private var previews = PreviewModel()
     @State private var layout = DevicePrefs.load(from: DevicePrefs.file).agentsLayout
+    @State private var showsUsage = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack(path: $path) {
-            Group {
-                switch layout {
-                case .grid:
-                    AgentGrid(
-                        entries: model.entries, previews: previews, notice: model.closeNotice,
-                        approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows,
-                        closePane: { model.beginClose(.pane, route: $0) }, menu: menu
-                    )
-                    .task(id: core != nil && scenePhase == .active && !newTask) {
-                        guard let core, scenePhase == .active, !newTask else { return }
-                        await previews.run(core: core)
-                    }
-                case .inbox:
-                    AgentInbox(
-                        entries: model.entries, notice: model.closeNotice, showsMachine: machines.count > 1,
-                        reconnect: reconnect, follows: follows, menu: menu
-                    )
-                case .list:
-                    TimelineView(.periodic(from: .now, by: 60)) { context in
-                        List {
-                            if let notice = model.closeNotice {
-                                Label(notice, systemImage: "exclamationmark.triangle")
-                                    .font(.footnote)
-                                    .foregroundStyle(.orange)
-                            }
-                            if model.entries.isEmpty {
-                                NoMachines()
-                            }
-                            ForEach(model.entries) { entry in
-                                Section {
-                                    if let error = entry.error {
-                                        Label(error, systemImage: "exclamationmark.triangle")
-                                            .font(.footnote)
-                                            .foregroundStyle(.orange)
-                                    }
-                                    if entry.flock?.details != nil && entry.agents.isEmpty {
-                                        Text("No agents running").foregroundStyle(.secondary)
-                                    }
-                                    ForEach(entry.agents, id: \.terminalId) { agent in
-                                        let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
-                                        NavigationLink(value: route) {
-                                            AgentRow(
-                                                agent: agent, workspace: entry.workspaceLabel(for: agent),
-                                                followed: follows?.isFollowing(route) == true, now: context.date
-                                            )
+            VStack(spacing: 0) {
+                Picker("View", selection: $showsUsage) {
+                    Text("Agents").tag(false)
+                    Text("Usage").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+                if showsUsage {
+                    List { UsageSections(entries: model.entries) }
+                } else {
+                    switch layout {
+                    case .grid:
+                        AgentGrid(
+                            entries: model.entries, previews: previews, notice: model.closeNotice,
+                            approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows,
+                            closePane: { model.beginClose(.pane, route: $0) }, menu: menu
+                        )
+                        .task(id: core != nil && scenePhase == .active && !newTask) {
+                            guard let core, scenePhase == .active, !newTask else { return }
+                            await previews.run(core: core)
+                        }
+                    case .inbox:
+                        AgentInbox(
+                            entries: model.entries, notice: model.closeNotice, showsMachine: machines.count > 1,
+                            reconnect: reconnect, follows: follows, menu: menu
+                        )
+                    case .list:
+                        TimelineView(.periodic(from: .now, by: 60)) { context in
+                            List {
+                                if let notice = model.closeNotice {
+                                    Label(notice, systemImage: "exclamationmark.triangle")
+                                        .font(.footnote)
+                                        .foregroundStyle(.orange)
+                                }
+                                if model.entries.isEmpty {
+                                    NoMachines()
+                                }
+                                ForEach(model.entries) { entry in
+                                    Section {
+                                        if let error = entry.error {
+                                            Label(error, systemImage: "exclamationmark.triangle")
+                                                .font(.footnote)
+                                                .foregroundStyle(.orange)
                                         }
-                                        .contextMenu { menu(agent, route) }
-                                    }
-                                    .opacity(entry.linkDown ? 0.5 : 1)
-                                    if !entry.terminals.isEmpty {
-                                        Text("Terminals").font(.caption).foregroundStyle(.secondary)
-                                        ForEach(entry.terminals, id: \.terminalId) { terminal in
-                                            let route = AgentRoute(machineId: entry.id, terminalId: terminal.terminalId)
+                                        if entry.flock?.details != nil && entry.agents.isEmpty {
+                                            Text("No agents running").foregroundStyle(.secondary)
+                                        }
+                                        ForEach(entry.agents, id: \.terminalId) { agent in
+                                            let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
                                             NavigationLink(value: route) {
-                                                TerminalRow(terminal: terminal)
+                                                AgentRow(
+                                                    agent: agent, workspace: entry.workspaceLabel(for: agent),
+                                                    followed: follows?.isFollowing(route) == true, now: context.date
+                                                )
                                             }
-                                            .contextMenu {
-                                                Button("Close pane", systemImage: "xmark.square", role: .destructive) {
-                                                    model.beginClose(.pane, route: route)
-                                                }
-                                            }
+                                            .contextMenu { menu(agent, route) }
                                         }
                                         .opacity(entry.linkDown ? 0.5 : 1)
+                                        if !entry.terminals.isEmpty {
+                                            Text("Terminals").font(.caption).foregroundStyle(.secondary)
+                                            ForEach(entry.terminals, id: \.terminalId) { terminal in
+                                                let route = AgentRoute(machineId: entry.id, terminalId: terminal.terminalId)
+                                                NavigationLink(value: route) {
+                                                    TerminalRow(terminal: terminal)
+                                                }
+                                                .contextMenu {
+                                                    Button("Close pane", systemImage: "xmark.square", role: .destructive) {
+                                                        model.beginClose(.pane, route: route)
+                                                    }
+                                                }
+                                            }
+                                            .opacity(entry.linkDown ? 0.5 : 1)
+                                        }
+                                    } header: {
+                                        Button {
+                                            reconnect(entry)
+                                        } label: {
+                                            MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting)
+                                        }
+                                        .buttonStyle(.plain)
                                     }
-                                } header: {
-                                    Button {
-                                        reconnect(entry)
-                                    } label: {
-                                        MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting)
-                                    }
-                                    .buttonStyle(.plain)
                                 }
                             }
                         }
@@ -115,6 +128,7 @@ struct FlockScreen: View {
                             ForEach(AgentsLayout.allCases, id: \.self) { Label($0.label, systemImage: $0.icon) }
                         }
                     }
+                    .disabled(showsUsage)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("New task", systemImage: "plus") { newTask = true }
