@@ -19,9 +19,6 @@ struct FlockScreen: View {
     var body: some View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
-                ViewSwitch(showsUsage: $showsUsage)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
                 if showsUsage {
                     List { UsageSections(entries: model.entries) }
                 } else {
@@ -109,12 +106,14 @@ struct FlockScreen: View {
                 await model.refresh(core: core)
             }
             .toolbar {
-                if tailnetStarting {
-                    ToolbarItem(placement: .principal) {
+                ToolbarItem(placement: .principal) {
+                    if tailnetStarting {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.small)
                             Text("Connecting…").font(.headline)
                         }
+                    } else {
+                        ViewSwitch(showsUsage: $showsUsage)
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
