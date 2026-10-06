@@ -703,6 +703,23 @@ pub struct Agent {
     pub last_activity_ms: Option<u64>,
 }
 
+/// From Claude Code's status line input, as `collied statusline` last recorded it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub five_hour: Option<UsageWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seven_day: Option<UsageWindow>,
+    pub recorded_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct UsageWindow {
+    #[schemars(range(max = 100))]
+    pub used_percent: u8,
+    pub resets_at_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Flock {
     pub seq: u64,
@@ -715,6 +732,9 @@ pub struct Flock {
     pub terminals: Vec<Terminal>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub terminals_enabled: bool,
+    /// The machine's plan usage, with or without a Claude Code agent open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_usage: Option<PlanUsage>,
 }
 
 /// A pane with no agent. `label` is the name given in herdr, never a title the pane's
@@ -840,6 +860,8 @@ pub enum Event {
     },
     #[serde(rename = "flock.changed")]
     FlockChanged {},
+    #[serde(rename = "plan.usage")]
+    PlanUsage { plan_usage: PlanUsage },
     #[serde(other)]
     Unrecognized,
 }
@@ -1120,6 +1142,38 @@ mod tests {
             event: Event::AgentStatus { agent: full },
         };
         let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(serde_json::from_str::<ServerFrame>(&json).unwrap(), event);
+    }
+
+    #[test]
+    fn plan_usage_is_additive() {
+        let older = r#"{"seq":1,"machine":{"name":"m","node_id":"n","herdr_session":"default"},"workspaces":[],"agents":[],"approvals":[],"terminals":[]}"#;
+        let f: Flock = serde_json::from_str(older).unwrap();
+        assert_eq!(f.plan_usage, None);
+        assert_eq!(serde_json::to_string(&f).unwrap(), older);
+        let usage = PlanUsage {
+            five_hour: Some(UsageWindow {
+                used_percent: 24,
+                resets_at_ms: 1_738_425_600_000,
+            }),
+            seven_day: None,
+            recorded_ms: 1_738_420_000_000,
+        };
+        let with = Flock {
+            plan_usage: Some(usage.clone()),
+            ..f
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.ends_with(
+            r#""plan_usage":{"five_hour":{"used_percent":24,"resets_at_ms":1738425600000},"recorded_ms":1738420000000}}"#
+        ));
+        assert_eq!(serde_json::from_str::<Flock>(&json).unwrap(), with);
+        let event = ServerFrame::Event {
+            seq: 2,
+            event: Event::PlanUsage { plan_usage: usage },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""name":"plan.usage""#), "{json}");
         assert_eq!(serde_json::from_str::<ServerFrame>(&json).unwrap(), event);
     }
 

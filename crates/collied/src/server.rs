@@ -519,6 +519,8 @@ pub async fn start_with(
     let tls_pin = collie_tls::pin(tls.cert[0].as_ref());
     let control = control::bind(&cfg.data_dir.join(config::CONTROL_SOCKET)).await?;
     let listener = node.listen("tcp", &format!(":{}", cfg.port))?;
+    let transcripts =
+        Transcripts::from_env().with_usage(cfg.data_dir.join(crate::usage::USAGE_FILE));
 
     let state = Arc::new(State {
         machine: MachineInfo {
@@ -540,7 +542,7 @@ pub async fn start_with(
         chunk_buckets: Mutex::new(HashMap::new()),
         reject_buckets: Mutex::new(HashMap::new()),
         tracker: Mutex::new(StatusTracker::default()),
-        transcripts: Mutex::new(Transcripts::from_env()),
+        transcripts: Mutex::new(transcripts),
         live: Mutex::new(activity::Live::default()),
         events,
         drive,
@@ -1917,9 +1919,9 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             }
         };
         delay = RECONCILE_EVERY;
+        let phones = state.events.receiver_count() > 0;
         let next = {
             let mut transcripts = lock(&state.transcripts);
-            let phones = state.events.receiver_count() > 0;
             Baseline::new(&agents, &workspaces, phones.then_some(&mut *transcripts))
         };
         match &base {
@@ -1930,9 +1932,14 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             None => {}
             Some(prev) => {
                 let (changed, shape) = prev.diff(&next);
+                let mut tracker = lock(&state.tracker);
+                let mut transcripts = lock(&state.transcripts);
+                // Checked with no phone too, so a phone that connects later is not sent a
+                // change its snapshot holds.
+                if let Some(plan_usage) = transcripts.plan_moved().filter(|_| phones) {
+                    let _ = state.events.send(Event::PlanUsage { plan_usage });
+                }
                 if !changed.is_empty() {
-                    let mut tracker = lock(&state.tracker);
-                    let mut transcripts = lock(&state.transcripts);
                     transcripts.retain(&agents);
                     let now = crate::now_ms();
                     for a in agents.iter().filter(|a| changed.contains(&a.terminal_id)) {

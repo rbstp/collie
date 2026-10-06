@@ -77,10 +77,16 @@ final class DemoAgentCore: ActivityCore {
 
     let snapshot: String
     private let agents: [AgentSummary]
+    private let usage: PlanUsage
 
     init(snapshot: String) {
         self.snapshot = snapshot
         let now = UInt64(Date.now.timeIntervalSince1970 * 1000)
+        usage = PlanUsage(
+            fiveHour: UsageWindow(usedPercent: 38, resetsAtMs: now + 7_980_000),
+            sevenDay: UsageWindow(usedPercent: 61, resetsAtMs: now + 277_200_000),
+            recordedMs: now - 20_000
+        )
         agents = [
             AgentSummary(
                 terminalId: "term_demo", workspaceId: "ws_collie", kind: "claude", name: nil, title: "fix the build",
@@ -216,7 +222,7 @@ final class DemoAgentCore: ActivityCore {
                 WorkspaceSummary(workspaceId: "ws_site", label: "website", number: 2, status: .done, cwd: "/Users/demo/website"),
                 WorkspaceSummary(workspaceId: "ws_api", label: "api", number: 3, status: .idle, cwd: "/Users/demo/api"),
             ],
-            agents: agents, approvalsCount: 1
+            agents: agents, approvalsCount: 1, planUsage: usage
         )
     }
 

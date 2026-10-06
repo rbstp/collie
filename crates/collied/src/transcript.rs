@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use crate::herdr::AgentInfo;
 use crate::prompt;
+use crate::usage::Usage;
 
 /// Only the end is read: transcripts reach tens of MB, and what is shown sits near the end.
 const TAIL_BYTES: u64 = 1 << 20;
@@ -39,6 +40,7 @@ struct Cached {
     path: PathBuf,
     len: u64,
     modified: SystemTime,
+    window: Option<u64>,
     derived: Derived,
 }
 
@@ -48,6 +50,7 @@ pub struct Transcripts {
     codex_sessions: Option<PathBuf>,
     cache: HashMap<String, Cached>,
     missed: HashSet<String>,
+    usage: Usage,
 }
 
 impl Transcripts {
@@ -57,7 +60,23 @@ impl Transcripts {
             codex_sessions,
             cache: HashMap::new(),
             missed: HashSet::new(),
+            usage: Usage::default(),
         }
+    }
+
+    pub fn with_usage(mut self, path: PathBuf) -> Self {
+        self.usage = Usage::new(path);
+        self
+    }
+
+    /// For the reconcile tick: one fstat, the recorded plan when it changed since it last said so.
+    pub fn plan_moved(&mut self) -> Option<protocol::PlanUsage> {
+        self.usage.plan_moved().then(|| self.usage.plan()).flatten()
+    }
+
+    pub fn plan(&mut self) -> Option<protocol::PlanUsage> {
+        self.usage.refresh();
+        self.usage.plan()
     }
 
     pub fn from_env() -> Self {
@@ -103,16 +122,23 @@ impl Transcripts {
             return None;
         };
         self.missed.remove(id);
+        let window = match kind {
+            Kind::Claude => {
+                self.usage.refresh();
+                self.usage.window(id)
+            }
+            Kind::Codex => None,
+        };
         if let Some(c) = self
             .cache
             .get(id)
-            .filter(|c| c.len == len && c.modified == modified)
+            .filter(|c| c.len == len && c.modified == modified && c.window == window)
         {
             return Some(c.derived.clone());
         }
         let text = tail(file, len).ok()?;
         let mut derived = match kind {
-            Kind::Claude => claude(&text),
+            Kind::Claude => claude(&text, window),
             Kind::Codex => codex(&text),
         };
         // A line longer than the tail (a large tool result) can hide the older values.
@@ -131,6 +157,7 @@ impl Transcripts {
                 path,
                 len,
                 modified,
+                window,
                 derived: derived.clone(),
             },
         );
@@ -182,11 +209,14 @@ impl Transcripts {
 /// The id becomes a file name, so it must be a plain lowercase UUID: no separator, no `..`.
 fn session_id(a: &AgentInfo) -> Option<&str> {
     let id = a.agent_session.as_ref()?.value.as_str();
-    (id.len() == 36
+    is_session_id(id).then_some(id)
+}
+
+pub(crate) fn is_session_id(id: &str) -> bool {
+    id.len() == 36
         && id
             .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b'-'))
-    .then_some(id)
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b'-')
 }
 
 /// Claude Code's project directory name for a working directory.
@@ -201,7 +231,7 @@ fn is_file(path: &Path) -> bool {
 }
 
 /// Never follows a symlink, and never blocks on a FIFO put in the transcript's place.
-fn open(path: &Path) -> Option<(File, u64, SystemTime)> {
+pub(crate) fn open(path: &Path) -> Option<(File, u64, SystemTime)> {
     let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -273,7 +303,8 @@ fn percent(remaining: u64, window: u64) -> u8 {
     ((remaining.min(window) * 100 + window / 2) / window) as u8
 }
 
-/// The transcript does not record the window; this follows Claude Code's model table.
+/// The transcript does not record the window; without the status line's, this follows
+/// Claude Code's model table.
 fn claude_window(model: &str, used: u64) -> u64 {
     let mut parts = model.strip_prefix("claude-").unwrap_or(model).split('-');
     let family = parts.next().unwrap_or_default();
@@ -293,7 +324,7 @@ fn claude_window(model: &str, used: u64) -> u64 {
     }
 }
 
-fn claude(text: &str) -> Derived {
+fn claude(text: &str, known_window: Option<u64>) -> Derived {
     let mut d = Derived::default();
     let mut compacted = None;
     let lines = text
@@ -330,7 +361,9 @@ fn claude(text: &str) -> Derived {
                     let seen = input
                         + u["cache_creation_input_tokens"].as_u64().unwrap_or(0)
                         + u["cache_read_input_tokens"].as_u64().unwrap_or(0);
-                    let window = claude_window(m["model"].as_str().unwrap_or_default(), seen);
+                    let window = known_window.unwrap_or_else(|| {
+                        claude_window(m["model"].as_str().unwrap_or_default(), seen)
+                    });
                     let used = compacted.unwrap_or(seen);
                     d.context_left = Some(percent(window.saturating_sub(used), window));
                 }
@@ -452,7 +485,7 @@ mod tests {
 
     #[test]
     fn claude_fixture() {
-        let d = claude(CLAUDE);
+        let d = claude(CLAUDE, None);
         // 2 + 429 + 54811 input tokens of a 1M window; the sidechain and synthetic lines are skipped.
         assert_eq!(d.context_left, Some(94));
         assert_eq!(d.last_line.as_deref(), Some("**Fixed** the flaky test."));
@@ -461,7 +494,7 @@ mod tests {
             Some("fix the flaky approval test it fails one run in ten")
         );
         let sidechain = r#"{"isSidechain":true,"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Subagent done."}],"usage":{"input_tokens":900000}}}"#;
-        let d = claude(&[CLAUDE, sidechain].join("\n"));
+        let d = claude(&[CLAUDE, sidechain].join("\n"), None);
         assert_eq!(
             (d.context_left, d.last_line.as_deref()),
             (Some(94), Some("**Fixed** the flaky test."))
@@ -472,12 +505,12 @@ mod tests {
     fn claude_compaction_sets_the_context_until_the_next_reply() {
         let boundary = r#"{"isSidechain":false,"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":749477,"postTokens":20000}}"#;
         let summary = r#"{"isSidechain":false,"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation."}}"#;
-        let d = claude(&[CLAUDE, boundary, summary].join("\n"));
+        let d = claude(&[CLAUDE, boundary, summary].join("\n"), None);
         assert_eq!(d.context_left, Some(98));
         assert_eq!(d.last_line.as_deref(), Some("**Fixed** the flaky test."));
         let reply = r#"{"isSidechain":false,"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Back."}],"usage":{"input_tokens":100000}}}"#;
         assert_eq!(
-            claude(&[CLAUDE, boundary, summary, reply].join("\n")).context_left,
+            claude(&[CLAUDE, boundary, summary, reply].join("\n"), None).context_left,
             Some(90)
         );
     }
@@ -489,13 +522,15 @@ mod tests {
         let notice = r#"{"type":"user","isSidechain":false,"origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>"}}"#;
         let summary = r#"{"type":"last-prompt","lastPrompt":"older"}"#;
         assert_eq!(
-            claude(&[summary, human, tool, notice].join("\n"))
+            claude(&[summary, human, tool, notice].join("\n"), None)
                 .last_prompt
                 .as_deref(),
             Some("ship it")
         );
         assert_eq!(
-            claude(&[human, summary].join("\n")).last_prompt.as_deref(),
+            claude(&[human, summary].join("\n"), None)
+                .last_prompt
+                .as_deref(),
             Some("older")
         );
     }
@@ -522,9 +557,9 @@ mod tests {
                 r#"{{"type":"assistant","isSidechain":false,"message":{{"model":"claude-haiku-4-5","content":[],"usage":{{"input_tokens":{used},"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}"#
             )
         };
-        assert_eq!(claude(&line(50_000)).context_left, Some(75));
-        assert_eq!(claude(&line(400_000)).context_left, Some(60));
-        assert_eq!(claude(&line(2_000_000)).context_left, Some(0));
+        assert_eq!(claude(&line(50_000), None).context_left, Some(75));
+        assert_eq!(claude(&line(400_000), None).context_left, Some(60));
+        assert_eq!(claude(&line(2_000_000), None).context_left, Some(0));
     }
 
     #[test]
@@ -661,6 +696,33 @@ mod tests {
     }
 
     #[test]
+    fn status_line_window_and_plan_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("collie");
+        let mut t = roots(dir.path()).with_usage(data.join(crate::usage::USAGE_FILE));
+        let project = dir.path().join("claude/projects/-Users-me-src-collie");
+        write(&project.join(format!("{CLAUDE_ID}.jsonl")), CLAUDE);
+        let a = agent("claude", CLAUDE_ID, "/Users/me/src/collie");
+        assert_eq!(t.derive(&a, false).unwrap().context_left, Some(94));
+        assert_eq!((t.plan(), t.plan_moved()), (None, None));
+
+        // The status line says this session's window is 200K, not the model's 1M.
+        let input = include_str!("../tests/fixtures/statusline.json").replace(
+            r#""context_window_size": 1000000"#,
+            r#""context_window_size": 200000"#,
+        );
+        crate::usage::record(&data, input.as_bytes(), 7).unwrap();
+        assert_eq!(t.derive(&a, false).unwrap().context_left, Some(72));
+        let plan = t.plan_moved().unwrap();
+        assert_eq!(plan.recorded_ms, 7);
+        assert_eq!(plan.five_hour.as_ref().unwrap().used_percent, 24);
+        assert_eq!((t.plan_moved(), t.plan()), (None, Some(plan)));
+
+        let c = agent("codex", CODEX_ID, "/Users/me/src/collie");
+        assert_eq!(t.derive(&c, false), None);
+    }
+
+    #[test]
     fn refuses_symlinks_and_reads_only_the_tail() {
         let dir = tempfile::tempdir().unwrap();
         let mut t = roots(dir.path());
@@ -683,6 +745,6 @@ mod tests {
         let (file, len, _) = open(&big).unwrap();
         let tail = tail(file, len).unwrap();
         assert!(tail.len() < TAIL_BYTES as usize && tail.starts_with('{'));
-        assert_eq!(claude(&tail).context_left, Some(94));
+        assert_eq!(claude(&tail, None).context_left, Some(94));
     }
 }

@@ -145,12 +145,13 @@ pub fn map_flock(
     now_ms: u64,
     machine: MachineInfo,
     seq: u64,
-    transcripts: Option<&mut Transcripts>,
+    mut transcripts: Option<&mut Transcripts>,
 ) -> Flock {
     Flock {
         seq,
         machine,
         workspaces: map_workspaces(snap),
+        plan_usage: transcripts.as_deref_mut().and_then(Transcripts::plan),
         agents: map_agents(&snap.agents, tracker, now_ms, transcripts),
         approvals: Vec::new(),
         terminals: Vec::new(),

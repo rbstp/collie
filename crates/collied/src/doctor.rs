@@ -101,6 +101,8 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     }
     let (s, d) = check_hooks();
     r.line(s, "hooks", d);
+    let (s, d) = check_usage(&data_dir, crate::now_ms());
+    r.line(s, "plan usage", d);
 
     Ok(!r.failed)
 }
@@ -121,6 +123,43 @@ fn check_hooks() -> (Status, String) {
         )
     } else {
         (Status::Warn, missing.to_owned())
+    }
+}
+
+fn check_usage(data_dir: &Path, now_ms: u64) -> (Status, String) {
+    let Some(recorded) = crate::usage::last_recorded(data_dir) else {
+        return (
+            Status::Warn,
+            "nothing recorded; add `collied statusline` to the Claude Code status line (README)"
+                .to_owned(),
+        );
+    };
+    let sessions = recorded.windows.len();
+    match recorded.plan {
+        Some(plan) => {
+            let minutes = now_ms.saturating_sub(plan.recorded_ms) / 60_000;
+            let windows: Vec<&str> = [("5h", &plan.five_hour), ("7d", &plan.seven_day)]
+                .into_iter()
+                .filter_map(|(name, w)| w.as_ref().map(|_| name))
+                .collect();
+            (
+                Status::Ok,
+                format!(
+                    "recorded {minutes} min ago ({}), windows for {sessions} session(s)",
+                    if windows.is_empty() {
+                        "no window open".to_owned()
+                    } else {
+                        windows.join(", ")
+                    }
+                ),
+            )
+        }
+        None => (
+            Status::Warn,
+            format!(
+                "windows for {sessions} session(s) but no rate limits yet (claude.ai Pro and Max only, after the first reply)"
+            ),
+        ),
     }
 }
 
@@ -557,5 +596,23 @@ fn check_tailnet(r: &mut Report, config: &Config, tsnet: &Path) {
             "tailnet",
             format!("{node}: no node state (not logged in)"),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_the_status_line_tap() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("collie");
+        let (s, d) = check_usage(&data, 0);
+        assert!(s == Status::Warn && d.contains("collied statusline"));
+        let input = include_str!("../tests/fixtures/statusline.json");
+        crate::usage::record(&data, input.as_bytes(), 60_000).unwrap();
+        let (s, d) = check_usage(&data, 240_000);
+        assert!(s == Status::Ok);
+        assert_eq!(d, "recorded 3 min ago (5h, 7d), windows for 1 session(s)");
     }
 }

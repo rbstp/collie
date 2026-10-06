@@ -574,6 +574,7 @@ fn apply(flock: &mut Flock, event: &Event) {
         Event::ApprovalResolved { approval_id, .. } => {
             flock.approvals.retain(|a| a.approval_id != *approval_id);
         }
+        Event::PlanUsage { plan_usage } => flock.plan_usage = Some(plan_usage.clone()),
         Event::AgentOutput(_)
         | Event::AgentOutputPatch(_)
         | Event::FlockChanged {}
@@ -629,6 +630,7 @@ mod tests {
             approvals: Vec::new(),
             terminals: Vec::new(),
             terminals_enabled: false,
+            plan_usage: None,
         }
     }
 
@@ -706,6 +708,33 @@ mod tests {
             s.apply_event(9, status_event("t1", AgentStatus::Idle)),
             EventOutcome::Dropped
         );
+    }
+
+    #[test]
+    fn plan_usage_event_survives_a_late_snapshot() {
+        let plan = |used_percent| protocol::PlanUsage {
+            five_hour: Some(protocol::UsageWindow {
+                used_percent,
+                resets_at_ms: 9,
+            }),
+            seven_day: None,
+            recorded_ms: 1,
+        };
+        let with = |seq, used| Flock {
+            plan_usage: Some(plan(used)),
+            ..flock(seq, vec![])
+        };
+        let used = |s: &FlockState| s.flock.as_ref()?.plan_usage.clone();
+        let mut s = FlockState::default();
+        s.apply_snapshot(flock(1, vec![]));
+        let event = Event::PlanUsage {
+            plan_usage: plan(30),
+        };
+        assert_eq!(s.apply_event(2, event), EventOutcome::Applied);
+        s.apply_snapshot(with(1, 10));
+        assert_eq!(used(&s), Some(plan(30)));
+        s.apply_snapshot(with(5, 40));
+        assert_eq!(used(&s), Some(plan(40)));
     }
 
     #[test]

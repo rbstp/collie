@@ -87,6 +87,8 @@ async fn scenario(
     let herdr_socket = root.join("herdr.sock");
     let herdr_calls = mock_herdr(&herdr_socket);
     let data_dir = root.join("collied");
+    let statusline = include_str!("../../collied/tests/fixtures/statusline.json");
+    collied::usage::record(&data_dir, statusline.as_bytes(), 1).unwrap();
     let handle = server::start(
         net.mac.clone(),
         ServerConfig {
@@ -178,7 +180,30 @@ async fn scenario(
         .map(|w| (w.workspace_id.as_str(), w.label.as_str()))
         .collect();
     assert_eq!(workspaces, [("w6", "collie"), ("w7", "api")]);
+    let plan = flock
+        .plan_usage
+        .expect("the snapshot carries the machine's plan usage");
+    assert_eq!(plan.five_hour.map(|w| w.used_percent), Some(24));
+    assert_eq!(
+        plan.seven_day.map(|w| w.resets_at_ms),
+        Some(1_738_857_600_000)
+    );
     println!("  flock in {:?}", t.elapsed());
+
+    println!("a newer plan reaches the phone while no agent's status changes");
+    let t = Instant::now();
+    collied::usage::record(&data_dir, statusline.replace("23.5", "57.0").as_bytes(), 2).unwrap();
+    let five_hour = || {
+        phone_a
+            .cached_flock(machine.id.clone())
+            .and_then(|f| f.plan_usage?.five_hour)
+            .map(|w| w.used_percent)
+    };
+    while five_hour() != Some(57) {
+        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", five_hour());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    println!("  plan in {:?}", t.elapsed());
 
     let peers_of_mac = status(&net.mac).await.peer.unwrap_or_default();
     let phone_b_id = peers_of_mac

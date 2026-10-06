@@ -315,6 +315,20 @@ pub struct AgentSummary {
     pub last_activity_ms: Option<u64>,
 }
 
+/// The subscription's plan usage on the machine; `recorded_ms` dates it.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct PlanUsage {
+    pub five_hour: Option<UsageWindow>,
+    pub seven_day: Option<UsageWindow>,
+    pub recorded_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct UsageWindow {
+    pub used_percent: u8,
+    pub resets_at_ms: u64,
+}
+
 /// A shell pane. `label` is the name given in herdr; the phone never sees a title the
 /// pane's program sets.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -341,6 +355,8 @@ pub struct MachineFlock {
     pub terminals: Vec<TerminalSummary>,
     #[uniffi(default = false)]
     pub terminals_enabled: bool,
+    #[uniffi(default = None)]
+    pub plan_usage: Option<PlanUsage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -2236,6 +2252,7 @@ fn view(conn: &Conn) -> MachineFlock {
             .flat_map(|f| f.terminals.iter().map(|t| terminal_summary(f, t, state)))
             .collect(),
         terminals_enabled: flock.is_some_and(|f| f.terminals_enabled),
+        plan_usage: flock.and_then(|f| f.plan_usage.as_ref()).map(plan_usage),
     }
 }
 
@@ -2272,6 +2289,18 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
         context_left: a.context_left,
         last_prompt: a.last_prompt.clone(),
         last_activity_ms: a.last_activity_ms,
+    }
+}
+
+fn plan_usage(u: &protocol::PlanUsage) -> PlanUsage {
+    let window = |w: &protocol::UsageWindow| UsageWindow {
+        used_percent: w.used_percent,
+        resets_at_ms: w.resets_at_ms,
+    };
+    PlanUsage {
+        five_hour: u.five_hour.as_ref().map(window),
+        seven_day: u.seven_day.as_ref().map(window),
+        recorded_ms: u.recorded_ms,
     }
 }
 
@@ -2470,6 +2499,25 @@ mod tests {
         assert_eq!(s.context_left, Some(42));
         assert_eq!(s.last_prompt.as_deref(), Some("fix it"));
         assert_eq!(s.last_activity_ms, Some(9));
+    }
+
+    #[test]
+    fn plan_usage_maps_both_windows() {
+        let json = r#"{"five_hour":{"used_percent":24,"resets_at_ms":1738425600000},"seven_day":{"used_percent":41,"resets_at_ms":1738857600000},"recorded_ms":1738420000000}"#;
+        assert_eq!(
+            plan_usage(&serde_json::from_str(json).unwrap()),
+            PlanUsage {
+                five_hour: Some(UsageWindow {
+                    used_percent: 24,
+                    resets_at_ms: 1_738_425_600_000
+                }),
+                seven_day: Some(UsageWindow {
+                    used_percent: 41,
+                    resets_at_ms: 1_738_857_600_000
+                }),
+                recorded_ms: 1_738_420_000_000,
+            }
+        );
     }
 
     #[test]
@@ -3051,6 +3099,7 @@ mod tailnet_tests {
             approvals: Vec::new(),
             terminals: Vec::new(),
             terminals_enabled: false,
+            plan_usage: None,
         }
     }
 

@@ -164,6 +164,100 @@ enum Elapsed {
     }
 }
 
+enum UsagePace: Equatable {
+    case slower
+    case onPace
+    case faster
+}
+
+struct UsageLimit: Equatable {
+    let label: String
+    let used: UInt8
+    let seconds: Int
+    let length: Int
+
+    var left: UInt8 { 100 - used }
+
+    var spokenLabel: String { label == "5h" ? "5-hour" : "Weekly" }
+
+    /// The share of the window that has passed, from its reset time and its length.
+    var elapsed: Double { min(1, max(0, 1 - Double(seconds) / Double(length))) }
+
+    /// Within 5 points of the elapsed share counts as on pace.
+    var pace: UsagePace {
+        let gap = Double(used) / 100 - elapsed
+        return gap < -0.05 ? .slower : gap > 0.05 ? .faster : .onPace
+    }
+
+    /// A clock time for the 5-hour window, a countdown for the weekly one.
+    func resets(now: Date, style: Date.FormatStyle = .init(date: .omitted, time: .shortened)) -> String {
+        label == "5h" ? now.addingTimeInterval(TimeInterval(seconds)).formatted(style) : PlanUsage.countdown(seconds: seconds)
+    }
+
+    func spokenLine(now: Date) -> String {
+        let resets = label == "5h" ? "resets at \(resets(now: now))" : "resets in \(PlanUsage.spoken(seconds: seconds))"
+        let trend = switch pace {
+        case .slower: "usage pace slower"
+        case .onPace: "usage on pace"
+        case .faster: "usage pace faster"
+        }
+        return "\(spokenLabel) limit, \(used) percent used, \(Int((elapsed * 100).rounded())) percent of the window elapsed, \(trend), \(resets)"
+    }
+}
+
+extension PlanUsage {
+    /// The status line runs only while Claude Code is in use, so a quiet Mac's figures age.
+    static let staleAfterMs: UInt64 = 5 * 60_000
+
+    func isStale(now: Date) -> Bool {
+        let nowMs = UInt64(max(0, now.timeIntervalSince1970 * 1000))
+        return nowMs > recordedMs && nowMs - recordedMs > Self.staleAfterMs
+    }
+
+    /// A window whose reset time has passed is left out: its figure no longer holds.
+    func limits(now: Date) -> [UsageLimit] {
+        let nowMs = UInt64(max(0, now.timeIntervalSince1970 * 1000))
+        return [("5h", fiveHour, 5 * 3600), ("7d", sevenDay, 7 * 86400)].compactMap { label, window, length in
+            guard let window, window.resetsAtMs > nowMs else { return nil }
+            return UsageLimit(
+                label: label, used: min(window.usedPercent, 100),
+                seconds: Int((window.resetsAtMs - nowMs) / 1000), length: length
+            )
+        }
+    }
+
+    func age(now: Date) -> String {
+        Self.ageSeconds(recordedMs, now: now) < 60 ? "just now" : "\(Elapsed.string(sinceMs: recordedMs, now: now)) ago"
+    }
+
+    func spokenAge(now: Date) -> String {
+        let seconds = Self.ageSeconds(recordedMs, now: now)
+        return seconds < 60 ? "recorded just now" : "recorded \(Self.spoken(seconds: seconds)) ago"
+    }
+
+    private static func ageSeconds(_ ms: UInt64, now: Date) -> Int {
+        max(0, Int(now.timeIntervalSince1970) - Int(ms / 1000))
+    }
+
+    static func countdown(seconds: Int) -> String {
+        switch seconds {
+        case ..<60: "<1m"
+        case ..<3600: "\(seconds / 60)m"
+        case ..<86400: "\(seconds / 3600)h \(seconds % 3600 / 60)m"
+        default: "\(seconds / 86400)d \(seconds % 86400 / 3600)h"
+        }
+    }
+
+    /// VoiceOver reads "13m" as metres; this spells the units out.
+    static func spoken(seconds: Int) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .full
+        formatter.allowedUnits = seconds < 86400 ? [.hour, .minute] : [.day, .hour]
+        formatter.maximumUnitCount = 2
+        return formatter.string(from: TimeInterval(max(60, seconds))) ?? ""
+    }
+}
+
 extension TerminalSummary {
     /// The name given in herdr, else the folder: never a title a program set.
     var displayTitle: String {

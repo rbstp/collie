@@ -59,6 +59,9 @@ enum Command {
     },
     /// Claude Code PermissionRequest hook: reports the pending tool call to collied.
     Hook,
+    /// Claude Code status line tap: records the plan usage and context window from the
+    /// status line input on stdin. Prints nothing.
+    Statusline,
 }
 
 #[derive(Subcommand)]
@@ -98,6 +101,15 @@ fn main() -> anyhow::Result<ExitCode> {
         .with_writer(std::io::stderr)
         .init();
     let cli = Cli::parse();
+    // Runs on every status line refresh: no runtime, no output.
+    if let Command::Statusline = cli.command {
+        let recorded = config::data_dir().and_then(|d| collied::usage::record_stdin(&d));
+        return Ok(if recorded.is_ok() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -155,6 +167,7 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
         Command::Peers { command } => peers(command, &control_path, &data_dir).await?,
         Command::Status => status(&control_path).await?,
         Command::Hook => hooks::run(&control_path).await,
+        Command::Statusline => unreachable!("handled before the runtime starts"),
         Command::Stop => service::stop()?,
         Command::Start => service::start()?,
         Command::Service { command } => match command {

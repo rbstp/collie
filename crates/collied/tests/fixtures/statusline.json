@@ -1,0 +1,62 @@
+{
+  "hook_event_name": "Status",
+  "cwd": "/Users/me/src/collie",
+  "session_id": "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "session_name": "fix-flaky-test",
+  "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "transcript_path": "/Users/me/.claude/projects/-Users-me-src-collie/3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d.jsonl",
+  "model": {
+    "id": "claude-opus-5-5",
+    "display_name": "Opus"
+  },
+  "workspace": {
+    "current_dir": "/Users/me/src/collie",
+    "project_dir": "/Users/me/src/collie",
+    "added_dirs": []
+  },
+  "version": "2.1.290",
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 1.84213,
+    "total_duration_ms": 845000,
+    "total_api_duration_ms": 212300,
+    "total_lines_added": 156,
+    "total_lines_removed": 23
+  },
+  "context_window": {
+    "total_input_tokens": 55242,
+    "total_output_tokens": 4120,
+    "context_window_size": 1000000,
+    "used_percentage": 6,
+    "remaining_percentage": 94,
+    "current_usage": {
+      "input_tokens": 2,
+      "output_tokens": 412,
+      "cache_creation_input_tokens": 429,
+      "cache_read_input_tokens": 54811
+    }
+  },
+  "exceeds_200k_tokens": false,
+  "effort": {
+    "level": "high"
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 23.5,
+      "resets_at": 1738425600
+    },
+    "seven_day": {
+      "used_percentage": 41.2,
+      "resets_at": 1738857600
+    },
+    "spend_limit": {
+      "used_percentage": 62.8,
+      "resets_at": 1740787200,
+      "used_usd": 314.12,
+      "limit_usd": 500,
+      "period": "monthly"
+    }
+  }
+}

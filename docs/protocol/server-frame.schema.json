@@ -515,6 +515,22 @@
         {
           "properties": {
             "name": {
+              "const": "plan.usage",
+              "type": "string"
+            },
+            "plan_usage": {
+              "$ref": "#/$defs/PlanUsage"
+            }
+          },
+          "required": [
+            "name",
+            "plan_usage"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
               "const": "Unrecognized",
               "type": "string"
             }
@@ -542,6 +558,17 @@
         },
         "machine": {
           "$ref": "#/$defs/MachineInfo"
+        },
+        "plan_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The machine's plan usage, with or without a Claude Code agent open."
         },
         "seq": {
           "format": "uint64",
@@ -690,6 +717,40 @@
       "required": [
         "name",
         "summary"
+      ],
+      "type": "object"
+    },
+    "PlanUsage": {
+      "description": "From Claude Code's status line input, as `collied statusline` last recorded it.",
+      "properties": {
+        "five_hour": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recorded_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seven_day": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageWindow"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "recorded_ms"
       ],
       "type": "object"
     },
@@ -1045,6 +1106,26 @@
     "UploadId": {
       "pattern": "^[0-9a-f]{32}$",
       "type": "string"
+    },
+    "UsageWindow": {
+      "properties": {
+        "resets_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "used_percent": {
+          "format": "uint8",
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "used_percent",
+        "resets_at_ms"
+      ],
+      "type": "object"
     },
     "Workspace": {
       "properties": {

@@ -31,27 +31,32 @@ struct AgentInbox<Menu: View>: View {
                     }
                     .buttonStyle(.plain)
                 }
-                let groups = InboxSection.grouped(items, now: .now)
-                ForEach(InboxSection.allCases, id: \.self) { section in
-                    if let rows = groups[section] {
-                        Section(section.title) {
-                            ForEach(rows) { item in
-                                NavigationLink(value: item.route) {
-                                    InboxRow(
-                                        item: item, machine: showsMachine ? item.machine : nil,
-                                        followed: follows?.isFollowing(item.route) == true, now: context.date
-                                    )
-                                }
-                                .contextMenu { menu(item.agent, item.route) }
-                                .opacity(item.linkDown ? 0.5 : 1)
-                            }
+                inbox(items, now: context.date)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func inbox(_ items: [InboxItem], now: Date) -> some View {
+        let groups = InboxSection.grouped(items, now: .now)
+        ForEach(InboxSection.allCases, id: \.self) { section in
+            if let rows = groups[section] {
+                Section(section.title) {
+                    ForEach(rows) { item in
+                        NavigationLink(value: item.route) {
+                            InboxRow(
+                                item: item, machine: showsMachine ? item.machine : nil,
+                                followed: follows?.isFollowing(item.route) == true, now: now
+                            )
                         }
+                        .contextMenu { menu(item.agent, item.route) }
+                        .opacity(item.linkDown ? 0.5 : 1)
                     }
                 }
-                if items.isEmpty && entries.contains(where: { $0.flock?.details != nil }) {
-                    Text("No agents running").foregroundStyle(.secondary)
-                }
             }
+        }
+        if items.isEmpty && entries.contains(where: { $0.flock?.details != nil }) {
+            Text("No agents running").foregroundStyle(.secondary)
         }
     }
 }
