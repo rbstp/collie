@@ -13,7 +13,8 @@ final class PreviewModel {
     static let interval = Duration.seconds(5)
     static let tick = Duration.seconds(1)
     /// A 120 pt card shows about 20 rows at font size 5. herdr counts rows at the Mac pane
-    /// width, so a card wider than a narrow pane rejoins them into fewer.
+    /// width, so a card wider than a narrow pane rejoins them into fewer. The input box and
+    /// status lines `card` crops off take about 10 more.
     static let lines: UInt16 = 60
 
     private(set) var screens: [AgentRoute: String] = [:]
@@ -117,6 +118,44 @@ final class PreviewModel {
     }
 
     private func show(_ ansi: String, for route: AgentRoute) {
+        let ansi = Self.card(ansi)
         if screens[route] != ansi { screens[route] = ansi }
+    }
+
+    /// Ends at the last line above Claude Code's input box, found as collied's `draft::parse`
+    /// finds it: the last block between two rules drawn from column 0 whose first row starts at
+    /// column 0 and whose other rows are indented by two spaces. A screen without one, such as
+    /// a dialog in its place or another agent, is kept whole.
+    nonisolated static func card(_ ansi: String) -> String {
+        let lines = ansi.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        let plain = lines.map(plainText)
+        let rules = plain.indices.filter { plain[$0].hasPrefix("─") && isRule(plain[$0]) }
+        let box = Array(zip(rules, rules.dropFirst())).last { top, bottom in
+            bottom > top + 1 && plain[top + 1].first.map { !$0.isWhitespace } == true
+                && plain[top + 2..<bottom].allSatisfy { $0.hasPrefix("  ") || $0.allSatisfy(\.isWhitespace) }
+        }
+        guard let top = box?.0, let last = plain[..<top].lastIndex(where: { !$0.allSatisfy(\.isWhitespace) }) else { return ansi }
+        return String(ansi[..<lines[last].endIndex])
+    }
+
+    /// collied sends only plain SGR escapes.
+    private nonisolated static func plainText(_ line: Substring) -> String {
+        var text = String.UnicodeScalarView()
+        var escape = false
+        for c in line.unicodeScalars {
+            if escape {
+                escape = c != "m"
+            } else if c == "\u{1b}" {
+                escape = true
+            } else {
+                text.append(c)
+            }
+        }
+        return String(text)
+    }
+
+    private nonisolated static func isRule(_ line: String) -> Bool {
+        let dashes = line.prefix { $0 == "─" }.count
+        return dashes >= 3 || line.dropFirst(dashes).allSatisfy(\.isWhitespace)
     }
 }

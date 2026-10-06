@@ -211,6 +211,129 @@ private func running(_ model: PreviewModel, _ core: FakeCore, screens: Int) asyn
     await run.value
 }
 
+private let output = """
+    \u{1b}[38;2;153;153;153m⏺\u{1b}[39m Update(Collie/Sources/Collie/AgentGrid.swift)
+      ⎿  \u{1b}[2mUpdated AgentGrid.swift with 12 additions and 3 removals\u{1b}[22m
+
+    ⏺ Done. \u{1b}[1mThe build passes.\u{1b}[22m
+    """
+private let rule = "\u{1b}[38;2;136;136;136m" + String(repeating: "─", count: 60) + "\u{1b}[39m"
+private let labeledRule = "\u{1b}[38;2;136;136;136m" + String(repeating: "─", count: 48) + " ultracode ─\u{1b}[39m"
+private let status = """
+      \u{1b}[38;2;153;153;153mOpus 5.5 high · ~/GitHub/collie (agent-previews) · 42% used\u{1b}[39m
+      \u{1b}[38;2;215;119;87m⏵⏵ auto mode on\u{1b}[39m \u{1b}[2m(shift+tab to cycle)\u{1b}[22m
+      ◼ wf_90782106 · implement 2/4 · 3m 12s
+    """
+
+private func claude(_ box: String, top: String = rule) -> String {
+    "\(output)\n\n\(top)\n\(box)\n\(rule)\n\(status)\n"
+}
+
+@Test func aCardEndsAboveClaudeCodesInputBox() {
+    for box in [
+        "❯\u{a0}\u{1b}[2mTry \"fix lint errors\"\u{1b}[22m",
+        "❯ add a test for the crop",
+        "❯ first line\n  second line\n\n  \u{1b}[1mfourth\u{1b}[22m",
+        "! git status",
+    ] {
+        #expect(PreviewModel.card(claude(box)) == output, "\(box)")
+    }
+    #expect(PreviewModel.card(claude("❯ ", top: labeledRule)) == output)
+    let crlf = claude("❯ typed").replacing("\n", with: "\r\n")
+    #expect(PreviewModel.card(crlf) == output.replacing("\n", with: "\r\n"))
+    let typedRule = "❯ one\n  ────────────\n  two"
+    #expect(PreviewModel.card(claude(typedRule)) == output, "a typed rule is indented, so it does not close the box")
+}
+
+@Test func aCardEndsAboveTheLastInputBox() {
+    let stale = "\(rule)\n❯ an old prompt\n\(rule)\n\(output)"
+    #expect(PreviewModel.card(claude("❯ ").replacing(output, with: stale)) == stale)
+}
+
+@Test func aDialogInPlaceOfTheInputBoxStaysOnTheCard() {
+    let bash = """
+        \(output)
+
+        \(String(repeating: "─", count: 60))
+         Bash command
+
+           cargo test -p collied
+           Run the collied tests
+
+         Do you want to proceed?
+         ❯ 1. Yes
+           2. Yes, and don't ask again for cargo test commands in /Users/me/src/collie
+           3. No, and tell Claude what to do differently (esc)
+
+         Esc to cancel · Tab to amend · ctrl+e to explain
+
+        """
+    let question = """
+        ❯ Use the AskUserQuestion tool to ask me which storage backend the cache should use.
+        \(String(repeating: "─", count: 60))
+         ☐ Cache Backend
+
+        Which storage backend should the cache use?
+
+        ❯ 1. SQLite
+             File-based database, good for single-instance deployments
+          2. Redis
+             In-memory data store, better for distributed systems
+          3. Type something.
+        \(String(repeating: "─", count: 60))
+          4. Chat about this
+
+        Enter to select · ↑/↓ to navigate · Esc to cancel
+
+        """
+    let plan = """
+        \(output)
+
+          \(String(repeating: "─", count: 60))
+           Ready to code?
+
+           Here is Claude's plan:
+          \(String(repeating: "╌", count: 60))
+           Create hello.txt containing hi.
+          \(String(repeating: "╌", count: 60))
+           Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+           ❯ 1. Yes, and use auto mode
+             2. Yes, manually approve edits
+             3. Tell Claude what to change
+
+        """
+    for screen in [bash, question, plan] {
+        #expect(PreviewModel.card(screen) == screen)
+    }
+}
+
+@Test func aScreenWithoutAnInputBoxIsKeptWhole() {
+    for screen in [
+        "",
+        "$ ls\nCargo.toml  Collie  crates\n$ ",
+        "\(output)\n\n\(rule)\n❯ a box with no bottom rule",
+        "\(rule)\n\n\(rule)\n  status",
+        "  rows of a draft\n  taller than the screen\n\(rule)\n\(status)",
+        "\u{1b}[1m›\u{1b}[22m Explain this codebase\n\n  ⏎ send   ⇧⏎ newline   ⌃T transcript   ⌃C quit",
+    ] {
+        #expect(PreviewModel.card(screen) == screen)
+    }
+}
+
+@MainActor
+@Test func aCardOfAClaudeCodeScreenEndsAboveItsInputBox() async {
+    let core = FakeCore()
+    core.state.withLock { $0.output = TerminalSnapshot(terminalId: "t1", source: .recent, ansi: claude("❯ "), truncated: false) }
+    let model = PreviewModel()
+    model.update([entry("m1", [("t1", .working)])])
+    model.appeared(route("t1"))
+    let run = await running(model, core, screens: 1)
+    #expect(model.screens[route("t1")] == output)
+    run.cancel()
+    await run.value
+}
+
 @MainActor
 @Test func gridChoiceIsOffByDefaultAndRememberedOnThisDevice() throws {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
