@@ -25,7 +25,7 @@ struct SettingsView: View {
                 Section("Notifications") {
                     LabeledContent("Push", value: app.pushStatus)
                 }
-                if WCSession.isSupported() && WCSession.default.isPaired {
+                if watchDecisions || (WCSession.isSupported() && WCSession.default.isPaired) {
                     Section {
                         Toggle(
                             "Decide from Apple Watch",

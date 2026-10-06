@@ -64,7 +64,6 @@ struct WatchAgent: Codable, Equatable, Identifiable, Sendable {
 struct WatchUsage: Codable, Equatable, Sendable {
     let fiveHourUsed: UInt8?
     let fiveHourResetsAtMs: UInt64?
-    let recordedMs: UInt64
 
     /// Nil once the window's reset time has passed: its figure no longer holds.
     func fiveHour(now: Date) -> UInt8? {
@@ -82,6 +81,11 @@ struct WatchUsage: Codable, Equatable, Sendable {
         guard let file = Self.file, let data = try? JSONEncoder().encode(self) else { return }
         try? data.write(to: file, options: .atomic)
     }
+
+    static func clear() {
+        guard let file else { return }
+        try? FileManager.default.removeItem(at: file)
+    }
 }
 
 struct WatchDecisionRequest: Codable, Sendable {
@@ -95,4 +99,6 @@ enum WatchMessage {
     static let decide = "decide"
     static let title = "title"
     static let body = "body"
+    /// In a reply: the watch need not offer this approval again.
+    static let answered = "answered"
 }

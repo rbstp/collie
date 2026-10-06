@@ -130,6 +130,10 @@ jobs:
       - name: generate the project
         run: just --no-deps ios-project
 
+      # The iOS app embeds the watch app, so every iOS build also builds for watchOS.
+      - name: install the watchOS platform
+        run: xcrun simctl list runtimes | grep -q watchOS || xcodebuild -downloadPlatform watchOS
+
       # ci.yml tests the pull request, not the revision shipped, and a manual dispatch skips it.
       - name: test the revision being shipped
         run: just --no-deps ios-test

@@ -16,10 +16,7 @@ extension WatchState {
             approvals: items.filter { $0.approval.expiresAtMs > nowMs }.prefix(Self.maxApprovals).map(WatchApproval.init),
             agents: rows.prefix(Self.maxAgents).map { WatchAgent(item: $0.0, done: $0.1) },
             usage: usage.map {
-                WatchUsage(
-                    fiveHourUsed: $0.fiveHour.map { min($0.usedPercent, 100) }, fiveHourResetsAtMs: $0.fiveHour?.resetsAtMs,
-                    recordedMs: $0.recordedMs
-                )
+                WatchUsage(fiveHourUsed: $0.fiveHour.map { min($0.usedPercent, 100) }, fiveHourResetsAtMs: $0.fiveHour?.resetsAtMs)
             },
             decisionsAllowed: allowed, live: live
         )
@@ -71,6 +68,16 @@ extension WatchAgent {
     }
 }
 
+extension BackgroundOutcome {
+    /// The answer reached collied, may have, or the approval is gone: the watch need not offer it again.
+    var watchAnswered: Bool {
+        switch self {
+        case .applied, .unconfirmed, .expired, .alreadyResolved, .notFound, .unknownMachine, .unreachable(stage: .decide, message: _): true
+        case .superseded, .unreachable, .unauthorized, .failed: false
+        }
+    }
+}
+
 extension WatchDecision {
     var core: ApprovalDecision {
         switch self {
@@ -83,10 +90,10 @@ extension WatchDecision {
 
 @MainActor
 final class WatchLink: NSObject, WCSessionDelegate {
-    private var decide: (@MainActor (WatchDecisionRequest) async -> FollowUp)?
-    private var lastSent: Data?
+    private var decide: (@MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool))?
+    private var lastSent: (state: WatchState, at: Date)?
 
-    func activate(decide: @escaping @MainActor (WatchDecisionRequest) async -> FollowUp) {
+    func activate(decide: @escaping @MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool)) {
         self.decide = decide
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
@@ -99,13 +106,17 @@ final class WatchLink: NSObject, WCSessionDelegate {
         return session.activationState == .activated && session.isPaired && session.isWatchAppInstalled
     }
 
-    func publish(_ state: WatchState) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        guard let data = try? encoder.encode(state), data != lastSent else { return }
+    /// Agent lines and activity change every few seconds while agents work: alone, they go at most once a minute.
+    func publish(_ state: WatchState, now: Date = .now) {
+        if let lastSent {
+            var agentsOnly = state
+            agentsOnly.agents = lastSent.state.agents
+            guard lastSent.state != state, agentsOnly != lastSent.state || now.timeIntervalSince(lastSent.at) >= 60 else { return }
+        }
+        guard let data = try? JSONEncoder().encode(state) else { return }
         do {
             try WCSession.default.updateApplicationContext([WatchMessage.state: data])
-            lastSent = data
+            lastSent = (state, now)
         } catch {}
     }
 
@@ -133,20 +144,33 @@ final class WatchLink: NSObject, WCSessionDelegate {
         let reply = Reply(send: replyHandler)
         Task { @MainActor in
             guard let decide, let data, let request = try? JSONDecoder().decode(WatchDecisionRequest.self, from: data) else {
-                reply.send([WatchMessage.title: "collie", WatchMessage.body: "Nothing was sent."])
+                reply.send([WatchMessage.title: "collie", WatchMessage.body: "Nothing was sent.", WatchMessage.answered: false])
                 return
             }
-            let followUp = await decide(request)
-            reply.send([WatchMessage.title: followUp.title, WatchMessage.body: followUp.body])
+            let (followUp, answered) = await decide(request)
+            reply.send([WatchMessage.title: followUp.title, WatchMessage.body: followUp.body, WatchMessage.answered: answered])
         }
     }
 
-    nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: (any Error)?) {}
+    /// A new or reinstalled watch starts with an empty context: send the state again.
+    nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: (any Error)?) {
+        Task { @MainActor in self.lastSent = nil }
+    }
+
+    nonisolated func sessionWatchStateDidChange(_ session: WCSession) {
+        Task { @MainActor in self.lastSent = nil }
+    }
 
     nonisolated func sessionDidBecomeInactive(_ session: WCSession) {}
 
-    /// Switching to another watch deactivates the session; the next one needs a new activation.
+    /// Switching to another watch deactivates the session; the next one needs a new activation,
+    /// and a fresh authenticated opt-in before it can decide.
     nonisolated func sessionDidDeactivate(_ session: WCSession) {
+        var prefs = DevicePrefs.load(from: DevicePrefs.file)
+        if prefs.watchDecisions {
+            prefs.watchDecisions = false
+            prefs.save(to: DevicePrefs.file)
+        }
         WCSession.default.activate()
     }
 }

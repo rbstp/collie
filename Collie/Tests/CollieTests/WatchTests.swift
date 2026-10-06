@@ -107,10 +107,10 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     let newer = PlanUsage(fiveHour: UsageWindow(usedPercent: 73, resetsAtMs: nowMs + 60_000), sevenDay: nil, recordedMs: nowMs - 1_000)
     let state = WatchState(items: [], entries: [entry(mac, [], usage: older), entry(linux, [], usage: newer)], allowed: true, live: false, now: now)
     let usage = try #require(state.usage)
-    #expect(usage == WatchUsage(fiveHourUsed: 73, fiveHourResetsAtMs: nowMs + 60_000, recordedMs: nowMs - 1_000))
+    #expect(usage == WatchUsage(fiveHourUsed: 73, fiveHourResetsAtMs: nowMs + 60_000))
     #expect(usage.fiveHour(now: now) == 73)
     #expect(usage.fiveHour(now: now.addingTimeInterval(60)) == nil)
-    #expect(WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nil, recordedMs: nowMs).fiveHour(now: now) == nil)
+    #expect(WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nil).fiveHour(now: now) == nil)
     #expect(WatchState(items: [], entries: [entry(mac, [])], allowed: true, live: true, now: now).usage == nil)
 }
 
@@ -179,6 +179,15 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     let encoder = JSONEncoder()
     encoder.outputFormatting = .sortedKeys
     #expect(try encoder.encode(state).count < 65_536)
+}
+
+@Test func watchKeepsTheButtonsWhenNothingReachedCollied() {
+    #expect(BackgroundOutcome.applied(decision: .approve).watchAnswered)
+    #expect(BackgroundOutcome.notFound.watchAnswered)
+    #expect(BackgroundOutcome.unreachable(stage: .decide, message: "").watchAnswered)
+    #expect(!BackgroundOutcome.unreachable(stage: .connect, message: "").watchAnswered)
+    #expect(!BackgroundOutcome.unauthorized(message: "").watchAnswered)
+    #expect(!BackgroundOutcome.failed(message: "").watchAnswered)
 }
 
 @Test func devicePrefsKeepWatchDecisionsOffByDefault() throws {

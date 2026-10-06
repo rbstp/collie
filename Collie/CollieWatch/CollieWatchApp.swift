@@ -29,7 +29,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
     private(set) var state: WatchState?
     private(set) var receivedAt: Date?
     private(set) var sending: String?
-    /// Decided from this watch: no buttons again while the phone has not sent a newer list.
+    /// Decided from this watch: no buttons again while the phone still lists it.
     private(set) var answered: Set<String> = []
     private(set) var notice: (title: String, body: String)?
 
@@ -50,16 +50,17 @@ final class WatchModel: NSObject, WCSessionDelegate {
         }
     }
 
-    private func reload() {
+    /// `received` is nil for the context persisted from an earlier launch, whose age is unknown.
+    private func reload(received: Date?) {
         guard let data = WCSession.default.receivedApplicationContext[WatchMessage.state] as? Data,
             let next = try? JSONDecoder().decode(WatchState.self, from: data)
         else { return }
         let usageChanged = next.usage != state?.usage
         state = next
-        receivedAt = .now
+        receivedAt = received
         answered.formIntersection(next.approvals.map(\.id))
         if usageChanged {
-            next.usage?.save()
+            if let usage = next.usage { usage.save() } else { WatchUsage.clear() }
             WidgetCenter.shared.reloadTimelines(ofKind: "CollieUsage")
         }
     }
@@ -86,29 +87,34 @@ final class WatchModel: NSObject, WCSessionDelegate {
         let request = WatchDecisionRequest(nodeId: approval.nodeId, approvalId: approval.approvalId, decision: decision)
         guard let data = try? JSONEncoder().encode(request) else { return }
         let agent = approval.agent
-        let reply: (title: String, body: String)? = await withCheckedContinuation { continuation in
+        let reply: (title: String, body: String, answered: Bool)? = await withCheckedContinuation { continuation in
             WCSession.default.sendMessage(
                 [WatchMessage.decide: data],
                 replyHandler: { reply in
-                    continuation.resume(returning: (reply[WatchMessage.title] as? String ?? agent, reply[WatchMessage.body] as? String ?? ""))
+                    continuation.resume(
+                        returning: (
+                            reply[WatchMessage.title] as? String ?? agent, reply[WatchMessage.body] as? String ?? "",
+                            reply[WatchMessage.answered] as? Bool ?? false
+                        )
+                    )
                 },
                 errorHandler: { _ in continuation.resume(returning: nil) }
             )
         }
         if let reply {
-            notice = reply
-            answered.insert(approval.id)
+            notice = (reply.title, reply.body)
+            if reply.answered { answered.insert(approval.id) }
         } else {
             notice = (agent, "No answer from the iPhone. The decision may have been sent; check collie on the iPhone.")
         }
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: (any Error)?) {
-        Task { @MainActor in self.reload() }
+        Task { @MainActor in self.reload(received: nil) }
     }
 
     nonisolated func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        Task { @MainActor in self.reload() }
+        Task { @MainActor in self.reload(received: .now) }
     }
 }
 
@@ -236,23 +242,23 @@ private struct ApprovalDetail: View {
     let approval: WatchApproval
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let seconds = Int(approval.expiresAtMs / 1000) - Int(context.date.timeIntervalSince1970)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(verbatim: approval.agent).font(.headline)
-                    Text(verbatim: approval.place).font(.caption).foregroundStyle(.secondary)
-                    Text(seconds > 0 ? String(format: "%d:%02d", seconds / 60, seconds % 60) : "expired")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    if let command = approval.command {
-                        Text(verbatim: command).font(.footnote.monospaced())
-                    }
-                    Text(verbatim: approval.snippet).font(.footnote).foregroundStyle(.secondary)
-                    actions(expired: seconds <= 0)
-                    if let notice = model.notice {
-                        Text(verbatim: "\(notice.title): \(notice.body)").font(.footnote)
-                    }
+        let expiry = date(ms: approval.expiresAtMs)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(verbatim: approval.agent).font(.headline)
+                Text(verbatim: approval.place).font(.caption).foregroundStyle(.secondary)
+                Text(timerInterval: Date.now...max(.now, expiry), countsDown: true)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                if let command = approval.command {
+                    Text(verbatim: command).font(.footnote.monospaced())
+                }
+                Text(verbatim: approval.snippet).font(.footnote).foregroundStyle(.secondary)
+                TimelineView(.explicit([expiry])) { _ in
+                    actions(expired: Date.now >= expiry)
+                }
+                if let notice = model.notice {
+                    Text(verbatim: "\(notice.title): \(notice.body)").font(.footnote)
                 }
             }
         }

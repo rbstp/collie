@@ -132,7 +132,6 @@ targets:
       - path: CollieWatch
       - path: Sources/Shared/WatchState.swift
       - path: Sources/Shared/PushHint.swift
-      - path: Resources/Assets.xcassets
     dependencies:
       - target: CollieWatchWidgets
     settings:
