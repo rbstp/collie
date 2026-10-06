@@ -27,6 +27,7 @@ final class AppModel {
     private var alertsOff = false
     let approvals: ApprovalsModel
     let follows: FollowModel
+    let watch = WatchLink()
     var tab = AppTab.agents
     var openingAgent: AgentRoute?
     private var backgroundedAt: Date?
@@ -199,6 +200,7 @@ final class AppModel {
         switch phase {
         case .background:
             backgroundedAt = .now
+            publishWatchState()
             if let core {
                 let assertion = BackgroundAssertion(name: "core.suspend")
                 let epoch = core.beginSuspend()
@@ -344,6 +346,43 @@ final class AppModel {
         } else {
             await FollowModel.show(progress: nil, on: link)
         }
+    }
+
+    /// Never from a background launch: no scene polls there, and an empty list would clear the watch.
+    func publishWatchState() {
+        guard let core, watch.ready else { return }
+        let entries = core.machines().map { MachineFlockEntry(machine: $0, flock: core.cachedFlock(machineId: $0.id)) }
+        watch.publish(
+            WatchState(
+                items: approvals.items, entries: entries, allowed: DevicePrefs.load(from: DevicePrefs.file).watchDecisions,
+                live: backgroundedAt == nil, now: .now
+            )
+        )
+    }
+
+    /// From the paired watch: its wrist check stands in for Face ID only while this phone's
+    /// setting allows it, re-read here on every request, and only for an answer this phone sent
+    /// to the watch.
+    func decideFromWatch(_ request: WatchDecisionRequest) async -> FollowUp {
+        let shown = WatchLink.shown()
+        let agent = shown?.approvals.first { $0.approvalId == request.approvalId }?.agent ?? "collie"
+        let allowed = DevicePrefs.load(from: DevicePrefs.file).watchDecisions
+        if let refusal = WatchLink.refusal(request, allowed: allowed, shown: shown, now: .now) {
+            return FollowUp(title: agent, body: refusal, opensApproval: false)
+        }
+        guard let core else { return FollowUp(title: agent, body: FollowUp.unreachable, opensApproval: true) }
+        guard activityDecisions.insert(request.approvalId).inserted else {
+            return FollowUp(title: agent, body: "Already sending.", opensApproval: false)
+        }
+        defer { activityDecisions.remove(request.approvalId) }
+        let assertion = BackgroundAssertion(name: "watch.decide")
+        defer { assertion.end() }
+        let decision = request.decision.core
+        let report = await core.decideFromNotification(
+            machineNodeId: request.nodeId, approvalId: request.approvalId, decision: decision, budgetMs: 20_000
+        )
+        log.notice("watch decide: outcome=\(String(describing: report.outcome), privacy: .public) total=\(report.totalMs, privacy: .public)ms")
+        return FollowUp.after(report.outcome, decision: decision, agent: agent)
     }
 
     private func logColdStart() async {

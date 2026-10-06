@@ -73,6 +73,7 @@ targets:
         excludes:
           - AgentActivity.swift
           - DecideApprovalIntent.swift
+          - WatchState.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie.push
@@ -129,6 +130,8 @@ targets:
     platform: watchOS
     sources:
       - path: CollieWatch
+      - path: Sources/Shared/WatchState.swift
+      - path: Sources/Shared/PushHint.swift
       - path: Resources/Assets.xcassets
     settings:
       base:

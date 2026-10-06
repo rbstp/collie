@@ -1,6 +1,6 @@
 import Foundation
 
-// Compiled into both the app and ColliePush: Foundation only, extension-safe APIs only.
+// Compiled into the app, ColliePush and the watch targets: Foundation only, extension-safe APIs only.
 
 enum AppGroup {
     static let identifier = "group.dev.rbstp.collie"

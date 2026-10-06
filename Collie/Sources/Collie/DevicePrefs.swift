@@ -10,6 +10,7 @@ struct DevicePrefs: Codable, Equatable {
     var agentsLayout = AgentsLayout.grid
     var starred: Set<AgentRoute> = []
     var historyLines: UInt16 = 200
+    var watchDecisions = false
 
     static let historyChoices: [UInt16] = [200, 500, 1000]
 
@@ -38,6 +39,7 @@ extension DevicePrefs {
         agentsLayout = (try? container.decodeIfPresent(AgentsLayout.self, forKey: .agentsLayout)) ?? defaults.agentsLayout
         starred = (try? container.decodeIfPresent(Set<AgentRoute>.self, forKey: .starred)) ?? defaults.starred
         historyLines = try container.decodeIfPresent(UInt16.self, forKey: .historyLines) ?? defaults.historyLines
+        watchDecisions = try container.decodeIfPresent(Bool.self, forKey: .watchDecisions) ?? defaults.watchDecisions
     }
 }
 
