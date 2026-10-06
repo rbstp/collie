@@ -24,25 +24,18 @@ struct AgentGrid<Menu: View>: View {
             if entries.isEmpty {
                 NoMachines()
             }
-            LazyVGrid(
-                columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
-                alignment: .leading, spacing: 16
-            ) {
+            LazyVStack(alignment: .leading, spacing: 16) {
                 ForEach(entries) { entry in
                     Section {
-                        ForEach(entry.agents, id: \.terminalId) { agent in
-                            let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
-                            NavigationLink(value: route) {
-                                AgentCard(
-                                    agent: agent, screen: previews.screens[route], workspace: entry.workspaceLabel(for: agent),
-                                    machine: entry.machine.label, followed: follows?.isFollowing(route) == true
-                                )
+                        let agents = entry.gridAgents(starred: previews.starred)
+                        ForEach(agents.starred, id: \.terminalId) { card($0, in: entry, starred: true) }
+                        if !agents.rest.isEmpty {
+                            LazyVGrid(
+                                columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
+                                alignment: .leading, spacing: 16
+                            ) {
+                                ForEach(agents.rest, id: \.terminalId) { card($0, in: entry, starred: false) }
                             }
-                            .buttonStyle(.plain)
-                            .opacity(entry.linkDown ? 0.5 : 1)
-                            .contextMenu { menu(agent, route) }
-                            .onAppear { previews.appeared(route) }
-                            .onDisappear { previews.disappeared(route) }
                         }
                     } header: {
                         VStack(alignment: .leading, spacing: 6) {
@@ -66,6 +59,32 @@ struct AgentGrid<Menu: View>: View {
             .padding(.bottom)
         }
     }
+
+    private func card(_ agent: AgentSummary, in entry: MachineFlockEntry, starred: Bool) -> some View {
+        let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
+        return NavigationLink(value: route) {
+            AgentCard(
+                agent: agent, screen: previews.screens[route], workspace: entry.workspaceLabel(for: agent),
+                machine: entry.machine.label, followed: follows?.isFollowing(route) == true, starred: starred
+            )
+        }
+        .buttonStyle(.plain)
+        .opacity(entry.linkDown ? 0.5 : 1)
+        .contextMenu {
+            Button(starred ? "Unstar" : "Star", systemImage: starred ? "star.slash" : "star") { previews.toggleStar(route) }
+            menu(agent, route)
+        }
+        .onAppear { previews.appeared(route) }
+        .onDisappear { previews.disappeared(route) }
+    }
+}
+
+extension MachineFlockEntry {
+    /// Starred agents first, both parts in flock order.
+    func gridAgents(starred: Set<AgentRoute>) -> (starred: [AgentSummary], rest: [AgentSummary]) {
+        let isStarred = { (agent: AgentSummary) in starred.contains(AgentRoute(machineId: id, terminalId: agent.terminalId)) }
+        return (agents.filter(isStarred), agents.filter { !isStarred($0) })
+    }
 }
 
 private struct AgentCard: View {
@@ -74,12 +93,13 @@ private struct AgentCard: View {
     let workspace: String?
     let machine: String
     let followed: Bool
+    let starred: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             TerminalPreview(ansi: screen ?? "")
-                .frame(height: 120)
+                .frame(height: starred ? 240 : 120)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
@@ -87,6 +107,12 @@ private struct AgentCard: View {
                 StatusIcon(state: agent.status)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 4) {
+                        if starred {
+                            Image(systemName: "star.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.yellow)
+                                .accessibilityLabel("Starred")
+                        }
                         if followed {
                             Image(systemName: "pin.fill")
                                 .font(.caption2)

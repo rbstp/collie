@@ -8,6 +8,7 @@ struct DevicePrefs: Codable, Equatable {
     var fontSize = 11.0
     var dictationLanguage = DictationLanguage.english
     var agentsGrid = false
+    var starred: Set<AgentRoute> = []
 
     static let file: URL? = try? StateDirectory.prepare().appending(path: "prefs.json")
 
@@ -32,6 +33,7 @@ extension DevicePrefs {
         fontSize = try container.decodeIfPresent(Double.self, forKey: .fontSize) ?? defaults.fontSize
         dictationLanguage = (try? container.decodeIfPresent(DictationLanguage.self, forKey: .dictationLanguage)) ?? defaults.dictationLanguage
         agentsGrid = try container.decodeIfPresent(Bool.self, forKey: .agentsGrid) ?? defaults.agentsGrid
+        starred = (try? container.decodeIfPresent(Set<AgentRoute>.self, forKey: .starred)) ?? defaults.starred
     }
 }
 

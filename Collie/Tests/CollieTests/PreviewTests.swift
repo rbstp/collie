@@ -14,7 +14,8 @@ private final class FakeClock {
 }
 
 private func entry(
-    _ machineId: String, link: LinkPhase = .connected, since: UInt64 = 0, kind: String = "claude", _ agents: [(String, AgentState)]
+    _ machineId: String, link: LinkPhase = .connected, since: UInt64 = 0, kind: String = "claude", loaded: Bool = false,
+    _ agents: [(String, AgentState)]
 ) -> MachineFlockEntry {
     let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
     let summaries = agents.map {
@@ -23,7 +24,8 @@ private func entry(
             status: $0.1, statusSinceMs: since, cwd: nil, lastLine: nil
         )
     }
-    let flock = MachineFlock(machine: machine, link: link, lastError: nil, details: nil, workspaces: [], agents: summaries, approvalsCount: 0)
+    let details = loaded ? MachineDetails(name: "Mac", nodeId: "n1", herdrSession: "default") : nil
+    let flock = MachineFlock(machine: machine, link: link, lastError: nil, details: details, workspaces: [], agents: summaries, approvalsCount: 0)
     return MachineFlockEntry(machine: machine, flock: flock)
 }
 
@@ -414,4 +416,78 @@ private func claude(_ box: String, top: String = rule, above: String = "", foote
     prefs.agentsGrid = true
     prefs.save(to: file)
     #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, agentsGrid: true))
+}
+
+private func prefsFile() throws -> (file: URL, dir: URL) {
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return (dir.appending(path: "prefs.json"), dir)
+}
+
+@Test func starredCardsLeadTheirMachinesSectionInFlockOrder() {
+    let flock = entry("m1", [("t1", .blocked), ("t2", .working), ("t3", .idle), ("t4", .done)])
+    let agents = flock.gridAgents(starred: [route("t4"), route("t2"), route("t1", on: "m2")])
+    #expect(agents.starred.map(\.terminalId) == ["t2", "t4"])
+    #expect(agents.rest.map(\.terminalId) == ["t1", "t3"])
+    #expect(flock.gridAgents(starred: []).starred.isEmpty)
+}
+
+@MainActor
+@Test func aStarIsRememberedOnThisDeviceUntilItsAgentCloses() throws {
+    let (file, dir) = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try Data(#"{"wrapLines":false}"#.utf8).write(to: file)
+
+    let model = PreviewModel(prefsFile: file)
+    #expect(model.starred.isEmpty)
+    model.toggleStar(route("t1"))
+    model.toggleStar(route("t2"))
+    model.toggleStar(route("t3", on: "m2"))
+    model.toggleStar(route("t2"))
+    #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, starred: [route("t1"), route("t3", on: "m2")]))
+    #expect(PreviewModel(prefsFile: file).starred == [route("t1"), route("t3", on: "m2")])
+
+    // Not yet loaded, offline or still listing it: the star stays.
+    model.update([])
+    model.update([entry("m1", [("t2", .idle)]), entry("m2", link: .unavailable, loaded: true, [])])
+    model.update([entry("m1", loaded: true, [("t1", .idle)])])
+    #expect(model.starred == [route("t1"), route("t3", on: "m2")])
+
+    model.update([entry("m1", loaded: true, [("t2", .idle)]), entry("m2", loaded: true, [("t3", .idle)])])
+    #expect(model.starred == [route("t3", on: "m2")])
+    #expect(DevicePrefs.load(from: file).starred == [route("t3", on: "m2")])
+}
+
+@MainActor
+@Test func aStarredCardReadsMoreLinesAtOnceAndOnlyWhenItCanChange() async throws {
+    let (file, dir) = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let core = FakeCore()
+    let clock = FakeClock()
+    let model = PreviewModel(now: { clock.now }, prefsFile: file)
+    model.update([entry("m1", [("t1", .done), ("t2", .working)])])
+    model.appeared(route("t1"))
+    model.appeared(route("t2"))
+    let run = await running(model, core, screens: 2)
+    #expect(core.snapshot.readLines == [60, 60])
+
+    await model.toggleStar(route("t1"))?.value
+    #expect(core.snapshot.reads.last == "t1" && core.snapshot.readLines.last == 120)
+    for _ in 0..<10 {
+        clock.advance(.seconds(1))
+        await model.tick()?.value
+    }
+    #expect(core.snapshot.reads.filter { $0 == "t1" }.count == 2)
+    #expect(Set(core.snapshot.readLines.dropFirst(3)) == [60])
+
+    // A card moving to the starred row can show there before its grid card goes.
+    model.appeared(route("t2"))
+    model.disappeared(route("t2"))
+    await model.toggleStar(route("t2"))?.value
+    #expect(core.snapshot.reads.last == "t2" && core.snapshot.readLines.last == 120)
+    model.disappeared(route("t2"))
+    clock.advance(.seconds(5))
+    #expect(model.tick() == nil)
+    run.cancel()
+    await run.value
 }
