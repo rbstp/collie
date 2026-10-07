@@ -150,14 +150,18 @@ final class WatchLink: NSObject, WCSessionDelegate {
         return session.activationState == .activated && session.isPaired && session.isWatchAppInstalled
     }
 
-    /// Agent lines and activity change every few seconds while agents work: alone, they go at most once a minute.
     func publish(_ state: WatchState, now: Date = .now) {
-        if let lastSent {
-            var agentsOnly = state
-            agentsOnly.agents = lastSent.state.agents
-            guard lastSent.state != state, agentsOnly != lastSent.state || now.timeIntervalSince(lastSent.at) >= 60 else { return }
-        }
+        guard Self.due(state, lastSent: lastSent, reachable: WCSession.default.isReachable, now: now) else { return }
         send(state, now: now)
+    }
+
+    /// Agent lines and activity change every few seconds while agents work: alone, they go only
+    /// while the watch app is reachable, at most once a minute, as the context can wake the watch.
+    nonisolated static func due(_ state: WatchState, lastSent: (state: WatchState, at: Date)?, reachable: Bool, now: Date) -> Bool {
+        guard let lastSent else { return true }
+        var agentsOnly = state
+        agentsOnly.agents = lastSent.state.agents
+        return lastSent.state != state && (agentsOnly != lastSent.state || reachable && now.timeIntervalSince(lastSent.at) >= 60)
     }
 
     /// Unthrottled: a refresh answers with what the watch may then decide on.

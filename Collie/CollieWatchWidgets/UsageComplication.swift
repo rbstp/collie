@@ -20,7 +20,8 @@ struct UsageEntry: TimelineEntry {
     let usage: WatchUsage?
 }
 
-/// The watch app reloads the timeline when the figure changes; the entries run the ring down to the reset.
+/// The watch app reloads the timeline when the figure changes; the ring runs down to the reset by itself, and
+/// the entries change its color.
 struct UsageProvider: TimelineProvider {
     func placeholder(in context: Context) -> UsageEntry {
         let reset = UInt64((Date.now.timeIntervalSince1970 + 10_800) * 1000)
@@ -45,13 +46,14 @@ private struct UsageRing: View {
     var body: some View {
         let used = usage?.fiveHour(now: now)
         let left = usage?.fiveHourSecondsLeft(now: now)
-        Gauge(value: min(1, max(0, (left ?? 0) / WatchUsage.fiveHourLength))) {
+        let reset = now.addingTimeInterval(left ?? 0)
+        ProgressView(timerInterval: reset.addingTimeInterval(-WatchUsage.fiveHourLength)...reset, countsDown: true) {
             Text("5h")
         } currentValueLabel: {
             Text(used.map { "\($0)" } ?? "--")
                 .foregroundStyle(used.map(WatchUsage.usedColor) ?? .primary)
         }
-        .gaugeStyle(.accessoryCircularCapacity)
+        .progressViewStyle(.circular)
         .tint(left.map(WatchUsage.ringColor))
         .widgetAccentable()
     }

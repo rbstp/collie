@@ -119,12 +119,10 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
 
 @Test func watchComplicationRunsTheRingDownToTheReset() {
     let usage = WatchUsage(fiveHourUsed: 29, fiveHourResetsAtMs: nowMs + 9_000_000)
-    let dates = usage.timelineDates(now: now)
-    #expect(dates.first == now)
-    #expect(dates.last == now.addingTimeInterval(9_000))
-    #expect(dates.contains(now.addingTimeInterval(9_000 - 7_200)))
-    #expect(dates.contains(now.addingTimeInterval(9_000 - 3_600)))
-    #expect(zip(dates, dates.dropFirst()).allSatisfy { $1 > $0 && $1.timeIntervalSince($0) <= 300 })
+    #expect(usage.timelineDates(now: now) == [0, 1_800, 5_400, 9_000].map { now.addingTimeInterval($0) })
+    #expect(usage.timelineDates(now: now.addingTimeInterval(6_000)) == [6_000, 9_000].map { now.addingTimeInterval($0) })
+    let full = WatchUsage(fiveHourUsed: 29, fiveHourResetsAtMs: nowMs + 18_000_000)
+    #expect(full.timelineDates(now: now).count == 4)
     #expect(usage.fiveHourSecondsLeft(now: now) == 9_000)
     #expect(usage.fiveHourSecondsLeft(now: now.addingTimeInterval(9_000)) == nil)
     #expect(usage.timelineDates(now: now.addingTimeInterval(9_000)) == [now.addingTimeInterval(9_000)])
@@ -135,6 +133,32 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(WatchUsage.ringColor(secondsLeft: 3_601) == .yellow)
     #expect(WatchUsage.ringColor(secondsLeft: 3_600) == .red)
     #expect([0, 60, 61, 85, 86, 100].map(WatchUsage.usedColor) == [.green, .green, .yellow, .yellow, .red, .red])
+}
+
+@Test func watchGetsAgentChangesAloneOnlyWhileItsAppIsReachable() {
+    let shown = WatchState(items: [], entries: [entry(mac, [agent("t1", .working, activity: nowMs)])], allowed: true, live: true, now: now)
+    var agents = shown
+    agents.agents = WatchState(
+        items: [], entries: [entry(mac, [agent("t1", .working, activity: nowMs, line: "Running tests")])], allowed: true, live: true, now: now
+    ).agents
+    #expect(agents.agents.count == 1 && agents != shown)
+    var approvals = agents
+    approvals.approvals = [WatchApproval(item: item(approval("ap_1")))]
+    let later = now.addingTimeInterval(60)
+    #expect(WatchLink.due(agents, lastSent: nil, reachable: false, now: now))
+    #expect(!WatchLink.due(shown, lastSent: (shown, now), reachable: true, now: later))
+    #expect(!WatchLink.due(agents, lastSent: (shown, now), reachable: false, now: later.addingTimeInterval(3_600)))
+    #expect(!WatchLink.due(agents, lastSent: (shown, now), reachable: true, now: later.addingTimeInterval(-1)))
+    #expect(WatchLink.due(agents, lastSent: (shown, now), reachable: true, now: later))
+    for reachable in [false, true] {
+        #expect(WatchLink.due(approvals, lastSent: (shown, now), reachable: reachable, now: now), "approvals go at once")
+        var off = shown
+        off.decisionsAllowed = false
+        #expect(WatchLink.due(off, lastSent: (shown, now), reachable: reachable, now: now), "the setting goes at once")
+        var usage = shown
+        usage.usage = WatchUsage(fiveHourUsed: 50, fiveHourResetsAtMs: nowMs + 60_000)
+        #expect(WatchLink.due(usage, lastSent: (shown, now), reachable: reachable, now: now), "usage goes at once")
+    }
 }
 
 @Test func watchDecisionIsRefusedWhileTheSettingIsOff() {
