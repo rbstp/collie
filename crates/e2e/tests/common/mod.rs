@@ -505,7 +505,6 @@ pub fn mock_herdr(
 
 pub type Ws = WebSocketStream<ProbeStream>;
 
-/// A raw client on its own tailnet node, for what collie-core never sends.
 pub struct Probe {
     pub node: Node,
     pub target: String,

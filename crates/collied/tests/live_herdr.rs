@@ -287,7 +287,7 @@ async fn scenario(session: &HerdrSession) {
     let mut prompt_seen = false;
     for _ in 0..50 {
         let screen = herdr::detection_text(socket, &pane.pane_id).await.unwrap();
-        if !screen.trim().is_empty() {
+        if screen.trim_end().ends_with(['$', '#']) {
             prompt_seen = true;
             break;
         }
