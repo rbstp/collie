@@ -4,7 +4,6 @@ import SwiftUI
 struct AgentInbox<Menu: View>: View {
     let entries: [MachineFlockEntry]
     let notice: String?
-    let showsMachine: Bool
     let reconnect: (MachineFlockEntry) -> Void
     let follows: FollowModel?
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
@@ -44,10 +43,7 @@ struct AgentInbox<Menu: View>: View {
                 Section(section.title) {
                     ForEach(rows) { item in
                         NavigationLink(value: item.route) {
-                            InboxRow(
-                                item: item, machine: showsMachine ? item.machine : nil,
-                                followed: follows?.isFollowing(item.route) == true, now: now
-                            )
+                            InboxRow(item: item, followed: follows?.isFollowing(item.route) == true, now: now)
                         }
                         .contextMenu { menu(item.agent, item.route) }
                         .opacity(item.linkDown ? 0.5 : 1)
@@ -122,7 +118,6 @@ enum InboxSection: CaseIterable {
 
 private struct InboxRow: View {
     let item: InboxItem
-    let machine: String?
     let followed: Bool
     let now: Date
 
@@ -154,13 +149,12 @@ private struct InboxRow: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
                             .background(.quaternary, in: Capsule())
+                            .layoutPriority(1)
                     }
                     if let kind = agent.kind {
                         AgentKindLabel(kind: kind, iconOnly: true)
                     }
-                    if let machine {
-                        Text(machine)
-                    }
+                    Text(item.machine)
                 }
                 .lineLimit(1)
                 .font(.caption)
