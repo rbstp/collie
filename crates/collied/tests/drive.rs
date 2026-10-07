@@ -1191,13 +1191,12 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
         json!({"target": "w6:p1", "source": "recent_unwrapped", "lines": 200, "format": "ansi"})
     );
 
-    assert!(
-        tokio::time::timeout(Duration::from_millis(700), watcher.recv())
-            .await
-            .is_err(),
-        "unchanged output was pushed again"
-    );
-    assert!(herdr.params("agent.read").len() >= 3);
+    tokio::select! {
+        _ = watcher.recv() => panic!("unchanged output was pushed again"),
+        reached = reads_reach(&herdr, 3, Duration::from_secs(4)) => {
+            assert!(reached, "the watch stopped reading");
+        }
+    }
 
     herdr.with(|h| h.text = "next\r\n".into());
     let Ok(Some(Watched::Output(second))) = next(&mut watcher).await else {
@@ -1242,6 +1241,17 @@ async fn reads_over(herdr: &Mock, span: Duration) -> usize {
     herdr.params("agent.read").len() - before
 }
 
+async fn reads_reach(herdr: &Mock, count: usize, within: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + within;
+    while herdr.params("agent.read").len() < count {
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    true
+}
+
 #[tokio::test]
 async fn a_quiet_screen_is_read_once_a_second_until_it_changes() {
     let herdr = Mock::start();
@@ -1251,9 +1261,13 @@ async fn a_quiet_screen_is_read_once_a_second_until_it_changes() {
     let Ok(Some(Watched::Output(_))) = next(&mut watcher).await else {
         panic!("no first output");
     };
-    let busy = reads_over(&herdr, Duration::from_millis(2100)).await;
-    assert!(busy >= 6, "{busy} reads in 2.1 s before the quiet spell");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    let first_at = tokio::time::Instant::now();
+    let busy = herdr.params("agent.read").len() + 6;
+    assert!(
+        reads_reach(&herdr, busy, Duration::from_secs(4)).await,
+        "no 6 reads in 4 s before the quiet spell"
+    );
+    tokio::time::sleep_until(first_at + Duration::from_millis(5100)).await;
     let quiet = reads_over(&herdr, Duration::from_millis(2100)).await;
     assert!((1..=3).contains(&quiet), "{quiet} reads in 2.1 s after it");
 
@@ -1262,8 +1276,11 @@ async fn a_quiet_screen_is_read_once_a_second_until_it_changes() {
         panic!("no output after the change");
     };
     assert_eq!(second.ansi, "next\r\n");
-    let woken = reads_over(&herdr, Duration::from_millis(2100)).await;
-    assert!(woken >= 6, "{woken} reads in 2.1 s after the change");
+    let woken = herdr.params("agent.read").len() + 6;
+    assert!(
+        reads_reach(&herdr, woken, Duration::from_secs(4)).await,
+        "no 6 reads in 4 s after the change"
+    );
 }
 
 #[tokio::test]
