@@ -1143,6 +1143,9 @@ impl Session<'_> {
                 (reply, Some(origin))
             }
             Request::AgentFocus(p) => (drive.focus(&p.terminal_id, &auth).await, None),
+            Request::AgentScrollBottom(p) => {
+                (drive.scroll_bottom(&p.terminal_id, &auth).await, None)
+            }
             Request::AgentStar(p) => (self.star(p).await, None),
             // Starting an agent takes up to 30 s; the session keeps serving meanwhile.
             Request::TaskNew(_) if !self.tasks.is_empty() => (
@@ -1744,6 +1747,7 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::AgentSendKeys(p) => p.terminal_id.as_str(),
         Request::AgentTypeText(p) => p.terminal_id.as_str(),
         Request::AgentFocus(p) => p.terminal_id.as_str(),
+        Request::AgentScrollBottom(p) => p.terminal_id.as_str(),
         Request::AgentStar(p) => p.terminal_id.as_str(),
         Request::PaneClose(p) => p.terminal_id.as_str(),
         Request::WorkspaceClose(p) => p.workspace_id.as_str(),

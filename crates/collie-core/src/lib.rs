@@ -394,12 +394,16 @@ pub struct TerminalSnapshot {
     /// `ansi` with the agent's wrapped prose rejoined, for a screen that wraps at its own width.
     #[uniffi(default = None)]
     pub reflowed: Option<String>,
+    /// Claude Code's fullscreen transcript is scrolled up on the machine.
+    #[uniffi(default = false)]
+    pub jump_banner: bool,
 }
 
 impl From<TerminalRead> for TerminalSnapshot {
     fn from(r: TerminalRead) -> Self {
         Self {
             reflowed: r.reflowed(),
+            jump_banner: protocol::jump_banner(&r.ansi),
             terminal_id: r.terminal_id.into(),
             source: r.source.into(),
             ansi: r.ansi,
@@ -1259,6 +1263,18 @@ impl CollieCore {
     /// Brings the agent's pane to the front in herdr on the Mac.
     pub async fn focus(&self, machine_id: String, terminal_id: String) -> Result<(), CoreError> {
         let request = Request::AgentFocus(AgentTarget {
+            terminal_id: terminal(terminal_id)?,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    /// Claude Code's Ctrl+End, which collied sends only while its banner shows.
+    pub async fn scroll_bottom(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentScrollBottom(AgentTarget {
             terminal_id: terminal(terminal_id)?,
         });
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
@@ -3113,6 +3129,21 @@ mod tests {
             Some("⏺ a b")
         );
     }
+
+    #[test]
+    fn snapshots_say_when_the_transcript_is_scrolled_up() {
+        let read = |ansi: &str| TerminalRead {
+            terminal_id: TerminalId::new("term_1").unwrap(),
+            source: ReadSource::Recent,
+            ansi: ansi.into(),
+            truncated: false,
+            wraps: Vec::new(),
+            splits: Vec::new(),
+        };
+        assert!(!TerminalSnapshot::from(read("  95\n❯ ")).jump_banner);
+        let scrolled = "  96   \u{1b}[48;2;55;55;55m Jump to bottom: fn+↓ to scroll \u{1b}[0m\n❯ ";
+        assert!(TerminalSnapshot::from(read(scrolled)).jump_banner);
+    }
 }
 
 #[cfg(test)]
@@ -3232,6 +3263,7 @@ mod tailnet_tests {
         activities: Vec<String>,
         unpaired: bool,
         stars: Vec<(String, bool)>,
+        scrolls: Vec<String>,
         connections: usize,
         closed: usize,
     }
@@ -3461,6 +3493,10 @@ mod tailnet_tests {
                             lock(&seen)
                                 .stars
                                 .push((p.terminal_id.as_str().into(), p.starred));
+                            Ok(Response::Ok)
+                        }
+                        Request::AgentScrollBottom(p) => {
+                            lock(&seen).scrolls.push(p.terminal_id.as_str().into());
                             Ok(Response::Ok)
                         }
                         Request::ApprovalList(_) => {
@@ -3869,6 +3905,8 @@ mod tailnet_tests {
         rt.block_on(core.star(id(), t1(), false)).unwrap();
         assert!(core.cached_flock(id()).unwrap().starred.is_empty());
         assert_eq!(lock(&seen).stars, [(t1(), true), (t1(), false)]);
+        rt.block_on(core.scroll_bottom(id(), t1())).unwrap();
+        assert_eq!(lock(&seen).scrolls, [t1()]);
         rt.block_on(core.watch_agent(id(), None, 500)).unwrap();
         assert_eq!(lock(&seen).watches.last(), Some(&None));
         assert!(core.agent_view(id(), t1(), 0).unwrap().output.is_none());

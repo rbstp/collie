@@ -418,6 +418,12 @@ async fn scenario(
     assert_eq!(result(recv(&mut ws).await), Response::Ok);
     send(
         &mut ws,
+        json!({"id": 6, "method": "agent.scroll_bottom", "params": {"terminal_id": "term_65ce7ae4fd5731"}}),
+    )
+    .await;
+    assert_error(&recv(&mut ws).await, ErrorCode::AgentNotReady);
+    send(
+        &mut ws,
         json!({"id": 50, "method": "approval.list", "params": {}}),
     )
     .await;
@@ -801,6 +807,8 @@ async fn scenario(
         "\"result\":\"wrong code\"",
         "\"method\":\"peers.revoke\"",
         "\"method\":\"agent.focus\"",
+        "\"method\":\"agent.scroll_bottom\"",
+        "\"result\":\"agent_not_ready: already at the bottom\"",
         "\"method\":\"agent.star\"",
         "\"target\":\"term_65ce7ae4fd5731\"",
         "\"method\":\"agent.watch\"",
