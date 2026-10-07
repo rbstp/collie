@@ -4,14 +4,13 @@ mod common;
 use std::collections::VecDeque;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use collie_core::{AgentKey, CollieCore, CoreError, TaskOptions, TaskStarted, TerminalSource};
 use collied::config::TasksConfig;
 use collied::control::{Reply, Request};
-use collied::server::{self, ServerConfig, ServerHandle};
+use collied::server::{self, ServerHandle};
 use common::*;
 use protocol::AgentKind;
 use serde_json::{Value, json};
@@ -537,17 +536,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
 
 #[test]
 fn live_herdr_drive() {
-    let installed = Command::new("herdr")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !installed {
-        println!("skipped: herdr is not installed");
-        return;
-    }
-    if !in_child("live_herdr_drive") {
+    if !herdr_installed() || !in_child("live_herdr_drive") {
         return;
     }
     let t0 = Instant::now();
@@ -610,7 +599,20 @@ async fn live_scenario(
     .await;
     let (machine, _) = pair(&handle.control_path(), core, LABEL).await;
     let m = machine.id.clone();
-    connected_flock(core, &m).await;
+    let flock = connected_flock(core, &m).await;
+    assert_eq!(flock.details.unwrap().herdr_session, herdr.name);
+    let listed = collied::herdr::workspace_list(&herdr.socket).await.unwrap();
+    assert!(listed.iter().any(|w| w.label == "collie-e2e"), "{listed:?}");
+    let got: Vec<(&str, &str)> = flock
+        .workspaces
+        .iter()
+        .map(|w| (w.workspace_id.as_str(), w.label.as_str()))
+        .collect();
+    let want: Vec<(&str, &str)> = listed
+        .iter()
+        .map(|w| (w.workspace_id.as_str(), w.label.as_str()))
+        .collect();
+    assert_eq!(got, want);
     let snapshot = collied::herdr::session_snapshot(&herdr.socket)
         .await
         .unwrap();
@@ -726,17 +728,7 @@ async fn start_collied(
 ) -> ServerHandle {
     server::start_with(
         net.mac.clone(),
-        ServerConfig {
-            data_dir: data_dir.to_owned(),
-            port: PORT,
-            owner_user_id: None,
-            herdr_session: session.into(),
-            machine_name: "e2e-mac".into(),
-            approval_ttl: collied::approvals::TTL,
-            attachments_dir: data_dir.join("attachments"),
-            terminals: false,
-            terminal_grant_ttl: collied::terminal::GRANT_TTL,
-        },
+        server_config(data_dir, session),
         socket,
         &TasksConfig {
             agents: vec![AgentKind::new(agent).unwrap()],
@@ -752,14 +744,6 @@ async fn sessions(control: &Path) -> usize {
     match collied::control::request(control, &Request::Status).await {
         Ok(Some(Reply::Status(s))) => s.sessions,
         other => panic!("no status: {other:?}"),
-    }
-}
-
-async fn wait_for(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -840,8 +824,7 @@ struct Mock {
 
 impl Mock {
     fn start(socket: &Path, app: &Path, outside: &Path) -> Self {
-        let fixture: Value =
-            serde_json::from_str(include_str!("fixtures/session.snapshot.json")).unwrap();
+        let fixture: Value = serde_json::from_str(SNAPSHOT).unwrap();
         let mut snapshot = fixture["result"]["snapshot"].clone();
         for pane in snapshot["panes"].as_array_mut().unwrap() {
             let cwd = if pane["workspace_id"] == "w6" {

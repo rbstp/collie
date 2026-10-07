@@ -2,7 +2,6 @@
 mod common;
 
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -13,17 +12,7 @@ use common::*;
 
 #[test]
 fn live_terminal() {
-    let installed = Command::new("herdr")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !installed {
-        println!("skipped: herdr is not installed");
-        return;
-    }
-    if !in_child("live_terminal") {
+    if !herdr_installed() || !in_child("live_terminal") {
         return;
     }
     let mut herdr = HerdrSession::start();
@@ -100,15 +89,8 @@ async fn scenario(
     let handle = server::start(
         net.mac.clone(),
         ServerConfig {
-            attachments_dir: data_dir.join("attachments"),
-            data_dir: data_dir.clone(),
-            port: PORT,
-            owner_user_id: None,
-            herdr_session: herdr.name.clone(),
-            machine_name: "e2e-mac".into(),
-            approval_ttl: collied::approvals::TTL,
             terminals: true,
-            terminal_grant_ttl: collied::terminal::GRANT_TTL,
+            ..server_config(&data_dir, &herdr.name)
         },
         herdr.socket.clone(),
     )

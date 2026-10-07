@@ -1,6 +1,6 @@
 // Command testcontrol runs tailscale's in-memory control server and a DERP
-// relay on 127.0.0.1 for the tailnet integration tests. It prints the control
-// URL on stdout and serves until stdin closes.
+// relay on 127.0.0.1 for the integration tests. It prints the control URL on
+// stdout and serves until stdin closes.
 package main
 
 import (
@@ -24,6 +24,7 @@ import (
 func main() {
 	authKey := flag.String("authkey", "", "auth key every node must present")
 	offline := flag.Bool("offline", false, "report every peer offline, as a stale netmap would")
+	sameUser := flag.Bool("same-user", false, "own every node by one user")
 	flag.Parse()
 	if *authKey == "" {
 		log.Fatal("-authkey is required")
@@ -55,7 +56,8 @@ func main() {
 				},
 			},
 		},
-		RequireAuthKey: *authKey,
+		RequireAuthKey:   *authKey,
+		AllNodesSameUser: *sameUser,
 		// Peers are reported online, as real control does for connected nodes; collie-core
 		// does not dial a peer reported offline.
 		AllOnline: !*offline,

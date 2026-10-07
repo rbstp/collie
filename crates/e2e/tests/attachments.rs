@@ -2,29 +2,18 @@
 mod common;
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use collie_core::{CollieCore, CoreError, UploadProgress};
-use collied::control::{Client, Reply, Request};
 use collied::server::{self, ServerConfig};
 use common::*;
-use futures_util::{SinkExt, StreamExt};
-use protocol::{ErrorCode, PairingInvite, Response, ServerFrame, limits};
+use protocol::{ErrorCode, Response, limits};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tailnet::Node;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::{HeaderValue, header};
-
-const PROBE: &str = "E2E probe";
 
 #[test]
 fn attachments_end_to_end() {
@@ -93,21 +82,14 @@ fn upload_dirs(root: &Path) -> usize {
 }
 
 async fn scenario(root: &Path, core: &Arc<CollieCore>, probe: &Probe, net: &Net) {
-    mock_herdr(&root.join("herdr.sock"));
+    mock_herdr(&root.join("herdr.sock"), |_, _| None);
     let data_dir = root.join("collied");
     let store = root.join("cache/attachments");
     let handle = server::start(
         net.mac.clone(),
         ServerConfig {
-            data_dir: data_dir.clone(),
-            port: PORT,
-            owner_user_id: None,
-            herdr_session: "e2e".into(),
-            machine_name: "e2e-mac".into(),
-            approval_ttl: collied::approvals::TTL,
             attachments_dir: store.clone(),
-            terminals: false,
-            terminal_grant_ttl: collied::terminal::GRANT_TTL,
+            ..server_config(&data_dir, "e2e")
         },
         root.join("herdr.sock"),
     )
@@ -259,124 +241,4 @@ async fn chunk(ws: &mut Ws, upload_id: &str, offset: u64, data: &[u8]) -> Result
 async fn commit(ws: &mut Ws, n: u32, upload_id: &str) -> Result<Response, ErrorCode> {
     let params = json!({"op_id": op_id(n), "upload_id": upload_id});
     call(ws, "attachment.commit", params).await
-}
-
-type Ws = WebSocketStream<ProbeStream>;
-
-struct Probe {
-    node: Node,
-    target: String,
-    data_dir: PathBuf,
-}
-
-impl Probe {
-    async fn session(&self) -> Ws {
-        let stream = {
-            let (node, target) = (self.node.clone(), self.target.clone());
-            // netstack occasionally stalls one SYN for ~63 s; bounded retries keep the test fast.
-            tokio::task::spawn_blocking(move || {
-                (0..6)
-                    .find_map(|_| {
-                        node.dial_timeout("tcp", &target, Duration::from_secs(10))
-                            .ok()
-                    })
-                    .expect("probe could not dial collied")
-            })
-            .await
-            .unwrap()
-        };
-        stream.set_nonblocking(true).unwrap();
-        let mut req = format!("ws://{}{}", self.target, protocol::WS_PATH)
-            .into_client_request()
-            .unwrap();
-        req.headers_mut().insert(
-            header::SEC_WEBSOCKET_PROTOCOL,
-            HeaderValue::from_static(protocol::WS_SUBPROTOCOL),
-        );
-        let stream = probe_tls(UnixStream::from_std(stream).unwrap(), &self.data_dir).await;
-        let (mut ws, _) = tokio_tungstenite::client_async(req, stream).await.unwrap();
-        let hello = json!({"protocol_version": protocol::PROTOCOL_VERSION, "app_version": "e2e"});
-        call(&mut ws, "hello", hello).await.unwrap();
-        ws
-    }
-
-    async fn pair(&self, control: &Path) {
-        let mut cli = Client::connect(control).await.unwrap();
-        let Reply::Invite { uri, .. } = cli.call(&Request::Pair).await.unwrap() else {
-            panic!("no invite");
-        };
-        let code = PairingInvite::parse(&uri).unwrap().code;
-        let mut ws = self.session().await;
-        let params = json!({"pairing_code": code.as_str(), "device_label": PROBE});
-        let (paired, ()) = tokio::join!(call(&mut ws, "pair.complete", params), async {
-            let Reply::Confirm(candidate) = cli.recv().await.unwrap() else {
-                panic!("no confirmation request");
-            };
-            assert_eq!(candidate.device_label, PROBE);
-            cli.send(&Request::Confirm { accept: true }).await.unwrap();
-            assert!(matches!(
-                cli.recv().await.unwrap(),
-                Reply::PairDone { paired: true, .. }
-            ));
-        });
-        assert!(matches!(paired, Ok(Response::Paired { .. })), "{paired:?}");
-    }
-}
-
-async fn call(ws: &mut Ws, method: &str, params: Value) -> Result<Response, ErrorCode> {
-    let frame = json!({"id": 1, "method": method, "params": params});
-    ws.send(Message::text(frame.to_string())).await.unwrap();
-    loop {
-        let msg = tokio::time::timeout(Duration::from_secs(15), ws.next())
-            .await
-            .expect("no frame within 15 s")
-            .expect("connection ended")
-            .expect("websocket error");
-        let Message::Text(text) = msg else { continue };
-        match serde_json::from_str::<ServerFrame>(text.as_str()).unwrap() {
-            ServerFrame::Result { result, .. } => return Ok(result),
-            ServerFrame::Error { error, .. } => return Err(error.code),
-            ServerFrame::Event { .. } => {}
-        }
-    }
-}
-
-// One request per connection, like herdr. Fixtures are sanitized live samples.
-fn mock_herdr(path: &Path) {
-    let listener = UnixListener::bind(path).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    tokio::spawn(async move {
-        loop {
-            let Ok((stream, _)) = listener.accept().await else {
-                return;
-            };
-            tokio::spawn(async move {
-                let (r, mut w) = stream.into_split();
-                let mut line = String::new();
-                if tokio::io::BufReader::new(r)
-                    .read_line(&mut line)
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                let req: Value = serde_json::from_str(&line).unwrap();
-                let fixture = match req["method"].as_str().unwrap_or_default() {
-                    "ping" => Some(include_str!("fixtures/ping.json")),
-                    "session.snapshot" => Some(include_str!("fixtures/session.snapshot.json")),
-                    "agent.list" => Some(include_str!("fixtures/agent.list.json")),
-                    "workspace.list" => Some(include_str!("fixtures/workspace.list.json")),
-                    _ => None,
-                };
-                let mut resp = match fixture {
-                    Some(text) => serde_json::from_str(text).unwrap(),
-                    None => {
-                        json!({"error": {"code": "unknown_method", "message": "not mocked"}})
-                    }
-                };
-                resp["id"] = req["id"].clone();
-                let _ = w.write_all(format!("{resp}\n").as_bytes()).await;
-            });
-        }
-    });
 }

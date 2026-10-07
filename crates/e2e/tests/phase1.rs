@@ -6,19 +6,15 @@ use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use collie_core::{AgentState, CollieCore, CoreError};
 use collied::control::{Client, Reply, Request};
-use collied::server::{self, ServerConfig};
+use collied::server;
 use common::*;
 use protocol::PairingInvite;
-use serde_json::{Value, json};
 use tailnet::{Node, Status};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use tokio::net::UnixListener;
 
 const PHONE_TAG: &str = "tag:collie-phone";
 const READ_ONLY_HERDR: [&str; 6] = [
@@ -85,23 +81,13 @@ async fn scenario(
     let mac_self = mac_st.self_node.clone().unwrap();
     let mac_host = mac_self.dns_name.trim_end_matches('.').to_owned();
     let herdr_socket = root.join("herdr.sock");
-    let herdr_calls = mock_herdr(&herdr_socket);
+    let herdr_calls = mock_herdr(&herdr_socket, |_, _| None);
     let data_dir = root.join("collied");
     let statusline = include_str!("../../collied/tests/fixtures/statusline.json");
     collied::usage::record(&data_dir, statusline.as_bytes(), 1).unwrap();
     let handle = server::start(
         net.mac.clone(),
-        ServerConfig {
-            data_dir: data_dir.clone(),
-            port: PORT,
-            owner_user_id: None,
-            herdr_session: "e2e".into(),
-            machine_name: "e2e-mac".into(),
-            approval_ttl: collied::approvals::TTL,
-            attachments_dir: data_dir.join("attachments"),
-            terminals: false,
-            terminal_grant_ttl: collied::terminal::GRANT_TTL,
-        },
+        server_config(&data_dir, "e2e"),
         herdr_socket,
     )
     .await
@@ -359,82 +345,6 @@ async fn scenario(
     handle.shutdown().await;
 }
 
-#[test]
-fn live_herdr_session() {
-    let installed = Command::new("herdr")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !installed {
-        println!("skipped: herdr is not installed");
-        return;
-    }
-    if !in_child("live_herdr_session") {
-        return;
-    }
-    let t0 = Instant::now();
-    let mut herdr = HerdrSession::start();
-    println!(
-        "dedicated herdr session {} up in {:?}",
-        herdr.name,
-        t0.elapsed()
-    );
-    let root = TempDir::new("e2e-herdr");
-    let net = Net::start(&root.0);
-    wait_ready(&net.mac, 0);
-    let core = phone(&root.0, "phone", &net);
-    let rt = runtime();
-    rt.block_on(core.node_start(Some(net.key.clone()))).unwrap();
-    wait_ready(&net.mac, 1);
-    wait_phone(&rt, &core);
-
-    rt.block_on(async {
-        let expected = collied::herdr::workspace_list(&herdr.socket).await.unwrap();
-        assert!(
-            expected.iter().any(|w| w.label == "collie-e2e"),
-            "{expected:?}"
-        );
-        let data_dir = root.0.join("collied");
-        let handle = server::start(
-            net.mac.clone(),
-            ServerConfig {
-                attachments_dir: data_dir.join("attachments"),
-                data_dir,
-                port: PORT,
-                owner_user_id: None,
-                herdr_session: herdr.name.clone(),
-                machine_name: "e2e-mac".into(),
-                approval_ttl: collied::approvals::TTL,
-                terminals: false,
-                terminal_grant_ttl: collied::terminal::GRANT_TTL,
-            },
-            herdr.socket.clone(),
-        )
-        .await
-        .unwrap();
-        let (machine, _) = pair(&handle.control_path(), &core, LABEL).await;
-        let flock = connected_flock(&core, &machine.id).await;
-        assert_eq!(flock.details.unwrap().herdr_session, herdr.name);
-        let got: Vec<(&str, &str)> = flock
-            .workspaces
-            .iter()
-            .map(|w| (w.workspace_id.as_str(), w.label.as_str()))
-            .collect();
-        let want: Vec<(&str, &str)> = expected
-            .iter()
-            .map(|w| (w.workspace_id.as_str(), w.label.as_str()))
-            .collect();
-        assert_eq!(got, want);
-        handle.shutdown().await;
-    });
-    drop(core);
-    drop(rt);
-    assert!(herdr.stop(), "dedicated herdr session did not stop");
-    println!("total {:?}", t0.elapsed());
-}
-
 async fn status(node: &Node) -> Status {
     let node = node.clone();
     tokio::task::spawn_blocking(move || node.status())
@@ -496,50 +406,4 @@ async fn wait_audit(path: &Path, peer: &str, method: &str, result: &str) {
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-}
-
-// One request per connection, like herdr. Fixtures are sanitized live samples.
-fn mock_herdr(path: &Path) -> Arc<Mutex<Vec<String>>> {
-    let listener = UnixListener::bind(path).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let seen = calls.clone();
-    tokio::spawn(async move {
-        loop {
-            let Ok((stream, _)) = listener.accept().await else {
-                return;
-            };
-            let seen = seen.clone();
-            tokio::spawn(async move {
-                let (r, mut w) = stream.into_split();
-                let mut line = String::new();
-                if tokio::io::BufReader::new(r)
-                    .read_line(&mut line)
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                let req: Value = serde_json::from_str(&line).unwrap();
-                let method = req["method"].as_str().unwrap_or_default().to_owned();
-                seen.lock().unwrap().push(method.clone());
-                let fixture = match method.as_str() {
-                    "ping" => Some(include_str!("fixtures/ping.json")),
-                    "session.snapshot" => Some(include_str!("fixtures/session.snapshot.json")),
-                    "agent.list" => Some(include_str!("fixtures/agent.list.json")),
-                    "workspace.list" => Some(include_str!("fixtures/workspace.list.json")),
-                    _ => None,
-                };
-                let mut resp = match fixture {
-                    Some(text) => serde_json::from_str(text).unwrap(),
-                    None => {
-                        json!({"error": {"code": "unknown_method", "message": "not mocked"}})
-                    }
-                };
-                resp["id"] = req["id"].clone();
-                let _ = w.write_all(format!("{resp}\n").as_bytes()).await;
-            });
-        }
-    });
-    calls
 }

@@ -1,17 +1,14 @@
 #[allow(dead_code)]
 mod common;
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use collie_core::{MachineFlock, MachineKind, TerminalSource};
 use collied::server::{self, ServerConfig, ServerHandle};
 use common::*;
-use serde_json::{Value, json};
+use serde_json::json;
 use tailnet::Node;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use tokio::net::UnixListener;
 
 const LINUX_TAG: &str = "tag:collie-linux";
 const AGENT: &str = "term_65ce7ae4fd5731";
@@ -149,66 +146,25 @@ async fn timed<T>(call: impl Future<Output = T>) -> T {
 
 async fn start_collied(root: &Path, node: &Node, name: &str) -> ServerHandle {
     let herdr_socket = root.join(format!("herdr-{name}.sock"));
-    mock_herdr(&herdr_socket, name);
+    let screen = format!("e2e-{name} screen");
+    mock_herdr(&herdr_socket, move |method, p| {
+        (method == "agent.read").then(|| {
+            json!({"result": {"type": "pane_read", "read": {
+                "pane_id": p["target"], "workspace_id": "w6", "tab_id": "w6:t1",
+                "source": p["source"], "format": "ansi", "text": screen, "revision": 0,
+                "truncated": false,
+            }}})
+        })
+    });
     let data_dir = root.join(format!("collied-{name}"));
     server::start(
         node.clone(),
         ServerConfig {
-            attachments_dir: data_dir.join("attachments"),
-            data_dir,
-            port: PORT,
-            owner_user_id: None,
-            herdr_session: "e2e".into(),
             machine_name: format!("e2e-{name}"),
-            approval_ttl: collied::approvals::TTL,
-            terminals: false,
-            terminal_grant_ttl: collied::terminal::GRANT_TTL,
+            ..server_config(&data_dir, "e2e")
         },
         herdr_socket,
     )
     .await
     .unwrap()
-}
-
-// One request per connection, like herdr. Fixtures are sanitized live samples.
-fn mock_herdr(path: &Path, name: &str) {
-    let listener = UnixListener::bind(path).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let screen = format!("e2e-{name} screen");
-    tokio::spawn(async move {
-        loop {
-            let Ok((stream, _)) = listener.accept().await else {
-                return;
-            };
-            let screen = screen.clone();
-            tokio::spawn(async move {
-                let (r, mut w) = stream.into_split();
-                let mut line = String::new();
-                if tokio::io::BufReader::new(r)
-                    .read_line(&mut line)
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                let req: Value = serde_json::from_str(&line).unwrap();
-                let p = &req["params"];
-                let fixture = |text: &str| serde_json::from_str::<Value>(text).unwrap();
-                let mut resp = match req["method"].as_str().unwrap_or_default() {
-                    "ping" => fixture(include_str!("fixtures/ping.json")),
-                    "session.snapshot" => fixture(include_str!("fixtures/session.snapshot.json")),
-                    "agent.list" => fixture(include_str!("fixtures/agent.list.json")),
-                    "workspace.list" => fixture(include_str!("fixtures/workspace.list.json")),
-                    "agent.read" => json!({"result": {"type": "pane_read", "read": {
-                        "pane_id": p["target"], "workspace_id": "w6", "tab_id": "w6:t1",
-                        "source": p["source"], "format": "ansi", "text": screen, "revision": 0,
-                        "truncated": false,
-                    }}}),
-                    _ => json!({"error": {"code": "unknown_method", "message": "not mocked"}}),
-                };
-                resp["id"] = req["id"].clone();
-                let _ = w.write_all(format!("{resp}\n").as_bytes()).await;
-            });
-        }
-    });
 }

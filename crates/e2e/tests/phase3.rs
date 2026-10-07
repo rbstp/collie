@@ -17,21 +17,15 @@ use collie_core::{
     PendingApproval, PushEnvironment,
 };
 use collied::config::{PUSH_FILE, TasksConfig};
-use collied::control::{Client, Reply, Request};
+use collied::control::{Reply, Request};
 use collied::push::{Alert, Delivery, Device, Devices, Rejection, Sender};
 use collied::server::{self, ServerConfig, ServerHandle};
 use common::*;
-use futures_util::{SinkExt, StreamExt};
-use protocol::{ApnsEnvironment, Approval, ErrorCode, PairingInvite, Response, ServerFrame};
+use protocol::{ApnsEnvironment, Approval, ErrorCode, Response};
 use serde_json::{Value, json};
-use tailnet::Node;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixListener;
 use tokio::sync::watch;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::{HeaderValue, header};
 
 // testcontrol demands the auth key on every registration, even from a node key it
 // already knows, which real control accepts. tsnet falls back to TS_AUTHKEY, so the
@@ -51,26 +45,9 @@ const NOTIFY_KEY: [u8; 32] = [
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
     27, 28, 29, 30, 31, 32,
 ];
-const PROBE: &str = "E2E probe";
 const SNIPPET: &str =
     "Bash command\nrm -rf build\nRemove the build directory\nDo you want to proceed?";
-const BASH: &str = "\
-⏺ Bash(rm -rf build)
-  ⎿  Running…
-
-────────────────────────────────────────────────────────────────────────────────
- Bash command
-
-   rm -rf build
-   Remove the build directory
-
- Do you want to proceed?
- ❯ 1. Yes
-   2. Yes, and don't ask again for rm commands in /Users/me/src/app
-   3. No, and tell Claude what to do differently (esc)
-
- Esc to cancel · Tab to amend · ctrl+e to explain
-";
+const BASH: &str = include_str!("../../collied/tests/fixtures/claude/bash.txt");
 const MUTATING: [&str; 6] = [
     "agent.prompt",
     "agent.send_keys",
@@ -872,15 +849,8 @@ async fn start_collied(
     server::start_with(
         net.mac.clone(),
         ServerConfig {
-            data_dir: data_dir.to_owned(),
-            port: PORT,
-            owner_user_id: None,
-            herdr_session: "e2e".into(),
-            machine_name: "e2e-mac".into(),
             approval_ttl,
-            attachments_dir: data_dir.join("attachments"),
-            terminals: false,
-            terminal_grant_ttl: collied::terminal::GRANT_TTL,
+            ..server_config(data_dir, "e2e")
         },
         herdr.socket.clone(),
         &TasksConfig::default(),
@@ -952,14 +922,6 @@ async fn resolved(core: &CollieCore, m: &str, id: &str) {
     .await;
 }
 
-async fn wait_for(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-}
-
 fn files_containing(dir: &Path, needle: &str) -> Vec<PathBuf> {
     let mut hits = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -977,70 +939,7 @@ fn files_containing(dir: &Path, needle: &str) -> Vec<PathBuf> {
     hits
 }
 
-type Ws = WebSocketStream<ProbeStream>;
-
-struct Probe {
-    node: Node,
-    target: String,
-    data_dir: PathBuf,
-}
-
 impl Probe {
-    async fn session(&self) -> Ws {
-        let stream = {
-            let (node, target) = (self.node.clone(), self.target.clone());
-            // netstack occasionally stalls one SYN for ~63 s; bounded retries keep the test fast.
-            tokio::task::spawn_blocking(move || {
-                (0..6)
-                    .find_map(|_| {
-                        node.dial_timeout("tcp", &target, Duration::from_secs(10))
-                            .ok()
-                    })
-                    .expect("probe could not dial collied")
-            })
-            .await
-            .unwrap()
-        };
-        stream.set_nonblocking(true).unwrap();
-        let mut req = format!("ws://{}{}", self.target, protocol::WS_PATH)
-            .into_client_request()
-            .unwrap();
-        req.headers_mut().insert(
-            header::SEC_WEBSOCKET_PROTOCOL,
-            HeaderValue::from_static(protocol::WS_SUBPROTOCOL),
-        );
-        let stream = probe_tls(UnixStream::from_std(stream).unwrap(), &self.data_dir).await;
-        let (mut ws, _) = tokio_tungstenite::client_async(req, stream).await.unwrap();
-        let hello = json!({"protocol_version": protocol::PROTOCOL_VERSION, "app_version": "e2e"});
-        call(&mut ws, "hello", hello).await.unwrap();
-        ws
-    }
-
-    async fn pair(&self, control: &Path) {
-        let mut cli = Client::connect(control).await.unwrap();
-        let Reply::Invite { uri, .. } = cli.call(&Request::Pair).await.unwrap() else {
-            panic!("no invite");
-        };
-        let code = PairingInvite::parse(&uri).unwrap().code;
-        let mut ws = self.session().await;
-        let unpaired = call(&mut ws, "approval.list", json!({})).await;
-        assert_eq!(unpaired, Err(ErrorCode::NotPaired));
-        let mut ws = self.session().await;
-        let params = json!({"pairing_code": code.as_str(), "device_label": PROBE});
-        let (paired, ()) = tokio::join!(call(&mut ws, "pair.complete", params), async {
-            let Reply::Confirm(candidate) = cli.recv().await.unwrap() else {
-                panic!("no confirmation request");
-            };
-            assert_eq!(candidate.device_label, PROBE);
-            cli.send(&Request::Confirm { accept: true }).await.unwrap();
-            assert!(matches!(
-                cli.recv().await.unwrap(),
-                Reply::PairDone { paired: true, .. }
-            ));
-        });
-        assert!(matches!(paired, Ok(Response::Paired { .. })), "{paired:?}");
-    }
-
     async fn pending(&self) -> Vec<Approval> {
         let mut ws = self.session().await;
         match call(&mut ws, "approval.list", json!({})).await {
@@ -1059,24 +958,6 @@ impl Probe {
         let mut ws = self.session().await;
         let params = json!({"approval_id": id, "decision": "approve", "nonce": nonce});
         call(&mut ws, "approval.decide", params).await
-    }
-}
-
-async fn call(ws: &mut Ws, method: &str, params: Value) -> Result<Response, ErrorCode> {
-    let frame = json!({"id": 1, "method": method, "params": params});
-    ws.send(Message::text(frame.to_string())).await.unwrap();
-    loop {
-        let msg = tokio::time::timeout(Duration::from_secs(15), ws.next())
-            .await
-            .expect("no frame within 15 s")
-            .expect("connection ended")
-            .expect("websocket error");
-        let Message::Text(text) = msg else { continue };
-        match serde_json::from_str::<ServerFrame>(text.as_str()).unwrap() {
-            ServerFrame::Result { result, .. } => return Ok(result),
-            ServerFrame::Error { error, .. } => return Err(error.code),
-            ServerFrame::Event { .. } => {}
-        }
     }
 }
 
