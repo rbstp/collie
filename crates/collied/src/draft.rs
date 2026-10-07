@@ -81,7 +81,7 @@ pub fn parse(ansi: &str) -> Option<InputBox> {
             };
             row.iter()
                 .skip(skip)
-                .filter(|(c, dim)| !dim && !c.is_control() && !prompt::is_format(*c))
+                .filter(|(c, dim)| !dim && !c.is_control() && !protocol::is_format(*c))
                 .map(|(c, _)| *c)
                 .collect::<String>()
                 .trim_end()

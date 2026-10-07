@@ -10,28 +10,28 @@ publish = false
 [dependencies]
 anyhow = "1.0.104"
 apns-h2 = "0.11.0"
-base64 = "0.23.1"
-collie-tls = { path = "../tls" }
-chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
+base64.workspace = true
+collie-tls.workspace = true
+chacha20poly1305 = { workspace = true, features = ["alloc", "zeroize"] }
 clap = { version = "4.6.7", features = ["derive"] }
-futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
-getrandom = "0.4.3"
-protocol = { path = "../protocol" }
+futures-util.workspace = true
+getrandom.workspace = true
+protocol.workspace = true
 qrcode = { version = "0.14.1", default-features = false }
 rustix = { version = "1.1.5", features = ["fs", "process", "system", "termios"] }
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.11.0"
+sha2.workspace = true
 subtle = "2.6.1"
-tailnet = { path = "../tailnet" }
+tailnet.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+tokio-tungstenite.workspace = true
 toml = "1.1.6"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2.2"
-zeroize = "1.9.0"
+zeroize.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"
@@ -39,7 +39,7 @@ security-framework = "3.7.0"
 security-framework-sys = "2.17.0"
 
 [dev-dependencies]
-tempfile = "3.27.0"
+tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]

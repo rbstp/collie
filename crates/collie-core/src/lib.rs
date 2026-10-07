@@ -30,13 +30,13 @@ use tokio::sync::watch;
 use zeroize::Zeroizing;
 
 pub use approvals::{
-    ApprovalChoice, ApprovalDecision, ApprovalEvent, ApprovalFeed, BackgroundDecideReport,
-    BackgroundOutcome, DecideStage, DecisionOutcome, MachineApprovals, PendingApproval,
+    ApprovalChoice, ApprovalDecision, ApprovalFeed, BackgroundDecideReport, BackgroundOutcome,
+    DecideStage, DecisionOutcome, MachineApprovals, PendingApproval,
 };
 pub use attachments::UploadProgress;
 use conn::{
     Conn, ConnectError, FOREGROUND_RECONNECT, IdentitySlot, LinkPhase, NodeSlot, PushSlot,
-    RequestError, blocking,
+    Registrations, RequestError, blocking,
 };
 pub use identity::IdentitySigner;
 use reach::Reachability;
@@ -438,8 +438,6 @@ pub enum AgentKey {
     ShiftTab,
     CtrlC,
     CtrlEnter,
-    Y,
-    N,
 }
 
 impl From<AgentKey> for Key {
@@ -455,8 +453,6 @@ impl From<AgentKey> for Key {
             AgentKey::ShiftTab => Self::ShiftTab,
             AgentKey::CtrlC => Self::CtrlC,
             AgentKey::CtrlEnter => Self::CtrlEnter,
-            AgentKey::Y => Self::Y,
-            AgentKey::N => Self::N,
         }
     }
 }
@@ -517,6 +513,26 @@ pub fn core_version() -> String {
 #[uniffi::export]
 pub fn protocol_version() -> u32 {
     protocol::PROTOCOL_VERSION
+}
+
+/// The note check `decide` makes, for the app to run before asking for Face ID.
+#[uniffi::export]
+pub fn check_note(note: String, decision: ApprovalDecision) -> Result<(), CoreError> {
+    approval_note(note, decision).map(|_| ())
+}
+
+fn approval_note(note: String, decision: ApprovalDecision) -> Result<PromptText, CoreError> {
+    PromptText::new(note)
+        .ok()
+        .filter(|n| protocol::is_one_line(n.as_str()))
+        .filter(|n| n.as_str().chars().count() <= limits::MAX_NOTE_CHARS)
+        .filter(|_| matches!(decision, ApprovalDecision::Approve | ApprovalDecision::Deny))
+        .ok_or_else(|| {
+            invalid(
+                "note",
+                "a note must be one non-empty line of at most 200 characters, without control or invisible characters (some combined emoji contain one), with Approve or Deny",
+            )
+        })
 }
 
 #[uniffi::export]
@@ -1209,11 +1225,11 @@ impl CollieCore {
     ) -> Result<(), CoreError> {
         let text = PromptText::new(text)
             .ok()
-            .filter(|t| !t.as_str().contains(['\n', '\t']))
+            .filter(|t| protocol::is_one_line(t.as_str()))
             .ok_or_else(|| {
                 invalid(
                     "text",
-                    "an answer must be one non-empty line of at most 32 KiB, without control characters",
+                    "an answer must be one non-empty line of at most 32 KiB, without control or invisible characters (some combined emoji contain one)",
                 )
             })?;
         let request = Request::AgentTypeText(AgentTypeTextParams {
@@ -1330,16 +1346,6 @@ impl CollieCore {
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
     }
 
-    pub async fn approvals(&self, machine_id: String) -> Result<Vec<PendingApproval>, CoreError> {
-        match self
-            .call(&machine_id, Request::ApprovalList(Empty {}), CALL_TIMEOUT)
-            .await?
-        {
-            Response::Approvals { approvals } => Ok(approvals.iter().map(Into::into).collect()),
-            other => Err(unexpected(&other).into()),
-        }
-    }
-
     /// Uses the nonce collie-core holds from the flock and `approval.needed`, fetching
     /// `approval.list` when it has none. Not retried: the nonce is single use. `note`, one
     /// line, goes with Approve or Deny on an approval with `supports_note`.
@@ -1352,24 +1358,7 @@ impl CollieCore {
     ) -> Result<DecisionOutcome, CoreError> {
         let approval_id = ApprovalId::new(approval_id)
             .map_err(|_| invalid("approval_id", "invalid approval id"))?;
-        let note = match note {
-            None => None,
-            Some(note) => Some(
-                PromptText::new(note)
-                    .ok()
-                    .filter(|n| !n.as_str().contains(['\n', '\t']))
-                    .filter(|n| n.as_str().chars().count() <= limits::MAX_NOTE_CHARS)
-                    .filter(|_| {
-                        matches!(decision, ApprovalDecision::Approve | ApprovalDecision::Deny)
-                    })
-                    .ok_or_else(|| {
-                        invalid(
-                            "note",
-                            "a note must be one non-empty line of at most 200 characters, without control characters, with Approve or Deny",
-                        )
-                    })?,
-            ),
-        };
+        let note = note.map(|n| approval_note(n, decision)).transpose()?;
         let conn = self.conn(&machine_id)?;
         let _busy = Busy::new(&self.inner);
         self.run(async move {
@@ -1401,32 +1390,27 @@ impl CollieCore {
     }
 
     /// Local and cheap, meant to be polled. `None` when the machine has no connection yet.
-    pub fn approval_feed(&self, machine_id: String, after_revision: u64) -> Option<ApprovalFeed> {
+    pub fn approval_feed(&self, machine_id: String) -> Option<ApprovalFeed> {
         let conn = lock(&self.inner.conns).get(&machine_id).cloned()?;
         let link = lock(&conn.shared.link).phase;
-        Some(approvals::feed(
-            link,
-            &lock(&conn.shared.flock),
-            after_revision,
-        ))
+        Some(approvals::feed(link, &lock(&conn.shared.flock)))
     }
 
     /// Lock-screen Approve/Deny. Starts the tailnet from cached state if needed (never
     /// a login), dials the Mac pinned to `machine_node_id`, fetches the nonce and
-    /// decides, all within `budget_ms` (default and at most 20 s, 0 is refused). Never
+    /// decides, all within `budget_ms` (at most 20 s, 0 is refused). Never
     /// throws: the report carries the outcome and step timings.
     pub async fn decide_from_notification(
         &self,
         machine_node_id: String,
         approval_id: String,
         decision: ApprovalDecision,
-        budget_ms: Option<u64>,
+        budget_ms: u64,
     ) -> BackgroundDecideReport {
-        let budget = match budget_ms {
-            None => BACKGROUND_BUDGET,
-            Some(0) => return BackgroundDecideReport::failed("budget_ms must be positive".into()),
-            Some(ms) => Duration::from_millis(ms).min(BACKGROUND_BUDGET),
-        };
+        if budget_ms == 0 {
+            return BackgroundDecideReport::failed("budget_ms must be positive".into());
+        }
+        let budget = Duration::from_millis(budget_ms).min(BACKGROUND_BUDGET);
         let inner = self.inner.clone();
         let fut =
             approvals::decide_in_background(inner, machine_node_id, approval_id, decision, budget);
@@ -1444,13 +1428,7 @@ impl CollieCore {
         let fut = approvals::list_in_background(self.inner.clone(), budget);
         match self.runtime.spawn(fut).await {
             Ok(listed) => listed,
-            Err(_) => lock(&self.inner.machines)
-                .iter()
-                .map(|m| MachineApprovals {
-                    machine_id: m.id.clone(),
-                    approvals: None,
-                })
-                .collect(),
+            Err(_) => approvals::unlisted(&lock(&self.inner.machines)),
         }
     }
 
@@ -1475,21 +1453,11 @@ impl CollieCore {
             apns_token: PushToken::new(apns_token_hex.trim()).map_err(|_| {
                 invalid("apns_token", "APNs token must be 64 to 256 hex characters")
             })?,
-            live_activity_push_to_start_token: None,
             environment: environment.into(),
             notification_key: NotificationKey::new(URL_SAFE_NO_PAD.encode(&*notification_key))
                 .expect("32 bytes encode to a canonical 43-char base64url key"),
         };
-        {
-            let machines = lock(&self.inner.machines);
-            if !machines.iter().any(|m| m.id == machine_id) {
-                return Err(CoreError::MachineNotFound);
-            }
-            lock(&self.inner.push)
-                .entry(machine_id.clone())
-                .or_default()
-                .push = Some(push.clone());
-        }
+        self.update_push(&machine_id, |reg| reg.push = Some(push.clone()))?;
         self.send_if_connected(&machine_id, Request::PushRegister(push), None)
     }
 
@@ -1512,17 +1480,11 @@ impl CollieCore {
             // The app restarts activities an older build started before it registers any.
             shows_approvals: true,
         };
-        {
-            let machines = lock(&self.inner.machines);
-            if !machines.iter().any(|m| m.id == machine_id) {
-                return Err(CoreError::MachineNotFound);
-            }
-            let mut push = lock(&self.inner.push);
-            let reg = push.entry(machine_id.clone()).or_default();
+        self.update_push(&machine_id, |reg| {
             reg.unsent_ends.retain(|a| *a != params.activity_id);
             reg.activities
                 .insert(params.activity_id.as_str().to_owned(), params.clone());
-        }
+        })?;
         self.send_if_connected(&machine_id, Request::PushActivityToken(params), None)
     }
 
@@ -1530,16 +1492,7 @@ impl CollieCore {
     /// connection.
     pub fn end_activity(&self, machine_id: String, activity_id: String) -> Result<(), CoreError> {
         let activity_id = activity(activity_id)?;
-        {
-            let machines = lock(&self.inner.machines);
-            if !machines.iter().any(|m| m.id == machine_id) {
-                return Err(CoreError::MachineNotFound);
-            }
-            lock(&self.inner.push)
-                .entry(machine_id.clone())
-                .or_default()
-                .end(&activity_id);
-        }
+        self.update_push(&machine_id, |reg| reg.end(&activity_id))?;
         let request = Request::PushActivityEnd(PushActivityEndParams {
             activity_id: activity_id.clone(),
         });
@@ -1733,8 +1686,24 @@ impl CollieCore {
         .await
     }
 
-    /// Holds the machines lock until the conn is inserted so a concurrent removal
-    /// cannot leave a supervisor for a removed machine.
+    /// Under the machines lock, so a machine removed meanwhile is left with no registration.
+    fn update_push(
+        &self,
+        machine_id: &str,
+        update: impl FnOnce(&mut Registrations),
+    ) -> Result<(), CoreError> {
+        let machines = lock(&self.inner.machines);
+        if !machines.iter().any(|m| m.id == machine_id) {
+            return Err(CoreError::MachineNotFound);
+        }
+        update(
+            lock(&self.inner.push)
+                .entry(machine_id.to_owned())
+                .or_default(),
+        );
+        Ok(())
+    }
+
     /// An end the Mac acknowledged is no longer sent with the next connection.
     fn send_if_connected(
         &self,
@@ -1762,6 +1731,8 @@ impl CollieCore {
         Ok(())
     }
 
+    /// Holds the machines lock until the conn is inserted so a concurrent removal
+    /// cannot leave a supervisor for a removed machine.
     fn conn(&self, machine_id: &str) -> Result<Arc<Conn>, CoreError> {
         let machines = lock(&self.inner.machines);
         let machine = machines
@@ -3013,10 +2984,18 @@ mod tests {
             Some("keys".into())
         );
         assert_eq!(
-            field(rt.block_on(core.send_keys(m(), t(), vec![AgentKey::Y; 17]))),
+            field(rt.block_on(core.send_keys(m(), t(), vec![AgentKey::Enter; 17]))),
             Some("keys".into())
         );
-        for bad in ["", "one\ntwo", "a\tb", "x\u{1b}[2J"] {
+        for bad in [
+            "",
+            "one\ntwo",
+            "a\tb",
+            "x\u{1b}[2J",
+            "echo ok \u{202E}x",
+            "a\u{200B}b",
+            "use Redis\u{E0041}",
+        ] {
             assert_eq!(
                 field(rt.block_on(core.type_text(m(), t(), bad.into()))),
                 Some("text".into()),
@@ -3028,10 +3007,6 @@ mod tests {
                 "{bad:?}"
             );
         }
-        assert_eq!(
-            field(rt.block_on(core.terminal_run(m(), t(), "echo ok \u{202E}x".into()))),
-            Some("text".into())
-        );
         assert_eq!(
             field(rt.block_on(core.terminal_send_keys(m(), t(), vec![AgentKey::Enter; 17]))),
             Some("keys".into())
@@ -3064,6 +3039,27 @@ mod tests {
             rt.block_on(core.prompt(m(), t(), "fix it\nthen test".into(), None)),
             Err(CoreError::MachineNotFound)
         ));
+    }
+
+    #[test]
+    fn snapshots_carry_the_reflowed_text() {
+        let read = TerminalRead {
+            terminal_id: TerminalId::new("term_1").unwrap(),
+            source: ReadSource::Recent,
+            ansi: "⏺ a\n  b".into(),
+            truncated: false,
+            wraps: Vec::new(),
+            splits: Vec::new(),
+        };
+        assert_eq!(TerminalSnapshot::from(read.clone()).reflowed, None);
+        let read = TerminalRead {
+            wraps: vec![1],
+            ..read
+        };
+        assert_eq!(
+            TerminalSnapshot::from(read).reflowed.as_deref(),
+            Some("⏺ a b")
+        );
     }
 }
 
@@ -3230,22 +3226,6 @@ mod tailnet_tests {
         }
     }
 
-    #[test]
-    fn snapshots_carry_the_reflowed_text() {
-        assert_eq!(
-            TerminalSnapshot::from(terminal_read("⏺ a\n  b")).reflowed,
-            None
-        );
-        let read = TerminalRead {
-            wraps: vec![1],
-            ..terminal_read("⏺ a\n  b")
-        };
-        assert_eq!(
-            TerminalSnapshot::from(read).reflowed.as_deref(),
-            Some("⏺ a b")
-        );
-    }
-
     fn terminal_read(ansi: &str) -> TerminalRead {
         TerminalRead {
             terminal_id: TerminalId::new("term_1").unwrap(),
@@ -3398,7 +3378,7 @@ mod tailnet_tests {
                             }
                         }
                         Request::AgentSendKeys(p) => {
-                            assert_eq!(p.keys, vec![protocol::Key::ShiftTab, protocol::Key::Y]);
+                            assert_eq!(p.keys, vec![protocol::Key::ShiftTab, protocol::Key::Down]);
                             Err(ErrorCode::AgentBlocked)
                         }
                         Request::AgentTypeText(p) => {
@@ -3805,7 +3785,7 @@ mod tailnet_tests {
         }
 
         let err = rt
-            .block_on(core.send_keys(id(), t1(), vec![AgentKey::ShiftTab, AgentKey::Y]))
+            .block_on(core.send_keys(id(), t1(), vec![AgentKey::ShiftTab, AgentKey::Down]))
             .unwrap_err();
         assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
         rt.block_on(core.type_text(id(), t1(), "DuckDB".into()))
@@ -3930,17 +3910,10 @@ mod tailnet_tests {
         assert!(reachability(&group, &mac_id).last_ok_ms.is_some());
 
         let feed = poll("approval.needed", || {
-            core.approval_feed(id(), 0)
-                .filter(|f| f.events.len() >= 2 && f.pending.len() == 2)
+            core.approval_feed(id()).filter(|f| f.pending.len() == 2)
         });
         let pending = PendingApproval::from(&approval("a1"));
         let asked = PendingApproval::from(&question("q1"));
-        assert_eq!(
-            feed.events[0],
-            ApprovalEvent::Needed {
-                approval: pending.clone()
-            }
-        );
         assert_eq!(feed.pending, vec![pending.clone(), asked.clone()]);
         assert!(asked.options.is_empty());
         assert!(asked.accepts_input && asked.has_text_field);
@@ -3954,29 +3927,31 @@ mod tailnet_tests {
                 detail: Some("Shared across processes".into()),
             }
         );
-        let listed = rt.block_on(core.approvals(id())).unwrap();
-        assert_eq!(listed, vec![pending, asked]);
-        for shown in [format!("{feed:?}"), format!("{listed:?}")] {
-            assert!(
-                !shown.contains(NONCE) && !shown.contains("Nonce"),
-                "{shown}"
-            );
-        }
-        assert_eq!(lock(&seen).lists, 1);
+        let shown = format!("{feed:?}");
+        assert!(
+            !shown.contains(NONCE) && !shown.contains("Nonce"),
+            "{shown}"
+        );
+        assert_eq!(lock(&seen).lists, 0);
         for (decision, note) in [
             (ApprovalDecision::ApproveAlways, "x".to_owned()),
             (ApprovalDecision::Approve, "a\nb".to_owned()),
             (ApprovalDecision::Approve, "a\u{1b}[Z".to_owned()),
+            (ApprovalDecision::Approve, "ok \u{202E}x".to_owned()),
+            (ApprovalDecision::Deny, "a\u{2066}b".to_owned()),
+            (ApprovalDecision::Deny, "use Redis\u{E0041}".to_owned()),
             (
                 ApprovalDecision::Deny,
                 "a".repeat(limits::MAX_NOTE_CHARS + 1),
             ),
         ] {
+            assert!(check_note(note.clone(), decision).is_err(), "{note:?}");
             let err = rt
                 .block_on(core.decide(id(), "a1".into(), decision, Some(note)))
                 .unwrap_err();
             assert!(matches!(err, CoreError::InvalidInput { .. }), "{err:?}");
         }
+        assert!(check_note("oui\u{202F}! 👍🏽".into(), ApprovalDecision::Approve).is_ok());
         let outcome = rt
             .block_on(core.decide(
                 id(),
@@ -3994,7 +3969,7 @@ mod tailnet_tests {
         );
         assert_eq!(
             lock(&seen).lists,
-            1,
+            0,
             "decided with the nonce held since approval.needed"
         );
         assert_eq!(
@@ -4002,15 +3977,10 @@ mod tailnet_tests {
             vec![("a1".to_owned(), protocol::Decision::Approve)]
         );
         assert_eq!(lock(&seen).notes, [Some("use a .tmp extension".to_owned())]);
-        let resolved = poll("approval.resolved", || {
-            core.approval_feed(id(), feed.revision)
-                .filter(|f| !f.events.is_empty())
+        poll("approval.resolved", || {
+            core.approval_feed(id())
+                .filter(|f| f.pending == [asked.clone()])
         });
-        assert!(matches!(
-            &resolved.events[0],
-            ApprovalEvent::Resolved { approval_id, .. } if approval_id == "a1"
-        ));
-        assert_eq!(resolved.pending.len(), 1);
         let err = rt
             .block_on(core.decide(id(), "a1".into(), ApprovalDecision::Approve, None))
             .unwrap_err();
@@ -4095,7 +4065,7 @@ mod tailnet_tests {
             mac_id.clone(),
             "a2".into(),
             ApprovalDecision::Deny,
-            Some(15_000),
+            15_000,
         ));
         println!("cold background decide: {report:?}");
         assert_eq!(
@@ -4113,7 +4083,7 @@ mod tailnet_tests {
             report.decide_ms,
         ];
         assert!(steps.iter().all(Option::is_some), "{report:?}");
-        assert_eq!(lock(&seen).lists, 3, "the cold path fetched approval.list");
+        assert_eq!(lock(&seen).lists, 2, "the cold path fetched approval.list");
         assert_eq!(
             lock(&seen).decisions.last(),
             Some(&("a2".to_owned(), protocol::Decision::Deny))
@@ -4127,13 +4097,13 @@ mod tailnet_tests {
                 approvals: Some(pending)
             }]
         );
-        assert_eq!(lock(&seen).lists, 4);
+        assert_eq!(lock(&seen).lists, 3);
 
         let again = rt.block_on(core.decide_from_notification(
             mac_id.clone(),
             "a2".into(),
             ApprovalDecision::Deny,
-            Some(u64::MAX),
+            u64::MAX,
         ));
         assert_eq!(again.outcome, BackgroundOutcome::NotFound);
         assert!(again.node_was_running);
@@ -4141,14 +4111,14 @@ mod tailnet_tests {
             "nNOPE".into(),
             "a2".into(),
             ApprovalDecision::Approve,
-            None,
+            20_000,
         ));
         assert_eq!(unknown.outcome, BackgroundOutcome::UnknownMachine);
         let zero = rt.block_on(core.decide_from_notification(
             mac_id.clone(),
             "a2".into(),
             ApprovalDecision::Approve,
-            Some(0),
+            0,
         ));
         assert!(
             matches!(zero.outcome, BackgroundOutcome::Failed { .. }),
@@ -4159,7 +4129,7 @@ mod tailnet_tests {
             mac_id.clone(),
             "a2".into(),
             ApprovalDecision::Approve,
-            Some(1),
+            1,
         ));
         assert!(
             matches!(late.outcome, BackgroundOutcome::Unreachable { .. }),
@@ -4208,7 +4178,7 @@ mod tailnet_tests {
             mac_id.clone(),
             "a3".into(),
             ApprovalDecision::Approve,
-            None,
+            20_000,
         ));
         assert_eq!(
             report.outcome,

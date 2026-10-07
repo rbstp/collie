@@ -20,6 +20,7 @@ use crate::herdr::{self, AgentInfo, WorkspaceInfo};
 use crate::hooks;
 use crate::prompt::{self, Menu};
 use crate::push::{self, Push};
+use crate::server::TokenBucket;
 
 pub const TTL: Duration = Duration::from_secs(600);
 pub const SETTLE: Duration = Duration::from_secs(3);
@@ -97,7 +98,7 @@ struct Alerted {
 struct Inner {
     pending: HashMap<String, Pending>,
     resolved: VecDeque<ApprovalId>,
-    buckets: HashMap<String, (f64, Instant)>,
+    buckets: HashMap<String, TokenBucket>,
     alerted: HashMap<String, Alerted>,
     /// The approval id the phone's alert for a terminal carries: a quiet reissue keeps it, a
     /// later alert replaces it, and it is cleared once the agent there is no longer blocked.
@@ -547,21 +548,11 @@ impl Approvals {
     }
 
     fn take_token(&self, peer: &str) -> bool {
-        let now = Instant::now();
-        let mut inner = self.lock();
-        let (tokens, at) = inner
+        self.lock()
             .buckets
             .entry(peer.to_owned())
-            .or_insert((DECIDE_BURST, now));
-        *tokens =
-            (*tokens + now.duration_since(*at).as_secs_f64() * DECIDE_PER_SEC).min(DECIDE_BURST);
-        *at = now;
-        if *tokens >= 1.0 {
-            *tokens -= 1.0;
-            true
-        } else {
-            false
-        }
+            .or_insert_with(|| TokenBucket::new(DECIDE_BURST))
+            .take(DECIDE_PER_SEC, DECIDE_BURST)
     }
 
     fn finish(&self, terminal: &str, id: &ApprovalId, outcome: ApprovalOutcome) {

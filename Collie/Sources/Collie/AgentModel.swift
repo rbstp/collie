@@ -643,8 +643,6 @@ extension AgentKey {
         case .shiftTab: "⇧⇥"
         case .ctrlC: "^C"
         case .ctrlEnter: "⌃⏎"
-        case .y: "y"
-        case .n: "n"
         }
     }
 
@@ -660,8 +658,6 @@ extension AgentKey {
         case .shiftTab: "Shift Tab"
         case .ctrlC: "Control C"
         case .ctrlEnter: "Control Return"
-        case .y: "Y"
-        case .n: "N"
         }
     }
 }

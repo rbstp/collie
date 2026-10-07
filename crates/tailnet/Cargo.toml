@@ -8,13 +8,13 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-libc = "0.2.190"
+libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tailscale-sys = { path = "../tailscale-sys" }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "rt"] }
-zeroize = "1.9.0"
+zeroize.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }

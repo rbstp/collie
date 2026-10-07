@@ -101,8 +101,9 @@ fn is_unsafe_char(c: char) -> bool {
 }
 
 /// Invisible and bidi formatting characters let a label render as something else,
-/// for example a different phone name on the Mac's pairing prompt.
-pub(crate) fn is_format(c: char) -> bool {
+/// for example a different phone name on the Mac's pairing prompt. Tags and the
+/// supplementary variation selectors also carry hidden text an LLM still reads.
+pub fn is_format(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}'
@@ -113,6 +114,8 @@ pub(crate) fn is_format(c: char) -> bool {
             | '\u{2060}'..='\u{206F}'
             | '\u{FEFF}'
             | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0000}'..='\u{E007F}'
+            | '\u{E0100}'..='\u{E01EF}'
     )
 }
 
@@ -265,7 +268,7 @@ validated_string!(
     Label,
     debug = plain,
     check = label,
-    schema = { "minLength": 1, "maxLength": 64 }
+    schema = { "minLength": 1, "maxLength": limits::MAX_LABEL_CHARS }
 );
 
 validated_string!(
@@ -273,7 +276,7 @@ validated_string!(
     Cwd,
     debug = plain,
     check = |s| s.starts_with('/') && s.len() <= limits::MAX_CWD_BYTES && !s.chars().any(char::is_control),
-    schema = { "pattern": "^/", "maxLength": 1024 }
+    schema = { "pattern": "^/", "maxLength": limits::MAX_CWD_BYTES }
 );
 
 validated_string!(
@@ -283,7 +286,7 @@ validated_string!(
     PromptText,
     debug = plain,
     check = |s| !s.trim().is_empty() && s.len() <= limits::MAX_PROMPT_BYTES && !s.chars().any(is_unsafe_char),
-    schema = { "minLength": 1, "maxLength": 32768 }
+    schema = { "minLength": 1, "maxLength": limits::MAX_PROMPT_BYTES }
 );
 
 validated_string!(
@@ -291,7 +294,7 @@ validated_string!(
     DraftText,
     debug = plain,
     check = |s| s.len() <= limits::MAX_PROMPT_BYTES && !s.chars().any(|c| (c.is_control() && c != '\n') || is_format(c)),
-    schema = { "maxLength": 32768 }
+    schema = { "maxLength": limits::MAX_PROMPT_BYTES }
 );
 
 validated_string!(
@@ -314,7 +317,7 @@ validated_string!(
     AttachmentName,
     debug = plain,
     check = attachment_name,
-    schema = { "minLength": 1, "maxLength": 64 }
+    schema = { "minLength": 1, "maxLength": limits::MAX_ATTACHMENT_NAME_CHARS }
 );
 
 validated_string!(
@@ -371,6 +374,8 @@ mod tests {
         assert!(Label::new("Richard's iPhone").is_ok());
         assert!(Label::new("iPhone\u{202E}enohPi").is_err());
         assert!(Label::new("i\u{200B}Phone").is_err());
+        assert!(Label::new("iPhone\u{E0041}").is_err());
+        assert!(Label::new("iPhone\u{E0100}").is_err());
     }
 
     #[test]

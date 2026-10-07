@@ -26,8 +26,6 @@ pub enum Request {
 
     #[serde(rename = "flock.snapshot")]
     FlockSnapshot(Empty),
-    #[serde(rename = "workspace.list")]
-    WorkspaceList(Empty),
     #[serde(rename = "agent.read")]
     AgentRead(ReadParams),
     #[serde(rename = "pane.read")]
@@ -97,7 +95,6 @@ impl Request {
         "pair.complete",
         "unpair",
         "flock.snapshot",
-        "workspace.list",
         "agent.read",
         "pane.read",
         "agent.watch",
@@ -134,7 +131,6 @@ impl Request {
             Self::PairComplete(_) => "pair.complete",
             Self::Unpair(_) => "unpair",
             Self::FlockSnapshot(_) => "flock.snapshot",
-            Self::WorkspaceList(_) => "workspace.list",
             Self::AgentRead(_) => "agent.read",
             Self::PaneRead(_) => "pane.read",
             Self::AgentWatch(_) => "agent.watch",
@@ -170,7 +166,6 @@ impl Request {
         match self {
             Self::Hello(_) | Self::PairComplete(_) | Self::Unpair(_) => MethodClass::Session,
             Self::FlockSnapshot(_)
-            | Self::WorkspaceList(_)
             | Self::AgentRead(_)
             | Self::PaneRead(_)
             | Self::AgentWatch(_)
@@ -203,7 +198,6 @@ impl Request {
     }
 }
 
-/// Drive and Approval calls are written to the audit log and rate limited per peer.
 /// Terminal calls reach plain shells: collied refuses them unless the machine enables them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MethodClass {
@@ -249,7 +243,7 @@ pub struct ReadParams {
     pub terminal_id: TerminalId,
     pub source: ReadSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = 1000))]
+    #[schemars(range(min = 1, max = limits::MAX_READ_LINES))]
     pub lines: Option<u16>,
 }
 
@@ -266,16 +260,20 @@ impl ReadParams {
 pub struct AgentWatchParams {
     pub terminal_id: Option<TerminalId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = 1000))]
+    #[schemars(range(min = 1, max = limits::MAX_READ_LINES))]
     pub lines: Option<u16>,
 }
 
 impl AgentWatchParams {
     pub fn lines(&self) -> u16 {
-        self.lines.map_or(limits::DEFAULT_WATCH_LINES, |n| {
-            n.clamp(1, limits::MAX_READ_LINES)
-        })
+        watch_lines(self.lines)
     }
+}
+
+fn watch_lines(lines: Option<u16>) -> u16 {
+    lines.map_or(limits::DEFAULT_WATCH_LINES, |n| {
+        n.clamp(1, limits::MAX_READ_LINES)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -308,15 +306,13 @@ pub struct TerminalGrantParams {
 pub struct TerminalWatchParams {
     pub terminal_id: TerminalId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = 1000))]
+    #[schemars(range(min = 1, max = limits::MAX_READ_LINES))]
     pub lines: Option<u16>,
 }
 
 impl TerminalWatchParams {
     pub fn lines(&self) -> u16 {
-        self.lines.map_or(limits::DEFAULT_WATCH_LINES, |n| {
-            n.clamp(1, limits::MAX_READ_LINES)
-        })
+        watch_lines(self.lines)
     }
 }
 
@@ -330,14 +326,15 @@ pub struct TerminalRunParams {
 }
 
 impl TerminalRunParams {
-    /// Bidi and invisible characters would let a pasted command read as another.
     pub fn is_valid(&self) -> bool {
-        !self
-            .text
-            .as_str()
-            .chars()
-            .any(|c| c == '\n' || c == '\t' || crate::ids::is_format(c))
+        is_one_line(self.text.as_str())
     }
+}
+
+/// Text collied types into a pane: Enter is what submits it, and bidi and invisible
+/// characters would let it read as something else.
+pub fn is_one_line(text: &str) -> bool {
+    !text.chars().any(|c| c == '\n' || c == '\t' || is_format(c))
 }
 
 /// What the phone's terminal key signs to unlock one terminal on one machine: each part
@@ -394,10 +391,6 @@ pub enum Key {
     CtrlC,
     #[serde(rename = "ctrl+enter")]
     CtrlEnter,
-    #[serde(rename = "y")]
-    Y,
-    #[serde(rename = "n")]
-    N,
 }
 
 impl Key {
@@ -413,8 +406,6 @@ impl Key {
             Self::ShiftTab => "shift+tab",
             Self::CtrlC => "ctrl+c",
             Self::CtrlEnter => "ctrl+enter",
-            Self::Y => "y",
-            Self::N => "n",
         }
     }
 }
@@ -424,7 +415,7 @@ impl Key {
 pub struct AgentSendKeysParams {
     pub op_id: OpId,
     pub terminal_id: TerminalId,
-    #[schemars(length(min = 1, max = 16))]
+    #[schemars(length(min = 1, max = limits::MAX_KEYS_PER_CALL))]
     pub keys: Vec<Key>,
 }
 
@@ -435,7 +426,7 @@ impl AgentSendKeysParams {
 }
 
 /// Typed into the free-text field of a blocked Claude Code question or plan, then Enter.
-/// One line: Enter is what submits it.
+/// One line without bidi or invisible format characters: Enter is what submits it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentTypeTextParams {
@@ -446,7 +437,7 @@ pub struct AgentTypeTextParams {
 
 impl AgentTypeTextParams {
     pub fn is_valid(&self) -> bool {
-        !self.text.as_str().contains(['\n', '\t'])
+        is_one_line(self.text.as_str())
     }
 }
 
@@ -489,8 +480,9 @@ pub enum Decision {
 }
 
 /// `choice` is set exactly when `decision` is `choose`. `note`, one line of at most 200
-/// characters, goes with `approve` or `deny` on an approval with `supports_note`: collied
-/// types it into the option's amend field before Enter.
+/// characters without bidi or invisible format characters, goes with `approve` or `deny`
+/// on an approval with `supports_note`: collied types it into the option's amend field
+/// before Enter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ApprovalDecideParams {
@@ -508,7 +500,7 @@ impl ApprovalDecideParams {
         (self.decision == Decision::Choose) == self.choice.is_some()
             && self.note.as_ref().is_none_or(|n| {
                 matches!(self.decision, Decision::Approve | Decision::Deny)
-                    && !n.as_str().contains(['\n', '\t'])
+                    && is_one_line(n.as_str())
                     && n.as_str().chars().count() <= limits::MAX_NOTE_CHARS
             })
     }
@@ -525,8 +517,6 @@ pub enum ApnsEnvironment {
 #[serde(deny_unknown_fields)]
 pub struct PushRegisterParams {
     pub apns_token: PushToken,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub live_activity_push_to_start_token: Option<PushToken>,
     pub environment: ApnsEnvironment,
     pub notification_key: NotificationKey,
 }
@@ -557,7 +547,7 @@ pub struct PushActivityEndParams {
 pub struct AttachmentBeginParams {
     pub op_id: OpId,
     pub name: AttachmentName,
-    #[schemars(range(min = 1, max = 20971520))]
+    #[schemars(range(min = 1, max = limits::MAX_ATTACHMENT_BYTES))]
     pub size: u64,
     pub sha256: Sha256Hex,
 }
@@ -617,9 +607,6 @@ pub enum Response {
         machine: MachineInfo,
     },
     Flock(Flock),
-    Workspaces {
-        workspaces: Vec<Workspace>,
-    },
     Terminal(TerminalRead),
     TaskOptions(TaskOptions),
     TaskStarted {
@@ -1422,6 +1409,9 @@ mod tests {
             r#","decision":"approve","note":"a\nb""#,
             r#","decision":"approve","note":"a\tb""#,
             r#","decision":"approve","note":"a\u001b[Z""#,
+            r#","decision":"approve","note":"ok \u202efi.exe""#,
+            r#","decision":"deny","note":"a\u200bb""#,
+            r#","decision":"deny","note":"use Redis\udb40\udc41""#,
             r#","decision":"deny","note":"  ""#,
             &format!(
                 r#","decision":"approve","note":"{}""#,
@@ -1444,10 +1434,21 @@ mod tests {
                 serde_json::to_string(text).unwrap()
             ))
         };
+        assert!(typed("oui\u{202F}! c’est partagé 👍🏽").is_ok());
         let ok = typed("use Redis, it is shared").unwrap();
         assert_eq!(ok.request.class(), MethodClass::Drive);
         assert_eq!(ok.request.method(), "agent.type_text");
-        for bad in ["a\nb", "a\tb", "a\u{1b}[2J", "  "] {
+        for bad in [
+            "a\nb",
+            "a\tb",
+            "a\u{1b}[2J",
+            "  ",
+            "use \u{202E}sideR",
+            "use\u{2066} Redis",
+            "\u{FEFF}yes",
+            "use Redis\u{E0041}\u{E007F}",
+            "\u{1F600}\u{E0100}",
+        ] {
             assert_eq!(
                 typed(bad).unwrap_err().code,
                 ErrorCode::InvalidParams,

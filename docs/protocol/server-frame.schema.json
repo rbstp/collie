@@ -836,25 +836,6 @@
           "type": "object"
         },
         {
-          "properties": {
-            "type": {
-              "const": "workspaces",
-              "type": "string"
-            },
-            "workspaces": {
-              "items": {
-                "$ref": "#/$defs/Workspace"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "type",
-            "workspaces"
-          ],
-          "type": "object"
-        },
-        {
           "$ref": "#/$defs/TerminalRead",
           "properties": {
             "type": {

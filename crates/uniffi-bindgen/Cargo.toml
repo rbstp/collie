@@ -8,7 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-uniffi = { version = "0.32.2", features = ["cli"] }
+uniffi = { workspace = true, features = ["cli"] }
 
 [lints]
 workspace = true

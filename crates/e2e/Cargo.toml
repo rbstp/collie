@@ -8,19 +8,19 @@ repository.workspace = true
 publish = false
 
 [dev-dependencies]
-base64 = "0.23.1"
-chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc"] }
+base64.workspace = true
+chacha20poly1305 = { workspace = true, features = ["alloc"] }
 collie-core = { path = "../collie-core" }
-collie-tls = { path = "../tls" }
+collie-tls.workspace = true
 collied = { path = "../collied" }
-futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
-protocol = { path = "../protocol" }
+futures-util.workspace = true
+protocol.workspace = true
 serde_json.workspace = true
-sha2 = "0.11.0"
-tailnet = { path = "../tailnet" }
+sha2.workspace = true
+tailnet.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
-tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
-zeroize = "1.9.0"
+tokio-tungstenite.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

@@ -124,10 +124,32 @@ struct Sessions {
     live: HashMap<u64, Live>,
 }
 
-struct TokenBucket {
+pub(crate) struct TokenBucket {
     tokens: f64,
     at: Instant,
     limited: bool,
+}
+
+impl TokenBucket {
+    pub(crate) fn new(burst: f64) -> Self {
+        Self {
+            tokens: burst,
+            at: Instant::now(),
+            limited: false,
+        }
+    }
+
+    pub(crate) fn take(&mut self, per_sec: f64, burst: f64) -> bool {
+        let now = Instant::now();
+        self.tokens =
+            (self.tokens + now.duration_since(self.at).as_secs_f64() * per_sec).min(burst);
+        self.at = now;
+        let ok = self.tokens >= 1.0;
+        if ok {
+            self.tokens -= 1.0;
+        }
+        ok
+    }
 }
 
 #[derive(PartialEq)]
@@ -143,17 +165,11 @@ fn take_token<K: Hash + Eq>(
     per_sec: f64,
     burst: f64,
 ) -> Rate {
-    let now = Instant::now();
     let mut buckets = lock(buckets);
-    let b = buckets.entry(key).or_insert(TokenBucket {
-        tokens: burst,
-        at: now,
-        limited: false,
-    });
-    b.tokens = (b.tokens + now.duration_since(b.at).as_secs_f64() * per_sec).min(burst);
-    b.at = now;
-    if b.tokens >= 1.0 {
-        b.tokens -= 1.0;
+    let b = buckets
+        .entry(key)
+        .or_insert_with(|| TokenBucket::new(burst));
+    if b.take(per_sec, burst) {
         b.limited = false;
         Rate::Ok
     } else if b.limited {
@@ -1104,7 +1120,6 @@ impl Session<'_> {
             }
             Request::Unpair(_) => return self.unpair(id).await,
             Request::FlockSnapshot(_) => (self.flock().await, None),
-            Request::WorkspaceList(_) => (self.workspaces().await, None),
             Request::AgentRead(p) => (drive.read(p, true).await, None),
             Request::PaneRead(p) => (drive.read(p, false).await, None),
             Request::AgentWatch(p) => (self.watch(p).await, None),
@@ -1332,12 +1347,7 @@ impl Session<'_> {
     async fn finish(&mut self, method: &str, done: Finished) -> Flow {
         let quiet = matches!(
             method,
-            "hello"
-                | "flock.snapshot"
-                | "workspace.list"
-                | "approval.list"
-                | "attachment.chunk"
-                | "attachment.abort"
+            "hello" | "flock.snapshot" | "approval.list" | "attachment.chunk" | "attachment.abort"
         ) || (method == "terminal.challenge" && done.reply.is_ok());
         if !quiet && done.origin != Some(Origin::Ran) {
             let mut result = outcome(&done.reply);
@@ -1555,13 +1565,6 @@ impl Session<'_> {
         }
         let _ = self.state.events.send(Event::FlockChanged {});
         Ok(Response::Ok)
-    }
-
-    async fn workspaces(&self) -> Reply {
-        let snap = herdr_result(herdr::session_snapshot(&self.state.herdr).await)?;
-        Ok(Response::Workspaces {
-            workspaces: flock::map_workspaces(&snap),
-        })
     }
 
     async fn pair_complete(&self, window: u64, p: PairCompleteParams) -> Reply {

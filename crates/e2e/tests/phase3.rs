@@ -13,8 +13,8 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use collie_core::{
-    ApprovalDecision, ApprovalEvent, ApprovalFeed, BackgroundOutcome, CollieCore, CoreError,
-    DecisionOutcome, PendingApproval, PushEnvironment,
+    ApprovalDecision, ApprovalFeed, BackgroundOutcome, CollieCore, CoreError, DecisionOutcome,
+    PendingApproval, PushEnvironment,
 };
 use collied::config::{PUSH_FILE, TasksConfig};
 use collied::control::{Client, Reply, Request};
@@ -151,7 +151,7 @@ fn phase3_end_to_end() {
         node.clone(),
         pending_id.clone(),
         ApprovalDecision::Approve,
-        Some(BUDGET_MS),
+        BUDGET_MS,
     ));
     println!(
         "  node up {:?} ms, connect {:?} ms, lookup {:?} ms, decide {:?} ms, total {} ms",
@@ -234,11 +234,9 @@ fn phase3_expired_approvals() {
             NOTIFY_KEY.to_vec(),
         )
         .unwrap();
-        let rev = core.approval_feed(m.clone(), 0).unwrap().revision;
-
         println!("in-app decide on an expired approval");
         herdr.set_status("blocked");
-        let (a, rev) = needed(&core, &m, rev).await;
+        let a = needed(&core, &m).await;
         herdr.with(|h| h.down = true);
         tokio::time::sleep(ttl + Duration::from_millis(200)).await;
         let err = core
@@ -251,12 +249,11 @@ fn phase3_expired_approvals() {
             .await
             .unwrap_err();
         assert!(matches!(err, CoreError::ApprovalExpired), "{err:?}");
-        let (rev, outcome) = resolved(&core, &m, rev, &a.approval_id).await;
-        assert_eq!(outcome, DecisionOutcome::Expired);
+        resolved(&core, &m, &a.approval_id).await;
 
         println!("the reissued approval alerts again, replacing the dead alert");
         herdr.with(|h| h.down = false);
-        let (b, _) = needed(&core, &m, rev).await;
+        let b = needed(&core, &m).await;
         assert_ne!(b.approval_id, a.approval_id);
         let alerts = apns.wait(2).await;
         assert_eq!(alerts.len(), 2, "{alerts:?}");
@@ -274,7 +271,7 @@ fn phase3_expired_approvals() {
                 machine.node_id.clone(),
                 b.approval_id.clone(),
                 ApprovalDecision::Approve,
-                Some(BUDGET_MS),
+                BUDGET_MS,
             )
             .await;
         assert_eq!(report.outcome, BackgroundOutcome::Expired, "{report:?}");
@@ -351,9 +348,8 @@ fn live_activity_follows_an_agent() {
         let (_, sync) = live(&apns, "the first sync", |_, _| true).await;
         assert_eq!(sync.delivery, Delivery::LiveActivity { urgent: false });
         assert_eq!(sync.payload["aps"]["content-state"]["status"], "working");
-        let rev = core.approval_feed(m.clone(), 0).unwrap().revision;
         herdr.set_status("blocked");
-        let (approval, _) = needed(&core, &m, rev).await;
+        let approval = needed(&core, &m).await;
         let (device, blocked) = live(&apns, "the blocked update", |_, a| {
             a.payload["aps"]["content-state"]["status"] == "blocked"
         })
@@ -573,9 +569,8 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
 
     println!("a blocked agent raises approval.needed and one APNs alert, its context sealed");
     let t = Instant::now();
-    let rev = core.approval_feed(m.clone(), 0).unwrap().revision;
     rig.herdr.set_status("blocked");
-    let (a, rev) = needed(core, &m, rev).await;
+    let a = needed(core, &m).await;
     assert_eq!(a.terminal_id, TERMINAL);
     assert_eq!(a.agent_label, "api-fixer");
     assert_eq!(a.workspace_label, "api");
@@ -619,7 +614,7 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
     }
     assert!(!wire.contains(&encoded_key()));
     let nonce = rig.probe.nonce(&a.approval_id).await;
-    let feed = core.approval_feed(m.clone(), 0).unwrap();
+    let feed = core.approval_feed(m.clone()).unwrap();
     assert!(!format!("{feed:?}").contains(&nonce));
     for (_, alert) in &alerts {
         assert!(!alert.payload.to_string().contains(&nonce));
@@ -643,7 +638,7 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
                     machine.node_id.clone(),
                     a.approval_id.clone(),
                     ApprovalDecision::Approve,
-                    Some(BUDGET_MS),
+                    BUDGET_MS,
                 )
                 .await;
             let keys = rig.herdr.params("agent.send_keys").len();
@@ -671,11 +666,7 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
         [json!({"target": PANE, "keys": ["enter"]})]
     );
     assert_eq!(rig.herdr.status(), "working");
-    let (rev, outcome) = resolved(core, &m, rev, &a.approval_id).await;
-    assert!(
-        matches!(outcome, DecisionOutcome::Applied { .. }),
-        "{outcome:?}"
-    );
+    resolved(core, &m, &a.approval_id).await;
 
     println!("replaying the used nonce is refused and audited");
     let replay = rig.probe.decide(&a.approval_id, &nonce).await;
@@ -708,7 +699,7 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
 
     println!("a prompt that changes before the decision supersedes it");
     rig.herdr.set_status("blocked");
-    let (b, rev) = needed(core, &m, rev).await;
+    let b = needed(core, &m).await;
     rig.herdr
         .with(|h| h.text = BASH.replace("rm -rf build", "rm -rf ~"));
     let outcome = core
@@ -726,9 +717,8 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
         rig.decisions().last().unwrap(),
         "approve: superseded: fingerprint mismatch"
     );
-    let (rev, outcome) = resolved(core, &m, rev, &b.approval_id).await;
-    assert_eq!(outcome, DecisionOutcome::Superseded);
-    let (c, _) = needed(core, &m, rev).await;
+    resolved(core, &m, &b.approval_id).await;
+    let c = needed(core, &m).await;
     assert!(c.snippet.contains("rm -rf ~"), "{c:?}");
     let alerts = rig.apns.wait(3).await;
     assert_eq!(alerts.len(), 3, "the changed prompt alerts again");
@@ -765,9 +755,8 @@ async fn after_restart(rig: &Rig, core: &Arc<CollieCore>, m: &str, phone_id: &st
     );
 
     println!("deny sends the agent's own deny key");
-    let rev = core.approval_feed(m.into(), 0).unwrap().revision;
     rig.herdr.set_status("blocked");
-    let (e, rev) = needed(core, m, rev).await;
+    let e = needed(core, m).await;
     let outcome = core
         .decide(
             m.into(),
@@ -792,15 +781,11 @@ async fn after_restart(rig: &Rig, core: &Arc<CollieCore>, m: &str, phone_id: &st
         rig.decisions().last().unwrap(),
         &format!("deny: applied terminal={TERMINAL} keys=esc")
     );
-    let (rev, outcome) = resolved(core, m, rev, &e.approval_id).await;
-    assert!(
-        matches!(outcome, DecisionOutcome::Applied { .. }),
-        "{outcome:?}"
-    );
+    resolved(core, m, &e.approval_id).await;
 
     println!("a revoked phone can no longer decide or receive alerts");
     rig.herdr.set_status("blocked");
-    let (d, _) = needed(core, m, rev).await;
+    let d = needed(core, m).await;
     rig.apns.wait(5).await;
     let revoked = collied::control::request(
         &rig.control,
@@ -836,7 +821,7 @@ async fn after_restart(rig: &Rig, core: &Arc<CollieCore>, m: &str, phone_id: &st
             node.into(),
             d.approval_id.clone(),
             ApprovalDecision::Approve,
-            Some(BUDGET_MS),
+            BUDGET_MS,
         )
         .await;
     println!("  lock-screen decide: {report:?}");
@@ -940,13 +925,12 @@ fn assert_private(path: &Path) {
 async fn feed_until(
     core: &CollieCore,
     m: &str,
-    rev: u64,
     what: &str,
     mut done: impl FnMut(&ApprovalFeed) -> bool,
 ) -> ApprovalFeed {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        if let Some(feed) = core.approval_feed(m.into(), rev)
+        if let Some(feed) = core.approval_feed(m.into())
             && done(&feed)
         {
             return feed;
@@ -956,46 +940,16 @@ async fn feed_until(
     }
 }
 
-async fn needed(core: &CollieCore, m: &str, rev: u64) -> (PendingApproval, u64) {
-    let feed = feed_until(core, m, rev, "approval.needed", |f| {
-        f.events
-            .iter()
-            .any(|e| matches!(e, ApprovalEvent::Needed { .. }))
-    })
-    .await;
-    assert!(!feed.missed);
-    let approval = feed
-        .events
-        .into_iter()
-        .find_map(|e| match e {
-            ApprovalEvent::Needed { approval } => Some(approval),
-            _ => None,
-        })
-        .unwrap();
-    assert!(feed.pending.contains(&approval), "{:?}", feed.pending);
-    (approval, feed.revision)
+async fn needed(core: &CollieCore, m: &str) -> PendingApproval {
+    let feed = feed_until(core, m, "approval.needed", |f| !f.pending.is_empty()).await;
+    feed.pending.into_iter().next().unwrap()
 }
 
-async fn resolved(core: &CollieCore, m: &str, rev: u64, id: &str) -> (u64, DecisionOutcome) {
-    let feed = feed_until(core, m, rev, "approval.resolved", |f| {
-        f.events
-            .iter()
-            .any(|e| matches!(e, ApprovalEvent::Resolved { approval_id, .. } if approval_id == id))
+async fn resolved(core: &CollieCore, m: &str, id: &str) {
+    feed_until(core, m, "approval.resolved", |f| {
+        f.pending.iter().all(|p| p.approval_id != id)
     })
     .await;
-    assert!(feed.pending.iter().all(|p| p.approval_id != id));
-    let outcome = feed
-        .events
-        .into_iter()
-        .find_map(|e| match e {
-            ApprovalEvent::Resolved {
-                approval_id,
-                outcome,
-            } if approval_id == id => Some(outcome),
-            _ => None,
-        })
-        .unwrap();
-    (feed.revision, outcome)
 }
 
 async fn wait_for(what: &str, mut ready: impl FnMut() -> bool) {

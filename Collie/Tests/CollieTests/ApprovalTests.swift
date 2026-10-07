@@ -155,9 +155,9 @@ final class FakeApprovalCore: ApprovalCore {
     let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
 
     func machines() -> [Machine] { [mac, linux] }
-    func approvalFeed(machineId: String, afterRevision: UInt64) -> ApprovalFeed? {
+    func approvalFeed(machineId: String) -> ApprovalFeed? {
         let (link, pending) = state.withLock { ($0.link[machineId] ?? .stopped, $0.pending[machineId] ?? []) }
-        return ApprovalFeed(link: link, revision: 1, missed: false, events: [], pending: pending)
+        return ApprovalFeed(link: link, pending: pending)
     }
     func flock(machineId: String) async throws -> MachineFlock {
         let link = state.withLock { s in
@@ -551,6 +551,15 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     await model.decide(item, .approveAlways)
     #expect(auth.state.withLock { $0.reasons }.isEmpty)
     #expect(core.state.withLock { $0.decisions }.isEmpty)
+
+    let shrug = "ok \u{1F937}\u{200D}\u{2642}\u{FE0F}"
+    model.drafts[item.id] = shrug
+    await model.decide(item, .approve)
+    #expect(auth.state.withLock { $0.reasons }.isEmpty)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+    #expect(model.notice?.contains("combined emoji") == true)
+    #expect(model.drafts[item.id] == shrug)
+    model.drafts[item.id] = "use a .tmp extension"
 
     auth.state.withLock { $0.result = false }
     await model.decide(item, .approve)

@@ -7,7 +7,7 @@ import UserNotifications
 /// The slice of CollieCore the approvals screens use, so the model can run against a fake.
 protocol ApprovalCore: AnyObject, Sendable {
     func machines() -> [Machine]
-    func approvalFeed(machineId: String, afterRevision: UInt64) -> ApprovalFeed?
+    func approvalFeed(machineId: String) -> ApprovalFeed?
     func flock(machineId: String) async throws -> MachineFlock
     func decide(machineId: String, approvalId: String, decision: ApprovalDecision, note: String?) async throws -> DecisionOutcome
     func typeText(machineId: String, terminalId: String, text: String) async throws
@@ -116,7 +116,7 @@ final class ApprovalsModel {
         let nowMs = UInt64(Date.now.timeIntervalSince1970 * 1000)
         var connected: Set<String> = []
         let next = core.machines().flatMap { machine -> [ApprovalItem] in
-            guard let feed = core.approvalFeed(machineId: machine.id, afterRevision: .max) else { return [] }
+            guard let feed = core.approvalFeed(machineId: machine.id) else { return [] }
             let live = feed.pending.filter { $0.expiresAtMs > nowMs }
             // Only a connected machine's list is current: a cached one may miss resolutions.
             if feed.link == .connected {
@@ -216,7 +216,7 @@ final class ApprovalsModel {
     /// proves it is gone: on a cold launch the feed is empty only because nothing is connected yet.
     private func load(_ link: ApprovalLink, machine: Machine, core: any ApprovalCore) async {
         while !Task.isCancelled {
-            let wasConnected = core.approvalFeed(machineId: machine.id, afterRevision: .max)?.link == .connected
+            let wasConnected = core.approvalFeed(machineId: machine.id)?.link == .connected
             let flock = try? await core.flock(machineId: machine.id)
             guard !Task.isCancelled else { return }
             poll()
@@ -237,6 +237,12 @@ final class ApprovalsModel {
         guard let core, steps[item.id] == nil, item.approval.offers(decision),
             note == nil || item.approval.takesNote(with: decision)
         else { return }
+        if let note {
+            do { try checkNote(note: note, decision: decision) } catch {
+                show(describe(error), about: item.id)
+                return
+            }
+        }
         steps[item.id] = .authenticating(decision)
         show(nil)
         guard await auth.authenticate(reason: decision.reason(agent: item.approval.agentLabel)) else {

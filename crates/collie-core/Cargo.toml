@@ -11,24 +11,24 @@ publish = false
 crate-type = ["staticlib", "lib"]
 
 [dependencies]
-futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
-base64 = "0.23.1"
-collie-tls = { path = "../tls" }
-getrandom = "0.4.3"
-libc = "0.2.190"
-protocol = { path = "../protocol" }
+futures-util.workspace = true
+base64.workspace = true
+collie-tls.workspace = true
+getrandom.workspace = true
+libc.workspace = true
+protocol.workspace = true
 serde.workspace = true
-sha2 = "0.11.0"
+sha2.workspace = true
 serde_json.workspace = true
-tailnet = { path = "../tailnet" }
+tailnet.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
-tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
-uniffi = "0.32.2"
-zeroize = "1.9.0"
+tokio-tungstenite.workspace = true
+uniffi.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
-tempfile = "3.27.0"
+tempfile.workspace = true
 tokio = { workspace = true, features = ["io-util", "test-util"] }
 
 [lints]
