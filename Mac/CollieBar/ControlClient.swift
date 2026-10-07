@@ -107,8 +107,9 @@ enum Reply: Equatable, Sendable {
     }
 }
 
-/// Like `collied::printable`: control, format (bidi included) and separator characters
-/// from the phone are shown escaped, never interpreted.
+/// Like `collied::printable` (`char::escape_debug`): control, format (bidi included), separator,
+/// combining, default-ignorable and non-ASCII space characters from the phone are shown escaped,
+/// never interpreted.
 func printable(_ s: String) -> String {
     var out = ""
     for scalar in s.unicodeScalars {
@@ -118,10 +119,15 @@ func printable(_ s: String) -> String {
         case "\n": out += "\\n"
         case "\r": out += "\\r"
         default:
-            switch scalar.properties.generalCategory {
-            case .control, .format, .lineSeparator, .paragraphSeparator, .privateUse, .surrogate, .unassigned:
+            let p = scalar.properties
+            let hidden = switch p.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator, .privateUse, .surrogate, .unassigned: true
+            case .spaceSeparator: scalar != " "
+            default: p.isGraphemeExtend || p.isDefaultIgnorableCodePoint
+            }
+            if hidden {
                 out += "\\u{\(String(scalar.value, radix: 16))}"
-            default:
+            } else {
                 out.unicodeScalars.append(scalar)
             }
         }

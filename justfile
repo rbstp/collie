@@ -182,7 +182,8 @@ mac-notarize profile="collie-notary":
     #!/usr/bin/env bash
     set -euo pipefail
     app=target/mac/CollieBar.app
-    codesign -dvv "$app" 2>&1 | grep -q '^Authority=Developer ID Application: .* (RM3UT3MMSR)$' \
+    info="$(codesign -dvv "$app" 2>&1)" || true
+    grep -q '^Authority=Developer ID Application: .* (RM3UT3MMSR)$' <<<"$info" \
         || { echo "$app is not signed with the RM3UT3MMSR Developer ID: run just mac-install first"; exit 1; }
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT

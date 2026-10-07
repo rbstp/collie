@@ -76,6 +76,7 @@ struct ControlWireTests {
         #expect(printable("a\nb\tc\r") == "a\\nb\\tc\\r")
         #expect(printable("\u{1b}[31mred") == "\\u{1b}[31mred")
         #expect(printable("x\u{7f}\u{2028}") == "x\\u{7f}\\u{2028}")
+        #expect(printable("a\u{a0}b\u{301}c\u{3000}d\u{fe0f}e\u{3164}") == "a\\u{a0}b\\u{301}c\\u{3000}d\\u{fe0f}e\\u{3164}")
     }
 
     @Test func linesAreFramedAcrossReads() throws {
