@@ -274,6 +274,21 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(try JSONDecoder().decode(DevicePrefs.self, from: JSONEncoder().encode(prefs)).watchDecisions)
 }
 
+@Test func watchChecksADecisionBeforeAskingForTheWrist() throws {
+    let items = [item(approval("ap_1", expiresAtMs: nowMs + 60_000)), item(approval("ap_menu", options: [], choices: menu, acceptsInput: true))]
+    let state = WatchState(items: items, entries: [], allowed: true, live: true, now: now)
+    let approval = try #require(state.approvals.first { $0.id == "ap_1" })
+    let menuApproval = try #require(state.approvals.first { $0.id == "ap_menu" })
+    #expect(approval.canDecide(.approve, allowed: true, answered: [], now: now))
+    #expect(approval.canDecide(.deny, allowed: true, answered: ["ap_other"], now: now))
+    #expect(!approval.canDecide(.approve, allowed: false, answered: [], now: now))
+    #expect(!approval.canDecide(.approve, allowed: true, answered: ["ap_1"], now: now))
+    #expect(!approval.canDecide(.choose(1), allowed: true, answered: [], now: now))
+    #expect(!approval.canDecide(.approve, allowed: true, answered: [], now: now.addingTimeInterval(60)))
+    #expect(menuApproval.canDecide(.choose(1), allowed: true, answered: [], now: now))
+    #expect(!menuApproval.canDecide(.approve, allowed: true, answered: [], now: now))
+}
+
 private func prefsFile() throws -> URL {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

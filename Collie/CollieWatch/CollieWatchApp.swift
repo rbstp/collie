@@ -80,7 +80,6 @@ final class WatchModel: NSObject, WCSessionDelegate {
 
     override init() {
         super.init()
-        guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
         WCSession.default.activate()
     }
@@ -112,7 +111,6 @@ final class WatchModel: NSObject, WCSessionDelegate {
 
     /// Asks the phone, which answers even while locked; on no answer the last state stays.
     func refresh() async {
-        guard WCSession.isSupported() else { return }
         guard !refreshing else {
             again = true
             return
@@ -196,14 +194,13 @@ final class WatchModel: NSObject, WCSessionDelegate {
         answered.formIntersection(next.approvals.map(\.id))
         if usageChanged {
             if let usage = next.usage { usage.save() } else { WatchUsage.clear() }
-            WidgetCenter.shared.reloadTimelines(ofKind: "CollieUsage")
+            WidgetCenter.shared.reloadTimelines(ofKind: WatchUsage.widgetKind)
         }
     }
 
     /// True once the phone answered that this approval need not be offered again.
     func decide(_ approval: WatchApproval, _ decision: WatchDecision) async -> Bool {
-        guard state?.decisionsAllowed == true, sending == nil, !answered.contains(approval.id), approval.offers(decision),
-            approval.expiresAtMs > UInt64(Date.now.timeIntervalSince1970 * 1000)
+        guard sending == nil, approval.canDecide(decision, allowed: state?.decisionsAllowed == true, answered: answered, now: .now)
         else { return false }
         sending = approval.id
         defer { sending = nil }
