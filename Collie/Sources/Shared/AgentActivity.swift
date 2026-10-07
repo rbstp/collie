@@ -20,6 +20,8 @@ struct AgentActivityAttributes: ActivityAttributes {
         var status: AgentActivityStatus
         var statusSince: Date
         var title: String
+        /// One of `kinds`, sent by a newer collied only.
+        var kind: String?
         var workspace: String?
         var approvals: Int
         var approvalId: String?
@@ -28,12 +30,13 @@ struct AgentActivityAttributes: ActivityAttributes {
         var progress: String?
 
         init(
-            status: AgentActivityStatus, statusSince: Date, title: String, workspace: String?, approvals: Int,
-            approvalId: String? = nil, enc: String? = nil
+            status: AgentActivityStatus, statusSince: Date, title: String, kind: String? = nil, workspace: String?,
+            approvals: Int, approvalId: String? = nil, enc: String? = nil
         ) {
             self.status = status
             self.statusSince = statusSince
             self.title = title
+            self.kind = kind
             self.workspace = workspace
             self.approvals = approvals
             self.approvalId = approvalId
@@ -41,7 +44,7 @@ struct AgentActivityAttributes: ActivityAttributes {
         }
 
         enum CodingKeys: String, CodingKey {
-            case status, statusSince, title, workspace, approvals, approvalId, enc, progress
+            case status, statusSince, title, kind, workspace, approvals, approvalId, enc, progress
         }
 
         // statusSince is whole seconds since 2001-01-01 UTC (Foundation's reference date, what a
@@ -51,6 +54,7 @@ struct AgentActivityAttributes: ActivityAttributes {
             status = try container.decode(AgentActivityStatus.self, forKey: .status)
             statusSince = Date(timeIntervalSinceReferenceDate: try container.decode(Double.self, forKey: .statusSince))
             title = try container.decode(String.self, forKey: .title)
+            kind = try container.decodeIfPresent(String.self, forKey: .kind)
             workspace = try container.decodeIfPresent(String.self, forKey: .workspace)
             approvals = try container.decode(Int.self, forKey: .approvals)
             approvalId = try container.decodeIfPresent(String.self, forKey: .approvalId)
@@ -63,6 +67,7 @@ struct AgentActivityAttributes: ActivityAttributes {
             try container.encode(status, forKey: .status)
             try container.encode(Int64(statusSince.timeIntervalSinceReferenceDate.rounded(.down)), forKey: .statusSince)
             try container.encode(title, forKey: .title)
+            try container.encodeIfPresent(kind, forKey: .kind)
             try container.encodeIfPresent(workspace, forKey: .workspace)
             try container.encode(approvals, forKey: .approvals)
             try container.encodeIfPresent(approvalId, forKey: .approvalId)
@@ -70,8 +75,20 @@ struct AgentActivityAttributes: ActivityAttributes {
             try container.encodeIfPresent(progress, forKey: .progress)
         }
 
-        /// Matches collied's `relevance-score`.
-        var relevance: Double { status == .blocked ? 100 : 50 }
+        /// The kinds collied sends, each with an icon in CollieWidgets.
+        static let kinds = ["claude", "codex", "copilot"]
+
+        /// Matches collied's `relevance-score`: of several followed agents, iOS puts the one that
+        /// most needs the user in the Dynamic Island.
+        var relevance: Double {
+            switch status {
+            case .blocked: 100
+            case .done: 75
+            case .working: 50
+            case .idle: 25
+            case .unknown: 0
+            }
+        }
 
         /// The approval this blocked state can be decided from the activity, if collied sent one.
         var pendingApproval: String? { status == .blocked ? approvalId : nil }

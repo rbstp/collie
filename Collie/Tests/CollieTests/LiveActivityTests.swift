@@ -21,8 +21,31 @@ private func fixture() throws -> [String: Any] {
     #expect(state.status == .blocked)
     #expect(state.statusSince == Date(timeIntervalSince1970: unix))
     #expect(state.title == "api-fixer")
+    #expect(state.kind == "claude")
     #expect(state.workspace == "api")
     #expect(state.approvals == 1)
+}
+
+@Test func contentStateFromAnOlderColliedHasNoKind() throws {
+    let object = try #require(try fixture()["content_state"] as? [String: Any])
+    let older = object.filter { $0.key != "kind" }
+    let state = try JSONDecoder().decode(
+        AgentActivityAttributes.ContentState.self, from: JSONSerialization.data(withJSONObject: older)
+    )
+    #expect(state.kind == nil)
+    #expect(state.title == "api-fixer")
+    #expect(try JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? NSDictionary == older as NSDictionary)
+}
+
+@Test func kindsMatchCollied() throws {
+    #expect(try fixture()["kinds"] as? [String] == AgentActivityAttributes.ContentState.kinds)
+}
+
+@Test func theAgentMostInNeedIsTheMostRelevant() {
+    let ranked = [AgentActivityStatus.blocked, .done, .working, .idle, .unknown].map {
+        AgentActivityAttributes.ContentState(status: $0, statusSince: .now, title: "a", workspace: nil, approvals: 0).relevance
+    }
+    #expect(zip(ranked, ranked.dropFirst()).allSatisfy { $0 > $1 })
 }
 
 @Test func contentStateEncodesTheSameJSON() throws {
@@ -148,6 +171,8 @@ private func summary(name: String? = nil, kind: String? = "claude", title: Strin
 @Test func contentStateFromAgentNeverUsesTheTerminalTitle() {
     let state = AgentActivityAttributes.ContentState(agent: summary(), workspace: "api", approvals: 1)
     #expect(state.title == "claude")
+    #expect(state.kind == "claude")
+    #expect(AgentActivityAttributes.ContentState(agent: summary(kind: "gemini"), workspace: nil, approvals: 0).kind == nil)
     #expect(state.status == .blocked)
     #expect(state.statusSince == Date(timeIntervalSince1970: 1_791_028_800))
     #expect(AgentActivityAttributes.ContentState(agent: summary(name: " api-fixer "), workspace: nil, approvals: 0).title == "api-fixer")

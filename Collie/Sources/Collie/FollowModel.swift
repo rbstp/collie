@@ -394,6 +394,7 @@ extension AgentActivityAttributes.ContentState {
             status: AgentActivityStatus(agent.status),
             statusSince: Date(timeIntervalSince1970: TimeInterval(agent.statusSinceMs / 1000)),
             title: agent.alertTitle,
+            kind: agent.kind.flatMap { Self.kinds.contains($0) ? $0 : nil },
             workspace: workspace,
             approvals: approvals
         )

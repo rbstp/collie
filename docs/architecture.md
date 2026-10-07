@@ -383,17 +383,17 @@ The lock screen and the Dynamic Island show an agent only while the user follows
 {"aps": {
   "timestamp": 1791028800,
   "event": "update",
-  "content-state": {"status": "blocked", "statusSince": 812721600, "title": "api-fixer", "workspace": "api", "approvals": 1,
-                    "approvalId": "apr_test", "enc": "oKGio6Slpqeoqaqr7QAv18tqJkZ41BDjm3Mz/9NV7Tim7Fe0ZJoerlF+PbZlhhy7Ws9jjgfEGOzE+w=="},
+  "content-state": {"status": "blocked", "statusSince": 812721600, "title": "api-fixer", "kind": "claude", "workspace": "api",
+                    "approvals": 1, "approvalId": "apr_test", "enc": "oKGio6Slpqeoqaqr7QAv18tqJkZ41BDjm3Mz/9NV7Tim7Fe0ZJoerlF+PbZlhhy7Ws9jjgfEGOzE+w=="},
   "stale-date": 1791029700,
   "relevance-score": 100,
   "alert": {"title": "api-fixer", "body": "Blocked in api"}
 }}
 ```
 
-- `timestamp`, `stale-date` (now + 15 min) and `dismissal-date` are Unix seconds. `relevance-score` is 100 while `blocked`, else 50. `alert` only on the update that carries an approval alert, so the Dynamic Island expands; its text is the approval alert's.
-- `content-state` decodes into `AgentActivityAttributes.ContentState` with ActivityKit's default decoder: `status` is `idle | working | blocked | done | unknown`; `statusSince` is whole seconds since 2001-01-01T00:00:00Z (Unix seconds − 978307200), Swift's default `Date` Codable value, with no custom date strategy on either side; `title` is the alert title (herdr agent name, else agent kind, else `agent`); `workspace` is the workspace label; `approvals` counts the agent's pending approvals (0 or 1); `approvalId` and `enc` are optional and present only while an approval routed to this device is pending (an older app ignores them). The fixture [protocol/live-activity-content-state.json](protocol/live-activity-content-state.json) has both forms; its `enc` is the [notification test vector](protocol/notification-vector.json)'s. Both are checked by collied's and the app's tests.
-- The content state is plaintext to Apple: status, its start, the agent and workspace labels, a count and an approval id. The context only as `enc`; never the terminal title, snippet or nonce ([threat-model.md](threat-model.md#apple-sees-push-payload-metadata)).
+- `timestamp`, `stale-date` (now + 15 min) and `dismissal-date` are Unix seconds. `relevance-score` ranks the agent that most needs the user first, so of several followed agents iOS shows it in the Dynamic Island: `blocked` 100, `done` 75, `working` 50, `idle` 25, `unknown` 0. `alert` only on the update that carries an approval alert, so the Dynamic Island expands; its text is the approval alert's.
+- `content-state` decodes into `AgentActivityAttributes.ContentState` with ActivityKit's default decoder: `status` is `idle | working | blocked | done | unknown`; `statusSince` is whole seconds since 2001-01-01T00:00:00Z (Unix seconds − 978307200), Swift's default `Date` Codable value, with no custom date strategy on either side; `title` is the alert title (herdr agent name, else agent kind, else `agent`); `kind` is the herdr agent kind, only when the widget has an icon for it (`claude | codex | copilot`, the fixture's `kinds`), else omitted (an older app ignores it, an older collied never sends it); `workspace` is the workspace label; `approvals` counts the agent's pending approvals (0 or 1); `approvalId` and `enc` are optional and present only while an approval routed to this device is pending (an older app ignores them). The fixture [protocol/live-activity-content-state.json](protocol/live-activity-content-state.json) has both forms; its `enc` is the [notification test vector](protocol/notification-vector.json)'s. Both are checked by collied's and the app's tests.
+- The content state is plaintext to Apple: status, its start, the agent and workspace labels, one of three agent kinds, a count and an approval id. The context only as `enc`; never the terminal title, snippet or nonce ([threat-model.md](threat-model.md#apple-sees-push-payload-metadata)).
 
 ### Approval on the activity
 

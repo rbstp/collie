@@ -30,7 +30,10 @@ struct AgentLiveActivity: Widget {
                         .padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    Text(state.title).font(.headline).lineLimit(1)
+                    HStack(spacing: 6) {
+                        KindIcon(kind: state.kind, size: 18)
+                        Text(state.title).font(.headline).lineLimit(1)
+                    }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -44,11 +47,21 @@ struct AgentLiveActivity: Widget {
                     .padding(.horizontal, 4)
                 }
             } compactLeading: {
-                Image(systemName: state.status.symbol).foregroundStyle(state.status.color)
+                if KindIcon.known(state.kind) {
+                    KindIcon(kind: state.kind, size: 20)
+                } else {
+                    Text(state.title).font(.caption2.bold()).lineLimit(1).frame(maxWidth: 56)
+                }
             } compactTrailing: {
-                Text(state.status.label).font(.caption2.bold()).foregroundStyle(state.status.color)
+                HStack(spacing: 3) {
+                    Image(systemName: state.status.symbol)
+                    ElapsedText(since: state.statusSince, width: 40).font(.caption2.monospacedDigit())
+                }
+                .foregroundStyle(state.status.color)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(state.status.label)
             } minimal: {
-                Circle().fill(state.status.color).frame(width: 10, height: 10)
+                Image(systemName: state.status.symbol).foregroundStyle(state.status.color)
             }
             .widgetURL(link(context))
             .keylineTint(state.status.color)
@@ -171,10 +184,28 @@ private struct ApprovalNeeded: View {
 
 private struct ElapsedText: View {
     let since: Date
+    var width: CGFloat = 64
 
     var body: some View {
         Text(timerInterval: since...Date.distantFuture, countsDown: false)
             .multilineTextAlignment(.trailing)
-            .frame(maxWidth: 64, alignment: .trailing)
+            .frame(maxWidth: width, alignment: .trailing)
+    }
+}
+
+/// The agent kind's icon, from this extension's own asset catalog.
+private struct KindIcon: View {
+    let kind: String?
+    let size: CGFloat
+
+    static func known(_ kind: String?) -> Bool {
+        kind.map(AgentActivityAttributes.ContentState.kinds.contains) ?? false
+    }
+
+    var body: some View {
+        if let kind, Self.known(kind) {
+            Image(kind.capitalized).resizable().scaledToFit().frame(width: size, height: size)
+                .accessibilityLabel(kind.capitalized)
+        }
     }
 }

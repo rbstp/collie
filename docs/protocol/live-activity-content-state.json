@@ -4,6 +4,7 @@
     "status": "blocked",
     "statusSince": 812721600,
     "title": "api-fixer",
+    "kind": "claude",
     "workspace": "api",
     "approvals": 1
   },
@@ -11,10 +12,12 @@
     "status": "blocked",
     "statusSince": 812721600,
     "title": "api-fixer",
+    "kind": "claude",
     "workspace": "api",
     "approvals": 1,
     "approvalId": "apr_test",
     "enc": "oKGio6Slpqeoqaqr7QAv18tqJkZ41BDjm3Mz/9NV7Tim7Fe0ZJoerlF+PbZlhhy7Ws9jjgfEGOzE+w=="
   },
-  "statuses": ["idle", "working", "blocked", "done", "unknown"]
+  "statuses": ["idle", "working", "blocked", "done", "unknown"],
+  "kinds": ["claude", "codex", "copilot"]
 }
