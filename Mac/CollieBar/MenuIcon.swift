@@ -5,17 +5,11 @@ enum MenuIcon {
     /// off, and a dot at the top right while an approval is pending.
     static func image(running: Bool, pending: Bool) -> NSImage {
         let size = NSSize(width: 22, height: 18)
-        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        let symbol = NSImage(systemSymbolName: "dog.fill", accessibilityDescription: nil)?
-            .withSymbolConfiguration(config)
+        let glyph = NSImage(named: "MenuIcon")
         let image = NSImage(size: size, flipped: false) { rect in
-            if let symbol {
-                let s = symbol.size
-                let origin = NSPoint(x: (rect.width - s.width) / 2 - 1, y: (rect.height - s.height) / 2)
-                symbol.draw(
-                    in: NSRect(origin: origin, size: s), from: .zero, operation: .sourceOver,
-                    fraction: running ? 1 : 0.35)
-            }
+            glyph?.draw(
+                in: NSRect(x: (rect.width - 18) / 2 - 1, y: 0, width: 18, height: 18), from: .zero,
+                operation: .sourceOver, fraction: running ? 1 : 0.35)
             if pending {
                 let dot = NSRect(x: rect.maxX - 7, y: rect.maxY - 7, width: 6, height: 6)
                 NSGraphicsContext.current?.compositingOperation = .clear
