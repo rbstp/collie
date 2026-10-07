@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use protocol::AgentKind;
 use serde::Deserialize;
 
-pub use protocol::DEFAULT_PORT;
+use protocol::DEFAULT_PORT;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -221,13 +221,6 @@ pub fn load(path: &Path, explicit: bool) -> Result<Option<Config>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => Ok(None),
         Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
     }
-}
-
-/// `text` with the `[apns]` `key_path` line replaced by `key = "keychain"`, or None
-/// unless there is exactly one such line and the result parses to the same `[apns]` with
-/// the key in the Keychain.
-pub fn use_keychain(text: &str) -> Option<String> {
-    set_apns_key(text, &ApnsKey::Keychain, false)
 }
 
 /// `text` with the `[apns]` key location set to `key`: its one `key` or `key_path` line
@@ -479,7 +472,7 @@ mod tests {
         let text = format!(
             "# mine\n[tailnet]\nport = 9000\n\n[apns]\n  key_path = \"/k.p8\" # old\r\n{IDS}"
         );
-        let out = use_keychain(&text).unwrap();
+        let out = set_apns_key(&text, &ApnsKey::Keychain, false).unwrap();
         assert_eq!(
             out,
             format!("# mine\n[tailnet]\nport = 9000\n\n[apns]\n  key = \"keychain\"\r\n{IDS}")
@@ -489,17 +482,23 @@ mod tests {
         assert_eq!(c.apns.unwrap().key, ApnsKey::Keychain);
 
         assert_eq!(
-            use_keychain(&format!("[apns]\n{IDS}")),
+            set_apns_key(&format!("[apns]\n{IDS}"), &ApnsKey::Keychain, false),
             None,
             "already keychain"
         );
         assert_eq!(
-            use_keychain(&format!("[other]\nkey_path = 1\n[apns]\n{IDS}")),
+            set_apns_key(
+                &format!("[other]\nkey_path = 1\n[apns]\n{IDS}"),
+                &ApnsKey::Keychain,
+                false
+            ),
             None
         );
         assert_eq!(
-            use_keychain(
-                "apns = { key_path = \"/k\", key_id = \"6Y7FRZ845U\", team_id = \"RM3UT3MMSR\", bundle_id = \"b\" }\n"
+            set_apns_key(
+                "apns = { key_path = \"/k\", key_id = \"6Y7FRZ845U\", team_id = \"RM3UT3MMSR\", bundle_id = \"b\" }\n",
+                &ApnsKey::Keychain,
+                false
             ),
             None
         );

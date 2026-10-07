@@ -294,27 +294,6 @@ enum PaneLayoutResult {
     PaneLayout { layout: PaneLayout },
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct ProcessInfo {
-    pub shell_pid: Option<u32>,
-    pub foreground_process_group_id: Option<u32>,
-    #[serde(default)]
-    pub foreground_processes: Vec<Process>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Process {
-    pub pid: u32,
-    pub name: String,
-    pub argv: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ProcessInfoResult {
-    PaneProcessInfo { process_info: ProcessInfo },
-}
-
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct MatchedRule {
     pub id: String,
@@ -382,12 +361,6 @@ pub async fn pane_get(socket: &Path, pane_id: &str) -> Result<PaneInfo, Error> {
     let PaneInfoResult::PaneInfo { pane } =
         call(socket, "pane.get", json!({ "pane_id": pane_id })).await?;
     Ok(pane)
-}
-
-pub async fn pane_process_info(socket: &Path, pane_id: &str) -> Result<ProcessInfo, Error> {
-    let ProcessInfoResult::PaneProcessInfo { process_info } =
-        call(socket, "pane.process_info", json!({ "pane_id": pane_id })).await?;
-    Ok(process_info)
 }
 
 /// The pane's width in columns. herdr answers with the focused tab's layout when it does not
@@ -727,20 +700,5 @@ mod tests {
         .unwrap();
         let AgentListResult::AgentList { agents } = list.result.unwrap();
         assert_eq!(agents[0].state_change_seq, 0);
-    }
-
-    #[tokio::test]
-    async fn live_ping() {
-        let Some(path) = std::env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from) else {
-            eprintln!("skipped: HERDR_SOCKET_PATH not set");
-            return;
-        };
-        if !path.exists() {
-            eprintln!("skipped: {} does not exist", path.display());
-            return;
-        }
-        let pong = ping(&path).await.unwrap();
-        assert!(!pong.version.is_empty());
-        assert!(pong.protocol > 0);
     }
 }

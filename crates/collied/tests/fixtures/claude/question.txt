@@ -1,0 +1,12 @@
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Storage
+
+ Which storage backend should the cache use?
+
+ ❯ 1. SQLite
+      Embedded, no server
+   2. Redis
+      Shared across processes
+   3. Type something.
+
+ Enter to select · ↑/↓ to navigate · Esc to cancel

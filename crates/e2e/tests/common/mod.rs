@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -10,8 +10,17 @@ use std::time::{Duration, Instant};
 use collie_core::{CollieCore, IdentitySigner, Machine, MachineFlock, TailnetState};
 use collie_tls::rustls::sign::SigningKey;
 use collied::control::{Client, Reply, Request};
-use serde_json::Value;
+use collied::server::ServerConfig;
+use futures_util::{SinkExt, StreamExt};
+use protocol::{ErrorCode, PairingInvite, Response, ServerFrame};
+use serde_json::{Value, json};
 use tailnet::{BackendState, Config, Node, Status};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::net::{UnixListener, UnixStream};
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::{HeaderValue, header};
 use zeroize::Zeroizing;
 
 pub const KNOBS: [(&str, &str); 1] = [("TS_DISABLE_PORTMAPPER", "1")];
@@ -20,6 +29,8 @@ pub const WATCHDOG: Duration = Duration::from_secs(240);
 pub const LABEL: &str = "E2E iPhone";
 // The tag collie-core's pin requires of the Mac node, whatever OS the test runs on.
 pub const PHONE_PINNED_TAG: &str = "tag:collie-mac";
+pub const PROBE: &str = "E2E probe";
+pub const SNAPSHOT: &str = include_str!("../../../collied/tests/fixtures/session.snapshot.json");
 
 // libtailscale's Go runtime reads TS_* knobs once at load, so each test re-runs itself
 // in a child process that has them (same approach as crates/tailnet/tests/end_to_end.rs).
@@ -273,7 +284,7 @@ impl TestControl {
     fn start(auth_key: &str, dir: &Path) -> Self {
         let bin = dir.join("testcontrol");
         let status = Command::new(std::env::var("GO").unwrap_or_else(|_| "go".into()))
-            .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("testcontrol"))
+            .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../tailnet/testcontrol"))
             .env("GOTOOLCHAIN", "local")
             .env("GOFLAGS", "-mod=readonly")
             .args(["build", "-o"])
@@ -282,9 +293,11 @@ impl TestControl {
             .status()
             .expect("go build testcontrol");
         assert!(status.success(), "go build testcontrol: {status}");
-        // The helper exits when its stdin closes, so it dies with this process.
+        // The helper exits when its stdin closes, so it dies with this process. One user
+        // owns every node, as on a personal tailnet: the phones and the Mac's tag owner
+        // share a user ID, so the gate is exercised on pairing state and tags.
         let mut child = Command::new(&bin)
-            .args(["-authkey", auth_key])
+            .args(["-authkey", auth_key, "-same-user"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -405,4 +418,170 @@ pub fn herdr_pings(socket: &Path) -> bool {
     }
     let mut line = String::new();
     BufReader::new(conn).read_line(&mut line).is_ok() && line.contains("\"pong\"")
+}
+
+pub fn herdr_installed() -> bool {
+    let installed = Command::new("herdr")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !installed {
+        println!("skipped: herdr is not installed");
+    }
+    installed
+}
+
+pub fn server_config(data_dir: &Path, herdr_session: &str) -> ServerConfig {
+    ServerConfig {
+        attachments_dir: data_dir.join("attachments"),
+        data_dir: data_dir.to_owned(),
+        port: PORT,
+        owner_user_id: None,
+        herdr_session: herdr_session.into(),
+        machine_name: "e2e-mac".into(),
+        approval_ttl: collied::approvals::TTL,
+        terminals: false,
+        terminal_grant_ttl: collied::terminal::GRANT_TTL,
+    }
+}
+
+pub async fn wait_for(what: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ready() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+// One request per connection, like herdr. Fixtures are sanitized live samples; `extra`
+// answers anything else. Returns the methods called.
+pub fn mock_herdr(
+    path: &Path,
+    extra: impl Fn(&str, &Value) -> Option<Value> + Send + Sync + 'static,
+) -> Arc<Mutex<Vec<String>>> {
+    let listener = UnixListener::bind(path).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let seen = calls.clone();
+    let extra = Arc::new(extra);
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let (seen, extra) = (seen.clone(), extra.clone());
+            tokio::spawn(async move {
+                let (r, mut w) = stream.into_split();
+                let mut line = String::new();
+                if tokio::io::BufReader::new(r)
+                    .read_line(&mut line)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                let req: Value = serde_json::from_str(&line).unwrap();
+                let method = req["method"].as_str().unwrap_or_default().to_owned();
+                seen.lock().unwrap().push(method.clone());
+                let fixture = |text: &str| serde_json::from_str::<Value>(text).unwrap();
+                let mut resp = match method.as_str() {
+                    "ping" => fixture(include_str!("../fixtures/ping.json")),
+                    "session.snapshot" => fixture(SNAPSHOT),
+                    "agent.list" => fixture(include_str!("../fixtures/agent.list.json")),
+                    "workspace.list" => fixture(include_str!("../fixtures/workspace.list.json")),
+                    _ => extra(&method, &req["params"]).unwrap_or_else(
+                        || json!({"error": {"code": "unknown_method", "message": "not mocked"}}),
+                    ),
+                };
+                resp["id"] = req["id"].clone();
+                let _ = w.write_all(format!("{resp}\n").as_bytes()).await;
+            });
+        }
+    });
+    calls
+}
+
+pub type Ws = WebSocketStream<ProbeStream>;
+
+pub struct Probe {
+    pub node: Node,
+    pub target: String,
+    pub data_dir: PathBuf,
+}
+
+impl Probe {
+    pub async fn session(&self) -> Ws {
+        let stream = {
+            let (node, target) = (self.node.clone(), self.target.clone());
+            // netstack occasionally stalls one SYN for ~63 s; bounded retries keep the test fast.
+            tokio::task::spawn_blocking(move || {
+                (0..6)
+                    .find_map(|_| {
+                        node.dial_timeout("tcp", &target, Duration::from_secs(10))
+                            .ok()
+                    })
+                    .expect("probe could not dial collied")
+            })
+            .await
+            .unwrap()
+        };
+        stream.set_nonblocking(true).unwrap();
+        let mut req = format!("ws://{}{}", self.target, protocol::WS_PATH)
+            .into_client_request()
+            .unwrap();
+        req.headers_mut().insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static(protocol::WS_SUBPROTOCOL),
+        );
+        let stream = probe_tls(UnixStream::from_std(stream).unwrap(), &self.data_dir).await;
+        let (mut ws, _) = tokio_tungstenite::client_async(req, stream).await.unwrap();
+        let hello = json!({"protocol_version": protocol::PROTOCOL_VERSION, "app_version": "e2e"});
+        call(&mut ws, "hello", hello).await.unwrap();
+        ws
+    }
+
+    pub async fn pair(&self, control: &Path) {
+        let mut cli = Client::connect(control).await.unwrap();
+        let Reply::Invite { uri, .. } = cli.call(&Request::Pair).await.unwrap() else {
+            panic!("no invite");
+        };
+        let code = PairingInvite::parse(&uri).unwrap().code;
+        let mut ws = self.session().await;
+        let unpaired = call(&mut ws, "approval.list", json!({})).await;
+        assert_eq!(unpaired, Err(ErrorCode::NotPaired));
+        let mut ws = self.session().await;
+        let params = json!({"pairing_code": code.as_str(), "device_label": PROBE});
+        let (paired, ()) = tokio::join!(call(&mut ws, "pair.complete", params), async {
+            let Reply::Confirm(candidate) = cli.recv().await.unwrap() else {
+                panic!("no confirmation request");
+            };
+            assert_eq!(candidate.device_label, PROBE);
+            cli.send(&Request::Confirm { accept: true }).await.unwrap();
+            assert!(matches!(
+                cli.recv().await.unwrap(),
+                Reply::PairDone { paired: true, .. }
+            ));
+        });
+        assert!(matches!(paired, Ok(Response::Paired { .. })), "{paired:?}");
+    }
+}
+
+pub async fn call(ws: &mut Ws, method: &str, params: Value) -> Result<Response, ErrorCode> {
+    let frame = json!({"id": 1, "method": method, "params": params});
+    ws.send(Message::text(frame.to_string())).await.unwrap();
+    loop {
+        let msg = tokio::time::timeout(Duration::from_secs(15), ws.next())
+            .await
+            .expect("no frame within 15 s")
+            .expect("connection ended")
+            .expect("websocket error");
+        let Message::Text(text) = msg else { continue };
+        match serde_json::from_str::<ServerFrame>(text.as_str()).unwrap() {
+            ServerFrame::Result { result, .. } => return Ok(result),
+            ServerFrame::Error { error, .. } => return Err(error.code),
+            ServerFrame::Event { .. } => {}
+        }
+    }
 }

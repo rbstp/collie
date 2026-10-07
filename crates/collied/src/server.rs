@@ -44,7 +44,7 @@ use crate::peers::{self, Peer, Store};
 use crate::push::{self, ActivityError, Push};
 use crate::terminal::{self, Grants};
 use crate::transcript::Transcripts;
-use crate::{config, herdr};
+use crate::{config, herdr, lock};
 
 const MAX_CONNECTIONS: usize = 64;
 const MAX_SESSIONS_PER_NODE: usize = 4;
@@ -66,7 +66,6 @@ const CHUNK_RATE_BURST: f64 = 128.0;
 const UPKEEP_EVERY: Duration = Duration::from_secs(10);
 const TERMINALS_OFF: &str = "terminals are off on this machine; set [terminals] enabled = true in collied.toml and restart collied";
 const TERMINAL_KEY_MISSING: &str = "this phone has no terminal key here; pair it again";
-const TERMINAL_LOCKED: &str = "the terminal is locked; unlock it again";
 
 pub struct ServerConfig {
     pub data_dir: PathBuf,
@@ -206,10 +205,6 @@ pub struct State {
     tls_pin: KeyPin,
     /// Lock order: peers, then sessions, then terminals.
     terminals: Mutex<Grants>,
-}
-
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl State {
@@ -451,20 +446,18 @@ pub async fn start(
     cfg: ServerConfig,
     herdr_socket: PathBuf,
 ) -> anyhow::Result<ServerHandle> {
-    start_with_tasks(node, cfg, herdr_socket, &config::TasksConfig::default()).await
+    start_with(
+        node,
+        cfg,
+        herdr_socket,
+        &config::TasksConfig::default(),
+        None,
+    )
+    .await
 }
 
 /// Fails closed: the node must already be Running, and the only TCP listener is the
 /// tailnet one.
-pub async fn start_with_tasks(
-    node: Node,
-    cfg: ServerConfig,
-    herdr_socket: PathBuf,
-    tasks: &config::TasksConfig,
-) -> anyhow::Result<ServerHandle> {
-    start_with(node, cfg, herdr_socket, tasks, None).await
-}
-
 pub async fn start_with(
     node: Node,
     cfg: ServerConfig,
@@ -1493,7 +1486,7 @@ impl Session<'_> {
         self.terminal_watch = None;
         let auth = self.terminal_authorizer(&p.terminal_id);
         if !auth() {
-            return err(ErrorCode::TerminalLocked, TERMINAL_LOCKED);
+            return err(ErrorCode::TerminalLocked, drive::LOCKED);
         }
         let lines = p.lines();
         match self

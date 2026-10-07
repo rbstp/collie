@@ -44,10 +44,6 @@ fn mac_node(
     Ok((node, lock))
 }
 
-fn status(node: &Node) -> anyhow::Result<Status> {
-    Ok(node.status()?)
-}
-
 pub async fn login(
     data_dir: &Path,
     config: &Config,
@@ -63,7 +59,7 @@ pub async fn login(
     let mut shown_url = String::new();
     let mut warned_approval = false;
     loop {
-        let st = status(&node)?;
+        let st = node.status()?;
         match st.backend_state {
             BackendState::Running if st.self_node.is_some() => {
                 print_identity(&st);
@@ -141,7 +137,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
     node.start()?;
     let deadline = Instant::now() + RUN_START_TIMEOUT;
     loop {
-        let st = status(&node)?;
+        let st = node.status()?;
         if st.backend_state == BackendState::Running && st.self_node.is_some() {
             check_tag(&st, data_dir)?;
             break;

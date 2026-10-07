@@ -1,0 +1,15 @@
+❯ Use the AskUserQuestion tool to ask me which storage backend the cache should use.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Cache Backend
+
+Which storage backend should the cache use?
+
+❯ 1. SQLite
+     File-based database, good for single-instance deployments with local persistence
+  2. Redis
+     In-memory data store, better for distributed systems and high-performance scenarios
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

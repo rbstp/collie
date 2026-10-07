@@ -284,21 +284,16 @@ async fn scenario(session: &HerdrSession) {
         .await
         .unwrap();
     assert_eq!(pane.terminal_id, terminal.as_str());
-    let mut shell_seen = false;
+    let mut prompt_seen = false;
     for _ in 0..50 {
-        let info = herdr::pane_process_info(socket, &pane.pane_id)
-            .await
-            .unwrap();
-        if collied::drive::shell_in_foreground(&info) {
-            shell_seen = true;
+        let screen = herdr::detection_text(socket, &pane.pane_id).await.unwrap();
+        if screen.trim_end().ends_with(['$', '#']) {
+            prompt_seen = true;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    assert!(
-        shell_seen,
-        "the new pane's shell never showed in the foreground"
-    );
+    assert!(prompt_seen, "the new pane's shell never drew its prompt");
     let read = ReadParams {
         terminal_id: terminal.clone(),
         source: ReadSource::Visible,

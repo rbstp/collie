@@ -42,9 +42,9 @@ pub const DRAFT_CHANGED: &str = "the agent's input box has unsent text";
 const BLOCKED: &str = "agent is blocked; answer it through an approval";
 const TYPED_NOT_SENT: &str = "the prompt did not take the text; Enter was not sent";
 pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
-const LOCKED: &str = "the terminal is locked; unlock it again";
+pub const LOCKED: &str = "the terminal is locked; unlock it again";
 
-fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, Fail> {
+pub(crate) fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, Fail> {
     Err((code, message.into()))
 }
 
@@ -910,49 +910,6 @@ pub fn check_ready(listed: &AgentInfo, current: &AgentInfo) -> Result<(), Fail> 
     Ok(())
 }
 
-/// herdr 0.9.3 `process_info_shows_shell_initialization`: the pane's own shell is the
-/// foreground job.
-pub fn shell_in_foreground(info: &herdr::ProcessInfo) -> bool {
-    let Some(shell) = info.shell_pid else {
-        return false;
-    };
-    let is_shell = |name: &str| {
-        let name = name
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(name)
-            .trim_start_matches('-')
-            .trim_end_matches(".exe")
-            .to_ascii_lowercase();
-        matches!(
-            name.as_str(),
-            "sh" | "bash"
-                | "dash"
-                | "zsh"
-                | "fish"
-                | "ksh"
-                | "mksh"
-                | "csh"
-                | "tcsh"
-                | "elvish"
-                | "xonsh"
-                | "nu"
-                | "pwsh"
-                | "powershell"
-                | "cmd"
-        )
-    };
-    info.foreground_process_group_id == Some(shell)
-        && info.foreground_processes.iter().any(|p| {
-            p.pid == shell
-                && (is_shell(&p.name)
-                    || p.argv
-                        .as_ref()
-                        .and_then(|a| a.first())
-                        .is_some_and(|a| is_shell(a)))
-        })
-}
-
 fn agent_name() -> Result<String, Fail> {
     let mut b = [0u8; 4];
     getrandom::fill(&mut b).map_err(|_| (ErrorCode::Internal, "no randomness".to_owned()))?;
@@ -1464,28 +1421,6 @@ mod tests {
         for (key, name) in all {
             assert_eq!(key.herdr_name(), name);
         }
-    }
-
-    #[test]
-    fn shell_in_foreground_matches_herdr() {
-        let info = |pgid: u32, procs: serde_json::Value| -> herdr::ProcessInfo {
-            serde_json::from_value(serde_json::json!({
-                "pane_id": "w9:p1", "shell_pid": 100, "foreground_process_group_id": pgid,
-                "foreground_processes": procs,
-            }))
-            .unwrap()
-        };
-        let shell = serde_json::json!([{"pid": 100, "name": "-zsh"}]);
-        assert!(shell_in_foreground(&info(100, shell)));
-        let by_argv = serde_json::json!([{"pid": 100, "name": "x", "argv": ["/bin/bash", "-l"]}]);
-        assert!(shell_in_foreground(&info(100, by_argv)));
-        let job = serde_json::json!([{"pid": 200, "name": "vim"}]);
-        assert!(!shell_in_foreground(&info(200, job)));
-        let not_shell = serde_json::json!([{"pid": 100, "name": "node"}]);
-        assert!(!shell_in_foreground(&info(100, not_shell)));
-        let no_shell: herdr::ProcessInfo =
-            serde_json::from_value(serde_json::json!({"pane_id": "w9:p1"})).unwrap();
-        assert!(!shell_in_foreground(&no_shell));
     }
 
     fn agent(status: &str) -> AgentInfo {
