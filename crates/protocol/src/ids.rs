@@ -101,7 +101,8 @@ fn is_unsafe_char(c: char) -> bool {
 }
 
 /// Invisible and bidi formatting characters let a label render as something else,
-/// for example a different phone name on the Mac's pairing prompt.
+/// for example a different phone name on the Mac's pairing prompt. Tags and the
+/// supplementary variation selectors also carry hidden text an LLM still reads.
 pub fn is_format(c: char) -> bool {
     matches!(
         c,
@@ -113,6 +114,8 @@ pub fn is_format(c: char) -> bool {
             | '\u{2060}'..='\u{206F}'
             | '\u{FEFF}'
             | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0000}'..='\u{E007F}'
+            | '\u{E0100}'..='\u{E01EF}'
     )
 }
 
@@ -371,6 +374,8 @@ mod tests {
         assert!(Label::new("Richard's iPhone").is_ok());
         assert!(Label::new("iPhone\u{202E}enohPi").is_err());
         assert!(Label::new("i\u{200B}Phone").is_err());
+        assert!(Label::new("iPhone\u{E0041}").is_err());
+        assert!(Label::new("iPhone\u{E0100}").is_err());
     }
 
     #[test]

@@ -426,7 +426,7 @@ impl AgentSendKeysParams {
 }
 
 /// Typed into the free-text field of a blocked Claude Code question or plan, then Enter.
-/// One line: Enter is what submits it.
+/// One line without bidi or invisible format characters: Enter is what submits it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentTypeTextParams {
@@ -480,8 +480,9 @@ pub enum Decision {
 }
 
 /// `choice` is set exactly when `decision` is `choose`. `note`, one line of at most 200
-/// characters, goes with `approve` or `deny` on an approval with `supports_note`: collied
-/// types it into the option's amend field before Enter.
+/// characters without bidi or invisible format characters, goes with `approve` or `deny`
+/// on an approval with `supports_note`: collied types it into the option's amend field
+/// before Enter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ApprovalDecideParams {
@@ -1410,6 +1411,7 @@ mod tests {
             r#","decision":"approve","note":"a\u001b[Z""#,
             r#","decision":"approve","note":"ok \u202efi.exe""#,
             r#","decision":"deny","note":"a\u200bb""#,
+            r#","decision":"deny","note":"use Redis\udb40\udc41""#,
             r#","decision":"deny","note":"  ""#,
             &format!(
                 r#","decision":"approve","note":"{}""#,
@@ -1444,6 +1446,8 @@ mod tests {
             "use \u{202E}sideR",
             "use\u{2066} Redis",
             "\u{FEFF}yes",
+            "use Redis\u{E0041}\u{E007F}",
+            "\u{1F600}\u{E0100}",
         ] {
             assert_eq!(
                 typed(bad).unwrap_err().code,
