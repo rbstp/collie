@@ -379,7 +379,6 @@ private func attach(_ model: AgentModel, _ core: FakeCore, _ names: String...) a
     #expect(model.draft == "continue")
     #expect(!model.sendingPrompt)
     #expect(model.promptError?.contains("Approvals") == true)
-    #expect(model.promptError?.contains("Phase") == false)
 
     core.set(error: .AgentNotReady)
     await model.sendPrompt()

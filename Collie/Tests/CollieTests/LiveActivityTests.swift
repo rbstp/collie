@@ -24,6 +24,10 @@ private func fixture() throws -> [String: Any] {
     #expect(state.kind == "claude")
     #expect(state.workspace == "api")
     #expect(state.approvals == 1)
+    #expect(state.approvalId == nil)
+    #expect(state.enc == nil)
+    #expect(state.pendingApproval == nil)
+    #expect(state.command(key: vectorKey) == nil)
 }
 
 @Test func contentStateFromAnOlderColliedHasNoKind() throws {
@@ -67,19 +71,6 @@ private func fixture() throws -> [String: Any] {
     }
     #expect(try JSONDecoder().decode(AgentActivityStatus.self, from: Data(#""sleeping""#.utf8)) == .unknown)
 }
-
-@Test func contentStateWithoutApprovalHasNoCommand() throws {
-    let object = try fixture()
-    let json = try JSONSerialization.data(withJSONObject: try #require(object["content_state"]))
-    let state = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: json)
-    #expect(state.approvalId == nil)
-    #expect(state.enc == nil)
-    #expect(state.pendingApproval == nil)
-    #expect(state.command(key: vectorKey) == nil)
-}
-
-/// docs/protocol/notification-vector.json's key, which the fixture's `enc` is sealed with.
-private let vectorKey = SymmetricKey(data: Data((1...32).map { UInt8($0) }))
 
 @Test func contentStateWithApprovalOpensWithTheMacKey() throws {
     let object = try fixture()

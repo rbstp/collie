@@ -3,7 +3,6 @@ name: Collie
 options:
   bundleIdPrefix: dev.rbstp
   createIntermediateGroups: true
-  generateEmptyDirectories: false
   deploymentTarget:
     iOS: "26.0"
     watchOS: "26.0"
@@ -199,7 +198,6 @@ schemes:
       config: Debug
     test:
       config: Debug
-      gatherCoverageData: false
       targets:
         - CollieTests
     archive:

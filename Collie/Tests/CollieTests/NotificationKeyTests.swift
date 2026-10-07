@@ -29,9 +29,10 @@ private func vector() throws -> Vector {
     )
 }
 
-private let testKey = SymmetricKey(data: Data((1...32).map { UInt8($0) }))
+/// docs/protocol/notification-vector.json's key, which the Live Activity fixture's `enc` is sealed with too.
+let vectorKey = SymmetricKey(data: Data((1...32).map { UInt8($0) }))
 
-private func seal(_ plaintext: String, approvalId: String = "apr_1", key: SymmetricKey = testKey) throws -> String {
+private func seal(_ plaintext: String, approvalId: String = "apr_1", key: SymmetricKey = vectorKey) throws -> String {
     try ChaChaPoly.seal(Data(plaintext.utf8), using: key, authenticating: Data(approvalId.utf8)).combined.base64EncodedString()
 }
 
@@ -55,19 +56,19 @@ private func seal(_ plaintext: String, approvalId: String = "apr_1", key: Symmet
     #expect(PushContext.open(tampered.prefix(27).base64EncodedString(), approvalId: v.approvalId, key: key) == nil)
     #expect(PushContext.open("not base64!", approvalId: v.approvalId, key: key) == nil)
     #expect(PushContext.open("", approvalId: v.approvalId, key: key) == nil)
-    #expect(PushContext.open(try seal(#"{"v":2,"body":"x"}"#), approvalId: "apr_1", key: testKey) == nil)
-    #expect(PushContext.open(try seal(#"{"body":"x"}"#), approvalId: "apr_1", key: testKey) == nil)
-    #expect(PushContext.open(try seal("Bash: x"), approvalId: "apr_1", key: testKey) == nil)
-    #expect(PushContext.open(try seal(#"{"v":1,"body":" \u0007 "}"#), approvalId: "apr_1", key: testKey) == nil)
+    #expect(PushContext.open(try seal(#"{"v":2,"body":"x"}"#), approvalId: "apr_1", key: vectorKey) == nil)
+    #expect(PushContext.open(try seal(#"{"body":"x"}"#), approvalId: "apr_1", key: vectorKey) == nil)
+    #expect(PushContext.open(try seal("Bash: x"), approvalId: "apr_1", key: vectorKey) == nil)
+    #expect(PushContext.open(try seal(#"{"v":1,"body":" \u0007 "}"#), approvalId: "apr_1", key: vectorKey) == nil)
 }
 
 @Test func contextIsCleanedAndCapped() throws {
     let dirty = #"{"v":1,"body":"Bash: rm\u001b[31m x‮\u0000y\n"}"#
-    #expect(PushContext.open(try seal(dirty), approvalId: "apr_1", key: testKey) == "Bash: rm[31m xy")
+    #expect(PushContext.open(try seal(dirty), approvalId: "apr_1", key: vectorKey) == "Bash: rm[31m xy")
     let multi = #"{"v":1,"body":"Bash: echo safe\nrm -rf ~/x\r"}"#
-    #expect(PushContext.open(try seal(multi), approvalId: "apr_1", key: testKey) == "Bash: echo safe\nrm -rf ~/x")
+    #expect(PushContext.open(try seal(multi), approvalId: "apr_1", key: vectorKey) == "Bash: echo safe\nrm -rf ~/x")
     let long = String(repeating: "a", count: 700)
-    #expect(PushContext.open(try seal(#"{"v":1,"body":"\#(long)"}"#), approvalId: "apr_1", key: testKey)?.count == 600)
+    #expect(PushContext.open(try seal(#"{"v":1,"body":"\#(long)"}"#), approvalId: "apr_1", key: vectorKey)?.count == 600)
 }
 
 extension Data {
