@@ -33,7 +33,7 @@ The phone only dials (TCP to the Mac on port 8457). The Mac only listens through
 - The app starts its node (hostname `collie-phone`) and opens the Tailscale login page. Sign in as the user who owns collied (see [Owner](#owner)).
 - The onboarding screen also accepts an auth key, used once and not stored. It must be a key for your own user, not a tagged key: a tagged phone node is refused by collied.
 - The node must stay untagged and must not be shared in from another tailnet: collied refuses both.
-- State lives in the app container under `Application Support/collie` (node keys in `tsnet/`, paired Macs in `machines.json`). `Collie/Sources/Collie/StateDirectory.swift` creates it 0700 with data protection `completeUntilFirstUserAuthentication`, and collie-core refuses a directory that is not 0700 (P1, not yet verified on a device). Deleting the app deletes the node identity.
+- State lives in the app container under `Application Support/collie` (node keys in `tsnet/`, paired Macs in `machines.json`). `Collie/Sources/Collie/StateDirectory.swift` creates it 0700 with data protection `completeUntilFirstUserAuthentication`, and collie-core refuses a directory that is group or world accessible or owned by another user. Deleting the app deletes the node identity.
 - The state directory must be excluded from iCloud and Finder backups. Otherwise restoring a backup, on this phone or another device, brings back the same node keys and `StableID`, which collied accepts as the paired phone. `StateDirectory.swift` excludes it from backup.
 
 ## Policy file
@@ -115,9 +115,10 @@ The policy is the first filter, not the authorization. collied checks every acce
 2. `whois(peer)` must return a node that is **untagged** and **not shared in** (`Sharer == 0`).
 3. If an owner is known, the node must be owned by that user (`WhoIsNode::is_owned_by`).
 4. Then:
-   - its `StableID` is in `peers.json` with the same user ID it was paired with: full session (`hello` first, then the method allowlist). A paired `StableID` that now reports another user is refused;
-   - it is not paired and a pairing window opened locally with `collied pair` is active: pairing-only session (`hello`, `pair.complete`, then close);
+   - its `StableID` is in `peers.json` with the same user ID it was paired with and a pinned TLS key: full session (`hello` first, then the method allowlist). A paired `StableID` that now reports another user is refused;
+   - it is not paired, or was paired before mutual TLS and has no TLS key, and a pairing window opened locally with `collied pair` is active: pairing-only session (`hello`, `pair.complete`, then close);
    - otherwise: closed before the upgrade and audited.
+5. The TLS handshake must prove the key pinned for that phone (any P-256 key in a pairing-only session), and the gate then decides again under the peers, pairing and sessions locks: a different decision (a revoke, a pairing, or the pairing window closing during the handshake) closes the connection.
 
 So a device of yours that the policy lets through still gets nothing until it is paired, and a tagged or shared-in node is refused even if a policy mistake lets it reach port 8457.
 
@@ -140,7 +141,7 @@ Neither device has a Tailscale CLI, so the numeric ID is not shown anywhere else
 
 ### Phone side
 
-The phone checks the other direction (`crates/collie-core/src/pin.rs`). It does not use a DNS answer: it takes the machine's IP from its own netmap entry whose DNS name matches and whose `StableID` is the one pinned at pairing, requires that entry to carry the tag seen at pairing (`tag:collie-mac` or `tag:collie-linux`; pairing accepts either), and dials that IP. A different node under the name, or a machine that lost or changed its tag, is a pin violation and is not retried automatically.
+The phone checks the other direction (`crates/collie-core/src/pin.rs`). It does not use a DNS answer: it takes the machine's IP from its own netmap entry whose DNS name matches and whose `StableID` is the one pinned at pairing, requires that entry to carry the tag seen at pairing (`tag:collie-mac` or `tag:collie-linux`; pairing accepts either), and dials that IP once whois confirms the IP is that node and not shared in. The TLS handshake must show the machine's key pinned at pairing, and `hello` must report the pinned node ID. A different node under the name, a different key, or a machine that lost or changed its tag, is a pin violation and is not retried automatically.
 
 ## Key expiry
 

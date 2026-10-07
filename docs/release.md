@@ -106,7 +106,7 @@ The certificate and the profiles expire after a year; renew them and update thei
 ## App icon and TestFlight
 
 - The icon is a single 1024x1024 universal image, `Collie/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png`; Xcode derives every other size. The app's `Info.plist` sets `CFBundleIconName` to `AppIcon` and `project.yml` sets `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`: App Store validation rejects an upload whose icon is only in the asset catalog without `CFBundleIconName`.
-- `Info.plist` does not set `ITSAppUsesNonExemptEncryption`, so App Store Connect asks the export compliance question for every uploaded build, and the build waits as "Missing Compliance" until it is answered (TestFlight, the build, Manage). The app uses encryption beyond Apple's own: WireGuard and TLS inside the embedded Tailscale node.
+- `Info.plist` sets `ITSAppUsesNonExemptEncryption` to `false`, declaring that the app's encryption (WireGuard and TLS in the embedded Tailscale node, TLS between the phone and collied) is exempt, so App Store Connect does not ask the export compliance question for uploaded builds. Whether that declaration is correct is not yet reviewed.
 
 The iOS app embeds the watch app, so every iOS build, test and archive also builds for watchOS: both workflows install the watchOS platform on the `xcode-27` runner when it is missing. The watch app has its own copy of the icon, `Collie/CollieWatch/Assets.xcassets/AppIcon.appiconset/AppIcon.png`.
 
