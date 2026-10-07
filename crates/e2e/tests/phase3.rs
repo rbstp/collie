@@ -374,6 +374,7 @@ fn live_activity_follows_an_agent() {
                 "status": "blocked",
                 "statusSince": state["statusSince"],
                 "title": "api-fixer",
+                "kind": "claude",
                 "workspace": "api",
                 "approvals": 1,
                 "approvalId": state["approvalId"],

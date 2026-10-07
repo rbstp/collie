@@ -130,12 +130,12 @@ final class FollowModel {
             notice = "Live Activities are off for collie. Turn them on in Settings to follow agents on the Lock Screen."
             return
         }
-        guard case let (machine, state)? = content(for: agent) else {
+        guard case let (machine, title, state)? = content(for: agent) else {
             notice = "This agent's status is not known yet. Try again once its machine is connected."
             return
         }
         do {
-            try start(agent, machine: machine, state: state)
+            try start(agent, machine: machine, title: title, state: state)
         } catch {
             notice = "Could not start the Live Activity: \(error.localizedDescription)"
             return
@@ -200,14 +200,14 @@ final class FollowModel {
                 }
                 continue
             }
-            guard case let (machine, state)? = content(for: agent) else { continue }
+            guard case let (machine, title, state)? = content(for: agent) else { continue }
             let live = activities(for: agent)
             if live.isEmpty {
                 guard enabled, !attempted.contains(agent), UIApplication.shared.applicationState == .active else { continue }
                 attempted.insert(agent)
                 endDead()
                 do {
-                    try start(agent, machine: machine, state: state)
+                    try start(agent, machine: machine, title: title, state: state)
                 } catch {
                     log.error("restart: \(error.localizedDescription, privacy: .public)")
                 }
@@ -265,18 +265,22 @@ final class FollowModel {
         return (state.title, activity.attributes.terminalId)
     }
 
-    private func content(for agent: FollowedAgent) -> (Machine, AgentActivityAttributes.ContentState)? {
+    private func content(for agent: FollowedAgent) -> (Machine, String, AgentActivityAttributes.ContentState)? {
         guard let flock = core?.cachedFlock(machineId: agent.machineId), flock.link == .connected,
             let summary = flock.agents.first(where: { $0.terminalId == agent.terminalId })
         else { return nil }
         let workspace = flock.workspaces.first { $0.workspaceId == summary.workspaceId }?.label
         let approvals = approvals?.items(machineId: agent.machineId, terminalId: agent.terminalId).count ?? 0
-        return (flock.machine, AgentActivityAttributes.ContentState(agent: summary, workspace: workspace, approvals: approvals))
+        return (
+            flock.machine, summary.activityTitle,
+            AgentActivityAttributes.ContentState(agent: summary, workspace: workspace, approvals: approvals)
+        )
     }
 
-    private func start(_ agent: FollowedAgent, machine: Machine, state: AgentActivityAttributes.ContentState) throws {
+    private func start(_ agent: FollowedAgent, machine: Machine, title: String, state: AgentActivityAttributes.ContentState) throws {
         let attributes = AgentActivityAttributes(
-            machineId: agent.machineId, terminalId: agent.terminalId, machineLabel: machine.label, nodeId: machine.nodeId
+            machineId: agent.machineId, terminalId: agent.terminalId, machineLabel: machine.label, nodeId: machine.nodeId,
+            title: title
         )
         let activity = try Activity.request(attributes: attributes, content: Self.activityContent(state), pushType: .token)
         watch(activity)
@@ -394,6 +398,7 @@ extension AgentActivityAttributes.ContentState {
             status: AgentActivityStatus(agent.status),
             statusSince: Date(timeIntervalSince1970: TimeInterval(agent.statusSinceMs / 1000)),
             title: agent.alertTitle,
+            kind: agent.kind.flatMap { Self.kinds.contains($0) ? $0 : nil },
             workspace: workspace,
             approvals: approvals
         )
@@ -418,6 +423,11 @@ extension AgentSummary {
         [name, kind].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
             .map { String($0.prefix(64)) } ?? "agent"
     }
+
+    /// The Live Activity's static title: what the app shows, kept on the phone in the attributes.
+    /// Cut in scalars, not characters: one character can stack any number of combining marks,
+    /// and attributes over 4 KB fail to start.
+    var activityTitle: String { String(String.UnicodeScalarView(displayTitle.unicodeScalars.prefix(64))) }
 }
 
 /// "Follow on Lock Screen" / "Stop following", for the agent screen's More menu and the Agents list.

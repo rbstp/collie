@@ -30,6 +30,12 @@ const GONE_AFTER: u8 = 2;
 /// 2001-01-01T00:00:00Z in Unix seconds: Swift's default `Date` Codable value, which
 /// ActivityKit uses to decode `content-state`, counts seconds from it.
 pub const REFERENCE_DATE: u64 = 978_307_200;
+/// The kinds the widget has an icon for: any other kind would be herdr text sent to
+/// Apple in clear for nothing.
+pub const KINDS: [&str; 3] = ["claude", "codex", "copilot"];
+/// The approval context's JSON-escaped bytes an activity carries sealed: with labels at their
+/// caps, more would take the update over APNs' 4 KB, and APNs would refuse it.
+const MAX_CONTEXT_BYTES: usize = 1800;
 
 /// Plaintext to Apple: labels, status, a count and an approval id only, never terminal
 /// text. The approval's context only leaves sealed to the device's notification key.
@@ -39,6 +45,8 @@ pub struct ContentState {
     #[serde(rename = "statusSince")]
     pub status_since: i64,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     pub approvals: u32,
@@ -64,6 +72,9 @@ pub fn content(
         status: agent.status,
         status_since: reference_seconds(agent.status_since_ms),
         title: approvals::alert_title(a),
+        kind: KINDS
+            .into_iter()
+            .find(|k| agent.kind.as_deref() == Some(*k)),
         workspace: Some(approvals::workspace_label(&a.workspace_id, workspaces)),
         approvals: pending
             .iter()
@@ -91,7 +102,7 @@ pub fn update(state: &ContentState, urgent: bool, now_ms: u64) -> Alert {
         "event": "update",
         "content-state": state,
         "stale-date": now + STALE_AFTER,
-        "relevance-score": if state.status == AgentStatus::Blocked { 100 } else { 50 },
+        "relevance-score": relevance(state.status),
     });
     if urgent {
         aps["alert"] = json!({
@@ -100,6 +111,36 @@ pub fn update(state: &ContentState, urgent: bool, now_ms: u64) -> Alert {
         });
     }
     live(aps, urgent, now)
+}
+
+/// Of several followed agents, iOS shows the most relevant in the Dynamic Island: the one
+/// that most needs the user. Matches the app's `relevance`.
+pub fn relevance(status: AgentStatus) -> u32 {
+    match status {
+        AgentStatus::Blocked => 100,
+        AgentStatus::Done => 75,
+        AgentStatus::Working => 50,
+        AgentStatus::Idle => 25,
+        AgentStatus::Unknown => 0,
+    }
+}
+
+/// Cut with a visible `…`, so the approver never takes part of a command for all of it.
+fn fit(body: &str) -> String {
+    let escaped = |c: char| serde_json::to_string(&c).map_or(6, |s| s.len() - 2);
+    if body.chars().map(escaped).sum::<usize>() <= MAX_CONTEXT_BYTES {
+        return body.to_owned();
+    }
+    let mut used = escaped('…');
+    let mut out: String = body
+        .chars()
+        .take_while(|&c| {
+            used += escaped(c);
+            used <= MAX_CONTEXT_BYTES
+        })
+        .collect();
+    out.push('…');
+    out
 }
 
 pub fn end(last: Option<&ContentState>, now_ms: u64) -> Alert {
@@ -243,7 +284,7 @@ impl Live {
                     .context
                     .as_ref()
                     .zip(r.device.notification_key.as_ref())
-                    .and_then(|((id, body), key)| push::seal_fresh(key, id, body));
+                    .and_then(|((id, body), key)| push::seal_fresh(key, id, &fit(body)));
                 self.offered.insert(
                     device.clone(),
                     Offer {
@@ -554,6 +595,78 @@ mod tests {
             .map(|s| json!(flock::status(s)))
             .collect();
         assert_eq!(json!(statuses), fixture["statuses"]);
+        assert_eq!(json!(KINDS), fixture["kinds"]);
+    }
+
+    #[test]
+    fn only_kinds_with_an_icon_leave() {
+        let mut tracker = StatusTracker::default();
+        let mut a = agent("working");
+        for (kind, sent) in [
+            (Some("codex"), Some("codex")),
+            (Some("SECRET-kind"), None),
+            (Some(""), None),
+            (None, None),
+        ] {
+            a.agent = kind.map(str::to_owned);
+            let state = content(&a, &workspaces(), &[], &mut tracker, T0).unwrap();
+            assert_eq!(state.kind, sent);
+            assert!(!json!(state).to_string().contains("SECRET-kind"));
+        }
+    }
+
+    #[test]
+    fn the_agent_most_in_need_is_the_most_relevant() {
+        let ranked = [
+            AgentStatus::Blocked,
+            AgentStatus::Done,
+            AgentStatus::Working,
+            AgentStatus::Idle,
+            AgentStatus::Unknown,
+        ]
+        .map(relevance);
+        assert!(ranked.windows(2).all(|w| w[0] > w[1]), "{ranked:?}");
+        assert!(ranked.iter().all(|r| *r <= 100));
+    }
+
+    /// APNs refuses a Live Activity payload over 4 KB, and ActivityKit a content state over
+    /// 4 KB: labels and approval context at their length caps, in four-byte characters or
+    /// characters JSON escapes, still fit.
+    #[test]
+    fn the_largest_update_fits() {
+        let mut tracker = StatusTracker::default();
+        let wide = "😀".repeat(200);
+        let mut a = agent("blocked");
+        a.agent = Some("copilot".into());
+        a.name = Some(wide.clone());
+        let ws: Vec<WorkspaceInfo> = serde_json::from_value(json!([{
+            "workspace_id": "w7", "number": 1, "label": wide, "agent_status": "working",
+        }]))
+        .unwrap();
+        let mut state = content(&a, &ws, &pending(), &mut tracker, T0).unwrap();
+        state.approvals = u32::MAX;
+        state.approval_id = Some("A".repeat(64));
+        let max = crate::prompt::MAX_CONTEXT_CHARS;
+        for context in [
+            "😀".repeat(max),
+            "😀\"".repeat(max / 2),
+            "\u{1}".repeat(max),
+        ] {
+            state.enc = push::seal_fresh(&push::tests::key(), "AAAA", &fit(&context));
+            let state_len = json!(state).to_string().len();
+            let payload_len = update(&state, true, u64::MAX / 2).payload.to_string().len();
+            assert!(state_len <= 4096, "content state {state_len} bytes");
+            assert!(payload_len <= 4096, "payload {payload_len} bytes");
+        }
+    }
+
+    #[test]
+    fn only_an_oversized_context_is_cut_and_marked() {
+        let usual = "Bash: rm -rf build\nin \"api\"".to_owned();
+        assert_eq!(fit(&usual), usual);
+        let cut = fit(&"😀".repeat(crate::prompt::MAX_CONTEXT_CHARS));
+        assert!(cut.ends_with("😀…"), "{cut}");
+        assert!(json!(cut).to_string().len() - 2 <= MAX_CONTEXT_BYTES);
     }
 
     #[test]
@@ -576,7 +689,7 @@ mod tests {
                 "event": "update",
                 "content-state": {
                     "status": "blocked", "statusSince": now - REFERENCE_DATE,
-                    "title": "api-fixer", "workspace": "api", "approvals": 1,
+                    "title": "api-fixer", "kind": "claude", "workspace": "api", "approvals": 1,
                 },
                 "stale-date": now + 900,
                 "relevance-score": 100,

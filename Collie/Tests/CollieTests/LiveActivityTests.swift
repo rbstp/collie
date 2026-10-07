@@ -21,8 +21,31 @@ private func fixture() throws -> [String: Any] {
     #expect(state.status == .blocked)
     #expect(state.statusSince == Date(timeIntervalSince1970: unix))
     #expect(state.title == "api-fixer")
+    #expect(state.kind == "claude")
     #expect(state.workspace == "api")
     #expect(state.approvals == 1)
+}
+
+@Test func contentStateFromAnOlderColliedHasNoKind() throws {
+    let object = try #require(try fixture()["content_state"] as? [String: Any])
+    let older = object.filter { $0.key != "kind" }
+    let state = try JSONDecoder().decode(
+        AgentActivityAttributes.ContentState.self, from: JSONSerialization.data(withJSONObject: older)
+    )
+    #expect(state.kind == nil)
+    #expect(state.title == "api-fixer")
+    #expect(try JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? NSDictionary == older as NSDictionary)
+}
+
+@Test func kindsMatchCollied() throws {
+    #expect(try fixture()["kinds"] as? [String] == AgentActivityAttributes.ContentState.kinds)
+}
+
+@Test func theAgentMostInNeedIsTheMostRelevant() {
+    let ranked = [AgentActivityStatus.blocked, .done, .working, .idle, .unknown].map {
+        AgentActivityAttributes.ContentState(status: $0, statusSince: .now, title: "a", workspace: nil, approvals: 0).relevance
+    }
+    #expect(zip(ranked, ranked.dropFirst()).allSatisfy { $0 > $1 })
 }
 
 @Test func contentStateEncodesTheSameJSON() throws {
@@ -100,10 +123,14 @@ private let vectorKey = SymmetricKey(data: Data((1...32).map { UInt8($0) }))
     let attributes = try JSONDecoder().decode(AgentActivityAttributes.self, from: Data(old.utf8))
     #expect(attributes.nodeId == nil)
     #expect(attributes.isOutdated)
-    let current = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Mac", nodeId: "nMAC")
+    #expect(attributes.title == nil)
+    let state = AgentActivityAttributes.ContentState(status: .idle, statusSince: .now, title: "claude", workspace: nil, approvals: 0)
+    #expect(attributes.displayTitle(state) == "claude")
+    let current = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Mac", nodeId: "nMAC", title: "fix the build")
     #expect(!current.isOutdated)
     let decoded = try JSONDecoder().decode(AgentActivityAttributes.self, from: JSONEncoder().encode(current))
     #expect(decoded.nodeId == "nMAC")
+    #expect(decoded.displayTitle(state) == "fix the build")
 }
 
 @MainActor
@@ -148,11 +175,17 @@ private func summary(name: String? = nil, kind: String? = "claude", title: Strin
 @Test func contentStateFromAgentNeverUsesTheTerminalTitle() {
     let state = AgentActivityAttributes.ContentState(agent: summary(), workspace: "api", approvals: 1)
     #expect(state.title == "claude")
+    #expect(state.kind == "claude")
+    #expect(AgentActivityAttributes.ContentState(agent: summary(kind: "gemini"), workspace: nil, approvals: 0).kind == nil)
     #expect(state.status == .blocked)
     #expect(state.statusSince == Date(timeIntervalSince1970: 1_791_028_800))
     #expect(AgentActivityAttributes.ContentState(agent: summary(name: " api-fixer "), workspace: nil, approvals: 0).title == "api-fixer")
     #expect(AgentActivityAttributes.ContentState(agent: summary(name: " ", kind: nil), workspace: nil, approvals: 0).title == "agent")
     #expect(summary(name: String(repeating: "x", count: 80)).alertTitle.count == 64)
+    #expect(summary().activityTitle == "rm -rf secrets")
+    #expect(summary(title: String(repeating: "x", count: 80)).activityTitle.count == 64)
+    #expect(summary(title: " ").activityTitle == "claude")
+    #expect(summary(title: "e" + String(repeating: "\u{301}", count: 2000)).activityTitle.utf8.count <= 256)
 }
 
 @Test func agentLinkRoundTrips() throws {
