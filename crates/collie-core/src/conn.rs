@@ -412,6 +412,14 @@ impl Conn {
         self.wake.notify_one();
     }
 
+    /// Ends a wait for the node to run without forcing a dial; the attempt goes through
+    /// [`open`] as any other.
+    pub fn node_running(&self) {
+        if lock(&self.shared.link).phase != LinkPhase::Connected {
+            self.wake.notify_one();
+        }
+    }
+
     /// iOS suspends sockets without closing them: after a long background period the
     /// connection is assumed dead, after a short one it is probed. A suspended core has
     /// no session left to probe.

@@ -1818,6 +1818,11 @@ impl Inner {
             let inner = self.clone();
             std::thread::spawn(move || {
                 let report = measure(&inner.node, t0, created, started);
+                if report.backend_state == TailnetState::Running {
+                    for conn in lock(&inner.conns).values() {
+                        conn.node_running();
+                    }
+                }
                 *lock(&inner.cold_start) = Some(report);
             });
         }

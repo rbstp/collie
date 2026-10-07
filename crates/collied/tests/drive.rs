@@ -1209,8 +1209,8 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
     let Ok(Some(Watched::Patch(patch))) = next(&mut watcher).await else {
         panic!("unchanged history is not sent again");
     };
-    assert_eq!((patch.skip, patch.keep), (0, 100));
-    assert_eq!(patch.tail, ["b\r", ""]);
+    assert_eq!((patch.skip, patch.keep, patch.trail), (0, 100, 1));
+    assert_eq!(patch.tail, ["b\r"]);
     assert_eq!(patch.apply(&full).unwrap().ansi, format!("{history}b\r\n"));
 
     herdr.with(|h| {

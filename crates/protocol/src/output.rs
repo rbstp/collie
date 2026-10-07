@@ -7,7 +7,8 @@ use crate::ids::TerminalId;
 use crate::messages::{ReadSource, TerminalRead};
 
 /// The watched agent's new `recent` text: `head`, then lines `skip..skip + keep` of the
-/// text the watch sent last, then `tail`, joined with `\n`. `base` is [`text_hash`] of
+/// text the watch sent last, then `tail`, then the last `trail` lines of that text, joined
+/// with `\n`. The trailing lines start at or after `skip + keep`. `base` is [`text_hash`] of
 /// that previous text. A client that does not hold it re-issues `agent.watch`, whose
 /// first event is always a full `agent.output`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -18,6 +19,7 @@ pub struct OutputPatch {
     pub skip: u32,
     pub keep: u32,
     pub tail: Vec<String>,
+    pub trail: u32,
     pub truncated: bool,
     /// [`TerminalRead::wraps`] and [`TerminalRead::splits`] of the new text, absent when
     /// they are those of the previous text.
@@ -34,7 +36,14 @@ impl OutputPatch {
         let new: Vec<&str> = next.ansi.split('\n').collect();
         let (start, skip, keep) = longest_run(&old, &new);
         let head = &new[..start];
-        let tail = &new[start + keep..];
+        let rest = &new[start + keep..];
+        let trail = rest
+            .iter()
+            .rev()
+            .zip(old[skip + keep..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let tail = &rest[..rest.len() - trail];
         let sent: usize = head.iter().chain(tail).map(|l| l.len() + 1).sum();
         if keep == 0 || sent > next.ansi.len() / 2 {
             return None;
@@ -46,6 +55,7 @@ impl OutputPatch {
             skip: u32::try_from(skip).ok()?,
             keep: u32::try_from(keep).ok()?,
             tail: tail.iter().map(|&l| l.to_owned()).collect(),
+            trail: u32::try_from(trail).ok()?,
             truncated: next.truncated,
             wraps: (next.wraps != prev.wraps).then(|| next.wraps.clone()),
             splits: (next.splits != prev.splits).then(|| next.splits.clone()),
@@ -61,12 +71,17 @@ impl OutputPatch {
         let end = skip.checked_add(usize::try_from(self.keep).ok()?)?;
         let old: Vec<&str> = prev.ansi.split('\n').collect();
         let kept = old.get(skip..end)?;
+        let from = old.len().checked_sub(usize::try_from(self.trail).ok()?)?;
+        if from < end {
+            return None;
+        }
         let lines: Vec<&str> = self
             .head
             .iter()
             .map(String::as_str)
             .chain(kept.iter().copied())
             .chain(self.tail.iter().map(String::as_str))
+            .chain(old[from..].iter().copied())
             .collect();
         Some(TerminalRead {
             terminal_id: self.terminal_id.clone(),
@@ -151,7 +166,18 @@ mod tests {
         let next = history(0..1000) + "✶ Thinking… (4s)\r\n";
         let patch = round_trip(&prev, &next);
         assert_eq!((patch.head.len(), patch.skip, patch.keep), (0, 0, 1000));
-        assert_eq!(patch.tail, ["✶ Thinking… (4s)\r", ""]);
+        assert_eq!(patch.tail, ["✶ Thinking… (4s)\r"]);
+        assert_eq!(patch.trail, 1);
+    }
+
+    #[test]
+    fn unchanged_lines_below_a_change_are_kept_by_reference() {
+        let input_box = "─".repeat(120) + "\r\n> \r\n" + &"─".repeat(120) + "\r\n  ? for shortcuts";
+        let prev = history(0..200) + "✻ Thinking… (3s)\r\n\r\n" + &input_box;
+        let next = history(0..200) + "✶ Thinking… (4s)\r\n\r\n" + &input_box;
+        let patch = round_trip(&prev, &next);
+        assert_eq!((patch.skip, patch.keep, patch.trail), (0, 200, 5));
+        assert_eq!(patch.tail, ["✶ Thinking… (4s)\r"]);
     }
 
     #[test]
@@ -206,6 +232,8 @@ mod tests {
         let prev = read(&history(0..10));
         assert!(OutputPatch::between(&prev, &read(&history(100..110))).is_none());
         assert!(OutputPatch::between(&prev, &read(&history(6..16))).is_none());
+        let changed = history(0..3) + &history(100..106) + &history(8..10);
+        assert!(OutputPatch::between(&prev, &read(&changed)).is_none());
     }
 
     #[test]
@@ -233,6 +261,101 @@ mod tests {
             ..patch
         };
         assert_eq!(overflow.apply(&read(&prev)), None);
+    }
+
+    /// xorshift64: a fixed seed, so a failure reproduces.
+    struct Rng(u64);
+
+    impl Rng {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            usize::try_from(self.0 % n as u64).unwrap()
+        }
+
+        /// Lines from a small alphabet, so texts share runs, repeats and trailing lines.
+        fn text(&mut self) -> Vec<String> {
+            (0..self.below(40))
+                .map(|_| ["", "─────", "> ", "a", "b", "✻ c"][self.below(6)].to_owned())
+                .collect()
+        }
+
+        fn edit(&mut self, lines: &[String]) -> Vec<String> {
+            let mut out = lines.to_vec();
+            for _ in 0..self.below(4) {
+                let at = self.below(out.len() + 1);
+                match self.below(3) {
+                    0 => out.insert(at, format!("new {}", self.below(9))),
+                    1 if at < out.len() => drop(out.remove(at)),
+                    _ => out.drain(..at.min(self.below(3))).for_each(drop),
+                }
+            }
+            out
+        }
+    }
+
+    #[test]
+    fn apply_of_between_is_the_new_text() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let (mut patched, mut trailed) = (0, 0);
+        for _ in 0..20_000 {
+            let a = rng.text();
+            let b = if rng.below(4) == 0 {
+                rng.text()
+            } else {
+                rng.edit(&a)
+            };
+            let (prev, next) = (read(&a.join("\n")), read(&b.join("\n")));
+            let Some(patch) = OutputPatch::between(&prev, &next) else {
+                continue;
+            };
+            assert_eq!(patch.apply(&prev).as_ref(), Some(&next), "{a:?} -> {b:?}");
+            let sent: usize = patch
+                .head
+                .iter()
+                .chain(&patch.tail)
+                .map(|l| l.len() + 1)
+                .sum();
+            assert!(sent <= next.ansi.len() / 2, "{a:?} -> {b:?}");
+            patched += 1;
+            trailed += usize::from(patch.trail > 0);
+        }
+        assert!(patched > 1000 && trailed > 1000, "{patched} {trailed}");
+    }
+
+    #[test]
+    fn out_of_range_runs_are_refused() {
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        let picks = [0, 1, 2, 3, 5, 8, 13, u32::MAX - 1, u32::MAX];
+        let mut applied = 0;
+        for _ in 0..20_000 {
+            let lines = rng.text();
+            let old = read(&lines.join("\n"));
+            let n = old.ansi.split('\n').count() as u64;
+            let [skip, keep, trail] = [0; 3].map(|_| picks[rng.below(picks.len())]);
+            let patch = OutputPatch {
+                terminal_id: old.terminal_id.clone(),
+                base: text_hash(&old.ansi),
+                head: vec!["h".into()],
+                skip,
+                keep,
+                tail: vec!["t".into()],
+                trail,
+                truncated: false,
+                wraps: None,
+                splits: None,
+            };
+            let end = u64::from(skip) + u64::from(keep);
+            let valid = end <= n && u64::from(trail) <= n - end;
+            assert_eq!(
+                patch.apply(&old).is_some(),
+                valid,
+                "{skip} {keep} {trail} of {n}"
+            );
+            applied += usize::from(valid);
+        }
+        assert!(applied > 1000);
     }
 
     #[test]
