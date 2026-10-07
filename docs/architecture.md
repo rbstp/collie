@@ -356,7 +356,7 @@ The lock screen and the Dynamic Island show an agent only while the user follows
 
 ### Protocol
 
-- `push.activity_token {activity_id, terminal_id, token, shows_approvals?}` and `push.activity_end {activity_id}`, both `MethodClass::Push`. `activity_id` is ActivityKit's `Activity.id` (`[A-Za-z0-9-]`, at most 64), `token` is the update token in hex (64 to 256 characters, redacted in `Debug`). `shows_approvals` (default false, omitted when false) says the activity shows an approval's command and its buttons; collie-core always sends `true`, since the app restarts activities an older build started before it registers any.
+- `push.activity_token {activity_id, terminal_id, token, shows_approvals?}` and `push.activity_end {activity_id}`, both `MethodClass::Push`. `activity_id` is ActivityKit's `Activity.id` (`[A-Za-z0-9-]`, at most 64), `token` is the update token in hex (64 to 256 characters, redacted in `Debug`). `shows_approvals` (default false, omitted when false) says the activity shows an approval's command and its buttons; collie-core always sends `true`, since every activity the app starts carries the Mac's node id.
 - Additive, no version bump. An older collied answers `not_implemented` or `unknown_method`, which the phone ignores. A collied from before `shows_approvals` rejects it as an unknown field (`invalid_params`), so collied is upgraded before the app; an app from before it registers without it and keeps getting approval notifications.
 
 ### collied
