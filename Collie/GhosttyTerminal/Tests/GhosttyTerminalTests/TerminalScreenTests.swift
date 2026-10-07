@@ -170,7 +170,8 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
         ("  - one two three four", 12, "  - one two \u{1B}E\u{1B}[4Cthree \u{1B}E\u{1B}[4Cfour"),
         ("\u{23FA} said hello there", 13, "\u{23FA} said hello \u{1B}E\u{1B}[2Cthere"),
         ("        deep in it", 14, "        deep \u{1B}Ein it"),
-        ("a\tbcdefgh ij", 12, "a\t\u{1B}Ebcdefgh ij"),
+        ("a\tbcdefgh ij", 12, "a\tbcde\u{1B}Efgh ij"),
+        ("abcdefghij\tk", 12, "abcdefghij\tk"),
     ]
     for (input, columns, prepared) in cases {
         #expect(TerminalScreen.preparedForWrapping(input, columns: columns) == prepared, "\(input.debugDescription)")
@@ -182,11 +183,21 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
     let cases = [
         (
             "\u{2502} Phases" + pad(40) + "\u{2502} agent" + pad(30) + "7m45s \u{2502}",
-            "\u{2502} Phases  \u{2502} agent  7m45s \u{2502}"
+            "\u{2502} Phases" + pad(9) + "\u{2502} agent" + pad(9) + "7m45s \u{2502}"
         ),
         (
             "  \u{2502} \u{1B}[1mPhases\u{1B}[0m" + pad(50) + "\u{1B}[2m\u{2502}\u{1B}[0m",
-            "  \u{2502} \u{1B}[1mPhases\u{1B}[0m  \u{1B}[2m\u{2502}\u{1B}[0m"
+            "  \u{2502} \u{1B}[1mPhases\u{1B}[0m" + pad(29) + "\u{1B}[2m\u{2502}\u{1B}[0m"
+        ),
+        ("\u{2502}    if x:" + pad(60) + "\u{2502}", "\u{2502}    if x:" + pad(29) + "\u{2502}"),
+        ("\u{2502}" + pad(50) + "\u{2502} agent" + pad(50) + "\u{2502}", "\u{2502}" + pad(15) + "\u{2502} agent" + pad(15) + "\u{2502}"),
+        (
+            "\u{2502} Name      \u{2502} Value          \u{2502} Notes about this row  \u{2502}",
+            "\u{2502} Name \u{2502} Value \u{2502} Notes about this row \u{2502}"
+        ),
+        (
+            "\u{2502}      \u{251C} agent alpha beta gamma delta epsilon zeta" + pad(40) + "\u{2502}",
+            "\u{2502} \u{251C} agent alpha beta gamma delta \u{1B}E\u{1B}[2Cepsilon zeta \u{2502}"
         ),
         ("\u{2502} a" + pad(30) + "\u{2502}", "\u{2502} a" + pad(30) + "\u{2502}"),
         ("Phases" + pad(40) + "agent", "Phases" + pad(34) + "\u{1B}E" + pad(6) + "agent"),
@@ -207,7 +218,7 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
     let frame = screen.render(ansiSnapshot: panel.joined(separator: "\r\n"), wrapColumns: 40)
     #expect(frame.rows == 3)
     let rows = Dictionary(grouping: frame.runs, by: \.row).mapValues { $0.map(\.text).joined() }
-    #expect(rows[1] == "\u{2502} \u{2713} plan  7m45s \u{2502} reviewer  \u{2502}")
+    #expect(rows[1] == "\u{2502} \u{2713} plan" + pad(7) + "7m45s \u{2502} reviewer" + pad(7) + "\u{2502}")
     #expect(screen.render(ansiSnapshot: row).runs.map(\.text) == [row])
 }
 

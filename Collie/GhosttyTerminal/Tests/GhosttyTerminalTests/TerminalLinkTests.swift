@@ -104,6 +104,12 @@ private func selection(_ row: Int, _ column: Int, _ endRow: Int, _ endColumn: In
     #expect(selection(2, 5, 2, 5).link(in: frame)?.absoluteString == "https://example.com/a/very/long/path")
 }
 
+@Test func linkAfterATabAcrossABreak() throws {
+    let frame = try render("see\thttps://example.com/abc", wrapColumns: 12)
+    #expect(frame.wrapContinuations == [1, 2])
+    #expect(selection(1, 3, 1, 3).link(in: frame)?.absoluteString == "https://example.com/abc")
+}
+
 @Test func linkEndsAtAHardLineBreak() throws {
     let frame = try render("https://example.com/a\r\nb/c")
     #expect(selection(0, 3, 0, 3).link(in: frame)?.absoluteString == "https://example.com/a")
