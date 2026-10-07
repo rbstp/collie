@@ -109,19 +109,20 @@ private func fixture() throws -> [String: Any] {
     #expect(local.keepingApproval(of: moved) == local)
 }
 
-@Test func activitiesFromAnOlderBuildAreRestarted() throws {
-    let old = #"{"machineId":"m1","terminalId":"t1","machineLabel":"Mac"}"#
-    let attributes = try JSONDecoder().decode(AgentActivityAttributes.self, from: Data(old.utf8))
-    #expect(attributes.nodeId == nil)
-    #expect(attributes.isOutdated)
-    #expect(attributes.title == nil)
+@Test func activityAttributesRequireTheNodeId() throws {
     let state = AgentActivityAttributes.ContentState(status: .idle, statusSince: .now, title: "claude", workspace: nil, approvals: 0)
-    #expect(attributes.displayTitle(state) == "claude")
-    let current = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Mac", nodeId: "nMAC", title: "fix the build")
-    #expect(!current.isOutdated)
-    let decoded = try JSONDecoder().decode(AgentActivityAttributes.self, from: JSONEncoder().encode(current))
+    let running = #"{"machineId":"m1","terminalId":"t1","machineLabel":"Mac","nodeId":"nMAC","title":"fix the build"}"#
+    let decoded = try JSONDecoder().decode(AgentActivityAttributes.self, from: Data(running.utf8))
     #expect(decoded.nodeId == "nMAC")
     #expect(decoded.displayTitle(state) == "fix the build")
+    let current = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Mac", nodeId: "nMAC", title: "fix the build")
+    let roundTrip = try JSONDecoder().decode(AgentActivityAttributes.self, from: JSONEncoder().encode(current))
+    #expect(roundTrip.nodeId == "nMAC")
+    #expect(roundTrip.displayTitle(state) == "fix the build")
+    let untitled = #"{"machineId":"m1","terminalId":"t1","machineLabel":"Mac","nodeId":"nMAC"}"#
+    #expect(try JSONDecoder().decode(AgentActivityAttributes.self, from: Data(untitled.utf8)).displayTitle(state) == "claude")
+    let old = #"{"machineId":"m1","terminalId":"t1","machineLabel":"Mac"}"#
+    #expect(throws: DecodingError.self) { try JSONDecoder().decode(AgentActivityAttributes.self, from: Data(old.utf8)) }
 }
 
 @MainActor

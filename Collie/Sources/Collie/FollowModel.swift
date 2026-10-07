@@ -133,13 +133,13 @@ final class FollowModel {
     }
 
     /// On every foreground: hand each running activity's token to its Mac again, end activities
-    /// no longer followed, and restart followed ones iOS ended or an older build started.
+    /// no longer followed, and restart followed ones iOS ended.
     func foreground() {
         enabled = ActivityAuthorizationInfo().areActivitiesEnabled
         attempted = []
         for activity in Activity<AgentActivityAttributes>.activities where activity.isLive {
             let agent = AgentRoute(machineId: activity.attributes.machineId, terminalId: activity.attributes.terminalId)
-            guard list.contains(agent), !activity.attributes.isOutdated else {
+            guard list.contains(agent) else {
                 end(activity, dismissal: .immediate)
                 continue
             }
@@ -265,7 +265,7 @@ final class FollowModel {
 
     private func activities(for agent: AgentRoute) -> [Activity<AgentActivityAttributes>] {
         Activity<AgentActivityAttributes>.activities.filter {
-            $0.isLive && !$0.attributes.isOutdated && $0.attributes.machineId == agent.machineId
+            $0.isLive && $0.attributes.machineId == agent.machineId
                 && $0.attributes.terminalId == agent.terminalId
         }
     }
@@ -331,11 +331,6 @@ extension Activity {
     var isLive: Bool {
         activityState == .active || activityState == .stale
     }
-}
-
-extension AgentActivityAttributes {
-    /// Started by a build before `nodeId`: it can show neither the command nor the buttons.
-    var isOutdated: Bool { nodeId == nil }
 }
 
 extension DecideApprovalIntent {

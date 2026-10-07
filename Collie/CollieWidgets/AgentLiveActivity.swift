@@ -121,9 +121,8 @@ private struct Approval: View {
         let state = context.state
         // Buttons only for an approval whose command opened under the Mac's key with its id as
         // AAD: an id Apple or the APNs key holder pushed in clear must not become decidable here.
-        if let approvalId = state.pendingApproval, let nodeId = context.attributes.nodeId,
-            let command = state.command(key: NotificationKey.load(nodeId: nodeId))
-        {
+        let nodeId = context.attributes.nodeId
+        if let approvalId = state.pendingApproval, let command = state.command(key: NotificationKey.load(nodeId: nodeId)) {
             VStack(alignment: .leading, spacing: 8) {
                 Text(command)
                     .font(.caption.monospaced())
@@ -159,7 +158,7 @@ private struct Approval: View {
     private func missing(_ state: AgentActivityAttributes.ContentState) -> String {
         guard state.pendingApproval != nil else { return "debug: no approval id" }
         guard state.enc != nil else { return "debug: no enc" }
-        guard let nodeId = context.attributes.nodeId else { return "debug: no node id" }
+        let nodeId = context.attributes.nodeId
         guard let key = NotificationKey.load(nodeId: nodeId) else { return "debug: no key for \(nodeId)" }
         return state.command(key: key) == nil ? "debug: enc did not open" : "debug: ok"
     }
