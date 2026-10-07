@@ -283,4 +283,34 @@ mod tests {
         assert_eq!(joins(&rows, 189), (vec![], vec![1]));
         assert_eq!(joins(&rows, 190), (vec![1], vec![]));
     }
+
+    #[test]
+    fn plain_text_reads_what_draft_reads() {
+        let mut screens = vec![LIVE.join("\r\n")];
+        let mut dirs =
+            vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else {
+                    let raw = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
+                    screens.push(crate::drive::sanitize_ansi(&raw));
+                    screens.push(raw);
+                }
+            }
+        }
+        screens.push("a\u{1b}[2;38;5;1mb\u{1b}[\u{1b}c\r\u{1b}".into());
+        let mut plain = String::new();
+        for row in screens.iter().flat_map(|s| s.split('\n')) {
+            plain_text(row, &mut plain);
+            let cells: String = crate::draft::cells(row)
+                .into_iter()
+                .map(|(c, _)| c)
+                .filter(|&c| c != '\r')
+                .collect();
+            assert_eq!(plain, cells, "{row:?}");
+        }
+    }
 }

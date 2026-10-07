@@ -576,17 +576,11 @@ async fn scenario(
         serde_json::from_slice(&std::fs::read(data_dir.join("stars.json")).unwrap()).unwrap()
     };
     assert!(saved().get(shell).is_some());
-    let snapshots = || {
-        herdr
-            .methods()
-            .iter()
-            .filter(|m| *m == "session.snapshot")
-            .count()
-    };
-    let asked = snapshots();
+    let calls = |method: &str| herdr.methods().iter().filter(|m| *m == method).count();
+    let asked = calls("session.snapshot");
     tokio::time::sleep(Duration::from_millis(2500)).await;
     assert!(
-        snapshots() > asked,
+        calls("session.snapshot") > asked,
         "a starred shell pane skipped the snapshot"
     );
     let closed = {
@@ -632,9 +626,16 @@ async fn scenario(
         result(call(&mut ws, "agent.star", star(first, true)).await),
         Response::Ok
     );
-    let asked = snapshots();
+    // A tick that read `agent.list` before the star may still take the snapshot.
+    let ticked = calls("agent.list") + 1;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls("agent.list") < ticked {
+        assert!(Instant::now() < deadline, "no reconcile tick");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let asked = calls("session.snapshot");
     tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert_eq!(snapshots(), asked);
+    assert_eq!(calls("session.snapshot"), asked);
 
     println!("a herdr restore moves the star to its pane's new terminal id");
     let restored = "term_aaaaaaaaaaaa02";
