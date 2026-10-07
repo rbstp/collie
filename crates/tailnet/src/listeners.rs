@@ -25,8 +25,8 @@ mod imp {
     use std::io;
 
     // lsof prints nothing and exits 1 both when nothing matches and when the pid is gone,
-    // so an empty result only counts once the pid is known to be alive and lsof stayed
-    // silent.
+    // so an empty result only counts once the pid is known to be alive and lsof printed
+    // nothing on stderr but the mount warning accepted below.
     pub fn listeners(pid: u32) -> io::Result<Vec<String>> {
         let out = std::process::Command::new("/usr/sbin/lsof")
             .args(["-nP", "-a", "-p", &pid.to_string(), "-iTCP", "-sTCP:LISTEN"])
@@ -224,6 +224,8 @@ mod tests {
         }
         let first = warning.lines().next().unwrap();
         let two: String = warning.lines().take(2).map(|l| format!("{l}\n")).collect();
+        let l: Vec<&str> = warning.lines().collect();
+        let swapped = format!("{}\n{}\n{}\n", l[0], l[2], l[1]);
         let bad = [
             "\n".to_owned(),
             " ".to_owned(),
@@ -231,6 +233,10 @@ mod tests {
             two,
             warning.replace("dev=100001c", "dev="),
             warning.replace("dev=100001c", "dev=10zz"),
+            warning.replace("hfs file system", " file system"),
+            warning.replace("hfs file system", "hfs x file system"),
+            warning.replace("file system /", "file system "),
+            swapped,
             "lsof: avoiding stat(/): -b was specified.\n".to_owned(),
             "lsof: PID 1, FD 3: proc_pidfdinfo(PROC_PIDFDSOCKETINFO);\n      too few bytes; expected 792, got 10\n".to_owned(),
             "lsof: PID 1 information error: Operation not permitted\n".to_owned(),
