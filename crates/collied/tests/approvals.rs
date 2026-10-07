@@ -40,6 +40,9 @@ const PLAN: &str = include_str!("fixtures/claude/plan.txt");
 // prompt is unnumbered.
 const QUESTION_LIVE: &str = include_str!("fixtures/claude-2.1.289/question.tmux.txt");
 const TRUST_LIVE: &str = include_str!("fixtures/claude-2.1.289/trust.tmux.txt");
+// Claude Code 2.1.292 in herdr 0.9.3: the same unnumbered trust prompt, "No, exit" first.
+const TRUST_292: &str = include_str!("fixtures/claude-2.1.292/trust.detection.txt");
+const TRUST_OPTIONS: [&str; 2] = ["No, exit", "Yes, I trust this folder"];
 
 // Claude Code 2.1.289 in herdr 0.9.3, the working directory renamed.
 const BASH_LIVE: &str = include_str!("fixtures/claude-2.1.289/bash.detection.txt");
@@ -243,7 +246,8 @@ fn move_cursor(text: &str, by: isize) -> String {
     let options: Vec<usize> = (0..lines.len())
         .filter(|&i| {
             let t = lines[i].trim_start().trim_start_matches('❯').trim_start();
-            t.as_bytes().first().is_some_and(u8::is_ascii_digit) && t[1..].starts_with(". ")
+            (t.as_bytes().first().is_some_and(u8::is_ascii_digit) && t[1..].starts_with(". "))
+                || TRUST_OPTIONS.contains(&t)
         })
         .collect();
     let at = options
@@ -1513,6 +1517,70 @@ async fn a_plan_is_chosen_with_arrows_never_esc() {
 }
 
 #[tokio::test]
+async fn the_unnumbered_trust_prompt_is_decided_like_a_numbered_one() {
+    let mut rig = Rig::start(TTL).await;
+    let trust = |h: &mut Herdr| {
+        h.rule = "live_blocked_form".into();
+        h.text = TRUST_292.into();
+        set_status(h, "blocked");
+    };
+    rig.herdr.with(trust);
+    let a = rig.needed().await;
+    assert_eq!(a.options, [Decision::Approve, Decision::Deny]);
+    assert_eq!(
+        choice_labels(&a),
+        [
+            (0, TRUST_OPTIONS[0].to_owned(), true),
+            (1, TRUST_OPTIONS[1].to_owned(), false),
+        ]
+    );
+    assert!(!a.accepts_input && !a.has_text_field && !a.supports_note);
+    assert_eq!(
+        code(rig.choose(&a, 1, &a.nonce).await),
+        ErrorCode::InvalidParams,
+        "decided, never chosen by index"
+    );
+
+    rig.herdr.with(trust);
+    let b = rig.needed().await;
+    assert!(matches!(
+        resolved(rig.decide(&b, Decision::Approve, &b.nonce).await),
+        ApprovalOutcome::Applied { .. }
+    ));
+    rig.herdr.with(trust);
+    let c = rig.needed().await;
+    resolved(rig.decide(&c, Decision::Deny, &c.nonce).await);
+    rig.herdr.with(|h| {
+        trust(h);
+        h.arrows_move = false;
+    });
+    let d = rig.needed().await;
+    assert_eq!(
+        resolved(rig.decide(&d, Decision::Approve, &d.nonce).await),
+        ApprovalOutcome::Superseded
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+            json!({"target": "w7:p1", "keys": ["esc"]}),
+            json!({"target": "w7:p1", "keys": ["down"]}),
+        ]
+    );
+    let results: Vec<Value> = rig.audit().iter().map(|e| e["result"].clone()).collect();
+    assert_eq!(
+        results,
+        [
+            "choose 1: rejected: choice not offered".to_owned(),
+            format!("approve: applied terminal={TERMINAL} keys=down,enter"),
+            format!("deny: applied terminal={TERMINAL} keys=esc"),
+            format!("approve: superseded: cursor not on target terminal={TERMINAL} keys=down"),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn approvals_say_whether_keys_and_text_are_taken() {
     let mut rig = Rig::start(TTL).await;
     let two = BASH.replace(
@@ -1525,6 +1593,7 @@ async fn approvals_say_whether_keys_and_text_are_taken() {
         ("live_blocked_form", QUESTION, true, true, false),
         ("live_blocked_form", PLAN, false, false, false),
         ("live_blocked_form", TRUST_LIVE, false, false, false),
+        ("live_blocked_form", TRUST_292, false, false, false),
         ("bash_permission_prompt", BASH, false, false, true),
         ("bash_permission_prompt", &two, false, false, false),
         ("live_blocked_form", BASH, false, false, true),

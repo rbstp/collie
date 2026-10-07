@@ -940,28 +940,33 @@ async fn task_new_refusals() {
     );
     assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
 
-    // Claude Code's folder trust question is never answered for the user, even when it
-    // only shows up after the agent looked ready.
-    herdr.with(|h| {
-        h.calls.clear();
-        h.text = TRUST.into();
-        h.gets.extend([
-            started_agent("idle", true, false),
-            started_agent("blocked", true, false),
-        ]);
-    });
-    let (code, message) = drive
-        .task_new(task(&base.join("root/a"), "claude"), &yes())
-        .await
-        .0
-        .unwrap_err();
-    assert_eq!(code, ErrorCode::AgentBlocked);
-    assert!(message.contains("trust this folder"), "{message}");
-    assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
-    assert_eq!(
-        herdr.params("pane.read"),
-        vec![json!({"pane_id": "w9:p1", "source": "detection", "format": "text"})]
-    );
+    // Claude Code's folder trust question, numbered or not (2.1.292), is never answered
+    // for the user, even when it only shows up after the agent looked ready.
+    for trust in [
+        TRUST,
+        include_str!("fixtures/claude-2.1.292/trust.detection.txt"),
+    ] {
+        herdr.with(|h| {
+            h.calls.clear();
+            h.text = trust.into();
+            h.gets.extend([
+                started_agent("idle", true, false),
+                started_agent("blocked", true, false),
+            ]);
+        });
+        let (code, message) = drive
+            .task_new(task(&base.join("root/a"), "claude"), &yes())
+            .await
+            .0
+            .unwrap_err();
+        assert_eq!(code, ErrorCode::AgentBlocked);
+        assert!(message.contains("trust this folder"), "{message}");
+        assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
+        assert_eq!(
+            herdr.params("pane.read"),
+            vec![json!({"pane_id": "w9:p1", "source": "detection", "format": "text"})]
+        );
+    }
 
     herdr.with(|h| h.calls.clear());
     herdr.with(|h| h.gets.push_back(started_agent("idle", false, false)));
