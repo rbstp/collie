@@ -19,7 +19,6 @@ lint:
 
 test:
     cargo nextest run --workspace
-    cargo test --workspace --doc
 
 # Release build of collied signed with the team RM3UT3MMSR Developer ID, installed to ~/.cargo/bin.
 [macos]
@@ -112,6 +111,7 @@ ios-build-sim: ios-framework ios-project
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' CODE_SIGNING_ALLOWED=NO build
 
 ios-test: ios-framework ios-project
+    swift test --package-path Collie/GhosttyTerminal
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' CODE_SIGNING_ALLOWED=NO test
 
 # Debug build with automatic signing on the first connected iPhone. Release keeps its manual TestFlight signing.

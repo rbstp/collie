@@ -160,12 +160,12 @@ List paired phones with `collied peers list`, revoke one with `collied peers rev
 | `just schema` | Regenerates the protocol JSON Schemas in `docs/protocol/` |
 | `just ios-framework` | Builds the `CollieCore` xcframework and UniFFI bindings |
 | `just ios-project` | Builds libghostty-vt and generates the Xcode project with XcodeGen |
-| `just ios-test` | iOS unit tests on the simulator |
+| `just ios-test` | GhosttyTerminal package tests on macOS, then the iOS unit tests on the simulator |
 | `just ios-build-sim` | Simulator build |
 | `just ios-run-device` | Builds, installs and launches on a connected iPhone |
 | `just collied-install` | Release build of collied, installed to `~/.cargo/bin`. On macOS it is signed and restarts the launchd agent if it is installed. On Linux it is not signed and restarts the systemd user unit if it is active |
 
-CI runs on macOS: lint, the Rust tests, and the iOS simulator build and tests, on every pull request and on pushes to `master`. Merging a pull request that changes code into `master` uploads a build to the maintainer's TestFlight ([docs/release.md](docs/release.md)).
+CI runs on macOS: lint, the Rust tests, the GhosttyTerminal package tests, and the iOS simulator build and tests, on every pull request and on pushes to `master`. Merging a pull request that changes code into `master` uploads a build to the maintainer's TestFlight ([docs/release.md](docs/release.md)).
 
 ## Repository layout
 
