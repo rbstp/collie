@@ -178,7 +178,7 @@ mac-install: mac-build
 
 # Optional: notarizes and staples the app mac-install signed. Credentials from `xcrun notarytool store-credentials <profile>`.
 [macos]
-mac-notarize profile="collie-notary":
+mac-notarize profile="collie":
     #!/usr/bin/env bash
     set -euo pipefail
     app=target/mac/CollieBar.app

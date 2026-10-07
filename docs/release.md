@@ -70,10 +70,10 @@ Team `RM3UT3MMSR`, in the Apple Developer portal and App Store Connect:
 
 To run it on another Mac without a Gatekeeper prompt, notarize it. notarytool needs one credential, stored once in the login keychain:
 
-- an App Store Connect API team key with the Developer role (the TestFlight key works): `xcrun notarytool store-credentials collie-notary --key AuthKey_<KEY_ID>.p8 --key-id <KEY_ID> --issuer <ISSUER_ID>`
-- or an Apple ID app-specific password (appleid.apple.com): `xcrun notarytool store-credentials collie-notary --apple-id <apple id> --team-id RM3UT3MMSR --password <app-specific password>`
+- an App Store Connect API team key with the Developer role (the TestFlight key works): `xcrun notarytool store-credentials collie --key AuthKey_<KEY_ID>.p8 --key-id <KEY_ID> --issuer <ISSUER_ID>`
+- or an Apple ID app-specific password (appleid.apple.com): `xcrun notarytool store-credentials collie --apple-id <apple id> --team-id RM3UT3MMSR --password <app-specific password>`
 
-The latest Program License Agreement must be accepted, or submissions are refused. Then `just mac-install` and `just mac-notarize` (or `just mac-notarize <profile>`), which submits, waits, staples the app in `target/mac` and in `~/Applications`, and checks it with `spctl`. On a failure, `xcrun notarytool log <submission id> --keychain-profile collie-notary` says why.
+The latest Program License Agreement must be accepted, or submissions are refused. Then `just mac-install` and `just mac-notarize` (or `just mac-notarize <profile>`), which submits, waits, staples the app in `target/mac` and in `~/Applications`, and checks it with `spctl`. On a failure, `xcrun notarytool log <submission id> --keychain-profile collie` says why.
 
 ## collied on Linux
 
