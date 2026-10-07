@@ -16,6 +16,16 @@ struct MachineFlockEntry: Identifiable, Equatable {
 
     var linkDown: Bool { flock.map { ![.connected, .connecting].contains($0.link) } ?? false }
 
+    /// Waiting for the node, a dial or the first list, and no read failed.
+    var connecting: Bool {
+        guard error == nil else { return false }
+        switch flock?.link {
+        case nil, .offline, .connecting: return true
+        case .connected: return flock?.details == nil
+        default: return false
+        }
+    }
+
     func workspaceLabel(for agent: AgentSummary) -> String? {
         flock?.workspaces.first { $0.workspaceId == agent.workspaceId }?.label
     }
@@ -60,8 +70,9 @@ final class FlockModel {
         }
     }
 
-    /// Without `snapshot`, a machine is read from the core's cache, unless its last read failed.
-    func refresh(core: (any FlockCore)?, snapshot: Bool = true) async {
+    /// Without `snapshot`, a machine is read from the core's cache, unless its last read failed;
+    /// `cacheOnly` then leaves that machine as it is, so nothing goes over the network.
+    func refresh(core: (any FlockCore)?, snapshot: Bool = true, cacheOnly: Bool = false) async {
         guard let core, !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
@@ -72,7 +83,7 @@ final class FlockModel {
         }
         if seeded != entries { entries = seeded }
         await withTaskGroup(of: MachineFlockEntry.self) { group in
-            for entry in seeded {
+            for entry in seeded where !(cacheOnly && entry.error != nil) {
                 let machine = entry.machine
                 let cached = snapshot || entry.error != nil ? nil : core.cachedFlock(machineId: machine.id)
                 group.addTask {

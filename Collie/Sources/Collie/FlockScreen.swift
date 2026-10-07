@@ -171,7 +171,13 @@ struct FlockScreen: View {
                     if snapshot { AgentDrafts.prune(model.entries, file: AgentDrafts.file) }
                     follows?.sync()
                     tick += 1
-                    try? await Task.sleep(for: .seconds(3))
+                    let next = ContinuousClock.now + .seconds(3)
+                    // While a machine connects, its list shows as soon as it reaches the cache; these reads stay local.
+                    while model.entries.contains(where: \.connecting), ContinuousClock.now < next, !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(250))
+                        await model.refresh(core: core, snapshot: false, cacheOnly: true)
+                    }
+                    try? await Task.sleep(until: next)
                 }
             }
             .onChange(of: model.entries, initial: true) { _, entries in previews.update(entries) }

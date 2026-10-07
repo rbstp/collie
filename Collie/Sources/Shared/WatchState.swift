@@ -89,12 +89,11 @@ struct WatchUsage: Codable, Equatable, Sendable {
         return Date(timeIntervalSince1970: TimeInterval(reset) / 1000).timeIntervalSince(now)
     }
 
-    /// The complication draws each entry as is: every 5 minutes, each ring color change and the reset.
+    /// The complication's ring runs down by itself: an entry now, at each ring color change and at the reset.
     func timelineDates(now: Date) -> [Date] {
         guard let left = fiveHourSecondsLeft(now: now) else { return [now] }
         let reset = now.addingTimeInterval(left)
-        let marks = [reset.addingTimeInterval(-7200), reset.addingTimeInterval(-3600), reset].filter { $0 > now }
-        return Set(Array(stride(from: now, to: reset, by: 300)) + marks).sorted()
+        return [now] + [reset.addingTimeInterval(-7200), reset.addingTimeInterval(-3600), reset].filter { $0 > now }
     }
 
     static func ringColor(secondsLeft: TimeInterval) -> Color {
