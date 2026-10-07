@@ -35,8 +35,7 @@ struct FlockScreen: View {
                         }
                     case .inbox:
                         AgentInbox(
-                            entries: model.entries, notice: model.closeNotice, showsMachine: machines.count > 1,
-                            reconnect: reconnect, follows: follows, menu: menu
+                            entries: model.entries, notice: model.closeNotice, reconnect: reconnect, follows: follows, menu: menu
                         )
                     case .list:
                         TimelineView(.periodic(from: .now, by: 60)) { context in
