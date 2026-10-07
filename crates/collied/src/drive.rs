@@ -1460,8 +1460,6 @@ mod tests {
             (Key::ShiftTab, "shift+tab"),
             (Key::CtrlC, "ctrl+c"),
             (Key::CtrlEnter, "ctrl+enter"),
-            (Key::Y, "y"),
-            (Key::N, "n"),
         ];
         for (key, name) in all {
             assert_eq!(key.herdr_name(), name);

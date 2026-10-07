@@ -549,7 +549,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     let core = FakeCore()
     core.set(error: .AgentBlocked)
     let model = agentModel(core)
-    await model.tap(.y)?.value
+    await model.tap(.down)?.value
     #expect(model.notice?.contains("approval") == true)
 }
 
@@ -1115,7 +1115,7 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
     model.poll()
     model.draft = "rm the old logs and rebuild"
     core.set(hold: true)
-    let draining = model.tap(.y)
+    let draining = model.tap(.down)
     await core.waitHeld(1)
     model.tap(.enter)
 
@@ -1130,7 +1130,7 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
     #expect(!model.canSendPrompt)
     core.release()
     await draining?.value
-    #expect(core.snapshot.keys == [[.y]], "the key queued for the agent is dropped")
+    #expect(core.snapshot.keys == [[.down]], "the key queued for the agent is dropped")
     #expect(core.snapshot.terminalKeys.isEmpty && core.snapshot.commands.isEmpty)
     #expect(unlocker.reasons.withLock { $0.isEmpty })
 

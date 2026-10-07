@@ -346,7 +346,7 @@ enabled = true   # false, the default, when the section or the key is absent
 
 ## Live Activities
 
-The lock screen and the Dynamic Island show an agent only while the user follows it: off by default for every agent, at most 5 at once on the phone. The phone starts each activity itself, from the foreground; collied only updates and ends it. Push-to-start is not used (`live_activity_push_to_start_token` in `push.register` stays unused).
+The lock screen and the Dynamic Island show an agent only while the user follows it: off by default for every agent, at most 5 at once on the phone. The phone starts each activity itself, from the foreground; collied only updates and ends it. Push-to-start is not used.
 
 ### Phone and collie-core
 

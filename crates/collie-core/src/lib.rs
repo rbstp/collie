@@ -438,8 +438,6 @@ pub enum AgentKey {
     ShiftTab,
     CtrlC,
     CtrlEnter,
-    Y,
-    N,
 }
 
 impl From<AgentKey> for Key {
@@ -455,8 +453,6 @@ impl From<AgentKey> for Key {
             AgentKey::ShiftTab => Self::ShiftTab,
             AgentKey::CtrlC => Self::CtrlC,
             AgentKey::CtrlEnter => Self::CtrlEnter,
-            AgentKey::Y => Self::Y,
-            AgentKey::N => Self::N,
         }
     }
 }
@@ -1475,7 +1471,6 @@ impl CollieCore {
             apns_token: PushToken::new(apns_token_hex.trim()).map_err(|_| {
                 invalid("apns_token", "APNs token must be 64 to 256 hex characters")
             })?,
-            live_activity_push_to_start_token: None,
             environment: environment.into(),
             notification_key: NotificationKey::new(URL_SAFE_NO_PAD.encode(&*notification_key))
                 .expect("32 bytes encode to a canonical 43-char base64url key"),
@@ -3013,7 +3008,7 @@ mod tests {
             Some("keys".into())
         );
         assert_eq!(
-            field(rt.block_on(core.send_keys(m(), t(), vec![AgentKey::Y; 17]))),
+            field(rt.block_on(core.send_keys(m(), t(), vec![AgentKey::Enter; 17]))),
             Some("keys".into())
         );
         for bad in [
@@ -3401,7 +3396,7 @@ mod tailnet_tests {
                             }
                         }
                         Request::AgentSendKeys(p) => {
-                            assert_eq!(p.keys, vec![protocol::Key::ShiftTab, protocol::Key::Y]);
+                            assert_eq!(p.keys, vec![protocol::Key::ShiftTab, protocol::Key::Down]);
                             Err(ErrorCode::AgentBlocked)
                         }
                         Request::AgentTypeText(p) => {
@@ -3808,7 +3803,7 @@ mod tailnet_tests {
         }
 
         let err = rt
-            .block_on(core.send_keys(id(), t1(), vec![AgentKey::ShiftTab, AgentKey::Y]))
+            .block_on(core.send_keys(id(), t1(), vec![AgentKey::ShiftTab, AgentKey::Down]))
             .unwrap_err();
         assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
         rt.block_on(core.type_text(id(), t1(), "DuckDB".into()))

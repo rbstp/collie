@@ -26,8 +26,6 @@ pub enum Request {
 
     #[serde(rename = "flock.snapshot")]
     FlockSnapshot(Empty),
-    #[serde(rename = "workspace.list")]
-    WorkspaceList(Empty),
     #[serde(rename = "agent.read")]
     AgentRead(ReadParams),
     #[serde(rename = "pane.read")]
@@ -97,7 +95,6 @@ impl Request {
         "pair.complete",
         "unpair",
         "flock.snapshot",
-        "workspace.list",
         "agent.read",
         "pane.read",
         "agent.watch",
@@ -134,7 +131,6 @@ impl Request {
             Self::PairComplete(_) => "pair.complete",
             Self::Unpair(_) => "unpair",
             Self::FlockSnapshot(_) => "flock.snapshot",
-            Self::WorkspaceList(_) => "workspace.list",
             Self::AgentRead(_) => "agent.read",
             Self::PaneRead(_) => "pane.read",
             Self::AgentWatch(_) => "agent.watch",
@@ -170,7 +166,6 @@ impl Request {
         match self {
             Self::Hello(_) | Self::PairComplete(_) | Self::Unpair(_) => MethodClass::Session,
             Self::FlockSnapshot(_)
-            | Self::WorkspaceList(_)
             | Self::AgentRead(_)
             | Self::PaneRead(_)
             | Self::AgentWatch(_)
@@ -395,10 +390,6 @@ pub enum Key {
     CtrlC,
     #[serde(rename = "ctrl+enter")]
     CtrlEnter,
-    #[serde(rename = "y")]
-    Y,
-    #[serde(rename = "n")]
-    N,
 }
 
 impl Key {
@@ -414,8 +405,6 @@ impl Key {
             Self::ShiftTab => "shift+tab",
             Self::CtrlC => "ctrl+c",
             Self::CtrlEnter => "ctrl+enter",
-            Self::Y => "y",
-            Self::N => "n",
         }
     }
 }
@@ -526,8 +515,6 @@ pub enum ApnsEnvironment {
 #[serde(deny_unknown_fields)]
 pub struct PushRegisterParams {
     pub apns_token: PushToken,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub live_activity_push_to_start_token: Option<PushToken>,
     pub environment: ApnsEnvironment,
     pub notification_key: NotificationKey,
 }
@@ -618,9 +605,6 @@ pub enum Response {
         machine: MachineInfo,
     },
     Flock(Flock),
-    Workspaces {
-        workspaces: Vec<Workspace>,
-    },
     Terminal(TerminalRead),
     TaskOptions(TaskOptions),
     TaskStarted {

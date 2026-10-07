@@ -1104,7 +1104,6 @@ impl Session<'_> {
             }
             Request::Unpair(_) => return self.unpair(id).await,
             Request::FlockSnapshot(_) => (self.flock().await, None),
-            Request::WorkspaceList(_) => (self.workspaces().await, None),
             Request::AgentRead(p) => (drive.read(p, true).await, None),
             Request::PaneRead(p) => (drive.read(p, false).await, None),
             Request::AgentWatch(p) => (self.watch(p).await, None),
@@ -1332,12 +1331,7 @@ impl Session<'_> {
     async fn finish(&mut self, method: &str, done: Finished) -> Flow {
         let quiet = matches!(
             method,
-            "hello"
-                | "flock.snapshot"
-                | "workspace.list"
-                | "approval.list"
-                | "attachment.chunk"
-                | "attachment.abort"
+            "hello" | "flock.snapshot" | "approval.list" | "attachment.chunk" | "attachment.abort"
         ) || (method == "terminal.challenge" && done.reply.is_ok());
         if !quiet && done.origin != Some(Origin::Ran) {
             let mut result = outcome(&done.reply);
@@ -1555,13 +1549,6 @@ impl Session<'_> {
         }
         let _ = self.state.events.send(Event::FlockChanged {});
         Ok(Response::Ok)
-    }
-
-    async fn workspaces(&self) -> Reply {
-        let snap = herdr_result(herdr::session_snapshot(&self.state.herdr).await)?;
-        Ok(Response::Workspaces {
-            workspaces: flock::map_workspaces(&snap),
-        })
     }
 
     async fn pair_complete(&self, window: u64, p: PairCompleteParams) -> Reply {

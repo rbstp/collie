@@ -822,8 +822,6 @@ async fn send_keys_and_focus() {
             Key::Tab,
             Key::ShiftTab,
             Key::CtrlC,
-            Key::Y,
-            Key::N,
         ],
     };
     assert_eq!(
@@ -833,7 +831,7 @@ async fn send_keys_and_focus() {
     assert_eq!(
         herdr.params("agent.send_keys"),
         vec![
-            json!({"target": "w6:p1", "keys": ["esc", "enter", "up", "down", "tab", "shift+tab", "ctrl+c", "y", "n"]})
+            json!({"target": "w6:p1", "keys": ["esc", "enter", "up", "down", "tab", "shift+tab", "ctrl+c"]})
         ]
     );
     assert_eq!(

@@ -390,15 +390,6 @@ async fn scenario(
     assert_eq!(flock.machine.node_id, mac_self.stable_id);
     send(
         &mut ws,
-        json!({"id": 4, "method": "workspace.list", "params": {}}),
-    )
-    .await;
-    assert!(matches!(
-        result(recv(&mut ws).await),
-        Response::Workspaces { workspaces } if workspaces.len() == 2
-    ));
-    send(
-        &mut ws,
         json!({"id": 5, "method": "agent.focus", "params": {"terminal_id": "term_65ce7ae4fd5731"}}),
     )
     .await;
@@ -738,10 +729,8 @@ async fn scenario(
     for line in audit.lines() {
         let entry: Value = serde_json::from_str(line).unwrap();
         assert!(
-            !(matches!(
-                entry["method"].as_str(),
-                Some("hello" | "flock.snapshot" | "workspace.list")
-            ) && entry["result"] == "ok"),
+            !(matches!(entry["method"].as_str(), Some("hello" | "flock.snapshot"))
+                && entry["result"] == "ok"),
             "{line}"
         );
     }

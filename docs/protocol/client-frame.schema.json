@@ -340,9 +340,7 @@
         "tab",
         "shift+tab",
         "ctrl+c",
-        "ctrl+enter",
-        "y",
-        "n"
+        "ctrl+enter"
       ],
       "type": "string"
     },
@@ -460,16 +458,6 @@
         },
         "environment": {
           "$ref": "#/$defs/ApnsEnvironment"
-        },
-        "live_activity_push_to_start_token": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PushToken"
-            },
-            {
-              "type": "null"
-            }
-          ]
         },
         "notification_key": {
           "$ref": "#/$defs/NotificationKey"
@@ -712,22 +700,6 @@
       "properties": {
         "method": {
           "const": "flock.snapshot",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/$defs/Empty"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "const": "workspace.list",
           "type": "string"
         },
         "params": {

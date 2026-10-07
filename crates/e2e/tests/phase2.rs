@@ -230,7 +230,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     }
     herdr.with(|h| h.blocked_on = Some(BASH.into()));
     let err = core
-        .send_keys(m.clone(), CLAUDE.into(), vec![AgentKey::Y])
+        .send_keys(m.clone(), CLAUDE.into(), vec![AgentKey::Enter])
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
@@ -295,8 +295,6 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         AgentKey::Tab,
         AgentKey::ShiftTab,
         AgentKey::CtrlC,
-        AgentKey::Y,
-        AgentKey::N,
     ];
     core.send_keys(m.clone(), CLAUDE.into(), keys)
         .await
@@ -304,7 +302,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     assert_eq!(
         herdr.params("agent.send_keys").last(),
         Some(&json!({"target": "w6:p1", "keys": [
-            "esc", "enter", "up", "down", "tab", "shift+tab", "ctrl+c", "y", "n"
+            "esc", "enter", "up", "down", "tab", "shift+tab", "ctrl+c"
         ]}))
     );
 
@@ -558,7 +556,7 @@ fn live_herdr_drive() {
     std::fs::write(
         &fake_pi,
         "#!/bin/sh\nprintf 'fake pi ready\\n> '\n\
-         while IFS= read -r line; do printf 'pi got: %s\\n> ' \"$line\"; done\n",
+         while IFS= read -r line; do printf 'pi got: %s.\\n> ' \"$line\"; done\n",
     )
     .unwrap();
     std::fs::set_permissions(&fake_pi, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -684,10 +682,10 @@ async fn live_scenario(
         .await
         .unwrap();
     wait_output(core, &m, &term, "pi got: second prompt").await;
-    core.send_keys(m.clone(), term.clone(), vec![AgentKey::Y, AgentKey::Enter])
+    core.send_keys(m.clone(), term.clone(), vec![AgentKey::Enter])
         .await
         .unwrap();
-    wait_output(core, &m, &term, "pi got: y\r\n").await;
+    wait_output(core, &m, &term, "pi got: .\r\n").await;
     let visible = core
         .agent_read(m.clone(), term.clone(), TerminalSource::Visible, None)
         .await
