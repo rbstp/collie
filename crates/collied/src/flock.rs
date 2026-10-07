@@ -34,7 +34,7 @@ impl StatusTracker {
         let Some(path) = self.path.as_deref().filter(|_| self.dirty) else {
             return;
         };
-        if let Err(e) = crate::peers::save_json(path, &self.seen) {
+        if let Err(e) = crate::peers::replace_json(path, &self.seen) {
             tracing::warn!(error = %e, "could not save the status times");
         }
         self.dirty = false;
@@ -500,9 +500,15 @@ mod tests {
         let mut snap = fixture();
         let mut tracker = StatusTracker::load(path.clone());
         map_flock(&snap, &mut tracker, 1000, machine(), 0, None);
+        std::fs::write(path.with_extension("json.tmp"), "stale").unwrap();
         tracker.save();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec!["status.json"]);
 
         let mut restarted = StatusTracker::load(path.clone());
         snap.agents[1].agent_status = "idle".into();
@@ -517,11 +523,14 @@ mod tests {
         assert_eq!(f.agents[1].status_since_ms, 500);
         early.save();
 
-        let mut again = StatusTracker::load(path);
+        let mut again = StatusTracker::load(path.clone());
         snap.agents[0].state_change_seq += 1;
         let f = map_flock(&snap, &mut again, 6000, machine(), 0, None);
         assert_eq!(f.agents[0].status_since_ms, 6000);
         assert_eq!(f.agents[1].status_since_ms, 500);
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(StatusTracker::load(path).seen.is_empty());
     }
 
     fn pane(terminal_id: &str, pane_id: &str) -> PaneInfo {

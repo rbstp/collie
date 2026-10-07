@@ -436,7 +436,7 @@ On the phone, pairing accepts a node tagged `tag:collie-mac` or `tag:collie-linu
 | Logs | `collied.out.log`, `collied.err.log` in the data dir | the user journal |
 
 - For the data dir, the attachments root and the unit path, an `XDG_*_HOME` that is unset, empty or not absolute is ignored, as the XDG spec says. The herdr resolver mirrors herdr and takes `XDG_CONFIG_HOME` as given.
-- The data dir holds `collied.toml`, `tsnet/`, `tls-key.json`, `peers.json`, `peers.lock`, `push.json`, `status.json`, `stars.json`, `usage.json`, `usage.lock`, `audit.log`, `control.sock`, `node.lock` and `apns/`.
+- The data dir holds `collied.toml`, `tsnet/`, `tls-key.json`, `peers.json`, `peers.lock`, `push.json`, `status.json`, `stars.json`, `usage.json`, `usage.lock`, `audit.log`, `control.sock`, `node.lock` and `apns/`. `status.json` (when collied first saw each agent's status, for the phone's "how long ago") is replaced atomically, 0600, without `sync_all`, a full drive flush on macOS: a power cut can lose those times, and they restart from when collied next sees each status.
 - herdr socket: the same resolver on both OSes. `[herdr] session`, else `HERDR_SOCKET_PATH`, else `HERDR_SESSION`; then `$XDG_CONFIG_HOME/herdr[/sessions/<name>]/herdr.sock`, else `~/.config/herdr/...`. Verified: herdr 0.9.3 on Linux puts its socket at `$XDG_CONFIG_HOME/herdr/herdr.sock` (mode 0600), not under `XDG_RUNTIME_DIR`.
 - tsnet's upstream path logic creates an empty `~/.local/share/tailscale` (0700) for a non-root user. collied's node state is only in `<data dir>/tsnet`. A system tailscaled (root, `/var/lib/tailscale`) is untouched: the embedded node is a separate device with its own keys.
 
