@@ -1209,11 +1209,11 @@ impl CollieCore {
     ) -> Result<(), CoreError> {
         let text = PromptText::new(text)
             .ok()
-            .filter(|t| !t.as_str().contains(['\n', '\t']))
+            .filter(|t| protocol::is_one_line(t.as_str()))
             .ok_or_else(|| {
                 invalid(
                     "text",
-                    "an answer must be one non-empty line of at most 32 KiB, without control characters",
+                    "an answer must be one non-empty line of at most 32 KiB, without control or invisible characters",
                 )
             })?;
         let request = Request::AgentTypeText(AgentTypeTextParams {
@@ -1357,7 +1357,7 @@ impl CollieCore {
             Some(note) => Some(
                 PromptText::new(note)
                     .ok()
-                    .filter(|n| !n.as_str().contains(['\n', '\t']))
+                    .filter(|n| protocol::is_one_line(n.as_str()))
                     .filter(|n| n.as_str().chars().count() <= limits::MAX_NOTE_CHARS)
                     .filter(|_| {
                         matches!(decision, ApprovalDecision::Approve | ApprovalDecision::Deny)
@@ -1365,7 +1365,7 @@ impl CollieCore {
                     .ok_or_else(|| {
                         invalid(
                             "note",
-                            "a note must be one non-empty line of at most 200 characters, without control characters, with Approve or Deny",
+                            "a note must be one non-empty line of at most 200 characters, without control or invisible characters, with Approve or Deny",
                         )
                     })?,
             ),
@@ -3016,7 +3016,14 @@ mod tests {
             field(rt.block_on(core.send_keys(m(), t(), vec![AgentKey::Y; 17]))),
             Some("keys".into())
         );
-        for bad in ["", "one\ntwo", "a\tb", "x\u{1b}[2J"] {
+        for bad in [
+            "",
+            "one\ntwo",
+            "a\tb",
+            "x\u{1b}[2J",
+            "echo ok \u{202E}x",
+            "a\u{200B}b",
+        ] {
             assert_eq!(
                 field(rt.block_on(core.type_text(m(), t(), bad.into()))),
                 Some("text".into()),
@@ -3028,10 +3035,6 @@ mod tests {
                 "{bad:?}"
             );
         }
-        assert_eq!(
-            field(rt.block_on(core.terminal_run(m(), t(), "echo ok \u{202E}x".into()))),
-            Some("text".into())
-        );
         assert_eq!(
             field(rt.block_on(core.terminal_send_keys(m(), t(), vec![AgentKey::Enter; 17]))),
             Some("keys".into())
@@ -3967,6 +3970,8 @@ mod tailnet_tests {
             (ApprovalDecision::ApproveAlways, "x".to_owned()),
             (ApprovalDecision::Approve, "a\nb".to_owned()),
             (ApprovalDecision::Approve, "a\u{1b}[Z".to_owned()),
+            (ApprovalDecision::Approve, "ok \u{202E}x".to_owned()),
+            (ApprovalDecision::Deny, "a\u{2066}b".to_owned()),
             (
                 ApprovalDecision::Deny,
                 "a".repeat(limits::MAX_NOTE_CHARS + 1),

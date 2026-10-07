@@ -330,14 +330,15 @@ pub struct TerminalRunParams {
 }
 
 impl TerminalRunParams {
-    /// Bidi and invisible characters would let a pasted command read as another.
     pub fn is_valid(&self) -> bool {
-        !self
-            .text
-            .as_str()
-            .chars()
-            .any(|c| c == '\n' || c == '\t' || is_format(c))
+        is_one_line(self.text.as_str())
     }
+}
+
+/// Text collied types into a pane: Enter is what submits it, and bidi and invisible
+/// characters would let it read as something else.
+pub fn is_one_line(text: &str) -> bool {
+    !text.chars().any(|c| c == '\n' || c == '\t' || is_format(c))
 }
 
 /// What the phone's terminal key signs to unlock one terminal on one machine: each part
@@ -446,7 +447,7 @@ pub struct AgentTypeTextParams {
 
 impl AgentTypeTextParams {
     pub fn is_valid(&self) -> bool {
-        !self.text.as_str().contains(['\n', '\t'])
+        is_one_line(self.text.as_str())
     }
 }
 
@@ -508,7 +509,7 @@ impl ApprovalDecideParams {
         (self.decision == Decision::Choose) == self.choice.is_some()
             && self.note.as_ref().is_none_or(|n| {
                 matches!(self.decision, Decision::Approve | Decision::Deny)
-                    && !n.as_str().contains(['\n', '\t'])
+                    && is_one_line(n.as_str())
                     && n.as_str().chars().count() <= limits::MAX_NOTE_CHARS
             })
     }
@@ -1422,6 +1423,8 @@ mod tests {
             r#","decision":"approve","note":"a\nb""#,
             r#","decision":"approve","note":"a\tb""#,
             r#","decision":"approve","note":"a\u001b[Z""#,
+            r#","decision":"approve","note":"ok \u202efi.exe""#,
+            r#","decision":"deny","note":"a\u200bb""#,
             r#","decision":"deny","note":"  ""#,
             &format!(
                 r#","decision":"approve","note":"{}""#,
@@ -1444,10 +1447,19 @@ mod tests {
                 serde_json::to_string(text).unwrap()
             ))
         };
+        assert!(typed("oui\u{202F}! c’est partagé 👍🏽").is_ok());
         let ok = typed("use Redis, it is shared").unwrap();
         assert_eq!(ok.request.class(), MethodClass::Drive);
         assert_eq!(ok.request.method(), "agent.type_text");
-        for bad in ["a\nb", "a\tb", "a\u{1b}[2J", "  "] {
+        for bad in [
+            "a\nb",
+            "a\tb",
+            "a\u{1b}[2J",
+            "  ",
+            "use \u{202E}sideR",
+            "use\u{2066} Redis",
+            "\u{FEFF}yes",
+        ] {
             assert_eq!(
                 typed(bad).unwrap_err().code,
                 ErrorCode::InvalidParams,
