@@ -472,7 +472,7 @@ async fn scenario(
     assert_eq!(herdr.read_lines()[0], json!(200), "default watch depth");
     send(
         &mut ws,
-        json!({"id": 55, "method": "agent.watch", "params": {"terminal_id": "term_65ce7ae4fd5731", "lines": 5000}}),
+        json!({"id": 55, "method": "agent.watch", "params": {"terminal_id": "term_65ce7ae4fd5731", "lines": 5000, "low_data": true}}),
     )
     .await;
     assert_eq!(result(recv(&mut ws).await), Response::Ok);
@@ -484,6 +484,17 @@ async fn scenario(
         }
     ));
     assert_eq!(herdr.read_lines().last(), Some(&json!(1000)), "clamped");
+    let reads = || {
+        herdr
+            .methods()
+            .iter()
+            .filter(|m| *m == "agent.read")
+            .count()
+    };
+    let before = reads();
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    let low_data = reads() - before;
+    assert!((1..=3).contains(&low_data), "{low_data} reads in 2.1 s");
     send(
         &mut ws,
         json!({"id": 52, "method": "agent.watch", "params": {"terminal_id": null}}),
