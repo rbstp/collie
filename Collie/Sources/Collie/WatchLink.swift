@@ -15,11 +15,15 @@ extension WatchState {
         self.init(
             approvals: items.filter { $0.approval.expiresAtMs > nowMs }.prefix(Self.maxApprovals).map(WatchApproval.init),
             agents: rows.prefix(Self.maxAgents).map { WatchAgent(item: $0.0, done: $0.1) },
-            usage: usage.map {
-                WatchUsage(fiveHourUsed: $0.fiveHour.map { min($0.usedPercent, 100) }, fiveHourResetsAtMs: $0.fiveHour?.resetsAtMs)
-            },
+            usage: usage.map(WatchUsage.init),
             decisionsAllowed: allowed, live: live
         )
+    }
+}
+
+extension WatchUsage {
+    init(_ plan: PlanUsage) {
+        self.init(fiveHourUsed: plan.fiveHour.map { min($0.usedPercent, 100) }, fiveHourResetsAtMs: plan.fiveHour?.resetsAtMs)
     }
 }
 
@@ -50,8 +54,8 @@ extension WatchApproval {
 }
 
 extension WatchState {
-    /// `shown` with the approvals just listed from each Mac; a Mac that did not answer keeps
-    /// those last shown for it.
+    /// `shown` with the approvals and the newest plan usage just listed from each Mac; a Mac
+    /// that did not answer keeps the approvals last shown for it.
     static func refreshed(_ shown: WatchState?, listed: [MachineApprovals], machines: [Machine], allowed: Bool, now: Date) -> WatchState {
         let nowMs = now.unixMs
         var state = shown ?? WatchState(approvals: [], agents: [], usage: nil, decisionsAllowed: allowed, live: false)
@@ -67,6 +71,9 @@ extension WatchState {
         let fresh = items.sorted { ($0.approval.createdAtMs, $0.id) < ($1.approval.createdAtMs, $1.id) }.map(WatchApproval.init)
         let kept = state.approvals.filter { silent.contains($0.nodeId) }
         state.approvals = Array((fresh + kept).filter { $0.expiresAtMs > nowMs }.prefix(Self.maxApprovals))
+        if let plan = listed.compactMap(\.planUsage).max(by: { $0.recordedMs < $1.recordedMs }) {
+            state.usage = WatchUsage(plan)
+        }
         state.decisionsAllowed = allowed
         state.live = false
         return state

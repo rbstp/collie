@@ -202,6 +202,26 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(unpaired.approvals.isEmpty)
 }
 
+// #114: in the background the phone's sessions are closed, so a refresh's listing is the only fresh usage.
+@Test func watchRefreshTakesTheNewestListedPlanUsage() {
+    let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
+    let resets = nowMs + 3_600_000
+    let plan = { (used: UInt8, recorded: UInt64) in
+        PlanUsage(fiveHour: UsageWindow(usedPercent: used, resetsAtMs: resets), sevenDay: nil, recordedMs: recorded)
+    }
+    let shown = WatchState(
+        approvals: [], agents: [], usage: WatchUsage(fiveHourUsed: 24, fiveHourResetsAtMs: resets), decisionsAllowed: true, live: true
+    )
+    let listed = [
+        MachineApprovals(machineId: "m1", approvals: [], planUsage: plan(57, nowMs)),
+        MachineApprovals(machineId: "m2", approvals: [], planUsage: plan(40, nowMs - 1000)),
+    ]
+    let state = WatchState.refreshed(shown, listed: listed, machines: [mac, linux], allowed: true, now: now)
+    #expect(state.usage == WatchUsage(fiveHourUsed: 57, fiveHourResetsAtMs: resets))
+    let silent = WatchState.refreshed(shown, listed: [MachineApprovals(machineId: "m1", approvals: nil)], machines: [mac], allowed: true, now: now)
+    #expect(silent.usage == shown.usage)
+}
+
 @Test func watchApprovalsChangeOnlyThroughAConnectedLink() {
     let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
     // A refresh from a locked phone listed ap_new; the cache, frozen when the sessions closed, predates it.

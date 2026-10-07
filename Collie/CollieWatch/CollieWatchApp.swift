@@ -17,8 +17,14 @@ struct CollieWatchApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.refreshIfStale() } }
+            if phase == .background { model.scheduleBackgroundRefresh() }
         }
         .backgroundTask(.watchConnectivity) { [model] in await model.drain() }
+        .backgroundTask(.appRefresh(WatchModel.backgroundRefresh)) { [model] _ in
+            // Scheduled first, so a run the system ends early still leaves the next one.
+            await model.scheduleBackgroundRefresh()
+            await model.refreshIfStale(timeout: .seconds(10))
+        }
     }
 }
 
@@ -104,13 +110,22 @@ final class WatchModel: NSObject, WCSessionDelegate {
     }
 
     /// A raised wrist makes the app active again: each refresh wakes the phone and dials every Mac.
-    func refreshIfStale() async {
+    func refreshIfStale(timeout: Duration = .seconds(25)) async {
         if let refreshedAt, Date.now.timeIntervalSince(refreshedAt) < 60 { return }
-        await refresh()
+        await refresh(timeout: timeout)
+    }
+
+    static let backgroundRefresh = "refresh"
+
+    /// watchOS budgets about 4 background refreshes an hour to an app whose complication is on the active face.
+    func scheduleBackgroundRefresh() {
+        WKApplication.shared().scheduleBackgroundRefresh(
+            withPreferredDate: .now.addingTimeInterval(15 * 60), userInfo: Self.backgroundRefresh as NSString
+        ) { _ in }
     }
 
     /// Asks the phone, which answers even while locked; on no answer the last state stays.
-    func refresh() async {
+    func refresh(timeout: Duration = .seconds(25)) async {
         guard !refreshing else {
             again = true
             return
@@ -119,7 +134,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
         defer { refreshing = false }
         repeat {
             again = false
-            await ask()
+            await ask(timeout: timeout)
         } while again
         // As on the phone, back to the list: a rebuilt approval for that agent shows there.
         if let key = opened, let state, !couldNotRefresh(key.nodeId), state.approvals.count < WatchState.maxApprovals,
@@ -130,7 +145,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
         }
     }
 
-    private func ask() async {
+    private func ask(timeout: Duration) async {
         let session = WCSession.default
         for _ in 0..<10 where session.activationState != .activated || !session.isReachable {
             try? await Task.sleep(for: .milliseconds(200))
@@ -154,12 +169,12 @@ final class WatchModel: NSObject, WCSessionDelegate {
                 continuation.finish()
             }
         )
-        let timeout = Task {
-            try? await Task.sleep(for: .seconds(25))
+        let deadline = Task {
+            try? await Task.sleep(for: timeout)
             continuation.yield(nil)
             continuation.finish()
         }
-        defer { timeout.cancel() }
+        defer { deadline.cancel() }
         var reply: RefreshReply?
         for await first in replies {
             reply = first
