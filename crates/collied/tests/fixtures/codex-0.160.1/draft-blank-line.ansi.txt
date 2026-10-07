@@ -1,0 +1,58 @@
+[0m[2m╭─────────────────────────────────────────────────╮[0m
+[0m[2m│ [0m[1m[38;2;99;168;248m✨ Update available![0m [0m[1m0.160.1 -> 0.161.0[0m[2m         │[0m
+[0m[2m│ [0mRun [0m[38;2;99;168;248mbrew upgrade --cask codex[0m to update.[0m[2m        │[0m
+[0m[2m│                                                 │[0m
+[0m[2m│ [0mSee full release notes:[0m[2m                         │[0m
+[0m[2m│ [0m[4m[38;2;99;168;248mhttps://github.com/openai/codex/releases/latest[0m[2m │[0m
+[0m[2m╰─────────────────────────────────────────────────╯[0m
+ 
+ 
+  [0m[38;2;99;168;248m>_ [0m[1mOpenAI Codex[0m[2m (v0.160.1)[0m
+     [0m[2m/private/tmp/collie-67-codex[0m
+ 
+  [0m[38;2;99;168;248mAny loose ends? Semicolons count.[0m
+ 
+[0m[48;2;51;51;60m                                                                                                                                                             [0m
+[0m[1m[2m[48;2;51;51;60m› [0m[48;2;51;51;60mReply with just the word Green.                                                                                                                            [0m
+[0m[48;2;51;51;60m                                                                                                                                                             [0m
+ 
+[0m[2m• [0mGreen
+ 
+[0m[2m  Worked for 3s • 7:39 PM                                                                                                                                    [0m
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+[0m[48;2;42;42;50m                                                                                                                                                             [0m
+[0m[1m[48;2;42;42;50m›[0m[48;2;42;42;50m first line of a draft                                                                                                                                      [0m
+[0m[48;2;42;42;50m                                                                                                                                                             [0m
+[0m[48;2;42;42;50m  third line after a blank line                                                                                                                              [0m
+[0m[48;2;42;42;50m                                                                                                                                                             [0m
+  [0m[38;2;246;226;183mGPT-6-Sol high[0m[38;2;143;142;146m · [0m[38;2;171;223;167m/private/tmp/collie-67-codex[0m[38;2;143;142;146m · [0m[38;2;200;169;238mReady[0m[38;2;143;142;146m · [0m[38;2;242;181;144mContext 97% left[0m
+                                                                                                                                   [0m[38;2;143;142;146m⚠ [0m[38;2;196;167;103m3 warnings[0m[38;2;143;142;146m · [0m[1m[38;2;230;229;229mf2[0m[38;2;143;142;146m to view[0m

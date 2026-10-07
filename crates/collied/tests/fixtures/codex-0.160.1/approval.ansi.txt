@@ -1,0 +1,60 @@
+[0m[2m╭─────────────────────────────────────────────────╮[0m
+[0m[2m│ [0m[1m[38;2;99;168;248m✨ Update available! [0m[1m0.160.1 -> 0.161.0[0m[2m         │[0m
+[0m[2m│ [0mRun [0m[38;2;99;168;248mbrew upgrade --cask codex [0mto update.[0m[2m        │[0m
+[0m[2m│                                                 │[0m
+[0m[2m│ [0mSee full release notes:[0m[2m                         │[0m
+[0m[2m│ [0m[4m[38;2;99;168;248mhttps://github.com/openai/codex/releases/latest[0m[2m │[0m
+[0m[2m╰─────────────────────────────────────────────────╯[0m
+
+
+  [0m[38;2;99;168;248m>_ [0m[1mOpenAI Codex[0m[2m (v0.160.1)[0m
+     [0m[2m/private/tmp/collie-67-codex[0m
+
+  [0m[38;2;99;168;248mThese might be the bugs you’re looking for.[0m
+
+[0m[48;2;51;51;60m                                                                                                                                                                                                                     [0m
+[0m[1m[2m[48;2;51;51;60m› [0m[48;2;51;51;60mRun 'curl -sI https://example.com' to check the network, asking me for approval if the sandbox blocks it. Do not edit any files.                                                                                   [0m
+[0m[48;2;51;51;60m                                                                                                                                                                                                                     [0m
+
+[0m[2m• [0mI’ll run the HEAD request and report the result. If the sandbox blocks network access, I’ll retry through the approval flow.
+
+[0m[1m[38;5;1m• [0m[1mFailed (exit 6) [0m[38;2;137;180;250mcurl[0m[38;2;147;153;178m -[0m[38;2;235;160;172msI[0m[38;2;205;214;244m https://example.com[0m
+[0m[2m  └ (no output)[0m
+
+[0m[1m[38;2;53;53;61m• [0m[1mRunning [0m[38;2;137;180;250mcurl[0m[38;2;147;153;178m -[0m[38;2;235;160;172msI[0m[38;2;205;214;244m https://example.com[0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[0m[48;2;42;42;50m                                                                                                                                                                                                                     [0m
+[0m[48;2;42;42;50m  [0m[1m[48;2;42;42;50mWould you like to run the following command?[0m[48;2;42;42;50m                                                                                                                                                                       [0m
+[0m[48;2;42;42;50m                                                                                                                                                                                                                     [0m
+[0m[48;2;42;42;50m  Environment: [0m[1m[48;2;42;42;50mlocal[0m[48;2;42;42;50m                                                                                                                                                                                                 [0m
+[0m[48;2;42;42;50m                                                                                                                                                                                                                     [0m
+[0m[48;2;42;42;50m  Reason: [0m[3m[48;2;42;42;50mThe sandbox could not resolve example.com. May I rerun this HEAD request with network access to check connectivity?[0m[48;2;42;42;50m                                                                                        [0m
+[0m[48;2;42;42;50m                                                                                                                                                                                                                     [0m
+[0m[48;2;42;42;50m  $ [0m[38;2;137;180;250m[48;2;42;42;50mcurl[0m[38;2;147;153;178m[48;2;42;42;50m -[0m[38;2;235;160;172m[48;2;42;42;50msI[0m[38;2;205;214;244m[48;2;42;42;50m https://example.com[0m[48;2;42;42;50m                                                                                                                                                                                     [0m
+[0m[48;2;42;42;50m                                                                                                                                                                                                                     [0m
+[0m[48;2;42;42;50m                                                                                                                                                                                                                     [0m
+[0m[1m[38;2;0;0;46m[48;2;99;168;248m› 1. Yes, proceed ([0m[1m[38;2;59;59;59m[48;2;99;168;248my[0m[1m[38;2;0;0;46m[48;2;99;168;248m)                                                                                                                                                                                                [0m
+[0m[48;2;42;42;50m  2. Yes, and don't ask again for commands that start with `curl -sI https://example.com` ([0m[1m[38;2;230;229;229m[48;2;42;42;50mp[0m[48;2;42;42;50m)                                                                                                                        [0m
+[0m[48;2;42;42;50m  3. No, and tell Codex what to do differently ([0m[1m[38;2;230;229;229m[48;2;42;42;50mesc[0m[48;2;42;42;50m)                                                                                                                                                                 [0m
+[0m[48;2;42;42;50m                                                                                                                                                                                                                     [0m
+  [0m[2mPress [0m[1m[38;2;230;229;229menter[0m[2m to confirm or [0m[1m[38;2;230;229;229mesc[0m[2m to cancel                                                                                                                                                                            [0m

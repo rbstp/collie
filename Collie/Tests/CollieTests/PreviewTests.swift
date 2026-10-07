@@ -407,6 +407,81 @@ private func claude(_ box: String, top: String = rule, above: String = "", foote
     await run.value
 }
 
+/// Rows of a screen captured with `herdr pane read`.
+private func capture(_ name: String) throws -> [String] {
+    let url = URL(filePath: #filePath).deletingLastPathComponent()
+        .appending(path: "../../../crates/collied/tests/fixtures/\(name).ansi.txt")
+    return try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\r\n")
+}
+
+@Test func aCopilotCardEndsAtItsLastOutput() throws {
+    for (state, last) in [
+        ("1.0.93-1/declined", 53), ("1.0.93-1/draft-long", 39), ("1.0.93-1/draft", 22), ("1.0.93-1/idle", 22),
+        ("1.0.93-1/mode-autopilot", 39), ("1.0.93-1/mode-plan", 39), ("1.0.93-1/output-long", 53), ("1.0.93-1/output-shell", 39),
+        ("1.0.93-1/output", 28), ("1.0.94-1/idle", 22), ("1.0.94-1/output", 26), ("1.0.94-1/narrow-output", 27),
+        ("1.0.94-1/narrower-output", 33),
+    ] {
+        let rows = try capture("copilot-\(state)")
+        let screen = rows.joined(separator: "\r\n")
+        #expect(PreviewModel.copilotCard(screen) == rows[...last].joined(separator: "\r\n"), "\(state)")
+        #expect(PreviewModel.codexCard(screen) == screen, "\(state)")
+    }
+}
+
+@Test func aWorkingCopilotCardKeepsItsWorkingRow() throws {
+    for (state, last, working) in [
+        ("1.0.93-1/working-long", 53, 59), ("1.0.93-1/working-shell", 35, 59), ("1.0.93-1/working-start", 25, 59),
+        ("1.0.93-1/working-streaming", 53, 59), ("1.0.93-1/working-submitted", 31, 59), ("1.0.94-1/working", 25, 59),
+        ("1.0.94-1/narrow-working", 30, 57),
+    ] {
+        let rows = try capture("copilot-\(state)")
+        #expect(rows[working].contains("Working"), "\(state)")
+        let card = (rows[...last] + [rows[working]]).joined(separator: "\r\n")
+        #expect(PreviewModel.copilotCard(rows.joined(separator: "\r\n")) == card, "\(state)")
+    }
+}
+
+@Test func aCodexCardEndsAtItsLastOutput() throws {
+    for (state, last) in [
+        ("after-output", 27), ("draft-multiline", 27), ("draft", 27), ("draft-blank-line", 20), ("idle-warning", 37), ("idle", 53),
+        ("interrupted", 28), ("working-draft", 53), ("working", 53),
+    ] {
+        let rows = try capture("codex-0.160.1/\(state)")
+        let screen = rows.joined(separator: "\r\n")
+        #expect(PreviewModel.codexCard(screen) == rows[...last].joined(separator: "\r\n"), "\(state)")
+        #expect(PreviewModel.copilotCard(screen) == screen, "\(state)")
+    }
+}
+
+@Test func aCopilotOrCodexDialogStaysOnTheCard() throws {
+    var screens = try ["copilot-1.0.93-1/permission", "copilot-1.0.93-1/permission-edit", "copilot-1.0.93-1/trust"].map(capture)
+    screens += try ["approval", "patch", "warnings-view", "trust", "update"].map { try capture("codex-0.160.1/\($0)") }
+    var option = try capture("codex-0.160.1/draft-multiline")
+    option[56] = "  2. Yes, proceed"
+    for rows in screens + [option] {
+        let screen = rows.joined(separator: "\r\n")
+        #expect(PreviewModel.copilotCard(screen) == screen)
+        #expect(PreviewModel.codexCard(screen) == screen)
+    }
+}
+
+@MainActor
+@Test func aBlockedAgentsCardKeepsItsWholeScreen() async throws {
+    let rows = try capture("copilot-1.0.93-1/idle")
+    let screen = rows.joined(separator: "\r\n")
+    let core = FakeCore()
+    core.state.withLock { $0.output = TerminalSnapshot(terminalId: "t1", source: .recent, ansi: screen, truncated: false) }
+    let model = PreviewModel()
+    model.update([entry("m1", kind: "copilot", [("t1", .working)])])
+    model.appeared(route("t1"))
+    let run = await running(model, core, screens: 1)
+    #expect(model.screens[route("t1")] == rows[...22].joined(separator: "\r\n"))
+    await model.update([entry("m1", kind: "copilot", [("t1", .blocked)])])?.value
+    #expect(model.screens[route("t1")] == screen)
+    run.cancel()
+    await run.value
+}
+
 @MainActor
 @Test func layoutIsGridByDefaultAndRememberedOnThisDevice() throws {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)

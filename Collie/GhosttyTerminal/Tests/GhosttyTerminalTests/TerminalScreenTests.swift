@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import GhosttyTerminal
@@ -122,18 +123,19 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
 @Test func trailingBlanksAndPaddingAreTrimmedPerRow() {
     let cases = [
         ("", ""),
-        ("abc   ", "abc"),
-        ("abc \t \r\n  x  \r\n", "abc\r\n  x\r\n"),
+        ("abc   ", "abc\u{1B}[K"),
+        ("abc \t \r\n  x  \r\n", "abc\u{1B}[K\r\n  x\u{1B}[K\r\n"),
         ("a\u{1B}[0m   \u{1B}[48;2;1;2;3m  \u{1B}[0m\r\nb", "a\u{1B}[0m\u{1B}[48;2;1;2;3m\u{1B}[0m\r\nb"),
-        ("\u{1B}[1m a \u{1B}[22m b\u{1B}[0m ", "\u{1B}[1m a \u{1B}[22m b\u{1B}[0m"),
-        ("   \u{1B}[0m\n\n x", "\u{1B}[0m\n\n x"),
+        ("\u{1B}[1m a \u{1B}[22m b\u{1B}[0m ", "\u{1B}[1m a \u{1B}[22m b\u{1B}[0m\u{1B}[K"),
+        ("   \u{1B}[0m\n\n x", "\u{1B}[K\u{1B}[0m\n\n x"),
         ("\u{4E2D}\u{00A0}", "\u{4E2D}\u{00A0}"),
         ("\u{1B}[2m\u{2500}\u{2500} \u{1B}[0m  \r\nx", "\u{1B}[?7l\u{1B}[2m\u{2500}\u{2500}\u{1B}[?7h\u{1B}[0m\r\nx"),
         ("\u{2502} a \u{2502}", "\u{2502} a \u{2502}"),
-        ("\u{2580}\u{2580}", "\u{2580}\u{2580}"),
+        ("\u{2580}\u{2580}", "\u{1B}[?7l\u{2580}\u{2580}\u{1B}[?7h"),
+        ("\u{25A0}\u{25A0}", "\u{25A0}\u{25A0}"),
         ("a \u{1B}[4:3m  \u{1B}[58:2::1:2:3m ", "a\u{1B}[4:3m\u{1B}[58:2::1:2:3m"),
-        ("a \u{1B}[<m ", "a \u{1B}[<m"),
-        ("a \u{1B}[/m ", "a \u{1B}[/m"),
+        ("a \u{1B}[<m ", "a \u{1B}[<m\u{1B}[K"),
+        ("a \u{1B}[/m ", "a \u{1B}[/m\u{1B}[K"),
     ]
     for (input, trimmed) in cases {
         #expect(TerminalScreen.preparedForWrapping(input, columns: Int(TerminalScreen.maxColumns)) == trimmed, "\(input.debugDescription)")
@@ -222,10 +224,86 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
             "\u{2502} \u{251C} agent alpha beta gamma delta \u{1B}E\u{1B}[2Cepsilon zeta \u{2502}"
         ),
         ("\u{2502} a" + pad(30) + "\u{2502}", "\u{2502} a" + pad(30) + "\u{2502}"),
-        ("Phases" + pad(40) + "agent", "Phases" + pad(34) + "\u{1B}E" + pad(6) + "agent"),
+        ("Phases" + pad(40) + "agent", "Phases" + pad(29) + "agent"),
+        ("Phases" + pad(39) + "agent", "Phases" + pad(34) + "\u{1B}E" + pad(1) + "agent"),
     ]
     for (input, prepared) in cases {
         #expect(TerminalScreen.preparedForWrapping(input, columns: 40) == prepared, "\(input.debugDescription)")
+    }
+}
+
+@Test func trimmedBackgroundsFillTheRestOfTheRow() {
+    let pad = { (count: Int) in String(repeating: " ", count: count) }
+    let x = String(repeating: "x", count: 40)
+    let cases = [
+        ("\u{1B}[48;5;1m> hi" + pad(60) + "\u{1B}[0m", "\u{1B}[48;5;1m> hi\u{1B}[K\u{1B}[0m"),
+        (x + "\u{1B}[48;5;1m" + pad(10) + "\u{1B}[0m", x + "\u{1B}[48;5;1m\u{1B}[0m"),
+        (
+            "the quick brown fox jumps over the lazy dog\u{1B}[48;5;1m" + pad(10) + "\u{1B}[0m",
+            "the quick brown fox jumps over the lazy \u{1B}Edog\u{1B}[48;5;1m\u{1B}[K\u{1B}[0m"
+        ),
+        (
+            "\u{1B}[48;5;1m> alpha beta gamma delta epsilon zeta eta theta iota kappa" + pad(60) + "\u{1B}[0m",
+            "\u{1B}[48;5;1m> alpha beta gamma delta epsilon zeta \u{1B}[K\u{1B}E\u{1B}[2Ceta theta iota kappa\u{1B}[K\u{1B}[0m"
+        ),
+        ("x \u{1B}[48;5;1m tag \u{1B}[0m  ", "x \u{1B}[48;5;1m tag\u{1B}[0m"),
+        ("a\u{1B}[0m" + pad(50) + "\u{1B}[48;5;1m" + pad(10) + "\u{1B}[0m", "a\u{1B}[0m\u{1B}[48;5;1m\u{1B}[0m"),
+    ]
+    for (input, prepared) in cases {
+        #expect(TerminalScreen.preparedForWrapping(input, columns: 40) == prepared, "\(input.debugDescription)")
+    }
+}
+
+/// Rows of a screen captured with `herdr pane read`.
+private func capture(_ name: String, rows: ClosedRange<Int>) throws -> String {
+    let url = URL(filePath: #filePath).deletingLastPathComponent()
+        .appending(path: "../../../../crates/collied/tests/fixtures/\(name).ansi.txt")
+    return try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\r\n")[rows].joined(separator: "\r\n")
+}
+
+private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB) -> Range<Int>? {
+    let runs = frame.runs.filter { $0.row == row && $0.style.background == background }
+    guard let start = runs.map(\.startColumn).min(), let end = runs.map(\.endColumn).max(),
+        runs.reduce(0, { $0 + $1.endColumn - $1.startColumn }) == end - start
+    else { return nil }
+    return start..<end
+}
+
+@Test func copilotsInputBoxKeepsOneRowPerLine() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let frame = screen.render(ansiSnapshot: try capture("copilot-1.0.93-1/draft", rows: 55...59), wrapColumns: 50)
+    let rows = Dictionary(grouping: frame.runs, by: \.row).mapValues { $0.map(\.text).joined() }
+    #expect(rows[0] == " /private/tmp/collie67-copilot Session: 0 AIC used")
+    #expect(rows[1] == "\u{257B}" + String(repeating: "\u{2584}", count: 49))
+    #expect(rows[2]?.hasPrefix("\u{2503} Explain what calc.py does in one sentence") == true)
+    #expect(painted(frame, row: 2, TerminalRGB(20, 27, 34)) == 1..<50)
+    #expect(rows[3] == "\u{2579}" + String(repeating: "\u{2580}", count: 49))
+    #expect(frame.rows <= 6)
+}
+
+@Test func copilotsDraftWiderThanTheRowIsShadedOnEveryRow() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let frame = screen.render(ansiSnapshot: try capture("copilot-1.0.93-1/draft-long", rows: 55...58), wrapColumns: 50)
+    #expect(frame.rows > 4)
+    for row in 1..<(frame.rows - 1) {
+        #expect(painted(frame, row: row, TerminalRGB(20, 27, 34))?.upperBound == 50, "\(row)")
+    }
+}
+
+@Test func rightAlignedTextKeepsNoPaddingOnItsOwnRow() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let frame = screen.render(ansiSnapshot: try capture("copilot-1.0.94-1/narrow-output", rows: 52...52), wrapColumns: 40)
+    let rows = Dictionary(grouping: frame.runs, by: \.row).mapValues { $0.map(\.text).joined() }
+    #expect(frame.rows == 2)
+    #expect(rows[1] == " Session: 7.85 AIC used")
+}
+
+@Test func codexsComposerIsShadedAcrossTheRow() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let frame = screen.render(ansiSnapshot: try capture("codex-0.160.1/working", rows: 55...57), wrapColumns: 50)
+    #expect(frame.rows == 3)
+    for row in 0..<3 {
+        #expect(painted(frame, row: row, TerminalRGB(42, 42, 50)) == 0..<50, "\(row)")
     }
 }
 

@@ -1,0 +1,58 @@
+[0m[48;2;42;42;50m                                                                                                                                                                                                                    [0m
+[0m[1m[48;2;42;42;50m  Folder access[0m[48;2;42;42;50m                                                                                                                                                                                                     [0m
+[0m[48;2;42;42;50m  [0m[2m[48;2;42;42;50m/private/tmp/collie-67-codex                                                                                                                                                                                    [0m[48;2;42;42;50m  [0m
+[0m[48;2;42;42;50m                                                                                                                                                                                                                    [0m
+[0m[48;2;42;42;50m  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you trust these      [0m
+[0m[48;2;42;42;50m  files. Your trust decision will be saved.                                                                                                                                                                         [0m
+[0m[48;2;42;42;50m                                                                                                                                                                                                                    [0m
+[0m[1m[38;2;0;0;46m[48;2;99;168;248m› 1. Trust and continue                                                                                                                                                                                             [0m
+[0m[48;2;42;42;50m  2. Back to Agent Command Center                                                                                                                                                                                   [0m
+[0m[48;2;42;42;50m                                                                                                                                                                                                                    [0m
+[0m[48;2;42;42;50m  [0m[1m[38;2;230;229;229m[48;2;42;42;50menter[0m[2m[48;2;42;42;50m continue · [0m[1m[38;2;230;229;229m[48;2;42;42;50mesc[0m[2m[48;2;42;42;50m back[0m[48;2;42;42;50m                                                                                                                                                                                         [0m
+[0m[48;2;42;42;50m                                                                                                                                                                                                                    [0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+ 
+ 
