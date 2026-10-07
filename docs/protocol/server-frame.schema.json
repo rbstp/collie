@@ -665,7 +665,7 @@
       "type": "string"
     },
     "OutputPatch": {
-      "description": "The watched agent's new `recent` text: `head`, then lines `skip..skip + keep` of the\ntext the watch sent last, then `tail`, joined with `\\n`. `base` is [`text_hash`] of\nthat previous text. A client that does not hold it re-issues `agent.watch`, whose\nfirst event is always a full `agent.output`.",
+      "description": "The watched agent's new `recent` text: `head`, then lines `skip..skip + keep` of the\ntext the watch sent last, then `tail`, then the last `trail` lines of that text, joined\nwith `\\n`. The trailing lines start at or after `skip + keep`. `base` is [`text_hash`] of\nthat previous text. A client that does not hold it re-issues `agent.watch`, whose\nfirst event is always a full `agent.output`.",
       "properties": {
         "base": {
           "format": "uint64",
@@ -708,6 +708,11 @@
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"
         },
+        "trail": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "truncated": {
           "type": "boolean"
         },
@@ -731,6 +736,7 @@
         "skip",
         "keep",
         "tail",
+        "trail",
         "truncated"
       ],
       "type": "object"

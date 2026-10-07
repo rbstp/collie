@@ -412,6 +412,15 @@ impl Conn {
         self.wake.notify_one();
     }
 
+    /// Ends a wait for the node to run without forcing a dial; the attempt goes through
+    /// [`open`] as any other. Only a waiter is woken: a stored permit would cut a later
+    /// backoff short.
+    pub fn node_running(&self) {
+        if lock(&self.shared.link).phase == LinkPhase::Offline {
+            self.wake.notify_waiters();
+        }
+    }
+
     /// iOS suspends sockets without closing them: after a long background period the
     /// connection is assumed dead, after a short one it is probed. A suspended core has
     /// no session left to probe.
@@ -1001,6 +1010,60 @@ mod tests {
         let err = ConnectError::Session(SessionError::NotPaired);
         assert_eq!(backoff.failed(&shared, &err, t0), None);
         assert_eq!(link(&shared), (LinkPhase::Stopped, Some(err.to_string())));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn node_running_wakes_only_a_wait_for_the_node() {
+        let (_suspend, suspended) = watch::channel(true);
+        let machine = Machine {
+            id: "m".into(),
+            label: "m".into(),
+            host: "m".into(),
+            port: 0,
+            node_id: "n".into(),
+            kind: MachineKind::Mac,
+            key: String::new(),
+            terminal_key: String::new(),
+        };
+        let conn = Conn::spawn(
+            &tokio::runtime::Handle::current(),
+            machine,
+            NodeSlot::default(),
+            IdentitySlot::default(),
+            PushSlot::default(),
+            Arc::default(),
+            suspended,
+        );
+        let timed = |wake: Arc<Notify>| {
+            tokio::spawn(async move {
+                let t = tokio::time::Instant::now();
+                wait(&wake, OFFLINE_POLL).await;
+                t.elapsed()
+            })
+        };
+        for phase in [
+            LinkPhase::Connecting,
+            LinkPhase::Connected,
+            LinkPhase::Waiting,
+            LinkPhase::Unavailable,
+            LinkPhase::Offline,
+            LinkPhase::Stopped,
+        ] {
+            lock(&conn.shared.link).phase = phase;
+            let waiting = timed(conn.wake.clone());
+            tokio::task::yield_now().await;
+            conn.node_running();
+            assert_eq!(
+                waiting.await.unwrap() < OFFLINE_POLL,
+                phase == LinkPhase::Offline,
+                "{phase:?}"
+            );
+            conn.node_running();
+            assert!(
+                timed(conn.wake.clone()).await.unwrap() >= OFFLINE_POLL,
+                "a later wait is not cut short ({phase:?})"
+            );
+        }
     }
 
     #[tokio::test]
