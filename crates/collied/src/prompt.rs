@@ -120,9 +120,9 @@ pub struct Menu {
 
 impl Menu {
     /// The unnumbered folder trust prompt ([`Menu::parse_trust`]), else the last numbered
-    /// option block on screen, numbered from 1 without gaps, with exactly one `❯` cursor.
-    /// Anything else is not a menu collied will answer. The trust prompt goes first: it
-    /// has no numbered line under its rule, so a numbered menu above it is stale output.
+    /// option block on screen, numbered from 1 without gaps, with exactly one `❯` cursor,
+    /// in the dialog after the last rule: a numbered menu above it is stale output.
+    /// Anything else is not a menu collied will answer.
     pub fn parse(text: &str) -> Option<Self> {
         Self::parse_trust(text).or_else(|| Self::parse_numbered(text))
     }
@@ -130,6 +130,9 @@ impl Menu {
     fn parse_numbered(text: &str) -> Option<Self> {
         let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
         let last = lines.iter().rposition(|l| option_line(l).is_some())?;
+        if last < lines.len() - after_last_rule(text).len() {
+            return None;
+        }
         let after = lines[last + 1..]
             .iter()
             .take_while(|l| !l.trim().is_empty() && !is_rule(l))
@@ -199,7 +202,8 @@ impl Menu {
     /// Claude Code's folder trust prompt since 2.1.289: unnumbered, "No, exit" first. Read
     /// only in the dialog after the last rule, with no numbered line, exactly one `❯` line,
     /// and its options one line each at the cursor's label column, between a blank line
-    /// with the body above and a blank line with a hint below (no partial screen). Every
+    /// with the body above and a blank line with a hint below, indented no deeper than the
+    /// cursor (no partial screen, no option after a blank). Every
     /// option maps to its own decision and one names the trust, so no other menu is
     /// read without numbers.
     fn parse_trust(text: &str) -> Option<Self> {
@@ -241,6 +245,9 @@ impl Menu {
             || (1..decided.len()).any(|i| decided[..i].contains(&decided[i]))
             || !options.iter().any(|l| trust_wording(l))
             || !lines[end + 1..].iter().any(|l| !l.trim().is_empty())
+            || lines[end + 1..]
+                .iter()
+                .any(|l| l.len() - l.trim_start().len() > indent)
         {
             return None;
         }
@@ -919,6 +926,13 @@ mod tests {
             ),
             ("cut after an option", cut(" ❯ No, exit\n")),
             (
+                "option after a blank",
+                TRUST_292.replace(
+                    "   Yes, I trust this folder\n\n",
+                    "   Yes, I trust this folder\n\n   Yes, and trust all subfolders\n\n",
+                ),
+            ),
+            (
                 "cut before the hint",
                 cut("   Yes, I trust this folder\n\n"),
             ),
@@ -941,6 +955,10 @@ mod tests {
         ];
         for (why, screen) in refused {
             assert_eq!(Menu::parse(&screen), None, "{why}");
+            if why != "no rule" {
+                let stale = format!("{BASH_TWO}\n{screen}");
+                assert_eq!(Menu::parse(&stale), None, "{why}, under a numbered menu");
+            }
         }
         let generic = "────────\n Run it?\n\n ❯ Yes\n   No\n\n Enter to confirm\n";
         assert_eq!(
