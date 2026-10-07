@@ -20,7 +20,6 @@ struct AgentActivityAttributes: ActivityAttributes {
         var status: AgentActivityStatus
         var statusSince: Date
         var title: String
-        /// One of `kinds`, sent by a newer collied only.
         var kind: String?
         var workspace: String?
         var approvals: Int

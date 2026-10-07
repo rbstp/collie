@@ -55,7 +55,7 @@ struct AgentLiveActivity: Widget {
             } compactTrailing: {
                 HStack(spacing: 3) {
                     Image(systemName: state.status.symbol)
-                    ElapsedText(since: state.statusSince, width: 40).font(.caption2.monospacedDigit())
+                    ElapsedText(since: state.statusSince, width: 48).font(.caption2.monospacedDigit())
                 }
                 .foregroundStyle(state.status.color)
                 .accessibilityElement(children: .combine)
@@ -189,6 +189,7 @@ private struct ElapsedText: View {
     var body: some View {
         Text(timerInterval: since...Date.distantFuture, countsDown: false)
             .multilineTextAlignment(.trailing)
+            .lineLimit(1)
             .frame(maxWidth: width, alignment: .trailing)
     }
 }
