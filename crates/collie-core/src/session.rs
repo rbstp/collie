@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -24,7 +24,6 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const SILENCE_LIMIT: Duration = Duration::from_secs(45);
 const MAX_MESSAGE_BYTES: usize = 4 << 20;
 const MAX_REPLAY_EVENTS: usize = 1024;
-const MAX_APPROVAL_EVENTS: usize = 64;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum SessionError {
@@ -419,9 +418,6 @@ pub struct FlockState {
     /// The text the watch sent last, the base of its next patch. A read reply can replace
     /// `output` but not this.
     watched_output: Option<TerminalRead>,
-    /// `approval.needed` and `approval.resolved` events, numbered by `approval_revision`.
-    pub approval_events: VecDeque<(u64, Event)>,
-    pub approval_revision: u64,
     output_events: u64,
     last_seq: u64,
     since_snapshot: Vec<(u64, Event)>,
@@ -519,17 +515,6 @@ impl FlockState {
             event => {
                 if let Some(flock) = &mut self.flock {
                     apply(flock, &event);
-                }
-                if matches!(
-                    event,
-                    Event::ApprovalNeeded { .. } | Event::ApprovalResolved { .. }
-                ) {
-                    if self.approval_events.len() == MAX_APPROVAL_EVENTS {
-                        self.approval_events.pop_front();
-                    }
-                    self.approval_revision += 1;
-                    self.approval_events
-                        .push_back((self.approval_revision, event.clone()));
                 }
                 if self.since_snapshot.len() == MAX_REPLAY_EVENTS {
                     self.since_snapshot.remove(0);
@@ -778,32 +763,6 @@ mod tests {
             },
         );
         assert!(s.flock.as_ref().unwrap().approvals.is_empty());
-    }
-
-    #[test]
-    fn approval_events_are_numbered_and_capped() {
-        let mut s = FlockState::default();
-        s.apply_snapshot(flock(0, vec![]));
-        let resolved = |id: &str| Event::ApprovalResolved {
-            approval_id: ApprovalId::new(id).unwrap(),
-            outcome: protocol::ApprovalOutcome::Superseded,
-        };
-        s.apply_event(1, resolved("a1"));
-        s.apply_event(1, resolved("dup"));
-        s.apply_event(2, status_event("t1", AgentStatus::Idle));
-        assert_eq!(s.approval_revision, 1);
-        for seq in 3..(3 + MAX_APPROVAL_EVENTS as u64) {
-            s.apply_event(seq, resolved("a2"));
-        }
-        assert_eq!(s.approval_events.len(), MAX_APPROVAL_EVENTS);
-        assert_eq!(s.approval_events.front().unwrap().0, 2);
-        s.new_connection();
-        s.apply_event(1, resolved("a3"));
-        assert_eq!(
-            s.approval_revision,
-            MAX_APPROVAL_EVENTS as u64 + 2,
-            "revisions never go back across connections"
-        );
     }
 
     #[test]

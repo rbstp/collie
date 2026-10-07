@@ -155,9 +155,9 @@ final class FakeApprovalCore: ApprovalCore {
     let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
 
     func machines() -> [Machine] { [mac, linux] }
-    func approvalFeed(machineId: String, afterRevision: UInt64) -> ApprovalFeed? {
+    func approvalFeed(machineId: String) -> ApprovalFeed? {
         let (link, pending) = state.withLock { ($0.link[machineId] ?? .stopped, $0.pending[machineId] ?? []) }
-        return ApprovalFeed(link: link, revision: 1, missed: false, events: [], pending: pending)
+        return ApprovalFeed(link: link, pending: pending)
     }
     func flock(machineId: String) async throws -> MachineFlock {
         let link = state.withLock { s in

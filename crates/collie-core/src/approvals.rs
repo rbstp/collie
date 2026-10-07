@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use protocol::{
-    Approval, ApprovalDecideParams, ApprovalId, ApprovalOutcome, Decision, Empty, ErrorCode, Event,
-    Nonce, PromptText, Request, Response,
+    Approval, ApprovalDecideParams, ApprovalId, ApprovalOutcome, Decision, Empty, ErrorCode, Nonce,
+    PromptText, Request, Response,
 };
 use tailnet::{BackendState, Node};
 
@@ -33,13 +33,12 @@ impl ApprovalDecision {
         }
     }
 
-    fn received(decision: Decision, choice: Option<u8>) -> Option<Self> {
-        Some(match (decision, choice) {
-            (Decision::Approve, _) => Self::Approve,
-            (Decision::ApproveAlways, _) => Self::ApproveAlways,
-            (Decision::Deny, _) => Self::Deny,
-            (Decision::Choose, Some(choice)) => Self::Choose { choice },
-            (Decision::Choose, None) => return None,
+    fn received(decision: Decision) -> Option<Self> {
+        Some(match decision {
+            Decision::Approve => Self::Approve,
+            Decision::ApproveAlways => Self::ApproveAlways,
+            Decision::Deny => Self::Deny,
+            Decision::Choose => return None,
         })
     }
 }
@@ -107,7 +106,7 @@ impl From<&Approval> for PendingApproval {
             options: a
                 .options
                 .iter()
-                .filter_map(|d| ApprovalDecision::received(*d, None))
+                .filter_map(|d| ApprovalDecision::received(*d))
                 .collect(),
             choices: a
                 .choices
@@ -149,13 +148,13 @@ impl From<ApprovalOutcome> for DecisionOutcome {
     fn from(o: ApprovalOutcome) -> Self {
         match o {
             ApprovalOutcome::Applied { decision, by } => {
-                match ApprovalDecision::received(decision, None) {
+                match ApprovalDecision::received(decision) {
                     Some(decision) => Self::Applied { decision, by },
                     None => Self::Unknown,
                 }
             }
             ApprovalOutcome::Unconfirmed { decision, by } => {
-                match ApprovalDecision::received(decision, None) {
+                match ApprovalDecision::received(decision) {
                     Some(decision) => Self::Unconfirmed { decision, by },
                     None => Self::Unknown,
                 }
@@ -175,56 +174,15 @@ impl From<ApprovalOutcome> for DecisionOutcome {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
-pub enum ApprovalEvent {
-    Needed {
-        approval: PendingApproval,
-    },
-    Resolved {
-        approval_id: String,
-        outcome: DecisionOutcome,
-    },
-}
-
-/// `events` are those after the caller's `after_revision`. `missed` means older events
-/// were dropped, so the caller should diff `pending` instead. Approvals raised while the
-/// link was down arrive through the snapshot only, so they show up in `pending` without
-/// an event.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ApprovalFeed {
     pub link: LinkPhase,
-    pub revision: u64,
-    pub missed: bool,
-    pub events: Vec<ApprovalEvent>,
     pub pending: Vec<PendingApproval>,
 }
 
-pub(crate) fn feed(link: LinkPhase, state: &FlockState, after_revision: u64) -> ApprovalFeed {
+pub(crate) fn feed(link: LinkPhase, state: &FlockState) -> ApprovalFeed {
     ApprovalFeed {
         link,
-        revision: state.approval_revision,
-        missed: state
-            .approval_events
-            .front()
-            .is_some_and(|(rev, _)| *rev > after_revision.saturating_add(1)),
-        events: state
-            .approval_events
-            .iter()
-            .filter(|(rev, _)| *rev > after_revision)
-            .filter_map(|(_, e)| match e {
-                Event::ApprovalNeeded { approval } => Some(ApprovalEvent::Needed {
-                    approval: approval.into(),
-                }),
-                Event::ApprovalResolved {
-                    approval_id,
-                    outcome,
-                } => Some(ApprovalEvent::Resolved {
-                    approval_id: approval_id.as_str().into(),
-                    outcome: outcome.clone().into(),
-                }),
-                _ => None,
-            })
-            .collect(),
         pending: state
             .flock
             .iter()
@@ -500,19 +458,23 @@ pub(crate) async fn list_in_background(
             (index, listed.ok())
         });
     }
-    let mut out: Vec<MachineApprovals> = machines
-        .iter()
-        .map(|m| MachineApprovals {
-            machine_id: m.id.clone(),
-            approvals: None,
-        })
-        .collect();
+    let mut out = unlisted(&machines);
     while let Some(joined) = lists.join_next().await {
         if let Ok((index, approvals)) = joined {
             out[index].approvals = approvals;
         }
     }
     out
+}
+
+pub(crate) fn unlisted(machines: &[Machine]) -> Vec<MachineApprovals> {
+    machines
+        .iter()
+        .map(|m| MachineApprovals {
+            machine_id: m.id.clone(),
+            approvals: None,
+        })
+        .collect()
 }
 
 async fn list(
@@ -650,7 +612,7 @@ fn remaining(deadline: Instant) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use protocol::{Flock, MachineInfo};
+    use protocol::{Event, Flock, MachineInfo};
 
     use super::*;
 
@@ -735,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    fn feed_reports_events_after_the_revision_without_nonces() {
+    fn feed_lists_pending_approvals_without_nonces() {
         let mut s = state();
         s.apply_event(
             1,
@@ -753,8 +715,7 @@ mod tests {
                 },
             },
         );
-        let all = feed(LinkPhase::Connected, &s, 0);
-        assert_eq!((all.revision, all.missed, all.events.len()), (2, false, 2));
+        let all = feed(LinkPhase::Connected, &s);
         assert_eq!(all.pending.len(), 1);
         assert_eq!(all.pending[0].approval_id, "a1");
         assert_eq!(all.pending[0].tool_name.as_deref(), Some("Bash"));
@@ -771,21 +732,6 @@ mod tests {
             !debug.contains(NONCE) && !debug.contains("Nonce"),
             "{debug}"
         );
-        let later = feed(LinkPhase::Connected, &s, 1);
-        assert_eq!(
-            later.events,
-            vec![ApprovalEvent::Resolved {
-                approval_id: "a0".into(),
-                outcome: DecisionOutcome::Applied {
-                    decision: ApprovalDecision::Deny,
-                    by: "mac".into()
-                }
-            }]
-        );
-        assert!(feed(LinkPhase::Connected, &s, 2).events.is_empty());
-        s.approval_events.pop_front();
-        assert!(feed(LinkPhase::Connected, &s, 0).missed);
-        assert!(!feed(LinkPhase::Connected, &s, 1).missed);
     }
 
     #[test]

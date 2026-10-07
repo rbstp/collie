@@ -347,8 +347,8 @@ final class DemoApprovalCore: ApprovalCore {
 
     func machines() -> [Machine] { [machine] }
 
-    func approvalFeed(machineId: String, afterRevision: UInt64) -> ApprovalFeed? {
-        ApprovalFeed(link: .connected, revision: 1, missed: false, events: [], pending: pending)
+    func approvalFeed(machineId: String) -> ApprovalFeed? {
+        ApprovalFeed(link: .connected, pending: pending)
     }
 
     func flock(machineId: String) async throws -> MachineFlock { throw CoreError.MachineNotFound }
