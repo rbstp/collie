@@ -179,8 +179,8 @@ pub fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
     write_json(path, value, true)
 }
 
-/// For a cache the next write restores: replaced atomically but never flushed, since
-/// `sync_all` is a full drive cache flush on macOS.
+/// For a file whose loss to a power cut costs only display state: replaced atomically but
+/// never flushed, since `sync_all` is a full drive cache flush on macOS.
 pub fn replace_json<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
     write_json(path, value, false)
 }
