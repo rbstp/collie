@@ -110,7 +110,8 @@ final class WatchModel: NSObject, WCSessionDelegate {
     }
 
     /// A raised wrist makes the app active again: each refresh wakes the phone and dials every
-    /// Mac, for up to 15 s on a locked phone while one is down, so any answer holds for a minute.
+    /// Mac, for up to 15 s on a locked phone while one is down, so any answer that carries the
+    /// state holds for a minute.
     func refreshIfStale(timeout: Duration = .seconds(25)) async {
         if let refreshedAt, Date.now.timeIntervalSince(refreshedAt) < 60 { return }
         await refresh(timeout: timeout)
