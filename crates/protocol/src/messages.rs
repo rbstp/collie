@@ -262,6 +262,9 @@ pub struct AgentWatchParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = limits::MAX_READ_LINES))]
     pub lines: Option<u16>,
+    /// The phone is in Low Data Mode: collied reads the screen once a second.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub low_data: bool,
 }
 
 impl AgentWatchParams {
@@ -308,6 +311,9 @@ pub struct TerminalWatchParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = limits::MAX_READ_LINES))]
     pub lines: Option<u16>,
+    /// As in `agent.watch`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub low_data: bool,
 }
 
 impl TerminalWatchParams {
@@ -1167,6 +1173,36 @@ mod tests {
         assert_eq!(watch(r#"{"terminal_id":"t","lines":0}"#).0, 1);
         assert_eq!(watch(r#"{"terminal_id":"t","lines":65535}"#).0, 1000);
         assert_eq!(watch(r#"{"terminal_id":null,"lines":1}"#).0, 1);
+    }
+
+    #[test]
+    fn low_data_is_an_optional_bool() {
+        for method in ["agent.watch", "terminal.watch"] {
+            let watch = |extra: &str| {
+                parse(&format!(
+                    r#"{{"id":1,"method":"{method}","params":{{"terminal_id":"t"{extra}}}}}"#
+                ))
+            };
+            let low_data = |frame: &ClientFrame| match &frame.request {
+                Request::AgentWatch(p) => p.low_data,
+                Request::TerminalWatch(p) => p.low_data,
+                _ => panic!("not a watch"),
+            };
+            let off = watch("").unwrap();
+            assert!(!low_data(&off));
+            assert!(!serde_json::to_string(&off).unwrap().contains("low_data"));
+            assert!(!low_data(&watch(r#","low_data":false"#).unwrap()));
+            let on = watch(r#","low_data":true"#).unwrap();
+            assert!(low_data(&on));
+            assert_eq!(parse(&serde_json::to_string(&on).unwrap()).unwrap(), on);
+            for bad in [
+                r#","low_data":"true""#,
+                r#","low_data":1"#,
+                r#","low_data":null"#,
+            ] {
+                assert_eq!(watch(bad).unwrap_err().code, ErrorCode::InvalidParams);
+            }
+        }
     }
 
     #[test]

@@ -585,6 +585,8 @@ struct Inner {
     paths: AtomicU64,
     /// A change of interface not acted on yet.
     moved: AtomicBool,
+    /// Copied into every conn's `FlockState::low_data`.
+    low_data: AtomicBool,
     busy: watch::Sender<usize>,
     log: Mutex<Option<Box<dyn CoreLog>>>,
 }
@@ -802,6 +804,16 @@ impl CollieCore {
         }
     }
 
+    /// Low Data Mode (`NWPath.isConstrained`): watches then ask collied for one read a
+    /// second. It applies from the next watch issued, a new session's included, not to a
+    /// running one.
+    pub fn set_low_data(&self, low_data: bool) {
+        self.inner.low_data.store(low_data, Ordering::SeqCst);
+        for conn in lock(&self.inner.conns).values() {
+            lock(&conn.shared.flock).low_data = low_data;
+        }
+    }
+
     /// Pull to refresh or a tap on the machine: a live session is probed, any other link
     /// dials at once, even when Tailscale reports the machine offline. When the node runs
     /// and the machine is online but dials keep failing, the node is restarted instead, and
@@ -897,11 +909,12 @@ impl CollieCore {
     ) -> Result<(), CoreError> {
         let terminal_id = terminal_id.map(terminal).transpose()?;
         let conn = self.conn(&machine_id)?;
-        {
+        let low_data = {
             let mut state = lock(&conn.shared.flock);
             state.watch(terminal_id.clone());
             state.watch_lines = Some(lines);
-        }
+            state.low_data
+        };
         if lock(&conn.shared.link).phase != LinkPhase::Connected {
             return Ok(());
         }
@@ -909,6 +922,7 @@ impl CollieCore {
             let watch = Request::AgentWatch(AgentWatchParams {
                 terminal_id,
                 lines: Some(lines),
+                low_data,
             });
             let response = conn
                 .request(watch, CALL_TIMEOUT)
@@ -1063,17 +1077,19 @@ impl CollieCore {
     ) -> Result<(), CoreError> {
         let terminal_id = terminal(terminal_id)?;
         let conn = self.conn(&machine_id)?;
-        {
+        let low_data = {
             let mut state = lock(&conn.shared.flock);
             state.watch_terminal(terminal_id.clone());
             state.watch_lines = Some(lines);
-        }
+            state.low_data
+        };
         let response = self
             .call(
                 &machine_id,
                 Request::TerminalWatch(TerminalWatchParams {
                     terminal_id,
                     lines: Some(lines),
+                    low_data,
                 }),
                 CALL_TIMEOUT,
             )
@@ -1622,6 +1638,7 @@ impl CollieCore {
                 path: Mutex::default(),
                 paths: AtomicU64::default(),
                 moved: AtomicBool::default(),
+                low_data: AtomicBool::default(),
                 busy: watch::Sender::new(0),
                 log: Mutex::default(),
             }),
@@ -1744,7 +1761,7 @@ impl CollieCore {
         Ok(conns
             .entry(machine.id.clone())
             .or_insert_with(|| {
-                Arc::new(Conn::spawn(
+                let conn = Conn::spawn(
                     self.runtime.handle(),
                     machine,
                     self.inner.node.clone(),
@@ -1752,7 +1769,9 @@ impl CollieCore {
                     self.inner.push.clone(),
                     self.inner.reach.clone(),
                     self.inner.suspended.subscribe(),
-                ))
+                );
+                lock(&conn.shared.flock).low_data = self.inner.low_data.load(Ordering::SeqCst);
+                Arc::new(conn)
             })
             .clone())
     }
@@ -2658,6 +2677,34 @@ mod tests {
             terminal_id: TerminalId::new("term_1").unwrap(),
         });
         assert_eq!(core.inner.claim_op("m1", &mut focus), None);
+    }
+
+    #[test]
+    fn low_data_reaches_every_machines_watch() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("s");
+        ensure_private_dir(&state).unwrap();
+        let mac = |id: &str| Machine {
+            id: id.into(),
+            label: "mac".into(),
+            host: format!("{id}.tail1234.ts.net"),
+            port: 8457,
+            node_id: format!("n{id}"),
+            kind: MachineKind::Mac,
+            key: String::new(),
+            terminal_key: String::new(),
+        };
+        MachineStore::new(state.clone())
+            .save(&[mac("m1"), mac("m2")])
+            .unwrap();
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        let low_data = |id: &str| lock(&core.conn(id).unwrap().shared.flock).low_data;
+        assert!(!low_data("m1"));
+        core.set_low_data(true);
+        assert!(low_data("m1"));
+        assert!(low_data("m2"), "a conn made later starts in Low Data Mode");
+        core.set_low_data(false);
+        assert!(!low_data("m1") && !low_data("m2"));
     }
 
     #[test]

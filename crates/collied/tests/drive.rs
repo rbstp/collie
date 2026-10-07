@@ -1170,11 +1170,11 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
     assert!(matches!(
-        drive.watch(tid("term_gone"), 200).await,
+        drive.watch(tid("term_gone"), 200, false).await,
         Err((ErrorCode::NotFound, _))
     ));
 
-    let mut watcher = drive.watch(tid(CLAUDE), 200).await.unwrap();
+    let mut watcher = drive.watch(tid(CLAUDE), 200, false).await.unwrap();
     let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
         panic!("no first output");
     };
@@ -1219,7 +1219,7 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
     assert!(matches!(next(&mut watcher).await, Ok(Some(Watched::Gone))));
     assert!(matches!(next(&mut watcher).await, Ok(None)));
 
-    let watcher = drive.watch(tid(CODEX_BLOCKED), 200).await.unwrap();
+    let watcher = drive.watch(tid(CODEX_BLOCKED), 200, false).await.unwrap();
     drop(watcher);
     tokio::time::sleep(Duration::from_millis(100)).await;
     let reads = herdr.params("agent.read").len();
@@ -1231,6 +1231,68 @@ async fn watch_pushes_changes_only_and_ends_when_the_agent_goes() {
     );
 }
 
+async fn reads_over(herdr: &Mock, span: Duration) -> usize {
+    let before = herdr.params("agent.read").len();
+    tokio::time::sleep(span).await;
+    herdr.params("agent.read").len() - before
+}
+
+#[tokio::test]
+async fn a_quiet_screen_is_read_once_a_second_until_it_changes() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let mut watcher = drive.watch(tid(CLAUDE), 200, false).await.unwrap();
+    let Ok(Some(Watched::Output(_))) = next(&mut watcher).await else {
+        panic!("no first output");
+    };
+    let busy = reads_over(&herdr, Duration::from_millis(2100)).await;
+    assert!(busy >= 6, "{busy} reads in 2.1 s before the quiet spell");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let quiet = reads_over(&herdr, Duration::from_millis(2100)).await;
+    assert!((1..=3).contains(&quiet), "{quiet} reads in 2.1 s after it");
+
+    herdr.with(|h| h.text = "next\r\n".into());
+    let Ok(Some(Watched::Output(second))) = next(&mut watcher).await else {
+        panic!("no output after the change");
+    };
+    assert_eq!(second.ansi, "next\r\n");
+    let woken = reads_over(&herdr, Duration::from_millis(2100)).await;
+    assert!(woken >= 6, "{woken} reads in 2.1 s after the change");
+}
+
+#[tokio::test]
+async fn a_low_data_watch_is_read_once_a_second() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let mut watcher = drive.watch(tid(CLAUDE), 200, true).await.unwrap();
+    let Ok(Some(Watched::Output(_))) = next(&mut watcher).await else {
+        panic!("no first output");
+    };
+    let n = reads_over(&herdr, Duration::from_millis(2100)).await;
+    assert!((1..=3).contains(&n), "{n} reads in 2.1 s");
+    herdr.with(|h| h.text = "next\r\n".into());
+    let Ok(Some(Watched::Output(_))) = next(&mut watcher).await else {
+        panic!("no output after the change");
+    };
+    let n = reads_over(&herdr, Duration::from_millis(2100)).await;
+    assert!((1..=3).contains(&n), "{n} reads in 2.1 s after a change");
+    drop(watcher);
+
+    let mut watcher = drive
+        .watch_terminal(tid(SHELL), 200, true, yes())
+        .await
+        .unwrap();
+    let Ok(Some(Watched::Output(_))) = next(&mut watcher).await else {
+        panic!("no shell output");
+    };
+    let before = herdr.params("pane.read").len();
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    let n = herdr.params("pane.read").len() - before;
+    assert!((1..=3).contains(&n), "{n} shell reads in 2.1 s");
+}
+
 #[tokio::test]
 async fn a_reply_over_herdrs_line_limit_is_read_with_fewer_lines() {
     let herdr = Mock::start();
@@ -1240,7 +1302,7 @@ async fn a_reply_over_herdrs_line_limit_is_read_with_fewer_lines() {
     let line = format!("{}\r\n", "\u{1b}[31mx".repeat(200));
     herdr.with(|h| h.text = line.repeat(1000));
 
-    let mut watcher = drive.watch(tid(CLAUDE), 1000).await.unwrap();
+    let mut watcher = drive.watch(tid(CLAUDE), 1000, false).await.unwrap();
     let Ok(Some(Watched::Output(read))) = next(&mut watcher).await else {
         panic!("no output");
     };
@@ -1428,7 +1490,7 @@ async fn claude_prose_wrapped_at_the_pane_width_is_marked() {
         vec![json!({"pane_id": "w6:p1"})]
     );
 
-    let mut watcher = drive.watch(tid(CLAUDE), 200).await.unwrap();
+    let mut watcher = drive.watch(tid(CLAUDE), 200, false).await.unwrap();
     let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
         panic!("no first output");
     };
@@ -1474,7 +1536,10 @@ async fn claude_prose_wrapped_at_the_pane_width_is_marked() {
         joins(drive.read(recent(CLAUDE), false).await),
         (vec![], vec![])
     );
-    let mut watcher = drive.watch_terminal(tid(SHELL), 200, yes()).await.unwrap();
+    let mut watcher = drive
+        .watch_terminal(tid(SHELL), 200, false, yes())
+        .await
+        .unwrap();
     let Ok(Some(Watched::Output(shell))) = next(&mut watcher).await else {
         panic!("no shell output");
     };
@@ -1490,7 +1555,7 @@ async fn a_terminal_watch_reads_only_under_its_grant_and_ends_when_an_agent_star
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
     assert!(matches!(
-        drive.watch_terminal(tid(CLAUDE), 200, yes()).await,
+        drive.watch_terminal(tid(CLAUDE), 200, false, yes()).await,
         Err((ErrorCode::NotFound, _))
     ));
     let grant = Arc::new(AtomicBool::new(true));
@@ -1498,7 +1563,10 @@ async fn a_terminal_watch_reads_only_under_its_grant_and_ends_when_an_agent_star
         let grant = grant.clone();
         Arc::new(move || grant.load(Ordering::SeqCst))
     };
-    let mut watcher = drive.watch_terminal(tid(SHELL), 300, auth).await.unwrap();
+    let mut watcher = drive
+        .watch_terminal(tid(SHELL), 300, false, auth)
+        .await
+        .unwrap();
     let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
         panic!("no first output");
     };

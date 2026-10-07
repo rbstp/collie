@@ -236,12 +236,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
             s.watched
                 .clone()
                 .filter(|_| !s.watch_shell)
-                .map(|terminal_id| (terminal_id, s.watch_lines))
+                .map(|terminal_id| (terminal_id, s.watch_lines, s.low_data))
         };
-        if let Some((terminal_id, lines)) = watch {
+        if let Some((terminal_id, lines, low_data)) = watch {
             seed.push(Request::AgentWatch(AgentWatchParams {
                 terminal_id: Some(terminal_id),
                 lines,
+                low_data,
             }));
         }
         for request in seed {
@@ -320,11 +321,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                                         Request::TerminalWatch(TerminalWatchParams {
                                             terminal_id,
                                             lines: state.watch_lines,
+                                            low_data: state.low_data,
                                         })
                                     } else {
                                         Request::AgentWatch(AgentWatchParams {
                                             terminal_id: Some(terminal_id),
                                             lines: state.watch_lines,
+                                            low_data: state.low_data,
                                         })
                                     }
                                 }
@@ -407,6 +410,8 @@ pub struct FlockState {
     /// `watched` is a shell pane, watched with `terminal.watch`.
     pub watch_shell: bool,
     pub watch_lines: Option<u16>,
+    /// The phone is in Low Data Mode; every watch issued says so.
+    pub low_data: bool,
     /// The challenge collied gave this session, for the grant that answers it.
     pub challenge: Option<(TerminalId, Nonce)>,
     /// Terminals this session holds a grant for, until when.
@@ -1307,6 +1312,7 @@ mod tests {
         let state = Mutex::new(FlockState::default());
         lock(&state).watch(Some(TerminalId::new("t1").unwrap()));
         lock(&state).watch_lines = Some(300);
+        lock(&state).low_data = true;
         let (_tx, mut rx) = mpsc::channel(8);
         let server = tokio::spawn(async move {
             assert!(matches!(
@@ -1318,6 +1324,7 @@ mod tests {
                 panic!("{watch:?}")
             };
             assert_eq!(p.lines, Some(300));
+            assert!(p.low_data);
             assert_eq!(p.terminal_id.unwrap().as_str(), "t1");
             write(
                 &mut ws,
@@ -1364,6 +1371,7 @@ mod tests {
                 panic!("no agent.read after the watch: {rewatch:?}")
             };
             assert_eq!(p.lines, Some(300));
+            assert!(p.low_data);
             assert_eq!(p.terminal_id.unwrap().as_str(), "t1");
         });
         let end = session
