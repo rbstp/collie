@@ -229,11 +229,7 @@ final class WatchLink: NSObject, WCSessionDelegate {
     /// Switching to another watch deactivates the session; the next one needs a new activation,
     /// and a fresh authenticated opt-in before it can decide.
     nonisolated func sessionDidDeactivate(_ session: WCSession) {
-        var prefs = DevicePrefs.load(from: DevicePrefs.file)
-        if prefs.watchDecisions {
-            prefs.watchDecisions = false
-            prefs.save(to: DevicePrefs.file)
-        }
+        DevicePrefs.turnOffWatchDecisions(in: DevicePrefs.file)
         WCSession.default.activate()
     }
 }

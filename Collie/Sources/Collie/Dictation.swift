@@ -195,9 +195,7 @@ final class DictationModel {
         guard language != self.language else { return }
         self.language = language
         problem = nil
-        var prefs = DevicePrefs.load(from: prefsFile)
-        prefs.dictationLanguage = language
-        prefs.save(to: prefsFile)
+        DevicePrefs.update(in: prefsFile) { $0.dictationLanguage = language }
         guard phase != .idle, phase != .finishing, let write else { return }
         let text = output
         cancel()

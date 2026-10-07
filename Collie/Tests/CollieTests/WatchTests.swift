@@ -1,5 +1,6 @@
 import CollieCore
 import Foundation
+import Synchronization
 import Testing
 
 @testable import Collie
@@ -271,4 +272,39 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     var prefs = DevicePrefs()
     prefs.watchDecisions = true
     #expect(try JSONDecoder().decode(DevicePrefs.self, from: JSONEncoder().encode(prefs)).watchDecisions)
+}
+
+private func prefsFile() throws -> URL {
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir.appending(path: "prefs.json")
+}
+
+@MainActor
+@Test func watchDecisionsNeedTheOwnerOnlyToTurnOn() async throws {
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let auth = FakeAuthenticator()
+    auth.state.withLock { $0.result = false }
+    #expect(await DevicePrefs.setWatchDecisions(true, in: file, auth: auth) == nil)
+    #expect(!DevicePrefs.load(from: file).watchDecisions)
+    auth.state.withLock { $0.result = true }
+    #expect(await DevicePrefs.setWatchDecisions(true, in: file, auth: auth) == true)
+    #expect(DevicePrefs.load(from: file).watchDecisions)
+    #expect(auth.state.withLock { $0.reasons } == ["Allow decisions from Apple Watch", "Allow decisions from Apple Watch"])
+    auth.state.withLock { $0.result = false }
+    #expect(await DevicePrefs.setWatchDecisions(false, in: file, auth: auth) == false)
+    #expect(!DevicePrefs.load(from: file).watchDecisions)
+    #expect(auth.state.withLock { $0.reasons }.count == 2)
+}
+
+@Test func anotherWatchTurnsWatchDecisionsOff() throws {
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    DevicePrefs(wrapLines: false, watchDecisions: true).save(to: file)
+    DevicePrefs.turnOffWatchDecisions(in: file)
+    #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false))
+    try FileManager.default.removeItem(at: file)
+    DevicePrefs.turnOffWatchDecisions(in: file)
+    #expect(!FileManager.default.fileExists(atPath: file.path))
 }

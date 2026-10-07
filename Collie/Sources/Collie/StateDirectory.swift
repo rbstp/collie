@@ -19,3 +19,19 @@ enum StateDirectory {
         return dir
     }
 }
+
+/// A JSON file in the state dir: a missing or unreadable file loads as the default.
+protocol StateFile: Codable {
+    init()
+}
+
+extension StateFile {
+    static func load(from file: URL?) -> Self {
+        file.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(Self.self, from: $0) } ?? Self()
+    }
+
+    func save(to file: URL?) {
+        guard let file, let data = try? JSONEncoder().encode(self) else { return }
+        try? data.write(to: file, options: .atomic)
+    }
+}

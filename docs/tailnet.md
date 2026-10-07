@@ -34,7 +34,7 @@ The phone only dials (TCP to the Mac on port 8457). The Mac only listens through
 - The onboarding screen also accepts an auth key, used once and not stored. It must be a key for your own user, not a tagged key: a tagged phone node is refused by collied.
 - The node must stay untagged and must not be shared in from another tailnet: collied refuses both.
 - State lives in the app container under `Application Support/collie` (node keys in `tsnet/`, paired Macs in `machines.json`). `Collie/Sources/Collie/StateDirectory.swift` creates it 0700 with data protection `completeUntilFirstUserAuthentication`, and collie-core refuses a directory that is not 0700 (P1, not yet verified on a device). Deleting the app deletes the node identity.
-- The state directory must be excluded from iCloud and Finder backups. Otherwise restoring a backup, on this phone or another device, brings back the same node keys and `StableID`, which collied accepts as the paired phone. This exclusion is a Phase 1 requirement and is not in the tree yet.
+- The state directory must be excluded from iCloud and Finder backups. Otherwise restoring a backup, on this phone or another device, brings back the same node keys and `StableID`, which collied accepts as the paired phone. `StateDirectory.swift` excludes it from backup.
 
 ## Policy file
 

@@ -176,9 +176,7 @@ struct FlockScreen: View {
             }
             .onChange(of: model.entries, initial: true) { _, entries in previews.update(entries) }
             .onChange(of: layout) { _, layout in
-                var prefs = DevicePrefs.load(from: DevicePrefs.file)
-                prefs.agentsLayout = layout
-                prefs.save(to: DevicePrefs.file)
+                DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout }
             }
             .onChange(of: opening, initial: true) { _, route in
                 guard let route else { return }

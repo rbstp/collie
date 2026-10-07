@@ -222,28 +222,28 @@ private func followFile() -> URL {
     #expect(FollowList.load(from: file).agents.isEmpty)
     var list = FollowList()
     var added: Bool
-    added = list.add(FollowedAgent(AgentRoute(machineId: "m1", terminalId: "t1")))
+    added = list.add(AgentRoute(machineId: "m1", terminalId: "t1"))
     #expect(added)
-    added = list.add(FollowedAgent(AgentRoute(machineId: "m1", terminalId: "t2")))
+    added = list.add(AgentRoute(machineId: "m1", terminalId: "t2"))
     #expect(added)
     list.save(to: file)
     #expect(FollowList.load(from: file) == list)
-    list.remove(FollowedAgent(AgentRoute(machineId: "m1", terminalId: "t1")))
+    list.remove(AgentRoute(machineId: "m1", terminalId: "t1"))
     list.save(to: file)
-    #expect(FollowList.load(from: file).agents == [FollowedAgent(AgentRoute(machineId: "m1", terminalId: "t2"))])
+    #expect(FollowList.load(from: file).agents == [AgentRoute(machineId: "m1", terminalId: "t2")])
 }
 
 @Test func followListCapsAtFive() {
     var list = FollowList()
     var added: Bool
     for i in 1...5 {
-        added = list.add(FollowedAgent(AgentRoute(machineId: "m1", terminalId: "t\(i)")))
+        added = list.add(AgentRoute(machineId: "m1", terminalId: "t\(i)"))
         #expect(added)
     }
     #expect(list.isFull)
-    added = list.add(FollowedAgent(AgentRoute(machineId: "m1", terminalId: "t3")))
+    added = list.add(AgentRoute(machineId: "m1", terminalId: "t3"))
     #expect(added)
-    added = list.add(FollowedAgent(AgentRoute(machineId: "m1", terminalId: "t6")))
+    added = list.add(AgentRoute(machineId: "m1", terminalId: "t6"))
     #expect(!added)
     #expect(list.agents.count == 5)
 }
@@ -253,7 +253,7 @@ private func followFile() -> URL {
     let file = followFile()
     defer { try? FileManager.default.removeItem(at: file) }
     var list = FollowList()
-    for i in 1...5 { list.add(FollowedAgent(AgentRoute(machineId: "m1", terminalId: "t\(i)"))) }
+    for i in 1...5 { list.add(AgentRoute(machineId: "m1", terminalId: "t\(i)")) }
     list.save(to: file)
     let follows = FollowModel(core: nil, approvals: nil, file: file)
     #expect(follows.isFollowing(AgentRoute(machineId: "m1", terminalId: "t5")))
@@ -303,7 +303,7 @@ extension FakeCore: ActivityCore {
 
 private func listWithDeadActivity(file: URL, following: Bool) {
     var list = FollowList()
-    if following { list.add(FollowedAgent(AgentRoute(machineId: "m1", terminalId: "t1"))) }
+    if following { list.add(AgentRoute(machineId: "m1", terminalId: "t1")) }
     _ = list.remember(RegisteredActivity(machineId: "m1", activityId: "A1"))
     list.save(to: file)
 }

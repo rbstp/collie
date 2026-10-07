@@ -61,19 +61,11 @@ final class AgentModel {
     var screen: String { wrapLines ? reflowed ?? ansi : ansi }
 
     var wrapLines: Bool {
-        didSet {
-            var prefs = DevicePrefs.load(from: prefsFile)
-            prefs.wrapLines = wrapLines
-            prefs.save(to: prefsFile)
-        }
+        didSet { DevicePrefs.update(in: prefsFile) { $0.wrapLines = wrapLines } }
     }
 
     var fontSize: Double {
-        didSet {
-            var prefs = DevicePrefs.load(from: prefsFile)
-            prefs.fontSize = fontSize
-            prefs.save(to: prefsFile)
-        }
+        didSet { DevicePrefs.update(in: prefsFile) { $0.fontSize = fontSize } }
     }
 
     private(set) var gestures: TerminalGestures
