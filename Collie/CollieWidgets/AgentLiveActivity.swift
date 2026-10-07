@@ -54,6 +54,7 @@ struct AgentLiveActivity: Widget {
                 }
             } compactTrailing: {
                 ElapsedText(since: state.statusSince, width: 48).font(.caption2.monospacedDigit())
+                    .minimumScaleFactor(0.8)
                     .foregroundStyle(state.status.color)
                     .accessibilityLabel(state.status.label)
             } minimal: {
