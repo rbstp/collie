@@ -980,13 +980,26 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     await model.jumpToBottom()
     #expect(core.snapshot.scrolls == ["term_1"])
     #expect(core.snapshot.keys.isEmpty)
+    #expect(!model.jumpBanner, "hidden until a new screen shows the banner again")
 
     core.set(error: .AgentNotReady)
     await model.jumpToBottom()
-    #expect(model.notice != nil)
+    #expect(model.notice != nil && model.jumpBanner)
     core.set()
 
     core.state.withLock { $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "❯ ", truncated: false) }
+    model.poll()
+    #expect(!model.jumpBanner && model.acceptsKeys)
+}
+
+@MainActor
+@Test func onlyClaudeCodeOffersJumpToBottom() {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "codex"
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "12 new messages ↓", truncated: false, jumpBanner: true)
+    }
+    let model = agentModel(core)
     model.poll()
     #expect(!model.jumpBanner && model.acceptsKeys)
 }

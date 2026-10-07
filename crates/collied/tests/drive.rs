@@ -449,11 +449,20 @@ async fn prompt_rechecks_the_agent_before_writing() {
     assert_eq!(drive.prompt(prompt(CLAUDE), &yes()).await, Ok(Response::Ok));
     assert_eq!(
         herdr.methods(),
-        vec!["agent.list", "agent.get", "pane.read", "agent.prompt"]
+        vec![
+            "agent.list",
+            "agent.get",
+            "pane.read",
+            "pane.read",
+            "agent.prompt"
+        ]
     );
     assert_eq!(
         herdr.params("pane.read"),
-        vec![json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"})]
+        vec![
+            json!({"pane_id": "w6:p1", "source": "detection", "format": "text"}),
+            json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"})
+        ]
     );
     assert_eq!(
         herdr.params("agent.prompt"),
@@ -560,7 +569,8 @@ async fn prompt_replaces_the_draft_the_phone_saw() {
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
     herdr.with(|h| {
-        h.screens = [screen("❯ one  \n  two\n  three"), screen(PLACEHOLDER)].into();
+        let draft = screen("❯ one  \n  two\n  three");
+        h.screens = [draft.clone(), draft, screen(PLACEHOLDER)].into();
     });
     assert_eq!(
         drive.prompt(expecting("one\ntwo\nthree\n"), &yes()).await,
@@ -571,6 +581,7 @@ async fn prompt_replaces_the_draft_the_phone_saw() {
         vec![
             "agent.list",
             "agent.get",
+            "pane.read",
             "pane.read",
             "agent.send_keys",
             "pane.read",
@@ -677,7 +688,7 @@ async fn prompt_is_not_sent_when_the_draft_does_not_clear() {
 
     herdr.with(|h| {
         h.calls.clear();
-        h.screens = [screen("❯ one"), TRUST.to_owned()].into();
+        h.screens = [screen("❯ one"), screen("❯ one"), TRUST.to_owned()].into();
     });
     assert_eq!(
         code(drive.prompt(expecting("one"), &yes()).await),
@@ -688,7 +699,7 @@ async fn prompt_is_not_sent_when_the_draft_does_not_clear() {
 
     herdr.with(|h| {
         h.calls.clear();
-        h.screens = [screen("❯ one"), screen(PLACEHOLDER)].into();
+        h.screens = [screen("❯ one"), screen("❯ one"), screen(PLACEHOLDER)].into();
     });
     assert_eq!(
         code(drive.prompt(expecting("one"), &no()).await),
@@ -704,7 +715,7 @@ async fn prompt_is_not_sent_when_the_draft_does_not_clear() {
     );
     herdr.with(|h| {
         h.calls.clear();
-        h.screens = [screen(&rows), screen(PLACEHOLDER)].into();
+        h.screens = [screen(&rows), screen(&rows), screen(PLACEHOLDER)].into();
     });
     let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = checks.clone();
@@ -894,7 +905,7 @@ async fn scroll_bottom_sends_ctrl_end_only_while_claude_shows_the_banner() {
 }
 
 #[tokio::test]
-async fn keys_are_refused_while_claude_is_scrolled_up() {
+async fn keys_and_prompts_are_refused_while_claude_is_scrolled_up() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
@@ -909,6 +920,20 @@ async fn keys_are_refused_while_claude_is_scrolled_up() {
         code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
         ErrorCode::AgentNotReady
     );
+    assert!(herdr.mutations().is_empty());
+    for screen in [SCROLLED, SCROLLED_DIALOG, NEW_MESSAGE] {
+        herdr.with(|h| {
+            h.snapshot["agents"][0]["agent_status"] = json!("idle");
+            h.text = screen.into();
+        });
+        assert_eq!(
+            drive.prompt(prompt(CLAUDE), &yes()).await,
+            Err((
+                ErrorCode::AgentNotReady,
+                "scrolled up on the machine; jump to the bottom first".into()
+            ))
+        );
+    }
     assert!(herdr.mutations().is_empty());
 
     herdr.with(|h| {

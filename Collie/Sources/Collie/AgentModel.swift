@@ -137,7 +137,7 @@ final class AgentModel {
     var isTerminal: Bool { mode == .terminal }
 
     /// Claude Code's transcript is scrolled up on the Mac; collied refuses keys until it jumps back down.
-    var jumpBanner: Bool { mode == .agent && screenBanner }
+    var jumpBanner: Bool { mode == .agent && agent?.kind == "claude" && screenBanner }
 
     var acceptsKeys: Bool { isTerminal ? !unlocking : blocked != .optionsOnly && blocked != .terminal && !jumpBanner }
 
@@ -293,6 +293,7 @@ final class AgentModel {
             let read = try await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: historyLines)
             ansi = read.ansi
             reflowed = read.reflowed
+            screenBanner = read.jumpBanner
             notice = nil
         } catch {
             notice = Self.message(for: error)
@@ -524,10 +525,12 @@ final class AgentModel {
     }
 
     func jumpToBottom() async {
+        screenBanner = false
         do {
             try await core.scrollBottom(machineId: route.machineId, terminalId: route.terminalId)
             notice = nil
         } catch {
+            screenBanner = true
             notice = Self.message(for: error)
         }
     }

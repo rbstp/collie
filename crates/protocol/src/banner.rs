@@ -2,9 +2,9 @@ const JUMP: &str = "Jump to bottom";
 const NEW: &str = " new message";
 
 /// Whether Claude Code's fullscreen transcript is scrolled up on the machine: a row of
-/// `screen` (plain text or SGR) shows its "Jump to bottom" or "N new messages" banner.
-/// Loose on purpose: a missed banner lets keys reach a dialog scrolled out of view, while
-/// prose quoting the whole banner only refuses keys until it scrolls away.
+/// `screen` (plain text or SGR) ends with its "Jump to bottom" or "N new messages" banner.
+/// Any row, on purpose: a missed banner lets keys reach a dialog scrolled out of view. The
+/// banner is always the last thing on its row, which keeps prose quoting it from matching.
 pub fn jump_banner(screen: &str) -> bool {
     screen.split('\n').any(|row| {
         let row = strip_sgr(row);
@@ -26,19 +26,19 @@ fn labels(row: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
     jumps.chain(news)
 }
 
-/// What follows the label: " (click) ↓", ": fn+↓ to scroll", " (<key>) ↓" or " ↓".
+/// The rest of the row after the label: " (<key>) ↓", ": <key> to scroll" or " ↓".
 fn hint(rest: &str) -> bool {
-    if rest.starts_with(" ↓") {
+    if rest == " ↓" {
         return true;
     }
     if let Some(key) = rest.strip_prefix(" (") {
         return key
-            .split_once(')')
-            .is_some_and(|(_, after)| after.starts_with(" ↓"));
+            .strip_suffix(") ↓")
+            .is_some_and(|k| !k.is_empty() && !k.contains(')'));
     }
     rest.strip_prefix(": ")
-        .and_then(|r| r.split_once(' '))
-        .is_some_and(|(key, after)| !key.is_empty() && after.starts_with("to scroll"))
+        .and_then(|r| r.strip_suffix(" to scroll"))
+        .is_some_and(|key| !key.is_empty() && !key.contains(' '))
 }
 
 fn strip_sgr(row: &str) -> String {
@@ -79,17 +79,24 @@ mod tests {
     }
 
     #[test]
-    fn every_banner_matches_alone_wrapped_in_sgr_and_between_transcript_text() {
+    fn every_banner_matches_only_at_the_end_of_its_row() {
         for banner in BANNERS {
             for row in [
                 format!("{:>60}", banner),
                 format!(
                     "                    \u{1b}[0m\u{1b}[38;2;255;255;255m\u{1b}[48;2;55;55;55m {banner} \u{1b}[0m"
                 ),
-                format!("  96      {banner}      more output"),
-                format!("  ⏺ The build passed {banner} and the tests ran"),
+                format!("  96      {banner}"),
+                format!("  ⏺ The build passed {banner}  "),
             ] {
                 assert!(jump_banner(&screen(&row)), "{row:?}");
+            }
+            for row in [
+                format!("  96      {banner}      more output"),
+                format!("  ⏺ The build passed {banner} and the tests ran"),
+                format!("+        \"{banner}\","),
+            ] {
+                assert!(!jump_banner(&screen(&row)), "{row:?}");
             }
         }
     }
@@ -122,6 +129,10 @@ mod tests {
             "  you have new messages ↓",
             "  0x new message ↓",
             "⏺ 4 new messages arrived",
+            "Claude Code's \"Jump to bottom (click) ↓\" banner. Nothing on the phone gets back",
+            "reads \"Jump to bottom: fn+↓ to scroll\" and \"1 new message: fn+↓ to scroll\".",
+            "- 3 new messages ↓ (shown when new output arrives)",
+            "  Jump to bottom: fn+↓ to scroll down",
         ] {
             assert!(!jump_banner(&screen(row)), "{row:?}");
         }

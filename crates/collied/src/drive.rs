@@ -488,6 +488,13 @@ impl Driver {
         let a = self.ready_agent(&p.terminal_id).await?;
         // herdr pastes a prompt after whatever is in Claude Code's input box.
         if a.agent.as_deref() == Some("claude") {
+            // herdr ends a prompt with Enter, which would confirm a dialog scrolled out of view.
+            let screen = herdr::detection_text(&self.herdr, &a.pane_id)
+                .await
+                .map_err(herdr_fail)?;
+            if protocol::jump_banner(&screen) {
+                return fail(ErrorCode::AgentNotReady, SCROLLED);
+            }
             let expected = p.expected_draft.as_ref().map(|d| d.as_str());
             self.replace_draft(&a.pane_id, expected, auth).await?;
         }
