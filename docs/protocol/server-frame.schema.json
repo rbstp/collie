@@ -895,6 +895,17 @@
               },
               "type": "array"
             },
+            "plan_usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PlanUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For a watch refresh while the phone's sessions are closed."
+            },
             "type": {
               "const": "approvals",
               "type": "string"

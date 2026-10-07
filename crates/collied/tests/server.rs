@@ -399,7 +399,7 @@ async fn scenario(
         json!({"id": 50, "method": "approval.list", "params": {}}),
     )
     .await;
-    let Response::Approvals { approvals } = result(recv(&mut ws).await) else {
+    let Response::Approvals { approvals, .. } = result(recv(&mut ws).await) else {
         panic!("no approvals");
     };
     assert_eq!(approvals, flock.approvals);

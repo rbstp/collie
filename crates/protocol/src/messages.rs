@@ -615,6 +615,9 @@ pub enum Response {
     },
     Approvals {
         approvals: Vec<Approval>,
+        /// For a watch refresh while the phone's sessions are closed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan_usage: Option<PlanUsage>,
     },
     ApprovalResolved {
         approval_id: ApprovalId,

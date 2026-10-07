@@ -3421,6 +3421,7 @@ mod tailnet_tests {
                             seen.lists += 1;
                             Ok(Response::Approvals {
                                 approvals: seen.approvals.clone(),
+                                plan_usage: None,
                             })
                         }
                         Request::ApprovalDecide(p) => {
@@ -4099,7 +4100,8 @@ mod tailnet_tests {
             listed,
             [MachineApprovals {
                 machine_id: id(),
-                approvals: Some(pending)
+                approvals: Some(pending),
+                plan_usage: None,
             }]
         );
         assert_eq!(lock(&seen).lists, 3);

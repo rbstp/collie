@@ -1172,6 +1172,7 @@ impl Session<'_> {
             Request::ApprovalList(_) => (
                 Ok(Response::Approvals {
                     approvals: self.state.approvals.pending(),
+                    plan_usage: lock(&self.state.transcripts).plan(),
                 }),
                 None,
             ),

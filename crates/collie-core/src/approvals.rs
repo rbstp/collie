@@ -11,7 +11,7 @@ use crate::conn::{self, LinkPhase, blocking};
 use crate::pin;
 use crate::session::{FlockState, Session, SessionError, lock, unexpected};
 use crate::store::Machine;
-use crate::{Inner, POLL_INTERVAL, ms};
+use crate::{Inner, POLL_INTERVAL, PlanUsage, ms};
 
 /// `Choose` picks `PendingApproval.choices[choice]`: collied takes it only for an
 /// approval with no `options`.
@@ -206,7 +206,7 @@ pub(crate) fn listed_nonce(
     id: &ApprovalId,
 ) -> Result<Option<Nonce>, SessionError> {
     match response {
-        Response::Approvals { approvals } => Ok(approvals
+        Response::Approvals { approvals, .. } => Ok(approvals
             .into_iter()
             .find(|a| a.approval_id == *id)
             .map(|a| a.nonce)),
@@ -437,6 +437,8 @@ async fn open(
 pub struct MachineApprovals {
     pub machine_id: String,
     pub approvals: Option<Vec<PendingApproval>>,
+    #[uniffi(default = None)]
+    pub plan_usage: Option<PlanUsage>,
 }
 
 /// `approval.list` on every paired machine over the same one-shot sessions as
@@ -460,8 +462,9 @@ pub(crate) async fn list_in_background(
     }
     let mut out = unlisted(&machines);
     while let Some(joined) = lists.join_next().await {
-        if let Ok((index, approvals)) = joined {
-            out[index].approvals = approvals;
+        if let Ok((index, Some((approvals, plan_usage)))) = joined {
+            out[index].approvals = Some(approvals);
+            out[index].plan_usage = plan_usage;
         }
     }
     out
@@ -473,6 +476,7 @@ pub(crate) fn unlisted(machines: &[Machine]) -> Vec<MachineApprovals> {
         .map(|m| MachineApprovals {
             machine_id: m.id.clone(),
             approvals: None,
+            plan_usage: None,
         })
         .collect()
 }
@@ -481,7 +485,7 @@ async fn list(
     inner: &Arc<Inner>,
     machine: &Machine,
     deadline: Instant,
-) -> Result<Vec<PendingApproval>, BackgroundOutcome> {
+) -> Result<(Vec<PendingApproval>, Option<PlanUsage>), BackgroundOutcome> {
     let node = node_up(inner, machine, deadline).await?;
     let mut session = open(inner, machine, node.clone(), deadline).await?;
     let response = call(
@@ -493,7 +497,13 @@ async fn list(
     .await?;
     tokio::spawn(session.close());
     match response {
-        Response::Approvals { approvals } => Ok(approvals.iter().map(Into::into).collect()),
+        Response::Approvals {
+            approvals,
+            plan_usage,
+        } => Ok((
+            approvals.iter().map(Into::into).collect(),
+            plan_usage.as_ref().map(crate::plan_usage),
+        )),
         other => Err(failed(unexpected(&other), DecideStage::Lookup)),
     }
 }
@@ -742,6 +752,7 @@ mod tests {
         assert!(cached_nonce(&s, &ApprovalId::new("a9").unwrap()).is_none());
         let list = Response::Approvals {
             approvals: vec![approval("a0")],
+            plan_usage: None,
         };
         assert_eq!(listed_nonce(list, &a0).unwrap().unwrap().as_str(), NONCE);
         assert!(listed_nonce(Response::Ok, &a0).is_err());

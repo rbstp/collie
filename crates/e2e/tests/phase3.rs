@@ -180,6 +180,53 @@ fn phase3_end_to_end() {
     println!("total {:?}", t0.elapsed());
 }
 
+// The watch refresh while the app is in the background: the phone's sessions are closed,
+// so this one-shot listing is all that can bring a plan recorded since (#114).
+#[test]
+fn background_listing_carries_the_plan() {
+    if !in_child("background_listing_carries_the_plan") {
+        return;
+    }
+    let root = TempDir::new("e2e3u");
+    let net = Net::start(&root.0);
+    wait_ready(&net.mac, 0);
+    let core = phone(&root.0, "phone", &net);
+    let rt = runtime();
+    rt.block_on(core.node_start(Some(net.key.clone()))).unwrap();
+    wait_ready(&net.mac, 1);
+    wait_phone(&rt, &core);
+    rt.block_on(async {
+        let herdr_socket = root.0.join("herdr.sock");
+        let _calls = mock_herdr(&herdr_socket, |_, _| None);
+        let data_dir = root.0.join("collied");
+        let statusline = include_str!("../../collied/tests/fixtures/statusline.json");
+        collied::usage::record(&data_dir, statusline.as_bytes(), 1).unwrap();
+        let handle = server::start(
+            net.mac.clone(),
+            server_config(&data_dir, "e2e"),
+            herdr_socket,
+        )
+        .await
+        .unwrap();
+        let (machine, _) = pair(&handle.control_path(), &core, LABEL).await;
+        connected_flock(&core, &machine.id).await;
+        core.suspend(core.begin_suspend()).await;
+        collied::usage::record(&data_dir, statusline.replace("23.5", "57.0").as_bytes(), 2)
+            .unwrap();
+
+        let listed = core.approvals_in_background(BUDGET_MS).await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].approvals, Some(vec![]));
+        let plan = listed[0]
+            .plan_usage
+            .clone()
+            .expect("the listing carries the plan");
+        assert_eq!(plan.five_hour.map(|w| w.used_percent), Some(57));
+    });
+    drop(core);
+    drop(rt);
+}
+
 // collied's reconcile expires a pending approval on its own once herdr answers, so herdr
 // is taken down while the approval runs out: the decision is what finds it expired.
 #[test]
@@ -943,7 +990,7 @@ impl Probe {
     async fn pending(&self) -> Vec<Approval> {
         let mut ws = self.session().await;
         match call(&mut ws, "approval.list", json!({})).await {
-            Ok(Response::Approvals { approvals }) => approvals,
+            Ok(Response::Approvals { approvals, .. }) => approvals,
             other => panic!("approval.list: {other:?}"),
         }
     }

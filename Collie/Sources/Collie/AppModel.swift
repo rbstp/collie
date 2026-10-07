@@ -366,7 +366,7 @@ final class AppModel {
 
     /// From the paired watch as it opens. Out of the foreground (locked, suspended or not
     /// running), the approvals are listed from each Mac over the lock-screen path and sent as
-    /// the state the watch may decide on; the agents and usage stay as last shown.
+    /// the state the watch may decide on, with the plan usage they carry; the agents stay as last shown.
     func refreshForWatch() async -> (WatchState, silent: [String])? {
         guard let core, watch.ready else { return nil }
         if UIApplication.shared.applicationState == .active {
