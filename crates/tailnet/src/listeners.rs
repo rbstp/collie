@@ -32,7 +32,7 @@ mod imp {
             .args(["-nP", "-a", "-p", &pid.to_string(), "-iTCP", "-sTCP:LISTEN"])
             .output()?;
         let stderr = String::from_utf8_lossy(&out.stderr);
-        if !stderr.trim().is_empty() || !matches!(out.status.code(), Some(0 | 1)) {
+        if !only_mount_stat_warnings(&stderr) || !matches!(out.status.code(), Some(0 | 1)) {
             return Err(io::Error::other(format!(
                 "lsof: {} ({})",
                 stderr.trim(),
@@ -44,6 +44,32 @@ mod imp {
             .skip(1)
             .map(str::to_owned)
             .collect())
+    }
+
+    // The only stderr accepted: readmnt's warning for a mount point lsof cannot stat()
+    // (macOS mounts disk images under the temp folder). lsof keeps the mount with its statfs
+    // dev and uses the mount table only to name the file system of vnode rows; socket rows
+    // never read it. Paths are printed escaped, so a mount name cannot forge a line. -w is
+    // not used: it also silences warnings that do mean missing rows.
+    pub(super) fn only_mount_stat_warnings(stderr: &str) -> bool {
+        let mut lines = stderr.lines();
+        while let Some(first) = lines.next() {
+            let named = first
+                .strip_prefix("lsof: WARNING: can't stat() ")
+                .and_then(|r| r.split_once(" file system /"))
+                .is_some_and(|(fs, _)| !fs.is_empty() && !fs.contains(' '));
+            let dev = lines
+                .next()
+                .filter(|l| *l == "      Output information may be incomplete.")
+                .and(lines.next())
+                .and_then(|l| l.strip_prefix("      assuming \"dev="))
+                .and_then(|r| r.strip_suffix("\" from mount table"))
+                .is_some_and(|h| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit()));
+            if !(named && dev) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -184,6 +210,38 @@ mod tests {
             kernel_tcp_listeners(std::process::id()).unwrap(),
             Vec::<String>::new()
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn accepts_only_the_mount_stat_warning() {
+        let warning = "lsof: WARNING: can't stat() hfs file system /private/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/49548321-01EB-453E-940C-85CE294CFA04
+      Output information may be incomplete.
+      assuming \"dev=100001c\" from mount table
+";
+        for ok in ["", warning, &warning.repeat(2)] {
+            assert!(imp::only_mount_stat_warnings(ok), "{ok:?}");
+        }
+        let first = warning.lines().next().unwrap();
+        let two: String = warning.lines().take(2).map(|l| format!("{l}\n")).collect();
+        let bad = [
+            "\n".to_owned(),
+            " ".to_owned(),
+            format!("{first}\n"),
+            two,
+            warning.replace("dev=100001c", "dev="),
+            warning.replace("dev=100001c", "dev=10zz"),
+            "lsof: avoiding stat(/): -b was specified.\n".to_owned(),
+            "lsof: PID 1, FD 3: proc_pidfdinfo(PROC_PIDFDSOCKETINFO);\n      too few bytes; expected 792, got 10\n".to_owned(),
+            "lsof: PID 1 information error: Operation not permitted\n".to_owned(),
+            "      Output information may be incomplete.\n".to_owned(),
+            "lsof: no mount information\n".to_owned(),
+        ];
+        for b in &bad {
+            for s in [b.clone(), format!("{warning}{b}"), format!("{b}{warning}")] {
+                assert!(!imp::only_mount_stat_warnings(&s), "{s:?}");
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]

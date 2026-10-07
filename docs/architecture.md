@@ -544,7 +544,7 @@ A test runs `systemd-analyze --user verify` on a unit with such characters in it
 
 `tailnet::kernel_tcp_listeners(pid)` lists the kernel TCP sockets in LISTEN state that a process holds. It first checks that the pid is alive (signal 0).
 
-- macOS: `/usr/sbin/lsof`, by absolute path.
+- macOS: `/usr/sbin/lsof`, by absolute path. Its stderr must be empty except for exact copies of the three-line warning lsof prints for a mount point it cannot stat() (macOS mounts disk images under the temp folder). That warning only affects file system names of file rows, never socket rows. Any other stderr, or an exit other than 0 or 1, is an error, never an empty list.
 - Linux: the socket inodes from the `socket:[N]` links in `/proc/<pid>/fd`, matched against the LISTEN rows (state `0A`) of `/proc/<pid>/net/tcp` and `tcp6`. The table header is checked. An fd closed during the listing is skipped, and so is a missing `tcp6` table when there is no IPv6 stack (no `/proc/sys/net/ipv6`); any other read or parse error is an error, never an empty list.
 
 Used by doctor's `listen` line and by the tailnet `end_to_end`, e2e and collied server tests.
