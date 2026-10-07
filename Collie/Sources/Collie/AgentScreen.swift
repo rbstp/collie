@@ -138,7 +138,7 @@ struct AgentScreen: View {
 }
 
 extension View {
-    /// Presents both steps of `close` once it begins; `perform` only runs from the second.
+    /// Asks to confirm `close` once it begins; `perform` only runs from that confirmation.
     func closeConfirmation(_ close: Binding<CloseConfirmation>, perform: @escaping @MainActor () async -> Void) -> some View {
         modifier(CloseDialogs(close: close, perform: perform))
     }
@@ -147,33 +147,24 @@ extension View {
 private struct CloseDialogs: ViewModifier {
     @Binding var close: CloseConfirmation
     let perform: @MainActor () async -> Void
-    @State private var confirmingFirst = false
-    @State private var confirmingSecond = false
+    @State private var asking = false
 
     func body(content: Content) -> some View {
         content
             .onChange(of: close.step) { _, step in
-                if case .first = step { confirmingFirst = true }
+                if case .asking = step { asking = true }
             }
-            .onChange(of: confirmingFirst) { _, shown in
-                if !shown, case .first = close.step { close.cancel() }
+            .onChange(of: asking) { _, shown in
+                if !shown, case .asking = close.step { close.cancel() }
             }
-            .confirmationDialog(title, isPresented: $confirmingFirst, titleVisibility: .visible) {
+            .confirmationDialog(title, isPresented: $asking, titleVisibility: .visible) {
                 Button(action, role: .destructive) {
                     close.advance()
-                    confirmingSecond = true
-                }
-                Button("Cancel", role: .cancel) { close.cancel() }
-            } message: {
-                Text(message)
-            }
-            .alert("Are you sure?", isPresented: $confirmingSecond) {
-                Button(action, role: .destructive) {
                     Task { await perform() }
                 }
                 Button("Cancel", role: .cancel) { close.cancel() }
             } message: {
-                Text("\(message) This cannot be undone.")
+                Text(message)
             }
     }
 

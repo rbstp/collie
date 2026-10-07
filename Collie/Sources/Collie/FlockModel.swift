@@ -45,7 +45,7 @@ final class FlockModel {
         close.begin(target)
     }
 
-    /// Only reachable after both confirmation steps, as on the agent screen.
+    /// Only reachable after the confirmation, as on the agent screen.
     func performClose(core: any AgentCore) async -> Bool {
         guard let route = closing, let target = close.confirm() else { return false }
         do {

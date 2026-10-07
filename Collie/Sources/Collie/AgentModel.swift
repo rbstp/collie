@@ -526,7 +526,7 @@ final class AgentModel {
         }
     }
 
-    /// Only reachable after both confirmation steps; the core is called with `confirm: true`.
+    /// Only reachable after the confirmation; the core is called with `confirm: true`.
     func performClose() async {
         guard let target = close.confirm() else { return }
         do {
@@ -591,12 +591,12 @@ enum CloseTarget: Equatable {
     case workspace(id: String)
 }
 
-/// Destructive closes need two explicit confirmations before the core sees `confirm: true`.
+/// Destructive closes need an explicit confirmation before the core sees `confirm: true`.
 struct CloseConfirmation: Equatable {
     enum Step: Equatable {
         case idle
-        case first(CloseTarget)
-        case second(CloseTarget)
+        case asking(CloseTarget)
+        case confirmed(CloseTarget)
     }
 
     private(set) var step = Step.idle
@@ -604,16 +604,16 @@ struct CloseConfirmation: Equatable {
     var target: CloseTarget? {
         switch step {
         case .idle: nil
-        case .first(let target), .second(let target): target
+        case .asking(let target), .confirmed(let target): target
         }
     }
 
     mutating func begin(_ target: CloseTarget) {
-        step = .first(target)
+        step = .asking(target)
     }
 
     mutating func advance() {
-        if case .first(let target) = step { step = .second(target) }
+        if case .asking(let target) = step { step = .confirmed(target) }
     }
 
     mutating func cancel() {
@@ -621,7 +621,7 @@ struct CloseConfirmation: Equatable {
     }
 
     mutating func confirm() -> CloseTarget? {
-        guard case .second(let target) = step else { return nil }
+        guard case .confirmed(let target) = step else { return nil }
         step = .idle
         return target
     }
