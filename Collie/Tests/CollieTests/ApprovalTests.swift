@@ -552,6 +552,15 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     #expect(auth.state.withLock { $0.reasons }.isEmpty)
     #expect(core.state.withLock { $0.decisions }.isEmpty)
 
+    let shrug = "ok \u{1F937}\u{200D}\u{2642}\u{FE0F}"
+    model.drafts[item.id] = shrug
+    await model.decide(item, .approve)
+    #expect(auth.state.withLock { $0.reasons }.isEmpty)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+    #expect(model.notice?.contains("combined emoji") == true)
+    #expect(model.drafts[item.id] == shrug)
+    model.drafts[item.id] = "use a .tmp extension"
+
     auth.state.withLock { $0.result = false }
     await model.decide(item, .approve)
     #expect(core.state.withLock { $0.decisions }.isEmpty)

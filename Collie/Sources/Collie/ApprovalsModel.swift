@@ -237,6 +237,12 @@ final class ApprovalsModel {
         guard let core, steps[item.id] == nil, item.approval.offers(decision),
             note == nil || item.approval.takesNote(with: decision)
         else { return }
+        if let note {
+            do { try checkNote(note: note, decision: decision) } catch {
+                show(describe(error), about: item.id)
+                return
+            }
+        }
         steps[item.id] = .authenticating(decision)
         show(nil)
         guard await auth.authenticate(reason: decision.reason(agent: item.approval.agentLabel)) else {

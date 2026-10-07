@@ -515,6 +515,26 @@ pub fn protocol_version() -> u32 {
     protocol::PROTOCOL_VERSION
 }
 
+/// The note check `decide` makes, for the app to run before asking for Face ID.
+#[uniffi::export]
+pub fn check_note(note: String, decision: ApprovalDecision) -> Result<(), CoreError> {
+    approval_note(note, decision).map(|_| ())
+}
+
+fn approval_note(note: String, decision: ApprovalDecision) -> Result<PromptText, CoreError> {
+    PromptText::new(note)
+        .ok()
+        .filter(|n| protocol::is_one_line(n.as_str()))
+        .filter(|n| n.as_str().chars().count() <= limits::MAX_NOTE_CHARS)
+        .filter(|_| matches!(decision, ApprovalDecision::Approve | ApprovalDecision::Deny))
+        .ok_or_else(|| {
+            invalid(
+                "note",
+                "a note must be one non-empty line of at most 200 characters, without control or invisible characters (some combined emoji contain one), with Approve or Deny",
+            )
+        })
+}
+
 #[uniffi::export]
 pub fn build_info() -> BuildInfo {
     BuildInfo {
@@ -1209,7 +1229,7 @@ impl CollieCore {
             .ok_or_else(|| {
                 invalid(
                     "text",
-                    "an answer must be one non-empty line of at most 32 KiB, without control or invisible characters",
+                    "an answer must be one non-empty line of at most 32 KiB, without control or invisible characters (some combined emoji contain one)",
                 )
             })?;
         let request = Request::AgentTypeText(AgentTypeTextParams {
@@ -1338,24 +1358,7 @@ impl CollieCore {
     ) -> Result<DecisionOutcome, CoreError> {
         let approval_id = ApprovalId::new(approval_id)
             .map_err(|_| invalid("approval_id", "invalid approval id"))?;
-        let note = match note {
-            None => None,
-            Some(note) => Some(
-                PromptText::new(note)
-                    .ok()
-                    .filter(|n| protocol::is_one_line(n.as_str()))
-                    .filter(|n| n.as_str().chars().count() <= limits::MAX_NOTE_CHARS)
-                    .filter(|_| {
-                        matches!(decision, ApprovalDecision::Approve | ApprovalDecision::Deny)
-                    })
-                    .ok_or_else(|| {
-                        invalid(
-                            "note",
-                            "a note must be one non-empty line of at most 200 characters, without control or invisible characters, with Approve or Deny",
-                        )
-                    })?,
-            ),
-        };
+        let note = note.map(|n| approval_note(n, decision)).transpose()?;
         let conn = self.conn(&machine_id)?;
         let _busy = Busy::new(&self.inner);
         self.run(async move {
@@ -2991,6 +2994,7 @@ mod tests {
             "x\u{1b}[2J",
             "echo ok \u{202E}x",
             "a\u{200B}b",
+            "use Redis\u{E0041}",
         ] {
             assert_eq!(
                 field(rt.block_on(core.type_text(m(), t(), bad.into()))),
@@ -3935,16 +3939,19 @@ mod tailnet_tests {
             (ApprovalDecision::Approve, "a\u{1b}[Z".to_owned()),
             (ApprovalDecision::Approve, "ok \u{202E}x".to_owned()),
             (ApprovalDecision::Deny, "a\u{2066}b".to_owned()),
+            (ApprovalDecision::Deny, "use Redis\u{E0041}".to_owned()),
             (
                 ApprovalDecision::Deny,
                 "a".repeat(limits::MAX_NOTE_CHARS + 1),
             ),
         ] {
+            assert!(check_note(note.clone(), decision).is_err(), "{note:?}");
             let err = rt
                 .block_on(core.decide(id(), "a1".into(), decision, Some(note)))
                 .unwrap_err();
             assert!(matches!(err, CoreError::InvalidInput { .. }), "{err:?}");
         }
+        assert!(check_note("oui\u{202F}! 👍🏽".into(), ApprovalDecision::Approve).is_ok());
         let outcome = rt
             .block_on(core.decide(
                 id(),
