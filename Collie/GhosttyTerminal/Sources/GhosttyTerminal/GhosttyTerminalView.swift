@@ -1,27 +1,6 @@
 #if canImport(UIKit)
 import CoreText
-import SwiftUI
 import UIKit
-
-/// Read-only terminal snapshot for SwiftUI. Input goes through the app's prompt bar and key strip.
-public struct GhosttyTerminalView: UIViewRepresentable {
-    public var snapshot: String
-    public var fontSize: CGFloat
-
-    public init(snapshot: String, fontSize: CGFloat = 12) {
-        self.snapshot = snapshot
-        self.fontSize = fontSize
-    }
-
-    public func makeUIView(context: Context) -> GhosttyTerminalUIView {
-        GhosttyTerminalUIView(fontSize: fontSize)
-    }
-
-    public func updateUIView(_ view: GhosttyTerminalUIView, context: Context) {
-        view.fontSize = fontSize
-        view.show(ansiSnapshot: snapshot)
-    }
-}
 
 /// Scrolls over the snapshot and draws only the visible cells, so a wide pane never needs a
 /// backing store larger than the screen.
@@ -100,7 +79,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private let swipe = UIPanGestureRecognizer()
     private let swipeFilter = SwipeAlongsideScroll()
 
-    public init(fontSize: CGFloat = 12) {
+    public init(fontSize: CGFloat) {
         self.fontSize = fontSize
         super.init(frame: .zero)
         backgroundColor = UIColor(Self.background)

@@ -1,11 +1,11 @@
 import GhosttyVt
 
-public struct TerminalRGB: Hashable, Sendable {
-    public var r: UInt8
-    public var g: UInt8
-    public var b: UInt8
+struct TerminalRGB: Hashable, Sendable {
+    var r: UInt8
+    var g: UInt8
+    var b: UInt8
 
-    public init(_ r: UInt8, _ g: UInt8, _ b: UInt8) {
+    init(_ r: UInt8, _ g: UInt8, _ b: UInt8) {
         self.r = r
         self.g = g
         self.b = b
@@ -16,44 +16,43 @@ public struct TerminalRGB: Hashable, Sendable {
     }
 }
 
-public struct TerminalStyle: Hashable, Sendable {
-    public var foreground: TerminalRGB
-    public var background: TerminalRGB?
-    public var bold = false
-    public var italic = false
-    public var faint = false
-    public var underline = false
-    public var strikethrough = false
-    public var invisible = false
+struct TerminalStyle: Hashable, Sendable {
+    var foreground: TerminalRGB
+    var background: TerminalRGB?
+    var bold = false
+    var italic = false
+    var faint = false
+    var underline = false
+    var strikethrough = false
+    var invisible = false
 }
 
 /// Consecutive cells of one row sharing a style. `utf16Columns[i]` is the column of `text.utf16[i]`.
-public struct TerminalRun: Equatable, Sendable {
-    public var row: Int
-    public var startColumn: Int
-    public var endColumn: Int
-    public var text: String
-    public var utf16Columns: [Int]
-    public var style: TerminalStyle
+struct TerminalRun: Equatable, Sendable {
+    var row: Int
+    var startColumn: Int
+    var endColumn: Int
+    var text: String
+    var utf16Columns: [Int]
+    var style: TerminalStyle
 }
 
-public struct TerminalFrame: Equatable, Sendable {
-    public var columns: Int
-    public var rows: Int
-    public var background: TerminalRGB
-    public var foreground: TerminalRGB
-    public var runs: [TerminalRun]
+struct TerminalFrame: Equatable, Sendable {
+    var columns: Int
+    var rows: Int
+    var background: TerminalRGB
+    var runs: [TerminalRun]
     /// Rows that continue the row above after a soft wrap.
-    public var wrapContinuations: Set<Int> = []
+    var wrapContinuations: Set<Int> = []
     /// True when content scrolled while wrapping, so a full row may continue a soft wrap that
     /// `wrapContinuations` does not list.
-    public var wrapsUnknown = false
+    var wrapsUnknown = false
 }
 
 /// A libghostty-vt terminal used as a snapshot renderer: no pty, no scrollback, no replies.
 /// Nothing is registered for terminal output (WRITE_PTY), clipboard or other effects, so the
 /// rendered content can never send bytes anywhere.
-public final class TerminalScreen {
+final class TerminalScreen {
     // Bounds on untrusted snapshot dimensions. Without wrapping, wider rows are clipped.
     static let maxColumns: UInt16 = 500
     static let maxRows: UInt16 = 2000
@@ -65,7 +64,7 @@ public final class TerminalScreen {
     private var columns = TerminalScreen.maxColumns
     private var rows: UInt16 = 1
 
-    public init?(background: TerminalRGB, foreground: TerminalRGB) {
+    init?(background: TerminalRGB, foreground: TerminalRGB) {
         var terminal: OpaquePointer?
         var renderState: OpaquePointer?
         var rowIterator: OpaquePointer?
@@ -105,7 +104,7 @@ public final class TerminalScreen {
     /// Replaces the screen with `snapshot`: rows of SGR-styled text joined by "\r\n". With
     /// `wrapColumns`, rows wrap at that width after trailing blanks are trimmed; without it they
     /// are clipped at `maxColumns`.
-    public func render(ansiSnapshot snapshot: String, wrapColumns: Int? = nil) -> TerminalFrame {
+    func render(ansiSnapshot snapshot: String, wrapColumns: Int? = nil) -> TerminalFrame {
         let wantedColumns: UInt16
         let wantedRows: UInt16
         var bytes: [UInt8]
@@ -165,7 +164,7 @@ public final class TerminalScreen {
     }
 
     /// Columns that fit `width` points of cells `cellWidth` wide, within 1...maxColumns.
-    public static func wrapColumns(width: Double, cellWidth: Double) -> Int {
+    static func wrapColumns(width: Double, cellWidth: Double) -> Int {
         guard cellWidth > 0, width.isFinite, width > 0 else { return 1 }
         return Int(min(max((width / cellWidth).rounded(.down), 1), Double(maxColumns)))
     }
@@ -375,7 +374,7 @@ public final class TerminalScreen {
         return breaks
     }
 
-    static let horizontalLines: Set<UInt32> = [0x2500, 0x2501, 0x2504, 0x2505, 0x2508, 0x2509, 0x254C, 0x254D, 0x2550]
+    private static let horizontalLines: Set<UInt32> = [0x2500, 0x2501, 0x2504, 0x2505, 0x2508, 0x2509, 0x254C, 0x254D, 0x2550]
 
     private static func sgrEnd(_ scalars: [Unicode.Scalar], at i: Int, before end: Int) -> Int? {
         guard scalars[i] == "\u{1B}", i + 1 < end, scalars[i + 1] == "[" else { return nil }
@@ -493,7 +492,6 @@ public final class TerminalScreen {
             columns: usedColumns,
             rows: usedRows,
             background: defaultBackground,
-            foreground: defaultForeground,
             runs: runs.filter { $0.row < usedRows && $0.startColumn < usedColumns }
         )
     }
