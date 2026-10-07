@@ -2,9 +2,11 @@ import Foundation
 import Security
 
 /// One generic password in the data protection keychain, holding a key's blob.
-struct KeychainItem {
+// @unchecked: accessible is one of the immutable kSecAttrAccessible constants.
+struct KeychainItem: @unchecked Sendable {
     let service: String
     let account: String
+    let accessible: CFString
 
     var query: [String: Any] {
         [
@@ -22,7 +24,7 @@ struct KeychainItem {
         return query
     }
 
-    func addQuery(_ data: Data, accessible: CFString) -> [String: Any] {
+    func addQuery(_ data: Data) -> [String: Any] {
         var item = query
         item[kSecAttrAccessible as String] = accessible
         item[kSecValueData as String] = data
@@ -38,9 +40,9 @@ struct KeychainItem {
     }
 
     /// Replaces any stored blob.
-    func write(_ data: Data, accessible: CFString) throws {
+    func write(_ data: Data) throws {
         SecItemDelete(query as CFDictionary)
-        let status = SecItemAdd(addQuery(data, accessible: accessible) as CFDictionary, nil)
+        let status = SecItemAdd(addQuery(data) as CFDictionary, nil)
         guard status == errSecSuccess else { throw KeychainError(status: status) }
     }
 }

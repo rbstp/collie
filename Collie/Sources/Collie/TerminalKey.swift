@@ -7,7 +7,13 @@ import Security
 /// Secure Enclave P-256 key, apart from the TLS key, that signs only after Face ID or the
 /// passcode. It exists only while the phone has a passcode; removing it destroys the key.
 enum TerminalKey {
-    static let keychain = KeychainItem(service: "dev.rbstp.collie.identity", account: "terminal")
+    #if targetEnvironment(simulator)
+    static let keychain = KeychainItem(
+        service: "dev.rbstp.collie.identity", account: "terminal", accessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
+    #else
+    static let keychain = KeychainItem(
+        service: "dev.rbstp.collie.identity", account: "terminal", accessible: kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly)
+    #endif
 
     /// nil when this phone cannot hold one (no passcode, or the phone is locked): terminals
     /// then ask to pair again. On a device there is no software fallback.
@@ -41,7 +47,7 @@ enum TerminalKey {
     private static func softKey() throws -> P256.Signing.PrivateKey {
         if let stored = try keychain.read() { return try P256.Signing.PrivateKey(rawRepresentation: stored) }
         let key = P256.Signing.PrivateKey()
-        try keychain.write(key.rawRepresentation, accessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
+        try keychain.write(key.rawRepresentation)
         return key
     }
     #else
@@ -57,7 +63,7 @@ enum TerminalKey {
             nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, [.privateKeyUsage, .userPresence], &error)
         else { throw error!.takeRetainedValue() as Error }
         let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access, authenticationContext: context)
-        try keychain.write(key.dataRepresentation, accessible: kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly)
+        try keychain.write(key.dataRepresentation)
         return key
     }
     #endif

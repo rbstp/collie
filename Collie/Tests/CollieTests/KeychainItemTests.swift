@@ -57,7 +57,7 @@ struct KeychainItemTests {
         expectSame(item.query, Before.identityBase())
         expectSame(item.readQuery, Before.read(Before.identityBase()))
         expectSame(
-            item.addQuery(blob, accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly),
+            item.addQuery(blob),
             Before.add(Before.identityBase(), blob, accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly)
         )
     }
@@ -66,11 +66,11 @@ struct KeychainItemTests {
         let item = TerminalKey.keychain
         expectSame(item.query, Before.terminalBase())
         expectSame(item.readQuery, Before.read(Before.terminalBase()))
-        for accessible in [kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, kSecAttrAccessibleWhenUnlockedThisDeviceOnly] {
-            expectSame(
-                item.addQuery(blob, accessible: accessible),
-                Before.add(Before.terminalBase(), blob, accessible: accessible)
-            )
-        }
+        #if targetEnvironment(simulator)
+        let accessible = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        #else
+        let accessible = kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly
+        #endif
+        expectSame(item.addQuery(blob), Before.add(Before.terminalBase(), blob, accessible: accessible))
     }
 }
