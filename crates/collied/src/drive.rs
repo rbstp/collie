@@ -415,14 +415,14 @@ impl Driver {
                     else {
                         continue;
                     };
-                    let mut read = terminal_read(terminal_id.clone(), ReadSource::Recent, read);
                     let mut h = DefaultHasher::new();
-                    (&read.ansi, read.truncated).hash(&mut h);
+                    (&read.text, read.truncated).hash(&mut h);
                     let hash = h.finish();
                     if last == Some(hash) {
                         continue;
                     }
                     last = Some(hash);
+                    let mut read = terminal_read(terminal_id.clone(), ReadSource::Recent, read);
                     if claude && !self.reflow(&pane_id, &mut read).await {
                         last = None;
                     }

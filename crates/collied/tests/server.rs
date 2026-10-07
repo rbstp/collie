@@ -576,6 +576,13 @@ async fn scenario(
         serde_json::from_slice(&std::fs::read(data_dir.join("stars.json")).unwrap()).unwrap()
     };
     assert!(saved().get(shell).is_some());
+    let calls = |method: &str| herdr.methods().iter().filter(|m| *m == method).count();
+    let asked = calls("session.snapshot");
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert!(
+        calls("session.snapshot") > asked,
+        "a starred shell pane skipped the snapshot"
+    );
     let closed = {
         let mut snap = herdr.snapshot.lock().unwrap();
         let panes = snap["panes"].as_array_mut().unwrap();
@@ -598,6 +605,68 @@ async fn scenario(
         panic!("no flock");
     };
     assert!(!flock.starred.iter().any(|t| t.as_str() == shell));
+
+    println!("stars agent.list shows where they were last seen skip the snapshot");
+    let set_extra = |terminal: Option<&str>| {
+        let mut snap = herdr.snapshot.lock().unwrap();
+        for list in ["agents", "panes"] {
+            let rows = snap[list].as_array_mut().unwrap();
+            rows.retain(|r| r["pane_id"] != "w6:p2");
+            if let Some(terminal) = terminal {
+                let mut row = rows[0].clone();
+                row["terminal_id"] = json!(terminal);
+                row["pane_id"] = json!("w6:p2");
+                rows.push(row);
+            }
+        }
+    };
+    let first = "term_aaaaaaaaaaaa01";
+    set_extra(Some(first));
+    assert_eq!(
+        result(call(&mut ws, "agent.star", star(first, true)).await),
+        Response::Ok
+    );
+    // A tick that read `agent.list` before the star may still take the snapshot.
+    let ticked = calls("agent.list") + 1;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls("agent.list") < ticked {
+        assert!(Instant::now() < deadline, "no reconcile tick");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let asked = calls("session.snapshot");
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(calls("session.snapshot"), asked);
+
+    println!("a herdr restore moves the star to its pane's new terminal id");
+    let restored = "term_aaaaaaaaaaaa02";
+    set_extra(Some(restored));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while saved().get(restored).is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "star not moved to the restored pane"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(saved().get(first).is_none());
+
+    println!("a closed agent pane loses its star before herdr reuses its pane id");
+    set_extra(None);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while saved().get(restored).is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "star of a closed agent pane kept"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let reused = "term_aaaaaaaaaaaa03";
+    set_extra(Some(reused));
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert!(saved().get(reused).is_none());
+    set_extra(None);
+    // The reconcile's flock.changed for the closed pane.
+    while let Ok(Some(_)) = tokio::time::timeout(Duration::from_secs(3), ws.next()).await {}
 
     println!("a fifth session from one node evicts its oldest");
     let mut extra = Vec::new();

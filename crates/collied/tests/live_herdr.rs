@@ -211,12 +211,31 @@ async fn approval_scenario(session: &HerdrSession) {
     );
     let screen = herdr::detection_text(socket, &pane).await.unwrap();
     assert!(screen.contains("Removed build/"), "{screen}");
-    close_workspace(
-        &Driver::new(socket.clone(), vec![], std::slice::from_ref(&work)).unwrap(),
-        socket,
-        WorkspaceId::new(created.root_pane.workspace_id).unwrap(),
-    )
-    .await;
+
+    // The reconcile skips the star snapshot while every star is in `agent.list`, so a
+    // closed agent pane must leave `agent.list` when it leaves the snapshot.
+    let close = PaneCloseParams {
+        terminal_id: TerminalId::new(terminal.clone()).unwrap(),
+        confirm: true,
+    };
+    assert_eq!(drive.pane_close(close, &yes).await, Ok(Response::Ok));
+    let agents = herdr::agent_list(socket).await.unwrap();
+    assert!(
+        !agents
+            .iter()
+            .any(|a| a.terminal_id == terminal || a.pane_id == pane)
+    );
+    let snap = herdr::session_snapshot(socket).await.unwrap();
+    assert!(!snap.panes.iter().any(|p| p.terminal_id == terminal));
+    let workspace = created.root_pane.workspace_id;
+    if snap.workspaces.iter().any(|w| w.workspace_id == workspace) {
+        close_workspace(
+            &Driver::new(socket.clone(), vec![], std::slice::from_ref(&work)).unwrap(),
+            socket,
+            WorkspaceId::new(workspace).unwrap(),
+        )
+        .await;
+    }
 }
 
 async fn scenario(session: &HerdrSession) {
