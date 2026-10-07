@@ -49,8 +49,7 @@ jobs:
             ~/go/pkg/mod
             ~/Library/Caches/go-build
             target
-            !target/debug/incremental
-          key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/*.patch', 'crates/tailnet/testcontrol/go.sum') }}
+          key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch', 'crates/tailnet/testcontrol/go.sum') }}
           restore-keys: rust-
 
       - name: install just, cargo-deny and cargo-nextest
@@ -110,7 +109,7 @@ jobs:
             ~/go/pkg/mod
             ~/Library/Caches/go-build
             target
-          key: ios-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/*.patch') }}
+          key: ios-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch') }}
           restore-keys: ios-
 
       - name: install just and xcodegen
