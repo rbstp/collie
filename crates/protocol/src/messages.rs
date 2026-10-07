@@ -45,6 +45,8 @@ pub enum Request {
     AgentTypeText(AgentTypeTextParams),
     #[serde(rename = "agent.focus")]
     AgentFocus(AgentTarget),
+    #[serde(rename = "agent.scroll_bottom")]
+    AgentScrollBottom(AgentTarget),
     #[serde(rename = "agent.star")]
     AgentStar(AgentStarParams),
     #[serde(rename = "task.new")]
@@ -104,6 +106,7 @@ impl Request {
         "agent.send_keys",
         "agent.type_text",
         "agent.focus",
+        "agent.scroll_bottom",
         "agent.star",
         "task.new",
         "workspace.close",
@@ -140,6 +143,7 @@ impl Request {
             Self::AgentSendKeys(_) => "agent.send_keys",
             Self::AgentTypeText(_) => "agent.type_text",
             Self::AgentFocus(_) => "agent.focus",
+            Self::AgentScrollBottom(_) => "agent.scroll_bottom",
             Self::AgentStar(_) => "agent.star",
             Self::TaskNew(_) => "task.new",
             Self::WorkspaceClose(_) => "workspace.close",
@@ -176,6 +180,7 @@ impl Request {
             | Self::AgentSendKeys(_)
             | Self::AgentTypeText(_)
             | Self::AgentFocus(_)
+            | Self::AgentScrollBottom(_)
             | Self::AgentStar(_)
             | Self::TaskNew(_)
             | Self::WorkspaceClose(_)
@@ -1216,6 +1221,26 @@ mod tests {
         assert_eq!(parse(top).unwrap_err().code, ErrorCode::MalformedFrame);
         let no_keys = r#"{"id":1,"method":"agent.send_keys","params":{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"t","keys":[]}}"#;
         assert_eq!(parse(no_keys).unwrap_err().code, ErrorCode::InvalidParams);
+    }
+
+    #[test]
+    fn scroll_bottom_names_only_the_agent() {
+        let frame =
+            parse(r#"{"id":1,"method":"agent.scroll_bottom","params":{"terminal_id":"term_1"}}"#)
+                .unwrap();
+        assert_eq!(frame.request.class(), MethodClass::Drive);
+        assert_eq!(frame.request.method(), "agent.scroll_bottom");
+        let json = serde_json::to_string(&frame).unwrap();
+        assert_eq!(parse(&json).unwrap(), frame);
+        for params in [
+            r#"{"terminal_id":"t","keys":["ctrl+end"]}"#,
+            r#"{"terminal_id":"t","text":"x"}"#,
+            "{}",
+        ] {
+            let bad = format!(r#"{{"id":1,"method":"agent.scroll_bottom","params":{params}}}"#);
+            assert_eq!(parse(&bad).unwrap_err().code, ErrorCode::InvalidParams);
+        }
+        assert_eq!(crate::PROTOCOL_VERSION, 9);
     }
 
     #[test]

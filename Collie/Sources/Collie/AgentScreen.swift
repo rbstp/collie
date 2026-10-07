@@ -60,6 +60,15 @@ struct AgentScreen: View {
                         ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
                     }
                 }
+                .overlay(alignment: .bottom) {
+                    if model.jumpBanner {
+                        Button("Jump to bottom", systemImage: "arrow.down") {
+                            Task { await model.jumpToBottom() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.bottom, 8)
+                    }
+                }
             if let notice = model.notice ?? model.blockedHint {
                 Label(notice, systemImage: "exclamationmark.triangle")
                     .font(.footnote)

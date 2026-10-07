@@ -63,6 +63,12 @@ const PLAN: &str = include_str!("fixtures/claude/plan.txt");
 const PLAN_LIVE: &str = include_str!("fixtures/claude-2.1.289/plan.detection.txt");
 const PLAN_TYPED_LIVE: &str =
     include_str!("fixtures/claude-2.1.289/plan-feedback-typed.detection.txt");
+// Claude Code 2.1.293 fullscreen in herdr 0.9.3, scrolled up with Page Up.
+const SCROLLED: &str = include_str!("fixtures/claude-2.1.293/scrolled-idle.detection.txt");
+const SCROLLED_DIALOG: &str =
+    include_str!("fixtures/claude-2.1.293/scrolled-dialog-hidden.detection.txt");
+const NEW_MESSAGE: &str = include_str!("fixtures/claude-2.1.293/new-message.detection.txt");
+const BOTTOM: &str = include_str!("fixtures/claude-2.1.293/bottom-idle.detection.txt");
 const MUTATING: [&str; 10] = [
     "agent.prompt",
     "agent.send_keys",
@@ -443,11 +449,20 @@ async fn prompt_rechecks_the_agent_before_writing() {
     assert_eq!(drive.prompt(prompt(CLAUDE), &yes()).await, Ok(Response::Ok));
     assert_eq!(
         herdr.methods(),
-        vec!["agent.list", "agent.get", "pane.read", "agent.prompt"]
+        vec![
+            "agent.list",
+            "agent.get",
+            "pane.read",
+            "pane.read",
+            "agent.prompt"
+        ]
     );
     assert_eq!(
         herdr.params("pane.read"),
-        vec![json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"})]
+        vec![
+            json!({"pane_id": "w6:p1", "source": "detection", "format": "text"}),
+            json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"})
+        ]
     );
     assert_eq!(
         herdr.params("agent.prompt"),
@@ -554,7 +569,8 @@ async fn prompt_replaces_the_draft_the_phone_saw() {
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
     herdr.with(|h| {
-        h.screens = [screen("❯ one  \n  two\n  three"), screen(PLACEHOLDER)].into();
+        let draft = screen("❯ one  \n  two\n  three");
+        h.screens = [draft.clone(), draft, screen(PLACEHOLDER)].into();
     });
     assert_eq!(
         drive.prompt(expecting("one\ntwo\nthree\n"), &yes()).await,
@@ -565,6 +581,7 @@ async fn prompt_replaces_the_draft_the_phone_saw() {
         vec![
             "agent.list",
             "agent.get",
+            "pane.read",
             "pane.read",
             "agent.send_keys",
             "pane.read",
@@ -671,7 +688,7 @@ async fn prompt_is_not_sent_when_the_draft_does_not_clear() {
 
     herdr.with(|h| {
         h.calls.clear();
-        h.screens = [screen("❯ one"), TRUST.to_owned()].into();
+        h.screens = [screen("❯ one"), screen("❯ one"), TRUST.to_owned()].into();
     });
     assert_eq!(
         code(drive.prompt(expecting("one"), &yes()).await),
@@ -682,7 +699,7 @@ async fn prompt_is_not_sent_when_the_draft_does_not_clear() {
 
     herdr.with(|h| {
         h.calls.clear();
-        h.screens = [screen("❯ one"), screen(PLACEHOLDER)].into();
+        h.screens = [screen("❯ one"), screen("❯ one"), screen(PLACEHOLDER)].into();
     });
     assert_eq!(
         code(drive.prompt(expecting("one"), &no()).await),
@@ -698,7 +715,7 @@ async fn prompt_is_not_sent_when_the_draft_does_not_clear() {
     );
     herdr.with(|h| {
         h.calls.clear();
-        h.screens = [screen(&rows), screen(PLACEHOLDER)].into();
+        h.screens = [screen(&rows), screen(&rows), screen(PLACEHOLDER)].into();
     });
     let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = checks.clone();
@@ -827,6 +844,107 @@ async fn send_keys_and_focus() {
         ErrorCode::NotPaired
     );
     assert_eq!(herdr.params("agent.focus").len(), 1);
+}
+
+#[tokio::test]
+async fn scroll_bottom_sends_ctrl_end_only_while_claude_shows_the_banner() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    for screen in [SCROLLED, SCROLLED_DIALOG, NEW_MESSAGE] {
+        herdr.with(|h| h.text = screen.into());
+        assert_eq!(
+            drive.scroll_bottom(&tid(CLAUDE), &yes()).await,
+            Ok(Response::Ok)
+        );
+    }
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        vec![json!({"pane_id": "w6:p1", "text": "\u{1b}[1;5F"}); 3]
+    );
+    assert_eq!(
+        herdr.params("pane.read")[0],
+        json!({"pane_id": "w6:p1", "source": "detection", "format": "text"})
+    );
+
+    let mut blocked = herdr.with(|h| h.snapshot["agents"][0].clone());
+    blocked["agent_status"] = json!("blocked");
+    herdr.with(|h| h.gets.push_back(blocked));
+    assert_eq!(
+        drive.scroll_bottom(&tid(CLAUDE), &yes()).await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(herdr.mutations(), vec!["pane.send_text"; 4]);
+
+    herdr.with(|h| h.text = BOTTOM.into());
+    assert_eq!(
+        code(drive.scroll_bottom(&tid(CLAUDE), &yes()).await),
+        ErrorCode::AgentNotReady
+    );
+    herdr.with(|h| h.text = SCROLLED.into());
+    assert_eq!(
+        drive.scroll_bottom(&tid(CODEX_BLOCKED), &yes()).await,
+        Err((ErrorCode::AgentNotReady, "not a Claude Code agent".into()))
+    );
+    let mut other = herdr.with(|h| h.snapshot["agents"][0].clone());
+    other["agent_session"]["value"] = json!("11111111-0000-4000-8000-000000000000");
+    herdr.with(|h| h.gets.push_back(other));
+    assert_eq!(
+        code(drive.scroll_bottom(&tid(CLAUDE), &yes()).await),
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(
+        code(drive.scroll_bottom(&tid("term_gone"), &yes()).await),
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        code(drive.scroll_bottom(&tid(CLAUDE), &no()).await),
+        ErrorCode::NotPaired
+    );
+    assert_eq!(herdr.mutations().len(), 4);
+}
+
+#[tokio::test]
+async fn keys_and_prompts_are_refused_while_claude_is_scrolled_up() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    for screen in [SCROLLED, SCROLLED_DIALOG, NEW_MESSAGE] {
+        herdr.with(|h| h.text = screen.into());
+        let (reply, target) = drive.send_keys(keys(CLAUDE), &yes()).await;
+        assert_eq!(code(reply), ErrorCode::AgentNotReady);
+        assert_eq!(target, None);
+    }
+    block(&herdr, &format!("{QUESTION}\n   1 new message (click) ↓\n"));
+    assert_eq!(
+        code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
+        ErrorCode::AgentNotReady
+    );
+    assert!(herdr.mutations().is_empty());
+    for screen in [SCROLLED, SCROLLED_DIALOG, NEW_MESSAGE] {
+        herdr.with(|h| {
+            h.snapshot["agents"][0]["agent_status"] = json!("idle");
+            h.text = screen.into();
+        });
+        assert_eq!(
+            drive.prompt(prompt(CLAUDE), &yes()).await,
+            Err((
+                ErrorCode::AgentNotReady,
+                "scrolled up on the machine; jump to the bottom first".into()
+            ))
+        );
+    }
+    assert!(herdr.mutations().is_empty());
+
+    herdr.with(|h| {
+        h.snapshot["agents"][0]["agent_status"] = json!("idle");
+        h.text = BOTTOM.into();
+    });
+    assert_eq!(
+        drive.send_keys(keys(CLAUDE), &yes()).await,
+        (Ok(Response::Ok), None)
+    );
+    assert_eq!(herdr.mutations(), ["agent.send_keys"]);
 }
 
 #[tokio::test]

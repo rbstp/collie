@@ -867,6 +867,22 @@
     {
       "properties": {
         "method": {
+          "const": "agent.scroll_bottom",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentTarget"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
           "const": "agent.star",
           "type": "string"
         },

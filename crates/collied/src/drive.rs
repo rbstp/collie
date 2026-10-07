@@ -46,6 +46,9 @@ const BLOCKED: &str = "agent is blocked; answer it through an approval";
 const TYPED_NOT_SENT: &str = "the prompt did not take the text; Enter was not sent";
 pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
 pub const LOCKED: &str = "the terminal is locked; unlock it again";
+const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
+/// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
+const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
 
 pub(crate) fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, Fail> {
     Err((code, message.into()))
@@ -485,6 +488,13 @@ impl Driver {
         let a = self.ready_agent(&p.terminal_id).await?;
         // herdr pastes a prompt after whatever is in Claude Code's input box.
         if a.agent.as_deref() == Some("claude") {
+            // herdr ends a prompt with Enter, which would confirm a dialog scrolled out of view.
+            let screen = herdr::detection_text(&self.herdr, &a.pane_id)
+                .await
+                .map_err(herdr_fail)?;
+            if protocol::jump_banner(&screen) {
+                return fail(ErrorCode::AgentNotReady, SCROLLED);
+            }
             let expected = p.expected_draft.as_ref().map(|d| d.as_str());
             self.replace_draft(&a.pane_id, expected, auth).await?;
         }
@@ -563,6 +573,19 @@ impl Driver {
             Ok(found) => found,
             Err(e) => return (Err(e), None),
         };
+        if a.agent.as_deref() == Some("claude") {
+            // A dialog scrolled out of view leaves the agent idle: keys would answer it unseen.
+            let scrolled = match &screen {
+                Some(s) => protocol::jump_banner(s),
+                None => match herdr::detection_text(&self.herdr, &a.pane_id).await {
+                    Ok(s) => protocol::jump_banner(&s),
+                    Err(e) => return (Err(herdr_fail(e)), None),
+                },
+            };
+            if scrolled {
+                return (fail(ErrorCode::AgentNotReady, SCROLLED), None);
+            }
+        }
         let keys: Vec<&str> = p.keys.iter().map(|k| k.herdr_name()).collect();
         let target = screen
             .is_some()
@@ -648,6 +671,33 @@ impl Driver {
         let a = self.find_agent(terminal_id).await?;
         authorized(auth)?;
         herdr::agent_focus(&self.herdr, &a.pane_id)
+            .await
+            .map_err(herdr_fail)?;
+        Ok(Response::Ok)
+    }
+
+    /// Navigation only, and only while Claude Code shows its banner: Ctrl+End never answers
+    /// a dialog, and brings back one scrolled out of view.
+    pub async fn scroll_bottom(&self, terminal_id: &TerminalId, auth: &Authorized) -> Reply {
+        let listed = self.find_agent(terminal_id).await?;
+        let current = herdr::agent_get(&self.herdr, &listed.pane_id)
+            .await
+            .map_err(herdr_fail)?;
+        match check_ready(&listed, &current) {
+            Ok(()) | Err((ErrorCode::AgentBlocked, _)) => {}
+            Err(e) => return Err(e),
+        }
+        if current.agent.as_deref() != Some("claude") {
+            return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
+        }
+        let screen = herdr::detection_text(&self.herdr, &current.pane_id)
+            .await
+            .map_err(herdr_fail)?;
+        if !protocol::jump_banner(&screen) {
+            return fail(ErrorCode::AgentNotReady, "already at the bottom");
+        }
+        authorized(auth)?;
+        herdr::pane_send_text(&self.herdr, &current.pane_id, SCROLL_BOTTOM)
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)

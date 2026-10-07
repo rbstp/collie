@@ -16,6 +16,7 @@ final class FakeCore: AgentCore {
         var typed: [String] = []
         var closes: [String] = []
         var stars: [String] = []
+        var scrolls: [String] = []
         var hold = false
         var held: [CheckedContinuation<Void, Never>] = []
         var error: CoreError?
@@ -101,8 +102,14 @@ final class FakeCore: AgentCore {
             )
         }
         if let output = state.withLock({ $0.output }) {
+            let agent = s.kind.map {
+                AgentSummary(
+                    terminalId: terminalId, workspaceId: "w1", kind: $0, name: nil, title: nil,
+                    status: .idle, statusSinceMs: 0, cwd: nil, lastLine: nil
+                )
+            }
             return AgentView(
-                link: .connected, lastError: nil, agent: nil, output: output.terminalId == terminalId ? output : nil, outputRevision: 1
+                link: .connected, lastError: nil, agent: agent, output: output.terminalId == terminalId ? output : nil, outputRevision: 1
             )
         }
         guard let kind = state.withLock({ $0.kind }) else { return nil }
@@ -147,6 +154,9 @@ final class FakeCore: AgentCore {
         try await call { $0.typed.append(text) }
     }
     func focus(machineId: String, terminalId: String) async throws {}
+    func scrollBottom(machineId: String, terminalId: String) async throws {
+        try await call { $0.scrolls.append(terminalId) }
+    }
     func star(machineId: String, terminalId: String, starred: Bool) async throws {
         try await call { $0.stars.append("\(machineId) \(terminalId) \(starred)") }
     }
@@ -954,6 +964,44 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     model.blocked = .keysAndText
     #expect(model.acceptsKeys && model.answering)
     #expect(model.blockedHint == "Choose an option above, use the arrow keys, or type an answer.")
+}
+
+@MainActor
+@Test func aScrolledUpTranscriptOffersJumpToBottomInsteadOfKeys() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "Jump to bottom ↓", truncated: false, jumpBanner: true)
+    }
+    let model = agentModel(core)
+    model.poll()
+    #expect(model.jumpBanner && !model.acceptsKeys)
+    #expect(model.tap(.down) == nil)
+    await model.jumpToBottom()
+    #expect(core.snapshot.scrolls == ["term_1"])
+    #expect(core.snapshot.keys.isEmpty)
+    #expect(!model.jumpBanner, "hidden until a new screen shows the banner again")
+
+    core.set(error: .AgentNotReady)
+    await model.jumpToBottom()
+    #expect(model.notice != nil && model.jumpBanner)
+    core.set()
+
+    core.state.withLock { $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "❯ ", truncated: false) }
+    model.poll()
+    #expect(!model.jumpBanner && model.acceptsKeys)
+}
+
+@MainActor
+@Test func onlyClaudeCodeOffersJumpToBottom() {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "codex"
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "12 new messages ↓", truncated: false, jumpBanner: true)
+    }
+    let model = agentModel(core)
+    model.poll()
+    #expect(!model.jumpBanner && model.acceptsKeys)
 }
 
 @MainActor
