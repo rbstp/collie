@@ -1477,7 +1477,7 @@ impl CollieCore {
             terminal_id: terminal(terminal_id)?,
             token: PushToken::new(token_hex.trim())
                 .map_err(|_| invalid("token", "activity token must be 64 to 256 hex characters"))?,
-            // The app restarts activities an older build started before it registers any.
+            // Every activity the app starts carries the Mac's node id.
             shows_approvals: true,
         };
         self.update_push(&machine_id, |reg| {
