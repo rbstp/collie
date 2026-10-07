@@ -95,6 +95,20 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
     #expect(rows[4] == "end")
 }
 
+@Test func wrappedFramesEndAtTheLastWrittenRow() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let tall = (1...300).map { "\u{1B}[48;5;\($0 % 8)mline \($0)\u{1B}[0m" }.joined(separator: "\r\n")
+    let tallFrame = screen.render(ansiSnapshot: tall, wrapColumns: 20)
+    #expect(tallFrame.rows == 300 && tallFrame.runs.last?.text == "line 300")
+    let short = "top\r\n\u{1B}[7m\(String(repeating: "y", count: 45))\u{1B}[0m\r\n"
+    let frame = screen.render(ansiSnapshot: short, wrapColumns: 20)
+    #expect(frame.rows == 4)
+    #expect(frame.wrapContinuations == [2, 3])
+    #expect(frame.runs.filter { $0.style.background == fg }.map(\.text).joined() == String(repeating: "y", count: 45))
+    let fresh = try #require(TerminalScreen(background: bg, foreground: fg))
+    #expect(frame == fresh.render(ansiSnapshot: short, wrapColumns: 20))
+}
+
 @Test func wrapModeCanBeTurnedOffAgain() throws {
     let screen = try #require(TerminalScreen(background: bg, foreground: fg))
     let long = String(repeating: "y", count: 200)
@@ -117,6 +131,9 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
         ("\u{1B}[2m\u{2500}\u{2500} \u{1B}[0m  \r\nx", "\u{1B}[?7l\u{1B}[2m\u{2500}\u{2500}\u{1B}[?7h\u{1B}[0m\r\nx"),
         ("\u{2502} a \u{2502}", "\u{2502} a \u{2502}"),
         ("\u{2580}\u{2580}", "\u{2580}\u{2580}"),
+        ("a \u{1B}[4:3m  \u{1B}[58:2::1:2:3m ", "a\u{1B}[4:3m\u{1B}[58:2::1:2:3m"),
+        ("a \u{1B}[<m ", "a \u{1B}[<m"),
+        ("a \u{1B}[/m ", "a \u{1B}[/m"),
     ]
     for (input, trimmed) in cases {
         #expect(TerminalScreen.preparedForWrapping(input, columns: Int(TerminalScreen.maxColumns)) == trimmed, "\(input.debugDescription)")
@@ -153,6 +170,11 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
         (line(100) + " e\u{301}\u{FE0F} x " + line(1), line(34) + " e\u{301}\u{FE0F} x " + line(1)),
         ("a\t" + line(100) + "b", "a\t" + line(31) + "b"),
         (line(100) + "\tb", line(31) + "\tb"),
+        (String(repeating: "\u{2550}", count: 100) + " x \u{2550}", String(repeating: "\u{2550}", count: 36) + " x \u{2550}"),
+        (
+            String(repeating: "\u{2551}", count: 30) + String(repeating: "\u{2550}", count: 30) + " x",
+            String(repeating: "\u{2551}", count: 30) + String(repeating: "\u{2550}", count: 8) + " x"
+        ),
     ]
     for (input, prepared) in cases {
         #expect(TerminalScreen.preparedForWrapping(input, columns: 40) == prepared, "\(input.debugDescription)")

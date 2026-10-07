@@ -130,13 +130,14 @@ final class TerminalScreen {
             rows = wantedRows
         }
         var wrapContinuations: Set<Int>? = []
+        var lastRow = Int.max
         if wrapColumns != nil {
-            wrapContinuations = writeTrackingWraps(bytes)
+            (wrapContinuations, lastRow) = writeTrackingWraps(bytes)
         } else {
             write(bytes[...])
         }
         ghostty_render_state_update(renderState, terminal)
-        var frame = readFrame()
+        var frame = readFrame(throughRow: lastRow)
         frame.wrapContinuations = wrapContinuations?.filter { $0 < frame.rows } ?? []
         frame.wrapsUnknown = wrapContinuations == nil
         return frame
@@ -145,9 +146,13 @@ final class TerminalScreen {
     /// Writes `bytes` a line at a time and returns the rows that continue a soft-wrapped line,
     /// from the cursor row before and after each line. ghostty_row_get is not in the render-state
     /// build of libghostty-vt. Once a line ends on the bottom row the screen may have scrolled, so
-    /// row numbers are unknown and nil is returned.
-    private func writeTrackingWraps(_ bytes: [UInt8]) -> Set<Int>? {
+    /// row numbers are unknown and nil is returned. Also returns the lowest row a line ended on.
+    /// Rows below it are blank because nothing written moves the cursor up or to an absolute
+    /// position: collied's sanitize_ansi keeps only CR, LF, TAB and SGR, and the NEL and CUF
+    /// that preparedForWrapping adds only move down or right.
+    private func writeTrackingWraps(_ bytes: [UInt8]) -> (continuations: Set<Int>?, lastRow: Int) {
         var continuations: Set<Int> = []
+        var lastRow = 0
         var reachedBottom = false
         var start = 0
         while start < bytes.count {
@@ -155,12 +160,13 @@ final class TerminalScreen {
             let top = cursorRow()
             write(bytes[start..<newline])
             let bottom = cursorRow()
+            lastRow = max(lastRow, bottom)
             reachedBottom = reachedBottom || bottom >= Int(rows) - 1
             if bottom > top { continuations.formUnion(top + 1...bottom) }
             write(bytes[newline..<min(newline + 1, bytes.count)])
             start = newline + 1
         }
-        return reachedBottom ? nil : continuations
+        return (reachedBottom ? nil : continuations, lastRow)
     }
 
     /// Columns that fit `width` points of cells `cellWidth` wide, within 1...maxColumns.
@@ -236,7 +242,7 @@ final class TerminalScreen {
                     if blanks > 0 { runs.append(blanks) }
                     blanks = 0
                 }
-                if Self.horizontalLines.contains(scalars[i].value) {
+                if (0x2500...0x2550).contains(scalars[i].value) && Self.horizontalLines.contains(scalars[i].value) {
                     if run.upperBound == i && scalars[run.lowerBound] == scalars[i] {
                         run = run.lowerBound..<(i + 1)
                     } else {
@@ -303,7 +309,7 @@ final class TerminalScreen {
             first -= 1
             height += heights[first]
         }
-        guard first > 0 else { return String(String.UnicodeScalarView(out)) }
+        guard first > 0 else { return String(decoding: out.map(\.value), as: UTF32.self) }
         let dropped = rowStarts[first]
         var kept: [Unicode.Scalar] = []
         var i = 0
@@ -316,7 +322,7 @@ final class TerminalScreen {
             }
         }
         kept.append(contentsOf: out[dropped...])
-        return String(String.UnicodeScalarView(kept))
+        return String(decoding: kept.map(\.value), as: UTF32.self)
     }
 
     /// Appends `range` of `scalars` in rows of `columns` cells, each broken after its last space
@@ -379,7 +385,7 @@ final class TerminalScreen {
     private static func sgrEnd(_ scalars: [Unicode.Scalar], at i: Int, before end: Int) -> Int? {
         guard scalars[i] == "\u{1B}", i + 1 < end, scalars[i + 1] == "[" else { return nil }
         var j = i + 2
-        while j < end, "0123456789;:".unicodeScalars.contains(scalars[j]) { j += 1 }
+        while j < end, (0x30...0x3B).contains(scalars[j].value) { j += 1 }
         return j < end && scalars[j] == "m" ? j + 1 : nil
     }
 
@@ -427,7 +433,7 @@ final class TerminalScreen {
         return Int(row)
     }
 
-    private func readFrame() -> TerminalFrame {
+    private func readFrame(throughRow lastRow: Int) -> TerminalFrame {
         var colors = GhosttyRenderStateColors()
         colors.size = MemoryLayout<GhosttyRenderStateColors>.size
         ghostty_render_state_get(renderState, GHOSTTY_RENDER_STATE_DATA_COLORS, &colors)
@@ -443,7 +449,7 @@ final class TerminalScreen {
         var usedRows = 0
         var row = 0
         var codepoints = [UInt32](repeating: 0, count: 16)
-        while ghostty_render_state_row_iterator_next(rowIterator) {
+        while row <= lastRow && ghostty_render_state_row_iterator_next(rowIterator) {
             ghostty_render_state_row_get(rowIterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &cells)
             var current: TerminalRun?
             var column = 0
