@@ -221,7 +221,13 @@ fn background_listing_carries_the_plan() {
             .plan_usage
             .clone()
             .expect("the listing carries the plan");
-        assert_eq!(plan.five_hour.map(|w| w.used_percent), Some(57));
+        assert_eq!(plan.five_hour.as_ref().map(|w| w.used_percent), Some(57));
+        let cached = core.cached_flock(machine.id.clone()).unwrap().plan_usage;
+        assert_eq!(
+            cached,
+            Some(plan),
+            "the app's return must not publish the older plan"
+        );
     });
     drop(core);
     drop(rt);

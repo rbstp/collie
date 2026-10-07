@@ -500,10 +500,16 @@ async fn list(
         Response::Approvals {
             approvals,
             plan_usage,
-        } => Ok((
-            approvals.iter().map(Into::into).collect(),
-            plan_usage.as_ref().map(crate::plan_usage),
-        )),
+        } => {
+            let conn = lock(&inner.conns).get(&machine.id).cloned();
+            if let (Some(plan), Some(conn)) = (&plan_usage, conn) {
+                lock(&conn.shared.flock).listed_plan(plan);
+            }
+            Ok((
+                approvals.iter().map(Into::into).collect(),
+                plan_usage.as_ref().map(crate::plan_usage),
+            ))
+        }
         other => Err(failed(unexpected(&other), DecideStage::Lookup)),
     }
 }

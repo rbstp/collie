@@ -536,6 +536,19 @@ impl FlockState {
         self.flock = Some(snapshot);
         self.herdr_down = false;
     }
+
+    /// From a one-shot listing while this connection is closed, so the app does not
+    /// publish the older plan it froze with before its next snapshot.
+    pub fn listed_plan(&mut self, plan: &protocol::PlanUsage) {
+        if let Some(flock) = &mut self.flock
+            && flock
+                .plan_usage
+                .as_ref()
+                .is_none_or(|p| p.recorded_ms < plan.recorded_ms)
+        {
+            flock.plan_usage = Some(plan.clone());
+        }
+    }
 }
 
 fn apply(flock: &mut Flock, event: &Event) {
@@ -721,6 +734,27 @@ mod tests {
         assert_eq!(used(&s), Some(plan(30)));
         s.apply_snapshot(with(5, 40));
         assert_eq!(used(&s), Some(plan(40)));
+    }
+
+    #[test]
+    fn listed_plan_replaces_only_an_older_one() {
+        let plan = |used_percent, recorded_ms| protocol::PlanUsage {
+            five_hour: Some(protocol::UsageWindow {
+                used_percent,
+                resets_at_ms: 9,
+            }),
+            seven_day: None,
+            recorded_ms,
+        };
+        let used = |s: &FlockState| s.flock.as_ref()?.plan_usage.clone();
+        let mut s = FlockState::default();
+        s.listed_plan(&plan(10, 1));
+        assert!(s.flock.is_none());
+        s.apply_snapshot(flock(1, vec![]));
+        s.listed_plan(&plan(30, 2));
+        assert_eq!(used(&s), Some(plan(30, 2)));
+        s.listed_plan(&plan(20, 1));
+        assert_eq!(used(&s), Some(plan(30, 2)));
     }
 
     #[test]
