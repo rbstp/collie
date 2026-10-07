@@ -53,13 +53,9 @@ struct AgentLiveActivity: Widget {
                     Text(state.title).font(.caption2.bold()).lineLimit(1).frame(maxWidth: 56)
                 }
             } compactTrailing: {
-                HStack(spacing: 3) {
-                    Image(systemName: state.status.symbol)
-                    ElapsedText(since: state.statusSince, width: 48).font(.caption2.monospacedDigit())
-                }
-                .foregroundStyle(state.status.color)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(state.status.label)
+                ElapsedText(since: state.statusSince, width: 48).font(.caption2.monospacedDigit())
+                    .foregroundStyle(state.status.color)
+                    .accessibilityLabel(state.status.label)
             } minimal: {
                 Image(systemName: state.status.symbol).foregroundStyle(state.status.color)
             }
