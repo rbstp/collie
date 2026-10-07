@@ -96,7 +96,7 @@ struct TerminalSelection: Equatable, Sendable {
 
     /// The selected text: a wide character partly selected is copied once, blank columns read as
     /// spaces, trailing spaces are dropped at each line end, and rows that continue a soft wrap
-    /// join the row above without a newline, keeping a space the wrap fell on.
+    /// join the row above without a newline or their indent, keeping a space the wrap fell on.
     func text(in frame: TerminalFrame) -> String {
         guard start.row < frame.rows else { return "" }
         let rows = Dictionary(grouping: frame.runs, by: \.row)
@@ -107,12 +107,13 @@ struct TerminalSelection: Equatable, Sendable {
                 text.trimTrailingSpaces()
                 text += "\n"
             }
-            var next = selected.lowerBound
+            // Blank columns before a soft-wrapped row's first character are its wrap indent.
+            var next = frame.wrapContinuations.contains(row) ? nil : Optional(selected.lowerBound)
             for run in (rows[row] ?? []).sorted(by: { $0.startColumn < $1.startColumn }) {
                 for cluster in Cluster.all(in: run) where cluster.column <= selected.upperBound && cluster.end > selected.lowerBound {
-                    if cluster.column > next { text += String(repeating: " ", count: cluster.column - next) }
+                    if let from = next, cluster.column > from { text += String(repeating: " ", count: cluster.column - from) }
                     text += cluster.text
-                    next = max(next, cluster.end)
+                    next = max(next ?? 0, cluster.end)
                 }
             }
         }
@@ -142,18 +143,20 @@ struct TerminalSelection: Equatable, Sendable {
                     touched = (touched?.lowerBound ?? lower)..<text.count
                 }
             }
-            var next = 0
+            var next = frame.wrapContinuations.contains(row) ? nil : Optional(0)
             for run in (rows[row] ?? []).sorted(by: { $0.startColumn < $1.startColumn }) {
                 let hidden = run.style.invisible || run.style.foreground == (run.style.background ?? frame.background)
                 for cluster in Cluster.all(in: run) {
-                    if cluster.column > next { add(repeatElement(" ", count: cluster.column - next), columns: next..<cluster.column) }
+                    if let from = next, cluster.column > from {
+                        add(repeatElement(" ", count: cluster.column - from), columns: from..<cluster.column)
+                    }
                     add(hidden ? [" "] : Array(cluster.text.unicodeScalars), columns: cluster.column..<cluster.end)
-                    next = max(next, cluster.end)
+                    next = max(next ?? 0, cluster.end)
                 }
             }
             // A full row may continue on the next one; an unknown character there stops a URL
             // from being offered cut short.
-            if frame.wrapsUnknown && next >= frame.columns { text.append("\u{FFFD}") }
+            if frame.wrapsUnknown && next ?? 0 >= frame.columns { text.append("\u{FFFD}") }
         }
         return touched.flatMap { TerminalLink.url(in: text, touching: $0) }
     }

@@ -112,7 +112,7 @@ public final class TerminalScreen {
         if let wrapColumns {
             wantedColumns = UInt16(min(max(wrapColumns, 1), Int(Self.maxColumns)))
             // Rows past the content are dropped by readFrame. preparedForWrapping keeps the
-            // content within maxRows - 1 rows by an upper bound on each line's wrapped height.
+            // content within maxRows - 1 rows by counting the rows each line breaks into.
             wantedRows = Self.maxRows
             bytes = Array("\u{1B}[?7h".utf8) + Array(Self.preparedForWrapping(snapshot, columns: Int(wantedColumns)).utf8)
         } else {
@@ -177,6 +177,10 @@ public final class TerminalScreen {
     /// wrap width with their last character kept instead of wrapping into several rows. Other
     /// rows wider than `columns` that hold a run of one horizontal line character, like a rule
     /// with a label, lose the excess from their longest run when that leaves at least one of it.
+    /// The rest that are wider break at words (appendBrokenAtWords), continuing at the row's
+    /// indent, or past a leading symbol and its spaces like a bullet. In those that also hold
+    /// box drawing and a run of three spaces or more after the first character, every such
+    /// space run is cut to the longest length that lets the row fit, or to one when none does.
     /// Widths follow Ghostty: East Asian wide and emoji presentation characters take two columns,
     /// marks and format characters none, and a tab advances to the next multiple of 8.
     /// The oldest rows are dropped, all but their SGR sequences, until the rest fits in
@@ -187,6 +191,7 @@ public final class TerminalScreen {
         out.reserveCapacity(scalars.count)
         var rowStarts: [Int] = []
         var heights: [Int] = []
+        var runs: [Int] = []
         var rowStart = 0
         while rowStart <= scalars.count {
             let newline = scalars[rowStart...].firstIndex(of: "\n") ?? scalars.count
@@ -202,12 +207,35 @@ public final class TerminalScreen {
             var runColumn = 0
             var longestRun = 0..<0
             var longestRunColumn = 0
+            var indent = 0
+            var hang = 0
+            var hangRun = 0
+            var blanks = 0
+            var padded = false
+            runs.removeAll(keepingCapacity: true)
             var i = rowStart
             while i < rowEnd {
                 if let end = Self.sgrEnd(scalars, at: i, before: rowEnd) {
                     trailingSGR.append(i..<end)
                     i = end
                     continue
+                }
+                switch (hang, scalars[i]) {
+                case (0, " "), (0, "\t"): break
+                case (0, let first):
+                    indent = width
+                    hang = first.properties.isAlphabetic || first.properties.numericType != nil ? 3 : 1
+                case (1, let next): hang = next == " " ? 2 : 3
+                case (2, " "): break
+                case (2, _): (indent, hang, hangRun) = (width, 3, blanks)
+                default: break
+                }
+                if scalars[i] == " " {
+                    if hang != 0 { blanks += 1 }
+                } else {
+                    padded = padded || blanks > 2
+                    if blanks > 0 { runs.append(blanks) }
+                    blanks = 0
                 }
                 if Self.horizontalLines.contains(scalars[i].value) {
                     if run.upperBound == i && scalars[run.lowerBound] == scalars[i] {
@@ -232,8 +260,13 @@ public final class TerminalScreen {
                 i += 1
             }
             let clip = boxOnly && sawBox
+            let collapse = !clip && sawBox && padded && contentWidth > columns
+            // The most cells every space run may keep for the row to fit, at least one.
+            var keep = 1
+            while collapse && runs.reduce(0, { $0 + max($1 - keep - 1, 0) }) >= contentWidth - columns { keep += 1 }
+            if collapse { indent -= max(hangRun - keep, 0) }
             var cut = 0
-            if !clip && contentWidth > columns {
+            if !clip && !collapse && contentWidth > columns {
                 // Tabs after the run move to other stops once it shrinks, so remeasure the tail.
                 var tried = contentWidth - columns
                 while tried < longestRun.count {
@@ -246,18 +279,21 @@ public final class TerminalScreen {
                 }
             }
             rowStarts.append(out.count)
-            // A wide character that does not fit wraps early, leaving at most one column unused.
-            let shown = contentWidth - cut
-            let perRow = max(columns - 1, 1)
-            heights.append(clip || shown <= columns ? 1 : (shown + perRow - 1) / perRow)
+            var height = 1
             if clip { out.append(contentsOf: "\u{1B}[?7l".unicodeScalars) }
             if cut > 0 {
                 out.append(contentsOf: scalars[rowStart..<(longestRun.upperBound - cut)])
                 out.append(contentsOf: scalars[longestRun.upperBound..<contentEnd])
+            } else if !clip && contentWidth > columns {
+                height += Self.appendBrokenAtWords(
+                    scalars, rowStart..<contentEnd, keepingPadding: collapse ? keep : nil, indent: indent < columns / 2 ? indent : 0,
+                    columns: columns, into: &out
+                )
             } else {
                 out.append(contentsOf: scalars[rowStart..<contentEnd])
             }
             if clip { out.append(contentsOf: "\u{1B}[?7h".unicodeScalars) }
+            heights.append(height)
             for range in trailingSGR { out.append(contentsOf: scalars[range]) }
             out.append(contentsOf: scalars[rowEnd..<min(newline + 1, scalars.count)])
             rowStart = newline + 1
@@ -282,6 +318,61 @@ public final class TerminalScreen {
         }
         kept.append(contentsOf: out[dropped...])
         return String(String.UnicodeScalarView(kept))
+    }
+
+    /// Appends `range` of `scalars` in rows of `columns` cells, each broken after its last space
+    /// that fits, or before the first character that does not when it has none. A break is a
+    /// NEL, so writeTrackingWraps counts the next row as a soft wrap, and that row starts
+    /// `indent` columns in. A tab stops at the last column, as in Ghostty. With `keepingPadding`,
+    /// a run of spaces after the first character keeps that many. Returns the number of breaks.
+    private static func appendBrokenAtWords(
+        _ scalars: [Unicode.Scalar], _ range: Range<Int>, keepingPadding: Int?, indent: Int, columns: Int,
+        into out: inout [Unicode.Scalar]
+    ) -> Int {
+        var newRow = Array("\u{1B}E".unicodeScalars)
+        if indent > 0 { newRow += "\u{1B}[\(indent)C".unicodeScalars }
+        var breaks = 0
+        var column = 0
+        var placed = false
+        var breakAt: Int?
+        var started = false
+        var blanks = 0
+        var i = range.lowerBound
+        while i < range.upperBound {
+            if let end = sgrEnd(scalars, at: i, before: range.upperBound) {
+                out.append(contentsOf: scalars[i..<end])
+                i = end
+                continue
+            }
+            let scalar = scalars[i]
+            i += 1
+            let blank = scalar == " " || scalar == "\t"
+            blanks = scalar == " " && started ? blanks + 1 : 0
+            if let keep = keepingPadding, blanks > keep { continue }
+            started = started || !blank
+            let advance = scalar == "\t" ? min(8 - column % 8, max(columns - 1 - column, 0)) : cellWidth(scalar, column: column)
+            while (placed || column > indent) && column + advance > columns {
+                if let at = breakAt {
+                    out.insert(contentsOf: newRow, at: at)
+                    column = width(of: out, in: (at + newRow.count)..<out.count, from: indent)
+                } else {
+                    out.append(contentsOf: newRow)
+                    column = indent
+                }
+                breaks += 1
+                breakAt = nil
+                placed = column > indent
+            }
+            let start = column
+            column += advance
+            out.append(scalar)
+            if !blank {
+                placed = true
+            } else if scalar == " " && placed && start >= indent {
+                breakAt = out.count
+            }
+        }
+        return breaks
     }
 
     static let horizontalLines: Set<UInt32> = [0x2500, 0x2501, 0x2504, 0x2505, 0x2508, 0x2509, 0x254C, 0x254D, 0x2550]

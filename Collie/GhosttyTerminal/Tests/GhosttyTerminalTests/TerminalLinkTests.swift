@@ -86,15 +86,28 @@ private func selection(_ row: Int, _ column: Int, _ endRow: Int, _ endColumn: In
 
 @Test func linkAcrossSoftWrappedRows() throws {
     let frame = try render("see https://example.com/a/very/long/path ok\r\nnext", wrapColumns: 12)
-    #expect(frame.wrapContinuations == [1, 2, 3])
+    #expect(frame.wrapContinuations == [1, 2, 3, 4])
     let url = "https://example.com/a/very/long/path"
     #expect(selection(2, 3, 2, 3).link(in: frame)?.absoluteString == url)
-    #expect(selection(0, 4, 0, 5).link(in: frame)?.absoluteString == url)
-    #expect(selection(3, 0, 3, 1).link(in: frame)?.absoluteString == url)
-    #expect(selection(0, 0, 4, 3).link(in: frame)?.absoluteString == url)
+    #expect(selection(1, 0, 1, 1).link(in: frame)?.absoluteString == url)
+    #expect(selection(3, 11, 4, 0).link(in: frame)?.absoluteString == url)
+    #expect(selection(0, 0, 5, 3).link(in: frame)?.absoluteString == url)
     #expect(selection(0, 0, 0, 2).link(in: frame) == nil)
-    #expect(selection(3, 5, 3, 6).link(in: frame) == nil)
-    #expect(selection(4, 0, 4, 3).link(in: frame) == nil)
+    #expect(selection(4, 1, 4, 2).link(in: frame) == nil)
+    #expect(selection(5, 0, 5, 3).link(in: frame) == nil)
+}
+
+@Test func linkAcrossIndentedWordBreaks() throws {
+    let frame = try render("  see https://example.com/a/very/long/path ok", wrapColumns: 14)
+    #expect(frame.wrapContinuations == [1, 2, 3, 4])
+    #expect(frame.runs.filter { $0.row > 0 }.allSatisfy { $0.startColumn == 2 })
+    #expect(selection(2, 5, 2, 5).link(in: frame)?.absoluteString == "https://example.com/a/very/long/path")
+}
+
+@Test func linkAfterATabAcrossABreak() throws {
+    let frame = try render("see\thttps://example.com/abc", wrapColumns: 12)
+    #expect(frame.wrapContinuations == [1, 2])
+    #expect(selection(1, 3, 1, 3).link(in: frame)?.absoluteString == "https://example.com/abc")
 }
 
 @Test func linkEndsAtAHardLineBreak() throws {
@@ -114,8 +127,8 @@ private func selection(_ row: Int, _ column: Int, _ endRow: Int, _ endColumn: In
 
 @Test func linkEndingOnAFullRowIsNotOfferedOnceWrapsAreUnknown() throws {
     var frame = try render("see https://example.com/a/very/long/path ok\r\nhttps://a.dev ok", wrapColumns: 24)
-    #expect(selection(0, 10, 0, 10).link(in: frame)?.absoluteString == "https://example.com/a/very/long/path")
+    #expect(selection(1, 10, 1, 10).link(in: frame)?.absoluteString == "https://example.com/a/very/long/path")
     (frame.wrapContinuations, frame.wrapsUnknown) = ([], true)
-    #expect(selection(0, 10, 0, 10).link(in: frame) == nil)
-    #expect(selection(2, 3, 2, 3).link(in: frame)?.absoluteString == "https://a.dev")
+    #expect(selection(1, 10, 1, 10).link(in: frame) == nil)
+    #expect(selection(3, 3, 3, 3).link(in: frame)?.absoluteString == "https://a.dev")
 }
