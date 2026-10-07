@@ -116,9 +116,9 @@ The policy is the first filter, not the authorization. collied checks every acce
 3. If an owner is known, the node must be owned by that user (`WhoIsNode::is_owned_by`).
 4. Then:
    - its `StableID` is in `peers.json` with the same user ID it was paired with and a pinned TLS key: full session (`hello` first, then the method allowlist). A paired `StableID` that now reports another user is refused;
-   - it is not paired and a pairing window opened locally with `collied pair` is active: pairing-only session (`hello`, `pair.complete`, then close);
+   - it is not paired, or was paired before mutual TLS and has no TLS key, and a pairing window opened locally with `collied pair` is active: pairing-only session (`hello`, `pair.complete`, then close);
    - otherwise: closed before the upgrade and audited.
-5. The TLS handshake must prove the key pinned for that phone (any P-256 key in a pairing-only session), and the gate then decides again under the peers and pairing locks: a different decision (a revoke or a pairing during the handshake) closes the connection.
+5. The TLS handshake must prove the key pinned for that phone (any P-256 key in a pairing-only session), and the gate then decides again under the peers, pairing and sessions locks: a different decision (a revoke, a pairing, or the pairing window closing during the handshake) closes the connection.
 
 So a device of yours that the policy lets through still gets nothing until it is paired, and a tagged or shared-in node is refused even if a policy mistake lets it reach port 8457.
 
