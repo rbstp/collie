@@ -10,7 +10,7 @@ use protocol::{
 };
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use zeroize::Zeroizing;
 
 use crate::audit::Audit;
@@ -151,6 +151,7 @@ pub struct Approvals {
     settle: Duration,
     budget: Duration,
     inner: Mutex<Inner>,
+    pending_count: watch::Sender<usize>,
 }
 
 fn is_blocked(a: &AgentInfo) -> bool {
@@ -267,6 +268,7 @@ impl Approvals {
             settle: SETTLE,
             budget: DECIDE_BUDGET,
             inner: Mutex::new(Inner::default()),
+            pending_count: watch::channel(0).0,
         }
     }
 
@@ -296,6 +298,17 @@ impl Approvals {
             .collect();
         out.sort_by_key(|a| a.created_at_ms);
         out
+    }
+
+    /// The number of pending approvals, sent again on every change.
+    pub fn watch_pending(&self) -> watch::Receiver<usize> {
+        self.pending_count.subscribe()
+    }
+
+    fn count(&self, inner: &Inner) {
+        let len = inner.pending.len();
+        self.pending_count
+            .send_if_modified(|n| std::mem::replace(n, len) != len);
     }
 
     /// An agent blocked there: no terminal input may reach that pane.
@@ -338,6 +351,7 @@ impl Approvals {
                     ended.push((p.approval.approval_id, outcome));
                 }
             }
+            self.count(&inner);
         }
         for (a, id) in live {
             let Ok(screen) = self.screen(a).await else {
@@ -348,6 +362,7 @@ impl Approvals {
                 !p.deciding && p.approval.approval_id == id && !p.screen.shows_same(&screen)
             }) {
                 inner.pending.remove(&a.terminal_id);
+                self.count(&inner);
                 inner.remember(id.clone());
                 if let Some(last) = inner.alerted.get_mut(&a.terminal_id) {
                     last.drifted = true;
@@ -503,6 +518,7 @@ impl Approvals {
                     deciding: false,
                 },
             );
+            self.count(&inner);
             alert
         };
         // A reissued alert replaces the dead one, whose approval_id no longer works.
@@ -559,6 +575,7 @@ impl Approvals {
                 .is_some_and(|p| p.approval.approval_id == *id)
             {
                 inner.pending.remove(terminal);
+                self.count(&inner);
             }
             inner.remember(id.clone());
         }

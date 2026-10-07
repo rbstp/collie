@@ -115,7 +115,7 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
    On Linux, collied's data directory is `$XDG_DATA_HOME/collie`, else `~/.local/share/collie`. It holds `collied.toml`, the node state, paired phones and the audit log. Logs go to the user journal: `journalctl --user -u collied`. A user unit runs while you have a session. `loginctl enable-linger` (optional) keeps it running without a login.
 
 3. **Install the app** on a connected iPhone with Developer Mode on (`just ios-run-device`). The watch app installs with it; signing it needs the paired Apple Watch registered to your team once first (connect the watch in Xcode's Devices and Simulators window, or add its UDID in the developer portal). Sign in to Tailscale inside the app with your own account.
-4. **Pair**: run `collied pair` on the computer, scan the QR code in the app (Machines, Add machine), and confirm with `y` on the computer. A phone paired before mutual TLS (Phase 6) pairs again the same way once both sides are updated.
+4. **Pair**: run `collied pair` on the computer (or Pair a Phone… in the menu bar app, step 9), scan the QR code in the app (Machines, Add machine), and confirm with `y` (or Pair in the app's window) on the computer. A phone paired before mutual TLS (Phase 6) pairs again the same way once both sides are updated.
 5. **Push notifications** (optional): add an `[apns]` section to `collied.toml` (`~/Library/Application Support/collie/collied.toml` on macOS, in the data directory on Linux), import the key with `collied apns import AuthKey_<KEY_ID>.p8`, then check with `collied apns test`. Each machine uses its own APNs key (its own key ID, revoked on its own) and sends its own pushes. On Linux, `collied apns import` encrypts the key into a systemd user credential (also sealed to the TPM2 when one is usable), with a 0600 file as the fallback where `systemd-creds` cannot encrypt. `collied doctor` reports which one is in use and, for a credential, its seal. The full steps are in [docs/release.md](docs/release.md).
 
 6. **Claude Code hook** (optional): add `collied hook` as a `PermissionRequest` hook in `~/.claude/settings.json`, so approvals name the exact tool call. It only reports the call to collied; Claude Code's dialog is unchanged. `collied doctor` checks it.
@@ -147,6 +147,8 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
 
    The phone must have a passcode, and must be paired after both sides are updated: the pairing records the phone's terminal key. A phone paired before shows "Pair this phone again to use terminals on this machine".
 
+9. **Menu bar app** (optional, macOS): `just mac-install` builds CollieBar, signs it with the same Developer ID and installs it to `~/Applications`. Its icon is bright while collied runs, dim when it is off, with a dot while an approval is pending. The menu turns collied off and on (`collied stop` and `collied start`), pairs a phone (the QR, then Pair or Don't Pair on the Mac), lists the paired phones, opens the audit log, and quits, which stops collied. Open at Login in the menu starts it at login; it is off by default. It is not notarized: that is optional, only for another Mac ([docs/release.md](docs/release.md)).
+
 List paired phones with `collied peers list`, revoke one with `collied peers revoke <label or StableID>` (removing the machine in the app does the same when the machine is reachable), and inspect the daemon with `collied status` (its tags and the herdr agents it sees).
 
 `collied stop` turns collied off and keeps it off, across reboots, until `collied start`. This is the same with the launchd agent and the systemd user unit.
@@ -166,6 +168,11 @@ List paired phones with `collied peers list`, revoke one with `collied peers rev
 | `just ios-test` | GhosttyTerminal package tests on macOS, then the iOS unit tests on the simulator |
 | `just ios-build-sim` | Simulator build |
 | `just ios-run-device` | Builds, installs and launches on a connected iPhone |
+| `just mac-project` | Generates the menu bar app's Xcode project (`Mac/project.yml`) |
+| `just mac-build` | Unsigned Release build of the menu bar app |
+| `just mac-test` | The menu bar app's unit tests (never touches the real control socket) |
+| `just mac-install` | Builds the menu bar app, signs it with the Developer ID and the hardened runtime, installs it to `~/Applications` and opens it |
+| `just mac-notarize` | Optional: notarizes and staples the app `mac-install` signed, with a `notarytool` keychain profile |
 | `just collied-install` | Release build of collied, installed to `~/.cargo/bin`. On macOS it is signed and restarts the launchd agent if it is installed. On Linux it is not signed and restarts the systemd user unit if it is active |
 
 CI runs on macOS: lint, the Rust tests, the GhosttyTerminal package tests, and the iOS simulator build and tests, on every pull request and on pushes to `master`. Merging a pull request that changes code into `master` uploads a build to the maintainer's TestFlight ([docs/release.md](docs/release.md)).
@@ -183,6 +190,7 @@ crates/
   uniffi-bindgen/  UniFFI binding generator used by `just ios-framework`
   e2e/             End-to-end tests: phone core against collied over a local test tailnet
 Collie/            iOS app (XcodeGen project.yml), ColliePush and CollieWidgets extensions, CollieWatch app and its CollieWatchWidgets complication, GhosttyTerminal package
+Mac/               macOS menu bar app CollieBar (XcodeGen project.yml), a client of collied's control socket
 docs/              Architecture, threat model, tailnet setup, release, protocol schemas
 scripts/           libghostty-vt xcframework build
 ```

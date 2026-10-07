@@ -180,6 +180,19 @@ async fn scenario(
         "{offline:#}"
     );
 
+    println!("watch sends the pending approval count, then every change");
+    let mut watch = Client::connect(&control).await.unwrap();
+    assert!(matches!(
+        watch.call(&Request::Watch).await.unwrap(),
+        Reply::Watch {
+            pending_approvals: 0
+        }
+    ));
+    // A watcher that goes away ends its task; the pairing below still gets its window.
+    let mut gone = Client::connect(&control).await.unwrap();
+    gone.call(&Request::Watch).await.unwrap();
+    drop(gone);
+
     println!("unpaired phone without a window is rejected before the upgrade");
     assert!(
         connect(
@@ -364,6 +377,15 @@ async fn scenario(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), watch.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Reply::Watch {
+            pending_approvals: 1
+        }
+    ));
     let mut ws = open(&phone, &target).await;
     send(&mut ws, hello_frame(protocol::PROTOCOL_VERSION)).await;
     let Response::Hello(hello) = result(recv(&mut ws).await) else {
@@ -819,8 +841,30 @@ async fn scenario(
         called.iter().all(|m| HERDR_CALLED.contains(&m.as_str())),
         "{called:?}"
     );
+    println!("watch pushes the resolved approval, and ends with the daemon");
+    herdr.set_status(1, "idle");
+    loop {
+        let reply = tokio::time::timeout(Duration::from_secs(10), watch.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let Reply::Watch { pending_approvals } = reply else {
+            panic!("not a watch reply: {reply:?}");
+        };
+        if pending_approvals == 0 {
+            break;
+        }
+    }
     handle.shutdown().await;
     assert!(!control.exists());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), watch.recv())
+            .await
+            .unwrap()
+            .is_err(),
+        "EOF once the daemon stops"
+    );
+    herdr.set_status(1, "blocked");
 
     terminal_phase(mac, &data_dir, &herdr_socket, &herdr, &phone, &target).await;
 }

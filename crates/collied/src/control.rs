@@ -29,6 +29,8 @@ pub enum Request {
     Confirm {
         accept: bool,
     },
+    /// Holds the connection open: the pending approval count now, then on every change.
+    Watch,
     Hook {
         session_id: String,
         tool_name: String,
@@ -128,6 +130,9 @@ pub enum Reply {
         closed_sessions: usize,
     },
     Noted,
+    Watch {
+        pending_approvals: usize,
+    },
     Error {
         message: String,
     },
@@ -253,7 +258,7 @@ pub async fn serve(listener: UnixListener, state: Arc<State>, mut shutdown: watc
                         state.audit.log("control", "control.connect", None, "rejected: foreign uid");
                         continue;
                     }
-                    tokio::spawn(handle(stream, state.clone()));
+                    tokio::spawn(handle(stream, state.clone(), shutdown.clone()));
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "control accept failed");
@@ -265,7 +270,7 @@ pub async fn serve(listener: UnixListener, state: Arc<State>, mut shutdown: watc
     }
 }
 
-async fn handle(stream: UnixStream, state: Arc<State>) {
+async fn handle(stream: UnixStream, state: Arc<State>, shutdown: watch::Receiver<bool>) {
     let (r, mut w) = stream.into_split();
     let mut r = BufReader::new(r);
     let req = match read_msg::<Request>(&mut r).await {
@@ -311,6 +316,7 @@ async fn handle(stream: UnixStream, state: Arc<State>) {
             Reply::Noted
         }
         Request::Pair => return pair(&state, &mut r, &mut w).await,
+        Request::Watch => return watch_pending(&state, &mut r, &mut w, shutdown).await,
         Request::Confirm { .. } => Reply::Error {
             message: "no pairing in progress".into(),
         },
@@ -407,6 +413,38 @@ async fn pair(state: &State, r: &mut BufReader<OwnedReadHalf>, w: &mut OwnedWrit
     );
     let _ = attempt.reply.send(paired);
     let _ = write_msg(w, &done(paired, &detail)).await;
+}
+
+/// Read-only like status, and not audited: it mutates nothing. Any input or EOF from the
+/// client, or the daemon's shutdown, ends it.
+async fn watch_pending(
+    state: &State,
+    r: &mut BufReader<OwnedReadHalf>,
+    w: &mut OwnedWriteHalf,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut rx = state.approvals.watch_pending();
+    let closed = read_msg::<Request>(r);
+    tokio::pin!(closed);
+    loop {
+        let n = *rx.borrow_and_update();
+        if write_msg(
+            w,
+            &Reply::Watch {
+                pending_approvals: n,
+            },
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
+        tokio::select! {
+            res = rx.changed() => if res.is_err() { return },
+            _ = &mut closed => return,
+            _ = shutdown.changed() => return,
+        }
+    }
 }
 
 fn done(paired: bool, detail: &str) -> Reply {
@@ -541,5 +579,28 @@ mod tests {
                 .is_err()
         );
         assert!(serde_json::from_str::<Request>(r#"{"cmd":"shell"}"#).is_err());
+        // The menu bar app sends these exact lines.
+        assert!(matches!(
+            serde_json::from_str(r#"{"cmd":"watch"}"#).unwrap(),
+            Request::Watch
+        ));
+        for (line, want) in [
+            (r#"{"cmd":"pair"}"#, Request::Pair),
+            (r#"{"cmd":"peers_list"}"#, Request::PeersList),
+            (r#"{"cmd":"watch"}"#, Request::Watch),
+            (
+                r#"{"cmd":"confirm","accept":true}"#,
+                Request::Confirm { accept: true },
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&want).unwrap(), line);
+        }
+        assert_eq!(
+            serde_json::to_string(&Reply::Watch {
+                pending_approvals: 1
+            })
+            .unwrap(),
+            r#"{"type":"watch","pending_approvals":1}"#
+        );
     }
 }

@@ -345,6 +345,18 @@ enabled = true   # false, the default, when the section or the key is absent
 - With an `enc` it reads the key for the alert's `node_id` and opens it; on success the body becomes the context (the title is kept), on any failure the plaintext fallback stays.
 - collie-core mirrors the last connection result per machine node ID (`last_ok_ms`, `last_fail_ms`, nothing else) to `reachability.json` in the App Group. If the alert's `node_id` last failed, the NSE appends " (machine may be unreachable, open collie to check)" to the body. Everything else passes through unchanged.
 
+## Menu bar app (macOS)
+
+CollieBar (`Mac/`) is a separate XcodeGen project, so the iOS project and its recipes are untouched. Pure Swift with no packages: it never links CollieCore. A SwiftUI `MenuBarExtra` with `LSUIElement`, so no Dock icon.
+
+- It talks to collied only over the control socket, as the CLI does, with three requests: `watch`, `pair` (then `confirm`), and `peers_list`. It opens no network listener and reads none of collied's data files (Open Audit Log hands `audit.log` to its default app, Console); peers come from `peers_list`, and with collied off the menu says so.
+- `watch` is read-only and not audited, like `status`: collied answers `{"type":"watch","pending_approvals":N}` at once, then one line each time the count of pending approvals changes, from a tokio watch channel the approvals update under their lock. It does not subscribe to the phone event broadcast, whose receiver count means a phone is connected. The open connection is the running state, EOF is off; the app retries a failed connect every 2 s, its only polling. An older collied answers `error`: shown as running, with "Update collied".
+- Off, on and Quit run `collied stop` and `collied start`, the executable named in the launchd plist (`ProgramArguments[0]`), with no shell, so launchd's semantics (disabled until `start`, across reboots) stay in one place. The socket cannot do it: a stopped collied has no socket, and launchd's `KeepAlive` would restart one stopped from inside. Quit leaves collied off until Turn On or `collied start`. A collied run by hand, not by launchd, is not stopped.
+- Pairing matches `collied pair`: the QR (CoreImage, correction level M), then the candidate's device label, node name and `StableID`, login and user ID, the terminal key change and "replaces an existing pairing", every phone string escaped like `collied::printable`, and 60 s to answer. Pair is not the default button (Return does nothing) and is live only 1 s after the candidate appears, the window's form of the CLI's `tcflush`; one answer is sent, never on its own: at the end of the 60 s collied refuses. The invite is never shown as text, selectable, copied, logged or kept: only the QR image lives in the view's state. Window restoration is off, and closing the window closes the connection, which cancels the pairing as Ctrl-C does.
+- Open at Login uses `SMAppService.mainApp`, off by default.
+- `just mac-install` signs it with the Developer ID (team `RM3UT3MMSR`) and the hardened runtime, no App Sandbox (it would block the socket and running collied) and no entitlements, so it needs no App ID or provisioning profile. Notarization is optional (`just mac-notarize`), only for running it on another Mac without a Gatekeeper prompt.
+- Its unit tests have no host app, so they never launch it against the live collied's socket.
+
 ## Live Activities
 
 The lock screen and the Dynamic Island show an agent only while the user follows it: off by default for every agent, at most 5 at once on the phone. The phone starts each activity itself, from the foreground; collied only updates and ends it. Push-to-start is not used.

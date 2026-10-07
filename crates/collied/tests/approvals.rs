@@ -917,6 +917,27 @@ async fn leaving_blocked_without_a_decision_supersedes() {
 }
 
 #[tokio::test]
+async fn the_pending_count_follows_every_approval() {
+    let mut rig = Rig::start(TTL).await;
+    let mut count = rig.approvals.watch_pending();
+    assert_eq!(*count.borrow_and_update(), 0);
+    let a = rig.needed().await;
+    assert!(count.has_changed().unwrap());
+    assert_eq!(*count.borrow_and_update(), 1);
+    rig.observe().await;
+    assert!(!count.has_changed().unwrap(), "no change, no update");
+    resolved(rig.decide(&a, Decision::Approve, &a.nonce).await);
+    assert_eq!(*count.borrow_and_update(), 0);
+
+    rig.herdr.set_status("blocked");
+    rig.needed().await;
+    assert_eq!(*count.borrow_and_update(), 1);
+    rig.herdr.set_status("working");
+    rig.observe().await;
+    assert_eq!(*count.borrow_and_update(), 0, "superseded");
+}
+
+#[tokio::test]
 async fn arrows_are_seen_on_the_target_before_enter() {
     let mut rig = Rig::start(TTL).await;
     let a = rig.needed().await;
