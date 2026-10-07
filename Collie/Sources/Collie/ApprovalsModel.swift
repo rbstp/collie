@@ -113,7 +113,7 @@ final class ApprovalsModel {
     /// Local and cheap: reads what the connections already hold.
     func poll() {
         guard let core else { return }
-        let nowMs = UInt64(Date.now.timeIntervalSince1970 * 1000)
+        let nowMs = Date.now.unixMs
         var connected: Set<String> = []
         let next = core.machines().flatMap { machine -> [ApprovalItem] in
             guard let feed = core.approvalFeed(machineId: machine.id) else { return [] }

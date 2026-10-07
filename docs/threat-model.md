@@ -9,7 +9,7 @@ Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the t
 | Control of every shell and agent on the computer | herdr socket (0600, no auth: same UID means full control); reachable from the phone only through collied's allowlist |
 | Mac node keys | `~/Library/Application Support/collie/tsnet` (0700) |
 | Linux node keys | `<data dir>/tsnet` (0700), data dir `$XDG_DATA_HOME/collie`, else `~/.local/share/collie`. Separate from a system tailscaled's state (`/var/lib/tailscale`): the embedded node is its own device with its own keys |
-| Phone node keys | app container `Application Support/collie/tsnet` (0700, `completeUntilFirstUserAuthentication`), not excluded from backups yet |
+| Phone node keys | app container `Application Support/collie/tsnet` (0700, `completeUntilFirstUserAuthentication`, excluded from backup) |
 | Pairings (`StableID` list) and the owner user ID | `peers.json` in collied's data dir (0600); optional `owner_user_id` in `collied.toml` |
 | Pairing code | the QR and the invite URI that `collied pair` prints as text in the terminal; 16 random bytes, one window at a time, 120 s, burned by the first attempt, redacted in `Debug` |
 | Approval nonces | collied memory and the phone session (collie-core only, never handed to Swift); 32 random bytes, single use |
@@ -105,9 +105,9 @@ Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the t
 |---|---|
 | Assets | Phone node keys, which pass the whois gate as the paired phone |
 | Attack | Keys read from the device (forensic tools, jailbreak, exploit) or from a backup, then used from another machine. |
-| Mitigations | App sandbox; state dir 0700 with data protection `completeUntilFirstUserAuthentication`, set by `StateDirectory.swift` and checked by collie-core (P1). State dir excluded from backups (P1 requirement, not in the tree yet). Revocation and key expiry as for a stolen phone. |
-| Residual | Node keys are files, readable after first unlock by code inside the app's sandbox, and until the backup exclusion lands a backup carries them. They no longer suffice: collied also requires the phone's TLS key, a Secure Enclave P-256 key that cannot leave the device (`ThisDeviceOnly`, usable after first unlock). Code running on the unlocked phone, inside the app's sandbox, can still use that key there. |
-| Phase | Secure Enclave TLS key: built (Phase 6). Backup exclusion for the node state: P1. |
+| Mitigations | App sandbox; state dir 0700 with data protection `completeUntilFirstUserAuthentication`, set by `StateDirectory.swift` and checked by collie-core (P1). State dir excluded from backups, also set by `StateDirectory.swift`. Revocation and key expiry as for a stolen phone. |
+| Residual | Node keys are files, readable after first unlock by code inside the app's sandbox. They no longer suffice: collied also requires the phone's TLS key, a Secure Enclave P-256 key that cannot leave the device (`ThisDeviceOnly`, usable after first unlock). Code running on the unlocked phone, inside the app's sandbox, can still use that key there. |
+| Phase | Secure Enclave TLS key: built (Phase 6). Backup exclusion for the node state: built (P1). |
 
 ## Threats from the design
 

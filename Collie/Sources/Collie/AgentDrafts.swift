@@ -1,7 +1,7 @@
 import Foundation
 
 /// Prompts not yet sent, per pane, kept on this device only in the state dir rather than UserDefaults.
-struct AgentDrafts: Codable {
+struct AgentDrafts: StateFile {
     struct Draft: Codable {
         var text: String
         var attachments: [AttachedFile]
@@ -11,15 +11,6 @@ struct AgentDrafts: Codable {
     static let file: URL? = try? StateDirectory.prepare().appending(path: "drafts.json")
 
     var drafts: [AgentRoute: Draft] = [:]
-
-    static func load(from file: URL?) -> AgentDrafts {
-        file.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(Self.self, from: $0) } ?? AgentDrafts()
-    }
-
-    func save(to file: URL?) {
-        guard let file, let data = try? JSONEncoder().encode(self) else { return }
-        try? data.write(to: file, options: .atomic)
-    }
 
     /// A draft goes with its pane: once its machine's loaded flock lists it no longer, or the machine is no longer paired.
     static func prune(_ entries: [MachineFlockEntry], file: URL?) {

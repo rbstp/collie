@@ -179,9 +179,7 @@ private func selection(_ a: TerminalCell, _ b: TerminalCell) -> TerminalSelectio
 }
 
 @Test func pointsMapToCellsThroughInsetAndContentOffset() {
-    let frame = TerminalFrame(
-        columns: 80, rows: 40, background: TerminalRGB(0, 0, 0), foreground: TerminalRGB(255, 255, 255), runs: []
-    )
+    let frame = TerminalFrame(columns: 80, rows: 40, background: TerminalRGB(0, 0, 0), runs: [])
     let (width, height, inset) = (6.5, 14.0, 8.0)
     let contentOffset = (x: 13.0, y: 140.0)
     func at(visibleX: Double, visibleY: Double) -> TerminalCell? {

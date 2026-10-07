@@ -74,14 +74,10 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .onChange(of: keepKeyboard) { _, keep in
-                var prefs = DevicePrefs.load(from: DevicePrefs.file)
-                prefs.keepKeyboard = keep
-                prefs.save(to: DevicePrefs.file)
+                DevicePrefs.update(in: DevicePrefs.file) { $0.keepKeyboard = keep }
             }
             .onChange(of: historyLines) { _, lines in
-                var prefs = DevicePrefs.load(from: DevicePrefs.file)
-                prefs.historyLines = lines
-                prefs.save(to: DevicePrefs.file)
+                DevicePrefs.update(in: DevicePrefs.file) { $0.historyLines = lines }
             }
             .refreshable { await app.refreshNode() }
             .task {
@@ -91,13 +87,9 @@ struct SettingsView: View {
         }
     }
 
-    /// Turning it off needs no authentication.
     private func setWatchDecisions(_ on: Bool) async {
-        if on, !(await DeviceOwnerAuthenticator().authenticate(reason: "Allow decisions from Apple Watch")) { return }
-        var prefs = DevicePrefs.load(from: DevicePrefs.file)
-        prefs.watchDecisions = on
-        prefs.save(to: DevicePrefs.file)
-        watchDecisions = DevicePrefs.load(from: DevicePrefs.file).watchDecisions
+        guard let allowed = await DevicePrefs.setWatchDecisions(on, in: DevicePrefs.file, auth: DeviceOwnerAuthenticator()) else { return }
+        watchDecisions = allowed
         app.publishWatchState()
     }
 }
@@ -122,9 +114,7 @@ private struct GesturesView: View {
         }
         .navigationTitle("Gestures")
         .onChange(of: gestures) { _, gestures in
-            var prefs = DevicePrefs.load(from: DevicePrefs.file)
-            prefs.gestures = gestures
-            prefs.save(to: DevicePrefs.file)
+            DevicePrefs.update(in: DevicePrefs.file) { $0.gestures = gestures }
         }
     }
 }

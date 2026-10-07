@@ -15,18 +15,6 @@ protocol ActivityCore: FlockCore {
 
 extension CollieCore: ActivityCore {}
 
-struct FollowedAgent: Codable, Hashable, Sendable {
-    let machineId: String
-    let terminalId: String
-
-    init(_ route: AgentRoute) {
-        machineId = route.machineId
-        terminalId = route.terminalId
-    }
-
-    var route: AgentRoute { AgentRoute(machineId: machineId, terminalId: terminalId) }
-}
-
 /// An activity whose token went to a Mac. Ids only, never tokens: iOS can end an activity while
 /// the app is not running, and its Mac must still be told to stop pushing to it.
 struct RegisteredActivity: Codable, Hashable, Sendable {
@@ -35,36 +23,27 @@ struct RegisteredActivity: Codable, Hashable, Sendable {
 }
 
 /// Agents followed on the Lock Screen, kept on this device in the state dir. Every agent starts unfollowed.
-struct FollowList: Codable, Equatable {
+struct FollowList: StateFile, Equatable {
     /// ActivityKit refuses more than about five activities per app.
     static let limit = 5
     static let file: URL? = try? StateDirectory.prepare().appending(path: "follows.json")
 
-    private(set) var agents: [FollowedAgent] = []
+    private(set) var agents: [AgentRoute] = []
     private(set) var registered: [RegisteredActivity] = []
 
-    static func load(from file: URL?) -> FollowList {
-        file.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(Self.self, from: $0) } ?? FollowList()
-    }
-
-    func save(to file: URL?) {
-        guard let file, let data = try? JSONEncoder().encode(self) else { return }
-        try? data.write(to: file, options: .atomic)
-    }
-
-    func contains(_ agent: FollowedAgent) -> Bool { agents.contains(agent) }
+    func contains(_ agent: AgentRoute) -> Bool { agents.contains(agent) }
 
     var isFull: Bool { agents.count >= Self.limit }
 
     @discardableResult
-    mutating func add(_ agent: FollowedAgent) -> Bool {
+    mutating func add(_ agent: AgentRoute) -> Bool {
         guard !contains(agent) else { return true }
         guard !isFull else { return false }
         agents.append(agent)
         return true
     }
 
-    mutating func remove(_ agent: FollowedAgent) {
+    mutating func remove(_ agent: AgentRoute) {
         agents.removeAll { $0 == agent }
     }
 
@@ -98,7 +77,7 @@ final class FollowModel {
     var notice: String?
     @ObservationIgnored private var watchers: [String: Task<Void, Never>] = [:]
     /// Restarts are tried once per foreground, so a refused request is not retried on every poll.
-    @ObservationIgnored private var attempted: Set<FollowedAgent> = []
+    @ObservationIgnored private var attempted: Set<AgentRoute> = []
     @ObservationIgnored private let log = Logger(subsystem: "dev.rbstp.collie", category: "live-activity")
 
     init(core: (any ActivityCore)?, approvals: ApprovalsModel?, file: URL? = FollowList.file) {
@@ -110,7 +89,7 @@ final class FollowModel {
     }
 
     func isFollowing(_ route: AgentRoute) -> Bool {
-        list.contains(FollowedAgent(route))
+        list.contains(route)
     }
 
     /// An activity started or watched in this run has no push token for its Mac yet.
@@ -118,8 +97,7 @@ final class FollowModel {
         watchers.keys.contains { id in !list.registered.contains { $0.activityId == id } }
     }
 
-    func follow(_ route: AgentRoute) {
-        let agent = FollowedAgent(route)
+    func follow(_ agent: AgentRoute) {
         guard !list.contains(agent) else { return }
         guard !list.isFull else {
             notice = "You can follow up to \(FollowList.limit) agents on the Lock Screen. Stop following one first."
@@ -145,8 +123,7 @@ final class FollowModel {
         attempted.insert(agent)
     }
 
-    func unfollow(_ route: AgentRoute) {
-        let agent = FollowedAgent(route)
+    func unfollow(_ agent: AgentRoute) {
         list.remove(agent)
         list.save(to: file)
         for activity in activities(for: agent) {
@@ -161,7 +138,7 @@ final class FollowModel {
         enabled = ActivityAuthorizationInfo().areActivitiesEnabled
         attempted = []
         for activity in Activity<AgentActivityAttributes>.activities where activity.isLive {
-            let agent = FollowedAgent(AgentRoute(machineId: activity.attributes.machineId, terminalId: activity.attributes.terminalId))
+            let agent = AgentRoute(machineId: activity.attributes.machineId, terminalId: activity.attributes.terminalId)
             guard list.contains(agent), !activity.attributes.isOutdated else {
                 end(activity, dismissal: .immediate)
                 continue
@@ -265,7 +242,7 @@ final class FollowModel {
         return (state.title, activity.attributes.terminalId)
     }
 
-    private func content(for agent: FollowedAgent) -> (Machine, String, AgentActivityAttributes.ContentState)? {
+    private func content(for agent: AgentRoute) -> (Machine, String, AgentActivityAttributes.ContentState)? {
         guard let flock = core?.cachedFlock(machineId: agent.machineId), flock.link == .connected,
             let summary = flock.agents.first(where: { $0.terminalId == agent.terminalId })
         else { return nil }
@@ -277,7 +254,7 @@ final class FollowModel {
         )
     }
 
-    private func start(_ agent: FollowedAgent, machine: Machine, title: String, state: AgentActivityAttributes.ContentState) throws {
+    private func start(_ agent: AgentRoute, machine: Machine, title: String, state: AgentActivityAttributes.ContentState) throws {
         let attributes = AgentActivityAttributes(
             machineId: agent.machineId, terminalId: agent.terminalId, machineLabel: machine.label, nodeId: machine.nodeId,
             title: title
@@ -286,7 +263,7 @@ final class FollowModel {
         watch(activity)
     }
 
-    private func activities(for agent: FollowedAgent) -> [Activity<AgentActivityAttributes>] {
+    private func activities(for agent: AgentRoute) -> [Activity<AgentActivityAttributes>] {
         Activity<AgentActivityAttributes>.activities.filter {
             $0.isLive && !$0.attributes.isOutdated && $0.attributes.machineId == agent.machineId
                 && $0.attributes.terminalId == agent.terminalId

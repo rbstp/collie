@@ -72,8 +72,7 @@ enum NotificationKey {
 
         /// Node ids name files, so only Tailscale's StableID alphabet is accepted.
         static func isValid(nodeId: String) -> Bool {
-            !nodeId.isEmpty && nodeId.count <= 64
-                && nodeId.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_") }
+            ProtocolId.valid(nodeId, extra: "-_")
         }
 
         static func url(nodeId: String) -> URL? {
@@ -114,6 +113,16 @@ enum NotificationKey {
         ]
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
         return query
+    }
+}
+
+enum ProtocolId {
+    /// The protocol's id grammar: ASCII letters, digits and `extra`, 1 to 64 bytes.
+    static func valid(_ s: String, extra: String) -> Bool {
+        (1...64).contains(s.utf8.count)
+            && s.unicodeScalars.allSatisfy { c in
+                ("a"..."z").contains(c) || ("A"..."Z").contains(c) || ("0"..."9").contains(c) || extra.unicodeScalars.contains(c)
+            }
     }
 }
 

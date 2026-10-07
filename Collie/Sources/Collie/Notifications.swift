@@ -9,7 +9,7 @@ struct ApprovalLink: Hashable, Sendable {
     let approvalId: String
 
     init?(nodeId: String, approvalId: String) {
-        guard Self.valid(nodeId), Self.valid(approvalId) else { return nil }
+        guard ProtocolId.valid(nodeId, extra: "-_"), ProtocolId.valid(approvalId, extra: "-_") else { return nil }
         self.nodeId = nodeId
         self.approvalId = approvalId
     }
@@ -22,13 +22,6 @@ struct ApprovalLink: Hashable, Sendable {
     }
 
     var userInfo: [String: String] { ["node_id": nodeId, "approval_id": approvalId] }
-
-    private static func valid(_ s: String) -> Bool {
-        (1...64).contains(s.utf8.count)
-            && s.utf8.allSatisfy { b in
-                (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A) || b == 0x2D || b == 0x5F
-            }
-    }
 }
 
 /// collied's background push once an alerted approval is over: it only removes that

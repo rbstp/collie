@@ -35,6 +35,11 @@ struct WatchApproval: Codable, Equatable, Identifiable, Sendable {
         }
         return options.contains(decision)
     }
+
+    /// The watch's own check before it asks for the wrist; the phone checks every decision again.
+    func canDecide(_ decision: WatchDecision, allowed: Bool, answered: Set<String>, now: Date) -> Bool {
+        allowed && !answered.contains(id) && offers(decision) && expiresAtMs > now.unixMs
+    }
 }
 
 struct WatchChoice: Codable, Equatable, Sendable {
@@ -65,12 +70,14 @@ struct WatchAgent: Codable, Equatable, Identifiable, Sendable {
 }
 
 struct WatchUsage: Codable, Equatable, Sendable {
+    static let widgetKind = "CollieUsage"
+
     let fiveHourUsed: UInt8?
     let fiveHourResetsAtMs: UInt64?
 
     /// Nil once the window's reset time has passed: its figure no longer holds.
     func fiveHour(now: Date) -> UInt8? {
-        guard let fiveHourUsed, let reset = fiveHourResetsAtMs, reset > UInt64(max(0, now.timeIntervalSince1970 * 1000)) else { return nil }
+        guard let fiveHourUsed, let reset = fiveHourResetsAtMs, reset > now.unixMs else { return nil }
         return fiveHourUsed
     }
 

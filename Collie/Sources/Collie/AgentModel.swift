@@ -61,19 +61,11 @@ final class AgentModel {
     var screen: String { wrapLines ? reflowed ?? ansi : ansi }
 
     var wrapLines: Bool {
-        didSet {
-            var prefs = DevicePrefs.load(from: prefsFile)
-            prefs.wrapLines = wrapLines
-            prefs.save(to: prefsFile)
-        }
+        didSet { DevicePrefs.update(in: prefsFile) { $0.wrapLines = wrapLines } }
     }
 
     var fontSize: Double {
-        didSet {
-            var prefs = DevicePrefs.load(from: prefsFile)
-            prefs.fontSize = fontSize
-            prefs.save(to: prefsFile)
-        }
+        didSet { DevicePrefs.update(in: prefsFile) { $0.fontSize = fontSize } }
     }
 
     private(set) var gestures: TerminalGestures
@@ -538,24 +530,22 @@ final class AgentModel {
     }
 
     private func watch(_ terminalId: String?) {
+        chain { core, machineId, lines in try await core.watchAgent(machineId: machineId, terminalId: terminalId, lines: lines) }
+    }
+
+    private func watchShell() {
+        let terminalId = route.terminalId
+        chain { core, machineId, lines in try await core.watchTerminal(machineId: machineId, terminalId: terminalId, lines: lines) }
+    }
+
+    private func chain(_ call: @escaping @Sendable (any AgentCore, String, UInt16) async throws -> Void) {
         let machineId = route.machineId
         let previous = Self.watchChains[machineId]
         let core = core
         let lines = historyLines
         Self.watchChains[machineId] = Task {
             await previous?.value
-            try? await core.watchAgent(machineId: machineId, terminalId: terminalId, lines: lines)
-        }
-    }
-
-    private func watchShell() {
-        let (machineId, terminalId) = (route.machineId, route.terminalId)
-        let previous = Self.watchChains[machineId]
-        let core = core
-        let lines = historyLines
-        Self.watchChains[machineId] = Task {
-            await previous?.value
-            try? await core.watchTerminal(machineId: machineId, terminalId: terminalId, lines: lines)
+            try? await call(core, machineId, lines)
         }
     }
 

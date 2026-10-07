@@ -6,7 +6,7 @@ import WidgetKit
 @main
 struct UsageComplication: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "CollieUsage", provider: UsageProvider()) { entry in
+        StaticConfiguration(kind: WatchUsage.widgetKind, provider: UsageProvider()) { entry in
             UsageRing(usage: entry.usage, now: entry.date)
                 .containerBackground(for: .widget) { AccessoryWidgetBackground() }
         }

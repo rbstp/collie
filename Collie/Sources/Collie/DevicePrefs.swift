@@ -1,7 +1,7 @@
 import Foundation
 
 /// Display choices kept on this device only, in the state dir rather than UserDefaults.
-struct DevicePrefs: Codable, Equatable {
+struct DevicePrefs: StateFile, Equatable {
     var wrapLines = true
     var keepKeyboard = false
     var gestures = TerminalGestures()
@@ -15,17 +15,31 @@ struct DevicePrefs: Codable, Equatable {
 
     static let file: URL? = try? StateDirectory.prepare().appending(path: "prefs.json")
 
-    static func load(from file: URL?) -> DevicePrefs {
-        file.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(Self.self, from: $0) } ?? DevicePrefs()
-    }
-
-    func save(to file: URL?) {
-        guard let file, let data = try? JSONEncoder().encode(self) else { return }
-        try? data.write(to: file, options: .atomic)
+    static func update(in file: URL?, _ change: (inout DevicePrefs) -> Void) {
+        var prefs = load(from: file)
+        change(&prefs)
+        prefs.save(to: file)
     }
 }
 
 extension DevicePrefs {
+    /// Turning it on needs the device owner, turning it off needs nothing. Nil when not authenticated.
+    @MainActor
+    static func setWatchDecisions(_ on: Bool, in file: URL?, auth: any Authenticator) async -> Bool? {
+        if on, !(await auth.authenticate(reason: "Allow decisions from Apple Watch")) { return nil }
+        update(in: file) { $0.watchDecisions = on }
+        return load(from: file).watchDecisions
+    }
+
+    /// Another watch needs a fresh authenticated opt-in before it can decide.
+    static func turnOffWatchDecisions(in file: URL?) {
+        var prefs = load(from: file)
+        if prefs.watchDecisions {
+            prefs.watchDecisions = false
+            prefs.save(to: file)
+        }
+    }
+
     /// A file saved before a field existed keeps the fields it has.
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)

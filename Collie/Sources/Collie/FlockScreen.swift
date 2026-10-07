@@ -176,9 +176,7 @@ struct FlockScreen: View {
             }
             .onChange(of: model.entries, initial: true) { _, entries in previews.update(entries) }
             .onChange(of: layout) { _, layout in
-                var prefs = DevicePrefs.load(from: DevicePrefs.file)
-                prefs.agentsLayout = layout
-                prefs.save(to: DevicePrefs.file)
+                DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout }
             }
             .onChange(of: opening, initial: true) { _, route in
                 guard let route else { return }
@@ -481,25 +479,9 @@ struct ContextRing: View {
 }
 
 extension AgentState {
-    var label: String {
-        switch self {
-        case .idle: "idle"
-        case .working: "working"
-        case .blocked: "blocked"
-        case .done: "done"
-        case .unknown: "unknown"
-        }
-    }
+    var label: String { AgentActivityStatus(self).label }
 
-    var color: Color {
-        switch self {
-        case .blocked: .red
-        case .working: .blue
-        case .idle: .gray
-        case .done: .green
-        case .unknown: .secondary
-        }
-    }
+    var color: Color { AgentActivityStatus(self).color }
 }
 
 extension LinkPhase {
