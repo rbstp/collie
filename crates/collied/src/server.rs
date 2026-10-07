@@ -1973,9 +1973,10 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         base = Some(next);
         outage = false;
         // Also with no phone connected: a closed pane must lose its star before herdr can
-        // give its pane id to a new pane.
+        // give its pane id to a new pane. Any star not in `agents` as it was last seen, a
+        // shell pane's included, takes the snapshot.
         let starred = lock(&state.stars).list();
-        if !starred.is_empty()
+        if !lock(&state.stars).listed(&agents)
             && let Ok(snap) = herdr::session_snapshot(&state.herdr).await
             && lock(&state.stars).reconcile(&snap.panes) != starred
         {

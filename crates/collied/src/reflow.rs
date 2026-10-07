@@ -1,12 +1,13 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::draft::{cells, separator};
+use crate::draft::separator;
 
 enum Prev {
     /// A row here may start a paragraph.
     Start,
-    /// The row above: the indent its continuation would have, and its text after that indent.
-    Row(usize, String),
+    /// The row above: the indent its continuation would have. Its text after that indent is
+    /// in `tail`.
+    Row(usize),
     /// Rows here may not continue the one above, until a blank row.
     Held,
 }
@@ -18,15 +19,12 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let (mut wraps, mut splits) = (Vec::new(), Vec::new());
     let mut prose = false;
     let mut prev = Prev::Start;
+    let (mut plain, mut tail) = (String::new(), String::new());
     for (i, row) in ansi.split('\n').enumerate() {
-        let plain: String = cells(row)
-            .into_iter()
-            .map(|(c, _)| c)
-            .filter(|&c| c != '\r')
-            .collect();
-        let plain = plain.trim_end();
-        let s = plain.trim_start_matches(' ');
-        let ind = plain.len() - s.len();
+        plain_text(row, &mut plain);
+        let trimmed = plain.trim_end();
+        let s = trimmed.trim_start_matches(' ');
+        let ind = trimmed.len() - s.len();
         if s.is_empty() {
             prev = Prev::Start;
             continue;
@@ -35,7 +33,7 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             let body = s.strip_prefix(['⏺', '※']);
             prose = body.is_some();
             prev = match body.map(|b| b.trim_start_matches([' ', '\u{a0}'])) {
-                Some(b) if !tool_header(b) => Prev::Row(2, b.to_owned()),
+                Some(b) if !tool_header(b) => row_above(&mut tail, b, 2),
                 _ => Prev::Held,
             };
             continue;
@@ -56,12 +54,12 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             continue;
         }
         if let Some(len) = list_marker(s) {
-            let tail = s[len..].trim_start_matches(' ');
-            prev = Prev::Row(ind + s[..s.len() - tail.len()].width(), tail.to_owned());
+            let rest = s[len..].trim_start_matches(' ');
+            prev = row_above(&mut tail, rest, ind + s[..s.len() - rest.len()].width());
             continue;
         }
         prev = match prev {
-            Prev::Row(hang, tail) if hang == ind => {
+            Prev::Row(hang) if hang == ind => {
                 let width = cols.saturating_sub(ind);
                 if tail.width() <= width {
                     let at = u32::try_from(i).unwrap_or(u32::MAX);
@@ -72,13 +70,36 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                         _ => {}
                     }
                 }
-                Prev::Row(ind, s.to_owned())
+                row_above(&mut tail, s, ind)
             }
-            Prev::Start => Prev::Row(ind, s.to_owned()),
+            Prev::Start => row_above(&mut tail, s, ind),
             Prev::Row(..) | Prev::Held => Prev::Held,
         };
     }
     (wraps, splits)
+}
+
+fn row_above(tail: &mut String, text: &str, hang: usize) -> Prev {
+    tail.clear();
+    tail.push_str(text);
+    Prev::Row(hang)
+}
+
+/// The characters `draft::cells` reads from `row`, without CR, into `out`.
+fn plain_text(row: &str, out: &mut String) {
+    out.clear();
+    let mut chars = row.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => chars
+                .by_ref()
+                .skip_while(|&c| c == '[')
+                .take_while(|&c| c != 'm')
+                .for_each(drop),
+            '\r' => {}
+            c => out.push(c),
+        }
+    }
 }
 
 /// A tool call such as `Bash(…)`, whose `⏺` blinks while it runs: joined only while the dot

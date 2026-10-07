@@ -132,6 +132,16 @@ impl Stars {
         self.list()
     }
 
+    /// Whether every star is an agent in `agents` at the pane it was last seen in, where
+    /// `reconcile` would change nothing.
+    pub fn listed(&self, agents: &[AgentInfo]) -> bool {
+        self.starred.iter().all(|(terminal_id, pane_id)| {
+            agents
+                .iter()
+                .any(|a| &a.terminal_id == terminal_id && &a.pane_id == pane_id)
+        })
+    }
+
     pub fn list(&self) -> Vec<TerminalId> {
         self.starred
             .keys()
@@ -586,6 +596,30 @@ mod tests {
                 .reconcile(&[pane("t5", "w2:p1")])
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn only_stars_listed_where_last_seen_skip_the_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut stars = Stars::load(dir.path().join("stars.json"));
+        let agents = fixture().agents;
+        assert!(stars.listed(&agents));
+        stars.star(&pane("term_65ce7ae4fd5731", "w6:p1"));
+        assert!(stars.listed(&agents));
+
+        // A closed pane, a herdr restore and a move each take the snapshot.
+        assert!(!stars.listed(&agents[1..]));
+        assert!(!stars.listed(&[]));
+        let mut restored = agents.clone();
+        restored[0].terminal_id = "term_65ce7ae4fd5799".into();
+        assert!(!stars.listed(&restored));
+        let mut moved = agents.clone();
+        moved[0].pane_id = "w9:p1".into();
+        assert!(!stars.listed(&moved));
+
+        // agent.list never holds a shell pane.
+        stars.star(&pane("term_ffffffffffff01", "w7:p2"));
+        assert!(!stars.listed(&agents));
     }
 
     #[test]
