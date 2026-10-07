@@ -102,7 +102,7 @@ fn is_unsafe_char(c: char) -> bool {
 
 /// Invisible and bidi formatting characters let a label render as something else,
 /// for example a different phone name on the Mac's pairing prompt.
-pub(crate) fn is_format(c: char) -> bool {
+pub fn is_format(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}'

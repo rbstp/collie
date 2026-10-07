@@ -336,7 +336,7 @@ impl TerminalRunParams {
             .text
             .as_str()
             .chars()
-            .any(|c| c == '\n' || c == '\t' || crate::ids::is_format(c))
+            .any(|c| c == '\n' || c == '\t' || is_format(c))
     }
 }
 

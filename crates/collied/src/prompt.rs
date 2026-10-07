@@ -1,5 +1,5 @@
 use protocol::limits::{MAX_CHOICE_LABEL_CHARS, MAX_SNIPPET_CHARS};
-use protocol::{ApprovalChoice, Decision};
+use protocol::{ApprovalChoice, Decision, is_format};
 
 const MAX_CONTINUATION_LINES: usize = 3;
 const MAX_BODY_LINES: usize = 12;
@@ -373,21 +373,6 @@ fn classify(label: &str) -> Option<Decision> {
 fn trust_wording(text: &str) -> bool {
     let t = text.to_lowercase();
     t.contains("trust this folder") || t.contains("do you trust the files in this folder")
-}
-
-/// Invisible and bidi formatting characters, as rejected by the protocol's `Label`.
-pub fn is_format(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{061C}'
-            | '\u{180E}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{206F}'
-            | '\u{FEFF}'
-            | '\u{FFF9}'..='\u{FFFB}'
-    )
 }
 
 pub fn clean(line: &str) -> String {
