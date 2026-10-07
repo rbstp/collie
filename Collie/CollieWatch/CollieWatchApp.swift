@@ -21,8 +21,9 @@ struct CollieWatchApp: App {
         }
         .backgroundTask(.watchConnectivity) { [model] in await model.drain() }
         .backgroundTask(.appRefresh(WatchModel.backgroundRefresh)) { [model] _ in
-            await model.refreshIfStale(timeout: .seconds(10))
+            // Scheduled first, so a run the system ends early still leaves the next one.
             await model.scheduleBackgroundRefresh()
+            await model.refreshIfStale(timeout: .seconds(10))
         }
     }
 }
