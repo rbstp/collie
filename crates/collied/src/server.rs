@@ -1390,7 +1390,7 @@ impl Session<'_> {
         self.terminal_watch = None;
         let lines = p.lines();
         if let Some(t) = p.terminal_id {
-            self.watch = Some(self.state.drive.watch(t, lines).await?);
+            self.watch = Some(self.state.drive.watch(t, lines, p.low_data).await?);
         }
         Ok(Response::Ok)
     }
@@ -1493,7 +1493,7 @@ impl Session<'_> {
         match self
             .state
             .drive
-            .watch_terminal(p.terminal_id.clone(), lines, auth)
+            .watch_terminal(p.terminal_id.clone(), lines, p.low_data, auth)
             .await
         {
             Ok(w) => {

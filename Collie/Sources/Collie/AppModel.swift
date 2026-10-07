@@ -59,7 +59,10 @@ final class AppModel {
             }
         }
         if let core {
-            pathMonitor.pathUpdateHandler = { core.networkChanged(interface: Self.interface(of: $0)) }
+            pathMonitor.pathUpdateHandler = { path in
+                core.setLowData(lowData: path.isConstrained)
+                core.networkChanged(interface: Self.interface(of: path))
+            }
             pathMonitor.start(queue: DispatchQueue(label: "dev.rbstp.collie.path"))
         }
         loadTerminalKey()

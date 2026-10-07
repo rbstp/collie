@@ -15,7 +15,6 @@ use protocol::{
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
-use tokio::time::MissedTickBehavior;
 
 use crate::draft::{self, InputBox};
 use crate::herdr::{self, AgentInfo, PaneInfo};
@@ -31,6 +30,10 @@ pub type Reply = Result<Response, Fail>;
 pub type Authorized = Arc<dyn Fn() -> bool + Send + Sync>;
 
 const WATCH_EVERY: Duration = Duration::from_millis(250);
+const WATCH_IDLE: Duration = Duration::from_secs(1);
+/// A screen unchanged this long is read at `WATCH_IDLE`; the first change goes back to
+/// `WATCH_EVERY`.
+const WATCH_QUIET: Duration = Duration::from_secs(5);
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const START_POLL: Duration = Duration::from_millis(250);
 pub const OP_TTL: Duration = Duration::from_secs(600);
@@ -353,10 +356,14 @@ impl Driver {
         self: &Arc<Self>,
         terminal_id: TerminalId,
         lines: u16,
+        low_data: bool,
     ) -> Result<Watcher, Fail> {
         self.find_agent(&terminal_id).await?;
         let (tx, rx) = mpsc::channel(1);
-        let task = tokio::spawn(self.clone().watch_loop(terminal_id, lines, None, tx));
+        let task = tokio::spawn(
+            self.clone()
+                .watch_loop(terminal_id, lines, low_data, None, tx),
+        );
         Ok(Watcher { rx, task })
     }
 
@@ -366,11 +373,15 @@ impl Driver {
         self: &Arc<Self>,
         terminal_id: TerminalId,
         lines: u16,
+        low_data: bool,
         auth: Authorized,
     ) -> Result<Watcher, Fail> {
         self.shell_pane(&terminal_id).await?;
         let (tx, rx) = mpsc::channel(1);
-        let task = tokio::spawn(self.clone().watch_loop(terminal_id, lines, Some(auth), tx));
+        let watch = self
+            .clone()
+            .watch_loop(terminal_id, lines, low_data, Some(auth), tx);
+        let task = tokio::spawn(watch);
         Ok(Watcher { rx, task })
     }
 
@@ -378,17 +389,20 @@ impl Driver {
         self: Arc<Self>,
         terminal_id: TerminalId,
         lines: u16,
+        low_data: bool,
         grant: Option<Authorized>,
         tx: mpsc::Sender<Watched>,
     ) {
         let shell = grant.is_some();
-        let mut tick = tokio::time::interval(WATCH_EVERY);
-        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut next = tokio::time::Instant::now();
+        let mut changed = next;
         let mut last = None;
         let mut sent: Option<TerminalRead> = None;
         let mut lines = Some(u32::from(lines));
         loop {
-            tick.tick().await;
+            tokio::time::sleep_until(next).await;
+            let now = tokio::time::Instant::now();
+            next = now + watch_period(low_data, now - changed);
             let pane = match &grant {
                 Some(auth) if !auth() => continue,
                 Some(_) => self
@@ -422,6 +436,8 @@ impl Driver {
                         continue;
                     }
                     last = Some(hash);
+                    changed = now;
+                    next = now + watch_period(low_data, Duration::ZERO);
                     let mut read = terminal_read(terminal_id.clone(), ReadSource::Recent, read);
                     if claude && !self.reflow(&pane_id, &mut read).await {
                         last = None;
@@ -916,6 +932,15 @@ fn agent_name() -> Result<String, Fail> {
     Ok(format!("collie-{:08x}", u32::from_be_bytes(b)))
 }
 
+/// Never shorter than `WATCH_EVERY`, whatever the phone asks.
+fn watch_period(low_data: bool, unchanged: Duration) -> Duration {
+    if low_data || unchanged >= WATCH_QUIET {
+        WATCH_IDLE
+    } else {
+        WATCH_EVERY
+    }
+}
+
 fn source_name(source: ReadSource) -> &'static str {
     match source {
         ReadSource::Visible => "visible",
@@ -1136,6 +1161,22 @@ mod tests {
     use protocol::Key;
 
     use super::*;
+
+    #[test]
+    fn the_watch_slows_down_after_a_quiet_spell_or_in_low_data_mode() {
+        assert_eq!(watch_period(false, Duration::ZERO), WATCH_EVERY);
+        assert_eq!(
+            watch_period(false, WATCH_QUIET - Duration::from_millis(1)),
+            WATCH_EVERY
+        );
+        assert_eq!(watch_period(false, WATCH_QUIET), WATCH_IDLE);
+        assert_eq!(watch_period(true, Duration::ZERO), WATCH_IDLE);
+        assert_eq!(watch_period(true, Duration::MAX), WATCH_IDLE);
+        assert_eq!(
+            (WATCH_EVERY, WATCH_IDLE),
+            (Duration::from_millis(250), Duration::from_secs(1))
+        );
+    }
 
     fn is_sgr_only(s: &str) -> bool {
         let mut rest = s;

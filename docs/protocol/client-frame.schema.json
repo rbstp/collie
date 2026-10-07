@@ -127,6 +127,10 @@
             "null"
           ]
         },
+        "low_data": {
+          "description": "The phone is in Low Data Mode: collied reads the screen once a second.",
+          "type": "boolean"
+        },
         "terminal_id": {
           "anyOf": [
             {
@@ -610,6 +614,10 @@
             "integer",
             "null"
           ]
+        },
+        "low_data": {
+          "description": "As in `agent.watch`.",
+          "type": "boolean"
         },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"

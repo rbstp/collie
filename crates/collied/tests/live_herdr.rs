@@ -336,7 +336,7 @@ async fn scenario(session: &HerdrSession) {
     };
     assert_eq!(drive.terminal_run(ran, &yes).await, Ok(Response::Ok));
     let mut watcher = drive
-        .watch_terminal(terminal.clone(), 50, yes.clone())
+        .watch_terminal(terminal.clone(), 50, false, yes.clone())
         .await
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
