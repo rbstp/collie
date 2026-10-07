@@ -32,7 +32,7 @@ struct AgentLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.center) {
                     HStack(spacing: 6) {
                         KindIcon(kind: state.kind, size: 18)
-                        Text(state.title).font(.headline).lineLimit(1)
+                        Text(context.attributes.displayTitle(state)).font(.headline).lineLimit(1)
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
@@ -82,7 +82,7 @@ private struct LockScreenView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 StatusPill(status: state.status)
-                Text(state.title).font(.headline).lineLimit(1)
+                Text(context.attributes.displayTitle(state)).font(.headline).lineLimit(1)
                 Spacer(minLength: 4)
                 if context.isStale {
                     Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.secondary)

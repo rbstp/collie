@@ -123,10 +123,14 @@ private let vectorKey = SymmetricKey(data: Data((1...32).map { UInt8($0) }))
     let attributes = try JSONDecoder().decode(AgentActivityAttributes.self, from: Data(old.utf8))
     #expect(attributes.nodeId == nil)
     #expect(attributes.isOutdated)
-    let current = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Mac", nodeId: "nMAC")
+    #expect(attributes.title == nil)
+    let state = AgentActivityAttributes.ContentState(status: .idle, statusSince: .now, title: "claude", workspace: nil, approvals: 0)
+    #expect(attributes.displayTitle(state) == "claude")
+    let current = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Mac", nodeId: "nMAC", title: "fix the build")
     #expect(!current.isOutdated)
     let decoded = try JSONDecoder().decode(AgentActivityAttributes.self, from: JSONEncoder().encode(current))
     #expect(decoded.nodeId == "nMAC")
+    #expect(decoded.displayTitle(state) == "fix the build")
 }
 
 @MainActor
@@ -178,6 +182,9 @@ private func summary(name: String? = nil, kind: String? = "claude", title: Strin
     #expect(AgentActivityAttributes.ContentState(agent: summary(name: " api-fixer "), workspace: nil, approvals: 0).title == "api-fixer")
     #expect(AgentActivityAttributes.ContentState(agent: summary(name: " ", kind: nil), workspace: nil, approvals: 0).title == "agent")
     #expect(summary(name: String(repeating: "x", count: 80)).alertTitle.count == 64)
+    #expect(summary().activityTitle == "rm -rf secrets")
+    #expect(summary(title: String(repeating: "x", count: 80)).activityTitle.count == 64)
+    #expect(summary(title: " ").activityTitle == "claude")
 }
 
 @Test func agentLinkRoundTrips() throws {

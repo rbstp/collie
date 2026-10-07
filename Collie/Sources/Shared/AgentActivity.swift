@@ -13,6 +13,11 @@ struct AgentActivityAttributes: ActivityAttributes {
     /// The Mac's node id, which keys its notification key and its decisions. Nil on activities
     /// an older build started; those are restarted on the next foreground.
     let nodeId: String?
+    /// The title the app shows for the agent, which may be the terminal title: set on the phone
+    /// and never sent through APNs. Nil on activities an older build started.
+    let title: String?
+
+    func displayTitle(_ state: ContentState) -> String { title ?? state.title }
 
     /// Plaintext to Apple: only what the approval alert already shows, plus the status and a count.
     /// `enc` is the approval context sealed like the alert's, so Apple only sees ciphertext.

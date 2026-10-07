@@ -350,7 +350,7 @@ The lock screen and the Dynamic Island show an agent only while the user follows
 
 ### Phone and collie-core
 
-- Following starts an `Activity` (`pushType: .token`) with the agent's current state. Each token from `pushTokenUpdates` goes to that agent's Mac with `register_activity_token(machine_id, activity_id, terminal_id, token_hex)`; every foreground registers the tokens of all running activities again. Unfollowing ends the activity at once and calls `end_activity(machine_id, activity_id)`.
+- Following starts an `Activity` (`pushType: .token`) with the agent's current state. Each token from `pushTokenUpdates` goes to that agent's Mac with `register_activity_token(machine_id, activity_id, terminal_id, token_hex)`; every foreground registers the tokens of all running activities again. The title the app shows for the agent (its terminal title, at most 64 characters) goes in the activity's static attributes, which stay on the phone, so the lock screen and the expanded island show it while collied's pushes keep the agent name or kind; it is fixed until the activity restarts. Unfollowing ends the activity at once and calls `end_activity(machine_id, activity_id)`.
 - collie-core keeps the registrations per machine in memory only (never on disk) and sends them on every connection, after `push.register`, since collied takes the APNs environment from it. Calls are queued in call order, so the app registers push before its activities. An end the Mac has not acknowledged is sent once more with the next connection (at most 16 kept per machine).
 
 ### Protocol
