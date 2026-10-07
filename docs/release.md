@@ -64,6 +64,17 @@ Team `RM3UT3MMSR`, in the Apple Developer portal and App Store Connect:
 
    Import writes the credential to `apns/<KEY_ID>.cred` in the data directory. systemd picks the seal, not collied: host key and TPM2 when a TPM2 is usable, host key only otherwise. Doctor's apns line says which, and warns when a TPM2 becomes usable after a host-only import. Import keeps an existing credential that decrypts to the same key, so to bind it to the TPM2, delete `apns/<KEY_ID>.cred` and import the `.p8` again. Where systemd-creds cannot encrypt (for example no `systemd-creds.socket`, systemd older than 256, a container), import falls back to a 0600 copy at `apns/AuthKey_<KEY_ID>.p8` in the data directory, sets `key_path` to it and says so. Doctor reports the fallback, and warns once systemd-creds works: import that file to encrypt it. The credential stops decrypting after an OS reinstall, a machine-id change, a uid or user name change, or a move to another machine: keep a copy of the `.p8` offline and import it again. Revoke the key in the portal if the machine is compromised.
 
+## Menu bar app notarization (optional)
+
+`just mac-install` signs the menu bar app with the Developer ID Application certificate and the hardened runtime; it runs on the Mac that built it without notarization. Nothing is needed in the developer portal: no App ID and no provisioning profile, as it has no entitlements.
+
+To run it on another Mac without a Gatekeeper prompt, notarize it. notarytool needs one credential, stored once in the login keychain:
+
+- an App Store Connect API team key with the Developer role (the TestFlight key works): `xcrun notarytool store-credentials collie-notary --key AuthKey_<KEY_ID>.p8 --key-id <KEY_ID> --issuer <ISSUER_ID>`
+- or an Apple ID app-specific password (appleid.apple.com): `xcrun notarytool store-credentials collie-notary --apple-id <apple id> --team-id RM3UT3MMSR --password <app-specific password>`
+
+The latest Program License Agreement must be accepted, or submissions are refused. Then `just mac-install` and `just mac-notarize` (or `just mac-notarize <profile>`), which submits, waits, staples the app in `target/mac` and in `~/Applications`, and checks it with `spctl`. On a failure, `xcrun notarytool log <submission id> --keychain-profile collie-notary` says why.
+
 ## collied on Linux
 
 There is no package. Install from a checkout, with the prerequisites in the README:
