@@ -265,7 +265,7 @@ validated_string!(
     Label,
     debug = plain,
     check = label,
-    schema = { "minLength": 1, "maxLength": 64 }
+    schema = { "minLength": 1, "maxLength": limits::MAX_LABEL_CHARS }
 );
 
 validated_string!(
@@ -273,7 +273,7 @@ validated_string!(
     Cwd,
     debug = plain,
     check = |s| s.starts_with('/') && s.len() <= limits::MAX_CWD_BYTES && !s.chars().any(char::is_control),
-    schema = { "pattern": "^/", "maxLength": 1024 }
+    schema = { "pattern": "^/", "maxLength": limits::MAX_CWD_BYTES }
 );
 
 validated_string!(
@@ -283,7 +283,7 @@ validated_string!(
     PromptText,
     debug = plain,
     check = |s| !s.trim().is_empty() && s.len() <= limits::MAX_PROMPT_BYTES && !s.chars().any(is_unsafe_char),
-    schema = { "minLength": 1, "maxLength": 32768 }
+    schema = { "minLength": 1, "maxLength": limits::MAX_PROMPT_BYTES }
 );
 
 validated_string!(
@@ -291,7 +291,7 @@ validated_string!(
     DraftText,
     debug = plain,
     check = |s| s.len() <= limits::MAX_PROMPT_BYTES && !s.chars().any(|c| (c.is_control() && c != '\n') || is_format(c)),
-    schema = { "maxLength": 32768 }
+    schema = { "maxLength": limits::MAX_PROMPT_BYTES }
 );
 
 validated_string!(
@@ -314,7 +314,7 @@ validated_string!(
     AttachmentName,
     debug = plain,
     check = attachment_name,
-    schema = { "minLength": 1, "maxLength": 64 }
+    schema = { "minLength": 1, "maxLength": limits::MAX_ATTACHMENT_NAME_CHARS }
 );
 
 validated_string!(

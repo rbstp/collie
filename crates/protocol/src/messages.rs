@@ -198,7 +198,6 @@ impl Request {
     }
 }
 
-/// Drive and Approval calls are written to the audit log and rate limited per peer.
 /// Terminal calls reach plain shells: collied refuses them unless the machine enables them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MethodClass {
@@ -244,7 +243,7 @@ pub struct ReadParams {
     pub terminal_id: TerminalId,
     pub source: ReadSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = 1000))]
+    #[schemars(range(min = 1, max = limits::MAX_READ_LINES))]
     pub lines: Option<u16>,
 }
 
@@ -261,16 +260,20 @@ impl ReadParams {
 pub struct AgentWatchParams {
     pub terminal_id: Option<TerminalId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = 1000))]
+    #[schemars(range(min = 1, max = limits::MAX_READ_LINES))]
     pub lines: Option<u16>,
 }
 
 impl AgentWatchParams {
     pub fn lines(&self) -> u16 {
-        self.lines.map_or(limits::DEFAULT_WATCH_LINES, |n| {
-            n.clamp(1, limits::MAX_READ_LINES)
-        })
+        watch_lines(self.lines)
     }
+}
+
+fn watch_lines(lines: Option<u16>) -> u16 {
+    lines.map_or(limits::DEFAULT_WATCH_LINES, |n| {
+        n.clamp(1, limits::MAX_READ_LINES)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -303,15 +306,13 @@ pub struct TerminalGrantParams {
 pub struct TerminalWatchParams {
     pub terminal_id: TerminalId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = 1000))]
+    #[schemars(range(min = 1, max = limits::MAX_READ_LINES))]
     pub lines: Option<u16>,
 }
 
 impl TerminalWatchParams {
     pub fn lines(&self) -> u16 {
-        self.lines.map_or(limits::DEFAULT_WATCH_LINES, |n| {
-            n.clamp(1, limits::MAX_READ_LINES)
-        })
+        watch_lines(self.lines)
     }
 }
 
@@ -414,7 +415,7 @@ impl Key {
 pub struct AgentSendKeysParams {
     pub op_id: OpId,
     pub terminal_id: TerminalId,
-    #[schemars(length(min = 1, max = 16))]
+    #[schemars(length(min = 1, max = limits::MAX_KEYS_PER_CALL))]
     pub keys: Vec<Key>,
 }
 
@@ -545,7 +546,7 @@ pub struct PushActivityEndParams {
 pub struct AttachmentBeginParams {
     pub op_id: OpId,
     pub name: AttachmentName,
-    #[schemars(range(min = 1, max = 20971520))]
+    #[schemars(range(min = 1, max = limits::MAX_ATTACHMENT_BYTES))]
     pub size: u64,
     pub sha256: Sha256Hex,
 }
