@@ -3,14 +3,15 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
 use protocol::{AttachmentName, ErrorCode, Sha256Hex, UploadId, limits};
 use sha2::{Digest, Sha256};
 
-use crate::drive::Fail;
+use crate::drive::{Fail, fail};
+use crate::lock;
 
 pub const MAX_PER_SESSION: usize = 2;
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -20,10 +21,6 @@ pub const RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 pub const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
 const PART: &str = ".part";
 const FALLBACK: &str = "attachment";
-
-fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, Fail> {
-    Err((code, message.into()))
-}
 
 fn internal(e: std::io::Error) -> Fail {
     tracing::error!(error = %e, "attachment storage");
@@ -215,10 +212,6 @@ struct Entry {
 pub struct Attachments {
     root: PathBuf,
     uploads: Mutex<HashMap<UploadId, Entry>>,
-}
-
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Attachments {

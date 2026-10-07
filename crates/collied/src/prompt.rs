@@ -634,65 +634,14 @@ pub mod fixtures {
  Enter to confirm · Esc to cancel
 ";
 
-    pub const QUESTION: &str = "\
-────────────────────────────────────────────────────────────────────────────────
- ☐ Storage
-
- Which storage backend should the cache use?
-
- ❯ 1. SQLite
-      Embedded, no server
-   2. Redis
-      Shared across processes
-   3. Type something.
-
- Enter to select · ↑/↓ to navigate · Esc to cancel
-";
-
-    pub const PLAN: &str = "\
-────────────────────────────────────────────────────────────────────────────────
- Would you like to proceed?
-
- ❯ 1. Yes, and auto-accept edits
-   2. Yes, and manually approve edits
-   3. No, keep planning
-";
+    pub const QUESTION: &str = include_str!("../tests/fixtures/claude/question.txt");
+    pub const PLAN: &str = include_str!("../tests/fixtures/claude/plan.txt");
 
     // Captured from Claude Code 2.1.289 (tmux, 100 columns): a rule splits the options,
     // and the trust prompt is unnumbered.
-    pub const QUESTION_LIVE: &str = "\
-❯ Use the AskUserQuestion tool to ask me which storage backend the cache should use.
-────────────────────────────────────────────────────────────────────────────────────────────────────
- ☐ Cache Backend
-
-Which storage backend should the cache use?
-
-❯ 1. SQLite
-     File-based database, good for single-instance deployments with local persistence
-  2. Redis
-     In-memory data store, better for distributed systems and high-performance scenarios
-  3. Type something.
-────────────────────────────────────────────────────────────────────────────────────────────────────
-  4. Chat about this
-
-Enter to select · ↑/↓ to navigate · Esc to cancel
-";
-
-    pub const TRUST_LIVE: &str = "\
-────────────────────────────────────────────────────────────────────────────────────────────────────
- Accessing workspace:
-
- /tmp/askq
-
- Quick safety check: Is this a project you created or one you trust?
-
- Claude Code'll be able to read, edit, and execute files here.
-
- ❯ No, exit
-   Yes, I trust this folder
-
- Enter to confirm · Esc to cancel
-";
+    pub const QUESTION_LIVE: &str =
+        include_str!("../tests/fixtures/claude-2.1.289/question.tmux.txt");
+    pub const TRUST_LIVE: &str = include_str!("../tests/fixtures/claude-2.1.289/trust.tmux.txt");
 
     // Captured from Claude Code 2.1.289 in herdr 0.9.3 (188 columns, the working
     // directory renamed). The Bash description sits above the command, which is printed

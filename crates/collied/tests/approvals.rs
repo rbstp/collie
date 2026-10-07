@@ -32,83 +32,14 @@ const LABEL: &str = "Test iPhone";
 const TTL: Duration = Duration::from_secs(600);
 const SETTLE: Duration = Duration::from_millis(600);
 
-const BASH: &str = "\
-⏺ Bash(rm -rf build)
-  ⎿  Running…
-
-────────────────────────────────────────────────────────────────────────────────
- Bash command
-
-   rm -rf build
-   Remove the build directory
-
- Do you want to proceed?
- ❯ 1. Yes
-   2. Yes, and don't ask again for rm commands in /Users/me/src/app
-   3. No, and tell Claude what to do differently (esc)
-
- Esc to cancel · Tab to amend · ctrl+e to explain
-";
-
-const QUESTION: &str = "\
-────────────────────────────────────────────────────────────────────────────────
- ☐ Storage
-
- Which storage backend should the cache use?
-
- ❯ 1. SQLite
-      Embedded, no server
-   2. Redis
-      Shared across processes
-   3. Type something.
-
- Enter to select · ↑/↓ to navigate · Esc to cancel
-";
-
-const PLAN: &str = "\
-────────────────────────────────────────────────────────────────────────────────
- Would you like to proceed?
-
- ❯ 1. Yes, and auto-accept edits
-   2. Yes, and manually approve edits
-   3. No, keep planning
-";
+const BASH: &str = include_str!("fixtures/claude/bash.txt");
+const QUESTION: &str = include_str!("fixtures/claude/question.txt");
+const PLAN: &str = include_str!("fixtures/claude/plan.txt");
 
 // Claude Code 2.1.289 (tmux, 100 columns): a rule splits the options, and the trust
 // prompt is unnumbered.
-const QUESTION_LIVE: &str = "\
-❯ Use the AskUserQuestion tool to ask me which storage backend the cache should use.
-────────────────────────────────────────────────────────────────────────────────────────────────────
- ☐ Cache Backend
-
-Which storage backend should the cache use?
-
-❯ 1. SQLite
-     File-based database, good for single-instance deployments with local persistence
-  2. Redis
-     In-memory data store, better for distributed systems and high-performance scenarios
-  3. Type something.
-────────────────────────────────────────────────────────────────────────────────────────────────────
-  4. Chat about this
-
-Enter to select · ↑/↓ to navigate · Esc to cancel
-";
-
-const TRUST_LIVE: &str = "\
-────────────────────────────────────────────────────────────────────────────────────────────────────
- Accessing workspace:
-
- /tmp/askq
-
- Quick safety check: Is this a project you created or one you trust?
-
- Claude Code'll be able to read, edit, and execute files here.
-
- ❯ No, exit
-   Yes, I trust this folder
-
- Enter to confirm · Esc to cancel
-";
+const QUESTION_LIVE: &str = include_str!("fixtures/claude-2.1.289/question.tmux.txt");
+const TRUST_LIVE: &str = include_str!("fixtures/claude-2.1.289/trust.tmux.txt");
 
 // Claude Code 2.1.289 in herdr 0.9.3, the working directory renamed.
 const BASH_LIVE: &str = include_str!("fixtures/claude-2.1.289/bash.detection.txt");

@@ -29,20 +29,7 @@ const TRUST: &str = "\
 
  Enter to confirm · Esc to cancel
 ";
-const QUESTION: &str = "\
-────────────────────────────────────────────────────────────────────────────────
- ☐ Storage
-
- Which storage backend should the cache use?
-
- ❯ 1. SQLite
-      Embedded, no server
-   2. Redis
-      Shared across processes
-   3. Type something.
-
- Enter to select · ↑/↓ to navigate · Esc to cancel
-";
+const QUESTION: &str = include_str!("fixtures/claude/question.txt");
 const BASH: &str = "\
 ────────────────────────────────────────────────────────────────────────────────
  Bash command
@@ -71,14 +58,7 @@ Which storage backend should the cache use?
 
 Enter to select · ↑/↓ to navigate · Esc to cancel
 ";
-const PLAN: &str = "\
-────────────────────────────────────────────────────────────────────────────────
- Would you like to proceed?
-
- ❯ 1. Yes, and auto-accept edits
-   2. Yes, and manually approve edits
-   3. No, keep planning
-";
+const PLAN: &str = include_str!("fixtures/claude/plan.txt");
 // Claude Code 2.1.289 in herdr 0.9.3 (rule legacy_no_prompt_blocker).
 const PLAN_LIVE: &str = include_str!("fixtures/claude-2.1.289/plan.detection.txt");
 const PLAN_TYPED_LIVE: &str =
@@ -106,7 +86,6 @@ struct Herdr {
     errors: HashMap<String, VecDeque<String>>,
     gets: VecDeque<Value>,
     started: Option<String>,
-    shell_busy: bool,
     new_pane_terminal: Option<String>,
     rule: Option<String>,
     slow: Option<Duration>,
@@ -301,15 +280,6 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
                     .ok_or_else(|| "pane_not_found".to_owned())?,
             };
             json!({"type": "pane_info", "pane": pane})
-        }
-        "pane.process_info" => {
-            let (pgid, fg) = if h.shell_busy {
-                (200, json!([{"pid": 200, "name": "vim"}]))
-            } else {
-                (100, json!([{"pid": 100, "name": "-zsh"}]))
-            };
-            json!({"type": "pane_process_info", "process_info": {"pane_id": p["pane_id"],
-                "shell_pid": 100, "foreground_process_group_id": pgid, "foreground_processes": fg}})
         }
         "workspace.create" => json!({"type": "workspace_created",
             "workspace": {"workspace_id": "w9", "number": 3, "label": p["label"], "focused": false,
@@ -1036,11 +1006,9 @@ async fn task_new_refusals() {
     assert_eq!(checks.load(std::sync::atomic::Ordering::SeqCst), 3);
     assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
 
-    // A busy pane is retried while it holds the new terminal, whatever runs in its
-    // foreground (rc files run helpers there while the shell starts)...
+    // A busy pane is retried while it holds the new terminal...
     herdr.with(|h| {
         h.calls.clear();
-        h.shell_busy = true;
         h.new_pane_terminal = None;
         h.gets.extend([
             started_agent("idle", true, false),
@@ -1059,7 +1027,6 @@ async fn task_new_refusals() {
     // ...and not once the pane holds another terminal.
     herdr.with(|h| {
         h.calls.clear();
-        h.shell_busy = false;
         h.new_pane_terminal = Some("term_other".to_owned());
     });
     herdr.fail_next("agent.start", &["agent_pane_busy"]);

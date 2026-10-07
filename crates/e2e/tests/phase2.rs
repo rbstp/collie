@@ -724,7 +724,7 @@ async fn start_collied(
     agent: &str,
     root: &Path,
 ) -> ServerHandle {
-    server::start_with_tasks(
+    server::start_with(
         net.mac.clone(),
         ServerConfig {
             data_dir: data_dir.to_owned(),
@@ -742,6 +742,7 @@ async fn start_collied(
             agents: vec![AgentKind::new(agent).unwrap()],
             roots: Some(vec![root.to_owned()]),
         },
+        None,
     )
     .await
     .unwrap()

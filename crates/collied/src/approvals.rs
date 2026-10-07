@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use protocol::{
     AgentStatus, Approval, ApprovalDecideParams, ApprovalId, ApprovalOutcome, Decision, ErrorCode,
-    Event, Nonce, Response, TerminalId,
+    Event, Nonce, Response, TerminalId, limits::MAX_LABEL_CHARS,
 };
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -14,7 +14,7 @@ use tokio::sync::broadcast;
 use zeroize::Zeroizing;
 
 use crate::audit::Audit;
-use crate::drive::{Authorized, Reply, herdr_fail};
+use crate::drive::{Authorized, Reply, fail, herdr_fail};
 use crate::flock;
 use crate::herdr::{self, AgentInfo, WorkspaceInfo};
 use crate::hooks;
@@ -31,7 +31,6 @@ const NOTE_POLL: Duration = Duration::from_millis(100);
 const RESOLVED_KEPT: usize = 256;
 const DECIDE_PER_SEC: f64 = 1.0;
 const DECIDE_BURST: f64 = 5.0;
-const MAX_LABEL_CHARS: usize = 64;
 // Keeps a lock-screen decision inside iOS's background budget: no key is sent once it has
 // passed, and the settle wait after the last key adds at most SETTLE, so a decision takes
 // under 10 s.
@@ -152,10 +151,6 @@ pub struct Approvals {
     settle: Duration,
     budget: Duration,
     inner: Mutex<Inner>,
-}
-
-fn fail<T>(code: ErrorCode, message: &str) -> Result<T, (ErrorCode, String)> {
-    Err((code, message.to_owned()))
 }
 
 fn is_blocked(a: &AgentInfo) -> bool {
