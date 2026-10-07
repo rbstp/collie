@@ -553,17 +553,17 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     #expect(model.notice?.contains("approval") == true)
 }
 
-@Test func closeNeedsTwoConfirmations() {
+@Test func closeNeedsAConfirmation() {
     var close = CloseConfirmation()
     #expect(close.confirm() == nil)
     close.advance()
     #expect(close.step == .idle)
 
     close.begin(.workspace(id: "w1"))
-    #expect(close.step == .first(.workspace(id: "w1")))
+    #expect(close.step == .asking(.workspace(id: "w1")))
     #expect(close.confirm() == nil)
     close.advance()
-    #expect(close.step == .second(.workspace(id: "w1")))
+    #expect(close.step == .confirmed(.workspace(id: "w1")))
     #expect(close.confirm() == .workspace(id: "w1"))
     #expect(close.step == .idle)
     #expect(close.confirm() == nil)
@@ -580,7 +580,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 }
 
 @MainActor
-@Test func closeCallsCoreOnlyAfterBothSteps() async {
+@Test func closeCallsCoreOnlyAfterTheConfirmation() async {
     let core = FakeCore()
     let model = agentModel(core)
     await model.performClose()
@@ -602,14 +602,14 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 }
 
 @MainActor
-@Test func listCloseGoesThroughBothConfirmationSteps() async {
+@Test func listCloseGoesThroughTheConfirmation() async {
     let core = FakeCore()
     let model = FlockModel()
     let route = AgentRoute(machineId: "m1", terminalId: "term_2")
     #expect(await model.performClose(core: core) == false)
 
     model.beginClose(.pane, route: route)
-    #expect(model.close.step == .first(.pane))
+    #expect(model.close.step == .asking(.pane))
     #expect(await model.performClose(core: core) == false)
     #expect(core.snapshot.closes.isEmpty)
     model.close.advance()
