@@ -6,13 +6,15 @@ import Security
 /// The phone's TLS key, which collied pins at pairing: a Secure Enclave P-256 key that never
 /// leaves this device. Usable after the first unlock, so lock-screen decisions can connect.
 enum Identity {
-    private static let service = "dev.rbstp.collie.identity"
+    /// On a device it holds the Secure Enclave's wrapped key, which only that enclave can use.
+    static let keychain = KeychainItem(
+        service: "dev.rbstp.collie.identity", account: "tls", accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly)
 
     static func load() throws -> (publicKey: Data, signer: IdentitySigner) {
         #if targetEnvironment(simulator)
-        let key = try stored().map { try P256.Signing.PrivateKey(rawRepresentation: $0) } ?? {
+        let key = try keychain.read().map { try P256.Signing.PrivateKey(rawRepresentation: $0) } ?? {
             let key = P256.Signing.PrivateKey()
-            try store(key.rawRepresentation)
+            try keychain.write(key.rawRepresentation)
             return key
         }()
         return (key.publicKey.derRepresentation, Signer { try key.signature(for: $0).derRepresentation })
@@ -20,47 +22,17 @@ enum Identity {
         guard SecureEnclave.isAvailable else { throw CocoaError(.featureUnsupported) }
         // A blob this enclave can no longer use is replaced: machines then refuse the new key
         // until the phone is revoked there and paired again.
-        let key = try stored().flatMap { try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: $0) } ?? {
+        let key = try keychain.read().flatMap { try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: $0) } ?? {
             var error: Unmanaged<CFError>?
             guard let access = SecAccessControlCreateWithFlags(
                 nil, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, .privateKeyUsage, &error)
             else { throw error!.takeRetainedValue() as Error }
             let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access)
-            try store(key.dataRepresentation)
+            try keychain.write(key.dataRepresentation)
             return key
         }()
         return (key.publicKey.derRepresentation, Signer { try key.signature(for: $0).derRepresentation })
         #endif
-    }
-
-    /// On a device this is the Secure Enclave's wrapped key, which only that enclave can use.
-    private static func stored() throws -> Data? {
-        var query = baseQuery()
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else { throw KeychainError(status: status) }
-        return data
-    }
-
-    private static func store(_ data: Data) throws {
-        SecItemDelete(baseQuery() as CFDictionary)
-        var item = baseQuery()
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        item[kSecValueData as String] = data
-        let status = SecItemAdd(item as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError(status: status) }
-    }
-
-    private static func baseQuery() -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "tls",
-            kSecUseDataProtectionKeychain as String: true,
-        ]
     }
 
     private final class Signer: IdentitySigner {

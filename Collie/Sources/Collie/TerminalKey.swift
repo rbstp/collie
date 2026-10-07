@@ -7,7 +7,13 @@ import Security
 /// Secure Enclave P-256 key, apart from the TLS key, that signs only after Face ID or the
 /// passcode. It exists only while the phone has a passcode; removing it destroys the key.
 enum TerminalKey {
-    private static let service = "dev.rbstp.collie.identity"
+    #if targetEnvironment(simulator)
+    static let keychain = KeychainItem(
+        service: "dev.rbstp.collie.identity", account: "terminal", accessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
+    #else
+    static let keychain = KeychainItem(
+        service: "dev.rbstp.collie.identity", account: "terminal", accessible: kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly)
+    #endif
 
     /// nil when this phone cannot hold one (no passcode, or the phone is locked): terminals
     /// then ask to pair again. On a device there is no software fallback.
@@ -39,15 +45,15 @@ enum TerminalKey {
 
     #if targetEnvironment(simulator)
     private static func softKey() throws -> P256.Signing.PrivateKey {
-        if let stored = try stored() { return try P256.Signing.PrivateKey(rawRepresentation: stored) }
+        if let stored = try keychain.read() { return try P256.Signing.PrivateKey(rawRepresentation: stored) }
         let key = P256.Signing.PrivateKey()
-        try store(key.rawRepresentation, accessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
+        try keychain.write(key.rawRepresentation)
         return key
     }
     #else
     private static func enclaveKey(context: LAContext?) throws -> SecureEnclave.P256.Signing.PrivateKey {
         guard SecureEnclave.isAvailable else { throw CocoaError(.featureUnsupported) }
-        if let stored = try stored(),
+        if let stored = try keychain.read(),
             let key = try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: stored, authenticationContext: context)
         {
             return key
@@ -57,39 +63,10 @@ enum TerminalKey {
             nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, [.privateKeyUsage, .userPresence], &error)
         else { throw error!.takeRetainedValue() as Error }
         let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access, authenticationContext: context)
-        try store(key.dataRepresentation, accessible: kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly)
+        try keychain.write(key.dataRepresentation)
         return key
     }
     #endif
-
-    private static func stored() throws -> Data? {
-        var query = baseQuery()
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else { throw KeychainError(status: status) }
-        return data
-    }
-
-    private static func store(_ data: Data, accessible: CFString) throws {
-        SecItemDelete(baseQuery() as CFDictionary)
-        var item = baseQuery()
-        item[kSecAttrAccessible as String] = accessible
-        item[kSecValueData as String] = data
-        let status = SecItemAdd(item as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError(status: status) }
-    }
-
-    private static func baseQuery() -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "terminal",
-            kSecUseDataProtectionKeychain as String: true,
-        ]
-    }
 }
 
 /// Face ID or the passcode, then a signature by the terminal key; a seam for tests.
