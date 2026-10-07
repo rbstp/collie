@@ -32,8 +32,8 @@ const CLAUDE_FORM_RULES: &[&str] = &["live_blocked_form"];
 /// Claude Code form whose dialog has no trust wording and no option that reads as a
 /// decision or starts with "yes" (a plan's "Yes, and auto-accept edits" grants a
 /// permission mode). Every numbered or `❯` line of the dialog counts, not only a parsed
-/// menu, so a menu that does not parse (wrapped labels, a second `❯`, the unnumbered trust
-/// prompt of Claude Code 2.1.289) cannot hide its approve option.
+/// menu, so a menu that does not parse (wrapped labels, a second `❯`) cannot hide its
+/// approve option.
 pub fn open_to_keys(kind: &str, rule: Option<&str>, text: &str) -> bool {
     kind == "claude"
         && rule.is_some_and(|r| CLAUDE_FORM_RULES.contains(&r))
@@ -119,11 +119,20 @@ pub struct Menu {
 }
 
 impl Menu {
-    /// The last numbered option block on screen, numbered from 1 without gaps, with
-    /// exactly one `❯` cursor. Anything else is not a menu collied will answer.
+    /// The unnumbered folder trust prompt ([`Menu::parse_trust`]), else the last numbered
+    /// option block on screen, numbered from 1 without gaps, with exactly one `❯` cursor,
+    /// in the dialog after the last rule: a numbered menu above it is stale output.
+    /// Anything else is not a menu collied will answer.
     pub fn parse(text: &str) -> Option<Self> {
+        Self::parse_trust(text).or_else(|| Self::parse_numbered(text))
+    }
+
+    fn parse_numbered(text: &str) -> Option<Self> {
         let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
         let last = lines.iter().rposition(|l| option_line(l).is_some())?;
+        if last < lines.len() - after_last_rule(text).len() {
+            return None;
+        }
         let after = lines[last + 1..]
             .iter()
             .take_while(|l| !l.trim().is_empty() && !is_rule(l))
@@ -187,6 +196,76 @@ impl Menu {
             heads,
             cursor,
             after,
+        })
+    }
+
+    /// Claude Code's folder trust prompt since 2.1.289: unnumbered, "No, exit" first. Read
+    /// only in the dialog after the last rule, with no numbered line, exactly one `❯` line,
+    /// and its options one line each at the cursor's label column, between a blank line
+    /// with the body above and a blank line with a hint below, indented no deeper than the
+    /// cursor (no partial screen, no option after a blank). Every
+    /// option maps to its own decision and one names the trust, so no other menu is
+    /// read without numbers.
+    fn parse_trust(text: &str) -> Option<Self> {
+        let lines: Vec<&str> = after_last_rule(text)
+            .into_iter()
+            .map(str::trim_end)
+            .collect();
+        // after_last_rule falls back to the whole screen when no rule tops a dialog.
+        if lines.len() == text.lines().count() || lines.iter().any(|l| option_line(l).is_some()) {
+            return None;
+        }
+        let mut marked = (0..lines.len()).filter(|&i| lines[i].trim_start().starts_with('❯'));
+        let at = marked.next()?;
+        if marked.next().is_some() {
+            return None;
+        }
+        let indent = lines[at].len() - lines[at].trim_start().len();
+        if !lines[at][..indent].bytes().all(|b| b == b' ') {
+            return None;
+        }
+        let pad = " ".repeat(indent + 2);
+        let label = |i: usize| {
+            let l = lines[i];
+            let rest = if i == at {
+                l[indent..].strip_prefix("❯ ")
+            } else {
+                l.strip_prefix(pad.as_str())
+            }?;
+            (!rest.starts_with(char::is_whitespace)).then_some(rest)
+        };
+        let blank = |i: usize| lines.get(i).is_some_and(|l| l.is_empty());
+        let first = (0..at).rev().find(|&i| blank(i))? + 1;
+        let end = (at..lines.len()).find(|&i| blank(i))?;
+        let options: Vec<String> = (first..end)
+            .map(|i| label(i).map(str::to_owned))
+            .collect::<Option<_>>()?;
+        let decided: Vec<Decision> = options.iter().map(|l| classify(l)).collect::<Option<_>>()?;
+        if options.len() < 2
+            || (1..decided.len()).any(|i| decided[..i].contains(&decided[i]))
+            || !options.iter().any(|l| trust_wording(l))
+            || !lines[end + 1..].iter().any(|l| !l.trim().is_empty())
+            || lines[end + 1..]
+                .iter()
+                .any(|l| l.len() - l.trim_start().len() > indent)
+        {
+            return None;
+        }
+        let raw_body: Vec<String> = lines[..first]
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| (*l).to_owned())
+            .collect();
+        if raw_body.is_empty() {
+            return None;
+        }
+        Some(Self {
+            body: raw_body.iter().map(|l| l.trim().to_owned()).collect(),
+            raw_body,
+            heads: options.clone(),
+            options,
+            cursor: at - first,
+            after: Vec::new(),
         })
     }
 
@@ -642,6 +721,12 @@ pub mod fixtures {
     pub const QUESTION_LIVE: &str =
         include_str!("../tests/fixtures/claude-2.1.289/question.tmux.txt");
     pub const TRUST_LIVE: &str = include_str!("../tests/fixtures/claude-2.1.289/trust.tmux.txt");
+    // Claude Code 2.1.292 in herdr 0.9.3 (214 columns, the shell prompt and working
+    // directory renamed): the unnumbered trust prompt, and the same after one `down`.
+    pub const TRUST_292: &str =
+        include_str!("../tests/fixtures/claude-2.1.292/trust.detection.txt");
+    pub const TRUST_292_ON_YES: &str =
+        include_str!("../tests/fixtures/claude-2.1.292/trust-on-yes.detection.txt");
 
     // Captured from Claude Code 2.1.289 in herdr 0.9.3 (188 columns, the working
     // directory renamed). The Bash description sits above the command, which is printed
@@ -757,6 +842,130 @@ mod tests {
         assert_eq!(m.keys(1), (vec![], "esc"));
         let m = Menu::parse(PLAN).unwrap();
         assert_eq!(m.keys(2), (vec!["down", "down"], "enter"));
+    }
+
+    #[test]
+    fn unnumbered_trust_prompt() {
+        for screen in [TRUST_LIVE, TRUST_292] {
+            let m = Menu::parse(screen).unwrap();
+            assert_eq!(m.options, ["No, exit", "Yes, I trust this folder"]);
+            assert_eq!((m.heads.clone(), m.cursor), (m.options.clone(), 0));
+            assert_eq!(m.body[0], "Accessing workspace:");
+            assert!(m.is_trust_prompt());
+            assert_eq!(m.decisions(), [(Approve, 1), (Deny, 0)]);
+            assert_eq!(m.keys(1), (vec!["down"], "enter"));
+            assert_eq!(m.keys(0), (vec![], "esc"));
+            assert!(!offers_note(screen));
+            for rule in [Some("live_blocked_form"), Some("legacy_no_prompt_blocker")] {
+                assert!(!open_to_keys("claude", rule, screen));
+                assert!(!open_to_text("claude", rule, screen));
+            }
+        }
+        let m = Menu::parse(TRUST_292).unwrap();
+        assert_eq!(m.body.len(), 5);
+        assert_eq!(m.body[1], "/tmp/trustlab");
+        assert_eq!(m.body[4], "Security guide");
+        assert_eq!(context(TRUST_292), "Accessing workspace: /tmp/trustlab");
+        let on_yes = Menu::parse(TRUST_292_ON_YES).unwrap();
+        assert_eq!(on_yes.cursor, 1);
+        assert!(m.only_changed(1, &on_yes));
+        assert_eq!(on_yes.region(), m.region_at(1));
+        assert_ne!(on_yes.region(), m.region());
+        assert_eq!(on_yes.keys(1), (vec![], "enter"));
+        assert_eq!(on_yes.keys(0), (vec![], "esc"));
+        let stale = format!("{BASH_TWO}\n{TRUST_292}");
+        assert_eq!(
+            Menu::parse(&stale),
+            Some(m),
+            "a menu above the dialog is old output"
+        );
+    }
+
+    #[test]
+    fn refuses_unnumbered_menus_it_cannot_map() {
+        let cut = |at: &str| TRUST_292[..TRUST_292.find(at).unwrap() + at.len()].to_owned();
+        let refused = [
+            ("no cursor", TRUST_292.replace(" ❯ No", "   No")),
+            ("two cursors", TRUST_292.replace("   Yes, I", " ❯ Yes, I")),
+            (
+                "cursor on the body",
+                TRUST_292
+                    .replace(" ❯ No", "   No")
+                    .replace(" Security guide", " ❯ Security guide"),
+            ),
+            (
+                "wrapped label",
+                TRUST_292.replace(
+                    "   Yes, I trust this folder\n",
+                    "   Yes, I trust\n     this folder\n",
+                ),
+            ),
+            ("misaligned", TRUST_292.replace("   Yes, I", "    Yes, I")),
+            ("tab indent", TRUST_292.replace(" ❯ No", "\t❯ No")),
+            (
+                "unknown option",
+                TRUST_292.replace(
+                    "   Yes, I trust this folder\n",
+                    "   Yes, I trust this folder\n   Later\n",
+                ),
+            ),
+            (
+                "two denials",
+                TRUST_292.replace(
+                    "   Yes, I trust this folder\n",
+                    "   Yes, I trust this folder\n   No\n",
+                ),
+            ),
+            (
+                "one option",
+                TRUST_292.replace("   Yes, I trust this folder\n", ""),
+            ),
+            (
+                "no trust wording",
+                TRUST_292.replace("Yes, I trust this folder", "Yes"),
+            ),
+            ("cut after an option", cut(" ❯ No, exit\n")),
+            (
+                "option after a blank",
+                TRUST_292.replace(
+                    "   Yes, I trust this folder\n\n",
+                    "   Yes, I trust this folder\n\n   Yes, and trust all subfolders\n\n",
+                ),
+            ),
+            (
+                "cut before the hint",
+                cut("   Yes, I trust this folder\n\n"),
+            ),
+            (
+                "no blank above",
+                TRUST_292.replace(" Security guide\n\n", " Security guide\n"),
+            ),
+            (
+                "numbered line",
+                TRUST_292.replace(" Security guide", " 1. Security guide"),
+            ),
+            (
+                "no rule",
+                TRUST_292
+                    .lines()
+                    .filter(|l| !is_rule(l))
+                    .map(|l| format!("{l}\n"))
+                    .collect(),
+            ),
+        ];
+        for (why, screen) in refused {
+            assert_eq!(Menu::parse(&screen), None, "{why}");
+            if why != "no rule" {
+                let stale = format!("{BASH_TWO}\n{screen}");
+                assert_eq!(Menu::parse(&stale), None, "{why}, under a numbered menu");
+            }
+        }
+        let generic = "────────\n Run it?\n\n ❯ Yes\n   No\n\n Enter to confirm\n";
+        assert_eq!(
+            Menu::parse(generic),
+            None,
+            "only the trust prompt goes unnumbered"
+        );
     }
 
     #[test]
