@@ -185,6 +185,7 @@ private func summary(name: String? = nil, kind: String? = "claude", title: Strin
     #expect(summary().activityTitle == "rm -rf secrets")
     #expect(summary(title: String(repeating: "x", count: 80)).activityTitle.count == 64)
     #expect(summary(title: " ").activityTitle == "claude")
+    #expect(summary(title: "e" + String(repeating: "\u{301}", count: 2000)).activityTitle.utf8.count <= 256)
 }
 
 @Test func agentLinkRoundTrips() throws {

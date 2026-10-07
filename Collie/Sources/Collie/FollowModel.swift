@@ -425,7 +425,9 @@ extension AgentSummary {
     }
 
     /// The Live Activity's static title: what the app shows, kept on the phone in the attributes.
-    var activityTitle: String { String(displayTitle.prefix(64)) }
+    /// Cut in scalars, not characters: one character can stack any number of combining marks,
+    /// and attributes over 4 KB fail to start.
+    var activityTitle: String { String(String.UnicodeScalarView(displayTitle.unicodeScalars.prefix(64))) }
 }
 
 /// "Follow on Lock Screen" / "Stop following", for the agent screen's More menu and the Agents list.
