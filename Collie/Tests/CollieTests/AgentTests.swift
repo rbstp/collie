@@ -693,27 +693,32 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 
     await model.refresh(core: core, snapshot: false, cacheOnly: true)
     #expect(core.snapshot.flocks == 0)
-    #expect(model.entries.first?.connecting == true)
+    #expect(model.entries.first?.connecting(nodeStarting: true) == true)
     core.state.withLock { $0.cachedFlock = flock(.connected) }
     await model.refresh(core: core, snapshot: false, cacheOnly: true)
-    #expect(model.entries.first?.connecting == true, "connected, but its list has not landed yet")
+    #expect(model.entries.first?.connecting(nodeStarting: true) == true, "connected, but its list has not landed yet")
     core.state.withLock { $0.cachedFlock = flock(.connected, details: details) }
     await model.refresh(core: core, snapshot: false, cacheOnly: true)
-    #expect(model.entries.first?.connecting == false)
+    #expect(model.entries.first?.connecting(nodeStarting: true) == false)
     #expect(core.snapshot.flocks == 0)
 
     core.state.withLock { $0.cachedFlock = flock(.connected, error: "herdr is not running on the machine") }
     await model.refresh(core: core, snapshot: false, cacheOnly: true)
     #expect(model.entries.first?.error != nil)
-    #expect(model.entries.first?.connecting == false)
+    #expect(model.entries.first?.connecting(nodeStarting: true) == false)
     await model.refresh(core: core, snapshot: false, cacheOnly: true)
     #expect(core.snapshot.flocks == 0, "a failed read is retried over the network by the 3 s refresh only")
 
     for (link, connecting) in [(LinkPhase.connecting, true), (.waiting, false), (.unavailable, false), (.stopped, false)] {
-        #expect(MachineFlockEntry(machine: machine, flock: flock(link)).connecting == connecting)
+        #expect(MachineFlockEntry(machine: machine, flock: flock(link)).connecting(nodeStarting: true) == connecting)
     }
-    #expect(MachineFlockEntry(machine: machine).connecting)
-    #expect(!MachineFlockEntry(machine: machine, flock: flock(.connecting), error: "machine not found").connecting)
+    #expect(MachineFlockEntry(machine: machine).connecting(nodeStarting: false))
+    #expect(MachineFlockEntry(machine: machine, flock: flock(.connecting)).connecting(nodeStarting: false))
+    #expect(
+        !MachineFlockEntry(machine: machine, flock: flock(.offline)).connecting(nodeStarting: false),
+        "a node that never runs is not polled fast past the start window"
+    )
+    #expect(!MachineFlockEntry(machine: machine, flock: flock(.connecting), error: "machine not found").connecting(nodeStarting: true))
 }
 
 @MainActor

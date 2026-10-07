@@ -165,6 +165,8 @@ struct FlockScreen: View {
             .task {
                 // Events keep the cache current; no event lists shells, and an older collied sends no title change.
                 var tick = 0
+                // Offline with no error is also a node that never reaches Running (logged out, no network).
+                let nodeStart = ContinuousClock.now + .seconds(20)
                 while !Task.isCancelled {
                     let snapshot = tick % 20 == 0
                     await model.refresh(core: core, snapshot: snapshot)
@@ -173,7 +175,9 @@ struct FlockScreen: View {
                     tick += 1
                     let next = ContinuousClock.now + .seconds(3)
                     // While a machine connects, its list shows as soon as it reaches the cache; these reads stay local.
-                    while model.entries.contains(where: \.connecting), ContinuousClock.now < next, !Task.isCancelled {
+                    while model.entries.contains(where: { $0.connecting(nodeStarting: ContinuousClock.now < nodeStart) }),
+                        ContinuousClock.now < next, !Task.isCancelled
+                    {
                         try? await Task.sleep(for: .milliseconds(250))
                         await model.refresh(core: core, snapshot: false, cacheOnly: true)
                     }

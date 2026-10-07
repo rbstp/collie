@@ -16,11 +16,12 @@ struct MachineFlockEntry: Identifiable, Equatable {
 
     var linkDown: Bool { flock.map { ![.connected, .connecting].contains($0.link) } ?? false }
 
-    /// Waiting for the node, a dial or the first list, and no read failed.
-    var connecting: Bool {
+    /// Waiting for a dial or the first list, or for the node while `nodeStarting`, and no read failed.
+    func connecting(nodeStarting: Bool) -> Bool {
         guard error == nil else { return false }
         switch flock?.link {
-        case nil, .offline, .connecting: return true
+        case nil, .connecting: return true
+        case .offline: return nodeStarting
         case .connected: return flock?.details == nil
         default: return false
         }
