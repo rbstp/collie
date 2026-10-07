@@ -132,3 +132,64 @@ ios-run-device: ios-framework ios-project
         CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=RM3UT3MMSR build
     xcrun devicectl device install app --device "$udid" target/ios/DerivedData/Build/Products/Debug-iphoneos/Collie.app
     xcrun devicectl device process launch --device "$udid" dev.rbstp.collie
+
+mac_xcodebuild := "xcodebuild -project Mac/CollieBar.xcodeproj -scheme CollieBar -derivedDataPath target/mac/DerivedData"
+
+[macos]
+mac-project:
+    xcodegen generate --spec Mac/project.yml
+
+# Unsigned Release build of the menu bar app.
+[macos]
+mac-build: mac-project
+    {{ mac_xcodebuild }} -configuration Release CODE_SIGNING_ALLOWED=NO build
+
+[macos]
+mac-test: mac-project
+    {{ mac_xcodebuild }} -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test
+
+# Menu bar app signed with the team RM3UT3MMSR Developer ID and the hardened runtime, installed to ~/Applications. Not notarized.
+[macos]
+mac-install: mac-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    identity="$(security find-identity -v -p codesigning \
+        | sed -n 's/^ *[0-9][0-9]*) [0-9A-F]\{40\} "\(Developer ID Application: .* (RM3UT3MMSR)\)"$/\1/p' | head -n 1)"
+    [ -n "$identity" ] || { echo "no valid \"Developer ID Application: ... (RM3UT3MMSR)\" identity in the keychain"; exit 1; }
+    app=target/mac/CollieBar.app
+    rm -rf "$app"
+    ditto target/mac/DerivedData/Build/Products/Release/CollieBar.app "$app"
+    codesign --force --sign "$identity" --options runtime --timestamp "$app"
+    codesign --verify --strict --verbose=2 "$app"
+    entitlements="$(codesign -d --entitlements - "$app" 2>/dev/null)"
+    [ -z "$entitlements" ] || { echo "unexpected entitlements:"; echo "$entitlements"; exit 1; }
+    osascript -e 'quit app id "dev.rbstp.colliebar"' >/dev/null 2>&1 || true
+    dest="$HOME/Applications/CollieBar.app"
+    mkdir -p "$HOME/Applications"
+    # A fresh copy beside the old one, then swapped in: the path stays stable for the login item.
+    tmp="$(mktemp -d "$HOME/Applications/.CollieBar.XXXXXX")"
+    trap 'rm -rf "$tmp"' EXIT
+    ditto "$app" "$tmp/CollieBar.app"
+    rm -rf "$dest"
+    mv "$tmp/CollieBar.app" "$dest"
+    codesign --verify --strict --verbose=2 "$dest"
+    echo "installed $dest, signed by $identity"
+    open "$dest"
+
+# Optional: notarizes and staples the app mac-install signed. Credentials from `xcrun notarytool store-credentials <profile>`.
+[macos]
+mac-notarize profile="collie-notary":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    app=target/mac/CollieBar.app
+    codesign -dvv "$app" 2>&1 | grep -q '^Authority=Developer ID Application: .* (RM3UT3MMSR)$' \
+        || { echo "$app is not signed with the RM3UT3MMSR Developer ID: run just mac-install first"; exit 1; }
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    ditto -c -k --keepParent "$app" "$tmp/CollieBar.zip"
+    # On failure: xcrun notarytool log <submission id> --keychain-profile "{{ profile }}"
+    xcrun notarytool submit "$tmp/CollieBar.zip" --keychain-profile "{{ profile }}" --wait
+    xcrun stapler staple "$app"
+    dest="$HOME/Applications/CollieBar.app"
+    if [ -d "$dest" ]; then xcrun stapler staple "$dest"; fi
+    spctl --assess --type execute --verbose=2 "$app"
