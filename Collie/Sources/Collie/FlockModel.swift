@@ -210,13 +210,13 @@ extension PlanUsage {
     static let staleAfterMs: UInt64 = 5 * 60_000
 
     func isStale(now: Date) -> Bool {
-        let nowMs = UInt64(max(0, now.timeIntervalSince1970 * 1000))
+        let nowMs = now.unixMs
         return nowMs > recordedMs && nowMs - recordedMs > Self.staleAfterMs
     }
 
     /// A window whose reset time has passed is left out: its figure no longer holds.
     func limits(now: Date) -> [UsageLimit] {
-        let nowMs = UInt64(max(0, now.timeIntervalSince1970 * 1000))
+        let nowMs = now.unixMs
         return [("5h", fiveHour, 5 * 3600), ("7d", sevenDay, 7 * 86400)].compactMap { label, window, length in
             guard let window, window.resetsAtMs > nowMs else { return nil }
             return UsageLimit(
@@ -272,4 +272,6 @@ extension AgentSummary {
         [title, name, kind].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
             ?? terminalId
     }
+
+    var activityMs: UInt64 { lastActivityMs ?? statusSinceMs }
 }

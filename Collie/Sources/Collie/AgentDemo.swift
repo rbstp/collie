@@ -83,7 +83,7 @@ final class DemoAgentCore: ActivityCore {
 
     init(snapshot: String) {
         self.snapshot = snapshot
-        let now = UInt64(Date.now.timeIntervalSince1970 * 1000)
+        let now = Date.now.unixMs
         usage = PlanUsage(
             fiveHour: UsageWindow(usedPercent: 38, resetsAtMs: now + 7_980_000),
             sevenDay: UsageWindow(usedPercent: 61, resetsAtMs: now + 277_200_000),
@@ -270,7 +270,7 @@ final class DemoApprovalCore: ApprovalCore {
     private let pending: [PendingApproval]
 
     init() {
-        let now = UInt64(Date.now.timeIntervalSince1970 * 1000)
+        let now = Date.now.unixMs
         pending = [
             PendingApproval(
                 approvalId: "ap_demo1", terminalId: "term_1", agentLabel: "fix the flaky test", workspaceLabel: "collie",

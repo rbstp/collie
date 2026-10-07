@@ -120,7 +120,7 @@ struct ApprovalCard: View {
                     .foregroundStyle(.secondary)
             } else {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let expired = approval.expiresAtMs <= UInt64(context.date.timeIntervalSince1970 * 1000)
+                    let expired = approval.expiresAtMs <= context.date.unixMs
                     if approval.options.isEmpty {
                         ChoiceButtons(model: model, item: item, expired: expired)
                     } else {

@@ -1,6 +1,10 @@
 import Foundation
 
-// Compiled into the app, ColliePush and the watch targets: Foundation only, extension-safe APIs only.
+// Compiled into the app, ColliePush, CollieWidgets and the watch targets: Foundation only, extension-safe APIs only.
+
+extension Date {
+    var unixMs: UInt64 { UInt64(max(0, timeIntervalSince1970 * 1000)) }
+}
 
 enum AppGroup {
     static let identifier = "group.dev.rbstp.collie"

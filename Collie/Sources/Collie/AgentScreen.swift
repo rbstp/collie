@@ -16,9 +16,8 @@ struct AgentScreen: View {
     @Environment(\.scenePhase) private var scenePhase
 
     init(
-        core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel? = nil, follows: FollowModel? = nil,
-        machineLabel: String? = nil, showsMachine: Bool = false, neighbor: ((Int) -> AgentRoute?)? = nil,
-        switchAgent: @escaping (AgentRoute) -> Void = { _ in }
+        core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel?, follows: FollowModel?,
+        machineLabel: String?, showsMachine: Bool, neighbor: ((Int) -> AgentRoute?)?, switchAgent: @escaping (AgentRoute) -> Void
     ) {
         _model = State(initialValue: AgentModel(core: core, route: route, draftsFile: AgentDrafts.file, machineLabel: machineLabel))
         self.approvals = approvals

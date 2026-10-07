@@ -530,24 +530,22 @@ final class AgentModel {
     }
 
     private func watch(_ terminalId: String?) {
+        chain { core, machineId, lines in try await core.watchAgent(machineId: machineId, terminalId: terminalId, lines: lines) }
+    }
+
+    private func watchShell() {
+        let terminalId = route.terminalId
+        chain { core, machineId, lines in try await core.watchTerminal(machineId: machineId, terminalId: terminalId, lines: lines) }
+    }
+
+    private func chain(_ call: @escaping @Sendable (any AgentCore, String, UInt16) async throws -> Void) {
         let machineId = route.machineId
         let previous = Self.watchChains[machineId]
         let core = core
         let lines = historyLines
         Self.watchChains[machineId] = Task {
             await previous?.value
-            try? await core.watchAgent(machineId: machineId, terminalId: terminalId, lines: lines)
-        }
-    }
-
-    private func watchShell() {
-        let (machineId, terminalId) = (route.machineId, route.terminalId)
-        let previous = Self.watchChains[machineId]
-        let core = core
-        let lines = historyLines
-        Self.watchChains[machineId] = Task {
-            await previous?.value
-            try? await core.watchTerminal(machineId: machineId, terminalId: terminalId, lines: lines)
+            try? await call(core, machineId, lines)
         }
     }
 

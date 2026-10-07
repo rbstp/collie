@@ -70,7 +70,7 @@ struct WatchUsage: Codable, Equatable, Sendable {
 
     /// Nil once the window's reset time has passed: its figure no longer holds.
     func fiveHour(now: Date) -> UInt8? {
-        guard let fiveHourUsed, let reset = fiveHourResetsAtMs, reset > UInt64(max(0, now.timeIntervalSince1970 * 1000)) else { return nil }
+        guard let fiveHourUsed, let reset = fiveHourResetsAtMs, reset > now.unixMs else { return nil }
         return fiveHourUsed
     }
 

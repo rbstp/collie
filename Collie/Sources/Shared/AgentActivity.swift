@@ -142,7 +142,7 @@ struct AgentLink: Hashable, Sendable {
     let terminalId: String
 
     init?(machineId: String, terminalId: String) {
-        guard Self.valid(machineId, extra: "_-"), Self.valid(terminalId, extra: "_:.-") else { return nil }
+        guard ProtocolId.valid(machineId, extra: "_-"), ProtocolId.valid(terminalId, extra: "_:.-") else { return nil }
         self.machineId = machineId
         self.terminalId = terminalId
     }
@@ -163,13 +163,5 @@ struct AgentLink: Hashable, Sendable {
         components.host = "agent"
         components.queryItems = [URLQueryItem(name: "m", value: machineId), URLQueryItem(name: "t", value: terminalId)]
         return components.url!
-    }
-
-    /// The protocol's id grammar: ASCII letters, digits and `extra`, 1 to 64 bytes.
-    private static func valid(_ s: String, extra: String) -> Bool {
-        (1...64).contains(s.utf8.count)
-            && s.unicodeScalars.allSatisfy { c in
-                ("a"..."z").contains(c) || ("A"..."Z").contains(c) || ("0"..."9").contains(c) || extra.unicodeScalars.contains(c)
-            }
     }
 }

@@ -8,7 +8,7 @@ extension WatchState {
 
     /// What the phone shows, capped so it fits in an application context.
     init(items: [ApprovalItem], entries: [MachineFlockEntry], allowed: Bool, live: Bool, now: Date) {
-        let nowMs = UInt64(max(0, now.timeIntervalSince1970 * 1000))
+        let nowMs = now.unixMs
         let groups = InboxSection.grouped(InboxItem.items(in: entries), now: now)
         let rows = (groups[.working] ?? []).map { ($0, false) } + (groups[.done] ?? []).map { ($0, true) }
         let usage = entries.compactMap { $0.flock?.planUsage }.max { $0.recordedMs < $1.recordedMs }
@@ -53,7 +53,7 @@ extension WatchState {
     /// `shown` with the approvals just listed from each Mac; a Mac that did not answer keeps
     /// those last shown for it.
     static func refreshed(_ shown: WatchState?, listed: [MachineApprovals], machines: [Machine], allowed: Bool, now: Date) -> WatchState {
-        let nowMs = UInt64(max(0, now.timeIntervalSince1970 * 1000))
+        let nowMs = now.unixMs
         var state = shown ?? WatchState(approvals: [], agents: [], usage: nil, decisionsAllowed: allowed, live: false)
         var silent: Set<String> = []
         let items = listed.flatMap { entry -> [ApprovalItem] in
@@ -90,18 +90,11 @@ extension WatchState {
 extension WatchAgent {
     init(item: InboxItem, done: Bool) {
         let agent = item.agent
-        let status: Status =
-            switch agent.status {
-            case .idle: .idle
-            case .working: .working
-            case .blocked: .blocked
-            case .done: .done
-            case .unknown: .unknown
-            }
         self.init(
             id: "\(item.route.machineId)/\(item.route.terminalId)", title: clip(agent.lastLine ?? agent.displayTitle, 100),
-            workspace: item.workspace.map { clip($0, 60) }, machine: clip(item.machine, 60), status: status,
-            done: done, activityMs: item.activityMs, contextLeft: agent.contextLeft
+            workspace: item.workspace.map { clip($0, 60) }, machine: clip(item.machine, 60),
+            status: Status(rawValue: AgentActivityStatus(agent.status).rawValue) ?? .unknown,
+            done: done, activityMs: agent.activityMs, contextLeft: agent.contextLeft
         )
     }
 }
@@ -186,7 +179,7 @@ final class WatchLink: NSObject, WCSessionDelegate {
         guard allowed else {
             return "Decisions from Apple Watch are off. Turn them on in collie Settings on the iPhone. Nothing was sent."
         }
-        let nowMs = UInt64(max(0, now.timeIntervalSince1970 * 1000))
+        let nowMs = now.unixMs
         guard let approval = shown?.approvals.first(where: { $0.nodeId == request.nodeId && $0.approvalId == request.approvalId }),
             approval.offers(request.decision), approval.expiresAtMs > nowMs
         else { return "This approval is no longer pending on the iPhone. Nothing was sent." }

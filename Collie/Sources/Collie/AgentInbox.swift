@@ -66,8 +66,6 @@ struct InboxItem: Identifiable, Equatable {
 
     var id: AgentRoute { route }
 
-    var activityMs: UInt64 { agent.lastActivityMs ?? agent.statusSinceMs }
-
     static func items(in entries: [MachineFlockEntry]) -> [InboxItem] {
         entries.flatMap { entry in
             entry.agents.map {
@@ -100,7 +98,7 @@ enum InboxSection: CaseIterable {
         case .working, .blocked: return .working
         case .done: return .done
         case .idle, .unknown:
-            let age = now.timeIntervalSince1970 - TimeInterval(agent.lastActivityMs ?? agent.statusSinceMs) / 1000
+            let age = now.timeIntervalSince1970 - TimeInterval(agent.activityMs) / 1000
             return age < archiveAfter ? .done : .archived
         }
     }
@@ -109,8 +107,8 @@ enum InboxSection: CaseIterable {
     static func grouped(_ items: [InboxItem], now: Date) -> [InboxSection: [InboxItem]] {
         Dictionary(grouping: items) { of($0.agent, now: now) }.mapValues { rows in
             rows.sorted {
-                ($0.agent.status == .blocked ? 0 : 1, UInt64.max - $0.activityMs, $0.route.terminalId)
-                    < ($1.agent.status == .blocked ? 0 : 1, UInt64.max - $1.activityMs, $1.route.terminalId)
+                ($0.agent.status == .blocked ? 0 : 1, UInt64.max - $0.agent.activityMs, $0.route.terminalId)
+                    < ($1.agent.status == .blocked ? 0 : 1, UInt64.max - $1.agent.activityMs, $1.route.terminalId)
             }
         }
     }
@@ -162,10 +160,10 @@ private struct InboxRow: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 6) {
-                Text(Elapsed.compact(sinceMs: item.activityMs, now: now))
+                Text(Elapsed.compact(sinceMs: item.agent.activityMs, now: now))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("active \(Elapsed.spoken(sinceMs: item.activityMs, now: now)) ago")
+                    .accessibilityLabel("active \(Elapsed.spoken(sinceMs: item.agent.activityMs, now: now)) ago")
                 if let left = agent.contextLeft {
                     ContextRing(left: left)
                 }

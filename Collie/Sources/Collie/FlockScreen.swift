@@ -479,25 +479,9 @@ struct ContextRing: View {
 }
 
 extension AgentState {
-    var label: String {
-        switch self {
-        case .idle: "idle"
-        case .working: "working"
-        case .blocked: "blocked"
-        case .done: "done"
-        case .unknown: "unknown"
-        }
-    }
+    var label: String { AgentActivityStatus(self).label }
 
-    var color: Color {
-        switch self {
-        case .blocked: .red
-        case .working: .blue
-        case .idle: .gray
-        case .done: .green
-        case .unknown: .secondary
-        }
-    }
+    var color: Color { AgentActivityStatus(self).color }
 }
 
 extension LinkPhase {
