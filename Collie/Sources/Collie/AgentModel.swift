@@ -45,6 +45,11 @@ final class AgentModel {
     var draft = ""
     /// What the phone last saw in the Mac's input box: nil when unknown. A send replaces exactly this text.
     private(set) var macDraft: String?
+    /// The Mac's box text loaded into the field, until the phone edits it; a prompt sent from the Mac clears it.
+    @ObservationIgnored private var loadedMacDraft: String?
+    /// The agent's last prompt when the field was loaded or the box last checked: only a new one means the Mac sent.
+    @ObservationIgnored private var seenPrompt: String?
+    @ObservationIgnored private(set) var sentMacDraftCheck: Task<Void, Never>?
     private(set) var sendingPrompt = false
     /// The Mac's input box holds text the mirror did not put there; it waits for the next send.
     private var mirrorPaused = false
@@ -230,6 +235,7 @@ final class AgentModel {
 
     /// Text left unsent in the Mac's input box moves to the phone's field, unless the phone already has a draft.
     func loadMacDraft() async {
+        let prompt = agent?.lastPrompt
         guard agent?.kind == "claude",
             let text = try? await core.agentDraft(machineId: route.machineId, terminalId: route.terminalId),
             !Task.isCancelled
@@ -240,6 +246,8 @@ final class AgentModel {
         } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, attachments.isEmpty, !dictation.isActive {
             draft = text
             macDraft = text
+            loadedMacDraft = text
+            seenPrompt = prompt
         } else if text == Self.boxToken(text), Self.slashToken(draft) == text {
             macDraft = text
         }
@@ -247,6 +255,7 @@ final class AgentModel {
 
     /// Keyboard typing in the prompt field: only this mirrors the draft's slash command to the Mac.
     func typed(_ text: String) {
+        if text != draft { loadedMacDraft = nil }
         draft = text
         typedDraft = text
         mirrorDelay?.cancel()
@@ -329,7 +338,13 @@ final class AgentModel {
         guard let view = core.agentView(machineId: route.machineId, terminalId: route.terminalId, afterRevision: revision) else { return }
         if link != view.link { link = view.link }
         if linkError != view.lastError { linkError = view.lastError }
-        if agent != view.agent { agent = view.agent }
+        if agent != view.agent {
+            if loadedMacDraft != nil, let prompt = view.agent?.lastPrompt, prompt != seenPrompt {
+                seenPrompt = prompt
+                dropSentMacDraft()
+            }
+            agent = view.agent
+        }
         if terminal != view.terminal { terminal = view.terminal }
         if terminalLocked != view.terminalLocked { terminalLocked = view.terminalLocked }
         if terminalsEnabled != view.terminalsEnabled { terminalsEnabled = view.terminalsEnabled }
@@ -343,6 +358,20 @@ final class AgentModel {
         }
         armNotice()
         followMode()
+    }
+
+    /// collied's last prompt is human typed only, so a background turn or text deleted on the Mac never gets here;
+    /// a nil last prompt (transcript unreadable for a moment) is ignored. The Mac's box reads empty once it sent.
+    private func dropSentMacDraft() {
+        sentMacDraftCheck = Task {
+            guard let box = try? await core.agentDraft(machineId: route.machineId, terminalId: route.terminalId), box.isEmpty,
+                let loaded = loadedMacDraft, draft == loaded, !sendingPrompt
+            else { return }
+            draft = ""
+            macDraft = ""
+            loadedMacDraft = nil
+            saveDraft()
+        }
     }
 
     private func show(notice options: [NoticeOption]) {
@@ -463,6 +492,7 @@ final class AgentModel {
             mirrorPaused = false
             mirrored = ""
             menuMoved = false
+            loadedMacDraft = nil
             let sentIds = Set(files.map(\.id))
             attachments.removeAll { sentIds.contains($0.id) }
             if draft.hasPrefix(sent) {
@@ -532,6 +562,7 @@ final class AgentModel {
 
     func paste(_ text: String?) {
         guard let text, !dictation.isActive else { return }
+        loadedMacDraft = nil
         draft += text
     }
 
@@ -539,6 +570,7 @@ final class AgentModel {
     @discardableResult
     func startDictation() -> Task<Void, Never>? {
         guard !sendingPrompt else { return nil }
+        loadedMacDraft = nil
         return dictation.start(appendingTo: draft) { [weak self] in self?.draft = $0 }
     }
 

@@ -39,6 +39,7 @@ final class FakeCore: AgentCore {
         var output: TerminalSnapshot?
         var outputRevision: UInt64 = 1
         var status: AgentState = .idle
+        var lastPrompt: String?
         var depths: [UInt16?] = []
         var shell: TerminalSummary?
         var shellLocked = true
@@ -120,10 +121,10 @@ final class FakeCore: AgentCore {
                 outputRevision: s.outputRevision
             )
         }
-        guard let kind = state.withLock({ $0.kind }) else { return nil }
+        guard let kind = s.kind else { return nil }
         let agent = AgentSummary(
             terminalId: terminalId, workspaceId: "w1", kind: kind, name: nil, title: nil,
-            status: .idle, statusSinceMs: 0, cwd: nil, lastLine: nil
+            status: s.status, statusSinceMs: 0, cwd: nil, lastLine: nil, lastPrompt: s.lastPrompt
         )
         return AgentView(link: .connected, lastError: nil, agent: agent, output: nil, outputRevision: 0)
     }
@@ -539,6 +540,107 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     #expect(model.attachments.map(\.name) == ["a.png"])
     #expect(model.macDraft == "mac text")
     #expect(model.promptError == CoreError.DraftNotCleared.description)
+}
+
+@MainActor
+private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) async {
+    core.state.withLock {
+        $0.macDraft = ""
+        $0.lastPrompt = prompt
+    }
+    model.poll()
+    await model.sentMacDraftCheck?.value
+}
+
+@MainActor
+@Test func aPromptSentFromTheMacClearsTheDraftLoadedFromIt() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "test")
+    await model.loadMacDraft()
+    await attach(model, core, "a.png")
+    await macSends(core, model, prompt: "test")
+    #expect(model.draft.isEmpty)
+    #expect(model.macDraft == "")
+    #expect(model.attachments.map(\.name) == ["a.png"])
+}
+
+@MainActor
+@Test func aPromptSentFromTheMacClearsTheLoadedDraftEvenAfterTheMacTextChanged() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "test")
+    await model.loadMacDraft()
+    core.state.withLock { $0.macDraft = "test2" }
+    model.poll()
+    await macSends(core, model, prompt: "test2")
+    #expect(model.draft.isEmpty)
+}
+
+@MainActor
+@Test func aPromptQueuedOnTheMacWhileWorkingClearsTheLoadedDraft() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.status = .working
+        $0.lastPrompt = "earlier"
+    }
+    let model = openedAgent(core, macDraft: "next")
+    await model.loadMacDraft()
+    await macSends(core, model, prompt: "next")
+    #expect(model.draft.isEmpty)
+}
+
+@MainActor
+@Test func aDraftEditedOnThePhoneStaysWhenTheMacSends() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "test")
+    await model.loadMacDraft()
+    model.typed("test from the phone")
+    await macSends(core, model, prompt: "test")
+    #expect(model.draft == "test from the phone")
+
+    let other = FakeCore()
+    let pasted = openedAgent(other, macDraft: "test")
+    await pasted.loadMacDraft()
+    pasted.paste(" more")
+    await macSends(other, pasted, prompt: "test")
+    #expect(pasted.draft == "test more")
+}
+
+@MainActor
+@Test func macTextDeletedWithoutSendingKeepsTheLoadedDraft() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "test")
+    await model.loadMacDraft()
+    core.state.withLock { $0.macDraft = "" }
+    model.poll()
+    await model.sentMacDraftCheck?.value
+    #expect(model.draft == "test")
+
+    core.state.withLock { $0.status = .blocked }
+    model.poll()
+    core.state.withLock { $0.status = .working }
+    model.poll()
+    await model.sentMacDraftCheck?.value
+    #expect(model.draft == "test")
+}
+
+@MainActor
+@Test func aTurnWithoutANewPromptKeepsTheLoadedDraft() async {
+    let core = FakeCore()
+    core.state.withLock { $0.lastPrompt = "earlier" }
+    let model = openedAgent(core, macDraft: "test")
+    await model.loadMacDraft()
+    core.state.withLock {
+        $0.macDraft = ""
+        $0.status = .working
+    }
+    model.poll()
+    core.state.withLock { $0.lastPrompt = nil }
+    model.poll()
+    core.state.withLock { $0.lastPrompt = "earlier" }
+    model.poll()
+    await model.sentMacDraftCheck?.value
+    #expect(model.draft == "test")
+    #expect(model.sentMacDraftCheck == nil)
 }
 
 @Test func keyStripIsTheAllowlistInOrder() {
