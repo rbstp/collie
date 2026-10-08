@@ -13,6 +13,7 @@ protocol AgentCore: AnyObject, Sendable {
     func focus(machineId: String, terminalId: String) async throws
     func scrollBottom(machineId: String, terminalId: String) async throws
     func answerNotice(machineId: String, terminalId: String, digit: UInt8) async throws
+    func slashDraft(machineId: String, terminalId: String, command: String, expectedDraft: String?) async throws
     func star(machineId: String, terminalId: String, starred: Bool) async throws
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws
     func closePane(machineId: String, terminalId: String, confirm: Bool) async throws

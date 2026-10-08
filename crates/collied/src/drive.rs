@@ -8,10 +8,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use protocol::{
-    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentStatus, AgentTypeTextParams, Cwd,
-    ErrorCode, NoticeDigit, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request,
-    Response, TaskNewParams, TaskOptions, TerminalId, TerminalRead, TerminalRunParams,
-    WorkspaceCloseParams, WorkspaceId, limits,
+    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentSlashDraftParams, AgentStatus,
+    AgentTypeTextParams, Cwd, ErrorCode, NoticeDigit, OpId, OutputPatch, PaneCloseParams,
+    ReadParams, ReadSource, Request, Response, TaskNewParams, TaskOptions, TerminalId,
+    TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -745,6 +745,46 @@ impl Driver {
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
+    }
+
+    /// Mirrors the phone's slash command token into Claude Code's input box as a bracketed
+    /// paste, never Enter or a key, so its command menu shows. The box is cleared first
+    /// through [`Self::replace_draft`]; an empty command stops there. The agent, the banner
+    /// and an empty visible box are checked again just before the paste.
+    pub async fn slash_draft(&self, p: AgentSlashDraftParams, auth: &Authorized) -> Reply {
+        let a = self.claude_at_bottom(&p.terminal_id).await?;
+        let expected = p.expected_draft.as_ref().map(|d| d.as_str());
+        self.replace_draft(&a.pane_id, expected, auth).await?;
+        if p.command.as_str().is_empty() {
+            return Ok(Response::Ok);
+        }
+        let a = self.claude_at_bottom(&p.terminal_id).await?;
+        if !matches!(
+            self.input_box(&a.pane_id).await?,
+            Some(InputBox::Draft(d)) if d.text.is_empty()
+        ) {
+            return fail(ErrorCode::AgentNotReady, "the input box is not empty");
+        }
+        authorized(auth)?;
+        let paste = format!("\u{1b}[200~{}\u{1b}[201~", p.command.as_str());
+        herdr::pane_send_text(&self.herdr, &a.pane_id, &paste)
+            .await
+            .map_err(herdr_fail)?;
+        Ok(Response::Ok)
+    }
+
+    async fn claude_at_bottom(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
+        let a = self.ready_agent(terminal_id).await?;
+        if a.agent.as_deref() != Some("claude") {
+            return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
+        }
+        let screen = herdr::detection_text(&self.herdr, &a.pane_id)
+            .await
+            .map_err(herdr_fail)?;
+        if protocol::jump_banner(&screen) {
+            return fail(ErrorCode::AgentNotReady, SCROLLED);
+        }
+        Ok(a)
     }
 
     pub async fn task_options(&self) -> Reply {

@@ -364,6 +364,7 @@ private struct KeyStrip: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(key.accessibilityName)
+                .disabled(model.commandShown && (key == .enter || key == .ctrlEnter))
             }
         }
         .disabled(!model.acceptsKeys)
@@ -427,7 +428,10 @@ private struct PromptBar: View {
                     .padding(.vertical, 8)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
                 } else {
-                    TextField(model.answering ? "Type an answer" : "Prompt the agent", text: $model.draft, axis: .vertical)
+                    TextField(
+                        model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: { model.typed($0) }),
+                        axis: .vertical
+                    )
                         .lineLimit(1...6)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)

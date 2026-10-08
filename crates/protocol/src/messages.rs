@@ -49,6 +49,8 @@ pub enum Request {
     AgentScrollBottom(AgentTarget),
     #[serde(rename = "agent.answer_notice")]
     AgentAnswerNotice(AgentAnswerNoticeParams),
+    #[serde(rename = "agent.slash_draft")]
+    AgentSlashDraft(AgentSlashDraftParams),
     #[serde(rename = "agent.star")]
     AgentStar(AgentStarParams),
     #[serde(rename = "task.new")]
@@ -110,6 +112,7 @@ impl Request {
         "agent.focus",
         "agent.scroll_bottom",
         "agent.answer_notice",
+        "agent.slash_draft",
         "agent.star",
         "task.new",
         "workspace.close",
@@ -148,6 +151,7 @@ impl Request {
             Self::AgentFocus(_) => "agent.focus",
             Self::AgentScrollBottom(_) => "agent.scroll_bottom",
             Self::AgentAnswerNotice(_) => "agent.answer_notice",
+            Self::AgentSlashDraft(_) => "agent.slash_draft",
             Self::AgentStar(_) => "agent.star",
             Self::TaskNew(_) => "task.new",
             Self::WorkspaceClose(_) => "workspace.close",
@@ -186,6 +190,7 @@ impl Request {
             | Self::AgentFocus(_)
             | Self::AgentScrollBottom(_)
             | Self::AgentAnswerNotice(_)
+            | Self::AgentSlashDraft(_)
             | Self::AgentStar(_)
             | Self::TaskNew(_)
             | Self::WorkspaceClose(_)
@@ -343,6 +348,18 @@ impl NoticeDigit {
 pub struct AgentAnswerNoticeParams {
     pub terminal_id: TerminalId,
     pub digit: NoticeDigit,
+}
+
+/// The phone's slash command token, mirrored into Claude Code's input box so its command
+/// menu shows; empty clears the box. The box is replaced only when it holds
+/// `expected_draft`, as for `agent.prompt`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSlashDraftParams {
+    pub terminal_id: TerminalId,
+    pub command: SlashCommand,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_draft: Option<DraftText>,
 }
 
 /// Stars are the machine's, shared by every paired phone. Unstarring needs no live pane.
@@ -1335,7 +1352,51 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 10);
+    }
+
+    #[test]
+    fn slash_draft_carries_one_command_token() {
+        let slash = |params: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"agent.slash_draft","params":{params}}}"#
+            ))
+        };
+        let frame =
+            slash(r#"{"terminal_id":"term_1","command":"/sk","expected_draft":"/s"}"#).unwrap();
+        assert_eq!(frame.request.class(), MethodClass::Drive);
+        assert_eq!(frame.request.method(), "agent.slash_draft");
+        let Request::AgentSlashDraft(p) = &frame.request else {
+            panic!("not a slash draft");
+        };
+        assert_eq!(p.command.as_str(), "/sk");
+        assert_eq!(p.expected_draft.as_ref().unwrap().as_str(), "/s");
+        let json = serde_json::to_string(&frame).unwrap();
+        assert_eq!(parse(&json).unwrap(), frame);
+        let Request::AgentSlashDraft(clear) = slash(r#"{"terminal_id":"t","command":""}"#)
+            .unwrap()
+            .request
+        else {
+            panic!("not a slash draft");
+        };
+        assert_eq!((clear.command.as_str(), clear.expected_draft), ("", None));
+        for params in [
+            r#"{"terminal_id":"t","command":"s"}"#,
+            r#"{"terminal_id":"t","command":"/s x"}"#,
+            r#"{"terminal_id":"t","command":"/s\n"}"#,
+            r#"{"terminal_id":"t","command":"/s\r"}"#,
+            r#"{"terminal_id":"t","command":"/s\u001b[201~"}"#,
+            r#"{"terminal_id":"t","command":"/s","expected_draft":"\u001b[2J"}"#,
+            r#"{"terminal_id":"t","command":"/s","keys":["enter"]}"#,
+            r#"{"terminal_id":"t","command":"/s","text":"x"}"#,
+            r#"{"terminal_id":"t"}"#,
+        ] {
+            assert_eq!(
+                slash(params).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{params}"
+            );
+        }
+        assert_eq!(crate::PROTOCOL_VERSION, 11);
     }
 
     #[test]

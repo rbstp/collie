@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
 use protocol::{
-    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, Cwd, DraftText,
-    ErrorCode, Key, Label, NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource,
-    Request, Response, TaskNewParams, TerminalId, TerminalRunParams, WorkspaceCloseParams,
-    WorkspaceId,
+    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentSlashDraftParams, AgentTypeTextParams,
+    Cwd, DraftText, ErrorCode, Key, Label, NoticeDigit, OpId, PaneCloseParams, PromptText,
+    ReadParams, ReadSource, Request, Response, SlashCommand, TaskNewParams, TerminalId,
+    TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -83,6 +83,8 @@ const HEADS_UP_EXPLAINED: &str =
 const HEADS_UP_DISMISSED: &str =
     include_str!("fixtures/claude-2.1.293/heads-up-dismissed.detection.txt");
 const YOU_SHOULD_KNOW: &str = include_str!("fixtures/claude-2.1.293/you-should-know.detection.txt");
+const SLASH_MENU: &str = include_str!("fixtures/claude-2.1.293/slash-menu.ansi.txt");
+const SLASH_TAB_HINT: &str = include_str!("fixtures/claude-2.1.293/slash-tab-hint.ansi.txt");
 const MUTATING: [&str; 10] = [
     "agent.prompt",
     "agent.send_keys",
@@ -1039,6 +1041,211 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         ErrorCode::NotPaired
     );
     assert!(herdr.mutations().is_empty());
+}
+
+fn slash(terminal: &str, command: &str, expected: Option<&str>) -> AgentSlashDraftParams {
+    AgentSlashDraftParams {
+        terminal_id: tid(terminal),
+        command: SlashCommand::new(command).unwrap(),
+        expected_draft: expected.map(|d| DraftText::new(d).unwrap()),
+    }
+}
+
+#[tokio::test]
+async fn slash_draft_pastes_the_command_into_an_empty_box_only() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.text = screen(PLACEHOLDER));
+    assert_eq!(
+        drive.slash_draft(slash(CLAUDE, "/s", None), &yes()).await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.methods(),
+        [
+            "agent.list",
+            "agent.get",
+            "pane.read",
+            "pane.read",
+            "agent.list",
+            "agent.get",
+            "pane.read",
+            "pane.read",
+            "pane.send_text"
+        ]
+    );
+    let reads: Vec<Value> = herdr
+        .params("pane.read")
+        .into_iter()
+        .map(|p| p["source"].clone())
+        .collect();
+    assert_eq!(reads, ["detection", "visible", "detection", "visible"]);
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        [json!({"pane_id": "w6:p1", "text": "\u{1b}[200~/s\u{1b}[201~"})]
+    );
+
+    // The token on the Mac is cleared, then the new one pasted; an empty command only clears.
+    for (command, sent) in [("/sk", Some("\u{1b}[200~/sk\u{1b}[201~")), ("", None)] {
+        herdr.with(|h| {
+            h.calls.clear();
+            h.screens = [SLASH_MENU.into(), SLASH_MENU.into(), screen(PLACEHOLDER)].into();
+        });
+        assert_eq!(
+            drive
+                .slash_draft(slash(CLAUDE, command, Some("/s")), &yes())
+                .await,
+            Ok(Response::Ok),
+            "{command}"
+        );
+        assert_eq!(
+            herdr.params("agent.send_keys"),
+            [json!({"target": "w6:p1", "keys": ["ctrl+e", "ctrl+u", "backspace"]})]
+        );
+        let pasted: Vec<Value> = herdr
+            .params("pane.send_text")
+            .into_iter()
+            .map(|p| p["text"].clone())
+            .collect();
+        assert_eq!(
+            pasted,
+            sent.map(|s| json!(s)).into_iter().collect::<Vec<_>>()
+        );
+        assert!(herdr.params("agent.prompt").is_empty());
+    }
+
+    // What Tab completed reads back with its hint; the phone names it to replace it.
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = [
+            SLASH_TAB_HINT.into(),
+            SLASH_TAB_HINT.into(),
+            screen(PLACEHOLDER),
+        ]
+        .into();
+    });
+    assert_eq!(
+        drive
+            .slash_draft(slash(CLAUDE, "", Some("/rename  [name]")), &yes())
+            .await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(herdr.mutations(), ["agent.send_keys"]);
+    herdr.with(|h| h.screens.clear());
+}
+
+#[tokio::test]
+async fn slash_draft_refusals_write_nothing() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.text = SLASH_MENU.into());
+    for expected in [None, Some("/x"), Some("")] {
+        assert_eq!(
+            drive
+                .slash_draft(slash(CLAUDE, "/sk", expected), &yes())
+                .await,
+            Err((ErrorCode::DraftChanged, "/s".to_owned())),
+            "{expected:?}"
+        );
+    }
+    for (shown, why) in [
+        (screen("! git push"), "bash mode"),
+        (screen("❯ /s [Pasted text #1 +40 lines]"), "collapsed paste"),
+        (TRUST.to_owned(), "no input box"),
+    ] {
+        herdr.with(|h| h.text = shown);
+        assert_eq!(
+            code(
+                drive
+                    .slash_draft(slash(CLAUDE, "/s", Some("git push")), &yes())
+                    .await
+            ),
+            ErrorCode::DraftNotCleared,
+            "{why}"
+        );
+    }
+    let scrolled = "scrolled up on the machine; jump to the bottom first";
+    herdr.with(|h| h.text = SCROLLED.into());
+    assert_eq!(
+        drive.slash_draft(slash(CLAUDE, "/s", None), &yes()).await,
+        Err((ErrorCode::AgentNotReady, scrolled.into()))
+    );
+    herdr.with(|h| h.text = screen(PLACEHOLDER));
+    let mut blocked = herdr.with(|h| h.snapshot["agents"][0].clone());
+    blocked["agent_status"] = json!("blocked");
+    herdr.with(|h| h.gets.push_back(blocked.clone()));
+    assert_eq!(
+        code(drive.slash_draft(slash(CLAUDE, "/s", None), &yes()).await),
+        ErrorCode::AgentBlocked
+    );
+    herdr.with(|h| h.snapshot["agents"][1]["agent_status"] = json!("idle"));
+    assert_eq!(
+        drive
+            .slash_draft(slash(CODEX_BLOCKED, "/s", None), &yes())
+            .await,
+        Err((ErrorCode::AgentNotReady, "not a Claude Code agent".into()))
+    );
+    assert_eq!(
+        code(drive.slash_draft(slash(CLAUDE, "/s", None), &no()).await),
+        ErrorCode::NotPaired
+    );
+    assert!(herdr.mutations().is_empty(), "{:?}", herdr.methods());
+
+    // Re-checked after the clear, just before the paste.
+    let idle = herdr.with(|h| h.snapshot["agents"][0].clone());
+    let typed = "the input box is not empty";
+    let cleared = || {
+        [
+            SLASH_MENU.to_owned(),
+            SLASH_MENU.into(),
+            screen(PLACEHOLDER),
+        ]
+    };
+    let mut banner = cleared().to_vec();
+    banner.push(SCROLLED.into());
+    let mut refilled = cleared().to_vec();
+    refilled.extend([screen(PLACEHOLDER), screen("❯ /s")]);
+    let mut dialog = cleared().to_vec();
+    dialog.extend([screen(PLACEHOLDER), TRUST.into()]);
+    for (screens, gets, why) in [
+        (cleared().to_vec(), vec![idle.clone(), blocked], "blocked"),
+        (banner, vec![], scrolled),
+        (refilled, vec![], typed),
+        (dialog, vec![], "a dialog"),
+    ] {
+        herdr.with(|h| {
+            h.calls.clear();
+            h.screens = screens.into();
+            h.gets = gets.into();
+        });
+        assert!(
+            drive
+                .slash_draft(slash(CLAUDE, "/sk", Some("/s")), &yes())
+                .await
+                .is_err(),
+            "{why}"
+        );
+        assert_eq!(herdr.mutations(), ["agent.send_keys"], "{why}");
+    }
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = cleared().into();
+    });
+    let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = checks.clone();
+    let revoked_after_clear: Authorized =
+        Arc::new(move || seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 1);
+    assert_eq!(
+        code(
+            drive
+                .slash_draft(slash(CLAUDE, "/sk", Some("/s")), &revoked_after_clear)
+                .await
+        ),
+        ErrorCode::NotPaired
+    );
+    assert_eq!(herdr.mutations(), ["agent.send_keys"]);
 }
 
 #[tokio::test]

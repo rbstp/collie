@@ -298,6 +298,16 @@ validated_string!(
 );
 
 validated_string!(
+    /// A slash command name as typed, or empty. A closed ASCII set: collied pastes it
+    /// between bracketed paste markers it adds itself, so it can carry no ESC, control,
+    /// space or invisible character.
+    SlashCommand,
+    debug = plain,
+    check = |s| s.is_empty() || s.strip_prefix('/').is_some_and(|name| name.is_empty() || ascii_ident(name, 63, b"_:.-")),
+    schema = { "pattern": "^(/[A-Za-z0-9_:.-]{0,63})?$" }
+);
+
+validated_string!(
     /// 16 random bytes, lowercase hex. Bound to the session that began the upload.
     UploadId,
     debug = plain,
@@ -349,6 +359,31 @@ mod tests {
         assert!(DraftText::new("a\u{1b}[2J").is_err());
         assert!(DraftText::new("a\u{202e}b").is_err());
         assert!(DraftText::new("a".repeat(limits::MAX_PROMPT_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn slash_commands_are_one_ascii_token() {
+        let max = format!("/{}", "a".repeat(63));
+        for ok in ["", "/", "/s", "/plugin:cmd-x_y.z", max.as_str()] {
+            assert!(SlashCommand::new(ok).is_ok(), "{ok:?}");
+        }
+        let long = format!("/{}", "a".repeat(64));
+        for bad in [
+            "s",
+            "//",
+            "/s x",
+            "/s\n",
+            "/s\t",
+            "/s\u{1b}[201~",
+            "/\u{1b}",
+            "/é",
+            "/a\u{202e}",
+            "/a\u{200b}",
+            " /s",
+            long.as_str(),
+        ] {
+            assert!(SlashCommand::new(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

@@ -430,6 +430,12 @@ async fn scenario(
     assert_error(&recv(&mut ws).await, ErrorCode::AgentNotReady);
     send(
         &mut ws,
+        json!({"id": 8, "method": "agent.slash_draft", "params": {"terminal_id": "term_65ce7ae4fd5731", "command": "/zq9slash", "expected_draft": "/zq8draft"}}),
+    )
+    .await;
+    assert_error(&recv(&mut ws).await, ErrorCode::DraftNotCleared);
+    send(
+        &mut ws,
         json!({"id": 50, "method": "approval.list", "params": {}}),
     )
     .await;
@@ -818,6 +824,8 @@ async fn scenario(
         "\"method\":\"agent.answer_notice\"",
         "\"target\":\"term_65ce7ae4fd5731 digit=1\"",
         "\"result\":\"agent_not_ready: no notice with that option\"",
+        "\"method\":\"agent.slash_draft\"",
+        "\"result\":\"draft_not_cleared: the agent's input box could not be read; nothing was sent\"",
         "\"method\":\"agent.star\"",
         "\"target\":\"term_65ce7ae4fd5731\"",
         "\"method\":\"agent.watch\"",
@@ -845,6 +853,10 @@ async fn scenario(
         !audit.contains(ACTIVITY_TOKEN),
         "activity token in the audit log"
     );
+    assert!(
+        !audit.contains("zq9") && !audit.contains("zq8"),
+        "slash command or draft in the audit log"
+    );
     for line in audit.lines() {
         let entry: Value = serde_json::from_str(line).unwrap();
         assert!(
@@ -852,6 +864,9 @@ async fn scenario(
                 && entry["result"] == "ok"),
             "{line}"
         );
+        if entry["method"] == "agent.slash_draft" {
+            assert_eq!(entry["target"], "term_65ce7ae4fd5731", "{line}");
+        }
     }
     let called = herdr.methods();
     assert!(
