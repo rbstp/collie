@@ -106,6 +106,7 @@ impl From<ErrorBody> for SessionError {
 }
 
 pub type Reply = oneshot::Sender<Result<Response, SessionError>>;
+pub type Seed = Vec<(Request, Option<Reply>)>;
 
 pub struct Session<S> {
     ws: WebSocketStream<S>,
@@ -217,18 +218,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         let _ = tokio::time::timeout(Duration::from_secs(2), self.ws.close(None)).await;
     }
 
-    /// `push` is re-registered on every session so collied always has the current tokens.
-    /// The watch's first `agent.output` is the full screen, so no read follows it. When
-    /// `stop` yields true the session sends a WebSocket close before dropping the socket.
+    /// `push` is re-registered on every session so collied always has the current tokens;
+    /// a request's reply, when it has one, gets collied's answer. The watch's first
+    /// `agent.output` is the full screen, so no read follows it. When `stop` yields true the
+    /// session sends a WebSocket close before dropping the socket.
     pub async fn run(
         mut self,
         requests: &mut tokio::sync::mpsc::Receiver<(Request, Reply)>,
         state: &Mutex<FlockState>,
-        push: Vec<Request>,
+        push: Seed,
         stop: impl Future<Output = bool>,
     ) -> SessionError {
         let mut pending: HashMap<RequestId, Pending> = HashMap::new();
-        let mut seed = vec![Request::FlockSnapshot(Empty {})];
+        let mut seed = vec![(Request::FlockSnapshot(Empty {}), None)];
         seed.extend(push);
         // A shell's watch needs a grant, which no new session has.
         let watch = {
@@ -239,16 +241,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                 .map(|terminal_id| (terminal_id, s.watch_lines, s.low_data))
         };
         if let Some((terminal_id, lines, low_data)) = watch {
-            seed.push(Request::AgentWatch(AgentWatchParams {
-                terminal_id: Some(terminal_id),
-                lines,
-                low_data,
-            }));
+            seed.push((
+                Request::AgentWatch(AgentWatchParams {
+                    terminal_id: Some(terminal_id),
+                    lines,
+                    low_data,
+                }),
+                None,
+            ));
         }
-        for request in seed {
+        for (request, reply) in seed {
             let read_mark = read_mark(state, &request);
             match self.send(request).await {
-                Ok(id) => pending.insert(id, (None, read_mark)),
+                Ok(id) => pending.insert(id, (reply, read_mark)),
                 Err(e) => return e,
             };
         }

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -9,16 +10,16 @@ use protocol::{
     ActivityId, Empty, HelloResult, KeyPin, PushActivityEndParams, PushActivityTokenParams,
     PushRegisterParams, Request, Response,
 };
+use serde::{Deserialize, Serialize};
 use tailnet::{BackendState, Node};
 use tokio::net::UnixStream;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::pin::{self, PinError};
-use crate::reach::Reachability;
-use crate::session::{FlockState, Reply, Session, SessionError, lock};
-use crate::store::Machine;
-use crate::store::MachineKind;
+use crate::reach::{Reachability, now_ms};
+use crate::session::{FlockState, Reply, Seed, Session, SessionError, lock};
+use crate::store::{Machine, MachineKind, write_atomic};
 
 const BACKOFF: [Duration; 6] = [
     Duration::from_secs(3),
@@ -52,6 +53,9 @@ const GRACE_BACKOFF: [Duration; 3] = [
 ];
 const QUEUE: usize = 8;
 const MAX_UNSENT_ENDS: usize = 16;
+/// collied drops an activity 8 h after its first registration, which precedes its end.
+const END_MAX_AGE_MS: u64 = 8 * 3600 * 1000;
+pub const ENDS_FILE: &str = "activity-ends.json";
 const MUTATION_ATTEMPTS: usize = 3;
 
 /// Every holder clones the outer Arc, never the inner Node, so the strong count says
@@ -62,45 +66,139 @@ pub type IdentitySlot = Arc<Mutex<Option<Arc<CertifiedKey>>>>;
 
 pub type Stream = collie_tls::client::TlsStream<collie_tls::Sniff<UnixStream>>;
 
-/// Keyed by machine id: each Mac gets its own notification key.
-pub type PushSlot = Arc<Mutex<BTreeMap<String, Registrations>>>;
+pub type PushSlot = Arc<Mutex<Pushes>>;
 
-/// Memory only, never written to disk. Every session of the machine sends them again.
+#[derive(Default)]
+pub struct Pushes {
+    /// Keyed by machine id: each Mac gets its own notification key.
+    pub machines: BTreeMap<String, Registrations>,
+    /// Where unsent ends are kept, `None` for memory only.
+    dir: Option<PathBuf>,
+}
+
+impl Pushes {
+    /// Unsent ends from `ENDS_FILE`, for paired machines only, at most 8 h old. An unreadable
+    /// file loads as none.
+    pub fn load(dir: PathBuf, paired: &[Machine]) -> Self {
+        let saved: BTreeMap<String, Vec<UnsentEnd>> = std::fs::read(dir.join(ENDS_FILE))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        let cutoff = now_ms().saturating_sub(END_MAX_AGE_MS);
+        let machines = saved
+            .into_iter()
+            .filter(|(id, _)| paired.iter().any(|m| m.id == *id))
+            .filter_map(|(id, mut ends)| {
+                ends.retain(|e| e.ended_at_ms >= cutoff);
+                ends.drain(..ends.len().saturating_sub(MAX_UNSENT_ENDS));
+                let reg = Registrations {
+                    unsent_ends: ends,
+                    ..Registrations::default()
+                };
+                (!reg.unsent_ends.is_empty()).then_some((id, reg))
+            })
+            .collect();
+        Self {
+            machines,
+            dir: Some(dir),
+        }
+    }
+
+    pub fn acknowledged(&mut self, machine_id: &str, activity_id: &ActivityId) {
+        let Some(reg) = self.machines.get_mut(machine_id) else {
+            return;
+        };
+        let count = reg.unsent_ends.len();
+        reg.unsent_ends.retain(|e| e.activity_id != *activity_id);
+        if reg.unsent_ends.len() != count {
+            self.save_ends();
+        }
+    }
+
+    /// Best effort: a failed write keeps the ends in memory for this process.
+    pub fn save_ends(&self) {
+        let Some(dir) = &self.dir else {
+            return;
+        };
+        let ends: BTreeMap<&str, &[UnsentEnd]> = self
+            .machines
+            .iter()
+            .filter(|(_, reg)| !reg.unsent_ends.is_empty())
+            .map(|(id, reg)| (id.as_str(), reg.unsent_ends.as_slice()))
+            .collect();
+        if let Ok(bytes) = serde_json::to_vec(&ends) {
+            let _ = write_atomic(dir, ENDS_FILE, &bytes);
+        }
+    }
+}
+
+/// The push registration and activity tokens are in memory only, never written to disk:
+/// every session of the machine sends them again.
 #[derive(Debug, Clone, Default)]
 pub struct Registrations {
     pub push: Option<PushRegisterParams>,
     pub activities: BTreeMap<String, PushActivityTokenParams>,
-    /// Ends the Mac may not have received yet: sent once with the next session.
-    pub unsent_ends: Vec<ActivityId>,
+    /// Ends the Mac has not acknowledged yet, sent with every session until it does. Kept
+    /// in `ENDS_FILE` too, so an end survives the app being killed before it reconnects.
+    pub unsent_ends: Vec<UnsentEnd>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnsentEnd {
+    pub activity_id: ActivityId,
+    pub ended_at_ms: u64,
 }
 
 impl Registrations {
-    pub fn end(&mut self, activity_id: &ActivityId) {
+    pub fn end(&mut self, activity_id: &ActivityId, now_ms: u64) {
         self.activities.remove(activity_id.as_str());
-        self.unsent_ends.retain(|a| a != activity_id);
+        self.unsent_ends.retain(|e| e.activity_id != *activity_id);
         if self.unsent_ends.len() == MAX_UNSENT_ENDS {
             self.unsent_ends.remove(0);
         }
-        self.unsent_ends.push(activity_id.clone());
+        self.unsent_ends.push(UnsentEnd {
+            activity_id: activity_id.clone(),
+            ended_at_ms: now_ms,
+        });
     }
 
-    /// `push.register` first: collied takes an activity's APNs environment from it.
-    pub fn take_requests(&mut self) -> Vec<Request> {
-        let ends = std::mem::take(&mut self.unsent_ends)
-            .into_iter()
-            .map(|activity_id| Request::PushActivityEnd(PushActivityEndParams { activity_id }));
-        self.push
+    /// `push.register` first: collied takes an activity's APNs environment from it. Each end
+    /// comes with the answer that acknowledges it.
+    pub fn requests(&self) -> (Seed, Acks) {
+        let (ends, acks): (Vec<_>, Vec<_>) = self
+            .unsent_ends
+            .iter()
+            .map(|e| {
+                let (tx, rx) = oneshot::channel();
+                let request = Request::PushActivityEnd(PushActivityEndParams {
+                    activity_id: e.activity_id.clone(),
+                });
+                ((request, Some(tx)), (e.activity_id.clone(), rx))
+            })
+            .unzip();
+        let requests = self
+            .push
             .clone()
             .map(Request::PushRegister)
             .into_iter()
+            .map(|r| (r, None))
             .chain(ends)
             .chain(
                 self.activities
                     .values()
                     .cloned()
-                    .map(Request::PushActivityToken),
+                    .map(|p| (Request::PushActivityToken(p), None)),
             )
-            .collect()
+            .collect();
+        (requests, acks)
+    }
+}
+
+pub async fn acknowledge(push: PushSlot, machine_id: String, acks: Acks) {
+    for (activity_id, answer) in acks {
+        if let Ok(Ok(_)) = answer.await {
+            lock(&push).acknowledged(&machine_id, &activity_id);
+        }
     }
 }
 
@@ -452,6 +550,7 @@ async fn send(
 }
 
 type Answer = oneshot::Receiver<Result<Response, SessionError>>;
+type Acks = Vec<(ActivityId, Answer)>;
 
 fn enqueue(
     requests: &mpsc::Sender<(Request, Reply)>,
@@ -565,12 +664,14 @@ async fn supervise(
                 reconnect.borrow_and_update();
                 // A clone, so the request that ends the session still forces the next dial.
                 let mut ended = reconnect.clone();
-                let push = lock(&push)
-                    .get_mut(&machine.id)
-                    .map(Registrations::take_requests)
+                let (seed, acks) = lock(&push)
+                    .machines
+                    .get(&machine.id)
+                    .map(Registrations::requests)
                     .unwrap_or_default();
+                tokio::spawn(acknowledge(push.clone(), machine.id.clone(), acks));
                 let end = session
-                    .run(&mut requests, &shared.flock, push, async {
+                    .run(&mut requests, &shared.flock, seed, async {
                         tokio::select! {
                             _ = ended.changed() => false,
                             _ = suspended.wait_for(|s| *s) => true,
