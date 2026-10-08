@@ -93,7 +93,7 @@ enum Attachment {
     static let maxPerPrompt = 10
     static let photoMaxSide: CGFloat = 2048
     static let photoQuality: CGFloat = 0.85
-    static let thumbnailMaxSide: CGFloat = 120
+    static let thumbnailMaxSide: CGFloat = 192
     /// collied deletes an upload 24 h after it arrives; the hour less allows for clock skew.
     static let keptOnMachine: TimeInterval = 23 * 60 * 60
 
