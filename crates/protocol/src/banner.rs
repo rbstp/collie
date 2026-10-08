@@ -57,7 +57,7 @@ pub struct NoticeOption {
 /// shows one directly above the input box; empty otherwise. A notice lists `1: <label>` to
 /// `n: <label>` (n up to 4) then `0: Dismiss`, wrapped over rows indented by two spaces,
 /// after its lead: a row starting at column 0 with a notice glyph, and the rows below it
-/// that are indented or blank. Only one blank row and right-aligned hint rows may sit
+/// that are indented or blank. At most three blank rows and right-aligned hint rows may sit
 /// between the options and the box's top rule, so a dialog (which replaces the box) or a
 /// notice quoted in the transcript never matches.
 pub fn notice(screen: &str) -> Vec<NoticeOption> {
@@ -65,18 +65,20 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
         .split('\n')
         .map(|r| strip_sgr(r).trim_end().to_owned())
         .collect();
-    let Some(mut i) = (1..rows.len())
+    let Some(rule) = (1..rows.len())
         .rev()
-        .find(|&i| rows[i].starts_with('\u{276f}') && is_rule(&rows[i - 1]))
+        .find(|&i| rows[i].starts_with('\u{276f}'))
+        .filter(|&i| is_rule(&rows[i - 1]))
         .map(|i| i - 1)
     else {
         return Vec::new();
     };
-    let mut blank = false;
-    while i > 0
-        && (rows[i - 1].starts_with("   ")
-            || rows[i - 1].is_empty() && !std::mem::replace(&mut blank, true))
-    {
+    // The box's one-row top margin, which a hint draws over, and the two blank rows a real
+    // screen showed above it.
+    let mut i = rule;
+    let mut blanks = 0;
+    while i > 0 && (rows[i - 1].starts_with("   ") || rows[i - 1].is_empty() && blanks < 3) {
+        blanks += usize::from(rows[i - 1].is_empty());
         i -= 1;
     }
     let end = i;
@@ -96,9 +98,14 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
         return Vec::new();
     };
     // An explanation's cards are text a side agent wrote: past a blank row, the options must
-    // stand apart from the text by a blank row of their own.
+    // stand apart from the text by a blank row of their own, and sit right on the box's top
+    // margin or on the two blank rows above a hint, since every card ends with a blank row.
+    let gap = &rows[end..rule];
     if !cells.is_empty() && i != below
-        || rows[i..below].iter().any(String::is_empty) && !rows[below - 1].is_empty()
+        || rows[i..below].iter().any(String::is_empty)
+            && (!rows[below - 1].is_empty()
+                || gap.iter().rev().skip(1).any(String::is_empty)
+                    && !matches!(gap, [a, b, h] if a.is_empty() && b.is_empty() && !h.is_empty()))
     {
         return Vec::new();
     }
@@ -129,8 +136,19 @@ fn lead(row: &str) -> Option<Vec<(u8, String)>> {
     Some(cells(rest).unwrap_or_default())
 }
 
+/// A row of `─`, or one carrying the session's title the way Claude Code draws it:
+/// `─── <title> ─`.
 fn is_rule(row: &str) -> bool {
-    !row.is_empty() && row.chars().all(|c| c == '\u{2500}')
+    let Some(head) = row.strip_suffix('\u{2500}') else {
+        return false;
+    };
+    let title = head.trim_start_matches('\u{2500}');
+    row.starts_with('\u{2500}')
+        && (title.is_empty()
+            || title.starts_with(' ')
+                && title.ends_with(' ')
+                && !title.trim().is_empty()
+                && !title.contains('\u{2500}'))
 }
 
 /// A row indented by exactly two spaces whose cells, apart by two or more spaces, all read
@@ -252,6 +270,29 @@ mod tests {
         assert!(!jump_banner(""));
     }
 
+    const HINT: &str = "new task? /clear to save 352.8k tokens";
+
+    #[test]
+    fn a_rule_may_carry_the_session_title_only_as_claude_code_draws_it() {
+        for row in ["────", "── Price rounding review (2) ─", "─ a ─"] {
+            assert!(is_rule(row), "{row:?}");
+        }
+        for row in [
+            "",
+            "──── Price rounding review (2)",
+            " Price rounding review (2) ─",
+            "x─── Price rounding review (2) ─",
+            "────Price rounding review (2)─",
+            "──── one ─── two ─",
+            "────   ─",
+            "──── ❯ ─ x",
+            "──── Price rounding review (2) ──",
+            "──── 3 new messages ────",
+        ] {
+            assert!(!is_rule(row), "{row:?}");
+        }
+    }
+
     macro_rules! fixture {
         ($name:literal) => {
             include_str!(concat!(
@@ -296,6 +337,9 @@ mod tests {
             fixture!("heads-up-wrapped.detection.txt"),
             fixture!("heads-up-narrow.detection.txt"),
             fixture!("you-should-know.detection.txt"),
+            fixture!("heads-up-titled.detection.txt"),
+            fixture!("heads-up-hint.detection.txt"),
+            &fixture!("heads-up-hint.detection.txt").replacen(HINT, "", 1),
         ] {
             assert_eq!(options(screen), heads_up);
         }
@@ -308,6 +352,7 @@ mod tests {
             fixture!("heads-up-explained.detection.txt"),
             fixture!("heads-up-explained-sketch.detection.txt"),
             fixture!("heads-up-explained-narrow.detection.txt"),
+            fixture!("heads-up-explained-hint.detection.txt"),
         ] {
             assert_eq!(options(screen), explained);
         }
@@ -472,7 +517,29 @@ mod tests {
             "on purpose.\n\n  1: Delete the branch   0: Dismiss\n",
             1,
         );
-        let blanks = survey.replacen("0: Dismiss\n", "0: Dismiss\n\n\n", 1);
+        let blanks = survey.replacen("0: Dismiss\n", "0: Dismiss\n\n\n\n", 1);
+        let hint = format!("{HINT:>210}");
+        let card_hint = card.replacen("\n\n\u{2500}", &format!("\n{hint}\n\u{2500}"), 1);
+        let cards_gap = explained.replacen("0: Dismiss\n", "0: Dismiss\n\n", 1);
+        let cards_hint = explained.replacen("0: Dismiss\n", &format!("0: Dismiss\n\n{hint}"), 1);
+        let card_real_hint = card.replacen("\n\n\u{2500}", &format!("\n\n\n{hint}\n\u{2500}"), 1);
+        let titled = fixture!("heads-up-titled.detection.txt");
+        let untitled = titled.replacen("(2) \u{2500}", "(2)", 1);
+        // A box whose rule is not recognized never falls back to a rule and prompt higher up.
+        let dashed = titled
+            .replacen("review (2)", "review \u{2500} 2", 1)
+            .replacen(
+                "0: Dismiss\n\n",
+                "0: Dismiss\n\n\u{2500}\u{2500}\u{2500}\u{2500}\n\u{276f} Check it\n",
+                1,
+            );
+        let unseen = survey
+            .replacen(
+                "0: Dismiss\n\n",
+                "0: Dismiss\n\n\u{2500}\u{2500} 3 new messages \u{2500}\u{2500}\n\u{276f} Check it\n",
+                1,
+            )
+            .replacen("\n\u{276f}\n", "\n\u{2502} Allow this?\n", 1);
         let dismissed = fixture!("heads-up-dismissed.detection.txt");
         let indented = dismissed.replacen("\u{2726} Dismissed.", "  \u{2726} Dismissed.", 1);
         let between = dismissed.replacen(
@@ -499,9 +566,37 @@ mod tests {
             1,
         );
         for screen in follow_ups.into_iter().chain([
-            quoted, no_box, five, twice, enter, order, close, zero_first, no_zero, six, long,
-            format, forged, no_gap, unindented, hidden, card, blanks, indented, between, unwrapped,
-            replied, reply, quoted_row,
+            quoted,
+            no_box,
+            five,
+            twice,
+            enter,
+            order,
+            close,
+            zero_first,
+            no_zero,
+            six,
+            long,
+            format,
+            forged,
+            no_gap,
+            unindented,
+            hidden,
+            card,
+            card_hint,
+            cards_gap,
+            cards_hint,
+            card_real_hint,
+            blanks,
+            indented,
+            between,
+            unwrapped,
+            replied,
+            reply,
+            quoted_row,
+            untitled,
+            dashed,
+            unseen,
         ]) {
             assert!(notice(&screen).is_empty(), "{screen}");
         }
