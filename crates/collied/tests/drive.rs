@@ -1146,12 +1146,17 @@ async fn a_prompt_waits_for_the_box_a_notice_answer_fills() {
         label: Label::new("Turn off suggestions").unwrap(),
     };
     let command = "/plugin disable cc-plugin-you-should-know@builtin";
-    // The fill shows a few reads after the digit; the prompt queued on the lock then sees it.
+    let echo = HEADS_UP_DISMISSED.replacen("\n❯\n", "\n❯\u{a0}4\n", 1);
+    assert_ne!(echo, HEADS_UP_DISMISSED);
+    // Claude Code shows the digit for 400 ms, clears the box, then fills it; the prompt queued
+    // on the lock sees the fill, not the digit or the empty box before it.
     herdr.with(|h| {
         h.screens = [
             HEADS_UP_DISMISSED.into(),
             HEADS_UP_DISMISSED.into(),
-            HEADS_UP_DISMISSED.into(),
+            echo.clone(),
+            echo.clone(),
+            echo.clone(),
             HEADS_UP_DISMISSED.into(),
             screen(&format!("❯\u{a0}{command}")),
         ]
@@ -1171,6 +1176,15 @@ async fn a_prompt_waits_for_the_box_a_notice_answer_fills() {
         h.calls.clear();
         h.screens.clear();
         h.text = HEADS_UP_DISMISSED.into();
+    });
+    assert_eq!(drive.answer_notice(&off, &yes()).await, Ok(Response::Ok));
+    assert_eq!(herdr.mutations(), ["pane.send_text"]);
+    assert!(herdr.params("pane.read").len() > 3);
+
+    // Nor does a digit no notice took.
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = [HEADS_UP_DISMISSED.into(), HEADS_UP_DISMISSED.into(), echo].into();
     });
     assert_eq!(drive.answer_notice(&off, &yes()).await, Ok(Response::Ok));
     assert_eq!(herdr.mutations(), ["pane.send_text"]);

@@ -729,10 +729,11 @@ impl Driver {
     /// One digit, no Enter, only while Claude Code shows a notice listing it with that label
     /// above an empty input box. Never to a blocked agent: a digit could select a permission
     /// option. The notice and the box are checked on the same visible read, the last one
-    /// before the write. An option can fill the box a moment after the digit, only if it is
-    /// still empty, so the lock is held until the box is no longer empty, for up to a second:
-    /// a prompt pasted before the fill would be replaced by it, and herdr's Enter would submit
-    /// the fill.
+    /// before the write. The digit sits in the box for 400 ms before Claude Code clears it and
+    /// runs the option, which can then fill the box, only if it is still empty, so the lock is
+    /// held until the box shows something other than the digit, for up to a second: a prompt
+    /// pasted before the fill would be replaced by it, and herdr's Enter would submit the
+    /// fill.
     pub async fn answer_notice(&self, p: &AgentAnswerNoticeParams, auth: &Authorized) -> Reply {
         let _box = self.box_writes.lock().await;
         let a = self.ready_agent(&p.terminal_id).await?;
@@ -774,7 +775,7 @@ impl Driver {
         while tokio::time::Instant::now() < deadline {
             tokio::time::sleep(SCREEN_POLL).await;
             match self.input_box(&a.pane_id).await? {
-                Some(InputBox::Draft(d)) if d.text.is_empty() => {}
+                Some(InputBox::Draft(d)) if d.text.is_empty() || d.text == p.digit.as_str() => {}
                 None => {}
                 Some(_) => break,
             }

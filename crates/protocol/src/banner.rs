@@ -57,9 +57,9 @@ pub struct NoticeOption {
 /// shows one directly above the input box; empty otherwise. A notice lists `1: <label>` to
 /// `n: <label>` (n up to 4) then `0: Dismiss`, wrapped over rows indented by two spaces,
 /// after its lead: a row starting at column 0 with a notice glyph, and the rows below it
-/// that are indented or blank. Only blank or right-aligned hint rows may sit between the
-/// options and the box's top rule, so a dialog (which replaces the box) or a notice quoted
-/// in the transcript never matches.
+/// that are indented or blank. Only one blank row and right-aligned hint rows may sit
+/// between the options and the box's top rule, so a dialog (which replaces the box) or a
+/// notice quoted in the transcript never matches.
 pub fn notice(screen: &str) -> Vec<NoticeOption> {
     let rows: Vec<String> = screen
         .split('\n')
@@ -72,7 +72,11 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
     else {
         return Vec::new();
     };
-    while i > 0 && (rows[i - 1].is_empty() || rows[i - 1].starts_with("   ")) {
+    let mut blank = false;
+    while i > 0
+        && (rows[i - 1].starts_with("   ")
+            || rows[i - 1].is_empty() && !std::mem::replace(&mut blank, true))
+    {
         i -= 1;
     }
     let end = i;
@@ -460,11 +464,15 @@ mod tests {
         let row = "  1: Understood   2: Chat in main session   0: Dismiss";
         let no_gap = explained.replacen("on purpose.\n\n", "on purpose.\n", 1);
         let unindented = explained.replacen("  Use decimal", "Use decimal", 1);
-        let hidden = fixture!("heads-up-explained-survey.detection.txt").replacen(
+        let explained_survey = fixture!("heads-up-explained-survey.detection.txt");
+        let hidden =
+            explained_survey.replacen("on purpose.\n", &format!("on purpose.\n{row}\n"), 1);
+        let card = explained_survey.replacen(
             "on purpose.\n",
-            &format!("on purpose.\n{row}\n"),
+            "on purpose.\n\n  1: Delete the branch   0: Dismiss\n",
             1,
         );
+        let blanks = survey.replacen("0: Dismiss\n", "0: Dismiss\n\n\n", 1);
         let dismissed = fixture!("heads-up-dismissed.detection.txt");
         let indented = dismissed.replacen("\u{2726} Dismissed.", "  \u{2726} Dismissed.", 1);
         let between = dismissed.replacen(
@@ -492,8 +500,8 @@ mod tests {
         );
         for screen in follow_ups.into_iter().chain([
             quoted, no_box, five, twice, enter, order, close, zero_first, no_zero, six, long,
-            format, forged, no_gap, unindented, hidden, indented, between, unwrapped, replied,
-            reply, quoted_row,
+            format, forged, no_gap, unindented, hidden, card, blanks, indented, between, unwrapped,
+            replied, reply, quoted_row,
         ]) {
             assert!(notice(&screen).is_empty(), "{screen}");
         }
