@@ -2273,11 +2273,17 @@ impl Inner {
         *machines = kept;
         let mut conns = lock(&self.conns);
         let mut push = lock(&self.push);
+        let mut dropped = false;
         for m in gone {
             conns.remove(&m.id);
-            push.machines.remove(&m.id);
+            dropped |= push
+                .machines
+                .remove(&m.id)
+                .is_some_and(|r| !r.unsent_ends.is_empty());
         }
-        push.save_ends();
+        if dropped {
+            push.save_ends();
+        }
         Ok(())
     }
 }
