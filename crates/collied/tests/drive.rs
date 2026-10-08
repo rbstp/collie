@@ -6,8 +6,9 @@ use std::time::Duration;
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, Cwd, DraftText,
-    ErrorCode, Key, Label, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request,
-    Response, TaskNewParams, TerminalId, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
+    ErrorCode, Key, Label, NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource,
+    Request, Response, TaskNewParams, TerminalId, TerminalRunParams, WorkspaceCloseParams,
+    WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -69,6 +70,19 @@ const SCROLLED_DIALOG: &str =
     include_str!("fixtures/claude-2.1.293/scrolled-dialog-hidden.detection.txt");
 const NEW_MESSAGE: &str = include_str!("fixtures/claude-2.1.293/new-message.detection.txt");
 const BOTTOM: &str = include_str!("fixtures/claude-2.1.293/bottom-idle.detection.txt");
+// Claude Code 2.1.293 notices above the input box; .ansi.txt are visible reads, where the
+// placeholder is dim.
+const SURVEY: &str = include_str!("fixtures/claude-2.1.293/survey.ansi.txt");
+const SURVEY_NARROW: &str = include_str!("fixtures/claude-2.1.293/survey-narrow.detection.txt");
+const SURVEY_STARTUP: &str = include_str!("fixtures/claude-2.1.293/survey-startup.detection.txt");
+const SURVEY_TYPED: &str = include_str!("fixtures/claude-2.1.293/survey-digit-typed.detection.txt");
+const SURVEY_SCROLLED: &str = include_str!("fixtures/claude-2.1.293/survey-scrolled.detection.txt");
+const HEADS_UP: &str = include_str!("fixtures/claude-2.1.293/heads-up.ansi.txt");
+const HEADS_UP_EXPLAINED: &str =
+    include_str!("fixtures/claude-2.1.293/heads-up-explained.detection.txt");
+const HEADS_UP_DISMISSED: &str =
+    include_str!("fixtures/claude-2.1.293/heads-up-dismissed.detection.txt");
+const YOU_SHOULD_KNOW: &str = include_str!("fixtures/claude-2.1.293/you-should-know.detection.txt");
 const MUTATING: [&str; 10] = [
     "agent.prompt",
     "agent.send_keys",
@@ -902,6 +916,108 @@ async fn scroll_bottom_sends_ctrl_end_only_while_claude_shows_the_banner() {
         ErrorCode::NotPaired
     );
     assert_eq!(herdr.mutations().len(), 4);
+}
+
+#[tokio::test]
+async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let digit = |d: u8| NoticeDigit::new(d).unwrap();
+    let mut sent = Vec::new();
+    for (screen, digits) in [(SURVEY, [1, 2, 3, 0].as_slice()), (HEADS_UP, &[1, 2, 0])] {
+        herdr.with(|h| h.text = screen.into());
+        for &d in digits {
+            herdr.with(|h| h.calls.clear());
+            assert_eq!(
+                drive.answer_notice(&tid(CLAUDE), digit(d), &yes()).await,
+                Ok(Response::Ok)
+            );
+            assert_eq!(
+                herdr.methods(),
+                [
+                    "agent.list",
+                    "agent.get",
+                    "pane.read",
+                    "pane.read",
+                    "pane.send_text"
+                ]
+            );
+            assert_eq!(
+                herdr.params("pane.read"),
+                [
+                    json!({"pane_id": "w6:p1", "source": "detection", "format": "text"}),
+                    json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"})
+                ]
+            );
+            sent.extend(herdr.params("pane.send_text"));
+        }
+    }
+    let texts: Vec<&str> = sent.iter().map(|p| p["text"].as_str().unwrap()).collect();
+    assert_eq!(texts, ["1", "2", "3", "0", "1", "2", "0"]);
+    assert!(sent.iter().all(|p| p["pane_id"] == "w6:p1"));
+
+    herdr.with(|h| h.calls.clear());
+    let refused = |screen: &'static str, d: u8, message: &'static str| (screen, d, message);
+    let none = "no notice with that option";
+    let typed = "the input box is not empty";
+    let scrolled = "scrolled up on the machine; jump to the bottom first";
+    let mut cases = vec![
+        refused(HEADS_UP, 3, none),
+        refused(HEADS_UP_DISMISSED, 1, none),
+        refused(YOU_SHOULD_KNOW, 1, none),
+        refused(SURVEY_NARROW, 1, none),
+        refused(BOTTOM, 1, none),
+        refused(SURVEY_TYPED, 0, typed),
+        refused(SURVEY_STARTUP, 3, typed),
+        refused(SURVEY_SCROLLED, 1, scrolled),
+    ];
+    cases.extend((0..4).map(|d| refused(HEADS_UP_EXPLAINED, d, none)));
+    for (screen, d, message) in cases {
+        herdr.with(|h| h.text = screen.into());
+        assert_eq!(
+            drive.answer_notice(&tid(CLAUDE), digit(d), &yes()).await,
+            Err((ErrorCode::AgentNotReady, message.into())),
+            "{d} on {screen}"
+        );
+    }
+    assert!(herdr.mutations().is_empty());
+
+    herdr.with(|h| h.text = SURVEY.into());
+    let mut blocked = herdr.with(|h| h.snapshot["agents"][0].clone());
+    blocked["agent_status"] = json!("blocked");
+    herdr.with(|h| h.gets.push_back(blocked));
+    assert_eq!(
+        code(drive.answer_notice(&tid(CLAUDE), digit(1), &yes()).await),
+        ErrorCode::AgentBlocked
+    );
+    herdr.with(|h| h.snapshot["agents"][1]["agent_status"] = json!("idle"));
+    assert_eq!(
+        drive
+            .answer_notice(&tid(CODEX_BLOCKED), digit(1), &yes())
+            .await,
+        Err((ErrorCode::AgentNotReady, "not a Claude Code agent".into()))
+    );
+    let mut other = herdr.with(|h| h.snapshot["agents"][0].clone());
+    other["agent_session"]["value"] = json!("11111111-0000-4000-8000-000000000000");
+    herdr.with(|h| h.gets.push_back(other));
+    assert_eq!(
+        code(drive.answer_notice(&tid(CLAUDE), digit(1), &yes()).await),
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(
+        code(
+            drive
+                .answer_notice(&tid("term_gone"), digit(1), &yes())
+                .await
+        ),
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        code(drive.answer_notice(&tid(CLAUDE), digit(1), &no()).await),
+        ErrorCode::NotPaired
+    );
+    assert!(herdr.mutations().is_empty());
 }
 
 #[tokio::test]

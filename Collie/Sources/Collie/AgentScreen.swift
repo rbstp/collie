@@ -68,6 +68,15 @@ struct AgentScreen: View {
                         .buttonStyle(.borderedProminent)
                         .padding(.bottom, 8)
                     }
+                    if !model.noticeOptions.isEmpty {
+                        HStack {
+                            ForEach(model.noticeOptions, id: \.digit) { option in
+                                Button(option.label) { Task { await model.answerNotice(option) } }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.bottom, 8)
+                    }
                 }
             if let notice = model.notice ?? model.blockedHint {
                 Label(notice, systemImage: "exclamationmark.triangle")

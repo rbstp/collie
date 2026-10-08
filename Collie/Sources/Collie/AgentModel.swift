@@ -33,6 +33,7 @@ final class AgentModel {
     private(set) var ansi = ""
     private(set) var reflowed: String?
     private var screenBanner = false
+    private var screenNotice: [NoticeOption] = []
     private(set) var refreshing = false
     private var revision: UInt64 = 0
 
@@ -139,6 +140,11 @@ final class AgentModel {
     /// Claude Code's transcript is scrolled up on the Mac; collied refuses keys until it jumps back down.
     var jumpBanner: Bool { mode == .agent && agent?.kind == "claude" && screenBanner }
 
+    /// A Claude Code notice's options, in screen order; collied sends the digit only while it shows.
+    var noticeOptions: [NoticeOption] {
+        mode == .agent && agent?.kind == "claude" && agent?.status != .blocked && blocked == nil && !jumpBanner ? screenNotice : []
+    }
+
     var acceptsKeys: Bool { isTerminal ? !unlocking : blocked != .optionsOnly && blocked != .terminal && !jumpBanner }
 
     /// Typed text answers the blocking prompt instead of prompting the agent.
@@ -229,6 +235,7 @@ final class AgentModel {
             ansi = output.ansi
             reflowed = output.reflowed
             screenBanner = output.jumpBanner
+            screenNotice = output.notice
             revision = view.outputRevision
         }
         followMode()
@@ -294,6 +301,7 @@ final class AgentModel {
             ansi = read.ansi
             reflowed = read.reflowed
             screenBanner = read.jumpBanner
+            screenNotice = read.notice
             notice = nil
         } catch {
             notice = Self.message(for: error)
@@ -531,6 +539,18 @@ final class AgentModel {
             notice = nil
         } catch {
             screenBanner = true
+            notice = Self.message(for: error)
+        }
+    }
+
+    func answerNotice(_ option: NoticeOption) async {
+        let shown = screenNotice
+        screenNotice = []
+        do {
+            try await core.answerNotice(machineId: route.machineId, terminalId: route.terminalId, digit: option.digit)
+            notice = nil
+        } catch {
+            screenNotice = shown
             notice = Self.message(for: error)
         }
     }

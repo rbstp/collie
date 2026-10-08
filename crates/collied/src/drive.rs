@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentStatus, AgentTypeTextParams, Cwd,
-    ErrorCode, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response,
-    TaskNewParams, TaskOptions, TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams,
-    WorkspaceId, limits,
+    ErrorCode, NoticeDigit, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request,
+    Response, TaskNewParams, TaskOptions, TerminalId, TerminalRead, TerminalRunParams,
+    WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -698,6 +698,41 @@ impl Driver {
         }
         authorized(auth)?;
         herdr::pane_send_text(&self.herdr, &current.pane_id, SCROLL_BOTTOM)
+            .await
+            .map_err(herdr_fail)?;
+        Ok(Response::Ok)
+    }
+
+    /// One digit, no Enter, only while Claude Code shows a notice listing it above an empty
+    /// input box. Never to a blocked agent: a digit could select a permission option. The
+    /// visible read comes last, closest to the write.
+    pub async fn answer_notice(
+        &self,
+        terminal_id: &TerminalId,
+        digit: NoticeDigit,
+        auth: &Authorized,
+    ) -> Reply {
+        let a = self.ready_agent(terminal_id).await?;
+        if a.agent.as_deref() != Some("claude") {
+            return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
+        }
+        let screen = herdr::detection_text(&self.herdr, &a.pane_id)
+            .await
+            .map_err(herdr_fail)?;
+        if protocol::jump_banner(&screen) {
+            return fail(ErrorCode::AgentNotReady, SCROLLED);
+        }
+        if !protocol::notice(&screen).iter().any(|o| o.digit == digit) {
+            return fail(ErrorCode::AgentNotReady, "no notice with that option");
+        }
+        if !matches!(
+            self.input_box(&a.pane_id).await?,
+            Some(InputBox::Draft(d)) if d.text.is_empty()
+        ) {
+            return fail(ErrorCode::AgentNotReady, "the input box is not empty");
+        }
+        authorized(auth)?;
+        herdr::pane_send_text(&self.herdr, &a.pane_id, digit.as_str())
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)

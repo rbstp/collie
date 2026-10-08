@@ -424,6 +424,12 @@ async fn scenario(
     assert_error(&recv(&mut ws).await, ErrorCode::AgentNotReady);
     send(
         &mut ws,
+        json!({"id": 7, "method": "agent.answer_notice", "params": {"terminal_id": "term_65ce7ae4fd5731", "digit": "1"}}),
+    )
+    .await;
+    assert_error(&recv(&mut ws).await, ErrorCode::AgentNotReady);
+    send(
+        &mut ws,
         json!({"id": 50, "method": "approval.list", "params": {}}),
     )
     .await;
@@ -809,6 +815,9 @@ async fn scenario(
         "\"method\":\"agent.focus\"",
         "\"method\":\"agent.scroll_bottom\"",
         "\"result\":\"agent_not_ready: already at the bottom\"",
+        "\"method\":\"agent.answer_notice\"",
+        "\"target\":\"term_65ce7ae4fd5731 digit=1\"",
+        "\"result\":\"agent_not_ready: no notice with that option\"",
         "\"method\":\"agent.star\"",
         "\"target\":\"term_65ce7ae4fd5731\"",
         "\"method\":\"agent.watch\"",

@@ -17,13 +17,13 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
-    ActivityId, AgentKind, AgentPromptParams, AgentSendKeysParams, AgentStarParams, AgentTarget,
-    AgentTypeTextParams, AgentWatchParams, ApprovalId, Cwd, DraftText, Empty, ErrorCode, Key,
-    Label, NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
-    PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
-    ReadSource, Request, Response, Signature, TaskNewParams, TerminalGrantParams, TerminalId,
-    TerminalKey, TerminalRead, TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams,
-    WorkspaceId, limits,
+    ActivityId, AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
+    AgentStarParams, AgentTarget, AgentTypeTextParams, AgentWatchParams, ApprovalId, Cwd,
+    DraftText, Empty, ErrorCode, Key, Label, NoticeDigit, NotificationKey, OpId,
+    PairCompleteParams, PairingInvite, PaneCloseParams, PromptText, PushActivityEndParams,
+    PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams, ReadSource, Request,
+    Response, Signature, TaskNewParams, TerminalGrantParams, TerminalId, TerminalKey, TerminalRead,
+    TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -397,6 +397,15 @@ pub struct TerminalSnapshot {
     /// Claude Code's fullscreen transcript is scrolled up on the machine.
     #[uniffi(default = false)]
     pub jump_banner: bool,
+    /// The options of a Claude Code notice above its input box, in screen order.
+    #[uniffi(default = [])]
+    pub notice: Vec<NoticeOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct NoticeOption {
+    pub digit: u8,
+    pub label: String,
 }
 
 impl From<TerminalRead> for TerminalSnapshot {
@@ -404,6 +413,13 @@ impl From<TerminalRead> for TerminalSnapshot {
         Self {
             reflowed: r.reflowed(),
             jump_banner: protocol::jump_banner(&r.ansi),
+            notice: protocol::notice(&r.ansi)
+                .into_iter()
+                .map(|o| NoticeOption {
+                    digit: o.digit.value(),
+                    label: o.label,
+                })
+                .collect(),
             terminal_id: r.terminal_id.into(),
             source: r.source.into(),
             ansi: r.ansi,
@@ -1276,6 +1292,22 @@ impl CollieCore {
     ) -> Result<(), CoreError> {
         let request = Request::AgentScrollBottom(AgentTarget {
             terminal_id: terminal(terminal_id)?,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    /// One digit of a Claude Code notice, which collied sends only while the notice shows it.
+    pub async fn answer_notice(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        digit: u8,
+    ) -> Result<(), CoreError> {
+        let digit =
+            NoticeDigit::new(digit).ok_or_else(|| invalid("digit", "a notice option is 0 to 3"))?;
+        let request = Request::AgentAnswerNotice(AgentAnswerNoticeParams {
+            terminal_id: terminal(terminal_id)?,
+            digit,
         });
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
     }
@@ -3144,6 +3176,31 @@ mod tests {
         let scrolled = "  96   \u{1b}[48;2;55;55;55m Jump to bottom: fn+↓ to scroll \u{1b}[0m\n❯ ";
         assert!(TerminalSnapshot::from(read(scrolled)).jump_banner);
     }
+
+    #[test]
+    fn snapshots_carry_the_notice_options() {
+        let read = |ansi: &str| TerminalRead {
+            terminal_id: TerminalId::new("term_1").unwrap(),
+            source: ReadSource::Recent,
+            ansi: ansi.into(),
+            truncated: false,
+            wraps: Vec::new(),
+            splits: Vec::new(),
+        };
+        let survey = include_str!("../../collied/tests/fixtures/claude-2.1.293/survey.ansi.txt");
+        let options: Vec<(u8, String)> = TerminalSnapshot::from(read(survey))
+            .notice
+            .into_iter()
+            .map(|o| (o.digit, o.label))
+            .collect();
+        assert_eq!(
+            options,
+            [(1, "Bad"), (2, "Fine"), (3, "Good"), (0, "Dismiss")].map(|(d, l)| (d, l.to_owned()))
+        );
+        let bottom =
+            include_str!("../../collied/tests/fixtures/claude-2.1.293/bottom-idle.detection.txt");
+        assert!(TerminalSnapshot::from(read(bottom)).notice.is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -3264,6 +3321,7 @@ mod tailnet_tests {
         unpaired: bool,
         stars: Vec<(String, bool)>,
         scrolls: Vec<String>,
+        answers: Vec<(String, String)>,
         connections: usize,
         closed: usize,
     }
@@ -3497,6 +3555,12 @@ mod tailnet_tests {
                         }
                         Request::AgentScrollBottom(p) => {
                             lock(&seen).scrolls.push(p.terminal_id.as_str().into());
+                            Ok(Response::Ok)
+                        }
+                        Request::AgentAnswerNotice(p) => {
+                            lock(&seen)
+                                .answers
+                                .push((p.terminal_id.as_str().into(), p.digit.as_str().into()));
                             Ok(Response::Ok)
                         }
                         Request::ApprovalList(_) => {
@@ -3907,6 +3971,12 @@ mod tailnet_tests {
         assert_eq!(lock(&seen).stars, [(t1(), true), (t1(), false)]);
         rt.block_on(core.scroll_bottom(id(), t1())).unwrap();
         assert_eq!(lock(&seen).scrolls, [t1()]);
+        rt.block_on(core.answer_notice(id(), t1(), 0)).unwrap();
+        assert!(matches!(
+            rt.block_on(core.answer_notice(id(), t1(), 4)),
+            Err(CoreError::InvalidInput { .. })
+        ));
+        assert_eq!(lock(&seen).answers, [(t1(), "0".to_owned())]);
         rt.block_on(core.watch_agent(id(), None, 500)).unwrap();
         assert_eq!(lock(&seen).watches.last(), Some(&None));
         assert!(core.agent_view(id(), t1(), 0).unwrap().output.is_none());

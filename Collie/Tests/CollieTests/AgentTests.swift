@@ -17,6 +17,7 @@ final class FakeCore: AgentCore {
         var closes: [String] = []
         var stars: [String] = []
         var scrolls: [String] = []
+        var answers: [UInt8] = []
         var hold = false
         var held: [CheckedContinuation<Void, Never>] = []
         var error: CoreError?
@@ -156,6 +157,9 @@ final class FakeCore: AgentCore {
     func focus(machineId: String, terminalId: String) async throws {}
     func scrollBottom(machineId: String, terminalId: String) async throws {
         try await call { $0.scrolls.append(terminalId) }
+    }
+    func answerNotice(machineId: String, terminalId: String, digit: UInt8) async throws {
+        try await call { $0.answers.append(digit) }
     }
     func star(machineId: String, terminalId: String, starred: Bool) async throws {
         try await call { $0.stars.append("\(machineId) \(terminalId) \(starred)") }
@@ -1002,6 +1006,63 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     let model = agentModel(core)
     model.poll()
     #expect(!model.jumpBanner && model.acceptsKeys)
+}
+
+@MainActor private let rating = [
+    NoticeOption(digit: 1, label: "Bad"), NoticeOption(digit: 2, label: "Fine"),
+    NoticeOption(digit: 3, label: "Good"), NoticeOption(digit: 0, label: "Dismiss"),
+]
+
+@MainActor
+private func noticeShown(_ core: FakeCore, kind: String = "claude", jumpBanner: Bool = false) -> AgentModel {
+    core.state.withLock {
+        $0.kind = kind
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent, ansi: "● How is Claude doing this session? (optional)", truncated: false,
+            jumpBanner: jumpBanner, notice: rating
+        )
+    }
+    let model = agentModel(core)
+    model.poll()
+    return model
+}
+
+@MainActor
+@Test func aNoticeOffersItsOptionsInScreenOrder() async {
+    let core = FakeCore()
+    let model = noticeShown(core)
+    #expect(model.noticeOptions.map(\.label) == ["Bad", "Fine", "Good", "Dismiss"])
+    #expect(model.acceptsKeys)
+    await model.answerNotice(model.noticeOptions[2])
+    #expect(core.snapshot.answers == [3])
+    #expect(core.snapshot.prompts.isEmpty && core.snapshot.keys.isEmpty)
+    #expect(model.noticeOptions.isEmpty, "hidden until a new screen shows the notice again")
+
+    model.poll()
+    core.set(error: .AgentNotReady)
+    await model.answerNotice(model.noticeOptions[3])
+    #expect(model.notice != nil && model.noticeOptions == rating)
+    core.set()
+
+    core.state.withLock { $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "❯ ", truncated: false) }
+    model.poll()
+    #expect(model.noticeOptions.isEmpty)
+}
+
+@MainActor
+@Test func onlyClaudeCodeOffersNoticeOptions() {
+    #expect(noticeShown(FakeCore(), kind: "codex").noticeOptions.isEmpty)
+}
+
+@MainActor
+@Test func noticeOptionsHideWhileBlockedOrScrolledUp() {
+    let model = noticeShown(FakeCore())
+    model.blocked = .optionsOnly
+    #expect(model.noticeOptions.isEmpty)
+    model.blocked = nil
+    #expect(model.noticeOptions == rating)
+    let scrolled = noticeShown(FakeCore(), jumpBanner: true)
+    #expect(scrolled.jumpBanner && scrolled.noticeOptions.isEmpty)
 }
 
 @MainActor

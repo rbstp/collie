@@ -1,3 +1,5 @@
+use crate::NoticeDigit;
+
 const JUMP: &str = "Jump to bottom";
 const NEW: &str = " new message";
 
@@ -39,6 +41,90 @@ fn hint(rest: &str) -> bool {
     rest.strip_prefix(": ")
         .and_then(|r| r.strip_suffix(" to scroll"))
         .is_some_and(|key| !key.is_empty() && !key.contains(' '))
+}
+
+const HEADS_UP: &str = "\u{2726} Heads up \u{b7} ";
+const RATING: &str = "\u{25cf} How is Claude doing this session? (optional)";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoticeOption {
+    pub digit: NoticeDigit,
+    pub label: String,
+}
+
+/// The options of Claude Code's "Heads up" notice or session rating question, in screen
+/// order, when `screen` (plain text or SGR) shows one directly above the input box; empty
+/// otherwise. Anchored on the input box's top rule, so a dialog (which replaces the box) or
+/// a notice quoted in the transcript never matches. Digits above 3 are never offered.
+pub fn notice(screen: &str) -> Vec<NoticeOption> {
+    let rows: Vec<String> = screen
+        .split('\n')
+        .map(|r| strip_sgr(r).trim_end().to_owned())
+        .collect();
+    let Some(mut i) = (1..rows.len())
+        .rev()
+        .find(|&i| rows[i].starts_with('\u{276f}') && is_rule(&rows[i - 1]))
+        .map(|i| i - 1)
+    else {
+        return Vec::new();
+    };
+    if i > 0 && option_row(&rows[i - 1]).is_none() {
+        i -= 1;
+    }
+    let mut options = Vec::new();
+    while let Some(cells) = i.checked_sub(1).and_then(|j| option_row(&rows[j])) {
+        options.splice(0..0, cells);
+        i -= 1;
+    }
+    let body = i;
+    while i > 0 && rows[i - 1].starts_with("  ") {
+        i -= 1;
+    }
+    let Some(header) = i.checked_sub(1).map(|j| &rows[j]) else {
+        return Vec::new();
+    };
+    let heads_up = header.starts_with(HEADS_UP);
+    let rating = std::iter::once(header.as_str())
+        .chain(rows[i..body].iter().map(|r| r.trim()))
+        .collect::<Vec<_>>()
+        .join(" ")
+        == RATING;
+    let mut seen = Vec::new();
+    for (d, _) in &options {
+        if *d > 4 || seen.contains(d) {
+            return Vec::new();
+        }
+        seen.push(*d);
+    }
+    if options.is_empty() || !(heads_up || rating) {
+        return Vec::new();
+    }
+    options
+        .into_iter()
+        .filter_map(|(d, label)| NoticeDigit::new(d).map(|digit| NoticeOption { digit, label }))
+        .collect()
+}
+
+fn is_rule(row: &str) -> bool {
+    !row.is_empty() && row.chars().all(|c| c == '\u{2500}')
+}
+
+/// A row indented by exactly two spaces whose cells, apart by two or more spaces, all read
+/// `<digit>: <label>`.
+fn option_row(row: &str) -> Option<Vec<(u8, String)>> {
+    let rest = row.strip_prefix("  ").filter(|r| !r.starts_with(' '))?;
+    rest.split("  ")
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(|cell| {
+            let (d, label) = cell.split_once(": ")?;
+            let d = match d.as_bytes() {
+                [b] if b.is_ascii_digit() => b - b'0',
+                _ => return None,
+            };
+            (!label.is_empty() && !label.contains(':')).then(|| (d, label.to_owned()))
+        })
+        .collect()
 }
 
 fn strip_sgr(row: &str) -> String {
@@ -137,5 +223,93 @@ mod tests {
             assert!(!jump_banner(&screen(row)), "{row:?}");
         }
         assert!(!jump_banner(""));
+    }
+
+    macro_rules! fixture {
+        ($name:literal) => {
+            include_str!(concat!(
+                "../../collied/tests/fixtures/claude-2.1.293/",
+                $name
+            ))
+        };
+    }
+
+    fn options(screen: &str) -> Vec<(&'static str, String)> {
+        notice(screen)
+            .into_iter()
+            .map(|o| (o.digit.as_str(), o.label))
+            .collect()
+    }
+
+    fn listed(options: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+        options.iter().map(|(d, l)| (*d, (*l).to_owned())).collect()
+    }
+
+    #[test]
+    fn a_notice_gives_its_options_in_screen_order() {
+        let rating = listed(&[("1", "Bad"), ("2", "Fine"), ("3", "Good"), ("0", "Dismiss")]);
+        let heads_up = listed(&[
+            ("1", "Learn more"),
+            ("2", "Knew this already"),
+            ("0", "Dismiss"),
+        ]);
+        for screen in [
+            fixture!("survey.detection.txt"),
+            fixture!("survey.ansi.txt"),
+            fixture!("survey-wrapped.detection.txt"),
+            fixture!("survey-startup.detection.txt"),
+            fixture!("survey-digit-typed.detection.txt"),
+            fixture!("survey-scrolled.detection.txt"),
+        ] {
+            assert_eq!(options(screen), rating);
+        }
+        for screen in [
+            fixture!("heads-up.detection.txt"),
+            fixture!("heads-up.ansi.txt"),
+            fixture!("heads-up-wrapped.detection.txt"),
+            fixture!("heads-up-narrow.detection.txt"),
+        ] {
+            assert_eq!(options(screen), heads_up);
+        }
+        assert_eq!(
+            options(fixture!("heads-up-internal.detection.txt")),
+            listed(&[
+                ("1", "Learn more"),
+                ("2", "Knew this already"),
+                ("3", "What is this"),
+                ("0", "Dismiss")
+            ])
+        );
+    }
+
+    #[test]
+    fn only_the_two_known_notices_above_the_input_box_match() {
+        for screen in [
+            fixture!("heads-up-explained.detection.txt"),
+            fixture!("heads-up-dismissed.detection.txt"),
+            fixture!("heads-up-thinking.detection.txt"),
+            fixture!("heads-up-collapsed.detection.txt"),
+            fixture!("you-should-know.detection.txt"),
+            fixture!("survey-narrow.detection.txt"),
+            fixture!("bottom-idle.detection.txt"),
+            fixture!("scrolled-idle.detection.txt"),
+            "",
+        ] {
+            assert!(notice(screen).is_empty(), "{screen}");
+        }
+        let survey = fixture!("survey.detection.txt");
+        let quoted = survey.replacen("\n\n\u{2500}", "\n\u{273b} Baked for 2s\n\n\u{2500}", 1);
+        let gap = survey.replacen("(optional)\n", "(optional)\n\n", 1);
+        let no_box = survey
+            .rsplit_once('\u{276f}')
+            .map(|(above, below)| format!("{above} {below}"))
+            .unwrap();
+        let five = survey.replacen("3: Good", "5: Good", 1);
+        let twice = survey.replacen("3: Good", "1: Good", 1);
+        let enter = survey.replacen("Fine   3", "Fine 3", 1);
+        let other = survey.replacen("this session?", "this file?", 1);
+        for screen in [quoted, gap, no_box, five, twice, enter, other] {
+            assert!(notice(&screen).is_empty(), "{screen}");
+        }
     }
 }
