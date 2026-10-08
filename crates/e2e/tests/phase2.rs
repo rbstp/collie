@@ -21,7 +21,7 @@ use tokio::sync::watch;
 const CLAUDE: &str = "term_65ce7ae4fd5731";
 const CODEX_BLOCKED: &str = "term_0a1b2c3d4e5f60";
 const NEW_TERMINAL: &str = "term_e2e00000000009";
-const HELD_PROMPT: &str = "held until the phone has reconnected";
+const HELD_PROMPT: &str = "held until the phone has dropped its session";
 const RULE: &str = "\u{1b}[38;2;136;136;136m────────────────────────────────────────\u{1b}[39m";
 const PLACEHOLDER: &str = "❯ \u{1b}[0m\u{1b}[2mTry \"create a util logging.py that...\"\u{1b}[0m";
 const BASH: &str = "\
@@ -463,13 +463,13 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     })
     .await;
     // Simulates iOS killing the socket: the core drops the connection and reconnects.
+    // Released once the session is dropped, as collied gives up on herdr after 5 s and
+    // the redial can take longer under load; the retry then replays the stored outcome.
     core.resume(60);
-    let deadline = Instant::now() + Duration::from_secs(4);
-    while sessions(&control).await < 2 {
-        assert!(Instant::now() < deadline, "the phone did not reconnect");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_for("the phone to drop its session", || {
+        !core.cached_flock(m.clone()).is_some_and(|f| connected(&f))
+    })
+    .await;
     herdr.release.send_replace(true);
     pending.await.unwrap().unwrap();
     assert_eq!(
