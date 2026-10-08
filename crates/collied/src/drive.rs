@@ -773,7 +773,10 @@ impl Driver {
     /// Mirrors the phone's slash command token into Claude Code's input box as a bracketed
     /// paste, never Enter or a key, so its command menu shows. The box is cleared first
     /// through [`Self::replace_draft`]; an empty command stops there. The agent, the banner
-    /// and an empty visible box are checked again just before the paste.
+    /// and an empty visible box are checked again just before the paste. It returns, and
+    /// releases the lock, only once the box shows the command: the next mirror's first read
+    /// would otherwise see the box empty before this paste renders, skip the clear, and
+    /// paste after it.
     pub async fn slash_draft(&self, p: AgentSlashDraftParams, auth: &Authorized) -> Reply {
         let _box = self.box_writes.lock().await;
         let a = self.claude_at_bottom(&p.terminal_id).await?;
@@ -794,7 +797,25 @@ impl Driver {
         herdr::pane_send_text(&self.herdr, &a.pane_id, &paste)
             .await
             .map_err(herdr_fail)?;
-        Ok(Response::Ok)
+        let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
+        loop {
+            tokio::time::sleep(SCREEN_POLL).await;
+            let shown = self.input_box(&a.pane_id).await?;
+            if matches!(&shown, Some(InputBox::Draft(d)) if d.text == p.command.as_str()) {
+                return Ok(Response::Ok);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return match shown {
+                    Some(InputBox::Draft(d)) if !d.text.is_empty() => {
+                        Err((ErrorCode::DraftChanged, d.text))
+                    }
+                    _ => fail(
+                        ErrorCode::AgentNotReady,
+                        "the input box did not show the command",
+                    ),
+                };
+            }
+        }
     }
 
     async fn claude_at_bottom(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {

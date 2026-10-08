@@ -328,6 +328,22 @@ mod tests {
                 include_str!("../tests/fixtures/claude-2.1.293/slash-tab-hint.ansi.txt"),
                 "/rename  [name]",
             ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-sta.ansi.txt"),
+                "/sta",
+            ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-stat.ansi.txt"),
+                "/stat",
+            ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-statu.ansi.txt"),
+                "/statu",
+            ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-statstatu.ansi.txt"),
+                "/stat/statu",
+            ),
         ] {
             assert_eq!(read(ansi), draft(text, 1), "{text}");
         }

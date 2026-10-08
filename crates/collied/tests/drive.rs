@@ -87,6 +87,12 @@ const HEADS_UP_DISMISSED: &str =
 const YOU_SHOULD_KNOW: &str = include_str!("fixtures/claude-2.1.293/you-should-know.detection.txt");
 const SLASH_MENU: &str = include_str!("fixtures/claude-2.1.293/slash-menu.ansi.txt");
 const SLASH_TAB_HINT: &str = include_str!("fixtures/claude-2.1.293/slash-tab-hint.ansi.txt");
+// Pasted with the command menu open; slash-statstatu is the box a later mirror pasted into
+// before the earlier paste had rendered.
+const SLASH_STA: &str = include_str!("fixtures/claude-2.1.293/slash-sta.ansi.txt");
+const SLASH_STAT: &str = include_str!("fixtures/claude-2.1.293/slash-stat.ansi.txt");
+const SLASH_STATU: &str = include_str!("fixtures/claude-2.1.293/slash-statu.ansi.txt");
+const SLASH_STATSTATU: &str = include_str!("fixtures/claude-2.1.293/slash-statstatu.ansi.txt");
 const MUTATING: [&str; 10] = [
     "agent.prompt",
     "agent.send_keys",
@@ -1086,7 +1092,16 @@ async fn slash_draft_pastes_the_command_into_an_empty_box_only() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
-    herdr.with(|h| h.text = screen(PLACEHOLDER));
+    herdr.with(|h| {
+        h.screens = [
+            screen(PLACEHOLDER),
+            screen(PLACEHOLDER),
+            screen(PLACEHOLDER),
+            screen(PLACEHOLDER),
+            screen("❯ /s"),
+        ]
+        .into()
+    });
     assert_eq!(
         drive.slash_draft(slash(CLAUDE, "/s", None), &yes()).await,
         Ok(Response::Ok)
@@ -1102,7 +1117,8 @@ async fn slash_draft_pastes_the_command_into_an_empty_box_only() {
             "agent.get",
             "pane.read",
             "pane.read",
-            "pane.send_text"
+            "pane.send_text",
+            "pane.read"
         ]
     );
     let reads: Vec<Value> = herdr
@@ -1110,7 +1126,10 @@ async fn slash_draft_pastes_the_command_into_an_empty_box_only() {
         .into_iter()
         .map(|p| p["source"].clone())
         .collect();
-    assert_eq!(reads, ["detection", "visible", "detection", "visible"]);
+    assert_eq!(
+        reads,
+        ["detection", "visible", "detection", "visible", "visible"]
+    );
     assert_eq!(
         herdr.params("pane.send_text"),
         [json!({"pane_id": "w6:p1", "text": "\u{1b}[200~/s\u{1b}[201~"})]
@@ -1120,7 +1139,15 @@ async fn slash_draft_pastes_the_command_into_an_empty_box_only() {
     for (command, sent) in [("/sk", Some("\u{1b}[200~/sk\u{1b}[201~")), ("", None)] {
         herdr.with(|h| {
             h.calls.clear();
-            h.screens = [SLASH_MENU.into(), SLASH_MENU.into(), screen(PLACEHOLDER)].into();
+            h.screens = [
+                SLASH_MENU.into(),
+                SLASH_MENU.into(),
+                screen(PLACEHOLDER),
+                screen(PLACEHOLDER),
+                screen(PLACEHOLDER),
+                screen("❯ /sk"),
+            ]
+            .into();
         });
         assert_eq!(
             drive
@@ -1162,6 +1189,109 @@ async fn slash_draft_pastes_the_command_into_an_empty_box_only() {
         Ok(Response::Ok)
     );
     assert_eq!(herdr.mutations(), ["agent.send_keys"]);
+    herdr.with(|h| h.screens.clear());
+}
+
+#[tokio::test]
+async fn slash_draft_returns_only_once_the_box_shows_the_command() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let empty = || screen(PLACEHOLDER);
+    // Shorter and longer tokens with the menu open; the read right after the paste is stale.
+    for (shown, expected, command, after) in [
+        (SLASH_STAT, "/stat", "/sta", SLASH_STA),
+        (SLASH_STA, "/sta", "/statu", SLASH_STATU),
+        (SLASH_STATU, "/statu", "/stat", SLASH_STAT),
+    ] {
+        herdr.with(|h| {
+            h.calls.clear();
+            h.screens = [
+                shown.into(),
+                shown.into(),
+                empty(),
+                empty(),
+                empty(),
+                empty(),
+                after.into(),
+            ]
+            .into();
+        });
+        assert_eq!(
+            drive
+                .slash_draft(slash(CLAUDE, command, Some(expected)), &yes())
+                .await,
+            Ok(Response::Ok),
+            "{command}"
+        );
+        assert_eq!(
+            herdr.mutations(),
+            ["agent.send_keys", "pane.send_text"],
+            "{command}"
+        );
+        let methods = herdr.methods();
+        let pasted = methods.iter().position(|m| m == "pane.send_text").unwrap();
+        assert_eq!(
+            methods[pasted + 1..],
+            ["pane.read", "pane.read"],
+            "{command}"
+        );
+        assert!(herdr.with(|h| h.screens.len() == 1), "{command}");
+    }
+
+    // Clearing to empty waits for the empty box before it returns.
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = [
+            SLASH_STAT.into(),
+            SLASH_STAT.into(),
+            SLASH_STAT.into(),
+            empty(),
+        ]
+        .into();
+    });
+    assert_eq!(
+        drive
+            .slash_draft(slash(CLAUDE, "", Some("/stat")), &yes())
+            .await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(herdr.mutations(), ["agent.send_keys"]);
+    assert_eq!(herdr.params("pane.read").len(), 4);
+
+    // A box that never shows the command fails closed, and nothing more is written.
+    for (after, err) in [
+        (
+            empty(),
+            (
+                ErrorCode::AgentNotReady,
+                "the input box did not show the command".to_owned(),
+            ),
+        ),
+        (
+            TRUST.to_owned(),
+            (
+                ErrorCode::AgentNotReady,
+                "the input box did not show the command".to_owned(),
+            ),
+        ),
+        (
+            SLASH_STATSTATU.to_owned(),
+            (ErrorCode::DraftChanged, "/stat/statu".to_owned()),
+        ),
+    ] {
+        herdr.with(|h| {
+            h.calls.clear();
+            h.screens = [empty(), empty(), empty(), empty(), after].into();
+        });
+        assert_eq!(
+            drive
+                .slash_draft(slash(CLAUDE, "/statu", None), &yes())
+                .await,
+            Err(err)
+        );
+        assert_eq!(herdr.mutations(), ["pane.send_text"]);
+    }
     herdr.with(|h| h.screens.clear());
 }
 

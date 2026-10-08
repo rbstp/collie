@@ -1,0 +1,60 @@
+
+[0m[38;2;215;119;87m ▐[0m[38;2;215;119;87m[48;2;0;0;0m▛███▛█   [0m[1mClaude Code [0m[38;2;153;153;153mv2.1.293[0m
+[0m[38;2;215;119;87m▝▜[0m[38;2;215;119;87m[48;2;0;0;0m█████[0m[38;2;215;119;87m█▀  [0m[38;2;153;153;153mOpus 5.5 with high effort · Claude Team[0m
+[0m[38;2;215;119;87m ▝▝   ▝▝   [0m[38;2;153;153;153m/private/tmp/collie134-slashfix[0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  [0m[38;2;177;185;249m❯ /[0m[1m[38;2;177;185;249msta[0m[38;2;177;185;249mtus                                     Show Claude Code [0m[1m[38;2;177;185;249msta[0m[38;2;177;185;249mtus including version, model, account, API connectivity, and tool statuses[0m
+  [0m[38;2;153;153;153m  /[0m[1msta[0m[38;2;153;153;153mtusline                                 Set up Claude Code's [0m[1msta[0m[38;2;153;153;153mtus line UI[0m
+  [0m[38;2;153;153;153m  /[0m[1msta[0m[38;2;153;153;153mcked-prs                                Create, navigate, update, and merge GitHub [0m[1msta[0m[38;2;153;153;153mcked pull requests with the `gh stack` CLI extension — a chain of PRs where each targets the branch below it. Use[0m
+                                                [0m[38;2;153;153;153mwhenever the user says "[0m[1msta[0m[38;2;153;153;153mcked PR", "stack", "PR stack", "stack this", "add to the stack", "rebase the stack", "merge the stack", or asks to split a large ch…[0m
+  [0m[38;2;153;153;153m  /usage ([0m[1msta[0m[38;2;153;153;153mts)                              Show session cost, plan usage, and activity [0m[1msta[0m[38;2;153;153;153mts[0m                                                                                  
+[0m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+❯ /sta
+[0m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[1m[38;5;4mOpus 5.5[0m[38;2;153;153;153m high  [0m[1m[38;5;2m░░░░░0% [0m[1m[38;5;4m14s[0m[38;2;153;153;153m | Est. usage: $0.00[0m
+  [0m[38;2;153;153;153m⏸ manual mode on[0m
