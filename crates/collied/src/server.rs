@@ -1146,10 +1146,8 @@ impl Session<'_> {
             Request::AgentScrollBottom(p) => {
                 (drive.scroll_bottom(&p.terminal_id, &auth).await, None)
             }
-            Request::AgentAnswerNotice(p) => (
-                drive.answer_notice(&p.terminal_id, p.digit, &auth).await,
-                None,
-            ),
+            Request::AgentAnswerNotice(p) => (drive.answer_notice(&p, &auth).await, None),
+            Request::AgentSlashDraft(p) => (drive.slash_draft(p, &auth).await, None),
             Request::AgentStar(p) => (self.star(p).await, None),
             // Starting an agent takes up to 30 s; the session keeps serving meanwhile.
             Request::TaskNew(_) if !self.tasks.is_empty() => (
@@ -1754,11 +1752,13 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::AgentScrollBottom(p) => p.terminal_id.as_str(),
         Request::AgentAnswerNotice(p) => {
             return Some(format!(
-                "{} digit={}",
+                "{} digit={} label={:?}",
                 p.terminal_id.as_str(),
-                p.digit.as_str()
+                p.digit.as_str(),
+                p.label.as_str()
             ));
         }
+        Request::AgentSlashDraft(p) => p.terminal_id.as_str(),
         Request::AgentStar(p) => p.terminal_id.as_str(),
         Request::PaneClose(p) => p.terminal_id.as_str(),
         Request::WorkspaceClose(p) => p.workspace_id.as_str(),

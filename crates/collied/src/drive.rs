@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use protocol::{
-    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentStatus, AgentTypeTextParams, Cwd,
-    ErrorCode, NoticeDigit, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request,
-    Response, TaskNewParams, TaskOptions, TerminalId, TerminalRead, TerminalRunParams,
-    WorkspaceCloseParams, WorkspaceId, limits,
+    AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
+    AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, Cwd, ErrorCode, Key, OpId,
+    OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskNewParams,
+    TaskOptions, TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
+    limits,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -47,6 +48,7 @@ const TYPED_NOT_SENT: &str = "the prompt did not take the text; Enter was not se
 pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
 pub const LOCKED: &str = "the terminal is locked; unlock it again";
 const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
+const COMMAND_SHOWN: &str = "a slash command shows in the input box; send it as a prompt";
 /// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
 const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
 
@@ -124,6 +126,10 @@ pub struct Driver {
     agents: Vec<AgentKind>,
     roots: Vec<PathBuf>,
     ops: OpCache,
+    /// Prompts, keys, slash drafts and notice answers from different sessions never
+    /// interleave, so a mirrored command or a side agent's note is never submitted by
+    /// another session's write.
+    box_writes: tokio::sync::Mutex<()>,
 }
 
 pub enum Watched {
@@ -163,6 +169,7 @@ impl Driver {
             agents,
             roots,
             ops: OpCache::new(OPS_PER_PEER, OP_TTL),
+            box_writes: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -485,6 +492,7 @@ impl Driver {
     }
 
     pub async fn prompt(&self, p: AgentPromptParams, auth: &Authorized) -> Reply {
+        let _box = self.box_writes.lock().await;
         let a = self.ready_agent(&p.terminal_id).await?;
         // herdr pastes a prompt after whatever is in Claude Code's input box.
         if a.agent.as_deref() == Some("claude") {
@@ -566,6 +574,7 @@ impl Driver {
         p: AgentSendKeysParams,
         auth: &Authorized,
     ) -> (Reply, Option<String>) {
+        let _box = self.box_writes.lock().await;
         let (a, screen) = match self
             .writable_agent(&p.terminal_id, prompt::open_to_keys)
             .await
@@ -584,6 +593,20 @@ impl Driver {
             };
             if scrolled {
                 return (fail(ErrorCode::AgentNotReady, SCROLLED), None);
+            }
+            // Enter would run the command menu's highlighted entry.
+            if screen.is_none()
+                && p.keys
+                    .iter()
+                    .any(|k| matches!(k, Key::Enter | Key::CtrlEnter))
+            {
+                match self.input_box(&a.pane_id).await {
+                    Ok(Some(InputBox::Draft(d))) if d.text.starts_with('/') => {
+                        return (fail(ErrorCode::AgentNotReady, COMMAND_SHOWN), None);
+                    }
+                    Ok(_) => {}
+                    Err(e) => return (Err(e), None),
+                }
             }
         }
         let keys: Vec<&str> = p.keys.iter().map(|k| k.herdr_name()).collect();
@@ -703,16 +726,17 @@ impl Driver {
         Ok(Response::Ok)
     }
 
-    /// One digit, no Enter, only while Claude Code shows a notice listing it above an empty
-    /// input box. Never to a blocked agent: a digit could select a permission option. The
-    /// notice and the box are checked on the same visible read, the last one before the write.
-    pub async fn answer_notice(
-        &self,
-        terminal_id: &TerminalId,
-        digit: NoticeDigit,
-        auth: &Authorized,
-    ) -> Reply {
-        let a = self.ready_agent(terminal_id).await?;
+    /// One digit, no Enter, only while Claude Code shows a notice listing it with that label
+    /// above an empty input box. Never to a blocked agent: a digit could select a permission
+    /// option. The notice and the box are checked on the same visible read, the last one
+    /// before the write. The digit sits in the box for 400 ms before Claude Code clears it and
+    /// runs the option, which can then fill the box, only if it is still empty, so the lock is
+    /// held until the box shows something other than the digit, for up to a second: a prompt
+    /// pasted before the fill would be replaced by it, and herdr's Enter would submit the
+    /// fill.
+    pub async fn answer_notice(&self, p: &AgentAnswerNoticeParams, auth: &Authorized) -> Reply {
+        let _box = self.box_writes.lock().await;
+        let a = self.ready_agent(&p.terminal_id).await?;
         if a.agent.as_deref() != Some("claude") {
             return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
         }
@@ -731,7 +755,10 @@ impl Driver {
         .await
         .map_err(herdr_fail)?;
         let visible = sanitize_ansi(&read.text);
-        if !protocol::notice(&visible).iter().any(|o| o.digit == digit) {
+        if !protocol::notice(&visible)
+            .iter()
+            .any(|o| o.digit == p.digit && o.label == p.label.as_str())
+        {
             return fail(ErrorCode::AgentNotReady, "no notice with that option");
         }
         if !matches!(
@@ -741,10 +768,81 @@ impl Driver {
             return fail(ErrorCode::AgentNotReady, "the input box is not empty");
         }
         authorized(auth)?;
-        herdr::pane_send_text(&self.herdr, &a.pane_id, digit.as_str())
+        herdr::pane_send_text(&self.herdr, &a.pane_id, p.digit.as_str())
             .await
             .map_err(herdr_fail)?;
+        let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
+        while tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(SCREEN_POLL).await;
+            match self.input_box(&a.pane_id).await? {
+                Some(InputBox::Draft(d)) if d.text.is_empty() || d.text == p.digit.as_str() => {}
+                None => {}
+                Some(_) => break,
+            }
+        }
         Ok(Response::Ok)
+    }
+
+    /// Mirrors the phone's slash command token into Claude Code's input box as a bracketed
+    /// paste, never Enter or a key, so its command menu shows. The box is cleared first
+    /// through [`Self::replace_draft`]; an empty command stops there. The agent, the banner
+    /// and an empty visible box are checked again just before the paste. It returns, and
+    /// releases the lock, only once the box shows the command: the next mirror's first read
+    /// would otherwise see the box empty before this paste renders, skip the clear, and
+    /// paste after it.
+    pub async fn slash_draft(&self, p: AgentSlashDraftParams, auth: &Authorized) -> Reply {
+        let _box = self.box_writes.lock().await;
+        let a = self.claude_at_bottom(&p.terminal_id).await?;
+        let expected = p.expected_draft.as_ref().map(|d| d.as_str());
+        self.replace_draft(&a.pane_id, expected, auth).await?;
+        if p.command.as_str().is_empty() {
+            return Ok(Response::Ok);
+        }
+        let a = self.claude_at_bottom(&p.terminal_id).await?;
+        if !matches!(
+            self.input_box(&a.pane_id).await?,
+            Some(InputBox::Draft(d)) if d.text.is_empty()
+        ) {
+            return fail(ErrorCode::AgentNotReady, "the input box is not empty");
+        }
+        authorized(auth)?;
+        let paste = format!("\u{1b}[200~{}\u{1b}[201~", p.command.as_str());
+        herdr::pane_send_text(&self.herdr, &a.pane_id, &paste)
+            .await
+            .map_err(herdr_fail)?;
+        let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
+        loop {
+            tokio::time::sleep(SCREEN_POLL).await;
+            let shown = self.input_box(&a.pane_id).await?;
+            if matches!(&shown, Some(InputBox::Draft(d)) if d.text == p.command.as_str()) {
+                return Ok(Response::Ok);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return match shown {
+                    Some(InputBox::Draft(d)) if !d.text.is_empty() => {
+                        Err((ErrorCode::DraftChanged, d.text))
+                    }
+                    _ => fail(
+                        ErrorCode::AgentNotReady,
+                        "the input box did not show the command",
+                    ),
+                };
+            }
+        }
+    }
+
+    async fn claude_at_bottom(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
+        let a = self.ready_agent(terminal_id).await?;
+        if a.agent.as_deref() != Some("claude") {
+            return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
+        }
+        let screen = herdr::detection_text(&self.herdr, &a.pane_id)
+            .await
+            .map_err(herdr_fail)?;
+        if protocol::jump_banner(&screen) {
+            return fail(ErrorCode::AgentNotReady, SCROLLED);
+        }
+        Ok(a)
     }
 
     pub async fn task_options(&self) -> Reply {
@@ -1251,8 +1349,6 @@ impl OpCache {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use protocol::Key;
 
     use super::*;
 

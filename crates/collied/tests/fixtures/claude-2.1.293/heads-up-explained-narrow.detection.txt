@@ -1,0 +1,58 @@
+           Claude Code v2.1.293
+ ▐▛███▛█   Opus 5.5 with high effort
+▝▜██████▀  Claude Team
+ ▝▝   ▝▝   /private/tmp/collie129-survey
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                        [-]
+✦ Heads up · total.py rounds 4.425 down
+  to 4.42 because it sums the prices as
+  binary floats.
+
+  Floats cannot store most prices
+  exactly
+  2.675 is stored as 2.67499999..., so
+  round(2.675, 2) gives 2.67, and the
+  sum lands just under 4.425.
+  Use decimal.Decimal(row["price"]) and
+  pick the rounding rule on purpose.
+
+  1: Understood
+  2: Chat in main session
+  0: Dismiss
+                          ● high · /effort
+────────────────────────────────────────────
+❯ Try "refactor <filepath>"
+────────────────────────────────────────────
+  Opus 5.5 high   master  ░░░░░0% 0s | E…
+  ⏸ manual mode on · ← 1 agent

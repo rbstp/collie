@@ -10,13 +10,18 @@
         "digit": {
           "$ref": "#/$defs/NoticeDigit"
         },
+        "label": {
+          "$ref": "#/$defs/Label",
+          "description": "The option's label as the phone showed it: a follow-up reuses a digit with another\nmeaning, so collied sends the digit only while the screen lists this exact option."
+        },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"
         }
       },
       "required": [
         "terminal_id",
-        "digit"
+        "digit",
+        "label"
       ],
       "type": "object"
     },
@@ -77,6 +82,33 @@
         "op_id",
         "terminal_id",
         "keys"
+      ],
+      "type": "object"
+    },
+    "AgentSlashDraftParams": {
+      "additionalProperties": false,
+      "description": "The phone's slash command token, mirrored into Claude Code's input box so its command\nmenu shows; empty clears the box. The box is replaced only when it holds\n`expected_draft`, as for `agent.prompt`.",
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/SlashCommand"
+        },
+        "expected_draft": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DraftText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "command"
       ],
       "type": "object"
     },
@@ -379,7 +411,8 @@
         "0",
         "1",
         "2",
-        "3"
+        "3",
+        "4"
       ],
       "type": "string"
     },
@@ -542,6 +575,10 @@
     },
     "Signature": {
       "pattern": "^[A-Za-z0-9_-]{11,96}$",
+      "type": "string"
+    },
+    "SlashCommand": {
+      "pattern": "^(/[A-Za-z0-9_:.-]{0,63})?$",
       "type": "string"
     },
     "TaskNewParams": {
@@ -914,6 +951,22 @@
         },
         "params": {
           "$ref": "#/$defs/AgentAnswerNoticeParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.slash_draft",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentSlashDraftParams"
         }
       },
       "required": [

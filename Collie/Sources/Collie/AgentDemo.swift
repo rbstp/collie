@@ -160,7 +160,8 @@ final class DemoAgentCore: ActivityCore {
 
     func focus(machineId: String, terminalId: String) async throws {}
     func scrollBottom(machineId: String, terminalId: String) async throws {}
-    func answerNotice(machineId: String, terminalId: String, digit: UInt8) async throws {}
+    func answerNotice(machineId: String, terminalId: String, digit: UInt8, label: String) async throws {}
+    func slashDraft(machineId: String, terminalId: String, command: String, expectedDraft: String?) async throws {}
 
     func star(machineId: String, terminalId: String, starred: Bool) async throws {
         stars.withLock { stars in

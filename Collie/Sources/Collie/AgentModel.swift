@@ -46,6 +46,16 @@ final class AgentModel {
     /// What the phone last saw in the Mac's input box: nil when unknown. A send replaces exactly this text.
     private(set) var macDraft: String?
     private(set) var sendingPrompt = false
+    /// The Mac's input box holds text the mirror did not put there; it waits for the next send.
+    private var mirrorPaused = false
+    /// The draft as the keyboard last left it; dictation, paste and restore never reach the Mac.
+    @ObservationIgnored private var typedDraft: String?
+    @ObservationIgnored private var mirrorDelay: Task<Void, Never>?
+    @ObservationIgnored private var mirroring: Task<Void, Never>?
+    /// The last command this screen asked collied to paste; only that is replaced unseen.
+    @ObservationIgnored private var mirrored = ""
+    /// ↑ or ↓ moved Claude Code's highlight off what the box holds; ⇥ takes it.
+    @ObservationIgnored private var menuMoved = false
     private(set) var promptError: String?
     private(set) var upload: AttachmentUpload?
     private var uploadTask: Task<Void, Never>?
@@ -152,6 +162,9 @@ final class AgentModel {
         mode == .agent && agent?.kind == "claude" && agent?.status != .blocked && blocked == nil && !jumpBanner && noticeArmed ? screenNotice : []
     }
 
+    /// A slash command shows in Claude Code's input box, so Enter would run its highlighted command.
+    var commandShown: Bool { mode == .agent && blocked == nil && agent?.status != .blocked && macDraft?.hasPrefix("/") == true }
+
     var acceptsKeys: Bool { isTerminal ? !unlocking : blocked != .optionsOnly && blocked != .terminal && !jumpBanner }
 
     /// Typed text answers the blocking prompt instead of prompting the agent.
@@ -221,12 +234,95 @@ final class AgentModel {
             let text = try? await core.agentDraft(machineId: route.machineId, terminalId: route.terminalId),
             !Task.isCancelled
         else { return }
+        mirrorPaused = false
         if text.isEmpty {
             macDraft = ""
         } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, attachments.isEmpty, !dictation.isActive {
             draft = text
             macDraft = text
+        } else if text == Self.boxToken(text), Self.slashToken(draft) == text {
+            macDraft = text
         }
+    }
+
+    /// Keyboard typing in the prompt field: only this mirrors the draft's slash command to the Mac.
+    func typed(_ text: String) {
+        draft = text
+        typedDraft = text
+        mirrorDelay?.cancel()
+        mirrorDelay = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            await self?.flushMirror()
+        }
+    }
+
+    /// Runs the mirror now, or waits for the one in flight, which follows the latest draft.
+    func flushMirror() async {
+        mirrorDelay?.cancel()
+        mirrorDelay = nil
+        let task = mirroring ?? Task { await runMirror() }
+        mirroring = task
+        await task.value
+    }
+
+    private var mirrors: Bool {
+        mode == .agent && agent?.kind == "claude" && agent?.status != .blocked && blocked == nil && !jumpBanner
+            && !dictation.isActive && !sendingPrompt && !mirrorPaused
+    }
+
+    /// One call at a time until the Mac's box holds the draft's command token, or nothing once the
+    /// draft no longer starts with one. An unknown box is never written.
+    private func runMirror() async {
+        while mirrors, draft == typedDraft, let box = macDraft.flatMap(Self.boxToken), Self.slashToken(draft) != box {
+            let target = Self.slashToken(draft)
+            if !target.isEmpty { mirrored = target }
+            do {
+                try await core.slashDraft(machineId: route.machineId, terminalId: route.terminalId, command: target, expectedDraft: macDraft)
+                macDraft = target
+                mirrored = target
+                menuMoved = false
+            } catch {
+                guard case .DraftChanged(let current) = error as? CoreError else { break }
+                macDraft = current
+                if current != mirrored {
+                    mirrorPaused = true
+                    promptError = Self.message(for: error)
+                }
+            }
+        }
+        mirroring = nil
+    }
+
+    /// The draft's leading `/` and what follows up to the first whitespace, if collied would paste it; else "".
+    static func slashToken(_ text: String) -> String {
+        let token = text.prefix { !$0.isWhitespace }
+        let name = token.dropFirst()
+        guard token.first == "/", name.count <= 63,
+            name.unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "_:.-".unicodeScalars.contains($0)) })
+        else { return "" }
+        return String(token)
+    }
+
+    /// The command token in the Mac's box, "" when it is empty, nil when it holds other text.
+    static func boxToken(_ text: String) -> String? {
+        if text.isEmpty { return "" }
+        guard text.hasPrefix("/") else { return nil }
+        return String(text.prefix { !$0.isWhitespace })
+    }
+
+    /// A command picked on the Mac with Tab replaces the phone's; Tab's trailing space
+    /// keeps what is typed next out of the command.
+    private func adopt(_ text: String) {
+        macDraft = text
+        guard let box = Self.boxToken(text) else {
+            mirrorPaused = true
+            return
+        }
+        let mine = Self.slashToken(draft)
+        guard !box.isEmpty, draft.hasPrefix("/"), box != mine else { return }
+        let rest = draft.dropFirst(mine.count)
+        draft = box + (rest.isEmpty ? " " : rest)
     }
 
     func poll() {
@@ -350,6 +446,13 @@ final class AgentModel {
         let typed = sent.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !sendingPrompt, !typed.isEmpty || !files.isEmpty else { return }
         let text = (files.map(\.path) + [typed].filter { !$0.isEmpty }).joined(separator: " ")
+        mirrorDelay?.cancel()
+        await mirroring?.value
+        guard !sendingPrompt else { return }
+        if menuMoved, commandShown {
+            promptError = "Press ⇥ to take the highlighted command, then send."
+            return
+        }
         sendingPrompt = true
         promptError = nil
         defer { sendingPrompt = false }
@@ -357,13 +460,19 @@ final class AgentModel {
         do {
             try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: macDraft)
             if macDraft != nil { macDraft = "" }
+            mirrorPaused = false
+            mirrored = ""
+            menuMoved = false
             let sentIds = Set(files.map(\.id))
             attachments.removeAll { sentIds.contains($0.id) }
             if draft.hasPrefix(sent) {
                 draft = String(draft.dropFirst(sent.count).drop(while: \.isWhitespace))
             }
         } catch {
-            if case .DraftChanged(let current) = error as? CoreError { macDraft = current }
+            if case .DraftChanged(let current) = error as? CoreError {
+                let mine = Self.slashToken(draft)
+                if !mine.isEmpty, Self.boxToken(current)?.hasPrefix(mine) == true { adopt(current) } else { macDraft = current }
+            }
             promptError = Self.message(for: error)
         }
     }
@@ -514,7 +623,7 @@ final class AgentModel {
     /// Keys go out in tap order: taps made while a send is in flight are batched into the next call.
     @discardableResult
     func tap(_ key: AgentKey) -> Task<Void, Never>? {
-        guard acceptsKeys else { return nil }
+        guard acceptsKeys, !(commandShown && (key == .enter || key == .ctrlEnter)) else { return nil }
         keyTaps += 1
         queuedKeys.append(key)
         guard !sendingKeys else { return nil }
@@ -529,6 +638,12 @@ final class AgentModel {
                 queuedKeys.removeAll()
                 return
             }
+            if !isTerminal {
+                await flushMirror()
+                if commandShown { queuedKeys.removeAll { $0 == .enter || $0 == .ctrlEnter } }
+                if queuedKeys.isEmpty { continue }
+            }
+            let command = commandShown
             let batch = Array(queuedKeys.prefix(16))
             queuedKeys.removeFirst(batch.count)
             do {
@@ -538,6 +653,13 @@ final class AgentModel {
                     try await core.sendKeys(machineId: route.machineId, terminalId: route.terminalId, keys: batch)
                 }
                 notice = nil
+                if command, let last = batch.last(where: { $0 == .up || $0 == .down || $0 == .tab }) {
+                    menuMoved = last != .tab
+                }
+                if command {
+                    try? await Task.sleep(for: .milliseconds(150))
+                    if let text = try? await core.agentDraft(machineId: route.machineId, terminalId: route.terminalId) { adopt(text) }
+                }
             } catch {
                 if case .TerminalLocked = error as? CoreError { terminalLocked = true }
                 queuedKeys.removeAll()
@@ -571,7 +693,7 @@ final class AgentModel {
         let seen = revision
         screenNotice = []
         do {
-            try await core.answerNotice(machineId: route.machineId, terminalId: route.terminalId, digit: option.digit)
+            try await core.answerNotice(machineId: route.machineId, terminalId: route.terminalId, digit: option.digit, label: option.label)
             notice = nil
         } catch {
             if revision == seen { screenNotice = shown }

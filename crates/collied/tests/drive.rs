@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
 use protocol::{
-    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, Cwd, DraftText,
-    ErrorCode, Key, Label, NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource,
-    Request, Response, TaskNewParams, TerminalId, TerminalRunParams, WorkspaceCloseParams,
-    WorkspaceId,
+    AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
+    AgentSlashDraftParams, AgentTypeTextParams, Cwd, DraftText, ErrorCode, Key, Label, NoticeDigit,
+    OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request, Response, SlashCommand,
+    TaskNewParams, TerminalId, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -80,9 +80,23 @@ const SURVEY_SCROLLED: &str = include_str!("fixtures/claude-2.1.293/survey-scrol
 const HEADS_UP: &str = include_str!("fixtures/claude-2.1.293/heads-up.ansi.txt");
 const HEADS_UP_EXPLAINED: &str =
     include_str!("fixtures/claude-2.1.293/heads-up-explained.detection.txt");
+const HEADS_UP_EXPLAINED_SURVEY: &str =
+    include_str!("fixtures/claude-2.1.293/heads-up-explained-survey.detection.txt");
 const HEADS_UP_DISMISSED: &str =
     include_str!("fixtures/claude-2.1.293/heads-up-dismissed.detection.txt");
+const HEADS_UP_EXPLAINED_DISMISSED: &str =
+    include_str!("fixtures/claude-2.1.293/heads-up-explained-dismissed.detection.txt");
+const HEADS_UP_INTERNAL: &str =
+    include_str!("fixtures/claude-2.1.293/heads-up-internal.detection.txt");
 const YOU_SHOULD_KNOW: &str = include_str!("fixtures/claude-2.1.293/you-should-know.detection.txt");
+const SLASH_MENU: &str = include_str!("fixtures/claude-2.1.293/slash-menu.ansi.txt");
+const SLASH_TAB_HINT: &str = include_str!("fixtures/claude-2.1.293/slash-tab-hint.ansi.txt");
+// Pasted with the command menu open; slash-statstatu is the box a later mirror pasted into
+// before the earlier paste had rendered.
+const SLASH_STA: &str = include_str!("fixtures/claude-2.1.293/slash-sta.ansi.txt");
+const SLASH_STAT: &str = include_str!("fixtures/claude-2.1.293/slash-stat.ansi.txt");
+const SLASH_STATU: &str = include_str!("fixtures/claude-2.1.293/slash-statu.ansi.txt");
+const SLASH_STATSTATU: &str = include_str!("fixtures/claude-2.1.293/slash-statstatu.ansi.txt");
 const MUTATING: [&str; 10] = [
     "agent.prompt",
     "agent.send_keys",
@@ -923,61 +937,137 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
-    let digit = |d: u8| NoticeDigit::new(d).unwrap();
+    let answer = |terminal: &str, d: u8, label: &str| AgentAnswerNoticeParams {
+        terminal_id: tid(terminal),
+        digit: NoticeDigit::new(d).unwrap(),
+        label: Label::new(label).unwrap(),
+    };
+    let filled = screen("❯ /plugin disable cc-plugin-you-should-know@builtin");
     let mut sent = Vec::new();
-    for (screen, digits) in [(SURVEY, [1, 2, 3, 0].as_slice()), (HEADS_UP, &[1, 2, 0])] {
-        herdr.with(|h| h.text = screen.into());
-        for &d in digits {
-            herdr.with(|h| h.calls.clear());
+    for (shown, options) in [
+        (
+            SURVEY,
+            [(1, "Bad"), (2, "Fine"), (3, "Good"), (0, "Dismiss")].as_slice(),
+        ),
+        (
+            HEADS_UP,
+            &[(1, "Learn more"), (2, "Knew this already"), (0, "Dismiss")],
+        ),
+        (
+            HEADS_UP_EXPLAINED,
+            &[
+                (1, "Understood"),
+                (2, "Chat in main session"),
+                (0, "Dismiss"),
+            ],
+        ),
+        (
+            HEADS_UP_DISMISSED,
+            &[
+                (1, "That was helpful"),
+                (2, "Not relevant"),
+                (3, "Couldn\u{2019}t understand"),
+                (4, "Turn off suggestions"),
+                (0, "Dismiss"),
+            ],
+        ),
+        (
+            HEADS_UP_EXPLAINED_DISMISSED,
+            &[
+                (1, "That was helpful"),
+                (2, "Didn\u{2019}t understand"),
+                (0, "Dismiss"),
+            ],
+        ),
+        (
+            HEADS_UP_INTERNAL,
+            &[
+                (1, "Learn more"),
+                (2, "Knew this already"),
+                (3, "What is this"),
+                (4, "Disable"),
+                (0, "Dismiss"),
+            ],
+        ),
+        (
+            YOU_SHOULD_KNOW,
+            &[(1, "Learn more"), (2, "Knew this already"), (0, "Dismiss")],
+        ),
+    ] {
+        herdr.with(|h| h.text = shown.into());
+        for &(d, label) in options {
+            // The call returns once the box is no longer empty.
+            herdr.with(|h| {
+                h.calls.clear();
+                h.screens = [shown.into(), shown.into(), filled.clone()].into();
+            });
             assert_eq!(
-                drive.answer_notice(&tid(CLAUDE), digit(d), &yes()).await,
+                drive.answer_notice(&answer(CLAUDE, d, label), &yes()).await,
                 Ok(Response::Ok)
             );
-            assert_eq!(
-                herdr.methods(),
-                [
-                    "agent.list",
-                    "agent.get",
-                    "pane.read",
-                    "pane.read",
-                    "pane.send_text"
-                ]
-            );
-            assert_eq!(
-                herdr.params("pane.read"),
-                [
-                    json!({"pane_id": "w6:p1", "source": "detection", "format": "text"}),
-                    json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"})
-                ]
-            );
+            let methods = [
+                "agent.list",
+                "agent.get",
+                "pane.read",
+                "pane.read",
+                "pane.send_text",
+                "pane.read",
+            ];
+            let mut reads = vec![
+                json!({"pane_id": "w6:p1", "source": "detection", "format": "text"}),
+                json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"}),
+            ];
+            reads.push(reads[1].clone());
+            assert_eq!(herdr.methods(), methods, "{label}");
+            assert_eq!(herdr.params("pane.read"), reads, "{label}");
             sent.extend(herdr.params("pane.send_text"));
+            herdr.with(|h| h.screens.clear());
         }
     }
     let texts: Vec<&str> = sent.iter().map(|p| p["text"].as_str().unwrap()).collect();
-    assert_eq!(texts, ["1", "2", "3", "0", "1", "2", "0"]);
+    assert_eq!(
+        texts,
+        [
+            "1", "2", "3", "0", "1", "2", "0", "1", "2", "0", "1", "2", "3", "4", "0", "1", "2",
+            "0", "1", "2", "3", "4", "0", "1", "2", "0"
+        ]
+    );
     assert!(sent.iter().all(|p| p["pane_id"] == "w6:p1"));
 
     herdr.with(|h| h.calls.clear());
-    let refused = |screen: &'static str, d: u8, message: &'static str| (screen, d, message);
     let none = "no notice with that option";
     let typed = "the input box is not empty";
     let scrolled = "scrolled up on the machine; jump to the bottom first";
-    let mut cases = vec![
-        refused(HEADS_UP, 3, none),
-        refused(HEADS_UP_DISMISSED, 1, none),
-        refused(YOU_SHOULD_KNOW, 1, none),
-        refused(SURVEY_NARROW, 1, none),
-        refused(BOTTOM, 1, none),
-        refused(SURVEY_TYPED, 0, typed),
-        refused(SURVEY_SCROLLED, 1, scrolled),
-    ];
-    cases.extend((0..4).map(|d| refused(HEADS_UP_EXPLAINED, d, none)));
-    for (screen, d, message) in cases {
+    for (screen, d, label, message) in [
+        (HEADS_UP, 3, "What is this", none),
+        (HEADS_UP, 2, "Chat in main session", none),
+        (HEADS_UP_EXPLAINED, 1, "Learn more", none),
+        (HEADS_UP_EXPLAINED, 2, "Knew this already", none),
+        (HEADS_UP_EXPLAINED, 3, "Understood", none),
+        (HEADS_UP_EXPLAINED_SURVEY, 1, "Understood", none),
+        (HEADS_UP, 4, "Turn off suggestions", none),
+        (HEADS_UP_INTERNAL, 4, "Turn off suggestions", none),
+        (HEADS_UP_DISMISSED, 4, "Disable", none),
+        (HEADS_UP_DISMISSED, 3, "Couldn't understand", none),
+        (HEADS_UP_EXPLAINED_DISMISSED, 2, "Not relevant", none),
+        (
+            HEADS_UP_EXPLAINED_DISMISSED,
+            3,
+            "Couldn\u{2019}t understand",
+            none,
+        ),
+        (YOU_SHOULD_KNOW, 3, "Learn more", none),
+        (SURVEY, 1, "Good", none),
+        (SURVEY_NARROW, 1, "Bad", none),
+        (BOTTOM, 1, "Bad", none),
+        (SURVEY_TYPED, 0, "Dismiss", typed),
+        (SURVEY_SCROLLED, 1, "Bad", scrolled),
+    ] {
         herdr.with(|h| h.text = screen.into());
         assert_eq!(
-            drive.answer_notice(&tid(CLAUDE), digit(d), &yes()).await,
+            drive.answer_notice(&answer(CLAUDE, d, label), &yes()).await,
             Err((ErrorCode::AgentNotReady, message.into())),
-            "{d} on {screen}"
+            "{d} {label} on {screen}"
         );
     }
     assert!(herdr.mutations().is_empty());
@@ -987,7 +1077,9 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
     assert_ne!(placeholder, SURVEY);
     herdr.with(|h| h.screens = [SURVEY_STARTUP.to_owned(), placeholder].into());
     assert_eq!(
-        drive.answer_notice(&tid(CLAUDE), digit(3), &yes()).await,
+        drive
+            .answer_notice(&answer(CLAUDE, 3, "Good"), &yes())
+            .await,
         Ok(Response::Ok)
     );
     let sent = herdr.params("pane.send_text");
@@ -998,7 +1090,9 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         h.screens = [HEADS_UP.to_owned(), HEADS_UP_EXPLAINED.to_owned()].into();
     });
     assert_eq!(
-        drive.answer_notice(&tid(CLAUDE), digit(2), &yes()).await,
+        drive
+            .answer_notice(&answer(CLAUDE, 2, "Knew this already"), &yes())
+            .await,
         Err((ErrorCode::AgentNotReady, none.into()))
     );
     assert!(herdr.mutations().is_empty());
@@ -1009,13 +1103,13 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
     blocked["agent_status"] = json!("blocked");
     herdr.with(|h| h.gets.push_back(blocked));
     assert_eq!(
-        code(drive.answer_notice(&tid(CLAUDE), digit(1), &yes()).await),
+        code(drive.answer_notice(&answer(CLAUDE, 1, "Bad"), &yes()).await),
         ErrorCode::AgentBlocked
     );
     herdr.with(|h| h.snapshot["agents"][1]["agent_status"] = json!("idle"));
     assert_eq!(
         drive
-            .answer_notice(&tid(CODEX_BLOCKED), digit(1), &yes())
+            .answer_notice(&answer(CODEX_BLOCKED, 1, "Bad"), &yes())
             .await,
         Err((ErrorCode::AgentNotReady, "not a Claude Code agent".into()))
     );
@@ -1023,22 +1117,445 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
     other["agent_session"]["value"] = json!("11111111-0000-4000-8000-000000000000");
     herdr.with(|h| h.gets.push_back(other));
     assert_eq!(
-        code(drive.answer_notice(&tid(CLAUDE), digit(1), &yes()).await),
+        code(drive.answer_notice(&answer(CLAUDE, 1, "Bad"), &yes()).await),
         ErrorCode::AgentNotReady
     );
     assert_eq!(
         code(
             drive
-                .answer_notice(&tid("term_gone"), digit(1), &yes())
+                .answer_notice(&answer("term_gone", 1, "Bad"), &yes())
                 .await
         ),
         ErrorCode::NotFound
     );
     assert_eq!(
-        code(drive.answer_notice(&tid(CLAUDE), digit(1), &no()).await),
+        code(drive.answer_notice(&answer(CLAUDE, 1, "Bad"), &no()).await),
         ErrorCode::NotPaired
     );
     assert!(herdr.mutations().is_empty());
+}
+
+#[tokio::test]
+async fn a_prompt_waits_for_the_box_a_notice_answer_fills() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let off = AgentAnswerNoticeParams {
+        terminal_id: tid(CLAUDE),
+        digit: NoticeDigit::new(4).unwrap(),
+        label: Label::new("Turn off suggestions").unwrap(),
+    };
+    let command = "/plugin disable cc-plugin-you-should-know@builtin";
+    let echo = HEADS_UP_DISMISSED.replacen("\n❯\n", "\n❯\u{a0}4\n", 1);
+    assert_ne!(echo, HEADS_UP_DISMISSED);
+    // Claude Code shows the digit for 400 ms, clears the box, then fills it; the prompt queued
+    // on the lock sees the fill, not the digit or the empty box before it.
+    herdr.with(|h| {
+        h.screens = [
+            HEADS_UP_DISMISSED.into(),
+            HEADS_UP_DISMISSED.into(),
+            echo.clone(),
+            echo.clone(),
+            echo.clone(),
+            HEADS_UP_DISMISSED.into(),
+            screen(&format!("❯\u{a0}{command}")),
+        ]
+        .into();
+    });
+    let auth = yes();
+    let (answered, prompted) = tokio::join!(
+        drive.answer_notice(&off, &auth),
+        drive.prompt(expecting(""), &auth)
+    );
+    assert_eq!(answered, Ok(Response::Ok));
+    assert_eq!(prompted, Err((ErrorCode::DraftChanged, command.to_owned())));
+    assert_eq!(herdr.mutations(), ["pane.send_text"]);
+
+    // A fill that never shows keeps the lock for a second; the digit stands.
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens.clear();
+        h.text = HEADS_UP_DISMISSED.into();
+    });
+    assert_eq!(drive.answer_notice(&off, &yes()).await, Ok(Response::Ok));
+    assert_eq!(herdr.mutations(), ["pane.send_text"]);
+    assert!(herdr.params("pane.read").len() > 3);
+
+    // Nor does a digit no notice took.
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = [HEADS_UP_DISMISSED.into(), HEADS_UP_DISMISSED.into(), echo].into();
+    });
+    assert_eq!(drive.answer_notice(&off, &yes()).await, Ok(Response::Ok));
+    assert_eq!(herdr.mutations(), ["pane.send_text"]);
+    assert!(herdr.params("pane.read").len() > 3);
+}
+
+fn slash(terminal: &str, command: &str, expected: Option<&str>) -> AgentSlashDraftParams {
+    AgentSlashDraftParams {
+        terminal_id: tid(terminal),
+        command: SlashCommand::new(command).unwrap(),
+        expected_draft: expected.map(|d| DraftText::new(d).unwrap()),
+    }
+}
+
+#[tokio::test]
+async fn slash_draft_pastes_the_command_into_an_empty_box_only() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| {
+        h.screens = [
+            screen(PLACEHOLDER),
+            screen(PLACEHOLDER),
+            screen(PLACEHOLDER),
+            screen(PLACEHOLDER),
+            screen("❯ /s"),
+        ]
+        .into()
+    });
+    assert_eq!(
+        drive.slash_draft(slash(CLAUDE, "/s", None), &yes()).await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.methods(),
+        [
+            "agent.list",
+            "agent.get",
+            "pane.read",
+            "pane.read",
+            "agent.list",
+            "agent.get",
+            "pane.read",
+            "pane.read",
+            "pane.send_text",
+            "pane.read"
+        ]
+    );
+    let reads: Vec<Value> = herdr
+        .params("pane.read")
+        .into_iter()
+        .map(|p| p["source"].clone())
+        .collect();
+    assert_eq!(
+        reads,
+        ["detection", "visible", "detection", "visible", "visible"]
+    );
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        [json!({"pane_id": "w6:p1", "text": "\u{1b}[200~/s\u{1b}[201~"})]
+    );
+
+    // The token on the Mac is cleared, then the new one pasted; an empty command only clears.
+    for (command, sent) in [("/sk", Some("\u{1b}[200~/sk\u{1b}[201~")), ("", None)] {
+        herdr.with(|h| {
+            h.calls.clear();
+            h.screens = [
+                SLASH_MENU.into(),
+                SLASH_MENU.into(),
+                screen(PLACEHOLDER),
+                screen(PLACEHOLDER),
+                screen(PLACEHOLDER),
+                screen("❯ /sk"),
+            ]
+            .into();
+        });
+        assert_eq!(
+            drive
+                .slash_draft(slash(CLAUDE, command, Some("/s")), &yes())
+                .await,
+            Ok(Response::Ok),
+            "{command}"
+        );
+        assert_eq!(
+            herdr.params("agent.send_keys"),
+            [json!({"target": "w6:p1", "keys": ["ctrl+e", "ctrl+u", "backspace"]})]
+        );
+        let pasted: Vec<Value> = herdr
+            .params("pane.send_text")
+            .into_iter()
+            .map(|p| p["text"].clone())
+            .collect();
+        assert_eq!(
+            pasted,
+            sent.map(|s| json!(s)).into_iter().collect::<Vec<_>>()
+        );
+        assert!(herdr.params("agent.prompt").is_empty());
+    }
+
+    // What Tab completed reads back with its hint; the phone names it to replace it.
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = [
+            SLASH_TAB_HINT.into(),
+            SLASH_TAB_HINT.into(),
+            screen(PLACEHOLDER),
+        ]
+        .into();
+    });
+    assert_eq!(
+        drive
+            .slash_draft(slash(CLAUDE, "", Some("/rename  [name]")), &yes())
+            .await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(herdr.mutations(), ["agent.send_keys"]);
+    herdr.with(|h| h.screens.clear());
+}
+
+#[tokio::test]
+async fn slash_draft_returns_only_once_the_box_shows_the_command() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let empty = || screen(PLACEHOLDER);
+    // Shorter and longer tokens with the menu open; the read right after the paste is stale.
+    for (shown, expected, command, after) in [
+        (SLASH_STAT, "/stat", "/sta", SLASH_STA),
+        (SLASH_STA, "/sta", "/statu", SLASH_STATU),
+        (SLASH_STATU, "/statu", "/stat", SLASH_STAT),
+    ] {
+        herdr.with(|h| {
+            h.calls.clear();
+            h.screens = [
+                shown.into(),
+                shown.into(),
+                empty(),
+                empty(),
+                empty(),
+                empty(),
+                after.into(),
+            ]
+            .into();
+        });
+        assert_eq!(
+            drive
+                .slash_draft(slash(CLAUDE, command, Some(expected)), &yes())
+                .await,
+            Ok(Response::Ok),
+            "{command}"
+        );
+        assert_eq!(
+            herdr.mutations(),
+            ["agent.send_keys", "pane.send_text"],
+            "{command}"
+        );
+        let methods = herdr.methods();
+        let pasted = methods.iter().position(|m| m == "pane.send_text").unwrap();
+        assert_eq!(
+            methods[pasted + 1..],
+            ["pane.read", "pane.read"],
+            "{command}"
+        );
+        assert!(herdr.with(|h| h.screens.len() == 1), "{command}");
+    }
+
+    // Clearing to empty waits for the empty box before it returns.
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = [
+            SLASH_STAT.into(),
+            SLASH_STAT.into(),
+            SLASH_STAT.into(),
+            empty(),
+        ]
+        .into();
+    });
+    assert_eq!(
+        drive
+            .slash_draft(slash(CLAUDE, "", Some("/stat")), &yes())
+            .await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(herdr.mutations(), ["agent.send_keys"]);
+    assert_eq!(herdr.params("pane.read").len(), 4);
+
+    // A box that never shows the command fails closed, and nothing more is written.
+    for (after, err) in [
+        (
+            empty(),
+            (
+                ErrorCode::AgentNotReady,
+                "the input box did not show the command".to_owned(),
+            ),
+        ),
+        (
+            TRUST.to_owned(),
+            (
+                ErrorCode::AgentNotReady,
+                "the input box did not show the command".to_owned(),
+            ),
+        ),
+        (
+            SLASH_STATSTATU.to_owned(),
+            (ErrorCode::DraftChanged, "/stat/statu".to_owned()),
+        ),
+    ] {
+        herdr.with(|h| {
+            h.calls.clear();
+            h.screens = [empty(), empty(), empty(), empty(), after].into();
+        });
+        assert_eq!(
+            drive
+                .slash_draft(slash(CLAUDE, "/statu", None), &yes())
+                .await,
+            Err(err)
+        );
+        assert_eq!(herdr.mutations(), ["pane.send_text"]);
+    }
+    herdr.with(|h| h.screens.clear());
+}
+
+#[tokio::test]
+async fn slash_draft_refusals_write_nothing() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.text = SLASH_MENU.into());
+    for expected in [None, Some("/x"), Some("")] {
+        assert_eq!(
+            drive
+                .slash_draft(slash(CLAUDE, "/sk", expected), &yes())
+                .await,
+            Err((ErrorCode::DraftChanged, "/s".to_owned())),
+            "{expected:?}"
+        );
+    }
+    for (shown, why) in [
+        (screen("! git push"), "bash mode"),
+        (screen("❯ /s [Pasted text #1 +40 lines]"), "collapsed paste"),
+        (TRUST.to_owned(), "no input box"),
+    ] {
+        herdr.with(|h| h.text = shown);
+        assert_eq!(
+            code(
+                drive
+                    .slash_draft(slash(CLAUDE, "/s", Some("git push")), &yes())
+                    .await
+            ),
+            ErrorCode::DraftNotCleared,
+            "{why}"
+        );
+    }
+    let scrolled = "scrolled up on the machine; jump to the bottom first";
+    herdr.with(|h| h.text = SCROLLED.into());
+    assert_eq!(
+        drive.slash_draft(slash(CLAUDE, "/s", None), &yes()).await,
+        Err((ErrorCode::AgentNotReady, scrolled.into()))
+    );
+    herdr.with(|h| h.text = screen(PLACEHOLDER));
+    let mut blocked = herdr.with(|h| h.snapshot["agents"][0].clone());
+    blocked["agent_status"] = json!("blocked");
+    herdr.with(|h| h.gets.push_back(blocked.clone()));
+    assert_eq!(
+        code(drive.slash_draft(slash(CLAUDE, "/s", None), &yes()).await),
+        ErrorCode::AgentBlocked
+    );
+    herdr.with(|h| h.snapshot["agents"][1]["agent_status"] = json!("idle"));
+    assert_eq!(
+        drive
+            .slash_draft(slash(CODEX_BLOCKED, "/s", None), &yes())
+            .await,
+        Err((ErrorCode::AgentNotReady, "not a Claude Code agent".into()))
+    );
+    assert_eq!(
+        code(drive.slash_draft(slash(CLAUDE, "/s", None), &no()).await),
+        ErrorCode::NotPaired
+    );
+    assert!(herdr.mutations().is_empty(), "{:?}", herdr.methods());
+
+    // Re-checked after the clear, just before the paste.
+    let idle = herdr.with(|h| h.snapshot["agents"][0].clone());
+    let typed = "the input box is not empty";
+    let cleared = || {
+        [
+            SLASH_MENU.to_owned(),
+            SLASH_MENU.into(),
+            screen(PLACEHOLDER),
+        ]
+    };
+    let mut banner = cleared().to_vec();
+    banner.push(SCROLLED.into());
+    let mut refilled = cleared().to_vec();
+    refilled.extend([screen(PLACEHOLDER), screen("❯ /s")]);
+    let mut dialog = cleared().to_vec();
+    dialog.extend([screen(PLACEHOLDER), TRUST.into()]);
+    for (screens, gets, why) in [
+        (cleared().to_vec(), vec![idle.clone(), blocked], "blocked"),
+        (banner, vec![], scrolled),
+        (refilled, vec![], typed),
+        (dialog, vec![], "a dialog"),
+    ] {
+        herdr.with(|h| {
+            h.calls.clear();
+            h.screens = screens.into();
+            h.gets = gets.into();
+        });
+        assert!(
+            drive
+                .slash_draft(slash(CLAUDE, "/sk", Some("/s")), &yes())
+                .await
+                .is_err(),
+            "{why}"
+        );
+        assert_eq!(herdr.mutations(), ["agent.send_keys"], "{why}");
+    }
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = cleared().into();
+    });
+    let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = checks.clone();
+    let revoked_after_clear: Authorized =
+        Arc::new(move || seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 1);
+    assert_eq!(
+        code(
+            drive
+                .slash_draft(slash(CLAUDE, "/sk", Some("/s")), &revoked_after_clear)
+                .await
+        ),
+        ErrorCode::NotPaired
+    );
+    assert_eq!(herdr.mutations(), ["agent.send_keys"]);
+}
+
+#[tokio::test]
+async fn enter_never_runs_a_slash_command_in_the_box() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let send = |keys: Vec<Key>| AgentSendKeysParams {
+        op_id: op('K'),
+        terminal_id: tid(CLAUDE),
+        keys,
+    };
+    herdr.with(|h| h.text = SLASH_MENU.into());
+    for enter in [Key::Enter, Key::CtrlEnter] {
+        assert_eq!(
+            drive.send_keys(send(vec![Key::Down, enter]), &yes()).await,
+            (
+                Err((
+                    ErrorCode::AgentNotReady,
+                    "a slash command shows in the input box; send it as a prompt".into()
+                )),
+                None
+            )
+        );
+    }
+    assert!(herdr.mutations().is_empty());
+    assert_eq!(
+        drive
+            .send_keys(send(vec![Key::Down, Key::Tab]), &yes())
+            .await,
+        (Ok(Response::Ok), None)
+    );
+    herdr.with(|h| h.text = screen("❯ fix the build"));
+    assert_eq!(
+        drive.send_keys(send(vec![Key::Enter]), &yes()).await,
+        (Ok(Response::Ok), None)
+    );
+    assert_eq!(herdr.mutations(), ["agent.send_keys", "agent.send_keys"]);
 }
 
 #[tokio::test]

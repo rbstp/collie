@@ -306,6 +306,50 @@ mod tests {
     }
 
     #[test]
+    fn slash_command_screens() {
+        for (ansi, text) in [
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-menu.ansi.txt"),
+                "/s",
+            ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-menu-down.ansi.txt"),
+                "/s",
+            ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-tab.ansi.txt"),
+                "/skills",
+            ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-no-match.ansi.txt"),
+                "/zzq",
+            ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-tab-hint.ansi.txt"),
+                "/rename  [name]",
+            ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-sta.ansi.txt"),
+                "/sta",
+            ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-stat.ansi.txt"),
+                "/stat",
+            ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-statu.ansi.txt"),
+                "/statu",
+            ),
+            (
+                include_str!("../tests/fixtures/claude-2.1.293/slash-statstatu.ansi.txt"),
+                "/stat/statu",
+            ),
+        ] {
+            assert_eq!(read(ansi), draft(text, 1), "{text}");
+        }
+    }
+
+    #[test]
     fn collapsed_content_and_other_modes_are_opaque() {
         for rows in [
             "❯ fix this [Pasted text #1 +40 lines]",

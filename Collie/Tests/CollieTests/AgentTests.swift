@@ -18,6 +18,10 @@ final class FakeCore: AgentCore {
         var stars: [String] = []
         var scrolls: [String] = []
         var answers: [UInt8] = []
+        var answerLabels: [String] = []
+        var slashes: [String] = []
+        var slashExpected: [String?] = []
+        var slashErrors: [CoreError] = []
         var hold = false
         var held: [CheckedContinuation<Void, Never>] = []
         var error: CoreError?
@@ -161,8 +165,19 @@ final class FakeCore: AgentCore {
     func scrollBottom(machineId: String, terminalId: String) async throws {
         try await call { $0.scrolls.append(terminalId) }
     }
-    func answerNotice(machineId: String, terminalId: String, digit: UInt8) async throws {
-        try await call { $0.answers.append(digit) }
+    func answerNotice(machineId: String, terminalId: String, digit: UInt8, label: String) async throws {
+        try await call {
+            $0.answers.append(digit)
+            $0.answerLabels.append(label)
+        }
+    }
+    func slashDraft(machineId: String, terminalId: String, command: String, expectedDraft: String?) async throws {
+        try await call {
+            $0.slashes.append(command)
+            $0.slashExpected.append(expectedDraft)
+        }
+        let error = state.withLock { $0.slashErrors.isEmpty ? nil : $0.slashErrors.removeFirst() }
+        if let error { throw error }
     }
     func star(machineId: String, terminalId: String, starred: Bool) async throws {
         try await call { $0.stars.append("\(machineId) \(terminalId) \(starred)") }
@@ -1042,7 +1057,7 @@ private func noticeShown(
     #expect(model.noticeOptions.map(\.label) == ["Bad", "Fine", "Good", "Dismiss"])
     #expect(model.acceptsKeys)
     await model.answerNotice(model.noticeOptions[2])
-    #expect(core.snapshot.answers == [3])
+    #expect(core.snapshot.answers == [3] && core.snapshot.answerLabels == ["Good"])
     #expect(core.snapshot.prompts.isEmpty && core.snapshot.keys.isEmpty)
     #expect(model.noticeOptions.isEmpty, "hidden until a new screen shows the notice again")
 
@@ -1391,4 +1406,256 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
     #expect(entry(enabled: true).terminals.map(\.displayTitle) == ["api", "logs"])
     let bare = TerminalSummary(terminalId: "t3", workspaceId: "w1", workspaceLabel: nil, label: nil, cwd: nil, locked: true)
     #expect(bare.displayTitle == "Terminal")
+}
+
+@MainActor
+private func slashReady(_ core: FakeCore) async -> AgentModel {
+    let model = openedAgent(core, macDraft: "")
+    await model.loadMacDraft()
+    return model
+}
+
+@MainActor
+@Test func typingASlashCommandMirrorsOnlyItsToken() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    for text in ["/", "/s", "/sk"] { model.typed(text) }
+    await model.flushMirror()
+    #expect(core.snapshot.slashes == ["/sk"])
+    #expect(core.snapshot.slashExpected == [""])
+    #expect(model.macDraft == "/sk" && model.commandShown)
+
+    model.typed("/sk ")
+    model.typed("/sk some args")
+    await model.flushMirror()
+    #expect(core.snapshot.slashes == ["/sk"], "arguments stay on the phone")
+
+    model.typed("plain text")
+    await model.flushMirror()
+    model.typed("plain text, longer")
+    await model.flushMirror()
+    #expect(core.snapshot.slashes == ["/sk", ""], "cleared once")
+    #expect(core.snapshot.slashExpected == ["", "/sk"])
+    #expect(model.macDraft == "" && !model.commandShown)
+    #expect(core.snapshot.prompts.isEmpty && core.snapshot.keys.isEmpty)
+
+    model.typed("/é")
+    await model.flushMirror()
+    #expect(core.snapshot.slashes.count == 2, "no command collied would refuse")
+}
+
+@MainActor
+@Test func aBurstOfTypingMakesFewMirrorCalls() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.typed("/")
+    model.typed("/s")
+    for _ in 0..<100 where core.snapshot.slashes.isEmpty {
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(core.snapshot.slashes == ["/s"], "debounced")
+
+    core.set(hold: true)
+    model.typed("/sk")
+    let first = Task { await model.flushMirror() }
+    await core.waitHeld(1)
+    model.typed("/ski")
+    model.typed("/skil")
+    core.release()
+    await first.value
+    await model.flushMirror()
+    #expect(core.snapshot.slashes == ["/s", "/sk", "/skil"])
+    #expect(core.snapshot.slashExpected == ["", "/s", "/sk"])
+}
+
+@MainActor
+@Test func onlyKeyboardTypingMirrors() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.draft = "/s"
+    model.paste("k")
+    await model.flushMirror()
+    await model.tap(.down)?.value
+    #expect(core.snapshot.slashes.isEmpty)
+    #expect(core.snapshot.keys == [[.down]])
+
+    let codex = openedAgent(core, kind: "codex", macDraft: "")
+    await codex.loadMacDraft()
+    codex.typed("/s")
+    await codex.flushMirror()
+
+    let blocked = await slashReady(core)
+    blocked.blocked = .keysAndText
+    blocked.typed("/s")
+    await blocked.flushMirror()
+
+    let unknown = openedAgent(core, macDraft: nil)
+    await unknown.loadMacDraft()
+    unknown.typed("/s")
+    await unknown.flushMirror()
+    #expect(core.snapshot.slashes.isEmpty)
+
+    core.state.withLock {
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "Jump to bottom", truncated: false, jumpBanner: true)
+    }
+    let scrolled = await slashReady(core)
+    scrolled.typed("/s")
+    await scrolled.flushMirror()
+    #expect(scrolled.jumpBanner && core.snapshot.slashes.isEmpty)
+}
+
+@MainActor
+@Test func aPickedCommandReplacesThePhoneCommand() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.typed("/sk")
+    await model.flushMirror()
+    core.state.withLock { $0.macDraft = "/skills" }
+    await model.tap(.tab)?.value
+    #expect(core.snapshot.keys == [[.tab]])
+    #expect(model.draft == "/skills ")
+    #expect(model.macDraft == "/skills")
+
+    model.typed("/skills extra")
+    await model.flushMirror()
+    #expect(core.snapshot.slashes == ["/sk"])
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["/skills extra"])
+    #expect(core.snapshot.expectedDrafts == ["/skills"])
+    #expect(model.macDraft == "" && model.draft.isEmpty)
+
+    model.typed("/mod opus")
+    await model.flushMirror()
+    core.state.withLock { $0.macDraft = "/model  [model]" }
+    await model.tap(.tab)?.value
+    #expect(model.draft == "/model opus", "the hint Claude Code draws is not taken")
+    #expect(model.macDraft == "/model  [model]")
+}
+
+@MainActor
+@Test func enterNeverRunsAMirroredCommand() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.typed("/s")
+    let enter = model.tap(.enter)
+    #expect(enter != nil, "the box is still empty")
+    await enter?.value
+    #expect(core.snapshot.slashes == ["/s"])
+    #expect(core.snapshot.keys.isEmpty, "Enter queued before the mirror is dropped")
+    #expect(model.commandShown)
+    #expect(model.tap(.enter) == nil && model.tap(.ctrlEnter) == nil)
+    await model.tap(.down)?.value
+    #expect(core.snapshot.keys == [[.down]])
+
+    model.blocked = .keys
+    #expect(!model.commandShown, "Enter answers the question that covers the box")
+    await model.tap(.enter)?.value
+    #expect(core.snapshot.keys == [[.down], [.enter]])
+}
+
+@MainActor
+@Test func arrowsNeedTabBeforeSend() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.typed("/s")
+    await model.flushMirror()
+    core.state.withLock { $0.macDraft = "/s" }
+    await model.tap(.down)?.value
+    #expect(model.draft == "/s")
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts.isEmpty, "the highlighted command is not what the box holds")
+    #expect(model.promptError != nil)
+
+    model.typed("/st")
+    await model.flushMirror()
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["/st"], "a new token resets the menu")
+
+    model.typed("/s")
+    await model.flushMirror()
+    core.state.withLock { $0.macDraft = "/s" }
+    await model.tap(.down)?.value
+    core.state.withLock { $0.macDraft = "/status" }
+    await model.tap(.tab)?.value
+    #expect(model.draft == "/status ")
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["/st", "/status"])
+    #expect(core.snapshot.expectedDrafts == ["/st", "/status"])
+}
+
+@MainActor
+@Test func aSendWaitsForTheMirrorInFlight() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    core.set(hold: true)
+    model.typed("/skills")
+    let mirror = Task { await model.flushMirror() }
+    await core.waitHeld(1)
+    let send = Task { await model.sendPrompt() }
+    try? await Task.sleep(for: .milliseconds(20))
+    #expect(core.snapshot.prompts.isEmpty)
+    core.release()
+    await mirror.value
+    await send.value
+    #expect(core.snapshot.prompts == ["/skills"])
+    #expect(core.snapshot.expectedDrafts == ["/skills"])
+}
+
+@MainActor
+@Test func textTypedOnTheMacPausesTheMirror() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    core.state.withLock { $0.slashErrors = [.DraftChanged(current: "/s")] }
+    model.typed("/s")
+    await model.flushMirror()
+    model.typed("/sk")
+    await model.flushMirror()
+    #expect(core.snapshot.slashes == ["/s", "/sk"], "a paste whose reply was lost is its own")
+    #expect(core.snapshot.slashExpected == ["", "/s"])
+    #expect(model.promptError == nil)
+
+    core.state.withLock { $0.slashErrors = [.DraftChanged(current: "/x")] }
+    model.typed("/ski")
+    await model.flushMirror()
+    model.typed("/skil")
+    await model.flushMirror()
+    #expect(core.snapshot.slashes == ["/s", "/sk", "/ski"], "a command typed on the Mac is not replaced")
+    #expect(model.macDraft == "/x" && model.promptError != nil)
+
+    await model.sendPrompt()
+    #expect(core.snapshot.expectedDrafts == ["/x"], "shown before the send replaces it")
+    core.state.withLock { $0.slashErrors = [.DraftChanged(current: "typed on the Mac")] }
+    model.typed("/c")
+    await model.flushMirror()
+    model.typed("/co")
+    await model.flushMirror()
+    #expect(core.snapshot.slashes == ["/s", "/sk", "/ski", "/c"], "resumes after a send")
+    #expect(model.macDraft == "typed on the Mac" && !model.commandShown)
+}
+
+@MainActor
+@Test func onlyACompletionOfThePhoneCommandIsTaken() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "/review delete the old branch")
+    model.draft = "/review foo"
+    await model.loadMacDraft()
+    #expect(model.macDraft == nil, "text the phone never showed stays unknown")
+
+    core.set(error: .DraftChanged(current: "/deploy prod"))
+    await model.sendPrompt()
+    #expect(model.draft == "/review foo" && model.macDraft == "/deploy prod")
+    core.set(error: .DraftChanged(current: "/reviewer  [pr]"))
+    await model.sendPrompt()
+    #expect(model.draft == "/reviewer foo", "a Tab completion missed after the keys")
+}
+
+@MainActor
+@Test func aReopenedScreenKnowsItsMirroredCommand() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "/s")
+    model.draft = "/s keep this"
+    await model.loadMacDraft()
+    #expect(model.draft == "/s keep this" && model.macDraft == "/s")
+    await model.sendPrompt()
+    #expect(core.snapshot.expectedDrafts == ["/s"])
 }

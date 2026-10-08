@@ -18,12 +18,13 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
     ActivityId, AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
-    AgentStarParams, AgentTarget, AgentTypeTextParams, AgentWatchParams, ApprovalId, Cwd,
-    DraftText, Empty, ErrorCode, Key, Label, NoticeDigit, NotificationKey, OpId,
+    AgentSlashDraftParams, AgentStarParams, AgentTarget, AgentTypeTextParams, AgentWatchParams,
+    ApprovalId, Cwd, DraftText, Empty, ErrorCode, Key, Label, NoticeDigit, NotificationKey, OpId,
     PairCompleteParams, PairingInvite, PaneCloseParams, PromptText, PushActivityEndParams,
     PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams, ReadSource, Request,
-    Response, Signature, TaskNewParams, TerminalGrantParams, TerminalId, TerminalKey, TerminalRead,
-    TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
+    Response, Signature, SlashCommand, TaskNewParams, TerminalGrantParams, TerminalId, TerminalKey,
+    TerminalRead, TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId,
+    limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -1296,18 +1297,44 @@ impl CollieCore {
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
     }
 
-    /// One digit of a Claude Code notice, which collied sends only while the notice shows it.
+    /// One digit of a Claude Code notice, which collied sends only while the notice shows it
+    /// with `label`.
     pub async fn answer_notice(
         &self,
         machine_id: String,
         terminal_id: String,
         digit: u8,
+        label: String,
     ) -> Result<(), CoreError> {
         let digit =
-            NoticeDigit::new(digit).ok_or_else(|| invalid("digit", "a notice option is 0 to 3"))?;
+            NoticeDigit::new(digit).ok_or_else(|| invalid("digit", "a notice option is 0 to 4"))?;
+        let label = Label::new(label).map_err(|_| invalid("label", "not a notice option"))?;
         let request = Request::AgentAnswerNotice(AgentAnswerNoticeParams {
             terminal_id: terminal(terminal_id)?,
             digit,
+            label,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    /// Mirrors a slash command token (`/` and up to 63 of `A-Z a-z 0-9 _ : . -`) into the
+    /// Claude Code input box, or clears it when `command` is empty. `expected_draft` is
+    /// what the phone last saw there, as for [`Self::prompt`].
+    pub async fn slash_draft(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        command: String,
+        expected_draft: Option<String>,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentSlashDraft(AgentSlashDraftParams {
+            terminal_id: terminal(terminal_id)?,
+            command: SlashCommand::new(command)
+                .map_err(|_| invalid("command", "not a slash command"))?,
+            expected_draft: expected_draft
+                .map(DraftText::new)
+                .transpose()
+                .map_err(|_| invalid("expected_draft", "invalid draft"))?,
         });
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
     }
@@ -3321,7 +3348,8 @@ mod tailnet_tests {
         unpaired: bool,
         stars: Vec<(String, bool)>,
         scrolls: Vec<String>,
-        answers: Vec<(String, String)>,
+        answers: Vec<(String, String, String)>,
+        slashes: Vec<(String, String, Option<String>)>,
         connections: usize,
         closed: usize,
     }
@@ -3557,10 +3585,20 @@ mod tailnet_tests {
                             lock(&seen).scrolls.push(p.terminal_id.as_str().into());
                             Ok(Response::Ok)
                         }
+                        Request::AgentSlashDraft(p) => {
+                            lock(&seen).slashes.push((
+                                p.terminal_id.as_str().into(),
+                                p.command.as_str().into(),
+                                p.expected_draft.map(String::from),
+                            ));
+                            Ok(Response::Ok)
+                        }
                         Request::AgentAnswerNotice(p) => {
-                            lock(&seen)
-                                .answers
-                                .push((p.terminal_id.as_str().into(), p.digit.as_str().into()));
+                            lock(&seen).answers.push((
+                                p.terminal_id.as_str().into(),
+                                p.digit.as_str().into(),
+                                p.label.as_str().into(),
+                            ));
                             Ok(Response::Ok)
                         }
                         Request::ApprovalList(_) => {
@@ -3971,12 +4009,39 @@ mod tailnet_tests {
         assert_eq!(lock(&seen).stars, [(t1(), true), (t1(), false)]);
         rt.block_on(core.scroll_bottom(id(), t1())).unwrap();
         assert_eq!(lock(&seen).scrolls, [t1()]);
-        rt.block_on(core.answer_notice(id(), t1(), 0)).unwrap();
+        rt.block_on(core.answer_notice(id(), t1(), 0, "Dismiss".into()))
+            .unwrap();
+        for (digit, label) in [(5, "Dismiss"), (0, ""), (0, "Dismiss\n")] {
+            assert!(matches!(
+                rt.block_on(core.answer_notice(id(), t1(), digit, label.into())),
+                Err(CoreError::InvalidInput { .. })
+            ));
+        }
+        assert_eq!(
+            lock(&seen).answers,
+            [(t1(), "0".to_owned(), "Dismiss".to_owned())]
+        );
+        rt.block_on(core.slash_draft(id(), t1(), "/sk".into(), Some("/s".into())))
+            .unwrap();
+        rt.block_on(core.slash_draft(id(), t1(), String::new(), None))
+            .unwrap();
+        for bad in ["s", "/s x", "/s\u{1b}[201~", "/é"] {
+            assert!(matches!(
+                rt.block_on(core.slash_draft(id(), t1(), bad.into(), None)),
+                Err(CoreError::InvalidInput { .. })
+            ));
+        }
         assert!(matches!(
-            rt.block_on(core.answer_notice(id(), t1(), 4)),
+            rt.block_on(core.slash_draft(id(), t1(), "/s".into(), Some("\u{1b}[2J".into()))),
             Err(CoreError::InvalidInput { .. })
         ));
-        assert_eq!(lock(&seen).answers, [(t1(), "0".to_owned())]);
+        assert_eq!(
+            lock(&seen).slashes,
+            [
+                (t1(), "/sk".to_owned(), Some("/s".to_owned())),
+                (t1(), String::new(), None)
+            ]
+        );
         rt.block_on(core.watch_agent(id(), None, 500)).unwrap();
         assert_eq!(lock(&seen).watches.last(), Some(&None));
         assert!(core.agent_view(id(), t1(), 0).unwrap().output.is_none());
