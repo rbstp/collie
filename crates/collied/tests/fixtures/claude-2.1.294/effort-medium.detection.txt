@@ -1,0 +1,59 @@
+
+  ⎿  Did not add a working directory.
+
+❯ /ide
+  ⎿  IDE selection cancelled
+
+❯ /skills
+  ⎿  No changes
+
+❯ /artifacts
+  ⎿  Artifacts panel closed
+
+❯ /import
+  ⎿  No items imported.
+
+❯ /powerup
+  ⎿  Power-ups closed
+
+❯ /usage-credits
+  ⎿  No request sent to your admin.
+
+❯ /skill-doctor
+
+❯ /agents
+  ⎿  The /agents wizard has been removed.
+
+     Ask Claude to create or update subagents for you (e.g. "create a code-reviewer subagent that ..."),
+     or edit the files directly:
+       • .claude/agents/       (this project)
+       • ~/.claude/agents/     (all projects)
+
+     Docs: https://code.claude.com/docs/en/sub-agents
+
+❯ /output-style
+  ⎿  Output style: Concise
+
+     Available styles:
+     - default
+     - Proactive: Claude executes immediately, minimizes interruptions, and prefers action over planning
+     - Concise (current): Claude responds tersely, leading with results and skipping preamble and narration
+     - Explanatory: Claude explains its implementation choices and codebase patterns
+     - Learning: Claude pauses and asks you to write small pieces of code for hands-on practice
+
+     Usage: /output-style <style>
+
+❯ /copy
+  ⎿  No assistant message to copy
+
+❯ /fast
+  ⎿  Fast mode OFF
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Effort
+
+                                                                  Faster                             Smarter
+                                                                  ──────────▲───────────────────────────────      Ultracode  off
+                                                                  low     medium     high     xhigh      max      Tab to toggle
+
+
+   ←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel

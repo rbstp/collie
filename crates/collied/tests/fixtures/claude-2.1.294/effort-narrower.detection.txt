@@ -1,0 +1,39 @@
+     - Concise (current): Claude responds
+       tersely, leading with results and
+       skipping preamble and narration
+     - Explanatory: Claude explains its
+       implementation choices and codebase
+       patterns
+     - Learning: Claude pauses and asks you to
+       write small pieces of code for
+       hands-on practice
+
+     Usage: /output-style <style>
+
+❯ /copy
+  ⎿  No assistant message to copy
+
+❯ /fast
+  ⎿  Fast mode OFF
+
+❯ /effort
+  ⎿  Cancelled
+
+❯ /effort
+  ⎿  Cancelled
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Effort
+
+   Faster                           Smarter
+
+   ───────────────────▲────────────────────
+   ─                   ─
+   low     mediu     high     xhig      max
+           m                  h
+
+
+                Ultracode  off
+                Tab to toggle
+
+   ←/→ to adjust · Enter to confirm · s for
+   this session only · Esc to cancel

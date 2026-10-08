@@ -1,0 +1,59 @@
+
+  ⎿  Kept model as Opus 5.5
+
+❯ /color
+  ⎿  Session color set to: pink
+
+❯ /tui
+  ⎿  Current renderer: fullscreen. Usage: /tui <default|fullscreen>
+
+❯ /scroll-speed
+  ⎿  Scroll speed unchanged
+
+❯ /autocompact
+  ⎿  Auto-compact window for Opus 5.5 unchanged: 1m tokens (default for this model)
+
+❯ /remote-env
+
+❯ /resume
+  ⎿  Resume cancelled
+
+❯ /export
+  ⎿  Export cancelled
+
+❯ /rename
+  ⎿  Session renamed to: cli-session-settings-review
+
+❯ /memory
+  ⎿  Cancelled memory editing
+
+❯ /plugin
+
+❯ /add-dir
+  ⎿  Did not add a working directory.
+
+❯ /ide
+  ⎿  IDE selection cancelled
+
+❯ /skills
+  ⎿  No changes
+
+❯ /artifacts
+  ⎿  Artifacts panel closed
+
+❯ /import
+  ⎿  No items imported.
+
+❯ /powerup
+  ⎿  Power-ups closed
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+   Request usage credits from your admin
+
+   This will send a request to your organization's admins to increase your usage credit limit.
+
+   Only send this if you're running into usage limits — your admins are notified and review each request.
+
+     Send request
+   ❯ Cancel
+
+   Enter to confirm · Esc to cancel

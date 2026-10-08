@@ -1,0 +1,59 @@
+
+ ▐▛███▛█   Claude Code v2.1.294
+▝▜██████▀  Opus 5.5 with high effort · Claude Team
+ ▝▝   ▝▝   /private/tmp/collie140-pickers
+
+
+❯ /effort
+  ⎿  Cancelled
+
+❯ /effort
+  ⎿  Set effort level to high (this session only): Comprehensive implementation with extensive testing and documentation
+
+❯ /model
+  ⎿  Kept model as Opus 5.5
+
+❯ /color
+  ⎿  Session color set to: pink
+
+❯ /tui
+  ⎿  Current renderer: fullscreen. Usage: /tui <default|fullscreen>
+
+❯ /scroll-speed
+  ⎿  Scroll speed unchanged
+
+❯ /autocompact
+  ⎿  Auto-compact window for Opus 5.5 unchanged: 1m tokens (default for this model)
+
+❯ /remote-env
+
+❯ /resume
+  ⎿  Resume cancelled
+
+❯ /export
+  ⎿  Export cancelled
+
+❯ /rename
+  ⎿  Session renamed to: cli-session-settings-review
+
+❯ /memory
+  ⎿  Cancelled memory editing
+
+❯ /plugin
+
+❯ /add-dir
+  ⎿  Did not add a working directory.
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+   Select IDE
+   Connect to an IDE for integrated development features.
+
+   No available IDEs detected. Make sure your IDE has the Claude Code extension or plugin installed and is running.
+
+   Enter to confirm · Esc to cancel

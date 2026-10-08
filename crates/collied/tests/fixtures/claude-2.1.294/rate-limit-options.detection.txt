@@ -1,0 +1,59 @@
+
+❯ /effort
+  ⎿  Set effort level to high (this session only): Comprehensive implementation with extensive testing and documentation
+
+❯ /model
+  ⎿  Kept model as Opus 5.5
+
+❯ /color
+  ⎿  Session color set to: pink
+
+❯ /tui
+  ⎿  Current renderer: fullscreen. Usage: /tui <default|fullscreen>
+
+❯ /scroll-speed
+  ⎿  Scroll speed unchanged
+
+❯ /autocompact
+  ⎿  Auto-compact window for Opus 5.5 unchanged: 1m tokens (default for this model)
+
+❯ /remote-env
+
+❯ /resume
+  ⎿  Resume cancelled
+
+❯ /export
+  ⎿  Export cancelled
+
+❯ /rename
+  ⎿  Session renamed to: cli-session-settings-review
+
+❯ /memory
+  ⎿  Cancelled memory editing
+
+❯ /plugin
+
+❯ /add-dir
+  ⎿  Did not add a working directory.
+
+❯ /ide
+  ⎿  IDE selection cancelled
+
+❯ /skills
+  ⎿  No changes
+
+❯ /artifacts
+  ⎿  Artifacts panel closed
+
+❯ /import
+  ⎿  No items imported.
+
+❯ /powerup
+  ⎿  Power-ups closed
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+   What do you want to do?
+
+   ❯ 1. Stop and wait for limit to reset
+     2. Ask your admin for more usage
+
+   Enter to confirm · Esc to cancel
