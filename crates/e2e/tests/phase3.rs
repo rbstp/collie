@@ -654,43 +654,42 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
     println!("a second session deciding while the first is sending keys is refused");
     let t = Instant::now();
     rig.herdr.hold(true);
-    let (applied, (raced, keys_while_held)) = tokio::join!(
-        core.decide(
-            m.clone(),
+    let (raced, (refused, keys_while_held)) = tokio::join!(
+        core.decide_from_notification(
+            machine.node_id.clone(),
             a.approval_id.clone(),
             ApprovalDecision::Approve,
-            None
+            BUDGET_MS,
         ),
         async {
             wait_for("the first decide to reach herdr", || rig.herdr.held() == 1).await;
-            let raced = core
-                .decide_from_notification(
-                    machine.node_id.clone(),
+            let refused = core
+                .decide(
+                    m.clone(),
                     a.approval_id.clone(),
                     ApprovalDecision::Approve,
-                    BUDGET_MS,
+                    None,
                 )
                 .await;
             let keys = rig.herdr.params("agent.send_keys").len();
             rig.herdr.hold(false);
-            (raced, keys)
+            (refused, keys)
         },
     );
+    assert!(
+        matches!(refused, Err(CoreError::ApprovalAlreadyResolved)),
+        "{refused:?}"
+    );
+    assert_eq!(keys_while_held, 0);
     assert_eq!(
         raced.outcome,
-        BackgroundOutcome::AlreadyResolved,
+        BackgroundOutcome::Applied {
+            decision: ApprovalDecision::Approve
+        },
         "{raced:?}"
     );
     assert!(raced.node_was_running);
     assert!(!format!("{raced:?}").contains(&nonce));
-    assert_eq!(keys_while_held, 0);
-    assert_eq!(
-        applied.unwrap(),
-        DecisionOutcome::Applied {
-            decision: ApprovalDecision::Approve,
-            by: LABEL.into()
-        }
-    );
     assert_eq!(
         rig.herdr.params("agent.send_keys"),
         [json!({"target": PANE, "keys": ["enter"]})]
