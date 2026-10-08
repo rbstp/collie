@@ -72,20 +72,10 @@ pub fn open_to_text(kind: &str, rule: Option<&str>, text: &str) -> bool {
 const EFFORT_FOOTER: &str =
     "←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel";
 
-/// Claude Code 2.1.294 settings pickers, each matched as its whole dialog: `/advisor`, and
-/// the time format, flagged message and output style pickers of `/config`. Each only
-/// changes a setting: it runs no tool and grants nothing.
+/// Claude Code 2.1.294 settings pickers, each matched as its whole dialog: the time
+/// format, flagged message and output style pickers of `/config`. Each only changes a
+/// setting: it runs no tool and grants nothing.
 const CLAUDE_SETTINGS_PICKERS: &[&str] = &[
-    "Advisor (experimental)
-     When Claude needs stronger judgment \u{2014} a complex decision, an ambiguous failure, a
-     problem it's circling without progress \u{2014} it escalates to the advisor model for
-     guidance, then resumes.
-     The advisor runs server-side and uses additional tokens.
-     1. Fable 5.1 2. Opus 5.5 3. Sonnet 5.5 4. No advisor
-     Recommended setup: Sonnet as the main model with Opus as the advisor. For certain
-     workloads this gives near-Opus performance with reduced token usage.
-     Learn more: https://claude.com/blog/the-advisor-strategy
-     Enter to confirm · Esc to cancel",
     "Time format
      1. auto 2. 12-hour 3. 24-hour 4. 24-hour-utc
      Enter to confirm · Esc to cancel",
@@ -829,7 +819,7 @@ pub mod fixtures {
             ))
         };
     }
-    pub const SETTINGS_PICKERS: [&str; 11] = [
+    pub const SETTINGS_PICKERS: [&str; 10] = [
         picker!("effort"),
         picker!("effort-medium"),
         picker!("effort-low"),
@@ -837,12 +827,12 @@ pub mod fixtures {
         picker!("effort-ultracode"),
         picker!("effort-narrow"),
         picker!("effort-narrower"),
-        picker!("advisor"),
         picker!("config-time-format"),
         picker!("config-flagged"),
         picker!("config-output-style"),
     ];
-    pub const ALERTING_DIALOGS: [&str; 8] = [
+    pub const ALERTING_DIALOGS: [&str; 9] = [
+        picker!("advisor"),
         picker!("config-language"),
         picker!("config-other-sessions"),
         picker!("config-project-instructions"),
@@ -1734,6 +1724,7 @@ me@mac app % codex
         let form = Some("live_blocked_form");
         for screen in SETTINGS_PICKERS {
             assert!(settings_picker("claude", form, screen), "{screen}");
+            assert!(open_to_keys("claude", form, screen), "{screen}");
             assert!(!settings_picker("codex", form, screen));
             for rule in [
                 Some("legacy_no_prompt_blocker"),
@@ -1767,7 +1758,7 @@ me@mac app % codex
             assert_ne!(changed, effort);
             assert!(!settings_picker("claude", form, &changed), "{to}");
         }
-        let time = SETTINGS_PICKERS[8];
+        let time = SETTINGS_PICKERS[7];
         for (from, to) in [("24-hour-utc", "24-hour-utc\n 5. Yes"), ("auto", "Yes")] {
             assert!(
                 !settings_picker("claude", form, &time.replacen(from, to, 1)),
