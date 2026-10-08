@@ -13,8 +13,6 @@ let package = Package(
         .target(
             name: "CollieCore",
             dependencies: ["CollieCoreFFI"],
-            // UniFFI's generated async code does not pass Swift 6 checking (uniffi-rs #2458).
-            swiftSettings: [.swiftLanguageMode(.v5)],
             // Required by the Go runtime and libtailscale linked into the static library.
             linkerSettings: [
                 .linkedFramework("CoreFoundation"),
