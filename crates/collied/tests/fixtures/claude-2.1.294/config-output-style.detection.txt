@@ -1,0 +1,19 @@
+
+  ⎿  Fast mode OFF
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Preferred output style
+
+
+   This changes how Claude Code communicates with you
+
+       Default
+       Claude completes coding tasks efficiently and provides concise responses
+       Proactive
+       Claude executes immediately, minimizes interruptions, and prefers action over planning
+   ❯ ✔ Concise
+       Claude responds tersely, leading with results and skipping preamble and narration
+       Explanatory
+       Claude explains its implementation choices and codebase patterns
+       Learning
+       Claude pauses and asks you to write small pieces of code for hands-on practice
+   Enter to confirm · Esc to cancel

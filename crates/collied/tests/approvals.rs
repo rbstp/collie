@@ -48,6 +48,12 @@ const TRUST_OPTIONS: [&str; 2] = ["No, exit", "Yes, I trust this folder"];
 const BASH_LIVE: &str = include_str!("fixtures/claude-2.1.289/bash.detection.txt");
 const PLAN_LIVE: &str = include_str!("fixtures/claude-2.1.289/plan.detection.txt");
 
+// Claude Code 2.1.294 in herdr 0.9.3, each `blocked` under live_blocked_form: `/effort`,
+// `/config`'s time format picker, and `/ide`, which connects an IDE and keeps alerting.
+const EFFORT: &str = include_str!("fixtures/claude-2.1.294/effort.detection.txt");
+const TIME_FORMAT: &str = include_str!("fixtures/claude-2.1.294/config-time-format.detection.txt");
+const IDE: &str = include_str!("fixtures/claude-2.1.294/ide.detection.txt");
+
 // Codex CLI and Copilot CLI prompts as herdr rules them; see `prompt::fixtures`.
 const OTHER_KINDS: [(&str, &str, &str); 6] = [
     (
@@ -1238,6 +1244,43 @@ async fn a_clear_names_only_the_alerted_approval() {
         clears(&sent).is_empty(),
         "a fresh alert replaces an expired one"
     );
+}
+
+#[tokio::test]
+async fn settings_pickers_raise_no_approval() {
+    for text in [EFFORT, TIME_FORMAT] {
+        let mut rig = Rig::start(TTL).await;
+        rig.follow();
+        rig.herdr.with(|h| {
+            h.rule = "live_blocked_form".into();
+            h.text = text.into();
+        });
+        rig.tick().await;
+        rig.tick().await;
+        rig.no_event();
+        assert!(rig.approvals.pending().is_empty());
+        assert!(!rig.approvals.has_pending(TERMINAL));
+        let sent = rig.sent().await;
+        assert!(alerting(&sent).is_empty(), "{sent:?}");
+        assert!(sent.iter().all(|(_, s)| {
+            s.payload["aps"]["content-state"]
+                .get("approvals")
+                .is_none_or(|n| *n == 0)
+        }));
+
+        rig.herdr.set_status("idle");
+        rig.tick().await;
+        assert!(clears(&rig.sent().await).is_empty());
+        assert!(rig.mutations().is_empty());
+    }
+
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| {
+        h.rule = "live_blocked_form".into();
+        h.text = IDE.into();
+    });
+    rig.needed().await;
+    assert_eq!(alerting(&rig.alerts(1).await).len(), 1);
 }
 
 fn alerting(sent: &[(String, Alert)]) -> Vec<(String, Alert)> {

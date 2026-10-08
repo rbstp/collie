@@ -47,6 +47,7 @@ struct Screen {
     pane_id: String,
     seq: u64,
     blocked: bool,
+    settings_picker: bool,
     menu: Option<Menu>,
     offered: Vec<(Decision, usize)>,
     accepts_input: bool,
@@ -442,6 +443,7 @@ impl Approvals {
             pane_id: a.pane_id.clone(),
             seq: a.state_change_seq,
             blocked: is_blocked(a),
+            settings_picker: prompt::settings_picker(kind, rule.as_deref(), &text),
             fingerprint: print(&region),
             dialog: prompt::squashed_lines(&text),
             cursor_at: menu.as_ref().map_or_else(Vec::new, |m| {
@@ -463,7 +465,7 @@ impl Approvals {
         let terminal_id = TerminalId::new(a.terminal_id.clone())?;
         let title = alert_title(a);
         let screen = self.screen(a).await?;
-        if !screen.blocked {
+        if !screen.blocked || screen.settings_picker {
             return Ok(());
         }
         // The hook runs beside the dialog, not before it, and a session's dialogs can come

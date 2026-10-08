@@ -69,6 +69,69 @@ pub fn open_to_text(kind: &str, rule: Option<&str>, text: &str) -> bool {
             }))
 }
 
+const EFFORT_FOOTER: &str =
+    "←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel";
+
+/// Claude Code 2.1.294 settings pickers, each matched as its whole dialog: the time
+/// format, flagged message and output style pickers of `/config`. Each only changes a
+/// setting: it runs no tool and grants nothing.
+const CLAUDE_SETTINGS_PICKERS: &[&str] = &[
+    "Time format
+     1. auto 2. 12-hour 3. 24-hour 4. 24-hour-utc
+     Enter to confirm · Esc to cancel",
+    "Switch models when a message is flagged
+     1. Switch automatically 2. Ask each time
+     Enter to confirm · Esc to cancel",
+    "Preferred output style
+     This changes how Claude Code communicates with you
+     Default
+     Claude completes coding tasks efficiently and provides concise responses
+     Proactive
+     Claude executes immediately, minimizes interruptions, and prefers action over planning
+     Concise
+     Claude responds tersely, leading with results and skipping preamble and narration
+     Explanatory
+     Claude explains its implementation choices and codebase patterns
+     Learning
+     Claude pauses and asks you to write small pieces of code for hands-on practice
+     Enter to confirm · Esc to cancel",
+];
+
+/// Whether a blocked Claude Code form is a settings picker a slash command opened
+/// (`/effort`, [`CLAUDE_SETTINGS_PICKERS`]), which raises no approval. Only the dialog
+/// under the last `▔` top border counts, whitespace aside so wrapping changes nothing.
+/// The effort slider must read "Effort", "Faster … Smarter", a track of `─` with one `▲`,
+/// and end on its exact footer, with no `❯` line; any other picker must show its listed
+/// text and nothing else, the `❯` cursor and `✔` current value aside. Any other dialog,
+/// rule or agent kind still raises one.
+pub fn settings_picker(kind: &str, rule: Option<&str>, text: &str) -> bool {
+    if kind != "claude" || !rule.is_some_and(|r| CLAUDE_FORM_RULES.contains(&r)) {
+        return false;
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(border) = lines.iter().rposition(|l| l.trim_start().starts_with('▔')) else {
+        return false;
+    };
+    let dialog: Vec<String> = lines[border + 1..]
+        .iter()
+        .map(|l| clean(l))
+        .filter(|l| !l.is_empty())
+        .collect();
+    let squashed: Vec<String> = dialog.iter().map(|l| unspaced(l)).collect();
+    let track = dialog.get(2).and_then(|l| l.split_whitespace().next());
+    let footer = unspaced(EFFORT_FOOTER);
+    let effort = dialog.len() > 3
+        && dialog[0] == "Effort"
+        && squashed[1] == "FasterSmarter"
+        && track.is_some_and(|t| {
+            t.chars().all(|c| matches!(c, '─' | '▲')) && t.matches('▲').count() == 1
+        })
+        && (3..squashed.len()).any(|i| squashed[i..].concat() == footer)
+        && !dialog.iter().any(|l| l.contains('❯'));
+    let whole = squashed.concat().replace(['❯', '✔'], "");
+    effort || CLAUDE_SETTINGS_PICKERS.iter().any(|p| unspaced(p) == whole)
+}
+
 /// Whether the permission prompt offers "Tab to amend". Only the lines under the last
 /// option count: the body can quote any text.
 pub fn offers_note(text: &str) -> bool {
@@ -742,6 +805,44 @@ pub mod fixtures {
     pub const PLAN_LIVE: &str = include_str!("../tests/fixtures/claude-2.1.289/plan.detection.txt");
     pub const PLAN_TYPED_LIVE: &str =
         include_str!("../tests/fixtures/claude-2.1.289/plan-feedback-typed.detection.txt");
+
+    // Claude Code 2.1.294 in herdr 0.9.3 (claude manifest 2026.09.11.1): the settings
+    // pickers slash commands open, then dialogs that must keep alerting, all `blocked`
+    // under live_blocked_form but the update channel one (legacy_no_prompt_blocker), then
+    // the idle prompt once an effort is chosen.
+    macro_rules! picker {
+        ($name:literal) => {
+            include_str!(concat!(
+                "../tests/fixtures/claude-2.1.294/",
+                $name,
+                ".detection.txt"
+            ))
+        };
+    }
+    pub const SETTINGS_PICKERS: [&str; 10] = [
+        picker!("effort"),
+        picker!("effort-medium"),
+        picker!("effort-low"),
+        picker!("effort-max"),
+        picker!("effort-ultracode"),
+        picker!("effort-narrow"),
+        picker!("effort-narrower"),
+        picker!("config-time-format"),
+        picker!("config-flagged"),
+        picker!("config-output-style"),
+    ];
+    pub const ALERTING_DIALOGS: [&str; 9] = [
+        picker!("advisor"),
+        picker!("config-language"),
+        picker!("config-other-sessions"),
+        picker!("config-project-instructions"),
+        picker!("config-update-channel"),
+        picker!("memory"),
+        picker!("ide"),
+        picker!("rate-limit-options"),
+        picker!("usage-credits"),
+    ];
+    pub const EFFORT_SET: &str = picker!("effort-set");
 
     // Codex CLI and GitHub Copilot CLI permission and folder trust prompts, each checked
     // with `herdr agent explain --file` (herdr 0.9.3, codex manifest 2026.10.01.1, copilot
@@ -1616,5 +1717,53 @@ me@mac app % codex
         let tail = after_last_rule(QUESTION);
         assert_eq!(tail[0], " ☐ Storage");
         assert_eq!(after_last_rule("a\nb\n────\n\n"), ["a", "b", "────", ""]);
+    }
+
+    #[test]
+    fn settings_pickers_are_matched_whole() {
+        let form = Some("live_blocked_form");
+        for screen in SETTINGS_PICKERS {
+            assert!(settings_picker("claude", form, screen), "{screen}");
+            assert!(open_to_keys("claude", form, screen), "{screen}");
+            assert!(!settings_picker("codex", form, screen));
+            for rule in [
+                Some("legacy_no_prompt_blocker"),
+                Some("model_picker_menu"),
+                None,
+            ] {
+                assert!(!settings_picker("claude", rule, screen), "{rule:?}");
+            }
+        }
+        for screen in ALERTING_DIALOGS.into_iter().chain([
+            EFFORT_SET,
+            BASH,
+            TRUST,
+            QUESTION,
+            QUESTION_LIVE,
+            TRUST_292,
+            BASH_LIVE,
+            PLAN_LIVE,
+        ]) {
+            assert!(!settings_picker("claude", form, screen), "{screen}");
+        }
+        let effort = SETTINGS_PICKERS[0];
+        for (from, to) in [
+            ("   Effort", "   Effort level"),
+            ("Esc to cancel", "Esc to cancel\n ❯ 1. Yes"),
+            ("Esc to cancel", "Esc to cancel\n Do you want to proceed?"),
+            ("────────────────────▲", "────────────────────▲▲"),
+            ("low", "❯ low"),
+        ] {
+            let changed = effort.replacen(from, to, 1);
+            assert_ne!(changed, effort);
+            assert!(!settings_picker("claude", form, &changed), "{to}");
+        }
+        let time = SETTINGS_PICKERS[7];
+        for (from, to) in [("24-hour-utc", "24-hour-utc\n 5. Yes"), ("auto", "Yes")] {
+            assert!(
+                !settings_picker("claude", form, &time.replacen(from, to, 1)),
+                "{to}"
+            );
+        }
     }
 }

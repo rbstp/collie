@@ -1,0 +1,59 @@
+
+ ▐▛███▛█   Claude Code v2.1.294
+▝▜██████▀  Opus 5.5 with high effort · Claude Team
+ ▝▝   ▝▝   /private/tmp/collie140-pickers
+
+
+❯ /effort
+  ⎿  Cancelled
+
+❯ /effort
+  ⎿  Set effort level to high (this session only): Comprehensive implementation with extensive testing and documentation
+
+❯ /model
+  ⎿  Kept model as Opus 5.5
+
+❯ /color
+  ⎿  Session color set to: pink
+
+❯ /tui
+  ⎿  Current renderer: fullscreen. Usage: /tui <default|fullscreen>
+
+❯ /scroll-speed
+  ⎿  Scroll speed unchanged
+
+❯ /autocompact
+  ⎿  Auto-compact window for Opus 5.5 unchanged: 1m tokens (default for this model)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+   Advisor (experimental)
+
+   When Claude needs stronger judgment — a complex decision, an ambiguous failure, a problem it's circling without progress — it escalates to the advisor model for guidance, then resumes.
+   The advisor runs server-side and uses additional tokens.
+
+     1. Fable 5.1
+     2. Opus 5.5
+     3. Sonnet 5.5
+   ❯ 4. No advisor ✔
+
+   Recommended setup: Sonnet as the main model with Opus as the advisor. For certain workloads this gives near-Opus performance with reduced token usage.
+
+   Learn more: https://claude.com/blog/the-advisor-strategy
+
+   Enter to confirm · Esc to cancel

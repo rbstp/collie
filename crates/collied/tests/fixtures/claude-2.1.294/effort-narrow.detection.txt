@@ -1,0 +1,39 @@
+
+
+❯ /output-style
+  ⎿  Output style: Concise
+
+     Available styles:
+     - default
+     - Proactive: Claude executes immediately, minimizes
+       interruptions, and prefers action over planning
+     - Concise (current): Claude responds tersely, leading with
+       results and skipping preamble and narration
+     - Explanatory: Claude explains its implementation choices
+       and codebase patterns
+     - Learning: Claude pauses and asks you to write small
+       pieces of code for hands-on practice
+
+     Usage: /output-style <style>
+
+❯ /copy
+  ⎿  No assistant message to copy
+
+❯ /fast
+  ⎿  Fast mode OFF
+
+❯ /effort
+  ⎿  Cancelled
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Effort
+
+           Faster                             Smarter
+           ────────────────────▲─────────────────────
+           low     medium     high     xhigh      max
+
+
+                         Ultracode  off
+                         Tab to toggle
+
+   ←/→ to adjust · Enter to confirm · s for this session only
+   · Esc to cancel
