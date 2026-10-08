@@ -316,13 +316,13 @@ final class FollowModel {
 
     private func forget(machineId: String, activityId: String) {
         watchers.removeValue(forKey: activityId)?.cancel()
-        if list.forget(activityId: activityId) {
-            list.save(to: file)
-        }
         do {
             try core?.endActivity(machineId: machineId, activityId: activityId)
         } catch {
             log.error("activity end: \(describe(error), privacy: .public)")
+        }
+        if list.forget(activityId: activityId) {
+            list.save(to: file)
         }
     }
 }

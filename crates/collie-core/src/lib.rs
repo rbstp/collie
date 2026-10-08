@@ -36,7 +36,7 @@ pub use approvals::{
 };
 pub use attachments::UploadProgress;
 use conn::{
-    Conn, ConnectError, FOREGROUND_RECONNECT, IdentitySlot, LinkPhase, NodeSlot, PushSlot,
+    Conn, ConnectError, FOREGROUND_RECONNECT, IdentitySlot, LinkPhase, NodeSlot, PushSlot, Pushes,
     Registrations, RequestError, blocking,
 };
 pub use identity::IdentitySigner;
@@ -1572,18 +1572,19 @@ impl CollieCore {
             shows_approvals: true,
         };
         self.update_push(&machine_id, |reg| {
-            reg.unsent_ends.retain(|a| *a != params.activity_id);
+            reg.unsent_ends
+                .retain(|e| e.activity_id != params.activity_id);
             reg.activities
                 .insert(params.activity_id.as_str().to_owned(), params.clone());
         })?;
         self.send_if_connected(&machine_id, Request::PushActivityToken(params), None)
     }
 
-    /// Stops the Mac pushing to that activity. Sent now if connected, else with the next
-    /// connection.
+    /// Stops the Mac pushing to that activity. Sent now if connected, and with every later
+    /// connection, of this process or the next, until the Mac acknowledges it.
     pub fn end_activity(&self, machine_id: String, activity_id: String) -> Result<(), CoreError> {
         let activity_id = activity(activity_id)?;
-        self.update_push(&machine_id, |reg| reg.end(&activity_id))?;
+        self.update_push(&machine_id, |reg| reg.end(&activity_id, reach::now_ms()))?;
         let request = Request::PushActivityEnd(PushActivityEndParams {
             activity_id: activity_id.clone(),
         });
@@ -1688,6 +1689,7 @@ impl CollieCore {
             })?;
         let store = MachineStore::new(state_dir.clone());
         let machines = store.load()?;
+        let push = Pushes::load(state_dir.clone(), &machines);
         Ok(Arc::new(Self {
             runtime,
             inner: Arc::new(Inner {
@@ -1703,7 +1705,7 @@ impl CollieCore {
                 cold_start: Mutex::default(),
                 measured: Default::default(),
                 login_name: Mutex::default(),
-                push: Arc::default(),
+                push: Arc::new(Mutex::new(push)),
                 reach: Arc::default(),
                 ops: Mutex::default(),
                 uploads: Mutex::default(),
@@ -1788,11 +1790,13 @@ impl CollieCore {
         if !machines.iter().any(|m| m.id == machine_id) {
             return Err(CoreError::MachineNotFound);
         }
-        update(
-            lock(&self.inner.push)
-                .entry(machine_id.to_owned())
-                .or_default(),
-        );
+        let mut push = lock(&self.inner.push);
+        let reg = push.machines.entry(machine_id.to_owned()).or_default();
+        let ends = reg.unsent_ends.clone();
+        update(reg);
+        if reg.unsent_ends != ends {
+            push.save_ends();
+        }
         Ok(())
     }
 
@@ -1814,10 +1818,8 @@ impl CollieCore {
         self.runtime.spawn(async move {
             let sent = sent.await;
             drop(busy);
-            if let (Ok(_), Some(ended)) = (sent, ends)
-                && let Some(reg) = lock(&push).get_mut(&machine_id)
-            {
-                reg.unsent_ends.retain(|a| *a != ended);
+            if let (Ok(_), Some(ended)) = (sent, ends) {
+                lock(&push).acknowledged(&machine_id, &ended);
             }
         });
         Ok(())
@@ -2271,9 +2273,16 @@ impl Inner {
         *machines = kept;
         let mut conns = lock(&self.conns);
         let mut push = lock(&self.push);
+        let mut dropped = false;
         for m in gone {
             conns.remove(&m.id);
-            push.remove(&m.id);
+            dropped |= push
+                .machines
+                .remove(&m.id)
+                .is_some_and(|r| !r.unsent_ends.is_empty());
+        }
+        if dropped {
+            push.save_ends();
         }
         Ok(())
     }
@@ -2835,6 +2844,7 @@ mod tests {
         )
         .unwrap();
         let push: BTreeMap<String, PushRegisterParams> = lock(&core.inner.push)
+            .machines
             .iter()
             .map(|(m, r)| (m.clone(), r.push.clone().unwrap()))
             .collect();
@@ -2864,7 +2874,7 @@ mod tests {
             "an unreachable machine is forgotten without an unpair"
         );
         assert_eq!(
-            lock(&core.inner.push).keys().collect::<Vec<_>>(),
+            lock(&core.inner.push).machines.keys().collect::<Vec<_>>(),
             ["m1"],
             "unpairing drops the machine's registration"
         );
@@ -2878,7 +2888,7 @@ mod tests {
             }
         }
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
-        assert!(lock(&core.inner.push).is_empty());
+        assert!(lock(&core.inner.push).machines.is_empty());
     }
 
     #[test]
@@ -2942,19 +2952,20 @@ mod tests {
             vec![3; 32],
         )
         .unwrap();
-        let methods = |reg: &mut conn::Registrations| -> Vec<String> {
-            reg.take_requests()
+        let methods = |reg: &conn::Registrations| -> Vec<String> {
+            reg.requests()
+                .0
                 .iter()
-                .map(|r| match r {
+                .map(|(r, _)| match r {
                     Request::PushActivityToken(p) => format!("token {}", p.activity_id.as_str()),
                     Request::PushActivityEnd(p) => format!("end {}", p.activity_id.as_str()),
                     other => other.method().to_owned(),
                 })
                 .collect()
         };
-        let mut reg = lock(&core.inner.push)["m1"].clone();
+        let reg = lock(&core.inner.push).machines["m1"].clone();
         assert_eq!(
-            methods(&mut reg),
+            methods(&reg),
             [
                 "push.register",
                 "token 3F2504E0-4F89-11D3-9A0C-0305E82C3301",
@@ -2968,26 +2979,20 @@ mod tests {
         );
 
         core.end_activity("m1".into(), act.into()).unwrap();
-        let mut reg = lock(&core.inner.push)["m1"].clone();
-        assert_eq!(
-            methods(&mut reg),
-            [
-                "push.register",
-                "end 3F2504E0-4F89-11D3-9A0C-0305E82C3301",
-                "token B"
-            ]
-        );
-        assert_eq!(
-            methods(&mut reg),
-            ["push.register", "token B"],
-            "ends go once"
-        );
+        let reg = lock(&core.inner.push).machines["m1"].clone();
+        let expected = [
+            "push.register",
+            "end 3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+            "token B",
+        ];
+        assert_eq!(methods(&reg), expected);
+        assert_eq!(methods(&reg), expected, "an end goes until acknowledged");
         register("m1", act, "term_1", &token).unwrap();
-        assert!(lock(&core.inner.push)["m1"].unsent_ends.is_empty());
+        assert!(lock(&core.inner.push).machines["m1"].unsent_ends.is_empty());
         for i in 0..40 {
             core.end_activity("m1".into(), format!("E{i}")).unwrap();
         }
-        assert_eq!(lock(&core.inner.push)["m1"].unsent_ends.len(), 16);
+        assert_eq!(lock(&core.inner.push).machines["m1"].unsent_ends.len(), 16);
 
         drop(core);
         for entry in std::fs::read_dir(&state).unwrap() {
@@ -2997,6 +3002,94 @@ mod tests {
                 assert!(!text.contains(&token), "{}", path.display());
             }
         }
+    }
+
+    #[test]
+    fn unsent_ends_survive_a_restart_until_acknowledged() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("s");
+        ensure_private_dir(&state).unwrap();
+        let mac = |id: &str| Machine {
+            id: id.into(),
+            label: "mac".into(),
+            host: format!("{id}.tail1234.ts.net"),
+            port: 8457,
+            node_id: format!("n{id}"),
+            kind: MachineKind::Mac,
+            key: String::new(),
+            terminal_key: String::new(),
+        };
+        MachineStore::new(state.clone())
+            .save(&[mac("m1"), mac("m2")])
+            .unwrap();
+        let file = state.join(conn::ENDS_FILE);
+        let token = "cd".repeat(80);
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        assert!(!file.exists(), "an older build has no file");
+        core.register_activity_token("m1".into(), "T1".into(), "term_1".into(), token.clone())
+            .unwrap();
+        core.end_activity("m1".into(), "A1".into()).unwrap();
+        core.end_activity("m1".into(), "A2".into()).unwrap();
+        core.end_activity("m2".into(), "B1".into()).unwrap();
+        drop(core);
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains(&token) && !text.contains("T1"), "{text}");
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+
+        let mut saved: serde_json::Value = serde_json::from_str(&text).unwrap();
+        saved["m1"].as_array_mut().unwrap().insert(
+            0,
+            serde_json::json!({"activity_id": "OLD", "ended_at_ms": 1}),
+        );
+        saved["gone"] = serde_json::json!([{"activity_id": "G1", "ended_at_ms": reach::now_ms()}]);
+        std::fs::write(&file, saved.to_string()).unwrap();
+
+        let ends = |core: &CollieCore, m: &str| -> Vec<String> {
+            lock(&core.inner.push)
+                .machines
+                .get(m)
+                .map(|r| {
+                    r.unsent_ends
+                        .iter()
+                        .map(|e| e.activity_id.as_str().to_owned())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        assert_eq!(ends(&core, "m1"), ["A1", "A2"], "older than 8 h is dropped");
+        assert_eq!(ends(&core, "m2"), ["B1"]);
+        assert!(ends(&core, "gone").is_empty(), "only paired machines");
+
+        let (seed, acks) = lock(&core.inner.push).machines["m1"].requests();
+        let mut replies = seed.into_iter().filter_map(|(r, reply)| Some((r, reply?)));
+        let (first, reply) = replies.next().unwrap();
+        assert!(matches!(first, Request::PushActivityEnd(p) if p.activity_id.as_str() == "A1"));
+        reply.send(Ok(Response::Ok)).unwrap();
+        let (_, reply) = replies.next().unwrap();
+        reply.send(Err(SessionError::Closed)).unwrap();
+        core.runtime.block_on(conn::acknowledge(
+            core.inner.push.clone(),
+            "m1".into(),
+            acks,
+        ));
+        assert_eq!(
+            ends(&core, "m1"),
+            ["A2"],
+            "only an acknowledged end is dropped"
+        );
+        assert!(
+            !core
+                .runtime
+                .block_on(core.remove_machine("m2".into()))
+                .unwrap()
+        );
+        drop(core);
+
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        assert_eq!(ends(&core, "m1"), ["A2"]);
+        assert!(ends(&core, "m2").is_empty());
     }
 
     #[test]
@@ -4261,7 +4354,7 @@ mod tailnet_tests {
             (lock(&seen).activities.last() == Some(&ended)).then_some(())
         });
         poll("acknowledged end", || {
-            lock(&core.inner.push)[&id()]
+            lock(&core.inner.push).machines[&id()]
                 .unsent_ends
                 .is_empty()
                 .then_some(())
@@ -4276,6 +4369,10 @@ mod tailnet_tests {
             ["register"],
             "an acknowledged end and an ended activity are not sent again"
         );
+
+        // An end made while the app is away is kept for the next process.
+        rt.block_on(core.suspend(core.begin_suspend()));
+        core.end_activity(id(), "ENDED-AWAY".into()).unwrap();
 
         // Cold start: a new process on the same state dir, node not started, no conns.
         lock(&seen).approvals.push(approval("a2"));
@@ -4377,6 +4474,15 @@ mod tailnet_tests {
             (lock(&seen).pushes.len() == 4).then_some(())
         });
         assert!(lock(&seen).pushes.iter().all(|t| t == TOKEN));
+        assert!(
+            lock(&seen)
+                .activities
+                .contains(&"end ENDED-AWAY".to_owned())
+        );
+        poll("the end from the last process acknowledged", || {
+            let ends = std::fs::read_to_string(phone_dir.join(conn::ENDS_FILE)).unwrap();
+            (!ends.contains("ENDED-AWAY")).then_some(())
+        });
 
         let link = || core.cached_flock(id()).unwrap().link;
         let (connections, closed) = {
