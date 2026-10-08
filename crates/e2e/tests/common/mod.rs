@@ -517,14 +517,31 @@ pub struct Probe {
 impl Probe {
     pub async fn session(&self) -> Ws {
         // collied closes a connection whose whois outlasts WHOIS_TIMEOUT, which a loaded
-        // test host can reach; the phone dials again then, and so does the probe.
+        // test host can reach; the phone dials again then, and so does the probe. Only that
+        // audited close is retried: any other close without a reply still fails the test.
+        let timeouts = || {
+            audit_lines(&self.data_dir.join("audit.log"))
+                .iter()
+                .filter(|l| {
+                    l["result"]
+                        .as_str()
+                        .is_some_and(|r| r.starts_with("rejected: whois timed out"))
+                })
+                .count()
+        };
         let mut closed = 0;
         let stream = loop {
+            let before = timeouts();
             let stream = self.dial().await;
             match probe_tls(UnixStream::from_std(stream).unwrap(), &self.data_dir).await {
                 Ok(s) => break s,
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof && closed < 3 => {
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof
+                        && closed < 3
+                        && timeouts() > before =>
+                {
                     closed += 1;
+                    eprintln!("probe: collied timed out whois ({e}), dialing again");
                 }
                 Err(e) => panic!("probe tls: {e}"),
             }
