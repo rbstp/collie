@@ -1,9 +1,10 @@
-// Command testcontrol runs tailscale's in-memory control server and a DERP
-// relay on 127.0.0.1 for the integration tests. It prints the control URL on
-// stdout and serves until stdin closes.
+// Command testcontrol runs tailscale's in-memory control server, a DERP relay
+// and a STUN server on 127.0.0.1 for the integration tests. It prints the
+// control URL on stdout and serves until stdin closes.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"os"
 
 	"tailscale.com/derp/derpserver"
+	"tailscale.com/net/stunserver"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
@@ -37,6 +39,14 @@ func main() {
 	derp.StartTLS()
 	defer derp.Close()
 
+	// Without a STUN port netcheck sends no probe, so magicsock takes IPv4 as unable
+	// to send and rebinds on every endpoint update, dropping DERP and every peer path.
+	stun := stunserver.New(context.Background())
+	if err := stun.Listen("127.0.0.1:0"); err != nil {
+		log.Fatal(err)
+	}
+	go stun.Serve()
+
 	control := &testcontrol.Server{
 		DERPMap: &tailcfg.DERPMap{
 			Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{
@@ -49,7 +59,7 @@ func main() {
 						HostName:         "127.0.0.1",
 						IPv4:             "127.0.0.1",
 						IPv6:             "none",
-						STUNPort:         -1,
+						STUNPort:         stun.LocalAddr().(*net.UDPAddr).Port,
 						DERPPort:         derp.Listener.Addr().(*net.TCPAddr).Port,
 						InsecureForTests: true,
 					}},
