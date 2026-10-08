@@ -89,6 +89,8 @@ const HEADS_UP_EXPLAINED_DISMISSED: &str =
 const HEADS_UP_INTERNAL: &str =
     include_str!("fixtures/claude-2.1.293/heads-up-internal.detection.txt");
 const YOU_SHOULD_KNOW: &str = include_str!("fixtures/claude-2.1.293/you-should-know.detection.txt");
+const HEADS_UP_TITLED: &str = include_str!("fixtures/claude-2.1.293/heads-up-titled.detection.txt");
+const HEADS_UP_HINT: &str = include_str!("fixtures/claude-2.1.293/heads-up-hint.detection.txt");
 const SLASH_MENU: &str = include_str!("fixtures/claude-2.1.293/slash-menu.ansi.txt");
 const SLASH_TAB_HINT: &str = include_str!("fixtures/claude-2.1.293/slash-tab-hint.ansi.txt");
 // Pasted with the command menu open; slash-statstatu is the box a later mirror pasted into
@@ -993,6 +995,14 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
             YOU_SHOULD_KNOW,
             &[(1, "Learn more"), (2, "Knew this already"), (0, "Dismiss")],
         ),
+        (
+            HEADS_UP_TITLED,
+            &[(1, "Learn more"), (2, "Knew this already"), (0, "Dismiss")],
+        ),
+        (
+            HEADS_UP_HINT,
+            &[(1, "Learn more"), (2, "Knew this already"), (0, "Dismiss")],
+        ),
     ] {
         herdr.with(|h| h.text = shown.into());
         for &(d, label) in options {
@@ -1029,7 +1039,7 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         texts,
         [
             "1", "2", "3", "0", "1", "2", "0", "1", "2", "0", "1", "2", "3", "4", "0", "1", "2",
-            "0", "1", "2", "3", "4", "0", "1", "2", "0"
+            "0", "1", "2", "3", "4", "0", "1", "2", "0", "1", "2", "0", "1", "2", "0"
         ]
     );
     assert!(sent.iter().all(|p| p["pane_id"] == "w6:p1"));
