@@ -396,17 +396,6 @@ private struct PromptBar: View {
             if model.dictation.isActive {
                 DictationBar(dictation: model.dictation)
             }
-            if !model.attachments.isEmpty {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 6) {
-                        ForEach(model.attachments) { file in
-                            AttachmentPill(file: file) { model.remove(file) }
-                        }
-                    }
-                }
-                .disabled(model.sendingPrompt)
-                .scrollIndicators(.hidden)
-            }
             HStack(alignment: .bottom, spacing: 8) {
                 if !model.answering && !model.isTerminal {
                     Menu {
@@ -420,24 +409,36 @@ private struct PromptBar: View {
                     .disabled(model.upload != nil || model.attachmentSlots <= 0)
                     .accessibilityLabel("Attach")
                 }
-                if model.isTerminal {
-                    CommandField(text: $model.draft, editing: $typingCommand) {
-                        Task { await model.sendPrompt() }
+                VStack(alignment: .leading, spacing: 8) {
+                    if !model.attachments.isEmpty {
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 8) {
+                                ForEach(model.attachments) { file in
+                                    AttachmentThumbnail(file: file) { model.remove(file) }
+                                }
+                            }
+                        }
+                        .disabled(model.sendingPrompt)
+                        .scrollIndicators(.hidden)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
-                } else {
-                    TextField(
-                        model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: { model.typed($0) }),
-                        axis: .vertical
-                    )
-                        .lineLimit(1...6)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
-                        .focused($editing)
-                        .disabled(model.dictation.isActive)
+                    if model.isTerminal {
+                        CommandField(text: $model.draft, editing: $typingCommand) {
+                            Task { await model.sendPrompt() }
+                        }
+                    } else {
+                        TextField(
+                            model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: { model.typed($0) }),
+                            axis: .vertical
+                        )
+                            .lineLimit(1...6)
+                            .focused($editing)
+                            .disabled(model.dictation.isActive)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
+                if !model.isTerminal {
                     DictationButton(model: model) { editing = false }
                 }
                 if editing || typingCommand {
@@ -461,11 +462,11 @@ private struct PromptBar: View {
                     if model.sendingPrompt {
                         ProgressView().frame(width: 32, height: 32)
                     } else {
-                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
+                        Image(systemName: "paperplane.circle.fill").font(.system(size: 32))
                     }
                 }
                 .disabled(!model.canSendPrompt)
-                .accessibilityLabel(model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send prompt")
+                .accessibilityLabel(model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
             }
         }
         .padding(.horizontal)
@@ -657,40 +658,44 @@ private struct DictationProblemRow: View {
     }
 }
 
-private struct AttachmentPill: View {
+private struct AttachmentThumbnail: View {
     let file: AttachedFile
     let remove: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
+        Group {
             if let thumbnail = file.thumbnail {
                 Image(uiImage: thumbnail)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: 22, height: 22)
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
             } else {
-                Image(systemName: file.symbol).font(.caption).foregroundStyle(.secondary).frame(width: 22, height: 22)
+                VStack(spacing: 4) {
+                    Image(systemName: file.symbol).font(.title3).foregroundStyle(.secondary)
+                    Text(file.name).font(.caption2).lineLimit(1).truncationMode(.middle).padding(.horizontal, 4)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.fill.secondary)
+                .dynamicTypeSize(...DynamicTypeSize.xxLarge)
             }
-            Text(shortName)
-                .font(.caption)
-                .lineLimit(1)
-                .accessibilityLabel(file.name)
+        }
+        .frame(width: 64, height: 64)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(file.name)
+        .overlay(alignment: .topTrailing) {
             Button(action: remove) {
-                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 20, height: 20)
+                    .background(.black.opacity(0.6), in: Circle())
+                    .padding(4)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Remove \(file.name)")
+            .accessibilityLabel(file.kind == .image ? "Remove image" : "Remove file")
         }
-        .padding(.leading, 4)
-        .padding(.trailing, 8)
-        .padding(.vertical, 4)
-        .background(.fill.tertiary, in: Capsule())
-    }
-
-    /// A horizontal ScrollView proposes no width, so `truncationMode` would never kick in.
-    private var shortName: String {
-        file.name.count <= 22 ? file.name : "\(file.name.prefix(10))…\(file.name.suffix(10))"
     }
 }
 
