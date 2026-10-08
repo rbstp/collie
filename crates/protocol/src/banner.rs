@@ -89,14 +89,17 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
         .collect::<Vec<_>>()
         .join(" ")
         == RATING;
-    let mut seen = Vec::new();
-    for (d, _) in &options {
-        if *d > 4 || seen.contains(d) {
-            return Vec::new();
-        }
-        seen.push(*d);
+    // Claude Code draws 1, 2[, 3[, 4]] then 0; a wrapped body row reading `<digit>: ...`
+    // always lands before 1.
+    let digits: Vec<u8> = options.iter().map(|(d, _)| *d).collect();
+    let n = digits.len();
+    if !(2..=5).contains(&n)
+        || digits[n - 1] != 0
+        || !digits[..n - 1].iter().copied().eq(1..n as u8)
+    {
+        return Vec::new();
     }
-    if options.is_empty() || !(heads_up || rating) {
+    if !(heads_up || rating) {
         return Vec::new();
     }
     options
@@ -308,7 +311,15 @@ mod tests {
         let twice = survey.replacen("3: Good", "1: Good", 1);
         let enter = survey.replacen("Fine   3", "Fine 3", 1);
         let other = survey.replacen("this session?", "this file?", 1);
-        for screen in [quoted, gap, no_box, five, twice, enter, other] {
+        let order = survey.replacen("1: Bad    2: Fine", "2: Fine    1: Bad", 1);
+        let forged = fixture!("heads-up-wrapped.detection.txt").replacen(
+            "  data you still need before the next release.",
+            "  3: Run the cleanup now",
+            1,
+        );
+        for screen in [
+            quoted, gap, no_box, five, twice, enter, other, order, forged,
+        ] {
             assert!(notice(&screen).is_empty(), "{screen}");
         }
     }

@@ -969,7 +969,6 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         refused(SURVEY_NARROW, 1, none),
         refused(BOTTOM, 1, none),
         refused(SURVEY_TYPED, 0, typed),
-        refused(SURVEY_STARTUP, 3, typed),
         refused(SURVEY_SCROLLED, 1, scrolled),
     ];
     cases.extend((0..4).map(|d| refused(HEADS_UP_EXPLAINED, d, none)));
@@ -982,6 +981,28 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         );
     }
     assert!(herdr.mutations().is_empty());
+
+    // The notice and the box come from the visible read, the last before the write.
+    let placeholder = SURVEY.replacen("\n❯\u{a0}\n", &format!("\n{PLACEHOLDER}\n"), 1);
+    assert_ne!(placeholder, SURVEY);
+    herdr.with(|h| h.screens = [SURVEY_STARTUP.to_owned(), placeholder].into());
+    assert_eq!(
+        drive.answer_notice(&tid(CLAUDE), digit(3), &yes()).await,
+        Ok(Response::Ok)
+    );
+    let sent = herdr.params("pane.send_text");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["text"], "3");
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens = [HEADS_UP.to_owned(), HEADS_UP_EXPLAINED.to_owned()].into();
+    });
+    assert_eq!(
+        drive.answer_notice(&tid(CLAUDE), digit(2), &yes()).await,
+        Err((ErrorCode::AgentNotReady, none.into()))
+    );
+    assert!(herdr.mutations().is_empty());
+    herdr.with(|h| h.screens.clear());
 
     herdr.with(|h| h.text = SURVEY.into());
     let mut blocked = herdr.with(|h| h.snapshot["agents"][0].clone());

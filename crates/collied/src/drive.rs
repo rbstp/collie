@@ -705,7 +705,7 @@ impl Driver {
 
     /// One digit, no Enter, only while Claude Code shows a notice listing it above an empty
     /// input box. Never to a blocked agent: a digit could select a permission option. The
-    /// visible read comes last, closest to the write.
+    /// notice and the box are checked on the same visible read, the last one before the write.
     pub async fn answer_notice(
         &self,
         terminal_id: &TerminalId,
@@ -722,11 +722,20 @@ impl Driver {
         if protocol::jump_banner(&screen) {
             return fail(ErrorCode::AgentNotReady, SCROLLED);
         }
-        if !protocol::notice(&screen).iter().any(|o| o.digit == digit) {
+        let read = herdr::pane_read(
+            &self.herdr,
+            &a.pane_id,
+            source_name(ReadSource::Visible),
+            None,
+        )
+        .await
+        .map_err(herdr_fail)?;
+        let visible = sanitize_ansi(&read.text);
+        if !protocol::notice(&visible).iter().any(|o| o.digit == digit) {
             return fail(ErrorCode::AgentNotReady, "no notice with that option");
         }
         if !matches!(
-            self.input_box(&a.pane_id).await?,
+            draft::parse(&visible),
             Some(InputBox::Draft(d)) if d.text.is_empty()
         ) {
             return fail(ErrorCode::AgentNotReady, "the input box is not empty");
