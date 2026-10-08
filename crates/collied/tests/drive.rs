@@ -942,8 +942,9 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         digit: NoticeDigit::new(d).unwrap(),
         label: Label::new(label).unwrap(),
     };
+    let filled = screen("❯ /plugin disable cc-plugin-you-should-know@builtin");
     let mut sent = Vec::new();
-    for (screen, options) in [
+    for (shown, options) in [
         (
             SURVEY,
             [(1, "Bad"), (2, "Fine"), (3, "Good"), (0, "Dismiss")].as_slice(),
@@ -971,31 +972,39 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
             ],
         ),
     ] {
-        herdr.with(|h| h.text = screen.into());
+        herdr.with(|h| h.text = shown.into());
         for &(d, label) in options {
-            herdr.with(|h| h.calls.clear());
+            // These two fill the box after the digit; the call returns once it shows.
+            let fills = matches!(label, "Chat in main session" | "Turn off suggestions");
+            herdr.with(|h| {
+                h.calls.clear();
+                if fills {
+                    h.screens = [shown.into(), shown.into(), filled.clone()].into();
+                }
+            });
             assert_eq!(
                 drive.answer_notice(&answer(CLAUDE, d, label), &yes()).await,
                 Ok(Response::Ok)
             );
-            assert_eq!(
-                herdr.methods(),
-                [
-                    "agent.list",
-                    "agent.get",
-                    "pane.read",
-                    "pane.read",
-                    "pane.send_text"
-                ]
-            );
-            assert_eq!(
-                herdr.params("pane.read"),
-                [
-                    json!({"pane_id": "w6:p1", "source": "detection", "format": "text"}),
-                    json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"})
-                ]
-            );
+            let mut methods = vec![
+                "agent.list",
+                "agent.get",
+                "pane.read",
+                "pane.read",
+                "pane.send_text",
+            ];
+            let mut reads = vec![
+                json!({"pane_id": "w6:p1", "source": "detection", "format": "text"}),
+                json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"}),
+            ];
+            if fills {
+                methods.push("pane.read");
+                reads.push(reads[1].clone());
+            }
+            assert_eq!(herdr.methods(), methods, "{label}");
+            assert_eq!(herdr.params("pane.read"), reads, "{label}");
             sent.extend(herdr.params("pane.send_text"));
+            herdr.with(|h| h.screens.clear());
         }
     }
     let texts: Vec<&str> = sent.iter().map(|p| p["text"].as_str().unwrap()).collect();
@@ -1100,6 +1109,48 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         ErrorCode::NotPaired
     );
     assert!(herdr.mutations().is_empty());
+}
+
+#[tokio::test]
+async fn a_prompt_waits_for_the_box_a_notice_answer_fills() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let off = AgentAnswerNoticeParams {
+        terminal_id: tid(CLAUDE),
+        digit: NoticeDigit::new(4).unwrap(),
+        label: Label::new("Turn off suggestions").unwrap(),
+    };
+    let command = "/plugin disable cc-plugin-you-should-know@builtin";
+    // The fill shows a few reads after the digit; the prompt queued on the lock then sees it.
+    herdr.with(|h| {
+        h.screens = [
+            HEADS_UP_DISMISSED.into(),
+            HEADS_UP_DISMISSED.into(),
+            HEADS_UP_DISMISSED.into(),
+            HEADS_UP_DISMISSED.into(),
+            screen(&format!("❯\u{a0}{command}")),
+        ]
+        .into();
+    });
+    let auth = yes();
+    let (answered, prompted) = tokio::join!(
+        drive.answer_notice(&off, &auth),
+        drive.prompt(expecting(""), &auth)
+    );
+    assert_eq!(answered, Ok(Response::Ok));
+    assert_eq!(prompted, Err((ErrorCode::DraftChanged, command.to_owned())));
+    assert_eq!(herdr.mutations(), ["pane.send_text"]);
+
+    // A fill that never shows keeps the lock for a second; the digit stands.
+    herdr.with(|h| {
+        h.calls.clear();
+        h.screens.clear();
+        h.text = HEADS_UP_DISMISSED.into();
+    });
+    assert_eq!(drive.answer_notice(&off, &yes()).await, Ok(Response::Ok));
+    assert_eq!(herdr.mutations(), ["pane.send_text"]);
+    assert!(herdr.params("pane.read").len() > 3);
 }
 
 fn slash(terminal: &str, command: &str, expected: Option<&str>) -> AgentSlashDraftParams {

@@ -729,7 +729,10 @@ impl Driver {
     /// One digit, no Enter, only while Claude Code shows a notice listing it with that label
     /// above an empty input box. Never to a blocked agent: a digit could select a permission
     /// option. The notice and the box are checked on the same visible read, the last one
-    /// before the write.
+    /// before the write. Chat in main session and Turn off suggestions fill the box a moment
+    /// after the digit, only if it is still empty, so the lock is held until the box is no
+    /// longer empty, for up to a second: a prompt pasted before the fill would be replaced by
+    /// it, and herdr's Enter would submit the fill.
     pub async fn answer_notice(&self, p: &AgentAnswerNoticeParams, auth: &Authorized) -> Reply {
         let _box = self.box_writes.lock().await;
         let a = self.ready_agent(&p.terminal_id).await?;
@@ -767,6 +770,20 @@ impl Driver {
         herdr::pane_send_text(&self.herdr, &a.pane_id, p.digit.as_str())
             .await
             .map_err(herdr_fail)?;
+        if matches!(
+            (p.digit.as_str(), p.label.as_str()),
+            ("2", "Chat in main session") | ("4", "Turn off suggestions")
+        ) {
+            let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
+            while tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(SCREEN_POLL).await;
+                match self.input_box(&a.pane_id).await? {
+                    Some(InputBox::Draft(d)) if d.text.is_empty() => {}
+                    None => {}
+                    Some(_) => break,
+                }
+            }
+        }
         Ok(Response::Ok)
     }
 
