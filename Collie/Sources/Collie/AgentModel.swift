@@ -14,6 +14,7 @@ final class AgentModel {
     private let core: any AgentCore
     private let unlocker: any TerminalUnlocker
     private let machineLabel: String?
+    @ObservationIgnored private let now: () -> ContinuousClock.Instant
 
     private(set) var agent: AgentSummary?
     private(set) var terminal: TerminalSummary?
@@ -33,6 +34,11 @@ final class AgentModel {
     private(set) var ansi = ""
     private(set) var reflowed: String?
     private var screenBanner = false
+    private var screenNotice: [NoticeOption] = []
+    /// When the phone first saw the notice; Claude Code ignores a digit within 600 ms of showing it and
+    /// leaves the digit in the input box.
+    @ObservationIgnored private var noticeSince: ContinuousClock.Instant?
+    private var noticeArmed = false
     private(set) var refreshing = false
     private var revision: UInt64 = 0
 
@@ -89,9 +95,11 @@ final class AgentModel {
     init(
         core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file, draftsFile: URL? = nil,
         dictationEngine: any DictationEngine = SpeechDictationEngine(),
-        unlocker: any TerminalUnlocker = SecureEnclaveUnlocker(), machineLabel: String? = nil
+        unlocker: any TerminalUnlocker = SecureEnclaveUnlocker(), machineLabel: String? = nil,
+        now: @escaping () -> ContinuousClock.Instant = { .now }
     ) {
         self.core = core
+        self.now = now
         self.route = route
         self.unlocker = unlocker
         self.machineLabel = machineLabel
@@ -138,6 +146,11 @@ final class AgentModel {
 
     /// Claude Code's transcript is scrolled up on the Mac; collied refuses keys until it jumps back down.
     var jumpBanner: Bool { mode == .agent && agent?.kind == "claude" && screenBanner }
+
+    /// A Claude Code notice's options, in screen order; collied sends the digit only while it shows.
+    var noticeOptions: [NoticeOption] {
+        mode == .agent && agent?.kind == "claude" && agent?.status != .blocked && blocked == nil && !jumpBanner && noticeArmed ? screenNotice : []
+    }
 
     var acceptsKeys: Bool { isTerminal ? !unlocking : blocked != .optionsOnly && blocked != .terminal && !jumpBanner }
 
@@ -229,9 +242,26 @@ final class AgentModel {
             ansi = output.ansi
             reflowed = output.reflowed
             screenBanner = output.jumpBanner
+            show(notice: output.notice)
             revision = view.outputRevision
         }
+        armNotice()
         followMode()
+    }
+
+    private func show(notice options: [NoticeOption]) {
+        if options.isEmpty {
+            noticeSince = nil
+        } else if noticeSince == nil || options != screenNotice {
+            noticeSince = now()
+        }
+        screenNotice = options
+        armNotice()
+    }
+
+    private func armNotice() {
+        let armed = noticeSince.map { now() - $0 >= .milliseconds(600) } ?? false
+        if noticeArmed != armed { noticeArmed = armed }
     }
 
     /// The shell is watched only while unlocked; an agent starting there takes the agent's watch back.
@@ -294,6 +324,7 @@ final class AgentModel {
             ansi = read.ansi
             reflowed = read.reflowed
             screenBanner = read.jumpBanner
+            show(notice: read.notice)
             notice = nil
         } catch {
             notice = Self.message(for: error)
@@ -531,6 +562,19 @@ final class AgentModel {
             notice = nil
         } catch {
             screenBanner = true
+            notice = Self.message(for: error)
+        }
+    }
+
+    func answerNotice(_ option: NoticeOption) async {
+        let shown = screenNotice
+        let seen = revision
+        screenNotice = []
+        do {
+            try await core.answerNotice(machineId: route.machineId, terminalId: route.terminalId, digit: option.digit)
+            notice = nil
+        } catch {
+            if revision == seen { screenNotice = shown }
             notice = Self.message(for: error)
         }
     }

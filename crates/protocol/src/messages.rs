@@ -47,6 +47,8 @@ pub enum Request {
     AgentFocus(AgentTarget),
     #[serde(rename = "agent.scroll_bottom")]
     AgentScrollBottom(AgentTarget),
+    #[serde(rename = "agent.answer_notice")]
+    AgentAnswerNotice(AgentAnswerNoticeParams),
     #[serde(rename = "agent.star")]
     AgentStar(AgentStarParams),
     #[serde(rename = "task.new")]
@@ -107,6 +109,7 @@ impl Request {
         "agent.type_text",
         "agent.focus",
         "agent.scroll_bottom",
+        "agent.answer_notice",
         "agent.star",
         "task.new",
         "workspace.close",
@@ -144,6 +147,7 @@ impl Request {
             Self::AgentTypeText(_) => "agent.type_text",
             Self::AgentFocus(_) => "agent.focus",
             Self::AgentScrollBottom(_) => "agent.scroll_bottom",
+            Self::AgentAnswerNotice(_) => "agent.answer_notice",
             Self::AgentStar(_) => "agent.star",
             Self::TaskNew(_) => "task.new",
             Self::WorkspaceClose(_) => "workspace.close",
@@ -181,6 +185,7 @@ impl Request {
             | Self::AgentTypeText(_)
             | Self::AgentFocus(_)
             | Self::AgentScrollBottom(_)
+            | Self::AgentAnswerNotice(_)
             | Self::AgentStar(_)
             | Self::TaskNew(_)
             | Self::WorkspaceClose(_)
@@ -288,6 +293,56 @@ fn watch_lines(lines: Option<u16>) -> u16 {
 #[serde(deny_unknown_fields)]
 pub struct AgentTarget {
     pub terminal_id: TerminalId,
+}
+
+/// A key Claude Code reads as an answer to a notice above its input box; never Enter or text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum NoticeDigit {
+    #[serde(rename = "0")]
+    Zero,
+    #[serde(rename = "1")]
+    One,
+    #[serde(rename = "2")]
+    Two,
+    #[serde(rename = "3")]
+    Three,
+}
+
+impl NoticeDigit {
+    pub fn new(digit: u8) -> Option<Self> {
+        match digit {
+            0 => Some(Self::Zero),
+            1 => Some(Self::One),
+            2 => Some(Self::Two),
+            3 => Some(Self::Three),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Zero => "0",
+            Self::One => "1",
+            Self::Two => "2",
+            Self::Three => "3",
+        }
+    }
+
+    pub fn value(self) -> u8 {
+        match self {
+            Self::Zero => 0,
+            Self::One => 1,
+            Self::Two => 2,
+            Self::Three => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentAnswerNoticeParams {
+    pub terminal_id: TerminalId,
+    pub digit: NoticeDigit,
 }
 
 /// Stars are the machine's, shared by every paired phone. Unstarring needs no live pane.
@@ -1240,7 +1295,47 @@ mod tests {
             let bad = format!(r#"{{"id":1,"method":"agent.scroll_bottom","params":{params}}}"#);
             assert_eq!(parse(&bad).unwrap_err().code, ErrorCode::InvalidParams);
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 9);
+    }
+
+    #[test]
+    fn answer_notice_carries_one_digit() {
+        let answer = |params: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"agent.answer_notice","params":{params}}}"#
+            ))
+        };
+        for (digit, value) in [("0", 0), ("1", 1), ("2", 2), ("3", 3)] {
+            let frame =
+                answer(&format!(r#"{{"terminal_id":"term_1","digit":"{digit}"}}"#)).unwrap();
+            assert_eq!(frame.request.class(), MethodClass::Drive);
+            assert_eq!(frame.request.method(), "agent.answer_notice");
+            let Request::AgentAnswerNotice(p) = &frame.request else {
+                panic!("not an answer");
+            };
+            assert_eq!(p.digit.as_str(), digit);
+            assert_eq!(NoticeDigit::new(value), Some(p.digit));
+            assert_eq!(p.digit.value(), value);
+            let json = serde_json::to_string(&frame).unwrap();
+            assert_eq!(parse(&json).unwrap(), frame);
+        }
+        assert_eq!(NoticeDigit::new(4), None);
+        for params in [
+            r#"{"terminal_id":"t","digit":"4"}"#,
+            r#"{"terminal_id":"t","digit":"1\r"}"#,
+            r#"{"terminal_id":"t","digit":"11"}"#,
+            r#"{"terminal_id":"t","digit":1}"#,
+            r#"{"terminal_id":"t","digit":"yes"}"#,
+            r#"{"terminal_id":"t","digit":"1","text":"x"}"#,
+            r#"{"terminal_id":"t","digit":"1","keys":["enter"]}"#,
+            r#"{"terminal_id":"t"}"#,
+        ] {
+            assert_eq!(
+                answer(params).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{params}"
+            );
+        }
+        assert_eq!(crate::PROTOCOL_VERSION, 10);
     }
 
     #[test]

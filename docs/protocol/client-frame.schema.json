@@ -4,6 +4,22 @@
       "pattern": "^[A-Za-z0-9-]{1,64}$",
       "type": "string"
     },
+    "AgentAnswerNoticeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "digit": {
+          "$ref": "#/$defs/NoticeDigit"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "digit"
+      ],
+      "type": "object"
+    },
     "AgentKind": {
       "pattern": "^[a-z][a-z0-9_-]{0,31}$",
       "type": "string"
@@ -355,6 +371,16 @@
     },
     "Nonce": {
       "pattern": "^[A-Za-z0-9_-]{43}$",
+      "type": "string"
+    },
+    "NoticeDigit": {
+      "description": "A key Claude Code reads as an answer to a notice above its input box; never Enter or text.",
+      "enum": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
       "type": "string"
     },
     "NotificationKey": {
@@ -872,6 +898,22 @@
         },
         "params": {
           "$ref": "#/$defs/AgentTarget"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.answer_notice",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentAnswerNoticeParams"
         }
       },
       "required": [

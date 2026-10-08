@@ -5,14 +5,14 @@ mod messages;
 mod output;
 mod schema;
 
-pub use banner::jump_banner;
+pub use banner::{NoticeOption, jump_banner, notice};
 pub use ids::*;
 pub use invite::*;
 pub use messages::*;
 pub use output::*;
 pub use schema::{client_frame_schema, server_frame_schema};
 
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 pub mod limits {
     pub const MAX_FRAME_BYTES: usize = 64 * 1024;

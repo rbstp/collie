@@ -32,6 +32,12 @@ struct AgentScreen: View {
         approvals?.blockedInput(machineId: model.route.machineId, terminalId: model.route.terminalId)
     }
 
+    private var noticeButtons: some View {
+        ForEach(model.noticeOptions, id: \.digit) { option in
+            Button(option.label) { Task { await model.answerNotice(option) } }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil)
@@ -67,6 +73,16 @@ struct AgentScreen: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .padding(.bottom, 8)
+                    }
+                    if !model.noticeOptions.isEmpty {
+                        ViewThatFits(in: .horizontal) {
+                            HStack { noticeButtons }
+                            VStack { noticeButtons }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding([.horizontal, .bottom], 8)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel("Claude Code notice")
                     }
                 }
             if let notice = model.notice ?? model.blockedHint {

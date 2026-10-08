@@ -1,0 +1,58 @@
+
+           Claude Code v2.1.293
+ ▐▛███▛█   Opus 5.5 with high …
+▝▜██████▀  Claude Team
+ ▝▝   ▝▝   /…/collie129-survey
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+● How is Claude doing this
+  session? (optional)
+  1: Bad  2: Fine3: Good 0:
+                         Dismiss
+
+────────────────────────────────
+❯ Try "refactor <filepath>"
+────────────────────────────────
+  Opus 5.5 high   master  ░░…
+  ⏸ manual mode on · ← 1 agent

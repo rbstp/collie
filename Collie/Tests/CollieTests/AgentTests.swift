@@ -17,6 +17,7 @@ final class FakeCore: AgentCore {
         var closes: [String] = []
         var stars: [String] = []
         var scrolls: [String] = []
+        var answers: [UInt8] = []
         var hold = false
         var held: [CheckedContinuation<Void, Never>] = []
         var error: CoreError?
@@ -32,6 +33,8 @@ final class FakeCore: AgentCore {
         var readLines: [UInt16?] = []
         var readError: CoreError?
         var output: TerminalSnapshot?
+        var outputRevision: UInt64 = 1
+        var status: AgentState = .idle
         var depths: [UInt16?] = []
         var shell: TerminalSummary?
         var shellLocked = true
@@ -105,11 +108,12 @@ final class FakeCore: AgentCore {
             let agent = s.kind.map {
                 AgentSummary(
                     terminalId: terminalId, workspaceId: "w1", kind: $0, name: nil, title: nil,
-                    status: .idle, statusSinceMs: 0, cwd: nil, lastLine: nil
+                    status: s.status, statusSinceMs: 0, cwd: nil, lastLine: nil
                 )
             }
             return AgentView(
-                link: .connected, lastError: nil, agent: agent, output: output.terminalId == terminalId ? output : nil, outputRevision: 1
+                link: .connected, lastError: nil, agent: agent, output: output.terminalId == terminalId ? output : nil,
+                outputRevision: s.outputRevision
             )
         }
         guard let kind = state.withLock({ $0.kind }) else { return nil }
@@ -156,6 +160,9 @@ final class FakeCore: AgentCore {
     func focus(machineId: String, terminalId: String) async throws {}
     func scrollBottom(machineId: String, terminalId: String) async throws {
         try await call { $0.scrolls.append(terminalId) }
+    }
+    func answerNotice(machineId: String, terminalId: String, digit: UInt8) async throws {
+        try await call { $0.answers.append(digit) }
     }
     func star(machineId: String, terminalId: String, starred: Bool) async throws {
         try await call { $0.stars.append("\(machineId) \(terminalId) \(starred)") }
@@ -1002,6 +1009,115 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     let model = agentModel(core)
     model.poll()
     #expect(!model.jumpBanner && model.acceptsKeys)
+}
+
+@MainActor private let rating = [
+    NoticeOption(digit: 1, label: "Bad"), NoticeOption(digit: 2, label: "Fine"),
+    NoticeOption(digit: 3, label: "Good"), NoticeOption(digit: 0, label: "Dismiss"),
+]
+
+@MainActor
+private func noticeShown(
+    _ core: FakeCore, kind: String = "claude", jumpBanner: Bool = false, clock: FakeClock = FakeClock()
+) -> AgentModel {
+    core.state.withLock {
+        $0.kind = kind
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent, ansi: "● How is Claude doing this session? (optional)", truncated: false,
+            jumpBanner: jumpBanner, notice: rating
+        )
+    }
+    let model = AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil) { clock.now }
+    model.poll()
+    clock.advance(.milliseconds(600))
+    model.poll()
+    return model
+}
+
+@MainActor
+@Test func aNoticeOffersItsOptionsInScreenOrder() async {
+    let core = FakeCore()
+    let clock = FakeClock()
+    let model = noticeShown(core, clock: clock)
+    #expect(model.noticeOptions.map(\.label) == ["Bad", "Fine", "Good", "Dismiss"])
+    #expect(model.acceptsKeys)
+    await model.answerNotice(model.noticeOptions[2])
+    #expect(core.snapshot.answers == [3])
+    #expect(core.snapshot.prompts.isEmpty && core.snapshot.keys.isEmpty)
+    #expect(model.noticeOptions.isEmpty, "hidden until a new screen shows the notice again")
+
+    model.poll()
+    clock.advance(.milliseconds(600))
+    model.poll()
+    core.set(error: .AgentNotReady)
+    await model.answerNotice(model.noticeOptions[3])
+    #expect(model.notice != nil && model.noticeOptions == rating)
+
+    core.set(hold: true, error: .AgentNotReady)
+    let refused = Task { await model.answerNotice(model.noticeOptions[0]) }
+    await core.waitHeld(1)
+    core.state.withLock {
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "❯ ", truncated: false)
+        $0.outputRevision = 2
+    }
+    model.poll()
+    core.release()
+    await refused.value
+    #expect(model.notice != nil && model.noticeOptions.isEmpty, "a newer screen without the notice wins over the restore")
+    core.set()
+}
+
+@MainActor
+@Test func noticeOptionsWaitUntilClaudeCodeTakesTheDigit() {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent, ansi: "● How is Claude doing this session? (optional)", truncated: false,
+            notice: rating
+        )
+    }
+    let clock = FakeClock()
+    let model = AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil) { clock.now }
+    model.poll()
+    #expect(model.noticeOptions.isEmpty)
+    clock.advance(.milliseconds(599))
+    model.poll()
+    #expect(model.noticeOptions.isEmpty)
+    clock.advance(.milliseconds(1))
+    model.poll()
+    #expect(model.noticeOptions == rating)
+
+    let headsUp = [NoticeOption(digit: 1, label: "Learn more"), NoticeOption(digit: 0, label: "Dismiss")]
+    core.state.withLock {
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "✦ Heads up", truncated: false, notice: headsUp)
+        $0.outputRevision = 2
+    }
+    model.poll()
+    #expect(model.noticeOptions.isEmpty, "another notice waits again")
+    clock.advance(.milliseconds(600))
+    model.poll()
+    #expect(model.noticeOptions == headsUp)
+}
+
+@MainActor
+@Test func onlyClaudeCodeOffersNoticeOptions() {
+    #expect(noticeShown(FakeCore(), kind: "codex").noticeOptions.isEmpty)
+}
+
+@MainActor
+@Test func noticeOptionsHideWhileBlockedOrScrolledUp() {
+    let core = FakeCore()
+    let model = noticeShown(core)
+    model.blocked = .optionsOnly
+    #expect(model.noticeOptions.isEmpty)
+    model.blocked = nil
+    #expect(model.noticeOptions == rating)
+    core.state.withLock { $0.status = .blocked }
+    model.poll()
+    #expect(model.blocked == nil && model.noticeOptions.isEmpty)
+    let scrolled = noticeShown(FakeCore(), jumpBanner: true)
+    #expect(scrolled.jumpBanner && scrolled.noticeOptions.isEmpty)
 }
 
 @MainActor

@@ -5,7 +5,7 @@ import Testing
 @testable import Collie
 
 @MainActor
-private final class FakeClock {
+final class FakeClock {
     var now = ContinuousClock.Instant.now
 
     func advance(_ duration: Duration) {
