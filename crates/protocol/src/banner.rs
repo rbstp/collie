@@ -67,7 +67,8 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
         .collect();
     let Some(rule) = (1..rows.len())
         .rev()
-        .find(|&i| rows[i].starts_with('\u{276f}') && is_rule(&rows[i - 1]))
+        .find(|&i| rows[i].starts_with('\u{276f}'))
+        .filter(|&i| is_rule(&rows[i - 1]))
         .map(|i| i - 1)
     else {
         return Vec::new();
@@ -98,11 +99,13 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
     };
     // An explanation's cards are text a side agent wrote: past a blank row, the options must
     // stand apart from the text by a blank row of their own, and sit right on the box's top
-    // margin, since every card ends with a blank row.
+    // margin or on the two blank rows above a hint, since every card ends with a blank row.
+    let gap = &rows[end..rule];
     if !cells.is_empty() && i != below
         || rows[i..below].iter().any(String::is_empty)
             && (!rows[below - 1].is_empty()
-                || rows[end..rule].iter().rev().skip(1).any(String::is_empty))
+                || gap.iter().rev().skip(1).any(String::is_empty)
+                    && !matches!(gap, [a, b, h] if a.is_empty() && b.is_empty() && !h.is_empty()))
     {
         return Vec::new();
     }
@@ -136,11 +139,13 @@ fn lead(row: &str) -> Option<Vec<(u8, String)>> {
 /// A row of `─`, or one carrying the session's title the way Claude Code draws it:
 /// `─── <title> ─`.
 fn is_rule(row: &str) -> bool {
-    let title = row.trim_matches('\u{2500}');
+    let Some(head) = row.strip_suffix('\u{2500}') else {
+        return false;
+    };
+    let title = head.trim_start_matches('\u{2500}');
     row.starts_with('\u{2500}')
         && (title.is_empty()
-            || row.ends_with('\u{2500}')
-                && title.starts_with(' ')
+            || title.starts_with(' ')
                 && title.ends_with(' ')
                 && !title.trim().is_empty()
                 && !title.contains('\u{2500}'))
@@ -281,6 +286,8 @@ mod tests {
             "──── one ─── two ─",
             "────   ─",
             "──── ❯ ─ x",
+            "──── Price rounding review (2) ──",
+            "──── 3 new messages ────",
         ] {
             assert!(!is_rule(row), "{row:?}");
         }
@@ -345,6 +352,7 @@ mod tests {
             fixture!("heads-up-explained.detection.txt"),
             fixture!("heads-up-explained-sketch.detection.txt"),
             fixture!("heads-up-explained-narrow.detection.txt"),
+            fixture!("heads-up-explained-hint.detection.txt"),
         ] {
             assert_eq!(options(screen), explained);
         }
@@ -514,7 +522,24 @@ mod tests {
         let card_hint = card.replacen("\n\n\u{2500}", &format!("\n{hint}\n\u{2500}"), 1);
         let cards_gap = explained.replacen("0: Dismiss\n", "0: Dismiss\n\n", 1);
         let cards_hint = explained.replacen("0: Dismiss\n", &format!("0: Dismiss\n\n{hint}"), 1);
-        let untitled = fixture!("heads-up-titled.detection.txt").replacen("(2) \u{2500}", "(2)", 1);
+        let card_real_hint = card.replacen("\n\n\u{2500}", &format!("\n\n\n{hint}\n\u{2500}"), 1);
+        let titled = fixture!("heads-up-titled.detection.txt");
+        let untitled = titled.replacen("(2) \u{2500}", "(2)", 1);
+        // A box whose rule is not recognized never falls back to a rule and prompt higher up.
+        let dashed = titled
+            .replacen("review (2)", "review \u{2500} 2", 1)
+            .replacen(
+                "0: Dismiss\n\n",
+                "0: Dismiss\n\n\u{2500}\u{2500}\u{2500}\u{2500}\n\u{276f} Check it\n",
+                1,
+            );
+        let unseen = survey
+            .replacen(
+                "0: Dismiss\n\n",
+                "0: Dismiss\n\n\u{2500}\u{2500} 3 new messages \u{2500}\u{2500}\n\u{276f} Check it\n",
+                1,
+            )
+            .replacen("\n\u{276f}\n", "\n\u{2502} Allow this?\n", 1);
         let dismissed = fixture!("heads-up-dismissed.detection.txt");
         let indented = dismissed.replacen("\u{2726} Dismissed.", "  \u{2726} Dismissed.", 1);
         let between = dismissed.replacen(
@@ -541,9 +566,37 @@ mod tests {
             1,
         );
         for screen in follow_ups.into_iter().chain([
-            quoted, no_box, five, twice, enter, order, close, zero_first, no_zero, six, long,
-            format, forged, no_gap, unindented, hidden, card, card_hint, cards_gap, cards_hint,
-            blanks, indented, between, unwrapped, replied, reply, quoted_row, untitled,
+            quoted,
+            no_box,
+            five,
+            twice,
+            enter,
+            order,
+            close,
+            zero_first,
+            no_zero,
+            six,
+            long,
+            format,
+            forged,
+            no_gap,
+            unindented,
+            hidden,
+            card,
+            card_hint,
+            cards_gap,
+            cards_hint,
+            card_real_hint,
+            blanks,
+            indented,
+            between,
+            unwrapped,
+            replied,
+            reply,
+            quoted_row,
+            untitled,
+            dashed,
+            unseen,
         ]) {
             assert!(notice(&screen).is_empty(), "{screen}");
         }
