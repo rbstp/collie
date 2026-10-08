@@ -30,7 +30,7 @@ final class PreviewModel {
     @ObservationIgnored private var visible: [AgentRoute: Int] = [:]
     @ObservationIgnored private var connected: Set<String> = []
     @ObservationIgnored private var statuses: [AgentRoute: (status: AgentState, since: UInt64)] = [:]
-    @ObservationIgnored private var claude: Set<AgentRoute> = []
+    @ObservationIgnored private var kinds: [AgentRoute: String] = [:]
     @ObservationIgnored private var readAt: [AgentRoute: ContinuousClock.Instant] = [:]
     @ObservationIgnored private var fresh: Set<AgentRoute> = []
     @ObservationIgnored private var reading: Set<AgentRoute> = []
@@ -82,12 +82,12 @@ final class PreviewModel {
     func update(_ entries: [MachineFlockEntry]) -> Task<Void, Never>? {
         connected = Set(entries.filter { $0.flock?.link == .connected }.map(\.id))
         var next: [AgentRoute: (status: AgentState, since: UInt64)] = [:]
-        claude = []
+        kinds = [:]
         for entry in entries {
             for agent in entry.flock?.agents ?? [] {
                 let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
                 next[route] = (agent.status, agent.statusSinceMs)
-                if agent.kind == "claude" { claude.insert(route) }
+                kinds[route] = agent.kind
             }
         }
         // `since` also moves on a change that came and went between two flock polls.
@@ -152,7 +152,14 @@ final class PreviewModel {
     }
 
     private func show(_ ansi: String, for route: AgentRoute) {
-        let ansi = claude.contains(route) ? Self.card(ansi) : ansi
+        // A blocked agent's card is never cropped, so it cannot hide a pending prompt.
+        let ansi =
+            switch statuses[route]?.status == .blocked ? nil : kinds[route] {
+            case "claude": Self.card(ansi)
+            case "copilot": Self.copilotCard(ansi)
+            case "codex": Self.codexCard(ansi)
+            default: ansi
+            }
         if screens[route] != ansi { screens[route] = ansi }
     }
 
@@ -185,6 +192,50 @@ final class PreviewModel {
             let final = tail.last(where: { !blank(plain[$0]) })
         else { return card }
         return card + ansi[lines[last].endIndex..<lines[last + 1].startIndex] + ansi[lines[first].startIndex..<lines[final].endIndex]
+    }
+
+    /// Drops Copilot CLI's input box, the session row above it and the footer under it, and keeps
+    /// the working row Copilot draws in the footer's place. The box is the last row starting with
+    /// "╻▄", rows starting with "┃", then one starting with "╹▀", and at most three rows may follow
+    /// it, as a narrow pane wraps the footer. A dialog draws in place of the box, so a screen without
+    /// one is kept whole, as is one with a numbered option in the rows dropped.
+    nonisolated static func copilotCard(_ ansi: String) -> String {
+        let lines = ansi.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        let plain = lines.map(plainText)
+        // The scrollbar draws "┃" in the last column.
+        let blank = { (line: String) in line.allSatisfy { $0.isWhitespace || $0 == "┃" } }
+        guard let top = plain.lastIndex(where: { $0.hasPrefix("╻▄") }),
+            let bottom = plain[(top + 1)...].firstIndex(where: { !$0.hasPrefix("┃") }),
+            bottom > top + 1, plain[bottom].hasPrefix("╹▀"), plain[(bottom + 1)...].count(where: { !blank($0) }) <= 3
+        else { return ansi }
+        let cut = top > 0 && plain[top - 1].contains("Session:") ? top - 1 : top
+        guard !plain[cut...].contains(where: isOption), let last = plain[..<cut].lastIndex(where: { !blank($0) }) else { return ansi }
+        let card = String(ansi[..<lines[last].endIndex])
+        guard let working = plain.indices[(bottom + 1)...].first(where: { !blank(plain[$0]) }),
+            plain[working].contains(#/^\s*\S Working\b/#)
+        else { return card }
+        return card + ansi[lines[last].endIndex..<lines[last + 1].startIndex] + lines[working]
+    }
+
+    /// Drops Codex's composer and the status lines under it. The composer is the last row starting
+    /// with "› " that is not a numbered option, after a blank row, then rows indented by two spaces
+    /// or blank down to the blank row that at most two rows follow. Codex's dialogs reuse that layout,
+    /// so a screen with a numbered option from the row above the composer down is kept whole.
+    nonisolated static func codexCard(_ ansi: String) -> String {
+        let lines = ansi.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        let plain = lines.map(plainText)
+        let blank = { (line: String) in line.allSatisfy(\.isWhitespace) }
+        guard let prompt = plain.lastIndex(where: { $0.hasPrefix("› ") && !isOption($0) }), prompt > 0, blank(plain[prompt - 1]),
+            let end = plain.indices[(prompt + 1)...].first(where: { blank(plain[$0]) && plain[($0 + 1)...].count(where: { !blank($0) }) <= 2 }),
+            plain[(prompt + 1)..<end].allSatisfy({ $0.hasPrefix("  ") || blank($0) }), !plain[(prompt - 1)...].contains(where: isOption),
+            let last = plain[..<(prompt - 1)].lastIndex(where: { !blank($0) })
+        else { return ansi }
+        return String(ansi[..<lines[last].endIndex])
+    }
+
+    /// A numbered choice of a dialog, like "› 1. Yes" or "│ ❯ 2. No".
+    private nonisolated static func isOption(_ line: String) -> Bool {
+        line.contains(#/^\W*\d+\.\s/#)
     }
 
     /// collied sends only plain SGR escapes.
