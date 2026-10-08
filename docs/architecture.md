@@ -604,7 +604,7 @@ On both OSes, `collied status` also prints `tags:` (`(none)` for an untagged nod
 ## iOS
 
 - Only the app target links CollieCore (Rust + Go). The Go runtime starts at image load through a `__mod_init_func` initializer, so the widget extension and the NSE stay pure Swift and share an App Group container (reachability hint, Live Activity state). The watch targets, CollieWatch and CollieWatchWidgets, are pure Swift too.
-- UniFFI 0.32.2 bindings compile in a Swift 5 language-mode package target (generated async foreign-trait code fails Swift 6 checking, uniffi-rs #2458/#2818); the app itself is Swift 6 strict.
+- UniFFI 0.32.2 bindings compile in Swift 6 language mode, as does the app.
 - One xcframework, one static library per slice (device, simulator): the Rust staticlib bundles the Go c-archive linked by `tailscale-sys`.
 - Terminal font: MesloLGS NF (Apache 2.0, romkatv/powerlevel10k-media at 145eb9fbc2f42ee408dacd9b22d8e6e0e553f83d), bundled in the GhosttyTerminal package and loaded from data without registering it system-wide, so Nerd Font prompt and status-line glyphs render as on the Mac. SHA-256: Regular d97946186e97f8d7c0139e8983abf40a1d2d086924f2c5dbf1c29bd8f2c6e57d, Bold b6c0199cf7c7483c8343ea020658925e6de0aeb318b89908152fcb4d19226003, Italic 6f357bcbe2597704e157a915625928bca38364a89c22a4ac36e7a116dcd392ef, Bold Italic 56b4131adecec052c4b324efb818dd326d586dbc316fc68f98f1cae2eb8d1220. Glyphs it lacks fall back through CoreText's cascade.
 
