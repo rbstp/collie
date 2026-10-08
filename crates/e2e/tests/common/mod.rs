@@ -181,7 +181,10 @@ impl IdentitySigner for Soft {
 pub type ProbeStream = collie_tls::client::TlsStream<collie_tls::Sniff<tokio::net::UnixStream>>;
 
 /// A raw client's TLS, pinning the key collied keeps in `data_dir`, with one key of its own.
-pub async fn probe_tls(stream: tokio::net::UnixStream, data_dir: &Path) -> ProbeStream {
+pub async fn probe_tls(
+    stream: tokio::net::UnixStream,
+    data_dir: &Path,
+) -> std::io::Result<ProbeStream> {
     static KEY: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
     let mine = KEY.get_or_init(|| collie_tls::generate().unwrap());
     let identity = collie_tls::certified(collie_tls::load(mine).unwrap()).unwrap();
@@ -201,9 +204,9 @@ pub async fn probe_tls(stream: tokio::net::UnixStream, data_dir: &Path) -> Probe
     )
     .await
     {
-        Ok(s) => s,
+        Ok(s) => Ok(s),
         Err(collie_tls::ConnectError::Forbidden) => panic!("probe refused with 403"),
-        Err(collie_tls::ConnectError::Tls(e)) => panic!("probe tls: {e}"),
+        Err(collie_tls::ConnectError::Tls(e)) => Err(e),
     }
 }
 
@@ -513,6 +516,50 @@ pub struct Probe {
 
 impl Probe {
     pub async fn session(&self) -> Ws {
+        // collied closes a connection whose whois outlasts WHOIS_TIMEOUT, which a loaded
+        // test host can reach; the phone dials again then, and so does the probe. Only that
+        // audited close is retried: any other close without a reply still fails the test.
+        let timeouts = || {
+            audit_lines(&self.data_dir.join("audit.log"))
+                .iter()
+                .filter(|l| {
+                    l["result"]
+                        .as_str()
+                        .is_some_and(|r| r.starts_with("rejected: whois timed out"))
+                })
+                .count()
+        };
+        let mut closed = 0;
+        let stream = loop {
+            let before = timeouts();
+            let stream = self.dial().await;
+            match probe_tls(UnixStream::from_std(stream).unwrap(), &self.data_dir).await {
+                Ok(s) => break s,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof
+                        && closed < 3
+                        && timeouts() > before =>
+                {
+                    closed += 1;
+                    eprintln!("probe: collied timed out whois ({e}), dialing again");
+                }
+                Err(e) => panic!("probe tls: {e}"),
+            }
+        };
+        let mut req = format!("ws://{}{}", self.target, protocol::WS_PATH)
+            .into_client_request()
+            .unwrap();
+        req.headers_mut().insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static(protocol::WS_SUBPROTOCOL),
+        );
+        let (mut ws, _) = tokio_tungstenite::client_async(req, stream).await.unwrap();
+        let hello = json!({"protocol_version": protocol::PROTOCOL_VERSION, "app_version": "e2e"});
+        call(&mut ws, "hello", hello).await.unwrap();
+        ws
+    }
+
+    async fn dial(&self) -> std::os::unix::net::UnixStream {
         let stream = {
             let (node, target) = (self.node.clone(), self.target.clone());
             // netstack occasionally stalls one SYN for ~63 s; bounded retries keep the test fast.
@@ -528,18 +575,7 @@ impl Probe {
             .unwrap()
         };
         stream.set_nonblocking(true).unwrap();
-        let mut req = format!("ws://{}{}", self.target, protocol::WS_PATH)
-            .into_client_request()
-            .unwrap();
-        req.headers_mut().insert(
-            header::SEC_WEBSOCKET_PROTOCOL,
-            HeaderValue::from_static(protocol::WS_SUBPROTOCOL),
-        );
-        let stream = probe_tls(UnixStream::from_std(stream).unwrap(), &self.data_dir).await;
-        let (mut ws, _) = tokio_tungstenite::client_async(req, stream).await.unwrap();
-        let hello = json!({"protocol_version": protocol::PROTOCOL_VERSION, "app_version": "e2e"});
-        call(&mut ws, "hello", hello).await.unwrap();
-        ws
+        stream
     }
 
     pub async fn pair(&self, control: &Path) {
