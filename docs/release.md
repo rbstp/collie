@@ -117,9 +117,26 @@ The certificate and the profiles expire after a year; renew them and update thei
 ## App icon and TestFlight
 
 - The icon is a single 1024x1024 universal image, `Collie/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png`; Xcode derives every other size. The app's `Info.plist` sets `CFBundleIconName` to `AppIcon` and `project.yml` sets `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`: App Store validation rejects an upload whose icon is only in the asset catalog without `CFBundleIconName`.
-- `Info.plist` sets `ITSAppUsesNonExemptEncryption` to `false`, declaring that the app's encryption (WireGuard and TLS in the embedded Tailscale node, TLS between the phone and collied) is exempt, so App Store Connect does not ask the export compliance question for uploaded builds. Whether that declaration is correct is not yet reviewed.
 
 The iOS app embeds the watch app, so every iOS build, test and archive also builds for watchOS: both workflows install the watchOS platform on the `xcode-27` runner when it is missing. The watch app has its own copy of the icon, `Collie/CollieWatch/Assets.xcassets/AppIcon.appiconset/AppIcon.png`.
+
+## Export compliance
+
+This is not legal advice; confirm with counsel before an App Store release.
+
+The app implements standard encryption on top of Apple's: WireGuard (Curve25519, ChaCha20-Poly1305) in libtailscale and TLS 1.3 (rustls with ring) to collied. Notification payloads use CryptoKit. There is no proprietary or [non-standard](https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-C/part-772/section-772.1) cryptography, and the source is public.
+
+- **US (EAR)**: once generally available on the App Store, mass market under Note 3 to Category 5 Part 2, self-classified as 5D992.c under [15 CFR 740.17(b)(1)](https://www.ecfr.gov/current/title-15/subtitle-B/chapter-VII/subchapter-C/part-740/section-740.17). No CCATS. Since the 2021 rule (86 FR 16482), the annual self-classification report of 740.17(e)(3) covers components and certain executable software, not an end-item app like this one, so none is filed; this section is the classification record. If one is ever filed, it is due February 1 for the previous year, by email to `crypt-supp8@bis.doc.gov` and `enc@nsa.gov`.
+- **Apple**: `Info.plist` sets [`ITSAppUsesNonExemptEncryption`](https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption) to `false`. Apple's "exempt" means exempt from uploading documentation: standard algorithms not provided by the OS need a document only for the App Store in France ([Apple's table](https://developer.apple.com/help/app-store-connect/reference/app-information/export-compliance-documentation-for-encryption)). The key answers the encryption question for every build, so TestFlight uploads never stop at Missing Compliance. Never set `true` without the matching [`ITSEncryptionExportComplianceCode`](https://developer.apple.com/documentation/bundleresources/information-property-list/itsencryptionexportcompliancecode): builds then stop at Missing Compliance, and a code Apple did not issue can fail the upload.
+- **Internal TestFlight** (today): builds reach only the owner in Canada, and [Apple](https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations) applies US export law only to distribution outside the US or Canada. Nothing else to do.
+
+Before an App Store release:
+
+1. In App Store Connect, Pricing and Availability, App Availability, choose specific countries or regions and leave out France; All Countries or Regions includes it.
+2. If App Store Connect asks about encryption (App Information, App Encryption Documentation, or Manage next to a build), answer: uses encryption, yes; algorithms, "Standard encryption algorithms instead of, or in addition to, using or accessing the encryption within Apple's operating system"; available on the App Store in France, no. No document is needed.
+3. To ship in France instead: file a declaration with [ANSSI](https://cyber.gouv.fr/reglementation/reglementation-identite-confiance-numerique/controles-reglementaires-cryptographie/controle-moyen-de-cryptologie/) (up to a month), fill in the App Description and availability, [upload the declaration](https://developer.apple.com/help/app-store-connect/manage-app-information/determine-and-upload-app-encryption-documentation) under App Encryption Documentation with France set to yes, wait for Apple's approval, then in one commit set `ITSAppUsesNonExemptEncryption` to `true` and `ITSEncryptionExportComplianceCode` to the key value Apple shows next to the approved document.
+
+An external TestFlight group is not limited by App Store availability, so leaving out France does not keep its testers out of France. Apple's France requirement names only the App Store; until that is settled, invite no external testers located in France.
 
 ## Adding a signed extension target
 
