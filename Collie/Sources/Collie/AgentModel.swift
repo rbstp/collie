@@ -52,6 +52,10 @@ final class AgentModel {
     @ObservationIgnored private var typedDraft: String?
     @ObservationIgnored private var mirrorDelay: Task<Void, Never>?
     @ObservationIgnored private var mirroring: Task<Void, Never>?
+    /// The last command this screen asked collied to paste; only that is replaced unseen.
+    @ObservationIgnored private var mirrored = ""
+    /// ↑ or ↓ moved Claude Code's highlight off what the box holds; ⇥ takes it.
+    @ObservationIgnored private var menuMoved = false
     private(set) var promptError: String?
     private(set) var upload: AttachmentUpload?
     private var uploadTask: Task<Void, Never>?
@@ -159,7 +163,7 @@ final class AgentModel {
     }
 
     /// A slash command shows in Claude Code's input box, so Enter would run its highlighted command.
-    var commandShown: Bool { mode == .agent && macDraft?.hasPrefix("/") == true }
+    var commandShown: Bool { mode == .agent && blocked == nil && agent?.status != .blocked && macDraft?.hasPrefix("/") == true }
 
     var acceptsKeys: Bool { isTerminal ? !unlocking : blocked != .optionsOnly && blocked != .terminal && !jumpBanner }
 
@@ -236,7 +240,7 @@ final class AgentModel {
         } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, attachments.isEmpty, !dictation.isActive {
             draft = text
             macDraft = text
-        } else if Self.slashToken(draft) == Self.boxToken(text) {
+        } else if text == Self.boxToken(text), Self.slashToken(draft) == text {
             macDraft = text
         }
     }
@@ -272,13 +276,19 @@ final class AgentModel {
     private func runMirror() async {
         while mirrors, draft == typedDraft, let box = macDraft.flatMap(Self.boxToken), Self.slashToken(draft) != box {
             let target = Self.slashToken(draft)
+            if !target.isEmpty { mirrored = target }
             do {
                 try await core.slashDraft(machineId: route.machineId, terminalId: route.terminalId, command: target, expectedDraft: macDraft)
                 macDraft = target
+                mirrored = target
+                menuMoved = false
             } catch {
                 guard case .DraftChanged(let current) = error as? CoreError else { break }
                 macDraft = current
-                if !current.isEmpty, current != Self.boxToken(current) { mirrorPaused = true }
+                if current != mirrored {
+                    mirrorPaused = true
+                    promptError = Self.message(for: error)
+                }
             }
         }
         mirroring = nil
@@ -301,7 +311,7 @@ final class AgentModel {
         return String(text.prefix { !$0.isWhitespace })
     }
 
-    /// A command picked on the Mac (Tab, or the arrows) replaces the phone's; Tab's trailing space
+    /// A command picked on the Mac with Tab replaces the phone's; Tab's trailing space
     /// keeps what is typed next out of the command.
     private func adopt(_ text: String) {
         macDraft = text
@@ -439,6 +449,10 @@ final class AgentModel {
         mirrorDelay?.cancel()
         await mirroring?.value
         guard !sendingPrompt else { return }
+        if menuMoved, commandShown {
+            promptError = "Press ⇥ to take the highlighted command, then send."
+            return
+        }
         sendingPrompt = true
         promptError = nil
         defer { sendingPrompt = false }
@@ -447,6 +461,8 @@ final class AgentModel {
             try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: macDraft)
             if macDraft != nil { macDraft = "" }
             mirrorPaused = false
+            mirrored = ""
+            menuMoved = false
             let sentIds = Set(files.map(\.id))
             attachments.removeAll { sentIds.contains($0.id) }
             if draft.hasPrefix(sent) {
@@ -454,7 +470,8 @@ final class AgentModel {
             }
         } catch {
             if case .DraftChanged(let current) = error as? CoreError {
-                if current.hasPrefix("/"), draft.hasPrefix("/") { adopt(current) } else { macDraft = current }
+                let mine = Self.slashToken(draft)
+                if !mine.isEmpty, Self.boxToken(current)?.hasPrefix(mine) == true { adopt(current) } else { macDraft = current }
             }
             promptError = Self.message(for: error)
         }
@@ -636,6 +653,9 @@ final class AgentModel {
                     try await core.sendKeys(machineId: route.machineId, terminalId: route.terminalId, keys: batch)
                 }
                 notice = nil
+                if command, let last = batch.last(where: { $0 == .up || $0 == .down || $0 == .tab }) {
+                    menuMoved = last != .tab
+                }
                 if command {
                     try? await Task.sleep(for: .milliseconds(150))
                     if let text = try? await core.agentDraft(machineId: route.machineId, terminalId: route.terminalId) { adopt(text) }

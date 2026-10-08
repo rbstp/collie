@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentSlashDraftParams, AgentStatus,
-    AgentTypeTextParams, Cwd, ErrorCode, NoticeDigit, OpId, OutputPatch, PaneCloseParams,
+    AgentTypeTextParams, Cwd, ErrorCode, Key, NoticeDigit, OpId, OutputPatch, PaneCloseParams,
     ReadParams, ReadSource, Request, Response, TaskNewParams, TaskOptions, TerminalId,
     TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId, limits,
 };
@@ -47,6 +47,7 @@ const TYPED_NOT_SENT: &str = "the prompt did not take the text; Enter was not se
 pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
 pub const LOCKED: &str = "the terminal is locked; unlock it again";
 const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
+const COMMAND_SHOWN: &str = "a slash command shows in the input box; send it as a prompt";
 /// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
 const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
 
@@ -124,6 +125,9 @@ pub struct Driver {
     agents: Vec<AgentKind>,
     roots: Vec<PathBuf>,
     ops: OpCache,
+    /// Prompts, keys and slash drafts from different sessions never interleave, so a
+    /// mirrored command is never submitted by another session's write.
+    box_writes: tokio::sync::Mutex<()>,
 }
 
 pub enum Watched {
@@ -163,6 +167,7 @@ impl Driver {
             agents,
             roots,
             ops: OpCache::new(OPS_PER_PEER, OP_TTL),
+            box_writes: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -485,6 +490,7 @@ impl Driver {
     }
 
     pub async fn prompt(&self, p: AgentPromptParams, auth: &Authorized) -> Reply {
+        let _box = self.box_writes.lock().await;
         let a = self.ready_agent(&p.terminal_id).await?;
         // herdr pastes a prompt after whatever is in Claude Code's input box.
         if a.agent.as_deref() == Some("claude") {
@@ -566,6 +572,7 @@ impl Driver {
         p: AgentSendKeysParams,
         auth: &Authorized,
     ) -> (Reply, Option<String>) {
+        let _box = self.box_writes.lock().await;
         let (a, screen) = match self
             .writable_agent(&p.terminal_id, prompt::open_to_keys)
             .await
@@ -584,6 +591,20 @@ impl Driver {
             };
             if scrolled {
                 return (fail(ErrorCode::AgentNotReady, SCROLLED), None);
+            }
+            // Enter would run the command menu's highlighted entry.
+            if screen.is_none()
+                && p.keys
+                    .iter()
+                    .any(|k| matches!(k, Key::Enter | Key::CtrlEnter))
+            {
+                match self.input_box(&a.pane_id).await {
+                    Ok(Some(InputBox::Draft(d))) if d.text.starts_with('/') => {
+                        return (fail(ErrorCode::AgentNotReady, COMMAND_SHOWN), None);
+                    }
+                    Ok(_) => {}
+                    Err(e) => return (Err(e), None),
+                }
             }
         }
         let keys: Vec<&str> = p.keys.iter().map(|k| k.herdr_name()).collect();
@@ -752,6 +773,7 @@ impl Driver {
     /// through [`Self::replace_draft`]; an empty command stops there. The agent, the banner
     /// and an empty visible box are checked again just before the paste.
     pub async fn slash_draft(&self, p: AgentSlashDraftParams, auth: &Authorized) -> Reply {
+        let _box = self.box_writes.lock().await;
         let a = self.claude_at_bottom(&p.terminal_id).await?;
         let expected = p.expected_draft.as_ref().map(|d| d.as_str());
         self.replace_draft(&a.pane_id, expected, auth).await?;
@@ -1291,8 +1313,6 @@ impl OpCache {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use protocol::Key;
 
     use super::*;
 

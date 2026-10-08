@@ -1475,7 +1475,7 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     #expect(core.snapshot.slashes.isEmpty)
     #expect(core.snapshot.keys == [[.down]])
 
-    let codex = openedAgent(FakeCore(), kind: "codex", macDraft: "")
+    let codex = openedAgent(core, kind: "codex", macDraft: "")
     await codex.loadMacDraft()
     codex.typed("/s")
     await codex.flushMirror()
@@ -1542,6 +1542,41 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     #expect(model.tap(.enter) == nil && model.tap(.ctrlEnter) == nil)
     await model.tap(.down)?.value
     #expect(core.snapshot.keys == [[.down]])
+
+    model.blocked = .keys
+    #expect(!model.commandShown, "Enter answers the question that covers the box")
+    await model.tap(.enter)?.value
+    #expect(core.snapshot.keys == [[.down], [.enter]])
+}
+
+@MainActor
+@Test func arrowsNeedTabBeforeSend() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.typed("/s")
+    await model.flushMirror()
+    core.state.withLock { $0.macDraft = "/s" }
+    await model.tap(.down)?.value
+    #expect(model.draft == "/s")
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts.isEmpty, "the highlighted command is not what the box holds")
+    #expect(model.promptError != nil)
+
+    model.typed("/st")
+    await model.flushMirror()
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["/st"], "a new token resets the menu")
+
+    model.typed("/s")
+    await model.flushMirror()
+    core.state.withLock { $0.macDraft = "/s" }
+    await model.tap(.down)?.value
+    core.state.withLock { $0.macDraft = "/status" }
+    await model.tap(.tab)?.value
+    #expect(model.draft == "/status ")
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["/st", "/status"])
+    #expect(core.snapshot.expectedDrafts == ["/st", "/status"])
 }
 
 @MainActor
@@ -1566,25 +1601,48 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
 @Test func textTypedOnTheMacPausesTheMirror() async {
     let core = FakeCore()
     let model = await slashReady(core)
-    core.state.withLock { $0.slashErrors = [.DraftChanged(current: "/x")] }
+    core.state.withLock { $0.slashErrors = [.DraftChanged(current: "/s")] }
     model.typed("/s")
     await model.flushMirror()
-    #expect(core.snapshot.slashes == ["/s", "/s"], "a bare command is replaced")
-    #expect(core.snapshot.slashExpected == ["", "/x"])
-
-    core.state.withLock { $0.slashErrors = [.DraftChanged(current: "typed on the Mac")] }
     model.typed("/sk")
     await model.flushMirror()
+    #expect(core.snapshot.slashes == ["/s", "/sk"], "a paste whose reply was lost is its own")
+    #expect(core.snapshot.slashExpected == ["", "/s"])
+    #expect(model.promptError == nil)
+
+    core.state.withLock { $0.slashErrors = [.DraftChanged(current: "/x")] }
     model.typed("/ski")
     await model.flushMirror()
-    #expect(core.snapshot.slashes == ["/s", "/s", "/sk"])
-    #expect(model.macDraft == "typed on the Mac" && !model.commandShown)
+    model.typed("/skil")
+    await model.flushMirror()
+    #expect(core.snapshot.slashes == ["/s", "/sk", "/ski"], "a command typed on the Mac is not replaced")
+    #expect(model.macDraft == "/x" && model.promptError != nil)
 
     await model.sendPrompt()
-    #expect(core.snapshot.expectedDrafts == ["typed on the Mac"])
+    #expect(core.snapshot.expectedDrafts == ["/x"], "shown before the send replaces it")
+    core.state.withLock { $0.slashErrors = [.DraftChanged(current: "typed on the Mac")] }
     model.typed("/c")
     await model.flushMirror()
-    #expect(core.snapshot.slashes == ["/s", "/s", "/sk", "/c"], "resumes after a send")
+    model.typed("/co")
+    await model.flushMirror()
+    #expect(core.snapshot.slashes == ["/s", "/sk", "/ski", "/c"], "resumes after a send")
+    #expect(model.macDraft == "typed on the Mac" && !model.commandShown)
+}
+
+@MainActor
+@Test func onlyACompletionOfThePhoneCommandIsTaken() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "/review delete the old branch")
+    model.draft = "/review foo"
+    await model.loadMacDraft()
+    #expect(model.macDraft == nil, "text the phone never showed stays unknown")
+
+    core.set(error: .DraftChanged(current: "/deploy prod"))
+    await model.sendPrompt()
+    #expect(model.draft == "/review foo" && model.macDraft == "/deploy prod")
+    core.set(error: .DraftChanged(current: "/reviewer  [pr]"))
+    await model.sendPrompt()
+    #expect(model.draft == "/reviewer foo", "a Tab completion missed after the keys")
 }
 
 @MainActor

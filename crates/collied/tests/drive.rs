@@ -1249,6 +1249,44 @@ async fn slash_draft_refusals_write_nothing() {
 }
 
 #[tokio::test]
+async fn enter_never_runs_a_slash_command_in_the_box() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let send = |keys: Vec<Key>| AgentSendKeysParams {
+        op_id: op('K'),
+        terminal_id: tid(CLAUDE),
+        keys,
+    };
+    herdr.with(|h| h.text = SLASH_MENU.into());
+    for enter in [Key::Enter, Key::CtrlEnter] {
+        assert_eq!(
+            drive.send_keys(send(vec![Key::Down, enter]), &yes()).await,
+            (
+                Err((
+                    ErrorCode::AgentNotReady,
+                    "a slash command shows in the input box; send it as a prompt".into()
+                )),
+                None
+            )
+        );
+    }
+    assert!(herdr.mutations().is_empty());
+    assert_eq!(
+        drive
+            .send_keys(send(vec![Key::Down, Key::Tab]), &yes())
+            .await,
+        (Ok(Response::Ok), None)
+    );
+    herdr.with(|h| h.text = screen("❯ fix the build"));
+    assert_eq!(
+        drive.send_keys(send(vec![Key::Enter]), &yes()).await,
+        (Ok(Response::Ok), None)
+    );
+    assert_eq!(herdr.mutations(), ["agent.send_keys", "agent.send_keys"]);
+}
+
+#[tokio::test]
 async fn keys_and_prompts_are_refused_while_claude_is_scrolled_up() {
     let herdr = Mock::start();
     let (_d, base) = root();
