@@ -971,36 +971,53 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
                 (0, "Dismiss"),
             ],
         ),
+        (
+            HEADS_UP_EXPLAINED_DISMISSED,
+            &[
+                (1, "That was helpful"),
+                (2, "Didn\u{2019}t understand"),
+                (0, "Dismiss"),
+            ],
+        ),
+        (
+            HEADS_UP_INTERNAL,
+            &[
+                (1, "Learn more"),
+                (2, "Knew this already"),
+                (3, "What is this"),
+                (4, "Disable"),
+                (0, "Dismiss"),
+            ],
+        ),
+        (
+            YOU_SHOULD_KNOW,
+            &[(1, "Learn more"), (2, "Knew this already"), (0, "Dismiss")],
+        ),
     ] {
         herdr.with(|h| h.text = shown.into());
         for &(d, label) in options {
-            // These two fill the box after the digit; the call returns once it shows.
-            let fills = matches!(label, "Chat in main session" | "Turn off suggestions");
+            // The call returns once the box is no longer empty.
             herdr.with(|h| {
                 h.calls.clear();
-                if fills {
-                    h.screens = [shown.into(), shown.into(), filled.clone()].into();
-                }
+                h.screens = [shown.into(), shown.into(), filled.clone()].into();
             });
             assert_eq!(
                 drive.answer_notice(&answer(CLAUDE, d, label), &yes()).await,
                 Ok(Response::Ok)
             );
-            let mut methods = vec![
+            let methods = [
                 "agent.list",
                 "agent.get",
                 "pane.read",
                 "pane.read",
                 "pane.send_text",
+                "pane.read",
             ];
             let mut reads = vec![
                 json!({"pane_id": "w6:p1", "source": "detection", "format": "text"}),
                 json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"}),
             ];
-            if fills {
-                methods.push("pane.read");
-                reads.push(reads[1].clone());
-            }
+            reads.push(reads[1].clone());
             assert_eq!(herdr.methods(), methods, "{label}");
             assert_eq!(herdr.params("pane.read"), reads, "{label}");
             sent.extend(herdr.params("pane.send_text"));
@@ -1011,7 +1028,8 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
     assert_eq!(
         texts,
         [
-            "1", "2", "3", "0", "1", "2", "0", "1", "2", "0", "1", "2", "3", "4", "0"
+            "1", "2", "3", "0", "1", "2", "0", "1", "2", "0", "1", "2", "3", "4", "0", "1", "2",
+            "0", "1", "2", "3", "4", "0", "1", "2", "0"
         ]
     );
     assert!(sent.iter().all(|p| p["pane_id"] == "w6:p1"));
@@ -1028,11 +1046,17 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         (HEADS_UP_EXPLAINED, 3, "Understood", none),
         (HEADS_UP_EXPLAINED_SURVEY, 1, "Understood", none),
         (HEADS_UP, 4, "Turn off suggestions", none),
-        (HEADS_UP_INTERNAL, 4, "Disable", none),
+        (HEADS_UP_INTERNAL, 4, "Turn off suggestions", none),
         (HEADS_UP_DISMISSED, 4, "Disable", none),
         (HEADS_UP_DISMISSED, 3, "Couldn't understand", none),
-        (HEADS_UP_EXPLAINED_DISMISSED, 1, "That was helpful", none),
-        (YOU_SHOULD_KNOW, 1, "Learn more", none),
+        (HEADS_UP_EXPLAINED_DISMISSED, 2, "Not relevant", none),
+        (
+            HEADS_UP_EXPLAINED_DISMISSED,
+            3,
+            "Couldn\u{2019}t understand",
+            none,
+        ),
+        (YOU_SHOULD_KNOW, 3, "Learn more", none),
         (SURVEY, 1, "Good", none),
         (SURVEY_NARROW, 1, "Bad", none),
         (BOTTOM, 1, "Bad", none),

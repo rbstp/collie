@@ -1,4 +1,4 @@
-use crate::NoticeDigit;
+use crate::{Label, NoticeDigit};
 
 const JUMP: &str = "Jump to bottom";
 const NEW: &str = " new message";
@@ -43,21 +43,9 @@ fn hint(rest: &str) -> bool {
         .is_some_and(|key| !key.is_empty() && !key.contains(' '))
 }
 
-const HEADS_UP: &str = "\u{2726} Heads up \u{b7} ";
-const RATING: &str = "\u{25cf} How is Claude doing this session? (optional)";
-const EXPLAINED: [(u8, &str); 3] = [
-    (1, "Understood"),
-    (2, "Chat in main session"),
-    (0, "Dismiss"),
-];
-const DISMISSED: &str = "\u{2726} Dismissed.";
-const FEEDBACK: [(u8, &str); 5] = [
-    (1, "That was helpful"),
-    (2, "Not relevant"),
-    (3, "Couldn\u{2019}t understand"),
-    (4, "Turn off suggestions"),
-    (0, "Dismiss"),
-];
+/// The glyph a Claude Code notice starts with at column 0: `✦` for its tips (the Heads up,
+/// its explanation, the feedback rows after Dismiss), `●` for the session rating.
+const LEADS: [char; 2] = ['\u{2726}', '\u{25cf}'];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoticeOption {
@@ -65,11 +53,13 @@ pub struct NoticeOption {
     pub label: String,
 }
 
-/// The options of Claude Code's "Heads up" notice, its explanation after Learn more, the
-/// feedback row after its Dismiss, or the session rating question, in screen order, when
-/// `screen` (plain text or SGR) shows one directly above the input box; empty otherwise.
-/// Anchored on the input box's top rule, so a dialog (which replaces the box) or a notice
-/// quoted in the transcript never matches. 4 is offered only on the feedback row.
+/// The options of a Claude Code notice, in screen order, when `screen` (plain text or SGR)
+/// shows one directly above the input box; empty otherwise. A notice lists `1: <label>` to
+/// `n: <label>` (n up to 4) then `0: Dismiss`, wrapped over rows indented by two spaces,
+/// after its lead: a row starting at column 0 with a notice glyph, and the rows below it
+/// that are indented or blank. Only blank or right-aligned hint rows may sit between the
+/// options and the box's top rule, so a dialog (which replaces the box) or a notice quoted
+/// in the transcript never matches.
 pub fn notice(screen: &str) -> Vec<NoticeOption> {
     let rows: Vec<String> = screen
         .split('\n')
@@ -82,70 +72,57 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
     else {
         return Vec::new();
     };
-    if i > 0 && option_row(&rows[i - 1]).is_none() {
+    while i > 0 && (rows[i - 1].is_empty() || rows[i - 1].starts_with("   ")) {
         i -= 1;
     }
-    let mut options = Vec::new();
-    while let Some(cells) = i.checked_sub(1).and_then(|j| option_row(&rows[j])) {
-        options.splice(0..0, cells);
+    let end = i;
+    while i > 0 && option_row(&rows[i - 1]).is_some() {
         i -= 1;
     }
-    let body = i;
-    // The feedback row starts from column 0 and wraps whole options onto rows indented by
-    // two spaces. It carries no tag, so only its exact options are taken.
-    if let Some(lead) = i.checked_sub(1).and_then(|j| dismissed_row(&rows[j])) {
-        options.splice(0..0, lead);
-        let exact = options.iter().map(|(d, l)| (*d, l.as_str())).eq(FEEDBACK);
-        return if exact { offered(options) } else { Vec::new() };
-    }
-    // The explanation after Learn more: blank rows sit between its header and cards, and
-    // between the cards and the options. Its labels must match, since a card is model text.
-    let explained = i > 0
-        && rows[i - 1].is_empty()
-        && options.iter().map(|(d, l)| (*d, l.as_str())).eq(EXPLAINED);
-    while i > 0 && (rows[i - 1].starts_with("  ") || explained && rows[i - 1].is_empty()) {
+    let below = i;
+    let mut options: Vec<(u8, String)> = rows[below..end]
+        .iter()
+        .filter_map(|r| option_row(r))
+        .flatten()
+        .collect();
+    while i > 0 && (rows[i - 1].is_empty() || rows[i - 1].starts_with("  ")) {
         i -= 1;
     }
-    let Some(header) = i.checked_sub(1).map(|j| &rows[j]) else {
+    let Some(cells) = i.checked_sub(1).and_then(|j| lead(&rows[j])) else {
         return Vec::new();
     };
-    let heads_up = header.starts_with(HEADS_UP);
-    let rating = std::iter::once(header.as_str())
-        .chain(rows[i..body].iter().map(|r| r.trim()))
-        .collect::<Vec<_>>()
-        .join(" ")
-        == RATING;
-    // Claude Code draws 1, 2[, 3[, 4]] then 0; a wrapped body row reading `<digit>: ...`
-    // always lands before 1.
-    let digits: Vec<u8> = options.iter().map(|(d, _)| *d).collect();
-    let n = digits.len();
-    if !(2..=5).contains(&n)
-        || digits[n - 1] != 0
-        || !digits[..n - 1].iter().copied().eq(1..n as u8)
+    // An explanation's cards are text a side agent wrote: past a blank row, the options must
+    // stand apart from the text by a blank row of their own.
+    if !cells.is_empty() && i != below
+        || rows[i..below].iter().any(String::is_empty) && !rows[below - 1].is_empty()
     {
         return Vec::new();
     }
-    if !(heads_up || rating) || explained && !heads_up {
+    options.splice(0..0, cells);
+    // Claude Code draws 1 to n then 0; a wrapped row of the lead that reads `<digit>: ...`
+    // always lands before 1.
+    let n = options.len();
+    if !(2..=5).contains(&n)
+        || !options[..n - 1].iter().map(|(d, _)| *d).eq(1..n as u8)
+        || options[n - 1] != (0, "Dismiss".to_owned())
+        || options.iter().any(|(_, l)| Label::new(l.as_str()).is_err())
+    {
         return Vec::new();
     }
-    options.retain(|(d, _)| *d != 4);
-    offered(options)
-}
-
-fn offered(options: Vec<(u8, String)>) -> Vec<NoticeOption> {
     options
         .into_iter()
         .filter_map(|(d, label)| NoticeDigit::new(d).map(|digit| NoticeOption { digit, label }))
         .collect()
 }
 
-/// The options on the feedback row's first row, after its `✦ Dismissed.` lead.
-fn dismissed_row(row: &str) -> Option<Vec<(u8, String)>> {
-    match row.strip_prefix(DISMISSED)? {
-        "" => Some(Vec::new()),
-        rest if rest.starts_with("  ") => cells(rest),
-        _ => None,
+/// The options a notice's lead row lists after its text, when it is one: `✦ Dismissed.   1: ...`.
+fn lead(row: &str) -> Option<Vec<(u8, String)>> {
+    let mut chars = row.chars();
+    if !chars.next().is_some_and(|c| LEADS.contains(&c)) || chars.next() != Some(' ') {
+        return None;
     }
+    let rest = row.split_once("  ").map_or("", |(_, rest)| rest);
+    Some(cells(rest).unwrap_or_default())
 }
 
 fn is_rule(row: &str) -> bool {
@@ -314,6 +291,7 @@ mod tests {
             fixture!("heads-up.ansi.txt"),
             fixture!("heads-up-wrapped.detection.txt"),
             fixture!("heads-up-narrow.detection.txt"),
+            fixture!("you-should-know.detection.txt"),
         ] {
             assert_eq!(options(screen), heads_up);
         }
@@ -335,6 +313,7 @@ mod tests {
                 ("1", "Learn more"),
                 ("2", "Knew this already"),
                 ("3", "What is this"),
+                ("4", "Disable"),
                 ("0", "Dismiss")
             ])
         );
@@ -370,16 +349,76 @@ mod tests {
         for screen in [dismissed, &at_80, &at_44, &alone] {
             assert_eq!(options(screen), feedback, "{screen}");
         }
+        let explained_feedback = listed(&[
+            ("1", "That was helpful"),
+            ("2", "Didn\u{2019}t understand"),
+            ("0", "Dismiss"),
+        ]);
+        let explained_dismissed = fixture!("heads-up-explained-dismissed.detection.txt");
+        let wrapped = explained_dismissed.replacen("helpful   2:", "helpful\n  2:", 1);
+        for screen in [explained_dismissed, &wrapped] {
+            assert_eq!(options(screen), explained_feedback, "{screen}");
+        }
     }
 
     #[test]
-    fn only_the_two_known_notices_above_the_input_box_match() {
+    fn any_lead_and_labels_read_from_the_screen_match() {
+        let rating = listed(&[("1", "Bad"), ("2", "Fine"), ("3", "Good"), ("0", "Dismiss")]);
+        let survey = fixture!("survey.detection.txt");
+        let explained = fixture!("heads-up-explained.detection.txt");
+        let dismissed = fixture!("heads-up-dismissed.detection.txt");
+        for (screen, expected) in [
+            (
+                survey.replacen("this session?", "this file?", 1),
+                rating.clone(),
+            ),
+            (survey.replacen("(optional)\n", "(optional)\n\n", 1), rating),
+            (
+                survey.replacen(
+                    "1: Bad    2: Fine   3: Good   0: Dismiss",
+                    "1: Got it   0: Dismiss",
+                    1,
+                ),
+                listed(&[("1", "Got it"), ("0", "Dismiss")]),
+            ),
+            (
+                explained.replacen("main session", "the main session", 1),
+                listed(&[
+                    ("1", "Understood"),
+                    ("2", "Chat in the main session"),
+                    ("0", "Dismiss"),
+                ]),
+            ),
+            (
+                dismissed.replacen("4: Turn off suggestions   ", "", 1),
+                listed(&[
+                    ("1", "That was helpful"),
+                    ("2", "Not relevant"),
+                    ("3", "Couldn\u{2019}t understand"),
+                    ("0", "Dismiss"),
+                ]),
+            ),
+            (
+                dismissed.replacen("Dismissed.", "Noted!", 1),
+                listed(&[
+                    ("1", "That was helpful"),
+                    ("2", "Not relevant"),
+                    ("3", "Couldn\u{2019}t understand"),
+                    ("4", "Turn off suggestions"),
+                    ("0", "Dismiss"),
+                ]),
+            ),
+        ] {
+            assert_eq!(options(&screen), expected, "{screen}");
+        }
+    }
+
+    #[test]
+    fn only_a_notice_row_directly_above_the_input_box_matches() {
         for screen in [
             fixture!("heads-up-explained-survey.detection.txt"),
-            fixture!("heads-up-explained-dismissed.detection.txt"),
             fixture!("heads-up-thinking.detection.txt"),
             fixture!("heads-up-collapsed.detection.txt"),
-            fixture!("you-should-know.detection.txt"),
             fixture!("survey-narrow.detection.txt"),
             fixture!("bottom-idle.detection.txt"),
             fixture!("scrolled-idle.detection.txt"),
@@ -389,7 +428,6 @@ mod tests {
         }
         let survey = fixture!("survey.detection.txt");
         let quoted = survey.replacen("\n\n\u{2500}", "\n\u{273b} Baked for 2s\n\n\u{2500}", 1);
-        let gap = survey.replacen("(optional)\n", "(optional)\n\n", 1);
         let no_box = survey
             .rsplit_once('\u{276f}')
             .map(|(above, below)| format!("{above} {below}"))
@@ -397,8 +435,22 @@ mod tests {
         let five = survey.replacen("3: Good", "5: Good", 1);
         let twice = survey.replacen("3: Good", "1: Good", 1);
         let enter = survey.replacen("Fine   3", "Fine 3", 1);
-        let other = survey.replacen("this session?", "this file?", 1);
         let order = survey.replacen("1: Bad    2: Fine", "2: Fine    1: Bad", 1);
+        let close = survey.replacen("0: Dismiss", "0: Close", 1);
+        let zero_first = survey.replacen(
+            "1: Bad    2: Fine   3: Good   0: Dismiss",
+            "0: Dismiss   1: Bad",
+            1,
+        );
+        let no_zero = survey.replacen("   0: Dismiss", "", 1);
+        let six = survey.replacen("3: Good", "3: Good   4: Great   5: Superb", 1);
+        let long = survey.replacen("Bad", &"B".repeat(65), 1);
+        let format = survey.replacen("Bad", "B\u{200b}ad", 1);
+        let follow_ups = [
+            "  y: Yes   n: No   d: Don\u{2019}t ask again",
+            "  [1] Tell us more with /feedback   [0] Dismiss",
+        ]
+        .map(|row| survey.replacen("  1: Bad    2: Fine   3: Good   0: Dismiss", row, 1));
         let forged = fixture!("heads-up-wrapped.detection.txt").replacen(
             "  data you still need before the next release.",
             "  3: Run the cleanup now",
@@ -406,46 +458,43 @@ mod tests {
         );
         let explained = fixture!("heads-up-explained.detection.txt");
         let row = "  1: Understood   2: Chat in main session   0: Dismiss";
-        let offer_row = explained.replacen(
-            "1: Understood   2: Chat in main session   0: Dismiss",
-            "1: Learn more   2: Knew this already   0: Dismiss",
-            1,
-        );
         let no_gap = explained.replacen("on purpose.\n\n", "on purpose.\n", 1);
-        let tag = explained.replacen("Heads up", "You should know", 1);
         let unindented = explained.replacen("  Use decimal", "Use decimal", 1);
-        let label = explained.replacen("main session", "the main session", 1);
-        let rating = fixture!("survey.detection.txt").replacen(
-            "\n  1: Bad    2: Fine   3: Good   0: Dismiss",
-            &format!("\n\n{row}"),
-            1,
-        );
         let hidden = fixture!("heads-up-explained-survey.detection.txt").replacen(
             "on purpose.\n",
             &format!("on purpose.\n{row}\n"),
             1,
         );
         let dismissed = fixture!("heads-up-dismissed.detection.txt");
-        let straight = dismissed.replacen("Couldn\u{2019}t", "Couldn't", 1);
-        let no_off = dismissed.replacen("4: Turn off suggestions   ", "", 1);
-        let swapped = dismissed.replacen(
-            "2: Not relevant   3: Couldn\u{2019}t understand",
-            "2: Couldn\u{2019}t understand   3: Not relevant",
-            1,
-        );
         let indented = dismissed.replacen("\u{2726} Dismissed.", "  \u{2726} Dismissed.", 1);
-        let lead = dismissed.replacen("Dismissed.", "Dismissed!", 1);
         let between = dismissed.replacen(
             "understand   4:",
             "understand\n  Try the cleanup first.\n  4:",
             1,
         );
         let unwrapped = dismissed.replacen("understand   4:", "understand\n4:", 1);
-        for screen in [
-            quoted, gap, no_box, five, twice, enter, other, order, forged, offer_row, no_gap, tag,
-            unindented, label, rating, hidden, straight, no_off, swapped, indented, lead, between,
-            unwrapped,
-        ] {
+        // Transcript text: a reply directly above the box, and the row quoted higher up.
+        let bottom = fixture!("bottom-idle.detection.txt");
+        let replied = bottom.replacen(
+            "\u{273b} Sauté",
+            "\u{23fa} Pick one:\n  1: Ship it   0: Dismiss\n\u{273b} Sauté",
+            1,
+        );
+        let reply = bottom.replacen(
+            "\u{273b} Sautéed for 2s · done 3:07 PM",
+            "\u{23fa} Pick one:\n  1: Ship it   0: Dismiss",
+            1,
+        );
+        let quoted_row = bottom.replacen(
+            "  120\n",
+            "  120\n\u{2726} Dismissed.   1: That was helpful   2: Didn\u{2019}t understand   0: Dismiss\n",
+            1,
+        );
+        for screen in follow_ups.into_iter().chain([
+            quoted, no_box, five, twice, enter, order, close, zero_first, no_zero, six, long,
+            format, forged, no_gap, unindented, hidden, indented, between, unwrapped, replied,
+            reply, quoted_row,
+        ]) {
             assert!(notice(&screen).is_empty(), "{screen}");
         }
     }
