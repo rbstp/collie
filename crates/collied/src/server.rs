@@ -1752,9 +1752,10 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::AgentScrollBottom(p) => p.terminal_id.as_str(),
         Request::AgentAnswerNotice(p) => {
             return Some(format!(
-                "{} digit={}",
+                "{} digit={} label={:?}",
                 p.terminal_id.as_str(),
-                p.digit.as_str()
+                p.digit.as_str(),
+                p.label.as_str()
             ));
         }
         Request::AgentSlashDraft(p) => p.terminal_id.as_str(),

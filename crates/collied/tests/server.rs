@@ -822,7 +822,7 @@ async fn scenario(
         "\"method\":\"agent.scroll_bottom\"",
         "\"result\":\"agent_not_ready: already at the bottom\"",
         "\"method\":\"agent.answer_notice\"",
-        "\"target\":\"term_65ce7ae4fd5731 digit=1\"",
+        "\"target\":\"term_65ce7ae4fd5731 digit=1 label=\\\"Bad\\\"\"",
         "\"result\":\"agent_not_ready: no notice with that option\"",
         "\"method\":\"agent.slash_draft\"",
         "\"result\":\"draft_not_cleared: the agent's input box could not be read; nothing was sent\"",

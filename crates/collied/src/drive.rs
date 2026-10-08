@@ -126,8 +126,9 @@ pub struct Driver {
     agents: Vec<AgentKind>,
     roots: Vec<PathBuf>,
     ops: OpCache,
-    /// Prompts, keys and slash drafts from different sessions never interleave, so a
-    /// mirrored command is never submitted by another session's write.
+    /// Prompts, keys, slash drafts and notice answers from different sessions never
+    /// interleave, so a mirrored command or a side agent's note is never submitted by
+    /// another session's write.
     box_writes: tokio::sync::Mutex<()>,
 }
 
@@ -730,6 +731,7 @@ impl Driver {
     /// option. The notice and the box are checked on the same visible read, the last one
     /// before the write.
     pub async fn answer_notice(&self, p: &AgentAnswerNoticeParams, auth: &Authorized) -> Reply {
+        let _box = self.box_writes.lock().await;
         let a = self.ready_agent(&p.terminal_id).await?;
         if a.agent.as_deref() != Some("claude") {
             return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
