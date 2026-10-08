@@ -10,13 +10,18 @@
         "digit": {
           "$ref": "#/$defs/NoticeDigit"
         },
+        "label": {
+          "$ref": "#/$defs/Label",
+          "description": "The option's label as the phone showed it: a follow-up reuses a digit with another\nmeaning, so collied sends the digit only while the screen lists this exact option."
+        },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"
         }
       },
       "required": [
         "terminal_id",
-        "digit"
+        "digit",
+        "label"
       ],
       "type": "object"
     },

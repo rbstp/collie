@@ -18,6 +18,7 @@ final class FakeCore: AgentCore {
         var stars: [String] = []
         var scrolls: [String] = []
         var answers: [UInt8] = []
+        var answerLabels: [String] = []
         var slashes: [String] = []
         var slashExpected: [String?] = []
         var slashErrors: [CoreError] = []
@@ -164,8 +165,11 @@ final class FakeCore: AgentCore {
     func scrollBottom(machineId: String, terminalId: String) async throws {
         try await call { $0.scrolls.append(terminalId) }
     }
-    func answerNotice(machineId: String, terminalId: String, digit: UInt8) async throws {
-        try await call { $0.answers.append(digit) }
+    func answerNotice(machineId: String, terminalId: String, digit: UInt8, label: String) async throws {
+        try await call {
+            $0.answers.append(digit)
+            $0.answerLabels.append(label)
+        }
     }
     func slashDraft(machineId: String, terminalId: String, command: String, expectedDraft: String?) async throws {
         try await call {
@@ -1053,7 +1057,7 @@ private func noticeShown(
     #expect(model.noticeOptions.map(\.label) == ["Bad", "Fine", "Good", "Dismiss"])
     #expect(model.acceptsKeys)
     await model.answerNotice(model.noticeOptions[2])
-    #expect(core.snapshot.answers == [3])
+    #expect(core.snapshot.answers == [3] && core.snapshot.answerLabels == ["Good"])
     #expect(core.snapshot.prompts.isEmpty && core.snapshot.keys.isEmpty)
     #expect(model.noticeOptions.isEmpty, "hidden until a new screen shows the notice again")
 

@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use protocol::{
-    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentSlashDraftParams, AgentStatus,
-    AgentTypeTextParams, Cwd, ErrorCode, Key, NoticeDigit, OpId, OutputPatch, PaneCloseParams,
-    ReadParams, ReadSource, Request, Response, TaskNewParams, TaskOptions, TerminalId,
-    TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId, limits,
+    AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
+    AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, Cwd, ErrorCode, Key, OpId,
+    OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskNewParams,
+    TaskOptions, TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
+    limits,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -724,16 +725,12 @@ impl Driver {
         Ok(Response::Ok)
     }
 
-    /// One digit, no Enter, only while Claude Code shows a notice listing it above an empty
-    /// input box. Never to a blocked agent: a digit could select a permission option. The
-    /// notice and the box are checked on the same visible read, the last one before the write.
-    pub async fn answer_notice(
-        &self,
-        terminal_id: &TerminalId,
-        digit: NoticeDigit,
-        auth: &Authorized,
-    ) -> Reply {
-        let a = self.ready_agent(terminal_id).await?;
+    /// One digit, no Enter, only while Claude Code shows a notice listing it with that label
+    /// above an empty input box. Never to a blocked agent: a digit could select a permission
+    /// option. The notice and the box are checked on the same visible read, the last one
+    /// before the write.
+    pub async fn answer_notice(&self, p: &AgentAnswerNoticeParams, auth: &Authorized) -> Reply {
+        let a = self.ready_agent(&p.terminal_id).await?;
         if a.agent.as_deref() != Some("claude") {
             return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
         }
@@ -752,7 +749,10 @@ impl Driver {
         .await
         .map_err(herdr_fail)?;
         let visible = sanitize_ansi(&read.text);
-        if !protocol::notice(&visible).iter().any(|o| o.digit == digit) {
+        if !protocol::notice(&visible)
+            .iter()
+            .any(|o| o.digit == p.digit && o.label == p.label.as_str())
+        {
             return fail(ErrorCode::AgentNotReady, "no notice with that option");
         }
         if !matches!(
@@ -762,7 +762,7 @@ impl Driver {
             return fail(ErrorCode::AgentNotReady, "the input box is not empty");
         }
         authorized(auth)?;
-        herdr::pane_send_text(&self.herdr, &a.pane_id, digit.as_str())
+        herdr::pane_send_text(&self.herdr, &a.pane_id, p.digit.as_str())
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)

@@ -348,6 +348,9 @@ impl NoticeDigit {
 pub struct AgentAnswerNoticeParams {
     pub terminal_id: TerminalId,
     pub digit: NoticeDigit,
+    /// The option's label as the phone showed it: a follow-up reuses a digit with another
+    /// meaning, so collied sends the digit only while the screen lists this exact option.
+    pub label: Label,
 }
 
 /// The phone's slash command token, mirrored into Claude Code's input box so its command
@@ -1322,8 +1325,10 @@ mod tests {
             ))
         };
         for (digit, value) in [("0", 0), ("1", 1), ("2", 2), ("3", 3)] {
-            let frame =
-                answer(&format!(r#"{{"terminal_id":"term_1","digit":"{digit}"}}"#)).unwrap();
+            let frame = answer(&format!(
+                r#"{{"terminal_id":"term_1","digit":"{digit}","label":"Chat in main session"}}"#
+            ))
+            .unwrap();
             assert_eq!(frame.request.class(), MethodClass::Drive);
             assert_eq!(frame.request.method(), "agent.answer_notice");
             let Request::AgentAnswerNotice(p) = &frame.request else {
@@ -1332,18 +1337,22 @@ mod tests {
             assert_eq!(p.digit.as_str(), digit);
             assert_eq!(NoticeDigit::new(value), Some(p.digit));
             assert_eq!(p.digit.value(), value);
+            assert_eq!(p.label.as_str(), "Chat in main session");
             let json = serde_json::to_string(&frame).unwrap();
             assert_eq!(parse(&json).unwrap(), frame);
         }
         assert_eq!(NoticeDigit::new(4), None);
         for params in [
-            r#"{"terminal_id":"t","digit":"4"}"#,
-            r#"{"terminal_id":"t","digit":"1\r"}"#,
-            r#"{"terminal_id":"t","digit":"11"}"#,
-            r#"{"terminal_id":"t","digit":1}"#,
-            r#"{"terminal_id":"t","digit":"yes"}"#,
-            r#"{"terminal_id":"t","digit":"1","text":"x"}"#,
-            r#"{"terminal_id":"t","digit":"1","keys":["enter"]}"#,
+            r#"{"terminal_id":"t","digit":"4","label":"Bad"}"#,
+            r#"{"terminal_id":"t","digit":"1\r","label":"Bad"}"#,
+            r#"{"terminal_id":"t","digit":"11","label":"Bad"}"#,
+            r#"{"terminal_id":"t","digit":1,"label":"Bad"}"#,
+            r#"{"terminal_id":"t","digit":"yes","label":"Bad"}"#,
+            r#"{"terminal_id":"t","digit":"1","label":"Bad","text":"x"}"#,
+            r#"{"terminal_id":"t","digit":"1","label":"Bad","keys":["enter"]}"#,
+            r#"{"terminal_id":"t","digit":"1"}"#,
+            r#"{"terminal_id":"t","digit":"1","label":""}"#,
+            r#"{"terminal_id":"t","digit":"1","label":"Bad\r"}"#,
             r#"{"terminal_id":"t"}"#,
         ] {
             assert_eq!(
@@ -1396,7 +1405,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 11);
+        assert_eq!(crate::PROTOCOL_VERSION, 12);
     }
 
     #[test]

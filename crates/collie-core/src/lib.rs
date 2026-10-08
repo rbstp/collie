@@ -1297,18 +1297,22 @@ impl CollieCore {
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
     }
 
-    /// One digit of a Claude Code notice, which collied sends only while the notice shows it.
+    /// One digit of a Claude Code notice, which collied sends only while the notice shows it
+    /// with `label`.
     pub async fn answer_notice(
         &self,
         machine_id: String,
         terminal_id: String,
         digit: u8,
+        label: String,
     ) -> Result<(), CoreError> {
         let digit =
             NoticeDigit::new(digit).ok_or_else(|| invalid("digit", "a notice option is 0 to 3"))?;
+        let label = Label::new(label).map_err(|_| invalid("label", "not a notice option"))?;
         let request = Request::AgentAnswerNotice(AgentAnswerNoticeParams {
             terminal_id: terminal(terminal_id)?,
             digit,
+            label,
         });
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
     }
@@ -3344,7 +3348,7 @@ mod tailnet_tests {
         unpaired: bool,
         stars: Vec<(String, bool)>,
         scrolls: Vec<String>,
-        answers: Vec<(String, String)>,
+        answers: Vec<(String, String, String)>,
         slashes: Vec<(String, String, Option<String>)>,
         connections: usize,
         closed: usize,
@@ -3590,9 +3594,11 @@ mod tailnet_tests {
                             Ok(Response::Ok)
                         }
                         Request::AgentAnswerNotice(p) => {
-                            lock(&seen)
-                                .answers
-                                .push((p.terminal_id.as_str().into(), p.digit.as_str().into()));
+                            lock(&seen).answers.push((
+                                p.terminal_id.as_str().into(),
+                                p.digit.as_str().into(),
+                                p.label.as_str().into(),
+                            ));
                             Ok(Response::Ok)
                         }
                         Request::ApprovalList(_) => {
@@ -4003,12 +4009,18 @@ mod tailnet_tests {
         assert_eq!(lock(&seen).stars, [(t1(), true), (t1(), false)]);
         rt.block_on(core.scroll_bottom(id(), t1())).unwrap();
         assert_eq!(lock(&seen).scrolls, [t1()]);
-        rt.block_on(core.answer_notice(id(), t1(), 0)).unwrap();
-        assert!(matches!(
-            rt.block_on(core.answer_notice(id(), t1(), 4)),
-            Err(CoreError::InvalidInput { .. })
-        ));
-        assert_eq!(lock(&seen).answers, [(t1(), "0".to_owned())]);
+        rt.block_on(core.answer_notice(id(), t1(), 0, "Dismiss".into()))
+            .unwrap();
+        for (digit, label) in [(4, "Dismiss"), (0, ""), (0, "Dismiss\n")] {
+            assert!(matches!(
+                rt.block_on(core.answer_notice(id(), t1(), digit, label.into())),
+                Err(CoreError::InvalidInput { .. })
+            ));
+        }
+        assert_eq!(
+            lock(&seen).answers,
+            [(t1(), "0".to_owned(), "Dismiss".to_owned())]
+        );
         rt.block_on(core.slash_draft(id(), t1(), "/sk".into(), Some("/s".into())))
             .unwrap();
         rt.block_on(core.slash_draft(id(), t1(), String::new(), None))

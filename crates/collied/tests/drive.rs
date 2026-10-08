@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
 use protocol::{
-    AgentKind, AgentPromptParams, AgentSendKeysParams, AgentSlashDraftParams, AgentTypeTextParams,
-    Cwd, DraftText, ErrorCode, Key, Label, NoticeDigit, OpId, PaneCloseParams, PromptText,
-    ReadParams, ReadSource, Request, Response, SlashCommand, TaskNewParams, TerminalId,
-    TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
+    AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
+    AgentSlashDraftParams, AgentTypeTextParams, Cwd, DraftText, ErrorCode, Key, Label, NoticeDigit,
+    OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request, Response, SlashCommand,
+    TaskNewParams, TerminalId, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -80,6 +80,8 @@ const SURVEY_SCROLLED: &str = include_str!("fixtures/claude-2.1.293/survey-scrol
 const HEADS_UP: &str = include_str!("fixtures/claude-2.1.293/heads-up.ansi.txt");
 const HEADS_UP_EXPLAINED: &str =
     include_str!("fixtures/claude-2.1.293/heads-up-explained.detection.txt");
+const HEADS_UP_EXPLAINED_SURVEY: &str =
+    include_str!("fixtures/claude-2.1.293/heads-up-explained-survey.detection.txt");
 const HEADS_UP_DISMISSED: &str =
     include_str!("fixtures/claude-2.1.293/heads-up-dismissed.detection.txt");
 const YOU_SHOULD_KNOW: &str = include_str!("fixtures/claude-2.1.293/you-should-know.detection.txt");
@@ -925,14 +927,35 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
-    let digit = |d: u8| NoticeDigit::new(d).unwrap();
+    let answer = |terminal: &str, d: u8, label: &str| AgentAnswerNoticeParams {
+        terminal_id: tid(terminal),
+        digit: NoticeDigit::new(d).unwrap(),
+        label: Label::new(label).unwrap(),
+    };
     let mut sent = Vec::new();
-    for (screen, digits) in [(SURVEY, [1, 2, 3, 0].as_slice()), (HEADS_UP, &[1, 2, 0])] {
+    for (screen, options) in [
+        (
+            SURVEY,
+            [(1, "Bad"), (2, "Fine"), (3, "Good"), (0, "Dismiss")].as_slice(),
+        ),
+        (
+            HEADS_UP,
+            &[(1, "Learn more"), (2, "Knew this already"), (0, "Dismiss")],
+        ),
+        (
+            HEADS_UP_EXPLAINED,
+            &[
+                (1, "Understood"),
+                (2, "Chat in main session"),
+                (0, "Dismiss"),
+            ],
+        ),
+    ] {
         herdr.with(|h| h.text = screen.into());
-        for &d in digits {
+        for &(d, label) in options {
             herdr.with(|h| h.calls.clear());
             assert_eq!(
-                drive.answer_notice(&tid(CLAUDE), digit(d), &yes()).await,
+                drive.answer_notice(&answer(CLAUDE, d, label), &yes()).await,
                 Ok(Response::Ok)
             );
             assert_eq!(
@@ -956,30 +979,33 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         }
     }
     let texts: Vec<&str> = sent.iter().map(|p| p["text"].as_str().unwrap()).collect();
-    assert_eq!(texts, ["1", "2", "3", "0", "1", "2", "0"]);
+    assert_eq!(texts, ["1", "2", "3", "0", "1", "2", "0", "1", "2", "0"]);
     assert!(sent.iter().all(|p| p["pane_id"] == "w6:p1"));
 
     herdr.with(|h| h.calls.clear());
-    let refused = |screen: &'static str, d: u8, message: &'static str| (screen, d, message);
     let none = "no notice with that option";
     let typed = "the input box is not empty";
     let scrolled = "scrolled up on the machine; jump to the bottom first";
-    let mut cases = vec![
-        refused(HEADS_UP, 3, none),
-        refused(HEADS_UP_DISMISSED, 1, none),
-        refused(YOU_SHOULD_KNOW, 1, none),
-        refused(SURVEY_NARROW, 1, none),
-        refused(BOTTOM, 1, none),
-        refused(SURVEY_TYPED, 0, typed),
-        refused(SURVEY_SCROLLED, 1, scrolled),
-    ];
-    cases.extend((0..4).map(|d| refused(HEADS_UP_EXPLAINED, d, none)));
-    for (screen, d, message) in cases {
+    for (screen, d, label, message) in [
+        (HEADS_UP, 3, "What is this", none),
+        (HEADS_UP, 2, "Chat in main session", none),
+        (HEADS_UP_EXPLAINED, 1, "Learn more", none),
+        (HEADS_UP_EXPLAINED, 2, "Knew this already", none),
+        (HEADS_UP_EXPLAINED, 3, "Understood", none),
+        (HEADS_UP_EXPLAINED_SURVEY, 1, "Understood", none),
+        (HEADS_UP_DISMISSED, 1, "That was helpful", none),
+        (YOU_SHOULD_KNOW, 1, "Learn more", none),
+        (SURVEY, 1, "Good", none),
+        (SURVEY_NARROW, 1, "Bad", none),
+        (BOTTOM, 1, "Bad", none),
+        (SURVEY_TYPED, 0, "Dismiss", typed),
+        (SURVEY_SCROLLED, 1, "Bad", scrolled),
+    ] {
         herdr.with(|h| h.text = screen.into());
         assert_eq!(
-            drive.answer_notice(&tid(CLAUDE), digit(d), &yes()).await,
+            drive.answer_notice(&answer(CLAUDE, d, label), &yes()).await,
             Err((ErrorCode::AgentNotReady, message.into())),
-            "{d} on {screen}"
+            "{d} {label} on {screen}"
         );
     }
     assert!(herdr.mutations().is_empty());
@@ -989,7 +1015,9 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
     assert_ne!(placeholder, SURVEY);
     herdr.with(|h| h.screens = [SURVEY_STARTUP.to_owned(), placeholder].into());
     assert_eq!(
-        drive.answer_notice(&tid(CLAUDE), digit(3), &yes()).await,
+        drive
+            .answer_notice(&answer(CLAUDE, 3, "Good"), &yes())
+            .await,
         Ok(Response::Ok)
     );
     let sent = herdr.params("pane.send_text");
@@ -1000,7 +1028,9 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         h.screens = [HEADS_UP.to_owned(), HEADS_UP_EXPLAINED.to_owned()].into();
     });
     assert_eq!(
-        drive.answer_notice(&tid(CLAUDE), digit(2), &yes()).await,
+        drive
+            .answer_notice(&answer(CLAUDE, 2, "Knew this already"), &yes())
+            .await,
         Err((ErrorCode::AgentNotReady, none.into()))
     );
     assert!(herdr.mutations().is_empty());
@@ -1011,13 +1041,13 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
     blocked["agent_status"] = json!("blocked");
     herdr.with(|h| h.gets.push_back(blocked));
     assert_eq!(
-        code(drive.answer_notice(&tid(CLAUDE), digit(1), &yes()).await),
+        code(drive.answer_notice(&answer(CLAUDE, 1, "Bad"), &yes()).await),
         ErrorCode::AgentBlocked
     );
     herdr.with(|h| h.snapshot["agents"][1]["agent_status"] = json!("idle"));
     assert_eq!(
         drive
-            .answer_notice(&tid(CODEX_BLOCKED), digit(1), &yes())
+            .answer_notice(&answer(CODEX_BLOCKED, 1, "Bad"), &yes())
             .await,
         Err((ErrorCode::AgentNotReady, "not a Claude Code agent".into()))
     );
@@ -1025,19 +1055,19 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
     other["agent_session"]["value"] = json!("11111111-0000-4000-8000-000000000000");
     herdr.with(|h| h.gets.push_back(other));
     assert_eq!(
-        code(drive.answer_notice(&tid(CLAUDE), digit(1), &yes()).await),
+        code(drive.answer_notice(&answer(CLAUDE, 1, "Bad"), &yes()).await),
         ErrorCode::AgentNotReady
     );
     assert_eq!(
         code(
             drive
-                .answer_notice(&tid("term_gone"), digit(1), &yes())
+                .answer_notice(&answer("term_gone", 1, "Bad"), &yes())
                 .await
         ),
         ErrorCode::NotFound
     );
     assert_eq!(
-        code(drive.answer_notice(&tid(CLAUDE), digit(1), &no()).await),
+        code(drive.answer_notice(&answer(CLAUDE, 1, "Bad"), &no()).await),
         ErrorCode::NotPaired
     );
     assert!(herdr.mutations().is_empty());

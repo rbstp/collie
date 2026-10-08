@@ -424,7 +424,7 @@ async fn scenario(
     assert_error(&recv(&mut ws).await, ErrorCode::AgentNotReady);
     send(
         &mut ws,
-        json!({"id": 7, "method": "agent.answer_notice", "params": {"terminal_id": "term_65ce7ae4fd5731", "digit": "1"}}),
+        json!({"id": 7, "method": "agent.answer_notice", "params": {"terminal_id": "term_65ce7ae4fd5731", "digit": "1", "label": "Bad"}}),
     )
     .await;
     assert_error(&recv(&mut ws).await, ErrorCode::AgentNotReady);

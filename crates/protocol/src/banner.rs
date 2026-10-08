@@ -45,6 +45,11 @@ fn hint(rest: &str) -> bool {
 
 const HEADS_UP: &str = "\u{2726} Heads up \u{b7} ";
 const RATING: &str = "\u{25cf} How is Claude doing this session? (optional)";
+const EXPLAINED: [(u8, &str); 3] = [
+    (1, "Understood"),
+    (2, "Chat in main session"),
+    (0, "Dismiss"),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoticeOption {
@@ -52,10 +57,11 @@ pub struct NoticeOption {
     pub label: String,
 }
 
-/// The options of Claude Code's "Heads up" notice or session rating question, in screen
-/// order, when `screen` (plain text or SGR) shows one directly above the input box; empty
-/// otherwise. Anchored on the input box's top rule, so a dialog (which replaces the box) or
-/// a notice quoted in the transcript never matches. Digits above 3 are never offered.
+/// The options of Claude Code's "Heads up" notice, its explanation after Learn more, or the
+/// session rating question, in screen order, when `screen` (plain text or SGR) shows one
+/// directly above the input box; empty otherwise. Anchored on the input box's top rule, so
+/// a dialog (which replaces the box) or a notice quoted in the transcript never matches.
+/// Digits above 3 are never offered.
 pub fn notice(screen: &str) -> Vec<NoticeOption> {
     let rows: Vec<String> = screen
         .split('\n')
@@ -77,7 +83,12 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
         i -= 1;
     }
     let body = i;
-    while i > 0 && rows[i - 1].starts_with("  ") {
+    // The explanation after Learn more: blank rows sit between its header and cards, and
+    // between the cards and the options. Its labels must match, since a card is model text.
+    let explained = i > 0
+        && rows[i - 1].is_empty()
+        && options.iter().map(|(d, l)| (*d, l.as_str())).eq(EXPLAINED);
+    while i > 0 && (rows[i - 1].starts_with("  ") || explained && rows[i - 1].is_empty()) {
         i -= 1;
     }
     let Some(header) = i.checked_sub(1).map(|j| &rows[j]) else {
@@ -99,7 +110,7 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
     {
         return Vec::new();
     }
-    if !(heads_up || rating) {
+    if !(heads_up || rating) || explained && !heads_up {
         return Vec::new();
     }
     options
@@ -274,6 +285,18 @@ mod tests {
         ] {
             assert_eq!(options(screen), heads_up);
         }
+        let explained = listed(&[
+            ("1", "Understood"),
+            ("2", "Chat in main session"),
+            ("0", "Dismiss"),
+        ]);
+        for screen in [
+            fixture!("heads-up-explained.detection.txt"),
+            fixture!("heads-up-explained-sketch.detection.txt"),
+            fixture!("heads-up-explained-narrow.detection.txt"),
+        ] {
+            assert_eq!(options(screen), explained);
+        }
         assert_eq!(
             options(fixture!("heads-up-internal.detection.txt")),
             listed(&[
@@ -288,7 +311,8 @@ mod tests {
     #[test]
     fn only_the_two_known_notices_above_the_input_box_match() {
         for screen in [
-            fixture!("heads-up-explained.detection.txt"),
+            fixture!("heads-up-explained-survey.detection.txt"),
+            fixture!("heads-up-explained-dismissed.detection.txt"),
             fixture!("heads-up-dismissed.detection.txt"),
             fixture!("heads-up-thinking.detection.txt"),
             fixture!("heads-up-collapsed.detection.txt"),
@@ -317,8 +341,30 @@ mod tests {
             "  3: Run the cleanup now",
             1,
         );
+        let explained = fixture!("heads-up-explained.detection.txt");
+        let row = "  1: Understood   2: Chat in main session   0: Dismiss";
+        let offer_row = explained.replacen(
+            "1: Understood   2: Chat in main session   0: Dismiss",
+            "1: Learn more   2: Knew this already   0: Dismiss",
+            1,
+        );
+        let no_gap = explained.replacen("on purpose.\n\n", "on purpose.\n", 1);
+        let tag = explained.replacen("Heads up", "You should know", 1);
+        let unindented = explained.replacen("  Use decimal", "Use decimal", 1);
+        let label = explained.replacen("main session", "the main session", 1);
+        let rating = fixture!("survey.detection.txt").replacen(
+            "\n  1: Bad    2: Fine   3: Good   0: Dismiss",
+            &format!("\n\n{row}"),
+            1,
+        );
+        let hidden = fixture!("heads-up-explained-survey.detection.txt").replacen(
+            "on purpose.\n",
+            &format!("on purpose.\n{row}\n"),
+            1,
+        );
         for screen in [
-            quoted, gap, no_box, five, twice, enter, other, order, forged,
+            quoted, gap, no_box, five, twice, enter, other, order, forged, offer_row, no_gap, tag,
+            unindented, label, rating, hidden,
         ] {
             assert!(notice(&screen).is_empty(), "{screen}");
         }

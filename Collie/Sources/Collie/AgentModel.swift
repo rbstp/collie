@@ -693,7 +693,7 @@ final class AgentModel {
         let seen = revision
         screenNotice = []
         do {
-            try await core.answerNotice(machineId: route.machineId, terminalId: route.terminalId, digit: option.digit)
+            try await core.answerNotice(machineId: route.machineId, terminalId: route.terminalId, digit: option.digit, label: option.label)
             notice = nil
         } catch {
             if revision == seen { screenNotice = shown }
