@@ -50,6 +50,14 @@ const EXPLAINED: [(u8, &str); 3] = [
     (2, "Chat in main session"),
     (0, "Dismiss"),
 ];
+const DISMISSED: &str = "\u{2726} Dismissed.";
+const FEEDBACK: [(u8, &str); 5] = [
+    (1, "That was helpful"),
+    (2, "Not relevant"),
+    (3, "Couldn\u{2019}t understand"),
+    (4, "Turn off suggestions"),
+    (0, "Dismiss"),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoticeOption {
@@ -57,11 +65,11 @@ pub struct NoticeOption {
     pub label: String,
 }
 
-/// The options of Claude Code's "Heads up" notice, its explanation after Learn more, or the
-/// session rating question, in screen order, when `screen` (plain text or SGR) shows one
-/// directly above the input box; empty otherwise. Anchored on the input box's top rule, so
-/// a dialog (which replaces the box) or a notice quoted in the transcript never matches.
-/// Digits above 3 are never offered.
+/// The options of Claude Code's "Heads up" notice, its explanation after Learn more, the
+/// feedback row after its Dismiss, or the session rating question, in screen order, when
+/// `screen` (plain text or SGR) shows one directly above the input box; empty otherwise.
+/// Anchored on the input box's top rule, so a dialog (which replaces the box) or a notice
+/// quoted in the transcript never matches. 4 is offered only on the feedback row.
 pub fn notice(screen: &str) -> Vec<NoticeOption> {
     let rows: Vec<String> = screen
         .split('\n')
@@ -83,6 +91,13 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
         i -= 1;
     }
     let body = i;
+    // The feedback row starts from column 0 and wraps whole options onto rows indented by
+    // two spaces. It carries no tag, so only its exact options are taken.
+    if let Some(lead) = i.checked_sub(1).and_then(|j| dismissed_row(&rows[j])) {
+        options.splice(0..0, lead);
+        let exact = options.iter().map(|(d, l)| (*d, l.as_str())).eq(FEEDBACK);
+        return if exact { offered(options) } else { Vec::new() };
+    }
     // The explanation after Learn more: blank rows sit between its header and cards, and
     // between the cards and the options. Its labels must match, since a card is model text.
     let explained = i > 0
@@ -113,10 +128,24 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
     if !(heads_up || rating) || explained && !heads_up {
         return Vec::new();
     }
+    options.retain(|(d, _)| *d != 4);
+    offered(options)
+}
+
+fn offered(options: Vec<(u8, String)>) -> Vec<NoticeOption> {
     options
         .into_iter()
         .filter_map(|(d, label)| NoticeDigit::new(d).map(|digit| NoticeOption { digit, label }))
         .collect()
+}
+
+/// The options on the feedback row's first row, after its `✦ Dismissed.` lead.
+fn dismissed_row(row: &str) -> Option<Vec<(u8, String)>> {
+    match row.strip_prefix(DISMISSED)? {
+        "" => Some(Vec::new()),
+        rest if rest.starts_with("  ") => cells(rest),
+        _ => None,
+    }
 }
 
 fn is_rule(row: &str) -> bool {
@@ -126,7 +155,10 @@ fn is_rule(row: &str) -> bool {
 /// A row indented by exactly two spaces whose cells, apart by two or more spaces, all read
 /// `<digit>: <label>`.
 fn option_row(row: &str) -> Option<Vec<(u8, String)>> {
-    let rest = row.strip_prefix("  ").filter(|r| !r.starts_with(' '))?;
+    cells(row.strip_prefix("  ").filter(|r| !r.starts_with(' '))?)
+}
+
+fn cells(rest: &str) -> Option<Vec<(u8, String)>> {
     rest.split("  ")
         .map(str::trim)
         .filter(|c| !c.is_empty())
@@ -306,6 +338,38 @@ mod tests {
                 ("0", "Dismiss")
             ])
         );
+        let feedback = listed(&[
+            ("1", "That was helpful"),
+            ("2", "Not relevant"),
+            ("3", "Couldn\u{2019}t understand"),
+            ("4", "Turn off suggestions"),
+            ("0", "Dismiss"),
+        ]);
+        let dismissed = fixture!("heads-up-dismissed.detection.txt");
+        let row = "\u{2726} Dismissed.   1: That was helpful   2: Not relevant   3: Couldn\u{2019}t understand   4: Turn off suggestions   0: Dismiss";
+        assert!(dismissed.contains(row));
+        // At 80 and 44 columns: whole options wrap onto rows past the two-column star.
+        let at_80 = dismissed.replacen("understand   4:", "understand\n  4:", 1);
+        let at_44 = dismissed.replacen(
+            row,
+            "\u{2726} Dismissed.   1: That was helpful\n  2: Not relevant\n  3: Couldn\u{2019}t understand\n  4: Turn off suggestions   0: Dismiss",
+            1,
+        );
+        let alone = dismissed.replacen(
+            row,
+            &format!(
+                "\u{2726} Dismissed.\n{}",
+                row.split("   ")
+                    .skip(1)
+                    .map(|cell| format!("  {cell}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            1,
+        );
+        for screen in [dismissed, &at_80, &at_44, &alone] {
+            assert_eq!(options(screen), feedback, "{screen}");
+        }
     }
 
     #[test]
@@ -313,7 +377,6 @@ mod tests {
         for screen in [
             fixture!("heads-up-explained-survey.detection.txt"),
             fixture!("heads-up-explained-dismissed.detection.txt"),
-            fixture!("heads-up-dismissed.detection.txt"),
             fixture!("heads-up-thinking.detection.txt"),
             fixture!("heads-up-collapsed.detection.txt"),
             fixture!("you-should-know.detection.txt"),
@@ -362,9 +425,26 @@ mod tests {
             &format!("on purpose.\n{row}\n"),
             1,
         );
+        let dismissed = fixture!("heads-up-dismissed.detection.txt");
+        let straight = dismissed.replacen("Couldn\u{2019}t", "Couldn't", 1);
+        let no_off = dismissed.replacen("4: Turn off suggestions   ", "", 1);
+        let swapped = dismissed.replacen(
+            "2: Not relevant   3: Couldn\u{2019}t understand",
+            "2: Couldn\u{2019}t understand   3: Not relevant",
+            1,
+        );
+        let indented = dismissed.replacen("\u{2726} Dismissed.", "  \u{2726} Dismissed.", 1);
+        let lead = dismissed.replacen("Dismissed.", "Dismissed!", 1);
+        let between = dismissed.replacen(
+            "understand   4:",
+            "understand\n  Try the cleanup first.\n  4:",
+            1,
+        );
+        let unwrapped = dismissed.replacen("understand   4:", "understand\n4:", 1);
         for screen in [
             quoted, gap, no_box, five, twice, enter, other, order, forged, offer_row, no_gap, tag,
-            unindented, label, rating, hidden,
+            unindented, label, rating, hidden, straight, no_off, swapped, indented, lead, between,
+            unwrapped,
         ] {
             assert!(notice(&screen).is_empty(), "{screen}");
         }

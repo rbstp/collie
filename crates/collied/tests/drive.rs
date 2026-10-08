@@ -84,6 +84,10 @@ const HEADS_UP_EXPLAINED_SURVEY: &str =
     include_str!("fixtures/claude-2.1.293/heads-up-explained-survey.detection.txt");
 const HEADS_UP_DISMISSED: &str =
     include_str!("fixtures/claude-2.1.293/heads-up-dismissed.detection.txt");
+const HEADS_UP_EXPLAINED_DISMISSED: &str =
+    include_str!("fixtures/claude-2.1.293/heads-up-explained-dismissed.detection.txt");
+const HEADS_UP_INTERNAL: &str =
+    include_str!("fixtures/claude-2.1.293/heads-up-internal.detection.txt");
 const YOU_SHOULD_KNOW: &str = include_str!("fixtures/claude-2.1.293/you-should-know.detection.txt");
 const SLASH_MENU: &str = include_str!("fixtures/claude-2.1.293/slash-menu.ansi.txt");
 const SLASH_TAB_HINT: &str = include_str!("fixtures/claude-2.1.293/slash-tab-hint.ansi.txt");
@@ -956,6 +960,16 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
                 (0, "Dismiss"),
             ],
         ),
+        (
+            HEADS_UP_DISMISSED,
+            &[
+                (1, "That was helpful"),
+                (2, "Not relevant"),
+                (3, "Couldn\u{2019}t understand"),
+                (4, "Turn off suggestions"),
+                (0, "Dismiss"),
+            ],
+        ),
     ] {
         herdr.with(|h| h.text = screen.into());
         for &(d, label) in options {
@@ -985,7 +999,12 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         }
     }
     let texts: Vec<&str> = sent.iter().map(|p| p["text"].as_str().unwrap()).collect();
-    assert_eq!(texts, ["1", "2", "3", "0", "1", "2", "0", "1", "2", "0"]);
+    assert_eq!(
+        texts,
+        [
+            "1", "2", "3", "0", "1", "2", "0", "1", "2", "0", "1", "2", "3", "4", "0"
+        ]
+    );
     assert!(sent.iter().all(|p| p["pane_id"] == "w6:p1"));
 
     herdr.with(|h| h.calls.clear());
@@ -999,7 +1018,11 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         (HEADS_UP_EXPLAINED, 2, "Knew this already", none),
         (HEADS_UP_EXPLAINED, 3, "Understood", none),
         (HEADS_UP_EXPLAINED_SURVEY, 1, "Understood", none),
-        (HEADS_UP_DISMISSED, 1, "That was helpful", none),
+        (HEADS_UP, 4, "Turn off suggestions", none),
+        (HEADS_UP_INTERNAL, 4, "Disable", none),
+        (HEADS_UP_DISMISSED, 4, "Disable", none),
+        (HEADS_UP_DISMISSED, 3, "Couldn't understand", none),
+        (HEADS_UP_EXPLAINED_DISMISSED, 1, "That was helpful", none),
         (YOU_SHOULD_KNOW, 1, "Learn more", none),
         (SURVEY, 1, "Good", none),
         (SURVEY_NARROW, 1, "Bad", none),

@@ -1307,7 +1307,7 @@ impl CollieCore {
         label: String,
     ) -> Result<(), CoreError> {
         let digit =
-            NoticeDigit::new(digit).ok_or_else(|| invalid("digit", "a notice option is 0 to 3"))?;
+            NoticeDigit::new(digit).ok_or_else(|| invalid("digit", "a notice option is 0 to 4"))?;
         let label = Label::new(label).map_err(|_| invalid("label", "not a notice option"))?;
         let request = Request::AgentAnswerNotice(AgentAnswerNoticeParams {
             terminal_id: terminal(terminal_id)?,
@@ -4011,7 +4011,7 @@ mod tailnet_tests {
         assert_eq!(lock(&seen).scrolls, [t1()]);
         rt.block_on(core.answer_notice(id(), t1(), 0, "Dismiss".into()))
             .unwrap();
-        for (digit, label) in [(4, "Dismiss"), (0, ""), (0, "Dismiss\n")] {
+        for (digit, label) in [(5, "Dismiss"), (0, ""), (0, "Dismiss\n")] {
             assert!(matches!(
                 rt.block_on(core.answer_notice(id(), t1(), digit, label.into())),
                 Err(CoreError::InvalidInput { .. })

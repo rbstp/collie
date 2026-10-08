@@ -311,6 +311,8 @@ pub enum NoticeDigit {
     Two,
     #[serde(rename = "3")]
     Three,
+    #[serde(rename = "4")]
+    Four,
 }
 
 impl NoticeDigit {
@@ -320,6 +322,7 @@ impl NoticeDigit {
             1 => Some(Self::One),
             2 => Some(Self::Two),
             3 => Some(Self::Three),
+            4 => Some(Self::Four),
             _ => None,
         }
     }
@@ -330,6 +333,7 @@ impl NoticeDigit {
             Self::One => "1",
             Self::Two => "2",
             Self::Three => "3",
+            Self::Four => "4",
         }
     }
 
@@ -339,6 +343,7 @@ impl NoticeDigit {
             Self::One => 1,
             Self::Two => 2,
             Self::Three => 3,
+            Self::Four => 4,
         }
     }
 }
@@ -1324,7 +1329,7 @@ mod tests {
                 r#"{{"id":1,"method":"agent.answer_notice","params":{params}}}"#
             ))
         };
-        for (digit, value) in [("0", 0), ("1", 1), ("2", 2), ("3", 3)] {
+        for (digit, value) in [("0", 0), ("1", 1), ("2", 2), ("3", 3), ("4", 4)] {
             let frame = answer(&format!(
                 r#"{{"terminal_id":"term_1","digit":"{digit}","label":"Chat in main session"}}"#
             ))
@@ -1341,9 +1346,9 @@ mod tests {
             let json = serde_json::to_string(&frame).unwrap();
             assert_eq!(parse(&json).unwrap(), frame);
         }
-        assert_eq!(NoticeDigit::new(4), None);
+        assert_eq!(NoticeDigit::new(5), None);
         for params in [
-            r#"{"terminal_id":"t","digit":"4","label":"Bad"}"#,
+            r#"{"terminal_id":"t","digit":"5","label":"Bad"}"#,
             r#"{"terminal_id":"t","digit":"1\r","label":"Bad"}"#,
             r#"{"terminal_id":"t","digit":"11","label":"Bad"}"#,
             r#"{"terminal_id":"t","digit":1,"label":"Bad"}"#,
