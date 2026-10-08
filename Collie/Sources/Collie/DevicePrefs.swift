@@ -10,6 +10,8 @@ struct DevicePrefs: StateFile, Equatable {
     var agentsLayout = AgentsLayout.grid
     var historyLines: UInt16 = 200
     var watchDecisions = false
+    /// Per machine id: the canonical folder collied returned when it was saved.
+    var taskBases: [String: String] = [:]
 
     static let historyChoices: [UInt16] = [200, 500, 1000]
 
@@ -52,6 +54,20 @@ extension DevicePrefs {
         agentsLayout = (try? container.decodeIfPresent(AgentsLayout.self, forKey: .agentsLayout)) ?? defaults.agentsLayout
         historyLines = try container.decodeIfPresent(UInt16.self, forKey: .historyLines) ?? defaults.historyLines
         watchDecisions = try container.decodeIfPresent(Bool.self, forKey: .watchDecisions) ?? defaults.watchDecisions
+        taskBases = try container.decodeIfPresent([String: String].self, forKey: .taskBases) ?? defaults.taskBases
+    }
+
+    /// Kept only once collied has listed it, in the canonical form it returned.
+    @MainActor
+    static func setTaskBase(_ path: String, machineId: String, core: any AgentCore, in file: URL?) async throws -> String {
+        let listed = try await core.taskFolders(machineId: machineId, path: path)
+        update(in: file) { $0.taskBases[machineId] = listed.path }
+        return listed.path
+    }
+
+    static func forgetTaskBase(machineId: String, in file: URL?) {
+        guard load(from: file).taskBases[machineId] != nil else { return }
+        update(in: file) { $0.taskBases[machineId] = nil }
     }
 }
 

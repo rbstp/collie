@@ -6,9 +6,9 @@ use std::time::Duration;
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
-    AgentSlashDraftParams, AgentTypeTextParams, Cwd, DraftText, ErrorCode, Key, Label, NoticeDigit,
-    OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request, Response, SlashCommand,
-    TaskNewParams, TerminalId, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
+    AgentSlashDraftParams, AgentTypeTextParams, Cwd, DraftText, ErrorCode, FolderName, Key, Label,
+    NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request, Response,
+    SlashCommand, TaskNewParams, TerminalId, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -403,6 +403,7 @@ fn task(cwd: &Path, agent: &str) -> TaskNewParams {
         agent: AgentKind::new(agent).unwrap(),
         prompt: PromptText::new("write the tests").unwrap(),
         label: Some(Label::new("tests").unwrap()),
+        new_folder: None,
     }
 }
 
@@ -1697,6 +1698,89 @@ async fn task_new_starts_waits_and_prompts() {
         herdr.params("agent.prompt"),
         vec![json!({"target": name, "text": "write the tests"})]
     );
+}
+
+#[tokio::test]
+async fn task_new_creates_its_new_folder_once() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base.join("root"));
+    let fresh = base.join("root/fresh");
+    let mut p = task(&base.join("root/b/.."), "claude");
+    p.new_folder = Some(FolderName::new("fresh").unwrap());
+    let fp = collied::drive::fingerprint(&Request::TaskNew(p.clone()));
+    let attempt = || {
+        let (d, p) = (drive.clone(), p.clone());
+        async move {
+            let (id, run) = (p.op_id.clone(), d.clone());
+            d.once(
+                "nPHONE",
+                &id,
+                fp,
+                async move { run.task_new(p, &yes()).await.0 },
+            )
+            .await
+        }
+    };
+    herdr.with(|h| {
+        h.gets.extend([
+            started_agent("idle", true, false),
+            started_agent("idle", true, false),
+        ])
+    });
+    let (first, origin) = attempt().await;
+    assert!(first.is_ok(), "{first:?}");
+    assert_eq!(origin, Origin::Ran);
+    assert!(fresh.is_dir());
+    assert_eq!(std::fs::read_dir(&fresh).unwrap().count(), 0);
+    assert_eq!(
+        herdr.params("workspace.create"),
+        vec![json!({"cwd": fresh, "label": "tests", "focus": false})]
+    );
+    assert_eq!(attempt().await, (first, Origin::Replayed));
+    assert_eq!(herdr.mutations().len(), 3);
+
+    let (reply, cwd) = drive.task_new(p.clone(), &yes()).await;
+    assert!(cwd.is_none());
+    assert_eq!(
+        reply,
+        Err((ErrorCode::InvalidParams, "folder already exists".into()))
+    );
+
+    herdr.with(|h| h.calls.clear());
+    p.new_folder = Some(FolderName::new("second").unwrap());
+    herdr.fail_next("workspace.create", &["timeout"]);
+    let (reply, cwd) = drive.task_new(p.clone(), &yes()).await;
+    let second = base.join("root/second");
+    assert_eq!(cwd.unwrap().as_str(), second.to_str().unwrap());
+    assert_eq!(
+        reply.unwrap_err(),
+        (
+            ErrorCode::AgentNotReady,
+            format!(
+                "folder {} was created and left in place: the agent did not take the input in time",
+                second.display()
+            )
+        )
+    );
+    assert!(second.is_dir());
+
+    herdr.with(|h| h.calls.clear());
+    p.new_folder = Some(FolderName::new("third").unwrap());
+    let refused = [
+        (task(&base.join("outside"), "claude"), "outside"),
+        (task(&base.join("root/a"), "codex"), "not allowed"),
+    ];
+    for (mut bad, why) in refused {
+        bad.new_folder = p.new_folder.clone();
+        let (reply, cwd) = drive.task_new(bad, &yes()).await;
+        assert!(cwd.is_none());
+        assert!(reply.unwrap_err().1.contains(why));
+    }
+    let (reply, _) = drive.task_new(p, &no()).await;
+    assert_eq!(code(reply), ErrorCode::NotPaired);
+    assert!(herdr.methods().is_empty());
+    assert!(!base.join("root/third").exists() && !base.join("outside/third").exists());
 }
 
 #[tokio::test]

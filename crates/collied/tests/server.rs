@@ -494,6 +494,42 @@ async fn scenario(
         "{frame:?}"
     );
 
+    println!("task.folders sends folder names only and audits none of them");
+    let folders = root.join("folders");
+    for d in ["alpha-q7", "Zed-q7", ".hidden-q7"] {
+        std::fs::create_dir_all(folders.join(d)).unwrap();
+    }
+    std::fs::write(folders.join("secret-q7.txt"), "x").unwrap();
+    send(
+        &mut ws,
+        json!({"id": 60, "method": "task.folders", "params": {"path": folders}}),
+    )
+    .await;
+    let Response::TaskFolders {
+        path,
+        folders: names,
+        truncated,
+    } = result(recv(&mut ws).await)
+    else {
+        panic!("no folders");
+    };
+    assert_eq!(
+        Path::new(path.as_str()),
+        std::fs::canonicalize(&folders).unwrap()
+    );
+    let names: Vec<&str> = names.iter().map(|n| n.as_str()).collect();
+    assert_eq!((names, truncated), (vec!["alpha-q7", "Zed-q7"], false));
+    send(
+        &mut ws,
+        json!({"id": 61, "method": "task.folders", "params": {"path": "/"}}),
+    )
+    .await;
+    let frame = recv(&mut ws).await;
+    assert!(
+        matches!(&frame, ServerFrame::Error { id: Some(61), error } if error.code == ErrorCode::InvalidParams),
+        "{frame:?}"
+    );
+
     println!("agent.watch pushes sanitized output as events");
     send(
         &mut ws,
@@ -868,6 +904,31 @@ async fn scenario(
             assert_eq!(entry["target"], "term_65ce7ae4fd5731", "{line}");
         }
     }
+    let listings: Vec<(String, String)> = audit
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|e| e["method"] == "task.folders")
+        .map(|e| {
+            (
+                e["target"].as_str().unwrap().to_owned(),
+                e["result"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listings,
+        [
+            (
+                folders.to_str().unwrap().to_owned(),
+                "ok folders=2".to_owned()
+            ),
+            (
+                "/".to_owned(),
+                "invalid_params: cwd is outside the allowed roots".to_owned()
+            ),
+        ]
+    );
+    assert!(!audit.contains("q7"), "a folder name in the audit log");
     let called = herdr.methods();
     assert!(
         called.iter().all(|m| HERDR_CALLED.contains(&m.as_str())),

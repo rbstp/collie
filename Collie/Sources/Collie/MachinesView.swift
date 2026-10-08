@@ -32,14 +32,18 @@ struct MachinesList: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(app.machines, id: \.id) { machine in
-                TimelineView(.periodic(from: .now, by: 2)) { _ in
-                    let link = app.core?.cachedFlock(machineId: machine.id)?.link
-                    let reachable = link.map { [.connected, .connecting].contains($0) } ?? true
-                    VStack(alignment: .leading, spacing: 2) {
-                        MachineName(machine: machine)
-                            .foregroundStyle(reachable ? .primary : .secondary)
-                            .tint(reachable ? nil : .secondary)
-                        Text(machine.host).font(.caption).foregroundStyle(.secondary)
+                NavigationLink {
+                    MachineSettingsView(app: app, machine: machine)
+                } label: {
+                    TimelineView(.periodic(from: .now, by: 2)) { _ in
+                        let link = app.core?.cachedFlock(machineId: machine.id)?.link
+                        let reachable = link.map { [.connected, .connecting].contains($0) } ?? true
+                        VStack(alignment: .leading, spacing: 2) {
+                            MachineName(machine: machine)
+                                .foregroundStyle(reachable ? .primary : .secondary)
+                                .tint(reachable ? nil : .secondary)
+                            Text(machine.host).font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -62,6 +66,88 @@ struct MachinesList: View {
             if let removeError {
                 Text(removeError).foregroundStyle(.red)
             }
+        }
+    }
+}
+
+struct MachineSettingsView: View {
+    let app: AppModel
+    let machine: Machine
+    @State private var base = ""
+    @State private var saved: String?
+    @State private var roots: [String] = []
+    @State private var saving = false
+    @State private var error: String?
+
+    private var typed: String { base.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("/path/to/folder", text: $base)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.body.monospaced())
+                ForEach(roots, id: \.self) { root in
+                    Button {
+                        base = root.hasSuffix("/") ? root : root + "/"
+                    } label: {
+                        Label(root, systemImage: "folder").font(.footnote.monospaced())
+                    }
+                    .foregroundStyle(.primary)
+                }
+                Button {
+                    Task { await save() }
+                } label: {
+                    if saving {
+                        HStack { ProgressView(); Text("Checking the folder…") }
+                    } else {
+                        Text("Save")
+                    }
+                }
+                .disabled(saving || !typed.hasPrefix("/") || typed == saved || app.core == nil)
+                if saved != nil {
+                    Button("Clear", role: .destructive) {
+                        DevicePrefs.forgetTaskBase(machineId: machine.id, in: DevicePrefs.file)
+                        saved = nil
+                        base = roots.first.map { $0.hasSuffix("/") ? $0 : $0 + "/" } ?? ""
+                    }
+                }
+                if let error {
+                    Text(error).foregroundStyle(.red)
+                }
+            } header: {
+                Text("Base folder")
+            } footer: {
+                Text("New Task completes folder names and lists the folders inside this folder. It must be inside one of the machine's task roots.")
+            }
+        }
+        .navigationTitle(machine.label)
+        .task { await load() }
+    }
+
+    private func load() async {
+        saved = DevicePrefs.load(from: DevicePrefs.file).taskBases[machine.id]
+        base = saved ?? ""
+        guard let core = app.core else { return }
+        do {
+            roots = try await core.taskOptions(machineId: machine.id).roots
+            if base.isEmpty, let root = roots.first { base = root.hasSuffix("/") ? root : root + "/" }
+        } catch {
+            self.error = AgentModel.message(for: error)
+        }
+    }
+
+    private func save() async {
+        guard let core = app.core else { return }
+        saving = true
+        error = nil
+        defer { saving = false }
+        do {
+            saved = try await DevicePrefs.setTaskBase(typed, machineId: machine.id, core: core, in: DevicePrefs.file)
+            base = saved ?? base
+        } catch {
+            self.error = AgentModel.message(for: error)
         }
     }
 }

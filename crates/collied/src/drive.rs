@@ -1,7 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::iter::Peekable;
-use std::path::PathBuf;
+use std::os::fd::OwnedFd;
+use std::path::{Component, Path, PathBuf};
 use std::str::Chars;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -9,11 +10,12 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
-    AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, Cwd, ErrorCode, Key, OpId,
-    OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskNewParams,
-    TaskOptions, TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
-    limits,
+    AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, Cwd, ErrorCode, FolderName, Key, OpId,
+    OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskFoldersParams,
+    TaskNewParams, TaskOptions, TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams,
+    WorkspaceId, limits,
 };
+use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
@@ -49,6 +51,11 @@ pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
 pub const LOCKED: &str = "the terminal is locked; unlock it again";
 const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
 const COMMAND_SHOWN: &str = "a slash command shows in the input box; send it as a prompt";
+const MAX_FOLDERS: usize = 500;
+const MAX_FOLDERS_SCANNED: usize = 10_000;
+/// `UF_HIDDEN` from `sys/stat.h`: Finder hides `~/Library` with it, not with a dot.
+#[cfg(target_os = "macos")]
+const UF_HIDDEN: u32 = 0x8000;
 /// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
 const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
 
@@ -879,31 +886,58 @@ impl Driver {
         })
         .await
         .map_err(|_| (ErrorCode::Internal, "cwd check failed".to_owned()))?;
+        let roots = self
+            .roots
+            .iter()
+            .filter_map(|r| r.to_str().and_then(|r| Cwd::new(r).ok()))
+            .collect();
         Ok(Response::TaskOptions(TaskOptions {
             agents,
             default_agent,
             recent_cwds,
+            roots,
         }))
     }
 
-    /// Also returns the canonical cwd once it is resolved, for the audit line.
+    pub async fn task_folders(&self, p: TaskFoldersParams, auth: &Authorized) -> Reply {
+        authorized(auth)?;
+        let roots = self.roots.clone();
+        tokio::task::spawn_blocking(move || list_folders(p.path.as_str(), &roots))
+            .await
+            .map_err(|_| (ErrorCode::Internal, "folder listing failed".to_owned()))?
+    }
+
+    /// Also returns the canonical cwd once it is resolved or created, for the audit line.
     pub async fn task_new(&self, p: TaskNewParams, auth: &Authorized) -> (Reply, Option<Cwd>) {
-        match self.task_cwd(&p).await {
-            Ok(cwd) => (self.start_task(p, &cwd, auth).await, Some(cwd)),
+        let created = p.new_folder.is_some();
+        match self.task_cwd(&p, auth).await {
+            Ok(cwd) => {
+                let mut reply = self.start_task(p, &cwd, auth).await;
+                if created {
+                    reply = reply.map_err(|(code, message)| {
+                        let left = format!("folder {} was created and left in place", cwd.as_str());
+                        (code, format!("{left}: {message}"))
+                    });
+                }
+                (reply, Some(cwd))
+            }
             Err(e) => (Err(e), None),
         }
     }
 
-    async fn task_cwd(&self, p: &TaskNewParams) -> Result<Cwd, Fail> {
+    async fn task_cwd(&self, p: &TaskNewParams, auth: &Authorized) -> Result<Cwd, Fail> {
         if !self.agents.contains(&p.agent) {
             return fail(ErrorCode::InvalidParams, "agent kind is not allowed");
         }
         let roots = self.roots.clone();
         let requested = p.cwd.as_str().to_owned();
-        tokio::task::spawn_blocking(move || resolve_cwd(&requested, &roots))
-            .await
-            .map_err(|_| (ErrorCode::Internal, "cwd check failed".to_owned()))?
-            .map_err(|m| (ErrorCode::InvalidParams, m.to_owned()))
+        let (new_folder, auth) = (p.new_folder.clone(), auth.clone());
+        tokio::task::spawn_blocking(move || match new_folder {
+            Some(name) => create_folder(&requested, &name, &roots, &auth),
+            None => resolve_cwd(&requested, &roots).map_err(invalid),
+        })
+        .await
+        .map_err(|_| (ErrorCode::Internal, "cwd check failed".to_owned()))?
     }
 
     /// On a failure after `workspace.create` nothing is closed: the error names the
@@ -1170,6 +1204,133 @@ pub fn resolve_cwd(cwd: &str, roots: &[PathBuf]) -> Result<Cwd, &'static str> {
     path.to_str()
         .and_then(|s| Cwd::new(s).ok())
         .ok_or("cwd is not a valid path")
+}
+
+fn invalid(message: &str) -> Fail {
+    (ErrorCode::InvalidParams, message.to_owned())
+}
+
+fn io_fail(e: rustix::io::Errno) -> Fail {
+    (
+        ErrorCode::InvalidParams,
+        format!("folder cannot be opened: {}", std::io::Error::from(e)),
+    )
+}
+
+fn open_under_root(cwd: &str, roots: &[PathBuf]) -> Result<(OwnedFd, Cwd), Fail> {
+    let resolved = resolve_cwd(cwd, roots).map_err(invalid)?;
+    let path = Path::new(resolved.as_str());
+    let Some(root) = roots.iter().find(|r| path.starts_with(r)) else {
+        return Err(invalid("cwd is outside the allowed roots"));
+    };
+    let dir = open_beneath(root, path).map_err(io_fail)?;
+    Ok((dir, resolved))
+}
+
+/// Opens the canonical `path` one component at a time from `root` without following a
+/// symlink, so a folder swapped for a link after the check fails instead of leading
+/// outside the roots.
+fn open_beneath(root: &Path, path: &Path) -> rustix::io::Result<OwnedFd> {
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let rel = path
+        .strip_prefix(root)
+        .map_err(|_| rustix::io::Errno::INVAL)?;
+    let mut dir = rustix::fs::open(root, flags, Mode::empty())?;
+    for part in rel.components() {
+        let Component::Normal(part) = part else {
+            return Err(rustix::io::Errno::INVAL);
+        };
+        dir = rustix::fs::openat(&dir, part, flags, Mode::empty())?;
+    }
+    Ok(dir)
+}
+
+/// Names only, of directories and of symlinks to a directory inside a root: no hidden
+/// entry, file or other name leaves the machine, and nothing inside them is read.
+fn list_folders(path: &str, roots: &[PathBuf]) -> Reply {
+    let (dir, path) = open_under_root(path, roots)?;
+    let mut folders = Vec::new();
+    let mut truncated = false;
+    for (scanned, entry) in rustix::fs::Dir::read_from(&dir)
+        .map_err(io_fail)?
+        .enumerate()
+    {
+        if scanned == MAX_FOLDERS_SCANNED {
+            truncated = true;
+            break;
+        }
+        let entry = entry.map_err(io_fail)?;
+        let Some(name) = entry
+            .file_name()
+            .to_str()
+            .ok()
+            .and_then(|n| FolderName::new(n).ok())
+        else {
+            continue;
+        };
+        if is_listed_folder(&dir, &path, &name, roots) {
+            folders.push(name);
+        }
+    }
+    folders.sort_by_cached_key(|n| n.as_str().to_lowercase());
+    if folders.len() > MAX_FOLDERS {
+        folders.truncate(MAX_FOLDERS);
+        truncated = true;
+    }
+    Ok(Response::TaskFolders {
+        path,
+        folders,
+        truncated,
+    })
+}
+
+fn is_listed_folder(dir: &OwnedFd, path: &Cwd, name: &FolderName, roots: &[PathBuf]) -> bool {
+    let Ok(st) = rustix::fs::statat(dir, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) else {
+        return false;
+    };
+    #[cfg(target_os = "macos")]
+    if st.st_flags & UF_HIDDEN != 0 {
+        return false;
+    }
+    match FileType::from_raw_mode(st.st_mode) {
+        FileType::Directory => true,
+        FileType::Symlink => Path::new(path.as_str())
+            .join(name.as_str())
+            .to_str()
+            .is_some_and(|p| resolve_cwd(p, roots).is_ok()),
+        _ => false,
+    }
+}
+
+/// `mkdirat` makes exactly one entry inside the opened parent and never follows a link
+/// at that name: an existing one, link or not, is `EEXIST`.
+fn create_folder(
+    parent: &str,
+    name: &FolderName,
+    roots: &[PathBuf],
+    auth: &Authorized,
+) -> Result<Cwd, Fail> {
+    let (dir, parent) = open_under_root(parent, roots)?;
+    authorized(auth)?;
+    rustix::fs::mkdirat(&dir, name.as_str(), Mode::from_raw_mode(0o755)).map_err(|e| {
+        if e == rustix::io::Errno::EXIST {
+            invalid("folder already exists")
+        } else {
+            (
+                ErrorCode::InvalidParams,
+                format!("folder cannot be created: {}", std::io::Error::from(e)),
+            )
+        }
+    })?;
+    let created = Path::new(parent.as_str()).join(name.as_str());
+    let created = created.to_str().unwrap_or_default();
+    match resolve_cwd(created, roots) {
+        Ok(cwd) if cwd.as_str() == created => Ok(cwd),
+        _ => fail(
+            ErrorCode::Internal,
+            format!("folder {created} was created and left in place: it changed right after"),
+        ),
+    }
 }
 
 /// Keeps printable text, CR, LF, TAB and SGR (`ESC [ digits ; : m`) only. The phone renders
@@ -1512,6 +1673,138 @@ mod tests {
             resolve_cwd(&s("root/file"), &roots),
             Err("cwd is not a directory")
         );
+    }
+
+    fn listed(path: &str, roots: &[PathBuf]) -> (String, Vec<String>, bool) {
+        let Ok(Response::TaskFolders {
+            path,
+            folders,
+            truncated,
+        }) = list_folders(path, roots)
+        else {
+            panic!("no listing for {path}");
+        };
+        let names = folders.iter().map(|f| f.as_str().to_owned()).collect();
+        (path.as_str().to_owned(), names, truncated)
+    }
+
+    #[test]
+    fn folders_lists_visible_directory_names_inside_roots() {
+        let (_dir, base) = tree();
+        let roots = vec![base.join("root")];
+        let s = |p: &str| base.join(p).to_str().unwrap().to_owned();
+        for d in ["root/Beta", "root/.git", "root/Icon\r", "root/x\u{202E}y"] {
+            std::fs::create_dir(base.join(d)).unwrap();
+        }
+        std::fs::write(base.join("root/notes.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(base.join("root/file"), base.join("root/to-file")).unwrap();
+        std::os::unix::fs::symlink("/nonexistent", base.join("root/dangling")).unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            std::fs::create_dir(base.join("root/Library")).unwrap();
+            let status = std::process::Command::new("chflags")
+                .arg("hidden")
+                .arg(base.join("root/Library"))
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        assert_eq!(
+            listed(&s("root/alias/.."), &roots),
+            (
+                s("root"),
+                vec!["alias".into(), "Beta".into(), "proj".into()],
+                false
+            )
+        );
+        assert_eq!(
+            listed(&s("root/alias"), &roots),
+            (s("root/proj"), vec!["sub".into()], false)
+        );
+        for outside in ["root2", "root/escape", "root/proj/../../outside"] {
+            assert_eq!(
+                list_folders(&s(outside), &roots),
+                Err(invalid("cwd is outside the allowed roots")),
+                "{outside}"
+            );
+        }
+        assert_eq!(
+            list_folders(&s("root/file"), &roots),
+            Err(invalid("cwd is not a directory"))
+        );
+    }
+
+    #[test]
+    fn folders_are_capped() {
+        let (_dir, base) = tree();
+        let many = base.join("root/many");
+        for i in 0..=MAX_FOLDERS {
+            std::fs::create_dir_all(many.join(format!("d{i:04}"))).unwrap();
+        }
+        let (_, names, truncated) = listed(many.to_str().unwrap(), &[base.join("root")]);
+        assert!(truncated);
+        assert_eq!(names.len(), MAX_FOLDERS);
+        assert_eq!(names[0], "d0000");
+    }
+
+    #[test]
+    fn create_folder_makes_one_empty_folder_inside_roots() {
+        use std::os::unix::fs::MetadataExt;
+        let (_dir, base) = tree();
+        let roots = vec![base.join("root")];
+        let s = |p: &str| base.join(p).to_str().unwrap().to_owned();
+        let name = |n: &str| FolderName::new(n).unwrap();
+        let yes: Authorized = Arc::new(|| true);
+        let created = create_folder(&s("root/alias"), &name("new"), &roots, &yes).unwrap();
+        assert_eq!(created.as_str(), s("root/proj/new"));
+        let meta = std::fs::symlink_metadata(created.as_str()).unwrap();
+        assert!(meta.is_dir());
+        assert_eq!(meta.mode() & 0o7777 & !0o755, 0);
+        assert_eq!(meta.mode() & 0o700, 0o700);
+        assert_eq!(meta.uid(), rustix::process::geteuid().as_raw());
+        assert_eq!(std::fs::read_dir(created.as_str()).unwrap().count(), 0);
+
+        std::os::unix::fs::symlink("/nonexistent", base.join("root/dangling")).unwrap();
+        for taken in ["proj", "alias", "escape", "file", "dangling"] {
+            assert_eq!(
+                create_folder(&s("root"), &name(taken), &roots, &yes),
+                Err(invalid("folder already exists")),
+                "{taken}"
+            );
+        }
+        assert!(!Path::new("/nonexistent").exists());
+        for parent in ["outside", "root/escape", "root2"] {
+            assert_eq!(
+                create_folder(&s(parent), &name("x"), &roots, &yes),
+                Err(invalid("cwd is outside the allowed roots")),
+                "{parent}"
+            );
+        }
+        let no: Authorized = Arc::new(|| false);
+        assert_eq!(
+            create_folder(&s("root"), &name("late"), &roots, &no)
+                .unwrap_err()
+                .0,
+            ErrorCode::NotPaired
+        );
+        assert!(!base.join("root/late").exists());
+        assert_eq!(std::fs::read_dir(base.join("outside")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn open_beneath_never_follows_a_link() {
+        let (_dir, base) = tree();
+        let root = base.join("root");
+        assert!(open_beneath(&root, &root.join("proj/sub")).is_ok());
+        assert!(open_beneath(&root, &root).is_ok());
+        for swapped in ["alias", "alias/sub", "escape"] {
+            assert!(
+                open_beneath(&root, &root.join(swapped)).is_err(),
+                "{swapped}"
+            );
+        }
+        assert!(open_beneath(&root, &root.join("proj/..")).is_err());
+        assert!(open_beneath(&root, &base.join("outside")).is_err());
     }
 
     #[test]

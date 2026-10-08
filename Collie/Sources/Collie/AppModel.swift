@@ -175,6 +175,7 @@ final class AppModel {
         }
         let unpaired = try await core?.removeMachine(id: machine.id) ?? false
         AgentDrafts.forget(machineId: machine.id, file: AgentDrafts.file)
+        DevicePrefs.forgetTaskBase(machineId: machine.id, in: DevicePrefs.file)
         if !(core?.machines() ?? []).contains(where: { $0.nodeId == machine.nodeId }) {
             NotificationKey.delete(nodeId: machine.nodeId)
         }

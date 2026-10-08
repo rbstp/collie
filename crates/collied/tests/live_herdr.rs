@@ -259,6 +259,7 @@ async fn scenario(session: &HerdrSession) {
             .any(|c| Path::new(c.as_str()) == work),
         "{opts:?}"
     );
+    assert_eq!(opts.roots, [Cwd::new(work.to_str().unwrap()).unwrap()]);
 
     let outside = TaskNewParams {
         op_id: OpId::new("O".repeat(22)).unwrap(),
@@ -266,6 +267,7 @@ async fn scenario(session: &HerdrSession) {
         agent: AgentKind::new("claude").unwrap(),
         prompt: PromptText::new("x").unwrap(),
         label: None,
+        new_folder: None,
     };
     assert_eq!(
         drive.task_new(outside, &yes).await.0.unwrap_err().0,
@@ -281,6 +283,7 @@ async fn scenario(session: &HerdrSession) {
                     agent: AgentKind::new("pi").unwrap(),
                     prompt: PromptText::new("say hello").unwrap(),
                     label: Some(Label::new("collie-live").unwrap()),
+                    new_folder: None,
                 },
                 &yes,
             )

@@ -182,7 +182,11 @@ final class DemoAgentCore: ActivityCore {
         throw CoreError.NotImplemented
     }
 
-    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
+    func taskFolders(machineId: String, path: String) async throws -> TaskFolders {
+        throw CoreError.NotImplemented
+    }
+
+    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?) async throws -> TaskStarted {
         throw CoreError.NotImplemented
     }
 

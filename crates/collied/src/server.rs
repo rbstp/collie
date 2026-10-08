@@ -1156,9 +1156,17 @@ impl Session<'_> {
             ),
             Request::TaskNew(p) => {
                 let (op_id, d) = (p.op_id.clone(), drive.clone());
+                let created = p.new_folder.is_some();
                 let op = self.audited(method, target.clone(), async move {
                     let (reply, cwd) = d.task_new(p, &auth).await;
-                    (reply, cwd.map(|c| c.as_str().to_owned()))
+                    let cwd = cwd.map(|c| {
+                        if created {
+                            format!("{} (created)", c.as_str())
+                        } else {
+                            c.as_str().to_owned()
+                        }
+                    });
+                    (reply, cwd)
                 });
                 self.starting = Some((id, target.clone()));
                 self.tasks.spawn(async move {
@@ -1172,6 +1180,7 @@ impl Session<'_> {
                 });
                 return Flow::Continue;
             }
+            Request::TaskFolders(p) => (drive.task_folders(p, &auth).await, None),
             Request::WorkspaceClose(p) => (drive.workspace_close(p, &auth).await, None),
             Request::PaneClose(p) => (drive.pane_close(p, &auth).await, None),
             Request::ApprovalList(_) => (
@@ -1762,7 +1771,13 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::AgentStar(p) => p.terminal_id.as_str(),
         Request::PaneClose(p) => p.terminal_id.as_str(),
         Request::WorkspaceClose(p) => p.workspace_id.as_str(),
-        Request::TaskNew(p) => p.cwd.as_str(),
+        Request::TaskNew(p) => match &p.new_folder {
+            Some(name) => {
+                return Some(format!("{} new_folder={:?}", p.cwd.as_str(), name.as_str()));
+            }
+            None => p.cwd.as_str(),
+        },
+        Request::TaskFolders(p) => p.path.as_str(),
         Request::PushActivityToken(p) => {
             return Some(activity::target(&p.terminal_id, &p.activity_id));
         }
@@ -1888,6 +1903,13 @@ fn outcome(reply: &Reply) -> String {
             terminal_id.as_str()
         ),
         Ok(Response::TerminalGranted { ttl_ms, .. }) => format!("granted ttl={}s", ttl_ms / 1000),
+        Ok(Response::TaskFolders {
+            folders, truncated, ..
+        }) => format!(
+            "ok folders={}{}",
+            folders.len(),
+            if *truncated { " truncated" } else { "" }
+        ),
         Ok(_) => "ok".to_owned(),
         Err((ErrorCode::DraftChanged, _)) => code_name(ErrorCode::DraftChanged),
         Err((code, message)) => format!("{}: {message}", code_name(*code)),

@@ -34,29 +34,64 @@ struct NewTaskSheet: View {
                 }
 
                 Section {
-                    TextField("/path/to/project", text: $model.cwd)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .font(.body.monospaced())
-                    ForEach(model.options?.recentCwds ?? [], id: \.self) { cwd in
-                        Button {
-                            model.cwd = cwd
-                        } label: {
-                            HStack {
-                                Text(cwd).font(.footnote.monospaced()).lineLimit(1).truncationMode(.head)
-                                Spacer()
-                                if model.cwd == cwd {
-                                    Image(systemName: "checkmark").foregroundStyle(.tint)
-                                }
+                    Toggle("New folder", isOn: $model.newFolder)
+                    if model.newFolder {
+                        TextField("Folder name", text: $model.folderName)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .font(.body.monospaced())
+                    } else {
+                        TextField(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project", text: $model.cwd)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .font(.body.monospaced())
+                        ForEach(model.completions, id: \.self) { name in
+                            Button {
+                                model.cwd = name
+                            } label: {
+                                Label(name, systemImage: "folder").font(.footnote.monospaced())
+                            }
+                            .foregroundStyle(.primary)
+                        }
+                        if let folders = model.folders {
+                            NavigationLink {
+                                FolderBrowser(folders: folders, selected: $model.cwd)
+                            } label: {
+                                Text("Browse \(folders.path)").lineLimit(1).truncationMode(.head)
                             }
                         }
-                        .foregroundStyle(.primary)
+                        ForEach(model.options?.recentCwds ?? [], id: \.self) { cwd in
+                            Button {
+                                model.cwd = cwd
+                            } label: {
+                                HStack {
+                                    Text(cwd).font(.footnote.monospaced()).lineLimit(1).truncationMode(.head)
+                                    Spacer()
+                                    if model.cwd == cwd {
+                                        Image(systemName: "checkmark").foregroundStyle(.tint)
+                                    }
+                                }
+                            }
+                            .foregroundStyle(.primary)
+                        }
                     }
                 } header: {
                     Text("Folder")
                 } footer: {
-                    if let error = model.optionsError {
-                        Text(error).foregroundStyle(.red)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if model.newFolder, let parent = model.newFolderParent {
+                            let name = model.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            Text("Creates \(parent)/\(name.isEmpty ? "name" : name) (empty) and starts the agent there.")
+                            if model.newFolderExists {
+                                Text("A folder with this name is already there.").foregroundStyle(.orange)
+                            }
+                        }
+                        if let error = model.optionsError {
+                            Text(error).foregroundStyle(.red)
+                        }
+                        if let error = model.foldersError {
+                            Text(error).foregroundStyle(.red)
+                        }
                     }
                 }
 
@@ -124,5 +159,35 @@ struct NewTaskSheet: View {
             .task(id: model.machineId) { await model.loadOptions() }
             .onDisappear(perform: cancel)
         }
+    }
+}
+
+private struct FolderBrowser: View {
+    let folders: TaskFolders
+    @Binding var selected: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(folders.folders, id: \.self) { name in
+                    Button {
+                        selected = name
+                        dismiss()
+                    } label: {
+                        Label(name, systemImage: "folder").font(.body.monospaced())
+                    }
+                    .foregroundStyle(.primary)
+                }
+            } footer: {
+                if folders.folders.isEmpty {
+                    Text("No folders.")
+                } else if folders.truncated {
+                    Text("Only the first \(folders.folders.count) folders are listed. Type a name to reach the others.")
+                }
+            }
+        }
+        .navigationTitle(URL(filePath: folders.path).lastPathComponent)
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

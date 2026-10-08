@@ -12,7 +12,7 @@ pub use messages::*;
 pub use output::*;
 pub use schema::{client_frame_schema, server_frame_schema};
 
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 pub mod limits {
     pub const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -27,6 +27,7 @@ pub mod limits {
     /// wrapped onto at most 4 rows, about 300 columns at an 80 column pane.
     pub const MAX_NOTE_CHARS: usize = 200;
     pub const MAX_CWD_BYTES: usize = 1024;
+    pub const MAX_FOLDER_NAME_BYTES: usize = 255;
     pub const NONCE_BYTES: usize = 32;
     pub const PAIRING_CODE_BYTES: usize = 16;
     pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;

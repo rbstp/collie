@@ -55,6 +55,8 @@ pub enum Request {
     AgentStar(AgentStarParams),
     #[serde(rename = "task.new")]
     TaskNew(TaskNewParams),
+    #[serde(rename = "task.folders")]
+    TaskFolders(TaskFoldersParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseParams),
     #[serde(rename = "pane.close")]
@@ -115,6 +117,7 @@ impl Request {
         "agent.slash_draft",
         "agent.star",
         "task.new",
+        "task.folders",
         "workspace.close",
         "pane.close",
         "approval.list",
@@ -154,6 +157,7 @@ impl Request {
             Self::AgentSlashDraft(_) => "agent.slash_draft",
             Self::AgentStar(_) => "agent.star",
             Self::TaskNew(_) => "task.new",
+            Self::TaskFolders(_) => "task.folders",
             Self::WorkspaceClose(_) => "workspace.close",
             Self::PaneClose(_) => "pane.close",
             Self::ApprovalList(_) => "approval.list",
@@ -193,6 +197,7 @@ impl Request {
             | Self::AgentSlashDraft(_)
             | Self::AgentStar(_)
             | Self::TaskNew(_)
+            | Self::TaskFolders(_)
             | Self::WorkspaceClose(_)
             | Self::PaneClose(_)
             | Self::AttachmentBegin(_)
@@ -541,6 +546,15 @@ pub struct TaskNewParams {
     pub prompt: PromptText,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<Label>,
+    /// When set, collied creates this empty folder directly inside `cwd` and starts there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_folder: Option<FolderName>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskFoldersParams {
+    pub path: Cwd,
 }
 
 /// `confirm` must be `true`; anything else yields `confirm_required`.
@@ -703,6 +717,13 @@ pub enum Response {
     TaskStarted {
         workspace_id: WorkspaceId,
         terminal_id: TerminalId,
+    },
+    /// The folders directly inside `path`, its canonical form, sorted; `truncated` when
+    /// some were left out.
+    TaskFolders {
+        path: Cwd,
+        folders: Vec<FolderName>,
+        truncated: bool,
     },
     Approvals {
         approvals: Vec<Approval>,
@@ -944,6 +965,7 @@ pub struct TaskOptions {
     pub agents: Vec<AgentKind>,
     pub default_agent: AgentKind,
     pub recent_cwds: Vec<Cwd>,
+    pub roots: Vec<Cwd>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1410,7 +1432,52 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 12);
+        assert_eq!(crate::PROTOCOL_VERSION, 13);
+    }
+
+    #[test]
+    fn task_folders_and_new_folder() {
+        let frame =
+            parse(r#"{"id":1,"method":"task.folders","params":{"path":"/Users/me/git"}}"#).unwrap();
+        assert_eq!(frame.request.class(), MethodClass::Drive);
+        assert_eq!(frame.request.method(), "task.folders");
+        let json = serde_json::to_string(&frame).unwrap();
+        assert_eq!(parse(&json).unwrap(), frame);
+        for params in [
+            r#"{"path":"/a","recursive":true}"#,
+            r#"{"path":"git"}"#,
+            "{}",
+        ] {
+            let bad = format!(r#"{{"id":1,"method":"task.folders","params":{params}}}"#);
+            assert_eq!(parse(&bad).unwrap_err().code, ErrorCode::InvalidParams);
+        }
+        let task = |extra: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"task.new","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","cwd":"/a","agent":"claude","prompt":"go"{extra}}}}}"#
+            ))
+        };
+        let Request::TaskNew(plain) = task("").unwrap().request else {
+            panic!("not a task");
+        };
+        assert_eq!(plain.new_folder, None);
+        let frame = task(r#","new_folder":"app""#).unwrap();
+        let Request::TaskNew(p) = &frame.request else {
+            panic!("not a task");
+        };
+        assert_eq!(p.new_folder.as_ref().unwrap().as_str(), "app");
+        let json = serde_json::to_string(&frame).unwrap();
+        assert_eq!(parse(&json).unwrap(), frame);
+        for bad in [
+            r#","new_folder":"../x""#,
+            r#","new_folder":".x""#,
+            r#","new_folder":"a/b""#,
+        ] {
+            assert_eq!(
+                task(bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{bad}"
+            );
+        }
     }
 
     #[test]

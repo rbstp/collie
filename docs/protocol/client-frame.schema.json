@@ -363,6 +363,12 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "FolderName": {
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[^.]",
+      "type": "string"
+    },
     "HelloParams": {
       "additionalProperties": false,
       "properties": {
@@ -581,6 +587,18 @@
       "pattern": "^(/[A-Za-z0-9_:.-]{0,63})?$",
       "type": "string"
     },
+    "TaskFoldersParams": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/Cwd"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "TaskNewParams": {
       "additionalProperties": false,
       "properties": {
@@ -599,6 +617,17 @@
               "type": "null"
             }
           ]
+        },
+        "new_folder": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FolderName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When set, collied creates this empty folder directly inside `cwd` and starts there."
         },
         "op_id": {
           "$ref": "#/$defs/OpId"
@@ -999,6 +1028,22 @@
         },
         "params": {
           "$ref": "#/$defs/TaskNewParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.folders",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TaskFoldersParams"
         }
       },
       "required": [
