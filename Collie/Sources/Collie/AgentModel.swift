@@ -47,6 +47,8 @@ final class AgentModel {
     private(set) var macDraft: String?
     /// The Mac's box text loaded into the field, until the phone edits it; a prompt sent from the Mac clears it.
     @ObservationIgnored private var loadedMacDraft: String?
+    /// The agent's last prompt when the field was loaded or the box last checked: only a new one means the Mac sent.
+    @ObservationIgnored private var seenPrompt: String?
     @ObservationIgnored private(set) var sentMacDraftCheck: Task<Void, Never>?
     private(set) var sendingPrompt = false
     /// The Mac's input box holds text the mirror did not put there; it waits for the next send.
@@ -233,6 +235,7 @@ final class AgentModel {
 
     /// Text left unsent in the Mac's input box moves to the phone's field, unless the phone already has a draft.
     func loadMacDraft() async {
+        let prompt = agent?.lastPrompt
         guard agent?.kind == "claude",
             let text = try? await core.agentDraft(machineId: route.machineId, terminalId: route.terminalId),
             !Task.isCancelled
@@ -244,6 +247,7 @@ final class AgentModel {
             draft = text
             macDraft = text
             loadedMacDraft = text
+            seenPrompt = prompt
         } else if text == Self.boxToken(text), Self.slashToken(draft) == text {
             macDraft = text
         }
@@ -335,7 +339,10 @@ final class AgentModel {
         if link != view.link { link = view.link }
         if linkError != view.lastError { linkError = view.lastError }
         if agent != view.agent {
-            if loadedMacDraft != nil, let before = agent, let after = view.agent, Self.promptSubmitted(before, after) { dropSentMacDraft() }
+            if loadedMacDraft != nil, let prompt = view.agent?.lastPrompt, prompt != seenPrompt {
+                seenPrompt = prompt
+                dropSentMacDraft()
+            }
             agent = view.agent
         }
         if terminal != view.terminal { terminal = view.terminal }
@@ -353,12 +360,8 @@ final class AgentModel {
         followMode()
     }
 
-    /// Approving a blocked agent also sets it working, so only a turn starting from rest, or a new prompt, counts.
-    private static func promptSubmitted(_ before: AgentSummary, _ after: AgentSummary) -> Bool {
-        after.lastPrompt != before.lastPrompt || after.status == .working && before.status != .working && before.status != .blocked
-    }
-
-    /// The Mac's box reads empty once its prompt is submitted; text deleted there without a send starts no turn.
+    /// collied's last prompt is human typed only, so a background turn or text deleted on the Mac never gets here;
+    /// a nil last prompt (transcript unreadable for a moment) is ignored. The Mac's box reads empty once it sent.
     private func dropSentMacDraft() {
         sentMacDraftCheck = Task {
             guard let box = try? await core.agentDraft(machineId: route.machineId, terminalId: route.terminalId), box.isEmpty,

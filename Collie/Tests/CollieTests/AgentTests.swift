@@ -546,7 +546,6 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) async {
     core.state.withLock {
         $0.macDraft = ""
-        $0.status = .working
         $0.lastPrompt = prompt
     }
     model.poll()
@@ -573,6 +572,19 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     core.state.withLock { $0.macDraft = "test2" }
     model.poll()
     await macSends(core, model, prompt: "test2")
+    #expect(model.draft.isEmpty)
+}
+
+@MainActor
+@Test func aPromptQueuedOnTheMacWhileWorkingClearsTheLoadedDraft() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.status = .working
+        $0.lastPrompt = "earlier"
+    }
+    let model = openedAgent(core, macDraft: "next")
+    await model.loadMacDraft()
+    await macSends(core, model, prompt: "next")
     #expect(model.draft.isEmpty)
 }
 
@@ -609,6 +621,26 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     model.poll()
     await model.sentMacDraftCheck?.value
     #expect(model.draft == "test")
+}
+
+@MainActor
+@Test func aTurnWithoutANewPromptKeepsTheLoadedDraft() async {
+    let core = FakeCore()
+    core.state.withLock { $0.lastPrompt = "earlier" }
+    let model = openedAgent(core, macDraft: "test")
+    await model.loadMacDraft()
+    core.state.withLock {
+        $0.macDraft = ""
+        $0.status = .working
+    }
+    model.poll()
+    core.state.withLock { $0.lastPrompt = nil }
+    model.poll()
+    core.state.withLock { $0.lastPrompt = "earlier" }
+    model.poll()
+    await model.sentMacDraftCheck?.value
+    #expect(model.draft == "test")
+    #expect(model.sentMacDraftCheck == nil)
 }
 
 @Test func keyStripIsTheAllowlistInOrder() {
