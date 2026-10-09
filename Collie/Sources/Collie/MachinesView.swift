@@ -177,7 +177,7 @@ struct PairView: View {
                     Text("Shown on the machine in its list of paired devices.")
                 }
 
-                Section("Pairing code") {
+                Section {
                     if QRScannerView.isSupported {
                         Button("Scan QR code", systemImage: "qrcode.viewfinder") {
                             Task { await startScanning() }
@@ -196,6 +196,10 @@ struct PairView: View {
                             model.invite = first.trimmingCharacters(in: .whitespacesAndNewlines)
                         }
                     }
+                } header: {
+                    Text("Pairing code")
+                } footer: {
+                    Text("On the computer, run collied setup, or collied pair if it is already set up, and scan the QR code it shows.")
                 }
 
                 Section {

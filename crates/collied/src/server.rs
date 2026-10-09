@@ -185,6 +185,7 @@ pub struct State {
     cfg: ServerConfig,
     machine: MachineInfo,
     dns_name: String,
+    started_ms: u64,
     herdr: PathBuf,
     peers: Arc<Mutex<Store>>,
     pairing: Mutex<Pairing<mpsc::Sender<PairAttempt>>>,
@@ -311,14 +312,21 @@ impl State {
 
     pub(crate) async fn status_info(&self) -> StatusInfo {
         let node = self.node.clone();
-        let (backend_state, tags) = match tokio::task::spawn_blocking(move || node.status()).await {
-            Ok(Ok(st)) => (
-                format!("{:?}", st.backend_state),
-                Some(st.self_node.and_then(|n| n.tags).unwrap_or_default()),
-            ),
-            Ok(Err(e)) => (format!("error: {e}"), None),
-            Err(e) => (format!("error: {e}"), None),
-        };
+        let (backend_state, tags, user_peers) =
+            match tokio::task::spawn_blocking(move || node.status()).await {
+                Ok(Ok(st)) => (
+                    format!("{:?}", st.backend_state),
+                    Some(st.self_node.and_then(|n| n.tags).unwrap_or_default()),
+                    Some(st.peer.map_or(0, |peers| {
+                        peers
+                            .values()
+                            .filter(|p| p.tags.as_ref().is_none_or(Vec::is_empty))
+                            .count()
+                    })),
+                ),
+                Ok(Err(e)) => (format!("error: {e}"), None, None),
+                Err(e) => (format!("error: {e}"), None, None),
+            };
         // Concurrent, so a wedged herdr costs one herdr timeout, under the control timeout.
         let (pong, snap) = tokio::join!(
             herdr::ping(&self.herdr),
@@ -354,6 +362,8 @@ impl State {
             tags,
             flock,
             flock_too_large: false,
+            started_ms: Some(self.started_ms),
+            user_peers,
         }
         .fit()
     }
@@ -546,6 +556,7 @@ pub async fn start_with(
         node,
         cfg,
         dns_name,
+        started_ms: crate::now_ms(),
         herdr: herdr_socket,
         peers,
         pairing: Mutex::new(Pairing::default()),

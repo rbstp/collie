@@ -437,6 +437,24 @@ The lock screen and the Dynamic Island show an agent only while the user follows
 - `enc` is sealed once per device and approval and repeated on later updates (refresh, new token), so coalescing still sees an unchanged state. Once the approval resolves (applied, denied, superseded, expired) or the agent leaves `blocked`, the next update omits `approvalId` and `enc`; it is a normal coalesced update without alert. An `end` never carries them.
 - On the phone, `AgentActivityAttributes` carries the Mac's `nodeId`. The widget reads the notification key for it from the shared Keychain access group, opens `enc` (`PushContext.open`) and shows the command on the lock screen and in the expanded Dynamic Island (`privacySensitive`: redacted while locked), else "Approval needed" without buttons. Approve and Deny, shown only with a command that decrypts, are `Button(intent:)` with a `LiveActivityIntent` whose `authenticationPolicy` is `.requiresAuthentication`: iOS makes the user unlock first, then the intent runs in the app process and takes the same path as the notification actions (`decideFromNotification`, background budget; the nonce comes from the Mac over the tailnet).
 
+## `collied setup` (macOS)
+
+One interactive command for adding a Mac or updating one in place. It reuses the subcommands' code (`daemon::login`, `service::install`, `doctor::run`, `push::import`, the `pair` flow) through a small `setup::Host` trait, so the order and the skip rules are unit tested against a fake without touching launchd, the tailnet or the Keychain. Each step checks its own done state, so a rerun resumes where the last one stopped:
+
+| Step | Done when | Otherwise |
+|---|---|---|
+| login | the daemon answers `status` with backend `Running` (it only serves once its node is tagged); a loaded job gets 20 s first, for a daemon just restarted by `just collied-install` | unload a loaded job without disabling it (a crash loop or a logged-out daemon holds the node lock or the socket), then `collied login`; if login fails, start the job again |
+| service | the plist on disk is the one `install` would write, the job is loaded, and the daemon's `started_ms` is not older than the binary's mtime | `service install` (bootout, then bootstrap, so a restart), then wait up to 60 s for the daemon; on a timeout print the end of `collied.err.log`. A plist with another `--config` than setup's stops setup instead: run `collied --config <path> setup` |
+| doctor | no fail line | stop: fix, then run setup again |
+| APNs | `[apns]` is in `collied.toml` | offer it: ask for the `.p8` (key ID from `AuthKey_<KEY_ID>.p8`), team and bundle IDs, append `[apns]` (new file 0600, else the atomic rewrite keeping the mode), `apns import`; put the old config back if the import fails; restart the service so the daemon reads it |
+| pair | never: phones may need to pair again after an update | offer `collied pair` |
+
+Before any step it refuses unless stdin is a terminal, so `yes | collied setup` cannot answer the pairing prompt, and unless the running binary is `~/.cargo/bin/collied`, Developer ID signed as `dev.rbstp.collied` (the check `apns import` already makes), so it never installs an unsigned agent or one pointing at `target/release`, which the next `cargo build` replaces unsigned. It never confirms a pairing: the `y` on the computer, after the `tcflush`, stays the only confirmation. On Linux it says to follow the README steps for now.
+
+The control socket's `status` reply gained `started_ms` (when the daemon started) and `user_peers` (untagged nodes of any user in the node's netmap, which for a tag-owned node are the devices the policy lets reach it), both with serde defaults; an older daemon reports neither, which setup treats as outdated. The phone protocol is unchanged.
+
+The policy check uses what the Mac can see. `collied login` prints Tailscale's last login error from the node's health (`You are logged out. The last login error was: ...`) and, when it mentions a tag, stops with the `tagOwners` and grant entries for this node's tag (`daemon::policy_snippet`, tested against [tailnet.md](tailnet.md)); the untagged-node error and the login timeout print them too. Doctor's `reach` line warns when `user_peers` is 0, and setup then prints the grant. The exact text control sends for a user who is not a tag owner has not been checked against a live tailnet.
+
 ## Linux
 
 collied runs on Linux with the same protocol, gate, allowlist and approvals as on macOS. What differs: the build, the paths, the node tag, the service manager, the listener check and where the APNs key lives. Built and tested on Arch (systemd 261, herdr 0.9.3).

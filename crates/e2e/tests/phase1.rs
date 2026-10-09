@@ -206,7 +206,7 @@ async fn scenario(
         .await
         .unwrap_err();
     assert!(
-        matches!(&err, CoreError::Unauthorized { message } if message.contains("403")),
+        matches!(&err, CoreError::Rejected { message } if message.contains("403")),
         "{err:?}"
     );
     assert!(phone_b.machines().is_empty());

@@ -131,6 +131,16 @@ Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the t
 | Residual | Same-UID code can drive the control socket or the app itself, as under [Same-UID malware on the Mac](#same-uid-malware-on-the-mac): it can already answer the y/N prompt. The QR is on screen for up to 120 s, like the terminal's. |
 | Phase | Built |
 
+### `collied setup`
+
+| | |
+|---|---|
+| Assets | The y/N decision on a candidate phone; the launchd agent; `collied.toml` and the APNs key |
+| Attack | Setup runs with piped input (`yes` into it) so a pairing is confirmed without a human; it installs an unsigned agent; it leaves the key or config readable. |
+| Mitigations | Refuses unless stdin is a terminal and the binary is `~/.cargo/bin/collied`, Developer ID signed as `dev.rbstp.collied`, before any step: the service then never points at a build output that the next `cargo build` replaces unsigned. Never confirms a pairing: it runs the `collied pair` flow, whose `y` follows a `tcflush`. Reuses `service install` and `apns import` (Keychain, read back, offer to delete the `.p8`); a new `collied.toml` is created 0600, an existing one is rewritten atomically keeping its mode (`[apns]` holds no secret, the key is in the Keychain). It changes no bind, gate or pairing rule, refuses to drop the `--config` the service runs with, and stops on any doctor fail line, `listen` included (built). |
+| Residual | As under [Same-UID malware on the Mac](#same-uid-malware-on-the-mac): same-UID code can drive a terminal or the control socket. |
+| Phase | Built |
+
 ### APNs key storage on Linux
 
 | | |

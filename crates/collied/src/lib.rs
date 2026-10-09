@@ -26,6 +26,7 @@ pub mod push;
 pub mod reflow;
 pub mod server;
 pub mod service;
+pub mod setup;
 pub mod terminal;
 pub mod transcript;
 pub mod turns;

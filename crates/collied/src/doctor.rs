@@ -468,6 +468,22 @@ async fn check_daemon(r: &mut Report, data_dir: &Path) {
             info.peers
         ),
     );
+    match info.user_peers {
+        Some(0) => r.line(
+            Status::Warn,
+            "reach",
+            format!(
+                "no device of yours can reach this node: the policy lacks the grant to {tag} on TCP {}, or your phone is not signed in to Tailscale yet (collied setup prints the policy entries)",
+                info.port
+            ),
+        ),
+        Some(n) => r.line(
+            Status::Ok,
+            "reach",
+            format!("{n} untagged device(s) can reach this node"),
+        ),
+        None => {}
+    }
     match tailnet::kernel_tcp_listeners(info.pid) {
         Ok(lines) if lines.is_empty() => r.line(
             Status::Ok,
