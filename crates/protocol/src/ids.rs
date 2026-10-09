@@ -154,8 +154,26 @@ fn folder_name(s: &str) -> bool {
         && !s.starts_with('.')
         && !s
             .chars()
-            .any(|c| c.is_control() || is_format(c) || c == '/' || c == '\\')
+            .any(|c| c.is_control() || is_format(c) || is_blank(c) || c == '/' || c == '\\')
         && s.trim() == s
+}
+
+/// Default_Ignorable code points `is_format` leaves out, plus the braille blank: they
+/// render as nothing, so a name could look empty or like another folder's.
+fn is_blank(c: char) -> bool {
+    matches!(
+        c,
+        '\u{034F}'
+            | '\u{115F}'
+            | '\u{1160}'
+            | '\u{17B4}'
+            | '\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{2800}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FFA0}'
+    )
 }
 
 fn label(s: &str) -> bool {
@@ -475,6 +493,11 @@ mod tests {
             "x ",
             "evil\u{202E}gpj",
             "x\u{200B}y",
+            "\u{3164}",
+            "collie\u{3164}",
+            "x\u{FE0F}",
+            "\u{2800}",
+            "x\u{034F}y",
             long.as_str(),
         ] {
             assert!(FolderName::new(bad).is_err(), "{bad:?}");

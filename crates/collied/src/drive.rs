@@ -1223,24 +1223,32 @@ fn open_under_root(cwd: &str, roots: &[PathBuf]) -> Result<(OwnedFd, Cwd), Fail>
     let Some(root) = roots.iter().find(|r| path.starts_with(r)) else {
         return Err(invalid("cwd is outside the allowed roots"));
     };
-    let dir = open_beneath(root, path).map_err(io_fail)?;
+    let dir = open_beneath(root, path)?;
     Ok((dir, resolved))
 }
 
 /// Opens the canonical `path` one component at a time from `root` without following a
 /// symlink, so a folder swapped for a link after the check fails instead of leading
-/// outside the roots.
-fn open_beneath(root: &Path, path: &Path) -> rustix::io::Result<OwnedFd> {
+/// outside the roots. A hidden folder below the root (dot or `UF_HIDDEN`) is refused, so
+/// `~/.ssh` or `~/Library` is neither listed nor created in.
+fn open_beneath(root: &Path, path: &Path) -> Result<OwnedFd, Fail> {
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let rel = path
         .strip_prefix(root)
-        .map_err(|_| rustix::io::Errno::INVAL)?;
-    let mut dir = rustix::fs::open(root, flags, Mode::empty())?;
+        .map_err(|_| io_fail(rustix::io::Errno::INVAL))?;
+    let mut dir = rustix::fs::open(root, flags, Mode::empty()).map_err(io_fail)?;
     for part in rel.components() {
         let Component::Normal(part) = part else {
-            return Err(rustix::io::Errno::INVAL);
+            return Err(io_fail(rustix::io::Errno::INVAL));
         };
-        dir = rustix::fs::openat(&dir, part, flags, Mode::empty())?;
+        if part.as_encoded_bytes().starts_with(b".") {
+            return Err(invalid("folder is hidden"));
+        }
+        dir = rustix::fs::openat(&dir, part, flags, Mode::empty()).map_err(io_fail)?;
+        #[cfg(target_os = "macos")]
+        if rustix::fs::fstat(&dir).map_err(io_fail)?.st_flags & UF_HIDDEN != 0 {
+            return Err(invalid("folder is hidden"));
+        }
     }
     Ok(dir)
 }
@@ -1311,6 +1319,10 @@ fn create_folder(
     auth: &Authorized,
 ) -> Result<Cwd, Fail> {
     let (dir, parent) = open_under_root(parent, roots)?;
+    // macOS PATH_MAX (1024) counts the NUL, so a longer path could be made but never resolved.
+    if parent.as_str().len() + 1 + name.as_str().len() >= limits::MAX_CWD_BYTES {
+        return Err(invalid("folder path is too long"));
+    }
     authorized(auth)?;
     rustix::fs::mkdirat(&dir, name.as_str(), Mode::from_raw_mode(0o755)).map_err(|e| {
         if e == rustix::io::Errno::EXIST {
@@ -1322,10 +1334,17 @@ fn create_folder(
             )
         }
     })?;
+    let made = rustix::fs::statat(&dir, name.as_str(), AtFlags::SYMLINK_NOFOLLOW);
     let created = Path::new(parent.as_str()).join(name.as_str());
     let created = created.to_str().unwrap_or_default();
+    let same = |cwd: &Cwd| {
+        let (Ok(made), Ok(now)) = (&made, rustix::fs::stat(cwd.as_str())) else {
+            return false;
+        };
+        (made.st_dev, made.st_ino) == (now.st_dev, now.st_ino)
+    };
     match resolve_cwd(created, roots) {
-        Ok(cwd) if cwd.as_str() == created => Ok(cwd),
+        Ok(cwd) if same(&cwd) => Ok(cwd),
         _ => fail(
             ErrorCode::Internal,
             format!("folder {created} was created and left in place: it changed right after"),
@@ -1732,6 +1751,25 @@ mod tests {
             list_folders(&s("root/file"), &roots),
             Err(invalid("cwd is not a directory"))
         );
+        std::fs::create_dir(base.join("root/.git/hooks")).unwrap();
+        let yes: Authorized = Arc::new(|| true);
+        let mut hidden = vec!["root/.git", "root/.git/hooks"];
+        if cfg!(target_os = "macos") {
+            std::fs::create_dir(base.join("root/Library/Mail")).unwrap();
+            hidden.extend(["root/Library", "root/Library/Mail"]);
+        }
+        for path in hidden {
+            assert_eq!(
+                list_folders(&s(path), &roots),
+                Err(invalid("folder is hidden")),
+                "{path}"
+            );
+            assert_eq!(
+                create_folder(&s(path), &FolderName::new("x").unwrap(), &roots, &yes),
+                Err(invalid("folder is hidden")),
+                "{path}"
+            );
+        }
     }
 
     #[test]
@@ -1788,6 +1826,22 @@ mod tests {
             ErrorCode::NotPaired
         );
         assert!(!base.join("root/late").exists());
+        let deep = base
+            .join("root")
+            .join("d".repeat(250))
+            .join("d".repeat(250));
+        let deep = deep.join("d".repeat(250));
+        std::fs::create_dir_all(&deep).unwrap();
+        assert_eq!(
+            create_folder(
+                deep.to_str().unwrap(),
+                &name(&"n".repeat(255)),
+                &roots,
+                &yes
+            ),
+            Err(invalid("folder path is too long"))
+        );
+        assert_eq!(std::fs::read_dir(&deep).unwrap().count(), 0);
         assert_eq!(std::fs::read_dir(base.join("outside")).unwrap().count(), 0);
     }
 

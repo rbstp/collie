@@ -119,7 +119,13 @@ struct MachineSettingsView: View {
             } header: {
                 Text("Base folder")
             } footer: {
-                Text("New Task completes folder names and lists the folders inside this folder. It must be inside one of the machine's task roots.")
+                VStack(alignment: .leading, spacing: 4) {
+                    if !typed.isEmpty, !typed.hasPrefix("/") {
+                        Text("Type the full path, for example \(roots.first ?? "/Users/you")/git: ~ is not expanded.")
+                            .foregroundStyle(.orange)
+                    }
+                    Text("New Task completes folder names and lists the folders inside this folder. It must be inside one of the machine's task roots.")
+                }
             }
         }
         .navigationTitle(machine.label)

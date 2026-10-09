@@ -22,6 +22,7 @@ final class NewTaskModel {
     private(set) var foldersError: String?
     var cwd = ""
     var newFolder = false
+    var newFolderRoot: String?
     var folderName = ""
     var agent = ""
     var prompt = ""
@@ -36,8 +37,7 @@ final class NewTaskModel {
         machineId = machines.first { $0.id == preferredMachineId }?.id ?? machines.first?.id
     }
 
-    /// An absolute path as typed, or a name inside the base folder. collied resolves it
-    /// and checks it against its roots.
+    /// collied resolves this and checks it against its roots.
     var folder: String? {
         let typed = trimmed(cwd)
         if typed.hasPrefix("/") { return typed }
@@ -45,21 +45,13 @@ final class NewTaskModel {
         return base + "/" + typed
     }
 
-    /// Where a new folder goes: the base folder, or else collied's first root.
-    var newFolderParent: String? { base ?? options?.roots.first }
+    var newFolderParent: String? { base ?? newFolderRoot ?? options?.roots.first }
 
     var newFolderNameIsValid: Bool {
         let name = trimmed(folderName)
         return !name.isEmpty && !name.contains("/") && !name.hasPrefix(".")
     }
 
-    /// Only a hint from the last listing: collied refuses a name that is taken.
-    var newFolderExists: Bool {
-        let name = trimmed(folderName)
-        return base != nil && folders?.folders.contains { $0.caseInsensitiveCompare(name) == .orderedSame } == true
-    }
-
-    /// Folders in the base whose names start with the typed name.
     var completions: [String] {
         let typed = trimmed(cwd)
         guard !typed.isEmpty, !typed.contains("/") else { return [] }
@@ -77,6 +69,7 @@ final class NewTaskModel {
         guard let machineId else { return }
         options = nil
         optionsError = nil
+        newFolderRoot = nil
         let base = DevicePrefs.load(from: prefsFile).taskBases[machineId]
         self.base = base
         folders = nil
@@ -116,8 +109,16 @@ final class NewTaskModel {
                 label: trimmed(label).nilIfEmpty, newFolder: newFolder ? trimmed(folderName) : nil
             )
         } catch {
-            phase = .editing
             self.error = AgentModel.message(for: error)
+            // A folder made before the agent failed to start stays; start in it next time.
+            let name = trimmed(folderName)
+            if newFolder, let listed = try? await core.taskFolders(machineId: machineId, path: cwd),
+                listed.folders.contains(name)
+            {
+                newFolder = false
+                self.cwd = listed.path + "/" + name
+            }
+            phase = .editing
             return nil
         }
         phase = .waitingForAgent

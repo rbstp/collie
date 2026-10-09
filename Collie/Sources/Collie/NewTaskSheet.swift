@@ -36,6 +36,11 @@ struct NewTaskSheet: View {
                 Section {
                     Toggle("New folder", isOn: $model.newFolder)
                     if model.newFolder {
+                        if model.base == nil, let roots = model.options?.roots, roots.count > 1 {
+                            Picker("In", selection: Binding(get: { model.newFolderParent }, set: { model.newFolderRoot = $0 })) {
+                                ForEach(roots, id: \.self) { Text($0).tag(Optional($0)) }
+                            }
+                        }
                         TextField("Folder name", text: $model.folderName)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
@@ -82,9 +87,6 @@ struct NewTaskSheet: View {
                         if model.newFolder, let parent = model.newFolderParent {
                             let name = model.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
                             Text("Creates \(parent)/\(name.isEmpty ? "name" : name) (empty) and starts the agent there.")
-                            if model.newFolderExists {
-                                Text("A folder with this name is already there.").foregroundStyle(.orange)
-                            }
                         }
                         if let error = model.optionsError {
                             Text(error).foregroundStyle(.red)

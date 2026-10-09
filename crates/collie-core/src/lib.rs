@@ -1451,7 +1451,7 @@ impl CollieCore {
                     FolderName::new(n).map_err(|_| {
                         invalid(
                             "new_folder",
-                            "folder name must be one plain name, not starting with a dot",
+                            "folder name must be one plain name of at most 255 bytes, without / or \\, a leading dot, or control or invisible characters",
                         )
                     })
                 })

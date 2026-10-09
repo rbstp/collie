@@ -978,8 +978,17 @@ private func prefsFile() throws -> URL {
     }
     model.folderName = " fresh "
     #expect(model.canStart)
-    #expect(!model.newFolderExists)
     #expect(await model.start() != nil)
+
+    core.state.withLock { $0.options.roots = ["/Users/me", "/Volumes/work"] }
+    let twoRoots = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+    await twoRoots.loadOptions()
+    twoRoots.prompt = "set it up"
+    twoRoots.newFolder = true
+    twoRoots.folderName = "other"
+    #expect(twoRoots.newFolderParent == "/Users/me")
+    twoRoots.newFolderRoot = "/Volumes/work"
+    #expect(await twoRoots.start() != nil)
 
     DevicePrefs.update(in: file) { $0.taskBases["m1"] = "/Users/me/git" }
     let based = NewTaskModel(core: core, machines: [mac], prefsFile: file)
@@ -987,9 +996,21 @@ private func prefsFile() throws -> URL {
     based.prompt = "set it up"
     based.newFolder = true
     based.folderName = "COLLIE"
-    #expect(based.newFolderExists)
     #expect(await based.start() != nil)
-    #expect(core.snapshot.taskNews == ["/Users/me fresh", "/Users/me/git COLLIE"])
+    #expect(core.snapshot.taskNews == ["/Users/me fresh", "/Volumes/work other", "/Users/me/git COLLIE"])
+
+    core.state.withLock { $0.started = nil }
+    let failed = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+    await failed.loadOptions()
+    failed.prompt = "set it up"
+    failed.newFolder = true
+    failed.folderName = "brand-new"
+    #expect(await failed.start() == nil)
+    #expect(failed.error != nil && failed.newFolder, "a name that was not created keeps New folder on")
+    failed.folderName = "collie"
+    #expect(await failed.start() == nil)
+    #expect(!failed.newFolder && failed.cwd == "/Users/me/git/collie", "the folder left in place is the next start's folder")
+    #expect(failed.canStart)
 }
 
 @MainActor
