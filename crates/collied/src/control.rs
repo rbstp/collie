@@ -57,6 +57,13 @@ pub struct StatusInfo {
     pub flock: Option<StatusFlock>,
     #[serde(default)]
     pub flock_too_large: bool,
+    /// None when the daemon predates this field.
+    #[serde(default)]
+    pub started_ms: Option<u64>,
+    /// Untagged nodes in this node's netmap: the devices the policy lets reach it. None
+    /// when the node status failed or the daemon predates this field.
+    #[serde(default)]
+    pub user_peers: Option<usize>,
 }
 
 impl StatusInfo {
@@ -525,6 +532,8 @@ mod tests {
                 tags: None,
                 flock: None,
                 flock_too_large: false,
+                started_ms: None,
+                user_peers: None,
             };
             write_msg(&mut w, &Reply::Status(info)).await.unwrap();
         });
@@ -555,6 +564,8 @@ mod tests {
             tags: Some(vec!["tag:collie-linux".into()]),
             flock: Some(flock(n)),
             flock_too_large: false,
+            started_ms: Some(1),
+            user_peers: Some(1),
         };
         let small = info(3).fit();
         assert!(small.flock.is_some() && !small.flock_too_large);
@@ -567,6 +578,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(old.tags, None);
+        assert_eq!((old.started_ms, old.user_peers), (None, None));
     }
 
     #[test]

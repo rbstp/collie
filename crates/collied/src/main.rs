@@ -1,4 +1,4 @@
-use std::io::BufRead;
+use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -23,6 +23,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Set up or update this machine: login, service, doctor, push notifications and
+    /// pairing, each skipped when already done (interactive, macOS).
+    Setup,
     /// Join the tailnet as tag:collie-mac on macOS, tag:collie-linux on Linux
     /// (interactive, or COLLIE_TS_AUTHKEY).
     Login,
@@ -154,6 +157,31 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
                 .unwrap_or_else(|| data_dir.join(config::CONFIG_FILE));
             return push::import(&config_path, explicit, &path);
         }
+        Command::Setup => {
+            anyhow::ensure!(
+                std::io::stdin().is_terminal(),
+                "collied setup is interactive: run it in a terminal"
+            );
+            #[cfg(target_os = "linux")]
+            anyhow::bail!(
+                "collied setup is macOS only for now: follow the Linux steps in the README"
+            );
+            #[cfg(target_os = "macos")]
+            {
+                doctor::signed_as_collied().map_err(|e| {
+                    anyhow::anyhow!(
+                        "{e}: run `just collied-install`, then ~/.cargo/bin/collied setup"
+                    )
+                })?;
+                let mut host = SetupHost {
+                    config: cli.config.as_deref(),
+                    data_dir: &data_dir,
+                    control_path: &control_path,
+                    auth_key,
+                };
+                return collied::setup::run(&mut host).await;
+            }
+        }
         Command::Login => {
             let config = load_config(cli.config.as_deref(), &data_dir)?;
             daemon::login(&data_dir, &config, auth_key).await?;
@@ -176,6 +204,130 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
         },
     }
     Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+struct SetupHost<'a> {
+    config: Option<&'a Path>,
+    data_dir: &'a Path,
+    control_path: &'a Path,
+    auth_key: Option<Zeroizing<String>>,
+}
+
+#[cfg(target_os = "macos")]
+impl collied::setup::Host for SetupHost<'_> {
+    async fn status(&mut self) -> Option<control::StatusInfo> {
+        match control::request(self.control_path, &Request::Status).await {
+            Ok(Some(Reply::Status(s))) => Some(s),
+            _ => None,
+        }
+    }
+
+    fn service(&mut self, started_ms: Option<u64>) -> anyhow::Result<service::State> {
+        service::state(self.config, self.data_dir, started_ms)
+    }
+
+    async fn login(&mut self) -> anyhow::Result<()> {
+        let config = load_config(self.config, self.data_dir)?;
+        daemon::login(self.data_dir, &config, self.auth_key.take()).await
+    }
+
+    fn stop_service(&mut self) -> anyhow::Result<()> {
+        service::stop()
+    }
+
+    fn install_service(&mut self) -> anyhow::Result<()> {
+        service::install(self.config, self.data_dir)
+    }
+
+    async fn wait_daemon(&mut self) -> anyhow::Result<control::StatusInfo> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            if let Some(s) = self.status().await
+                && s.backend_state == "Running"
+            {
+                return Ok(s);
+            }
+            if std::time::Instant::now() >= deadline {
+                let log = self.data_dir.join(service::STDERR_LOG);
+                let text = std::fs::read_to_string(&log).unwrap_or_default();
+                let lines: Vec<&str> = text.lines().collect();
+                for line in &lines[lines.len().saturating_sub(20)..] {
+                    println!("  {line}");
+                }
+                anyhow::bail!(
+                    "collied did not start within 60 s; the end of {} is above",
+                    log.display()
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+
+    async fn doctor(&mut self) -> anyhow::Result<bool> {
+        doctor::run(self.config.map(Path::to_owned)).await
+    }
+
+    fn apns_configured(&mut self) -> anyhow::Result<bool> {
+        Ok(load_config(self.config, self.data_dir)?.apns.is_some())
+    }
+
+    fn setup_apns(&mut self) -> anyhow::Result<bool> {
+        use collied::setup;
+        let p8 = setup::typed_path(&prompt(
+            "Path to the APNs key AuthKey_<KEY_ID>.p8 (mode 0600):",
+        )?)?;
+        let key_id = match setup::key_id_of(&p8) {
+            Some(id) => id.to_owned(),
+            None => prompt("Key ID:")?,
+        };
+        let or = |typed: String, default: &str| {
+            if typed.is_empty() {
+                default.to_owned()
+            } else {
+                typed
+            }
+        };
+        let team_id = or(
+            prompt(&format!("Team ID [{}]:", setup::TEAM_ID))?,
+            setup::TEAM_ID,
+        );
+        let bundle_id = or(
+            prompt(&format!("App bundle ID [{}]:", setup::BUNDLE_ID))?,
+            setup::BUNDLE_ID,
+        );
+        let section = setup::apns_section(&key_id, &team_id, &bundle_id)?;
+        let explicit = self.config.is_some();
+        let config_path = self
+            .config
+            .map_or_else(|| self.data_dir.join(config::CONFIG_FILE), Path::to_owned);
+        setup::with_apns(&config_path, &section, || {
+            push::import(&config_path, explicit, &p8)
+        })
+    }
+
+    async fn pair(&mut self) -> anyhow::Result<bool> {
+        pair(self.control_path, false).await
+    }
+
+    fn ask(&mut self, question: &str) -> anyhow::Result<bool> {
+        Ok(prompt(question)?.eq_ignore_ascii_case("y"))
+    }
+
+    fn say(&mut self, line: &str) {
+        println!("{line}");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn prompt(question: &str) -> anyhow::Result<String> {
+    // Discard anything typed before the question was shown.
+    let _ = rustix::termios::tcflush(std::io::stdin(), rustix::termios::QueueSelector::IFlush);
+    print!("{question} ");
+    std::io::Write::flush(&mut std::io::stdout())?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    Ok(line.trim().to_owned())
 }
 
 fn not_running() -> anyhow::Error {

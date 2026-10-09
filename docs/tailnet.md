@@ -15,6 +15,7 @@ The phone only dials (TCP to the Mac on port 8457). The Mac only listens through
 ## Mac node
 
 - `collied login` starts the node with `advertise_tags = ["tag:collie-mac"]` and prints the login URL (and its QR). Open it and sign in as a user listed in `tagOwners` for `tag:collie-mac`. The node then belongs to the tag, not to you: tags replace user ownership.
+- If Tailscale refuses the login, `collied login` prints its last login error; when the error is about the tag, it stops and prints the `tagOwners` and grant entries to add. `collied doctor` warns on its `reach` line when no device of yours can reach the node, which means the grant below is missing (or the phone is not signed in yet). `collied setup` runs both checks.
 - Instead of the interactive login, `collied login` accepts an auth key in `COLLIE_TS_AUTHKEY`. Use a key that applies `tag:collie-mac`. collied reads the variable and removes it from its own environment before doing anything else; `collied run` ignores it. The key is only needed once: the node keys persist in the state directory.
 - Hostname defaults to `collie-<mac hostname>` (`[tailnet] hostname` in `collied.toml` overrides it).
 - Node state (machine and node keys) lives in `~/Library/Application Support/collie/tsnet`, a 0700 directory owned by your user. `tailnet::Node::new` refuses a directory that is group or world accessible.

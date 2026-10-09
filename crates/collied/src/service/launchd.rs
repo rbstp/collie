@@ -6,6 +6,8 @@ use std::process::Command;
 
 use anyhow::Context;
 
+use super::State;
+
 pub const LABEL: &str = "dev.rbstp.collied";
 pub const STDOUT_LOG: &str = "collied.out.log";
 pub const STDERR_LOG: &str = "collied.err.log";
@@ -87,6 +89,65 @@ fn loaded(target: &str) -> anyhow::Result<bool> {
     Ok(status.success())
 }
 
+/// bootout returns before launchd has torn the job down; bootstrapping, or taking the
+/// node lock, before then fails.
+fn bootout(target: &str) -> anyhow::Result<bool> {
+    let ok = launchctl(&["bootout", target])?;
+    for _ in 0..50 {
+        if !loaded(target)? {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(ok)
+}
+
+/// Whether `install` would change anything, given when the running daemon started.
+pub fn state(
+    config: Option<&Path>,
+    data_dir: &Path,
+    started_ms: Option<u64>,
+) -> anyhow::Result<State> {
+    let exe = std::env::current_exe()?.canonicalize()?;
+    let config = config.map(Path::canonicalize).transpose()?;
+    let on_disk = match std::fs::read_to_string(plist_path()?) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e.into()),
+    };
+    let built_ms = std::fs::metadata(&exe)?
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let loaded = loaded(&format!("{}/{LABEL}", domain()))?;
+    Ok(decide(
+        on_disk.as_deref(),
+        &plist(&exe, config.as_deref(), data_dir),
+        loaded,
+        started_ms,
+        built_ms,
+    ))
+}
+
+fn decide(
+    on_disk: Option<&str>,
+    want: &str,
+    loaded: bool,
+    started_ms: Option<u64>,
+    built_ms: u64,
+) -> State {
+    match (on_disk, started_ms) {
+        (None, _) => State::Missing,
+        (Some(p), _) if p != want => State::Outdated("the service runs another binary or config"),
+        _ if !loaded => State::Outdated("the service is stopped"),
+        (_, None) => State::Outdated("the daemon is not answering"),
+        (_, Some(started)) if started < built_ms => {
+            State::Outdated("a newer collied binary is installed")
+        }
+        _ => State::Current,
+    }
+}
+
 pub fn install(config: Option<&Path>, data_dir: &Path) -> anyhow::Result<()> {
     crate::ensure_private_dir(data_dir)?;
     let exe = std::env::current_exe()?.canonicalize()?;
@@ -106,15 +167,7 @@ pub fn install(config: Option<&Path>, data_dir: &Path) -> anyhow::Result<()> {
     }
     let target = format!("{}/{LABEL}", domain());
     if loaded(&target)? {
-        let _ = launchctl(&["bootout", &target]);
-        // bootout returns before launchd has torn the job down; bootstrapping before
-        // then fails with "Bad request".
-        for _ in 0..50 {
-            if !loaded(&target)? {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
+        bootout(&target)?;
     }
     let tmp = path.with_extension("plist.tmp");
     let _ = std::fs::remove_file(&tmp);
@@ -147,7 +200,7 @@ pub fn stop() -> anyhow::Result<()> {
         launchctl(&["disable", &target])?,
         "launchctl disable {target} failed"
     );
-    let unloaded = loaded(&target)? && launchctl(&["bootout", &target])?;
+    let unloaded = loaded(&target)? && bootout(&target)?;
     println!(
         "{}; stays off until collied start",
         if unloaded {
@@ -218,5 +271,28 @@ mod tests {
         assert!(p.contains("<key>RunAtLoad</key>\n    <true/>"));
         assert!(p.contains("Application Support/collie/collied.err.log"));
         assert!(!p.contains("UserName") && !p.contains("Sockets"));
+    }
+
+    #[test]
+    fn state_follows_plist_job_and_binary() {
+        let want = "plist";
+        assert_eq!(decide(None, want, true, Some(9), 5), State::Missing);
+        assert!(matches!(
+            decide(Some("other"), want, true, Some(9), 5),
+            State::Outdated(_)
+        ));
+        assert_eq!(
+            decide(Some(want), want, false, None, 5),
+            State::Outdated("the service is stopped")
+        );
+        assert_eq!(
+            decide(Some(want), want, true, None, 5),
+            State::Outdated("the daemon is not answering")
+        );
+        assert_eq!(
+            decide(Some(want), want, true, Some(4), 5),
+            State::Outdated("a newer collied binary is installed")
+        );
+        assert_eq!(decide(Some(want), want, true, Some(5), 5), State::Current);
     }
 }

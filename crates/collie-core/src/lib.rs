@@ -40,6 +40,7 @@ use conn::{
     Registrations, RequestError, blocking,
 };
 pub use identity::IdentitySigner;
+use pin::PinError;
 use reach::Reachability;
 use session::{CALL_TIMEOUT, SessionError, expect_flock, expect_paired, lock, unexpected};
 pub use store::{Machine, MachineKind};
@@ -188,6 +189,32 @@ impl From<ConnectError> for CoreError {
             ConnectError::Session(s) => s.into(),
             _ => Self::Unreachable { message },
         }
+    }
+}
+
+/// Pairing is where a new machine's policy, tag or service mistakes show up, so these
+/// name the likely fix.
+fn pair_error(e: ConnectError, port: u16) -> CoreError {
+    match e {
+        ConnectError::Pin(PinError::MissingPeer { host }) => CoreError::Unreachable {
+            message: format!(
+                "{host} is not visible to this phone on the tailnet: check the policy grant to tag:collie-mac or tag:collie-linux on TCP {port}, and that the machine is logged in to this tailnet (collied setup checks both)"
+            ),
+        },
+        ConnectError::Pin(p @ PinError::Untagged { .. }) => CoreError::PinViolation {
+            message: format!("{p}: run collied setup on it"),
+        },
+        ConnectError::Dial(why) => CoreError::Unreachable {
+            message: format!(
+                "not reachable ({why}): the machine may be off or asleep, collied may not be running, or the policy may not allow TCP {port}"
+            ),
+        },
+        ConnectError::Session(SessionError::Refused(code @ (401 | 403))) => CoreError::Rejected {
+            message: format!(
+                "HTTP {code}, no pairing window is open for this phone: run collied pair on the machine and scan its new code"
+            ),
+        },
+        other => other.into(),
     }
 }
 
@@ -2275,7 +2302,8 @@ impl Inner {
             identity,
             true,
         )
-        .await?;
+        .await
+        .map_err(|e| pair_error(e, invite.port))?;
         let info = expect_paired(
             session
                 .call(
@@ -2605,6 +2633,45 @@ mod tests {
             message: message.into(),
         }
         .into()
+    }
+
+    #[test]
+    fn pairing_errors_name_the_fix() {
+        let missing = pair_error(
+            PinError::MissingPeer {
+                host: "collie-mac".into(),
+            }
+            .into(),
+            8457,
+        );
+        assert!(matches!(&missing, CoreError::Unreachable { message }
+            if message.contains("policy grant") && message.contains("TCP 8457")));
+        let untagged = pair_error(
+            PinError::Untagged {
+                host: "m".into(),
+                expected: "tag:collie-mac".into(),
+            }
+            .into(),
+            8457,
+        );
+        assert!(matches!(&untagged, CoreError::PinViolation { message }
+            if message.ends_with("run collied setup on it")));
+        assert!(matches!(
+            pair_error(ConnectError::Dial("timeout".into()), 8457),
+            CoreError::Unreachable { message } if message.contains("off or asleep")
+        ));
+        assert!(matches!(
+            pair_error(SessionError::Refused(403).into(), 8457),
+            CoreError::Rejected { message } if message.contains("collied pair") && message.contains("403")
+        ));
+        assert!(matches!(
+            pair_error(SessionError::Refused(500).into(), 8457),
+            CoreError::Unreachable { .. }
+        ));
+        assert!(matches!(
+            pair_error(ConnectError::Offline, 8457),
+            CoreError::NotRunning
+        ));
     }
 
     #[test]

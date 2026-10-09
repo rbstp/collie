@@ -18,6 +18,7 @@ pub const NODE_TAG: &str = "tag:collie-mac";
 #[cfg(target_os = "linux")]
 pub const NODE_TAG: &str = "tag:collie-linux";
 const POLL: Duration = Duration::from_millis(250);
+const LOGIN_ERROR: &str = "You are logged out. The last login error was: ";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const RUN_START_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -56,14 +57,16 @@ pub async fn login(
     let (node, _lock) = mac_node(data_dir, config, auth_key)?;
     node.start()?;
     let deadline = Instant::now() + LOGIN_TIMEOUT;
+    let port = config.tailnet.port;
     let mut shown_url = String::new();
+    let mut shown_error = String::new();
     let mut warned_approval = false;
     loop {
         let st = node.status()?;
         match st.backend_state {
             BackendState::Running if st.self_node.is_some() => {
                 print_identity(&st);
-                return check_tag(&st, data_dir);
+                return check_tag(&st, data_dir, port);
             }
             BackendState::NeedsMachineAuth if !warned_approval => {
                 println!("This machine needs approval by a tailnet admin; waiting.");
@@ -77,10 +80,22 @@ pub async fn login(
             println!("{}\n", st.auth_url);
             shown_url = st.auth_url;
         }
+        if let Some(e) = login_error(st.health.as_deref().unwrap_or_default())
+            && e != shown_error
+        {
+            println!("Tailscale login error: {e}");
+            anyhow::ensure!(
+                !e.to_ascii_lowercase().contains("tag"),
+                "your user may not own {NODE_TAG}. {}",
+                policy_help(port)
+            );
+            shown_error = e.to_owned();
+        }
         anyhow::ensure!(
             Instant::now() < deadline,
-            "login did not complete within 10 minutes (state {:?})",
-            st.backend_state
+            "login did not complete within 10 minutes (state {:?}). If you signed in, check that your user is a tag owner of {NODE_TAG}. {}",
+            st.backend_state,
+            policy_help(port)
         );
         tokio::time::sleep(POLL).await;
     }
@@ -89,7 +104,7 @@ pub async fn login(
 /// A node without the tag is user-owned: the phone refuses it, and the policy grant on
 /// port 8457 does not cover it. Logging in again does not change the tags of a node that
 /// is already registered, so the way out is a new node.
-fn check_tag(st: &Status, data_dir: &Path) -> anyhow::Result<()> {
+fn check_tag(st: &Status, data_dir: &Path, port: u16) -> anyhow::Result<()> {
     let tags = st
         .self_node
         .as_ref()
@@ -97,15 +112,43 @@ fn check_tag(st: &Status, data_dir: &Path) -> anyhow::Result<()> {
         .unwrap_or_default();
     anyhow::ensure!(
         tags.iter().any(|t| t == NODE_TAG),
-        "this node is registered without {NODE_TAG} (tags: {}). Remove it in the Tailscale admin console (Machines), delete {}, make sure your user is a tag owner of {NODE_TAG} (docs/tailnet.md), then run collied login; phones must pair again",
+        "this node is registered without {NODE_TAG} (tags: {}). Remove it in the Tailscale admin console (Machines), delete {}, make sure your user is a tag owner of {NODE_TAG}, then run collied login; phones must pair again. {}",
         if tags.is_empty() {
             "none".to_owned()
         } else {
             tags.join(", ")
         },
-        data_dir.join(config::TSNET_DIR).display()
+        data_dir.join(config::TSNET_DIR).display(),
+        policy_help(port)
     );
     Ok(())
+}
+
+fn login_error(health: &[String]) -> Option<&str> {
+    health.iter().find_map(|h| h.strip_prefix(LOGIN_ERROR))
+}
+
+/// The tailnet policy entries this machine needs.
+pub fn policy_snippet(port: u16) -> String {
+    format!(
+        r#"  "tagOwners": {{
+    "{NODE_TAG}": ["you@example.com"],
+  }},
+  "grants": [
+    {{
+      "src": ["you@example.com"],
+      "dst": ["{NODE_TAG}"],
+      "ip": ["tcp:{port}"],
+    }},
+  ],"#
+    )
+}
+
+pub fn policy_help(port: u16) -> String {
+    format!(
+        "The tailnet policy needs these entries (Tailscale admin console, Access controls), with your login instead of you@example.com; the full policy, with tests, is in docs/tailnet.md:\n\n{}\n",
+        policy_snippet(port)
+    )
 }
 
 fn print_identity(st: &Status) {
@@ -139,7 +182,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
     loop {
         let st = node.status()?;
         if st.backend_state == BackendState::Running && st.self_node.is_some() {
-            check_tag(&st, data_dir)?;
+            check_tag(&st, data_dir, config.tailnet.port)?;
             break;
         }
         anyhow::ensure!(
@@ -187,4 +230,33 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
         "tailnet listener failed; exiting so the service manager restarts collied"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn policy_snippet_matches_the_docs() {
+        let docs = include_str!("../../../docs/tailnet.md");
+        let snippet = policy_snippet(8457);
+        for line in snippet.lines().map(str::trim).filter(|l| l.len() > 3) {
+            assert!(docs.contains(line), "docs/tailnet.md lacks {line}");
+        }
+        assert!(snippet.contains(&format!("\"{NODE_TAG}\": [\"you@example.com\"],")));
+        assert!(snippet.contains(&format!("\"dst\": [\"{NODE_TAG}\"],")));
+    }
+
+    #[test]
+    fn finds_the_last_login_error() {
+        let health = |h: &[&str]| h.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(login_error(&health(&["You are logged out."])), None);
+        assert_eq!(
+            login_error(&health(&[
+                "Unable to connect to the Tailscale coordination server.",
+                "You are logged out. The last login error was: requested tags [tag:collie-mac] are invalid or not permitted",
+            ])),
+            Some("requested tags [tag:collie-mac] are invalid or not permitted")
+        );
+    }
 }

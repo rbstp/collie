@@ -41,6 +41,8 @@ Team `RM3UT3MMSR`, in the Apple Developer portal and App Store Connect:
    collied apns test
    ```
 
+   `collied setup` offers these steps when `[apns]` is not configured: it asks for the `.p8` path and the IDs (defaults `RM3UT3MMSR` and `dev.rbstp.collie`), writes the section, imports the key and restarts collied. The `.p8` must already be mode 0600.
+
    Import with the signed binary: the Keychain item trusts the program that created it. Re-run `just collied-install` (never `cargo install`) after every change to collied, or the daemon cannot read the key without a prompt. A config still using `key_path` is moved over by the same `collied apns import <key_path file>`, which rewrites that line to `key = "keychain"`. Revoke the key in the portal if the Mac is compromised.
 
    On Linux, it is a systemd user credential, encrypted with the host key (and the TPM2 when one is usable). There is no code signing:
