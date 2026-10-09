@@ -30,10 +30,18 @@ jobs:
           persist-credentials: false
           submodules: true
 
+      - name: cache the Go toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.tool_cache }}/go/1.27.2/arm64
+            ${{ runner.tool_cache }}/go/1.27.2/arm64.complete
+          key: go-toolchain-${{ runner.os }}-${{ runner.arch }}-1.27.2
+
       - name: set up go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.27.x
+          go-version: 1.27.2
           cache: false
 
       - name: install the rust toolchain
@@ -90,10 +98,19 @@ jobs:
       - name: boot the simulator
         run: xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
 
+      # setup-go otherwise unpacks Go from scratch on every macOS runner.
+      - name: cache the Go toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.tool_cache }}/go/1.27.2/arm64
+            ${{ runner.tool_cache }}/go/1.27.2/arm64.complete
+          key: go-toolchain-${{ runner.os }}-${{ runner.arch }}-1.27.2
+
       - name: set up go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: 1.27.x
+          go-version: 1.27.2
           cache: false
 
       - name: install the rust toolchain
@@ -129,11 +146,17 @@ jobs:
             echo "$RUNNER_TEMP/xcodegen/bin"
           } >> "$GITHUB_PATH"
 
+      - name: cache libghostty-vt
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: Collie/GhosttyTerminal/GhosttyVt.xcframework
+          key: ghostty-vt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ghostty/build-xcframework.sh') }}
+
       - name: build libghostty-vt
         run: just ios-ghostty
 
-      - name: build the xcframework
-        run: just ios-framework
+      - name: build the simulator xcframework
+        run: just ios-framework sim
 
       - name: generate the project
         run: just --no-deps ios-project

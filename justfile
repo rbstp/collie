@@ -73,19 +73,29 @@ ios_deployment_target := "26.0"
 sim := "iPhone 18 Pro"
 xcodebuild := "xcodebuild -project Collie/Collie.xcodeproj -scheme Collie -derivedDataPath target/ios/DerivedData"
 
-ios-framework:
+ios-framework target="all":
     #!/usr/bin/env bash
     set -euo pipefail
+    if [ "{{ target }}" != all ] && [ "{{ target }}" != sim ]; then
+        echo "ios-framework target must be all or sim" >&2
+        exit 1
+    fi
     export IPHONEOS_DEPLOYMENT_TARGET={{ ios_deployment_target }}
     pkg=Collie/CollieCore
     headers=target/ios/headers
-    cargo build --release -p collie-core --target aarch64-apple-ios
+    if [ "{{ target }}" = all ]; then
+        cargo build --release -p collie-core --target aarch64-apple-ios
+    fi
     cargo build --release -p collie-core --target aarch64-apple-ios-sim
     cargo build --release -p uniffi-bindgen
-    lib=target/aarch64-apple-ios/release/libcollie_core.a
+    sim_lib=target/aarch64-apple-ios-sim/release/libcollie_core.a
+    lib="$sim_lib"
+    if [ "{{ target }}" = all ]; then
+        lib=target/aarch64-apple-ios/release/libcollie_core.a
+    fi
     # Rewriting unchanged outputs makes Xcode recompile CollieCore and the app.
     stamp="$pkg/CollieCore.xcframework/.collie-build"
-    want="$(shasum -a 256 "$lib" target/aarch64-apple-ios-sim/release/libcollie_core.a target/release/uniffi-bindgen)"
+    want="$(printf '%s\n' '{{ target }}'; shasum -a 256 "$lib" "$sim_lib" target/release/uniffi-bindgen)"
     if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -f "$pkg/Sources/CollieCore/collie_core.swift" ]; then
         echo "CollieCore.xcframework is up to date"
         exit 0
@@ -94,10 +104,11 @@ ios-framework:
     target/release/uniffi-bindgen "$lib" "$pkg/Sources/CollieCore" --swift-sources
     target/release/uniffi-bindgen "$lib" "$headers/collie_coreFFI" --headers --modulemap \
         --module-name collie_coreFFI --modulemap-filename module.modulemap
-    xcodebuild -create-xcframework \
-        -library "$lib" -headers "$headers" \
-        -library target/aarch64-apple-ios-sim/release/libcollie_core.a -headers "$headers" \
-        -output "$pkg/CollieCore.xcframework"
+    libraries=(-library "$sim_lib" -headers "$headers")
+    if [ "{{ target }}" = all ]; then
+        libraries=(-library "$lib" -headers "$headers" "${libraries[@]}")
+    fi
+    xcodebuild -create-xcframework "${libraries[@]}" -output "$pkg/CollieCore.xcframework"
     echo "$want" > "$stamp"
 
 # libghostty-vt from a pinned Ghostty commit; skipped when already built for that pin.
