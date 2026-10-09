@@ -2426,11 +2426,11 @@ async fn claude_prose_wrapped_at_the_pane_width_is_marked() {
         "a pane missing from the layout"
     );
     herdr.with(|h| h.columns = Some(40));
-    let layouts = herdr.params("pane.layout").len();
     assert_eq!(
         joins(drive.read(recent(CODEX_BLOCKED), true).await),
         (vec![], vec![])
     );
+    let layouts = herdr.params("pane.layout").len();
     assert_eq!(
         joins(drive.read(recent(CLAUDE), false).await),
         (vec![], vec![])
@@ -2444,6 +2444,72 @@ async fn claude_prose_wrapped_at_the_pane_width_is_marked() {
     };
     assert_eq!((shell.wraps, shell.splits), (vec![], vec![]));
     assert_eq!(herdr.params("pane.layout").len(), layouts);
+}
+
+#[tokio::test]
+async fn codex_and_copilot_reads_and_watches_mark_only_prose_wraps() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude", "codex", "copilot"], &base);
+    let codex = include_str!("fixtures/codex-2026-10-09/prose.ansi.txt");
+    herdr.with(|h| {
+        h.text = codex.into();
+        h.columns = Some(186);
+    });
+    let recent = |terminal: &str| ReadParams {
+        terminal_id: tid(terminal),
+        source: ReadSource::Recent,
+        lines: None,
+    };
+    let Ok(Response::Terminal(read)) = drive.read(recent(CODEX_BLOCKED), true).await else {
+        panic!("no Codex read");
+    };
+    assert_eq!(
+        (read.wraps.as_slice(), read.splits.as_slice()),
+        (&[1][..], &[][..])
+    );
+    assert!(
+        read.ansi
+            .contains("screens so continuation detection joins prose")
+    );
+    assert!(
+        read.reflowed()
+            .unwrap()
+            .contains("tables, diffs, and interactive")
+    );
+    let mut watcher = drive.watch(tid(CODEX_BLOCKED), 200, false).await.unwrap();
+    let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+        panic!("no Codex watch");
+    };
+    assert_eq!((first.wraps, first.splits), (vec![1], vec![]));
+    drop(watcher);
+
+    let copilot = "term_0102030405060708";
+    let prose =
+        " ● The quick brown fox jumps over the  ┃\r\n   lazy dog keeps running.              ┃";
+    herdr.with(|h| {
+        let mut agent = h.snapshot["agents"][1].clone();
+        agent["terminal_id"] = json!(copilot);
+        agent["pane_id"] = json!("w7:p2");
+        agent["agent"] = json!("copilot");
+        h.snapshot["agents"].as_array_mut().unwrap().push(agent);
+        h.text = prose.into();
+        h.columns = Some(40);
+    });
+    let Ok(Response::Terminal(read)) = drive.read(recent(copilot), true).await else {
+        panic!("no Copilot read");
+    };
+    assert_eq!(
+        (read.wraps.as_slice(), read.splits.as_slice()),
+        (&[1][..], &[][..])
+    );
+    assert!(read.ansi.contains("the  ┃\r\n   lazy"));
+    assert!(read.reflowed().unwrap().contains("the lazy dog"));
+    let mut watcher = drive.watch(tid(copilot), 200, false).await.unwrap();
+    let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+        panic!("no Copilot watch");
+    };
+    assert_eq!((first.wraps, first.splits), (vec![1], vec![]));
 }
 
 #[tokio::test]

@@ -678,6 +678,12 @@
           "minimum": 0,
           "type": "integer"
         },
+        "copilot_scrollbar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "head": {
           "items": {
             "type": "string"
@@ -1153,6 +1159,9 @@
       "properties": {
         "ansi": {
           "type": "string"
+        },
+        "copilot_scrollbar": {
+          "type": "boolean"
         },
         "source": {
           "$ref": "#/$defs/ReadSource"

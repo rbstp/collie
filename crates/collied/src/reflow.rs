@@ -79,6 +79,133 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     (wraps, splits)
 }
 
+pub fn soft_wraps_for(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
+    match kind {
+        "claude" => soft_wraps(ansi, cols),
+        "codex" | "copilot" => tui_wraps(kind, ansi, cols),
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
+fn tui_wraps(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
+    let marker = if kind == "codex" { '•' } else { '●' };
+    let (mut wraps, mut splits) = (Vec::new(), Vec::new());
+    let (mut plain, mut tail) = (String::new(), String::new());
+    let mut prose = false;
+    let mut base = 0;
+    let mut prior_width = cols;
+    let mut prev = Prev::Held;
+    for (i, row) in ansi.split('\n').enumerate() {
+        plain_text(row, &mut plain);
+        let trimmed = plain.trim_end();
+        let scrollbar = kind == "copilot" && trimmed.ends_with('┃');
+        let trimmed = if kind == "copilot" {
+            trimmed.strip_suffix('┃').unwrap_or(trimmed).trim_end()
+        } else {
+            trimmed
+        };
+        let row_width = cols.saturating_sub(usize::from(scrollbar));
+        let s = trimmed.trim_start_matches(' ');
+        let ind = trimmed.len() - s.len();
+        if s.is_empty() {
+            prev = Prev::Start;
+            prose = false;
+            continue;
+        }
+        let marker_indent = if kind == "codex" { 0 } else { 1 };
+        if let Some(body) = (ind == marker_indent)
+            .then(|| s.strip_prefix(marker).and_then(|s| s.strip_prefix(' ')))
+            .flatten()
+        {
+            base = ind + 2;
+            prose = tui_prose(body, kind);
+            prev = if prose {
+                if let Some(len) = list_marker(body) {
+                    let rest = body[len..].trim_start_matches(' ');
+                    row_above(
+                        &mut tail,
+                        rest,
+                        base + body[..body.len() - rest.len()].width(),
+                    )
+                } else {
+                    row_above(&mut tail, body, base)
+                }
+            } else {
+                Prev::Held
+            };
+            prior_width = row_width;
+            continue;
+        }
+        if !prose && matches!(prev, Prev::Start) && ind == base {
+            let body = list_marker(s)
+                .map(|len| &s[len..])
+                .unwrap_or(s)
+                .trim_start();
+            if body.chars().next().is_some_and(char::is_uppercase) && tui_prose(body, kind) {
+                prose = true;
+            }
+        }
+        if !prose || ind < base || tui_structure(s) {
+            prose = false;
+            prev = Prev::Held;
+            continue;
+        }
+        if let Some(len) = list_marker(s) {
+            let rest = s[len..].trim_start_matches(' ');
+            prev = row_above(&mut tail, rest, ind + s[..s.len() - rest.len()].width());
+            prior_width = row_width;
+            continue;
+        }
+        let hang = match prev {
+            Prev::Row(hang) => hang,
+            Prev::Start => {
+                prev = row_above(&mut tail, s, ind);
+                prior_width = row_width;
+                continue;
+            }
+            Prev::Held => continue,
+        };
+        if ind != hang {
+            prev = Prev::Held;
+            continue;
+        }
+        let available = prior_width.saturating_sub(hang);
+        if tail.width() <= available {
+            let at = u32::try_from(i).unwrap_or(u32::MAX);
+            match separator(&tail, s, available) {
+                " " if wide_cut(&tail, s, available) => splits.push(at),
+                " " => wraps.push(at),
+                "" => splits.push(at),
+                _ => {}
+            }
+        }
+        prev = row_above(&mut tail, s, ind);
+        prior_width = row_width;
+    }
+    (wraps, splits)
+}
+
+fn tui_prose(body: &str, kind: &str) -> bool {
+    let body = body.trim_start();
+    body.chars().any(char::is_alphabetic)
+        && !tui_structure(body)
+        && match kind {
+            "codex" => !["Ran ", "Explored", "Edited ", "Working ", "Failed "]
+                .iter()
+                .any(|prefix| body.starts_with(prefix)),
+            "copilot" => !["Tip:", "MCP Servers", "Working ", "Thinking "]
+                .iter()
+                .any(|prefix| body.starts_with(prefix)),
+            _ => false,
+        }
+}
+
+fn tui_structure(text: &str) -> bool {
+    text.contains("  ")
+        || text.starts_with(['+', '$', '>', '|', '`'])
+        || text.chars().any(|c| ('\u{2500}'..='\u{259f}').contains(&c))
+}
+
 fn row_above(tail: &mut String, text: &str, hang: usize) -> Prev {
     tail.clear();
     tail.push_str(text);
@@ -158,6 +285,88 @@ mod tests {
     fn live_prose_joins_at_the_mac_width() {
         assert_eq!(wraps(LIVE, 189), [1, 4]);
         assert_eq!(wraps(LIVE, 200), [] as [u32; 0]);
+        assert_eq!(
+            soft_wraps_for("claude", &LIVE.join("\r\n"), 189),
+            joins(LIVE, 189)
+        );
+    }
+
+    #[test]
+    fn captured_codex_prose_joins_at_the_pane_width() {
+        let screen = include_str!("../tests/fixtures/codex-2026-10-09/prose.ansi.txt");
+        assert_eq!(soft_wraps_for("codex", screen, 186), (vec![1], vec![]));
+        assert_eq!(soft_wraps_for("codex", screen, 200), (vec![], vec![]));
+    }
+
+    #[test]
+    fn codex_code_after_a_blank_and_nested_markers_keep_their_rows() {
+        let rows = [
+            "• Example:",
+            "",
+            "  const longName = value",
+            "  return longName",
+            "",
+            "  • nested bullet outside a response",
+            "    and its next line",
+            "• A paragraph that fills",
+            "  the remaining line.",
+        ];
+        assert_eq!(
+            soft_wraps_for("codex", &rows.join("\r\n"), 24),
+            (vec![8], vec![])
+        );
+    }
+
+    #[test]
+    fn codex_new_paragraph_after_a_blank_can_join() {
+        let rows = [
+            "• First paragraph ends.",
+            "",
+            "  Another paragraph fills",
+            "  the remaining line.",
+        ];
+        assert_eq!(
+            soft_wraps_for("codex", &rows.join("\r\n"), 25),
+            (vec![3], vec![])
+        );
+    }
+
+    #[test]
+    fn codex_ui_code_and_diffs_keep_their_rows() {
+        for screen in [
+            include_str!("../tests/fixtures/codex-0.160.1/working.ansi.txt"),
+            include_str!("../tests/fixtures/codex-0.160.1/idle.ansi.txt"),
+            include_str!("../tests/fixtures/codex-0.160.1/patch.ansi.txt"),
+        ] {
+            assert_eq!(soft_wraps_for("codex", screen, 212), (vec![], vec![]));
+        }
+    }
+
+    #[test]
+    fn copilot_prose_and_list_continuations_join() {
+        let lines = [
+            " ● The quick brown fox jumps over the  ┃",
+            "   lazy dog keeps running.              ┃",
+            "                                      ┃",
+            " ● 1. The first list item goes all the  ┃",
+            "      way to the next line.              ┃",
+            "   2. A separate item.                  ┃",
+        ];
+        assert_eq!(
+            soft_wraps_for("copilot", &lines.join("\r\n"), 40),
+            (vec![1, 4], vec![])
+        );
+    }
+
+    #[test]
+    fn captured_copilot_ui_and_numbered_rows_stay_separate() {
+        for screen in [
+            include_str!("../tests/fixtures/copilot-1.0.93-1/output-long.ansi.txt"),
+            include_str!("../tests/fixtures/copilot-1.0.94-1/narrower-output.ansi.txt"),
+            include_str!("../tests/fixtures/copilot-1.0.93-1/permission.ansi.txt"),
+        ] {
+            assert_eq!(soft_wraps_for("copilot", screen, 212), (vec![], vec![]));
+        }
     }
 
     #[test]

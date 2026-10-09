@@ -27,6 +27,8 @@ pub struct OutputPatch {
     pub wraps: Option<Vec<u32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub splits: Option<Vec<u32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copilot_scrollbar: Option<bool>,
 }
 
 impl OutputPatch {
@@ -59,6 +61,8 @@ impl OutputPatch {
             truncated: next.truncated,
             wraps: (next.wraps != prev.wraps).then(|| next.wraps.clone()),
             splits: (next.splits != prev.splits).then(|| next.splits.clone()),
+            copilot_scrollbar: (next.copilot_scrollbar != prev.copilot_scrollbar)
+                .then_some(next.copilot_scrollbar),
         })
     }
 
@@ -90,6 +94,7 @@ impl OutputPatch {
             truncated: self.truncated,
             wraps: self.wraps.clone().unwrap_or_else(|| prev.wraps.clone()),
             splits: self.splits.clone().unwrap_or_else(|| prev.splits.clone()),
+            copilot_scrollbar: self.copilot_scrollbar.unwrap_or(prev.copilot_scrollbar),
         })
     }
 }
@@ -143,6 +148,7 @@ mod tests {
             truncated: false,
             wraps: Vec::new(),
             splits: Vec::new(),
+            copilot_scrollbar: false,
         }
     }
 
@@ -208,6 +214,7 @@ mod tests {
         };
         let next = TerminalRead {
             wraps: vec![7, 100],
+            copilot_scrollbar: true,
             ..read(&(history(0..100) + "a\r\nb\r\nc"))
         };
         let patch = OutputPatch::between(&prev, &next).unwrap();
@@ -216,13 +223,17 @@ mod tests {
             (Some(&[7, 100][..]), Some(&[][..]))
         );
         assert_eq!(patch.apply(&prev), Some(next.clone()));
+        assert_eq!(patch.copilot_scrollbar, Some(true));
 
         let tick = TerminalRead {
             ansi: next.ansi.clone() + "d",
             ..next.clone()
         };
         let patch = OutputPatch::between(&next, &tick).unwrap();
-        assert_eq!((&patch.wraps, &patch.splits), (&None, &None));
+        assert_eq!(
+            (&patch.wraps, &patch.splits, patch.copilot_scrollbar),
+            (&None, &None, None)
+        );
         assert!(!serde_json::to_string(&patch).unwrap().contains("wraps"));
         assert_eq!(patch.apply(&next), Some(tick));
     }
@@ -345,6 +356,7 @@ mod tests {
                 truncated: false,
                 wraps: None,
                 splits: None,
+                copilot_scrollbar: None,
             };
             let end = u64::from(skip) + u64::from(keep);
             let valid = end <= n && u64::from(trail) <= n - end;

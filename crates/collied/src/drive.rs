@@ -303,11 +303,11 @@ impl Driver {
     pub async fn read(&self, p: ReadParams, agent: bool) -> Reply {
         let mut lines = p.lines.map(u32::from);
         let source = source_name(p.source);
-        let mut claude = None;
+        let mut reflow = None;
         let read = if agent {
             let a = self.find_agent(&p.terminal_id).await?;
-            if a.agent.as_deref() == Some("claude") {
-                claude = Some(a.pane_id.clone());
+            if let Some(kind @ ("claude" | "codex" | "copilot")) = a.agent.as_deref() {
+                reflow = Some((a.pane_id.clone(), kind.to_owned()));
             }
             self.agent_read(&a.pane_id, source, &mut lines).await
         } else {
@@ -322,18 +322,19 @@ impl Driver {
         }
         .map_err(herdr_fail)?;
         let mut read = terminal_read(p.terminal_id, p.source, read);
-        if let Some(pane_id) = claude {
-            self.reflow(&pane_id, &mut read).await;
+        if let Some((pane_id, kind)) = reflow {
+            self.reflow(&pane_id, &kind, &mut read).await;
         }
         Ok(Response::Terminal(read))
     }
 
     /// Leaves `read` unjoined when herdr does not give the pane's width; `false` when herdr
     /// failed.
-    async fn reflow(&self, pane_id: &str, read: &mut TerminalRead) -> bool {
+    async fn reflow(&self, pane_id: &str, kind: &str, read: &mut TerminalRead) -> bool {
         let cols = herdr::pane_columns(&self.herdr, pane_id).await;
         if let Ok(Some(cols)) = cols {
-            (read.wraps, read.splits) = reflow::soft_wraps(&read.ansi, cols.into());
+            (read.wraps, read.splits) = reflow::soft_wraps_for(kind, &read.ansi, cols.into());
+            read.copilot_scrollbar = kind == "copilot";
         }
         cols.is_ok()
     }
@@ -427,16 +428,16 @@ impl Driver {
                 Some(_) => self
                     .shell_pane(&terminal_id)
                     .await
-                    .map(|p| (p.pane_id, false)),
+                    .map(|p| (p.pane_id, None)),
                 None => self
                     .find_agent(&terminal_id)
                     .await
-                    .map(|a| (a.pane_id, a.agent.as_deref() == Some("claude"))),
+                    .map(|a| (a.pane_id, a.agent)),
             };
             let msg = match pane {
                 Err((ErrorCode::NotFound, _)) => Watched::Gone,
                 Err(_) => continue,
-                Ok((pane_id, claude)) => {
+                Ok((pane_id, kind)) => {
                     let Ok(read) = self
                         .halving_read(
                             &pane_id,
@@ -458,7 +459,9 @@ impl Driver {
                     changed = now;
                     next = now + watch_period(low_data, Duration::ZERO);
                     let mut read = terminal_read(terminal_id.clone(), ReadSource::Recent, read);
-                    if claude && !self.reflow(&pane_id, &mut read).await {
+                    if let Some(kind @ ("claude" | "codex" | "copilot")) = kind.as_deref()
+                        && !self.reflow(&pane_id, kind, &mut read).await
+                    {
                         last = None;
                     }
                     if sent.as_ref() == Some(&read) {
@@ -1190,6 +1193,7 @@ fn terminal_read(
         truncated: read.truncated,
         wraps: Vec::new(),
         splits: Vec::new(),
+        copilot_scrollbar: false,
     }
 }
 

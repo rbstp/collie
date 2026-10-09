@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -880,6 +882,8 @@ pub struct TerminalRead {
     pub wraps: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub splits: Vec<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub copilot_scrollbar: bool,
 }
 
 impl TerminalRead {
@@ -900,6 +904,13 @@ impl TerminalRead {
         }
         let mut out = String::with_capacity(self.ansi.len());
         for (i, row) in rows.iter().enumerate() {
+            let row = if self.copilot_scrollbar
+                && (sep[i].is_some() || sep.get(i + 1).is_some_and(Option::is_some))
+            {
+                Cow::Owned(trim_copilot_line_end(row))
+            } else {
+                Cow::Borrowed(*row)
+            };
             match sep[i] {
                 Some(s) if i > 0 => {
                     let line = out.rfind('\n').map_or(0, |n| n + 1);
@@ -907,13 +918,13 @@ impl TerminalRead {
                     out.truncate(line);
                     out.push_str(&kept);
                     out.push_str(s);
-                    out.push_str(&trim_row_start(row));
+                    out.push_str(&trim_row_start(&row));
                 }
                 _ => {
                     if i > 0 {
                         out.push('\n');
                     }
-                    out.push_str(row);
+                    out.push_str(&row);
                 }
             }
         }
@@ -945,6 +956,21 @@ fn trim_line_end(mut line: &str) -> String {
         }
     }
     sgr.into_iter().rev().fold(line.to_owned(), |s, e| s + e)
+}
+
+fn trim_copilot_line_end(line: &str) -> String {
+    let trimmed = trim_line_end(line);
+    let mut bare = trimmed.as_str();
+    while let Some(start) = sgr_suffix(bare) {
+        bare = &bare[..start];
+    }
+    let Some(mut bare) = bare.strip_suffix('┃') else {
+        return trimmed;
+    };
+    while let Some(start) = sgr_suffix(bare) {
+        bare = &bare[..start];
+    }
+    trim_line_end(bare)
 }
 
 /// `row` without its leading spaces, keeping the SGR escapes among them.
@@ -2103,6 +2129,7 @@ mod tests {
             truncated: false,
             wraps: wraps.to_vec(),
             splits: splits.to_vec(),
+            copilot_scrollbar: false,
         }
     }
 
@@ -2120,6 +2147,22 @@ mod tests {
                 .unwrap(),
             "a b c"
         );
+    }
+
+    #[test]
+    fn copilot_scrollbar_is_removed_only_for_copilot_reflow() {
+        let ansi = " ● The quick brown fox jumps over the  \u{1b}[0m\u{1b}[38;2;145;152;161m┃\u{1b}[0m\r\n   lazy dog keeps running.┃";
+        let read = read_with(ansi, &[1], &[]);
+        assert!(read.reflowed().unwrap().contains('┃'));
+        let copilot = TerminalRead {
+            copilot_scrollbar: true,
+            ..read
+        };
+        assert_eq!(
+            copilot.reflowed().as_deref(),
+            Some(" ● The quick brown fox jumps over the lazy dog keeps running.")
+        );
+        assert_eq!(copilot.ansi, ansi);
     }
 
     #[test]
