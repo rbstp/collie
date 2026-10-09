@@ -256,7 +256,6 @@ struct ViewSwitch: View {
             segment("Agents", value: false)
             segment("Usage", value: true)
         }
-        .frame(height: 38)
         .padding(3)
         .glassEffect(.regular.interactive(), in: .capsule)
         .animation(.smooth(duration: 0.3), value: showsUsage)
@@ -277,7 +276,7 @@ struct ViewSwitch: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(showsUsage == value ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
                 .padding(.horizontal, 14)
-                .frame(maxHeight: .infinity)
+                .frame(minHeight: 38)
                 .background {
                     if showsUsage == value {
                         // Darkens the glass as much as the tab bar's selection does.
