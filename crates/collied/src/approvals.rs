@@ -157,6 +157,9 @@ pub struct Approvals {
     pending_count: watch::Sender<usize>,
 }
 
+/// Under this, Claude Code denies before anyone could act on an alert.
+const MIN_ALERT_SECS: u64 = 5;
+
 /// An approval never outlives Claude Code's own deny deadline.
 fn ttl(ttl: Duration, deny_in_secs: Option<u64>) -> Duration {
     deny_in_secs.map_or(ttl, |s| ttl.min(Duration::from_secs(s)))
@@ -253,7 +256,8 @@ pub async fn open_to(
 ) -> Result<Option<String>, herdr::Error> {
     let kind = a.agent.as_deref().unwrap_or_default();
     let explain = herdr::agent_explain(herdr, &a.pane_id).await?;
-    let text = herdr::detection_text(herdr, &a.pane_id).await?;
+    let (text, _) =
+        prompt::without_deny_countdown(&herdr::detection_text(herdr, &a.pane_id).await?);
     let rule = explain.matched_rule.map(|r| r.id);
     Ok(open(kind, rule.as_deref(), &text).then_some(text))
 }
@@ -515,7 +519,8 @@ impl Approvals {
             if inner.pending.contains_key(&a.terminal_id) {
                 return Ok(());
             }
-            let alert = inner.alert_due(&a.terminal_id, &screen, &approval);
+            let alert = screen.deny_in_secs.is_none_or(|s| s >= MIN_ALERT_SECS)
+                && inner.alert_due(&a.terminal_id, &screen, &approval);
             if alert {
                 inner
                     .notified
@@ -1007,6 +1012,7 @@ mod tests {
         assert_eq!(ttl(ten, None), ten);
         assert_eq!(ttl(ten, Some(69)), Duration::from_secs(69));
         assert_eq!(ttl(ten, Some(3600)), ten);
+        assert_eq!(ttl(ten, Some(0)), Duration::ZERO);
     }
 
     #[test]
