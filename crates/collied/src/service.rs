@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 mod launchd;
@@ -16,6 +16,21 @@ pub enum State {
     Stopped,
     Outdated(&'static str),
     Current,
+}
+
+/// The service runs this path: a build output would be replaced by the next cargo build
+/// (and on macOS left unsigned), and a symlink could point at one.
+pub fn installed_exe() -> anyhow::Result<PathBuf> {
+    let installed = crate::config::home_dir()?.join(".cargo/bin/collied");
+    let exe = std::env::current_exe()?.canonicalize()?;
+    anyhow::ensure!(
+        installed.symlink_metadata().is_ok_and(|m| m.is_file())
+            && installed.canonicalize().ok().as_ref() == Some(&exe),
+        "{} is not {}",
+        exe.display(),
+        installed.display()
+    );
+    Ok(exe)
 }
 
 fn built_ms(exe: &Path) -> anyhow::Result<u64> {

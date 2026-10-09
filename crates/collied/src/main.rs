@@ -163,18 +163,15 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
                 std::io::stdin().is_terminal(),
                 "collied setup is interactive: run it in a terminal"
             );
-            // The service runs this path: a build output would be replaced by the next
-            // cargo build (and on macOS left unsigned).
-            let installed = config::home_dir()?.join(".cargo/bin/collied");
-            let exe = std::env::current_exe()?.canonicalize()?;
             #[cfg(target_os = "macos")]
             let signed = doctor::signed_as_collied();
             #[cfg(target_os = "linux")]
             let signed: Result<(), String> = Ok(());
             signed
-                .and_then(|()| match installed.canonicalize() {
-                    Ok(p) if p == exe => Ok(()),
-                    _ => Err(format!("{} is not {}", exe.display(), installed.display())),
+                .and_then(|()| {
+                    service::installed_exe()
+                        .map(drop)
+                        .map_err(|e| e.to_string())
                 })
                 .map_err(|e| {
                     anyhow::anyhow!(
@@ -276,6 +273,10 @@ impl collied::setup::Host for SetupHost<'_> {
             return Ok(s);
         }
         let (log, lines) = service::log_tail(self.data_dir);
+        anyhow::ensure!(
+            !lines.is_empty(),
+            "collied did not start within 60 s, and {log} shows nothing: check it directly"
+        );
         for line in &lines {
             println!("  {line}");
         }

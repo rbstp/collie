@@ -167,10 +167,13 @@ fn show(property: &str) -> anyhow::Result<String> {
             "--value",
             UNIT,
         ])
-        .stderr(Stdio::null())
         .output()
         .context("run systemctl --user show")?;
-    anyhow::ensure!(out.status.success(), "systemctl --user show {UNIT} failed");
+    anyhow::ensure!(
+        out.status.success(),
+        "systemctl --user show {UNIT} failed: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
 
@@ -199,11 +202,16 @@ fn pinned_env() -> anyhow::Result<Vec<(&'static str, PathBuf)>> {
 /// Whether `install` would change anything, given when the running daemon started.
 pub fn state(
     config: Option<&Path>,
-    data_dir: &Path,
+    _data_dir: &Path,
     started_ms: Option<u64>,
 ) -> anyhow::Result<State> {
     let exe = std::env::current_exe()?.canonicalize()?;
-    let config = config.map(Path::canonicalize).transpose()?;
+    let config = config
+        .map(|c| {
+            c.canonicalize()
+                .with_context(|| format!("config {}", c.display()))
+        })
+        .transpose()?;
     let path = unit_path()?;
     let on_disk = match std::fs::read_to_string(&path) {
         Ok(text) => Some(text),
@@ -212,9 +220,14 @@ pub fn state(
     };
     let loaded_from = fragment()?;
     anyhow::ensure!(
-        loaded_from.is_empty() || Path::new(&loaded_from) == path,
+        (loaded_from.is_empty() && on_disk.is_none()) || Path::new(&loaded_from) == path,
         "the user manager loads {UNIT} from {loaded_from:?}, not {}: remove that unit or align XDG_CONFIG_HOME",
         path.display()
+    );
+    let drop_ins = show("DropInPaths")?;
+    anyhow::ensure!(
+        !drop_ins.contains(&format!("/{UNIT}.d/")),
+        "the user manager applies drop-ins to {UNIT} ({drop_ins}) that setup cannot check: remove them, then run collied setup again"
     );
     let env = pinned_env()?;
     let want = unit(&exe, config.as_deref(), &env)?;
@@ -224,11 +237,13 @@ pub fn state(
         let ours = pinned(&want, "XDG_DATA_HOME");
         anyhow::ensure!(
             theirs.is_none() || theirs == ours,
-            "the service runs with XDG_DATA_HOME={0}, but this shell's data dir is {1}: run XDG_DATA_HOME='{0}' collied setup",
-            theirs
-                .as_deref()
-                .map_or(String::new(), |t| unquote(t, false)),
-            data_dir.display()
+            "the service runs with XDG_DATA_HOME={0}, this shell with {1}: export XDG_DATA_HOME={0}, then run collied setup again",
+            shell_quote(
+                &theirs
+                    .as_deref()
+                    .map_or(String::new(), |t| unquote(t, false))
+            ),
+            shell_quote(&ours.as_deref().map_or(String::new(), |t| unquote(t, false))),
         );
         if let Some(theirs) = installed_config(text) {
             let ours = config
@@ -237,15 +252,20 @@ pub fn state(
                 .transpose()?;
             anyhow::ensure!(
                 ours.as_deref() == Some(theirs),
-                "the service runs with --config {0}: run collied --config '{0}' setup",
-                unquote(theirs, true)
+                "the service runs with --config {0}: run collied --config {0} setup",
+                shell_quote(&unquote(theirs, true))
             );
         }
     }
+    // A daemon answers: it must be the unit's, not a foreground one beside a restart loop.
+    let loaded = match started_ms {
+        Some(_) => show("ActiveState")? == "active",
+        None => loaded()?,
+    };
     Ok(decide(
         on_disk.as_deref(),
         &want,
-        loaded()?,
+        loaded,
         started_ms,
         built_ms(&exe)?,
     ))
@@ -264,6 +284,11 @@ fn pinned(unit: &str, key: &str) -> Option<String> {
     unit.lines()
         .find_map(|l| l.strip_prefix(&prefix))
         .map(|v| format!("\"{v}"))
+}
+
+/// For a command the user pastes into a shell.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 /// Undoes `quoted`, for showing a path back.
@@ -511,6 +536,7 @@ mod tests {
         assert_eq!(installed_config(&unit(exe, None, &env).unwrap()), None);
         let u = unit(exe, Some(Path::new(NASTY)), &env).unwrap();
         let theirs = installed_config(&u).unwrap();
+        assert_eq!(shell_quote("/a'b"), "'/a'\\''b'");
         assert_eq!(theirs, quote_arg(NASTY).unwrap());
         assert_eq!(unquote(theirs, true), NASTY);
         let data = pinned(&u, "XDG_DATA_HOME").unwrap();

@@ -423,9 +423,17 @@ fn check_service(
     started_ms: Option<u64>,
 ) -> (Status, String) {
     use crate::service::{self, State};
+    if let Err(e) = service::installed_exe() {
+        return (Status::Warn, format!("not checked: {e:#}"));
+    }
     match service::state(config, data_dir, started_ms) {
         Ok(State::Current) => (Status::Ok, format!("up to date{}", service::note())),
         Ok(State::Outdated(why)) => (Status::Warn, format!("{why}: run collied setup")),
+        Ok(State::Missing | State::Stopped) if started_ms.is_some() => (
+            Status::Warn,
+            "collied is running outside the service (collied run?): stop it, then run collied setup"
+                .to_owned(),
+        ),
         Ok(State::Stopped) => (
             Status::Warn,
             "stopped: collied start, or collied setup".to_owned(),
