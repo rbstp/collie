@@ -1,13 +1,28 @@
 # collie
 
-Watch and steer your [herdr](https://github.com/herdrdev/herdr) coding agents from your iPhone: see every agent and its status, read its terminal, prompt it, send keys, attach files, start new tasks, follow an agent in a Live Activity, and approve or deny a blocked agent from the lock screen.
+[![ci](https://github.com/rbstp/collie/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/rbstp/collie/actions/workflows/ci.yml)
 
-collie has two parts:
+collie is a remote control for [herdr](https://github.com/herdrdev/herdr) coding agents. A small daemon, `collied`, runs next to herdr on your Mac or Linux machine, and the Collie app on your iPhone and Apple Watch connects to it over your own tailnet. From the phone you can see every agent and its status, read its terminal, prompt it, send keys, attach files, start new tasks, follow an agent in a Live Activity, and approve or deny a blocked agent from the lock screen. A menu bar app on macOS and an Omarchy bar widget on Linux control the daemon from the desktop.
 
-- **`collied`**, a Rust daemon on your Mac or Linux machine. It talks to herdr over herdr's local Unix socket and joins your tailnet on its own through an embedded [libtailscale](https://github.com/tailscale/libtailscale).
-- **Collie**, the iOS app: SwiftUI over a Rust core (`collie-core`, exposed with UniFFI) that embeds its own Tailscale node too.
+- Every herdr agent across several machines, with live terminal views and a sessions inbox
+- Lock-screen, Live Activity and Apple Watch approvals, with the command end-to-end encrypted in the push
+- Claude Code, Codex and GitHub Copilot CLI agents, with remaining context and Claude Code plan usage
+- Tailnet only: an embedded Tailscale node on each side, no Tailscale app and no open TCP port on the real network
+- Mutual TLS pinned at pairing, with the phone's key in the Secure Enclave
 
-No Tailscale app is needed on either device, and no TCP port is opened outside the tailnet (the only socket on the real network is Tailscale's own WireGuard UDP socket).
+## Overview
+
+collie has these parts:
+
+| Component | Platform | Role |
+|---|---|---|
+| `collied` | macOS (Apple silicon), Linux (x86_64) | Rust daemon. Talks to herdr over its local Unix socket and joins your tailnet on its own through an embedded [libtailscale](https://github.com/tailscale/libtailscale). |
+| Collie | iOS | SwiftUI app over a Rust core (`collie-core`, exposed with UniFFI) that embeds its own Tailscale node. Includes the ColliePush notification extension and the CollieWidgets Live Activities. |
+| CollieWatch | watchOS | Apple Watch app and usage complication. It goes through the iPhone and never talks to `collied`. |
+| CollieBar | macOS | Menu bar app, a client of `collied`'s local control socket. |
+| CollieTray | Linux ([Omarchy](https://omarchy.org)) | Bar widget with the same menu as CollieBar. |
+
+No Tailscale app is needed on either device, and no TCP port is opened outside the tailnet: the only socket on the real network is Tailscale's own WireGuard UDP socket.
 
 ```
  iPhone                                                  Mac or Linux machine
@@ -23,74 +38,89 @@ No Tailscale app is needed on either device, and no TCP port is opened outside t
 
 ## Features
 
-- **Machines**: pair several Macs and Linux machines. Each one sends its own pushes, and one that is asleep or off is shown as offline (gray) without slowing the others. Removing a machine in the app also revokes the phone on that machine when it is reachable.
-- **Agents**: every herdr agent with its status (`idle`, `working`, `blocked`, `done`, as compact icons), grouped by machine (Mac or Linux) with blocked agents first, and each agent's workspace under its title. A small ring shows how much context a Claude Code or Codex agent has left, read from its transcript on the machine. Long-press an agent, or use the agent screen's menu, to close its pane or workspace. In the grid, the cards of Claude Code, Codex and Copilot CLI drop the agent's input box and status lines, keeping its output and any running task rows, and a blocked agent's card shows its whole screen so a dialog stays on it. Long-press a card in the grid to star it: starred cards lead their machine's section at twice the height. The machine keeps the stars, so they survive a reinstall of the app and a reboot, until the pane closes or the machine is removed from the phone.
-- **Inbox**: a third layout of the Agents tab, with agents grouped as Working, Done and Archived. Each shows its latest reply line, "You: <your last prompt>", the workspace, the agent kind, the machine and how long ago.
-- **Plan usage**: the Agents tab's Usage view (an Agents | Usage switch above the grid, inbox or list) shows one card per machine with its Claude Code subscription's 5-hour and weekly limits: a bar of the percent used with a tick at the share of the window gone by, the percent, when each resets, whether usage runs slower or faster than that pace, and how long ago it was recorded (dimmed once more than 5 minutes old). It comes from Claude Code's status line, through a one-line tap (step 7 below). Codex records no limits for this plan, so it shows none.
-- **Terminal**: a live view of the last 200 lines of the agent's pane, or 500 or 1000 set in Settings > Terminal > History (Claude Code's fullscreen mode, `"tui": "fullscreen"`, keeps its history out of the pane, so only one screen shows), rendered with libghostty-vt, with optional line wrapping at word boundaries (which rejoins Claude Code's paragraphs wrapped at the Mac's width, shrinks the padding of box-drawn panels and right-aligned text, keeps half-block borders to one row, and shades input boxes to the edge) and the MesloLGS NF font so Nerd Font glyphs match the Mac. Long-press to select text, drag the handles to adjust, and copy (Universal Clipboard included), or open an http or https link the selection touches. The machine checks the pane four times a second, and once a second after 5 s without a change (the next change can then take up to 1 s to show) or while the iPhone is in Low Data Mode.
-- **Gestures** (Settings > Terminal > Gestures): double-tap pastes into the prompt field, pinch sets the font size, swiping sideways switches to the previous or next agent (while lines wrap), and triple-tap can send Esc (off by default). Gestures stay off while text is selected.
-- **Terminals** (off by default, turned on per machine in `collied.toml`): plain shell panes, listed under Terminals with the Ghostty icon. When an agent exits, its screen turns into the pane's shell. Face ID or the passcode unlocks a terminal for 5 minutes, then the command field runs one line at a time and the key strip sends `esc ⇥ ^C ← ↑ ↓ → ⏎`.
-- **Prompt and keys**: send a prompt, or keys from the key strip (`esc ← ↑ ↓ → ⇥ ⇧⇥ ⏎ ⌃⏎`). A Claude Code prompt typed on the machine but not sent shows up in the phone's prompt field, and sending from the phone replaces it. If it is then sent on the machine instead, the phone's field empties too, unless the text was edited on the phone; files attached on the phone stay. A prompt not yet sent stays with its agent, on the phone only, when you go back, switch agents or close the app; its attachments for up to 23 hours, as the machine deletes them after 24. "Focus on <machine>" brings the agent's pane to the front in herdr. When Claude Code's fullscreen transcript is scrolled up on the machine (its "Jump to bottom" banner shows), a Jump to bottom button brings it back down, and the key strip stays off until then: the machine refuses keys and prompts while scrolled up, since a permission prompt scrolled out of view could otherwise be answered unseen. When Claude Code shows a notice above the input box, such as its "Heads up" tip, the explanation after Learn more, the feedback row after Dismiss or its session rating question, the phone shows the notice's options as buttons in the order they appear on screen, with the labels as the screen shows them (Learn more, Knew this already, Dismiss; or Bad, Fine, Good, Dismiss). Any notice counts that lists `1: <label>`, up to `4: <label>` in order, then `0: Dismiss`, directly above the input box. The machine sends only that one digit, without Enter, and only while the screen it re-reads shows the notice with that option, under the same label, above an empty input box, the agent is not blocked and the transcript is not scrolled up. Chat in main session, on the explanation, puts the explanation into the input box as a quoted note and sends nothing (Claude Code would send it at once only if it had no input box, and the machine answers only while an empty one shows); it then shows in the terminal view, and in the phone's prompt field once the agent's screen is opened again, and sending it starts a turn like any prompt. On the feedback row after a Heads up's Dismiss, That was helpful, Not relevant and Couldn’t understand send Anthropic a feedback signal about the tip (never its text or the transcript), and That was helpful also keeps Claude Code from suggesting it again; Turn off suggestions puts Claude Code's `/plugin disable cc-plugin-you-should-know@builtin` command into the input box and sends nothing (it shows like the note above), so tips turn off only once you send that command; on internal builds the Heads up's own Disable asks to be pressed again, then does the same. Buttons can also come from an installed Claude Code plugin that draws its options in this shape, and tapping one runs that plugin's option on the machine. What follows a rating, which can share the session transcript or send written feedback, is answered on the machine. While a Claude Code prompt typed on the phone starts with `/`, its command (up to the first space) also shows in the agent's input box on the machine, so Claude Code's command menu appears live; ↑ ↓ highlight a command and ⇥ takes it into the phone's prompt, and only Send runs it. ⏎ and ⌃⏎ are off while the command shows. Text from the mic button or a double-tap paste stays on the phone until you send it; text entered through the keyboard, its own dictation and paste included, counts as typing. Settings > Prompt can keep the keyboard open after sending.
-- **Dictation**: the mic button dictates into the prompt field on the phone itself (Apple's on-device speech models; audio never leaves the phone), in English (US) or French (Canada). Nothing is sent until you send it.
-- **Attachments**: up to 10 photos or files per prompt, uploaded over the tailnet and shown as thumbnails above the text in the prompt box, each with a × to remove it; the agent receives their paths on the machine.
-- **New task**: start Claude Code, Codex or GitHub Copilot CLI in a new workspace from the phone. Approvals are for Claude Code only: a blocked Codex or Copilot agent shows up, and its prompt is answered in the terminal on the machine. Each machine can have a base folder (Machines > the machine > Base folder, a full path such as `/Users/you/git`, since `~` is not expanded), which must be inside one of collied's task roots (`[tasks] roots`, the home folder by default): typing a name then means that folder inside the base (`collie` is `<base>/collie`), with matching folder names offered as you type, and Browse lists the folders directly inside the base. Recent folders and absolute paths still work. New folder creates one empty folder (no `git init`, no files) inside the base, or a task root (picked on the phone when there are several) when no base is set, and starts the agent there; if the agent then fails to start, the folder stays.
-- **Approvals**: when an agent blocks on a permission prompt, you get a push notification naming the tool call (with the Claude Code hook, the exact command or file; otherwise as read from the screen). Approve or deny from the lock screen (the iPhone must be unlocked first) or in the app (Face ID or the passcode for each decision). Once the agent moves on, however it was answered, the notification is removed (best effort: iOS may delay or skip the background push that does it). Claude Code's settings pickers (`/effort`, and the time format, output style and flagged message pickers of `/config`) raise no notification: they only change a setting, and the agent screen's arrow keys, Enter and Esc still answer them. In the app you can also add a note to an approval or a denial, send feedback on a plan, and answer Claude Code's question menus by picking an option or typing an answer. Notes, feedback and typed answers are one line, without control, bidi or invisible formatting characters (so an emoji sequence joined with U+200D, or a flag drawn with tag characters such as Scotland's, is refused too), so the text the agent receives is the text you see. The app checks a note before asking for Face ID.
-- **Done**: when an agent finishes a turn that took 30 seconds or more, you get a notification (agent name and workspace only), one per agent, replaced by the next. A tap opens the agent. It is on by default; Settings > Notifications > Notify when an agent finishes turns it off.
-- **Follow**: "Follow on Lock Screen" (the agent screen's menu, or a long press on the agent) shows the agent (up to 5) in a Live Activity and the Dynamic Island, with its status and how long it has been in it; the compact island shows the agent's kind icon (or its name) and, of several followed agents, the one that most needs you. When a followed agent blocks on a permission prompt, the activity shows the command with Approve and Deny buttons instead of a separate notification; other prompts arrive as a notification. Following is off by default; followed agents get a pin in the list.
-- **Apple Watch**: pending approvals with the command and a countdown, the agents as in the inbox, and a complication with the 5-hour plan usage inside a ring of the time left until it resets, refreshed in the background about every 15 minutes when watchOS allows it. When it opens, the watch asks the iPhone for the pending approvals, also while the iPhone is locked, at most once a minute unless an approval alert opened it (so approvals from a Mac that just came back can take up to a minute); the agents are as the iPhone app last saw them. Approvals in the watch app are read-only unless Settings > Apple Watch > Decide from Apple Watch is on; then the watch app can approve, deny or answer a question menu. Tapping an approval alert on the watch, or its buttons, opens that approval in the watch app; it never decides from the alert.
+Design details and limits are in [docs/architecture.md](docs/architecture.md).
 
-## Security model
+### Agents
 
-Security is the first requirement. The short version:
+- **Machines**: pair several Macs and Linux machines. Each sends its own pushes, and one that is asleep or off shows as offline without slowing the others. Removing a machine in the app also revokes the phone on that machine when it is reachable.
+- **Agent list**: every herdr agent with its status (`idle`, `working`, `blocked`, `done`) as compact icons, grouped by machine with blocked agents first. The Agents tab has three layouts: Grid (the default), List and Inbox. Long-press an agent, or use the agent screen's menu, to close its pane or workspace.
+- **Grid**: live previews of each agent. Claude Code, Codex and Copilot CLI cards keep the agent's output and drop its input box and status lines; a blocked agent's card shows its whole screen. Long-press a card to star it: starred cards lead their machine's section at twice the height. Stars are kept on the machine until the pane closes or the machine is removed.
+- **Inbox**: agents grouped as Working, Done and Archived, each with its latest reply line, your last prompt, the workspace, the agent kind, the machine and how long ago.
+- **Remaining context**: a small ring shows how much context a Claude Code or Codex agent has left, read from its transcript on the machine.
+- **Plan usage**: the Usage view (the Agents | Usage switch, or swipe left) shows one card per machine with its Claude Code subscription's 5-hour and weekly limits: percent used against the share of the window gone by, reset times, pace, and how old the reading is. It needs the status line tap ([step 7](#getting-started)). Codex records no limits for this plan, so it shows none.
 
-- **Tailnet only**: collied accepts connections only through its embedded Tailscale node, on one port. A test asserts it opens no kernel TCP listener.
-- **Whois gate**: every connection is checked with Tailscale whois before the WebSocket upgrade. The peer must be untagged, not shared in from another tailnet, owned by the collie owner (`owner_user_id` in `collied.toml`, or else the user of the first phone you confirm at pairing), and a paired phone: its node `StableID` must be paired and still belong to the user it was paired with. Authorization is re-checked before every frame, and revoking a phone cuts its live sessions.
-- **Mutual TLS**: inside the tunnel, the phone pins the machine's TLS key from the pairing QR, and collied pins the phone's key, which lives in the iPhone's Secure Enclave and never leaves it. A Tailscale node key copied off the phone, or a node injected by a compromised control plane, gets no session.
-- **Pairing**: a QR code shown by `collied pair`, plus a local y/N confirmation on the computer running collied.
-- **Approvals**: a nonce plus a fingerprint of the prompt on screen. collied moves the cursor, re-reads the screen, and presses Enter only if the fingerprint still matches; a prompt that changed is answered `superseded`. A small gap between that last re-read and Enter remains until herdr supports conditional input.
-- **Apple Watch**: deciding from the watch is off by default, and turning it on needs Face ID or the passcode. A decision then needs the watch unlocked and on the wrist, and goes through the iPhone, which re-reads the setting on each one and only sends an answer it showed the watch, through the lock-screen decide path (nonce and fingerprint on the machine). It works while the iPhone is locked. There is no Approve always on the watch. The watch holds no keys and never talks to collied.
-- **Terminals**: typing into a shell is command execution, so it is off unless `collied.toml` on that machine turns it on (never from the phone), its methods are a separate class in the allowlist, and every unlock is a grant collied verifies: a signature by a second Secure Enclave key on the phone, which signs only after Face ID or the passcode, for one terminal, one session and 5 minutes. collied re-reads the pane before every write and refuses one where an agent now runs. The audit log records each grant and command without its text.
-- **Push notifications**: the cleartext part of the push only says which agent is blocked and where. The command itself is end-to-end encrypted (ChaCha20-Poly1305, under a per-machine key generated on the phone, kept in its Keychain and handed to collied over the tailnet). The phone's notification extension decrypts it, so Apple sees the command only as ciphertext. Apple still sees agent and workspace names, ids and timing.
-- **Transcripts**: for the context ring and the inbox, collied reads the end of each live Claude Code or Codex agent's transcript on the machine. Only the percentage left, one line of the latest reply, one line of the latest prompt and the time of the last change go to the paired phone, over the same session as the terminal view. They are never logged or put in a push.
-- **Plan usage**: `collied statusline` keeps only the two limits' percentages and reset times, and each session's context window size, in a 0600 `usage.json` in collied's data directory; the rest of the status line input is dropped. Only the percentages, the reset times and when they were recorded go to the paired phone, never to a log or a push.
-- **Attachments**: uploads are size-capped (20 MiB per file, 200 MiB in total) and checksummed. Each is stored in a fresh random directory inside a private cache directory (0700 directories, 0600 non-executable files), under a sanitized copy of the file name, and deleted after 24 hours.
-- **Secrets**: `collied apns import` stores the APNs signing key in the Mac's login Keychain. The item's ACL lets only the Developer ID-signed collied read it without a Keychain prompt. On Linux it stores the key as a systemd user credential: encrypted with the host key, and also sealed to the TPM2 when one is usable. Where `systemd-creds` cannot encrypt, it falls back to a 0600 file. This is weaker than the Keychain: any process running as your user can decrypt the credential, not only collied ([docs/threat-model.md](docs/threat-model.md)).
+### Terminal and input
 
-Details, including what is not covered: [docs/threat-model.md](docs/threat-model.md) and [docs/architecture.md](docs/architecture.md).
+- **Terminal view**: the last 200 lines of the agent's pane (500 or 1000 in Settings > Terminal > History), rendered with libghostty-vt in the MesloLGS NF font, with optional word wrapping. Long-press to select and copy text (Universal Clipboard included) or open an http or https link. Claude Code's fullscreen mode (`"tui": "fullscreen"`) keeps its history out of the pane, so only one screen shows. The machine checks the pane four times a second, and once a second after 5 s without a change or while the iPhone is in Low Data Mode.
+- **Gestures** (Settings > Terminal > Gestures): double-tap pastes into the prompt field, pinch sets the font size, swiping sideways switches agents while lines wrap, and triple-tap can send Esc (off by default).
+- **Prompt and keys**: send a prompt, or keys from the key strip (`esc ← ↑ ↓ → ⇥ ⇧⇥ ⏎ ⌃⏎`). "Focus on <machine>" brings the agent's pane to the front in herdr. Settings > Prompt can keep the keyboard open after sending.
+- **Draft sync**: a Claude Code prompt typed on the machine but not sent shows up in the phone's prompt field, and sending from the phone replaces it. An unsent prompt stays with its agent on the phone, and its attachments for up to 23 hours. Text from the mic button or a double-tap paste stays on the phone until you send it.
+- **Slash commands**: while a Claude Code prompt on the phone starts with `/`, its command is mirrored into the agent's input box so Claude Code's command menu appears live. ↑ ↓ highlight a command, ⇥ takes it into the phone's prompt, and only Send runs it; ⏎ and ⌃⏎ are off while the command shows.
+- **Jump to bottom**: when Claude Code's fullscreen transcript is scrolled up on the machine, a Jump to bottom button brings it back down. Until then the machine refuses keys and prompts, so a permission prompt scrolled out of view cannot be answered unseen.
+- **Claude Code notices**: the options of a notice above the input box (the "Heads up" tip, its explanation and feedback row, the session rating question, or a plugin that draws its options the same way) show as buttons. A tap sends that one digit, without Enter, only while the screen still shows that option above an empty input box. Chat in main session and Turn off suggestions only fill the input box; nothing is sent until you send it. The tip feedback options send Anthropic a feedback signal about the tip, never its text or the transcript. Follow-ups to a rating are answered on the machine.
+- **Dictation**: the mic button dictates into the prompt field with Apple's on-device speech models, in English (US) or French (Canada). Audio never leaves the phone.
+- **Attachments**: up to 10 photos or files per prompt, uploaded over the tailnet and shown as removable thumbnails. The agent receives their paths on the machine; files are deleted after 24 hours.
+- **New task**: start Claude Code, Codex or GitHub Copilot CLI in a new workspace. Each machine can have a base folder (Machines > the machine > Base folder, a full path such as `/Users/you/git`, since `~` is not expanded) inside one of `collied`'s task roots (`[tasks] roots`, the home folder by default). Typing a name then means that folder inside the base, with matching folders offered as you type, and Browse lists the base's folders. Recent folders and absolute paths also work. New folder creates one empty folder (no `git init`) in the base, or in a task root when no base is set, and starts the agent there; it stays if the agent fails to start.
+- **Terminals** (off by default, enabled per machine in `collied.toml`): plain shell panes, listed under Terminals. When an agent exits, its screen becomes the pane's shell. Face ID or the passcode unlocks a terminal for 5 minutes; the command field then runs one line at a time and the key strip sends `esc ⇥ ^C ← ↑ ↓ → ⏎`.
 
-## Status
+### Approvals and notifications
 
-| Phase | Scope | State |
-|---|---|---|
-| 0 | Skeleton, protocol, libtailscale build | done |
-| 1 | Tailnet login, whois gate, pairing, agent list | done |
-| 2 | Terminal, prompt, keys, new task | done |
-| 3 | Lock-screen approvals with encrypted context, attachments | done |
-| 4 | Live Activities and Dynamic Island for agents you follow, approvals on the activity, question menus | done |
-| 5 | Multiple computers (macOS and Linux), Claude Code hooks enrichment | done |
-| 6 | Mutual TLS inside the tunnel, with a Secure Enclave key on the phone | done |
-| 7 | Improvements: compact status icons, opening links, gestures, dictation, live terminal previews with starred cards, more scrollback, plain terminals, remaining context and a sessions inbox, plan usage, Codex and Copilot CLI agents, battery and reconnect fixes, an Apple Watch app (done); a Mac menu bar icon, a performance and battery check, and more (see the milestone) | in progress |
+- **Approvals**: when an agent blocks on a permission prompt, a push notification names the tool call (the exact command or file with the Claude Code hook, otherwise as read from the screen). Approve or deny from the lock screen (after unlocking the iPhone) or in the app, with Face ID or the passcode for each decision. The notification is removed once the agent moves on, on a best-effort basis.
+- **In-app answers**: add a note to an approval or a denial, send feedback on a plan, and answer Claude Code's question menus by picking an option or typing an answer. Notes and answers are one line, without control, bidi or invisible formatting characters, so the agent receives exactly the text you see. Claude Code's folder trust prompt is answered the same way: Approve trusts the folder, Deny ends the session. Settings pickers such as `/effort` and `/config` raise no notification.
+- **Other agents**: approvals are for Claude Code only. A blocked Codex or Copilot agent still sends a notification, without Approve or Deny and never on a Live Activity, and is answered on the machine.
+- **Done alerts**: when an agent finishes a turn that took 30 seconds or more, a notification with its name and workspace, one per agent and none while it is on screen. A tap opens the agent. Settings > Notifications > Notify when an agent finishes turns it off.
+- **Live Activities**: "Follow on Lock Screen" (the agent screen's menu, or a long press on the agent) shows up to 5 agents in a Live Activity and the Dynamic Island, with their status and how long they have been in it. When a followed agent blocks on a permission prompt, the activity shows the command with Approve and Deny buttons; other prompts arrive as a notification. Following is off by default.
 
-Outside the phases: an audit log viewer, and smaller fixes tracked as [issues](https://github.com/rbstp/collie/issues).
+### Apple Watch
+
+- Pending approvals with the command and a countdown, the agents as in the inbox, and a complication with the 5-hour plan usage, refreshed about every 15 minutes when watchOS allows it.
+- Approvals are read-only unless Settings > Apple Watch > Decide from Apple Watch is on; the watch app can then approve, deny or answer a question menu. Decisions are made in the watch app, never from the alert itself.
+- The watch asks the iPhone for pending approvals when it opens, at most once a minute unless an approval alert opened it, and works while the iPhone is locked. The agents are as the iPhone app last saw them.
+
+### Desktop companions
+
+- **Menu bar app** (macOS): the icon is bright while `collied` runs, dim when it is off, with a dot while an approval is pending. The menu turns `collied` off and on, pairs a phone, lists the paired phones, opens the audit log, and quits (which stops `collied`).
+- **Bar widget** (Linux, Omarchy): the same icon states and menu in the Omarchy shell. Quit stops `collied` and takes the widget off the bar.
+
+## Security
+
+Security is the first requirement. In short:
+
+- **Tailnet only**: `collied` accepts connections only through its embedded Tailscale node, on one port. A test asserts it opens no kernel TCP listener.
+- **Whois gate**: every connection is checked with Tailscale whois before the WebSocket upgrade. The peer must be untagged, not shared in from another tailnet, owned by the collie owner (`owner_user_id` in `collied.toml`, otherwise the user of the first phone you confirm at pairing), and a paired phone whose node `StableID` still belongs to the user it was paired with. Authorization is re-checked before every frame, and revoking a phone cuts its live sessions.
+- **Mutual TLS**: inside the tunnel, the phone pins the machine's TLS key from the pairing QR, and `collied` pins the phone's key, which lives in the iPhone's Secure Enclave. A copied Tailscale node key, or a node injected by a compromised control plane, gets no session.
+- **Pairing**: a QR code shown by `collied pair`, plus a local y/N confirmation on the machine running `collied`.
+- **Approvals**: a nonce plus a fingerprint of the prompt on screen. `collied` re-reads the screen and presses Enter only if the fingerprint still matches; a prompt that changed is answered `superseded`. A small gap between that last re-read and Enter remains until herdr supports conditional input.
+- **Apple Watch**: deciding from the watch is off by default and turning it on needs Face ID or the passcode. A decision then needs the watch unlocked and on the wrist, and goes through the iPhone, which re-checks the setting and only sends an answer it showed the watch, on the same nonce and fingerprint path. There is no Approve always on the watch, and the watch holds no keys.
+- **Terminals**: shell input is command execution, so it is off unless `collied.toml` on that machine turns it on (never from the phone). Every unlock is a grant signed by a second Secure Enclave key after Face ID or the passcode, for one terminal, one session and 5 minutes. `collied` refuses to write to a pane where an agent now runs, and the audit log records each grant and command without its text.
+- **Push notifications**: the cleartext part only says which agent is blocked and where. The command is end-to-end encrypted (ChaCha20-Poly1305) under a per-machine key generated on the phone, and decrypted by the phone's notification extension. Apple still sees agent and workspace names, ids and timing.
+- **Transcripts and plan usage**: only the context percentage, one line of the latest reply and prompt, the plan limits' percentages and reset times, and their timestamps go to the paired phone, never to a log or a push. `collied statusline` keeps only the limits' percentages and reset times and each session's context window size, in a 0600 `usage.json`; the rest of the status line input is dropped.
+- **Attachments**: size-capped (20 MiB per file, 200 MiB in total), checksummed, stored under sanitized names in fresh random directories of a private cache (0700 directories, 0600 non-executable files), and deleted after 24 hours.
+- **Secrets**: on macOS, the APNs signing key is stored in the login Keychain, readable without a prompt only by the Developer ID-signed `collied`. On Linux it is a systemd user credential, encrypted with the host key and sealed to the TPM2 when one is usable, with a 0600 file as the fallback where `systemd-creds` cannot encrypt. This is weaker than the Keychain: any process running as your user can decrypt it.
+
+What is and is not covered: [docs/threat-model.md](docs/threat-model.md).
 
 ## Requirements
 
-- An Apple silicon Mac running [herdr](https://github.com/herdrdev/herdr) 0.9.3 (the version collied is tested against). Intel Macs are not supported.
-- Or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.3. The encrypted APNs key needs systemd 256 or later (`systemd-creds --user`); older versions fall back to a 0600 file. collied is built and tested on Arch Linux. aarch64 Linux is mapped in the build but not built or tested.
-- An iPhone on iOS 26 or later.
-- Optional: an Apple Watch on watchOS 26 or later.
+**To run:**
+
+- An Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager, running [herdr](https://github.com/herdrdev/herdr) 0.9.3 (the version `collied` is tested against). Intel Macs are not supported. On Linux, `collied` is built and tested on Arch Linux; aarch64 is mapped in the build but not built or tested, and the encrypted APNs key needs systemd 256 or later (`systemd-creds --user`), older versions fall back to a 0600 file.
+- An iPhone on iOS 26 or later, and optionally an Apple Watch on watchOS 26 or later.
 - A Tailscale account whose policy file you can edit.
-- To build on macOS: Rust (see `rust-toolchain.toml`), Go, Xcode 27 with the watchOS platform and an iPhone 18 Pro simulator, [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, [cargo-nextest](https://nexte.st), and `jq` (for `just ios-run-device`). The libghostty-vt build script downloads its own pinned Zig.
-- To build collied on Linux: Rust (see `rust-toolchain.toml`), Go 1.27.1 or later, a C compiler, libclang (for bindgen), [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st).
-- For the Linux bar widget (optional): Omarchy 4 (its shell runs on Quickshell 0.3) with `qrencode`, which Omarchy installs; node and Python 3 for `just tray-test`.
-- An Apple Developer account with a Developer ID Application certificate (collied is always signed on macOS; it is not signed on Linux), and an APNs key for push notifications.
+- An Apple Developer account with a Developer ID Application certificate (`collied` is always signed on macOS, never on Linux) and an APNs key for push notifications.
+- Optional, for the Linux bar widget: Omarchy 4 (its shell runs on Quickshell 0.3) with `qrencode`, which Omarchy installs.
+
+**To build on macOS:** Rust (see `rust-toolchain.toml`), Go, Xcode 27 with the watchOS platform and an iPhone 18 Pro simulator, [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, [cargo-nextest](https://nexte.st), and `jq` (for `just ios-run-device`). The libghostty-vt build script downloads its own pinned Zig.
+
+**To build `collied` on Linux:** Rust (see `rust-toolchain.toml`), Go 1.27.1 or later, a C compiler, libclang (for bindgen), [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st). For `just tray-test`, also node and Python 3.
 
 The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID and `dev.rbstp` bundle identifiers. Change them to your own before building.
 
 ## Getting started
 
-1. **Tailnet policy**: add a `tag:collie-mac` tag owner and a grant from your user to `tag:collie-mac` on TCP 8457. For a Linux machine, add a `tag:collie-linux` tag owner and the same TCP 8457 grant to `tag:collie-linux`. The full policy, with tests, is in [docs/tailnet.md](docs/tailnet.md). `collied setup` prints the entries to add when the tag owner or the grant is missing.
-2. **Build, install and set up collied**, on macOS signed with your Developer ID Application certificate, on Linux not signed; installed to `~/.cargo/bin` on both:
+1. **Tailnet policy**: add a `tag:collie-mac` tag owner and a grant from your user to `tag:collie-mac` on TCP 8457. For a Linux machine, add a `tag:collie-linux` tag owner and the same grant to `tag:collie-linux`. The full policy, with tests, is in [docs/tailnet.md](docs/tailnet.md). `collied setup` prints the entries to add when the tag owner or the grant is missing.
+
+2. **Build, install and set up `collied`**. It is installed to `~/.cargo/bin`, signed with your Developer ID Application certificate on macOS and unsigned on Linux:
 
    ```sh
    git clone --recurse-submodules https://github.com/rbstp/collie
@@ -100,23 +130,23 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
    collied setup
    ```
 
-   `collied setup` is interactive and runs these steps in order, skipping each one that is already done, so running it again resumes where it stopped:
+   `collied setup` is interactive. It runs these steps in order and skips each one already done, so running it again resumes where it stopped:
 
-   - `collied login`: sign in as the tag owner; the node becomes tag:collie-mac on macOS, tag:collie-linux on Linux.
-   - `collied service install`: the launchd agent that runs collied at login on macOS, the systemd user unit on Linux. Installed again, which restarts collied, when it points at another binary or config, is stopped, or runs an older binary than the installed one.
-   - `collied doctor`: setup stops on a fail line. Warn lines for peers, apns, hooks and plan usage are expected on a new machine.
-   - push notifications, when `[apns]` is not configured yet: offered, skippable (step 5).
+   - `collied login`: sign in as the tag owner. The node becomes `tag:collie-mac` on macOS, `tag:collie-linux` on Linux.
+   - `collied service install`: the launchd agent that runs `collied` at login on macOS, the systemd user unit on Linux. It is installed again, restarting `collied`, when it points at another binary or config, is stopped, or runs an older binary than the installed one.
+   - `collied doctor`: setup stops on a fail line. Warn lines for peers, apns, hooks and plan usage are expected on a new machine, and one for reach until your phone is signed in to Tailscale (step 3); setup then prints the policy entries in case the grant is missing.
+   - Push notifications, when `[apns]` is not configured yet: offered, and skippable (step 5).
    - `collied pair`: offered at the end (step 4).
 
-   It needs a terminal and `~/.cargo/bin/collied` (signed, on macOS), and never confirms a pairing itself: that stays your `y` on the computer. Each command also runs on its own. To update: `git pull`, `just setup`, `just collied-install`, then `collied setup` again; it keeps the node, the paired phones and the config, and offers to pair a phone again.
+   Setup needs a terminal and `~/.cargo/bin/collied` as a regular file rather than a symlink (signed, on macOS). It stops when the service already runs another `--config`, and on Linux when the user manager loads the unit from another file, applies a `collied.service.d` drop-in to it, or the unit pins another `XDG_DATA_HOME`. It never confirms a pairing itself: that stays your `y` on the machine. Each step also runs on its own.
 
-   On Linux, collied's data directory is `$XDG_DATA_HOME/collie`, else `~/.local/share/collie`. It holds `collied.toml`, the node state, paired phones and the audit log. Logs go to the user journal: `journalctl --user -u collied`. A user unit runs while you have a session. `loginctl enable-linger` (optional) keeps it running without a login.
+3. **Install the app** on a connected iPhone with Developer Mode on: `just ios-run-device`. The watch app installs with it; signing it needs the paired Apple Watch registered to your team once (connect the watch in Xcode's Devices and Simulators window, or add its UDID in the developer portal). Sign in to Tailscale inside the app with your own account.
 
-3. **Install the app** on a connected iPhone with Developer Mode on (`just ios-run-device`). The watch app installs with it; signing it needs the paired Apple Watch registered to your team once first (connect the watch in Xcode's Devices and Simulators window, or add its UDID in the developer portal). Sign in to Tailscale inside the app with your own account.
-4. **Pair**: accept the pairing offered at the end of `collied setup`, or run `collied pair` on the computer (or Pair a Phone… in the menu bar app, step 9), scan the QR code in the app (Machines, Add machine), and confirm with `y` (or Pair in the app's window) on the computer. A phone paired before mutual TLS (Phase 6) pairs again the same way once both sides are updated.
-5. **Push notifications** (optional): `collied setup` offers this: it asks for the `.p8` path, the team and bundle IDs, adds the `[apns]` section and imports the key. By hand: add an `[apns]` section to `collied.toml` (`~/Library/Application Support/collie/collied.toml` on macOS, in the data directory on Linux), import the key with `collied apns import AuthKey_<KEY_ID>.p8`, then check with `collied apns test`. Each machine uses its own APNs key (its own key ID, revoked on its own) and sends its own pushes. On Linux, `collied apns import` encrypts the key into a systemd user credential (also sealed to the TPM2 when one is usable), with a 0600 file as the fallback where `systemd-creds` cannot encrypt. `collied doctor` reports which one is in use and, for a credential, its seal. The full steps are in [docs/release.md](docs/release.md).
+4. **Pair**: accept the pairing offered at the end of `collied setup`, or run `collied pair` (or Pair a Phone in the menu bar app or bar widget). Scan the QR code in the app (Machines, Add machine) and confirm with `y` (or Pair in the app's window) on the machine.
 
-6. **Claude Code hook** (optional): add `collied hook` as a `PermissionRequest` hook in `~/.claude/settings.json`, so approvals name the exact tool call. It only reports the call to collied; Claude Code's dialog is unchanged. `collied doctor` checks it.
+5. **Push notifications** (optional): `collied setup` asks for the `.p8` path and the team and bundle IDs, adds the `[apns]` section and imports the key. By hand: add an `[apns]` section to `collied.toml`, import the key with `collied apns import AuthKey_<KEY_ID>.p8`, then check with `collied apns test`. Each machine uses its own APNs key (its own key ID, revoked on its own) and sends its own pushes. On Linux, `collied doctor` reports whether the key is a credential or a file and, for a credential, its seal. Full steps: [docs/release.md](docs/release.md).
+
+6. **Claude Code hook** (optional): add `collied hook` as a `PermissionRequest` hook in `~/.claude/settings.json` so approvals name the exact tool call. It only reports the call to `collied`; Claude Code's dialog is unchanged. `collied doctor` checks it.
 
    ```json
    {
@@ -136,22 +166,35 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
 
    It records the limits and the session's context window (so the context ring uses the exact window instead of the model's) and prints nothing, so the status line is unchanged. A `statusLine.command` without a script can call one that does `input=$(cat)`, the line above, then the old command with `printf '%s' "$input" |`. The limits exist for claude.ai Pro and Max plans only, after the session's first reply. `collied doctor` reports when the tap last recorded them.
 
-8. **Terminals** (optional): to use plain shell panes from the phone, add this to `collied.toml` and restart collied (`collied stop`, then `collied start`):
+8. **Terminals** (optional): to use plain shell panes from the phone, add this to `collied.toml` and restart `collied` (`collied stop`, then `collied start`):
 
    ```toml
    [terminals]
    enabled = true
    ```
 
-   The phone must have a passcode, and must be paired after both sides are updated: the pairing records the phone's terminal key. A phone paired before shows "Pair this phone again to use terminals on this machine".
+   The phone must have a passcode and must be paired after both sides are updated, since pairing records the phone's terminal key. A phone paired before shows "Pair this phone again to use terminals on this machine".
 
-9. **Menu bar app** (optional): on macOS, `just mac-install` builds CollieBar, signs it with the same Developer ID and installs it to `~/Applications`. Its icon is bright while collied runs, dim when it is off, with a dot while an approval is pending. The menu turns collied off and on (`collied stop` and `collied start`), pairs a phone (the QR, then Pair or Don't Pair on the Mac), lists the paired phones, opens the audit log, and quits, which stops collied. Open at Login in the menu starts it at login; it is off by default. It is not notarized: that is optional, only for another Mac ([docs/release.md](docs/release.md)).
+9. **Desktop companion** (optional):
 
-   On Linux with [Omarchy](https://omarchy.org), the same menu is a bar widget in the Omarchy shell (Quickshell): `just tray-install` copies `Linux/CollieTray` to `~/.config/omarchy/plugins/rbstp.collie` and puts it on the right of the bar. It has the same icon states and items: Turn Off or Turn On, Pair a Phone (the QR, then Pair or Don't Pair on the machine), the paired phones and Open Audit Log, which opens it read-only in a terminal. Quit stops collied and takes the widget off the bar (`omarchy plugin enable rbstp.collie` puts it back). It loads with the shell, so it is there at every login while enabled. Update it with `git pull` and `just tray-install`.
+   - macOS: `just mac-install` builds CollieBar, signs it with the same Developer ID and installs it to `~/Applications`. Open at Login in its menu starts it at login (off by default). It is not notarized; notarization is optional and only needed for another Mac ([docs/release.md](docs/release.md)).
+   - Linux with Omarchy: `just tray-install` copies `Linux/CollieTray` to `~/.config/omarchy/plugins/rbstp.collie` and puts it on the right of the bar. It loads with the shell at every login while enabled; after Quit, `omarchy plugin enable rbstp.collie` puts it back.
 
-List paired phones with `collied peers list`, revoke one with `collied peers revoke <label or StableID>` (removing the machine in the app does the same when the machine is reachable), and inspect the daemon with `collied status` (its tags and the herdr agents it sees).
+## Operating collied
 
-`collied stop` turns collied off and keeps it off, across reboots, until `collied start`. This is the same with the launchd agent and the systemd user unit.
+| Command | Purpose |
+|---|---|
+| `collied status` | The running daemon's state: its node and tags, sessions, paired phones, herdr version and the agents it sees |
+| `collied doctor` | Checks the config, service, herdr, the tailnet node, its tag and reach, push, hooks and plan usage |
+| `collied peers list` | Lists paired phones |
+| `collied peers revoke <label or StableID>` | Revokes a phone and closes its live sessions (removing the machine in the app does the same when it is reachable) |
+| `collied stop` | Turns `collied` off and keeps it off, across reboots, until `collied start` |
+| `collied start` | Starts it again |
+| `collied service uninstall` | Stops and removes the launchd agent or systemd user unit |
+
+**Configuration and data**: on macOS, `collied.toml` is in `~/Library/Application Support/collie/`. On Linux, the data directory is `$XDG_DATA_HOME/collie`, else `~/.local/share/collie`, and holds `collied.toml`, the node state, paired phones and the audit log. Logs go to the user journal (`journalctl --user -u collied`). A systemd user unit runs while you have a session; `loginctl enable-linger` (optional) keeps it running without a login.
+
+**Updating**: `git pull`, `just setup`, `just collied-install`, then `collied setup` again. It keeps the node, the paired phones and the config, and offers to pair a phone again. Update the bar widget with `git pull` and `just tray-install`, and the menu bar app with `just mac-install`.
 
 ## Development
 
@@ -163,7 +206,7 @@ List paired phones with `collied peers list`, revoke one with `collied peers rev
 | `just test` | All Rust tests with cargo-nextest, including end-to-end tests over a local test tailnet |
 | `just schema` | Regenerates the protocol JSON Schemas in `docs/protocol/` |
 | `just ios-framework` | Builds the `CollieCore` xcframework and UniFFI bindings |
-| `just ios-ghostty` | Builds libghostty-vt from its pinned Ghostty commit (skipped when already built) |
+| `just ios-ghostty` | Builds libghostty-vt from its pinned commit (skipped when already built) |
 | `just ios-project` | Builds libghostty-vt and generates the Xcode project with XcodeGen |
 | `just ios-test` | GhosttyTerminal package tests on macOS, then the iOS unit tests on the simulator |
 | `just ios-build-sim` | Simulator build |
@@ -173,11 +216,11 @@ List paired phones with `collied peers list`, revoke one with `collied peers rev
 | `just mac-test` | The menu bar app's unit tests (never touches the real control socket) |
 | `just mac-install` | Builds the menu bar app, signs it with the Developer ID and the hardened runtime, installs it to `~/Applications` and opens it |
 | `just mac-notarize` | Optional: notarizes and staples the app `mac-install` signed, with a `notarytool` keychain profile |
-| `just tray-test` | The Omarchy bar widget's tests (Linux): the icon matches the Mac's, the plugin validates, the wire format and parsing under node, and `Service.qml` in `qs` against a fake collied (never the real control socket) |
+| `just tray-test` | The Omarchy bar widget's tests (Linux): icon parity with the Mac, plugin validation, wire format and parsing under node, and `Service.qml` in `qs` against a fake `collied` (never the real control socket) |
 | `just tray-install` | Copies the Omarchy bar widget to `~/.config/omarchy/plugins/rbstp.collie` and puts it on the bar (Linux) |
-| `just collied-install` | Release build of collied, installed to `~/.cargo/bin`. On macOS it is signed and restarts the launchd agent if it is installed. On Linux it is not signed and restarts the systemd user unit if it is active |
+| `just collied-install` | Release build of `collied`, installed to `~/.cargo/bin`. On macOS it is signed and restarts the launchd agent if installed; on Linux it is unsigned and restarts the systemd user unit if active |
 
-CI runs on macOS: lint, the Rust tests, the GhosttyTerminal package tests, and the iOS simulator build and tests, on every pull request and on pushes to `master`. Merging a pull request that changes code into `master` uploads a build to the maintainer's TestFlight ([docs/release.md](docs/release.md)).
+CI runs on macOS on every pull request and on pushes to `master`: lint, the Rust tests, the GhosttyTerminal package tests, and the iOS simulator build and tests. Merging a pull request that changes code into `master` uploads a build to the maintainer's TestFlight ([docs/release.md](docs/release.md)).
 
 ## Repository layout
 
@@ -191,9 +234,29 @@ crates/
   collie-core/     The phone's Rust core, exposed to Swift with UniFFI
   uniffi-bindgen/  UniFFI binding generator used by `just ios-framework`
   e2e/             End-to-end tests: phone core against collied over a local test tailnet
-Collie/            iOS app (XcodeGen project.yml), ColliePush and CollieWidgets extensions, CollieWatch app and its CollieWatchWidgets complication, GhosttyTerminal package
-Mac/               macOS menu bar app CollieBar (XcodeGen project.yml), a client of collied's control socket
-Linux/             Omarchy bar widget CollieTray (a Quickshell plugin), a client of collied's control socket, and its tests
+Collie/            iOS app (XcodeGen project.yml), ColliePush and CollieWidgets extensions,
+                   CollieWatch app and its CollieWatchWidgets complication, CollieCore
+                   package (xcframework and UniFFI bindings), GhosttyTerminal package
+Mac/               macOS menu bar app CollieBar (XcodeGen project.yml), a client of
+                   collied's control socket
+Linux/             Omarchy bar widget CollieTray (a Quickshell plugin), a client of
+                   collied's control socket, and its tests
 docs/              Architecture, threat model, tailnet setup, release, protocol schemas
 scripts/           libghostty-vt xcframework build
 ```
+
+## Documentation
+
+- [Architecture](docs/architecture.md): design, protocol behavior, herdr and Tailscale integration, and how the main features work
+- [Threat model](docs/threat-model.md): assets, trust boundaries, threats and what is not covered
+- [Tailnet setup](docs/tailnet.md): the policy file, tags, owner, key expiry and revocation
+- [Release](docs/release.md): Apple setup, APNs, TestFlight, notarization and `collied` on Linux
+- [Protocol](docs/protocol): JSON Schemas of the client and server frames (generated with `just schema`) and shared test fixtures
+
+## Contributing
+
+Bugs and feature requests are tracked as [GitHub issues](https://github.com/rbstp/collie/issues). Before opening a pull request, run `just lint` and `just test`, plus the tests of any app you changed (`just ios-test`, `just mac-test` or `just tray-test`).
+
+## License
+
+collie is licensed under the [Apache License 2.0](LICENSE). The `tailscale-sys` crate, which builds the vendored libtailscale, is licensed `Apache-2.0 AND BSD-3-Clause`.
