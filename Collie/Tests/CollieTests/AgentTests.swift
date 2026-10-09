@@ -1488,6 +1488,11 @@ private func noticeShown(
     }
     model.poll()
     #expect(model.answering && !model.codexQuestionQueued)
+    #expect(model.accepts(.up) && model.accepts(.down) && model.accepts(.enter))
+    #expect(!model.accepts(.left) && !model.accepts(.shiftLeft))
+    await model.tap(.down)?.value
+    await model.tap(.enter)?.value
+    #expect(core.snapshot.keys == [[.shiftLeft], [.down], [.enter]])
     model.typed("DuckDB")
     await model.sendPrompt()
     #expect(core.snapshot.typed == ["DuckDB"])

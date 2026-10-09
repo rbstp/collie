@@ -2899,6 +2899,43 @@ async fn codex_question_opens_and_a_typed_answer_submits_without_approving() {
 }
 
 #[tokio::test]
+async fn codex_question_options_use_arrows_and_enter_without_approving() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["codex"], &base);
+    herdr.with(|h| {
+        h.text = CODEX_QUESTION_OPEN.into();
+        h.rule = Some("osc_title_blocked".into());
+    });
+    let mut down = keys(CODEX_BLOCKED);
+    down.keys = vec![Key::Down];
+    let mut enter = keys(CODEX_BLOCKED);
+    enter.keys = vec![Key::Enter];
+    assert!(drive.send_keys(down.clone(), &yes()).await.0.is_ok());
+    assert!(drive.send_keys(enter.clone(), &yes()).await.0.is_ok());
+    assert_eq!(
+        herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]})
+        ]
+    );
+
+    down.keys.push(Key::Enter);
+    assert_eq!(
+        code(drive.send_keys(down, &yes()).await.0),
+        ErrorCode::AgentBlocked
+    );
+    let approval = "Would you like to run the following command?\n› 1. Yes, proceed\n  2. No\nPress enter to confirm or esc to cancel\n";
+    herdr.with(|h| h.text = approval.into());
+    assert_eq!(
+        code(drive.send_keys(enter, &yes()).await.0),
+        ErrorCode::AgentBlocked
+    );
+    assert_eq!(herdr.params("agent.send_keys").len(), 2);
+}
+
+#[tokio::test]
 async fn plan_feedback_is_typed_but_keys_are_refused() {
     let herdr = Mock::start();
     let (_d, base) = root();

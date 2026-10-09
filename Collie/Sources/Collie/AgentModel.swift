@@ -178,6 +178,7 @@ final class AgentModel {
 
     func accepts(_ key: AgentKey) -> Bool {
         if key == .shiftLeft { return codexQuestionQueued }
+        if codexQuestionOpen && (key == .up || key == .down || key == .enter) { return true }
         return acceptsKeys
     }
 
@@ -711,7 +712,7 @@ final class AgentModel {
                 if queuedKeys.isEmpty { continue }
             }
             let command = commandShown
-            let batch = Array(queuedKeys.prefix(16))
+            let batch = Array(queuedKeys.prefix(codexQuestionOpen ? 1 : 16))
             queuedKeys.removeFirst(batch.count)
             do {
                 if isTerminal {

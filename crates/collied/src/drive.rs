@@ -630,12 +630,21 @@ impl Driver {
             );
         }
         let (a, screen) = match self
-            .writable_agent(&p.terminal_id, prompt::open_to_keys)
+            .writable_agent(&p.terminal_id, prompt::open_to_keys_or_codex_question)
             .await
         {
             Ok(found) => found,
             Err(e) => return (Err(e), None),
         };
+        if a.agent.as_deref() == Some("codex")
+            && screen.is_some()
+            && (p.keys.len() != 1 || !matches!(p.keys[0], Key::Up | Key::Down | Key::Enter))
+        {
+            return (
+                fail(ErrorCode::AgentBlocked, "send one question key at a time"),
+                None,
+            );
+        }
         if a.agent.as_deref() == Some("claude") {
             // A dialog scrolled out of view leaves the agent idle: keys would answer it unseen.
             let scrolled = match &screen {
