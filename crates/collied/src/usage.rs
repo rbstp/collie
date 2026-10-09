@@ -143,7 +143,7 @@ fn merge_plan(old: Option<PlanUsage>, new: PlanUsage, now_ms: u64) -> PlanUsage 
     }
 }
 
-pub fn record_codex(data_dir: &Path, usage: CodexUsage) -> anyhow::Result<()> {
+pub fn record_codex(data_dir: &Path, usage: Option<CodexUsage>) -> anyhow::Result<()> {
     crate::ensure_private_dir(data_dir)?;
     let _lock = lock(&data_dir.join(USAGE_LOCK))?;
     let path = data_dir.join(USAGE_FILE);
@@ -151,36 +151,73 @@ pub fn record_codex(data_dir: &Path, usage: CodexUsage) -> anyhow::Result<()> {
         Err(peers::Error::Json { .. }) => Recorded::default(),
         other => other?,
     };
-    if recorded.codex.as_ref().is_some_and(|old| {
-        old.used == usage.used
-            && old.limit == usage.limit
-            && old.resets_at_ms == usage.resets_at_ms
-            && usage.recorded_ms < old.recorded_ms + RESTAMP_MS
-    }) {
+    if recorded.codex.is_none() && usage.is_none() {
         return Ok(());
     }
-    recorded.codex = Some(usage);
+    if recorded
+        .codex
+        .as_ref()
+        .zip(usage.as_ref())
+        .is_some_and(|(old, new)| {
+            old.used == new.used
+                && old.limit == new.limit
+                && old.resets_at_ms == new.resets_at_ms
+                && new.recorded_ms < old.recorded_ms + RESTAMP_MS
+        })
+    {
+        return Ok(());
+    }
+    recorded.codex = usage;
     peers::replace_json(&path, &recorded)?;
     Ok(())
 }
 
-pub fn parse_codex_usage(response: &[u8], now_ms: u64) -> Option<CodexUsage> {
-    let root: Value = serde_json::from_slice(response).ok()?;
-    let limit = &root["result"]["rateLimits"]["individualLimit"];
+#[derive(Debug, PartialEq, Eq)]
+pub struct CodexUsageError;
+
+pub fn parse_codex_usage(
+    response: &[u8],
+    now_ms: u64,
+) -> Result<Option<CodexUsage>, CodexUsageError> {
+    let root: Value = serde_json::from_slice(response).map_err(|_| CodexUsageError)?;
+    let limits = root["result"].get("rateLimits").ok_or(CodexUsageError)?;
+    if limits.is_null() {
+        return Ok(None);
+    }
+    let limits = limits.as_object().ok_or(CodexUsageError)?;
+    let Some(limit) = limits.get("individualLimit").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
     let number = |v: &Value| v.as_f64().or_else(|| v.as_str()?.parse().ok());
-    let allowance = number(&limit["limit"]).filter(|n| n.is_finite() && *n > 0.0 && *n < 1e9)?;
-    let used = number(&limit["used"]).filter(|n| n.is_finite() && *n >= 0.0 && *n < 1e9)?;
-    let resets = limit["resetsAt"].as_u64()?;
-    let resets_at_ms = resets.checked_mul(1000)?;
-    (resets_at_ms > now_ms).then_some(CodexUsage {
+    let allowance = number(&limit["limit"])
+        .filter(|n| n.is_finite() && *n >= 1.0 && *n < 1e9)
+        .ok_or(CodexUsageError)?;
+    let used = number(&limit["used"])
+        .filter(|n| n.is_finite() && *n >= 0.0 && *n < 1e9)
+        .ok_or(CodexUsageError)?;
+    let resets = limit["resetsAt"].as_u64().ok_or(CodexUsageError)?;
+    let resets_at_ms = resets.checked_mul(1000).ok_or(CodexUsageError)?;
+    if resets_at_ms <= now_ms {
+        return Err(CodexUsageError);
+    }
+    Ok(Some(CodexUsage {
         used: used.round() as u64,
         limit: allowance.round() as u64,
         resets_at_ms,
         recorded_ms: now_ms,
-    })
+    }))
 }
 
-pub async fn fetch_codex_usage() -> Option<CodexUsage> {
+fn codex_account(response: &Value) -> Result<bool, CodexUsageError> {
+    let account = response["result"].get("account").ok_or(CodexUsageError)?;
+    if account.is_null() {
+        Ok(false)
+    } else {
+        account.as_object().map(|_| true).ok_or(CodexUsageError)
+    }
+}
+
+pub async fn fetch_codex_usage() -> Result<Option<CodexUsage>, CodexUsageError> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .into_iter()
         .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
@@ -196,7 +233,8 @@ pub async fn fetch_codex_usage() -> Option<CodexUsage> {
     let bin = dirs
         .into_iter()
         .map(|dir| dir.join("codex"))
-        .find(|path| path.is_file())?;
+        .find(|path| path.is_file())
+        .ok_or(CodexUsageError)?;
     let mut child = tokio::process::Command::new(bin)
         .arg("app-server")
         .stdin(Stdio::piped())
@@ -204,39 +242,54 @@ pub async fn fetch_codex_usage() -> Option<CodexUsage> {
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .ok()?;
-    let mut stdin = child.stdin.take()?;
+        .map_err(|_| CodexUsageError)?;
+    let mut stdin = child.stdin.take().ok_or(CodexUsageError)?;
     stdin
         .write_all(b"{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"collie\",\"version\":\"0.1\"}}}\n")
         .await
-        .ok()?;
-    stdin.flush().await.ok()?;
-    let stdout = child.stdout.take()?;
+        .map_err(|_| CodexUsageError)?;
+    stdin.flush().await.map_err(|_| CodexUsageError)?;
+    let stdout = child.stdout.take().ok_or(CodexUsageError)?;
     let mut lines = BufReader::new(stdout).lines();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
-            let line = lines.next_line().await.ok()??;
-            let response: Value = serde_json::from_str(&line).ok()?;
+            let line = lines.next_line().await.map_err(|_| CodexUsageError)?.ok_or(CodexUsageError)?;
+            let response: Value = serde_json::from_str(&line).map_err(|_| CodexUsageError)?;
             if response["id"] == 1 {
-                response["result"].as_object()?;
+                response["result"].as_object().ok_or(CodexUsageError)?;
                 break;
             }
         }
         stdin
-            .write_all(b"{\"method\":\"initialized\",\"params\":{}}\n{\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}\n")
+            .write_all(b"{\"method\":\"initialized\",\"params\":{}}\n{\"id\":2,\"method\":\"account/read\",\"params\":{}}\n")
             .await
-            .ok()?;
-        stdin.flush().await.ok()?;
-        while let Some(line) = lines.next_line().await.ok()? {
-            let response: Value = serde_json::from_str(&line).ok()?;
+            .map_err(|_| CodexUsageError)?;
+        stdin.flush().await.map_err(|_| CodexUsageError)?;
+        loop {
+            let line = lines.next_line().await.map_err(|_| CodexUsageError)?.ok_or(CodexUsageError)?;
+            let response: Value = serde_json::from_str(&line).map_err(|_| CodexUsageError)?;
             if response["id"] == 2 {
+                if !codex_account(&response)? {
+                    return Ok(None);
+                }
+                break;
+            }
+        }
+        stdin
+            .write_all(b"{\"id\":3,\"method\":\"account/rateLimits/read\",\"params\":{}}\n")
+            .await
+            .map_err(|_| CodexUsageError)?;
+        stdin.flush().await.map_err(|_| CodexUsageError)?;
+        loop {
+            let line = lines.next_line().await.map_err(|_| CodexUsageError)?.ok_or(CodexUsageError)?;
+            let response: Value = serde_json::from_str(&line).map_err(|_| CodexUsageError)?;
+            if response["id"] == 3 {
                 return parse_codex_usage(line.as_bytes(), crate::now_ms());
             }
         }
-        None
     })
     .await
-    .ok()?
+    .map_err(|_| CodexUsageError)?
 }
 
 fn merge_window(
@@ -411,10 +464,10 @@ mod tests {
         let (_dir, data) = data();
         record(&data, INPUT.as_bytes(), 1_000).unwrap();
         let response = br#"{"id":2,"result":{"rateLimits":{"primary":null,"secondary":null,"individualLimit":{"limit":"10000","used":"1531.7076","remainingPercent":85,"resetsAt":1793491200}}}}"#;
-        let codex = parse_codex_usage(response, 1_000).unwrap();
+        let codex = parse_codex_usage(response, 1_000).unwrap().unwrap();
         assert_eq!(codex.used, 1532);
         assert_eq!(codex.limit, 10_000);
-        record_codex(&data, codex.clone()).unwrap();
+        record_codex(&data, Some(codex.clone())).unwrap();
         let mut usage = Usage::new(data.join(USAGE_FILE));
         usage.refresh();
         let plan = usage.plan().unwrap();
@@ -425,8 +478,42 @@ mod tests {
                 br#"{"id":2,"result":{"rateLimits":{"individualLimit":null}}}"#,
                 1_000
             )
+            .unwrap()
             .is_none()
         );
+        assert!(parse_codex_usage(br#"{"id":2,"error":{"message":"offline"}}"#, 1_000).is_err());
+        record_codex(&data, None).unwrap();
+        usage.refresh();
+        assert!(usage.plan().unwrap().codex.is_none());
+        assert_eq!(usage.plan().unwrap().five_hour.unwrap().used_percent, 24);
+    }
+
+    #[test]
+    fn codex_only_usage_clears_after_sign_out() {
+        let (_dir, data) = data();
+        let response: Value =
+            serde_json::from_str(r#"{"id":2,"result":{"account":null}}"#).unwrap();
+        assert_eq!(codex_account(&response), Ok(false));
+        let failed: Value =
+            serde_json::from_str(r#"{"id":2,"error":{"message":"offline"}}"#).unwrap();
+        assert!(codex_account(&failed).is_err());
+        record_codex(
+            &data,
+            Some(CodexUsage {
+                used: 100,
+                limit: 1000,
+                resets_at_ms: 1_000_000,
+                recorded_ms: 10,
+            }),
+        )
+        .unwrap();
+        let mut usage = Usage::new(data.join(USAGE_FILE));
+        usage.refresh();
+        assert!(usage.plan_moved());
+        assert!(usage.plan().is_some());
+        record_codex(&data, None).unwrap();
+        assert!(usage.plan_moved());
+        assert!(usage.plan().is_none());
     }
 
     #[test]

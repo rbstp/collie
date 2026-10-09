@@ -606,7 +606,7 @@ async fn codex_usage(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if let Some(usage) = crate::usage::fetch_codex_usage().await {
+                if let Ok(usage) = crate::usage::fetch_codex_usage().await {
                     let _ = crate::usage::record_codex(&state.cfg.data_dir, usage);
                 }
             }
@@ -2026,7 +2026,11 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                 // Checked with no phone too, so a phone that connects later is not sent a
                 // change its snapshot holds.
                 if let Some(plan_usage) = transcripts.plan_moved().filter(|_| phones) {
-                    let _ = state.events.send(Event::PlanUsage { plan_usage });
+                    let event = match plan_usage {
+                        Some(plan_usage) => Event::PlanUsage { plan_usage },
+                        None => Event::FlockChanged {},
+                    };
+                    let _ = state.events.send(event);
                 }
                 if !changed.is_empty() {
                     transcripts.retain(&agents);

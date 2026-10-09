@@ -816,6 +816,30 @@ mod tests {
     }
 
     #[test]
+    fn codex_plan_removal_reaches_the_next_snapshot() {
+        let mut s = FlockState::default();
+        let mut with_codex = flock(1, vec![]);
+        with_codex.plan_usage = Some(protocol::PlanUsage {
+            five_hour: None,
+            seven_day: None,
+            recorded_ms: 0,
+            codex: Some(protocol::CodexUsage {
+                used: 100,
+                limit: 1_000,
+                resets_at_ms: 10_000,
+                recorded_ms: 20,
+            }),
+        });
+        s.apply_snapshot(with_codex);
+        assert_eq!(
+            s.apply_event(2, Event::FlockChanged {}),
+            EventOutcome::NeedsSnapshot
+        );
+        s.apply_snapshot(flock(2, vec![]));
+        assert!(s.flock.as_ref().unwrap().plan_usage.is_none());
+    }
+
+    #[test]
     fn new_connection_resets_cursor_but_keeps_flock() {
         let mut s = FlockState::default();
         s.apply_snapshot(flock(40, vec![agent("t1", AgentStatus::Idle)]));

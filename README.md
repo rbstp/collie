@@ -47,7 +47,7 @@ Design details and limits are in [docs/architecture.md](docs/architecture.md).
 - **Grid**: live previews of each agent. Claude Code, Codex and Copilot CLI cards keep the agent's output and drop its input box and status lines; a blocked agent's card shows its whole screen. Long-press a card to star it: starred cards lead their machine's section at twice the height. Stars are kept on the machine until the pane closes or the machine is removed.
 - **Inbox**: agents grouped as Working, Done and Archived, each with its latest reply line, your last prompt, the workspace, the agent kind, the machine and how long ago.
 - **Remaining context**: a small ring shows how much context a Claude Code or Codex agent has left, read from its transcript on the machine.
-- **Plan usage**: the Usage view (the Agents | Usage switch, or swipe left) shows one card per machine. Claude Code shows its 5-hour and weekly limits from the status line tap ([step 7](#getting-started)). Codex shows the monthly used and allowed credits and reset date for a credit-metered workspace, read through the local Codex app-server every five minutes.
+- **Plan usage**: the Usage view (the Agents | Usage switch, or swipe left) shows one card per machine. Claude Code shows its 5-hour and weekly limits from the status line tap ([step 7](#getting-started)). Codex shows the monthly used and allowed credits and reset date for a credit-metered workspace, read through the local Codex app-server every five minutes. The Codex row clears after sign-out or a switch to an account without a monthly limit.
 
 ### Terminal and input
 
