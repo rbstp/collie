@@ -70,8 +70,8 @@ impl Transcripts {
     }
 
     /// For the reconcile tick: one fstat, the recorded plan when it changed since it last said so.
-    pub fn plan_moved(&mut self) -> Option<protocol::PlanUsage> {
-        self.usage.plan_moved().then(|| self.usage.plan()).flatten()
+    pub fn plan_moved(&mut self) -> Option<Option<protocol::PlanUsage>> {
+        self.usage.plan_moved().then(|| self.usage.plan())
     }
 
     pub fn plan(&mut self) -> Option<protocol::PlanUsage> {
@@ -713,13 +713,33 @@ mod tests {
         );
         crate::usage::record(&data, input.as_bytes(), 7).unwrap();
         assert_eq!(t.derive(&a, false).unwrap().context_left, Some(72));
-        let plan = t.plan_moved().unwrap();
+        let plan = t.plan_moved().unwrap().unwrap();
         assert_eq!(plan.recorded_ms, 7);
         assert_eq!(plan.five_hour.as_ref().unwrap().used_percent, 24);
         assert_eq!((t.plan_moved(), t.plan()), (None, Some(plan)));
 
         let c = agent("codex", CODEX_ID, "/Users/me/src/collie");
         assert_eq!(t.derive(&c, false), None);
+    }
+
+    #[test]
+    fn codex_only_plan_reports_its_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("collie");
+        let mut t = roots(dir.path()).with_usage(data.join(crate::usage::USAGE_FILE));
+        crate::usage::record_codex(
+            &data,
+            Some(protocol::CodexUsage {
+                used: 100,
+                limit: 1_000,
+                resets_at_ms: 1_000_000,
+                recorded_ms: 10,
+            }),
+        )
+        .unwrap();
+        assert!(t.plan_moved().unwrap().is_some());
+        crate::usage::record_codex(&data, None).unwrap();
+        assert_eq!(t.plan_moved(), Some(None));
     }
 
     #[test]

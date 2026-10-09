@@ -343,6 +343,37 @@
         }
       ]
     },
+    "CodexUsage": {
+      "properties": {
+        "limit": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recorded_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resets_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "used": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "used",
+        "limit",
+        "resets_at_ms",
+        "recorded_ms"
+      ],
+      "type": "object"
+    },
     "Cwd": {
       "maxLength": 1024,
       "pattern": "^/",
@@ -771,6 +802,16 @@
     "PlanUsage": {
       "description": "From Claude Code's status line input, as `collied statusline` last recorded it.",
       "properties": {
+        "codex": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodexUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "five_hour": {
           "anyOf": [
             {

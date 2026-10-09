@@ -142,6 +142,15 @@ fn check_usage(data_dir: &Path, now_ms: u64) -> (Status, String) {
         );
     };
     let sessions = recorded.windows.len();
+    if recorded.plan.is_none()
+        && let Some(codex) = recorded.codex
+    {
+        let minutes = now_ms.saturating_sub(codex.recorded_ms) / 60_000;
+        return (
+            Status::Ok,
+            format!("Codex monthly limit recorded {minutes} min ago"),
+        );
+    }
     match recorded.plan {
         Some(plan) => {
             let minutes = now_ms.saturating_sub(plan.recorded_ms) / 60_000;

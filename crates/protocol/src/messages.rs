@@ -834,6 +834,16 @@ pub struct PlanUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seven_day: Option<UsageWindow>,
     pub recorded_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex: Option<CodexUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CodexUsage {
+    pub used: u64,
+    pub limit: u64,
+    pub resets_at_ms: u64,
+    pub recorded_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1581,6 +1591,7 @@ mod tests {
             }),
             seven_day: None,
             recorded_ms: 1_738_420_000_000,
+            codex: None,
         };
         let with = Flock {
             plan_usage: Some(usage.clone()),

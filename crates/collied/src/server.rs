@@ -588,6 +588,7 @@ pub async fn start_with(
         tokio::spawn(accept_loop(listener, state.clone(), rx.clone(), dead_tx)),
         tokio::spawn(control::serve(control, state.clone(), rx.clone())),
         tokio::spawn(upkeep(state.attachments.clone(), rx.clone())),
+        tokio::spawn(codex_usage(state.clone(), rx.clone())),
         tokio::spawn(reconcile(state.clone(), rx)),
     ];
     tracing::info!(host = %state.dns_name, port = state.cfg.port, "listening on the tailnet");
@@ -598,6 +599,20 @@ pub async fn start_with(
         listener_dead,
         _peers_lock: peers_lock,
     })
+}
+
+async fn codex_usage(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(300));
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Ok(usage) = crate::usage::fetch_codex_usage().await {
+                    let _ = crate::usage::record_codex(&state.cfg.data_dir, usage);
+                }
+            }
+            _ = shutdown.changed() => return,
+        }
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -2011,7 +2026,11 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                 // Checked with no phone too, so a phone that connects later is not sent a
                 // change its snapshot holds.
                 if let Some(plan_usage) = transcripts.plan_moved().filter(|_| phones) {
-                    let _ = state.events.send(Event::PlanUsage { plan_usage });
+                    let event = match plan_usage {
+                        Some(plan_usage) => Event::PlanUsage { plan_usage },
+                        None => Event::FlockChanged {},
+                    };
+                    let _ = state.events.send(event);
                 }
                 if !changed.is_empty() {
                     transcripts.retain(&agents);
