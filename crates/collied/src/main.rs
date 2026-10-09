@@ -233,6 +233,8 @@ impl SetupHost<'_> {
                     return Some(s);
                 }
                 running = Some((since, s));
+            } else {
+                running = None;
             }
             if now >= deadline {
                 return running.map(|(_, s)| s);
