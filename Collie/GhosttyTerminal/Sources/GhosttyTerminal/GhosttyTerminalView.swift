@@ -195,6 +195,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
             height: CGFloat(frameData.rows) * m.height + 2 * m.inset
         )
         selection = selection?.clamped(to: frameData)
+        pinShortContent()
         if followsBottom { scrollToBottom() }
         setNeedsLayout()
         canvas.setNeedsDisplay()
@@ -202,7 +203,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
 
     public override func layoutSubviews() {
         super.layoutSubviews()
-        if bounds.size != laidOutSize {
+        if pinShortContent() || bounds.size != laidOutSize {
             laidOutSize = bounds.size
             if followsBottom { scrollToBottom() }
             if wraps && wrapColumns != renderedColumns { render() }
@@ -448,6 +449,16 @@ public final class GhosttyTerminalUIView: UIScrollView {
             UIApplication.shared.open(shownLink)
         }
         selection = nil
+    }
+
+    @discardableResult
+    private func pinShortContent() -> Bool {
+        guard refreshControl?.isRefreshing != true else { return false }
+        let others = adjustedContentInset.top - contentInset.top + adjustedContentInset.bottom
+        let gap = max(0, bounds.height - others - contentSize.height)
+        guard abs(gap - contentInset.top) > 0.5 else { return false }
+        contentInset.top = gap
+        return true
     }
 
     private func scrollToBottom() {
