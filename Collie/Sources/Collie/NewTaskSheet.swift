@@ -14,6 +14,8 @@ struct NewTaskSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
+    private var expandedPrompt: Bool { editingPrompt || model.dictation.isActive || !model.attachments.isEmpty }
+
     init(
         core: any AgentCore, machines: [Machine], preferredMachineId: String?,
         onStarted: @escaping (AgentRoute) -> Void
@@ -129,9 +131,6 @@ struct NewTaskSheet: View {
                     if let problem = model.dictation.problem {
                         DictationProblemRow(problem: problem)
                     }
-                    if model.dictation.isActive {
-                        DictationBar(dictation: model.dictation)
-                    }
                     if !model.attachments.isEmpty {
                         ScrollView(.horizontal) {
                             HStack(spacing: 8) {
@@ -142,25 +141,55 @@ struct NewTaskSheet: View {
                         }
                         .scrollIndicators(.hidden)
                     }
-                    TextField("What should the agent do?", text: $model.prompt, axis: .vertical)
-                        .lineLimit(1...5)
-                        .focused($editingPrompt)
-                        .disabled(model.dictation.isActive)
-                    HStack {
-                        Menu {
-                            Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
-                            Button("Files", systemImage: "folder") { pickingFile = true }
-                        } label: {
-                            Image(systemName: "paperclip")
-                                .font(.system(size: 20))
-                                .frame(width: 32, height: 36)
+                    PromptInputLayout(expanded: expandedPrompt, showsStatus: model.dictation.isActive) {
+                        ZStack {
+                            Menu {
+                                Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
+                                Button("Files", systemImage: "folder") { pickingFile = true }
+                            } label: {
+                                Image(systemName: "paperclip")
+                                    .font(.system(size: 20))
+                                    .frame(width: 32, height: 36)
+                            }
+                            .disabled(model.upload != nil || model.attachmentSlots <= 0 || model.phase != .editing)
+                            .accessibilityLabel("Attach")
                         }
-                        .disabled(model.upload != nil || model.attachmentSlots <= 0 || model.phase != .editing)
-                        .accessibilityLabel("Attach")
-                        Spacer()
-                        DictationButton(dictation: model.dictation, disabled: model.phase != .editing) {
-                            editingPrompt = false
-                            model.startDictation()
+                        HStack(alignment: .bottom, spacing: 8) {
+                            TextField("What should the agent do?", text: $model.prompt, axis: .vertical)
+                                .lineLimit(expandedPrompt ? 1...3 : 1...1)
+                                .focused($editingPrompt)
+                                .disabled(model.dictation.isActive)
+                            if expandedPrompt && !model.prompt.isEmpty {
+                                Button {
+                                    model.prompt = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 36, height: 36)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(model.dictation.isActive || model.phase != .editing)
+                                .accessibilityLabel("Clear text")
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
+                        ZStack {
+                            if model.dictation.isActive {
+                                DictationBar(dictation: model.dictation)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                        HStack {
+                            if !model.dictation.isActive {
+                                DictationButton(dictation: model.dictation, disabled: model.phase != .editing) {
+                                    editingPrompt = false
+                                    model.startDictation()
+                                }
+                            }
                         }
                     }
                 }
