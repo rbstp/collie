@@ -119,6 +119,16 @@ pub fn state(
         .modified()?
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
+    if let Some(theirs) = on_disk.as_deref().and_then(installed_config) {
+        anyhow::ensure!(
+            config
+                .as_deref()
+                .map(|c| xml_escape(&c.display().to_string()))
+                .as_ref()
+                == Some(&theirs),
+            "the service runs with --config {theirs}: run collied --config {theirs} setup"
+        );
+    }
     let loaded = loaded(&format!("{}/{LABEL}", domain()))?;
     Ok(decide(
         on_disk.as_deref(),
@@ -127,6 +137,17 @@ pub fn state(
         started_ms,
         built_ms,
     ))
+}
+
+/// The `--config` argument of a plist written by `plist`, still XML escaped.
+fn installed_config(plist: &str) -> Option<String> {
+    let mut lines = plist.lines().map(str::trim);
+    lines.find(|l| *l == "<string>--config</string>")?;
+    let arg = lines
+        .next()?
+        .strip_prefix("<string>")?
+        .strip_suffix("</string>")?;
+    Some(arg.to_owned())
 }
 
 fn decide(
@@ -138,9 +159,9 @@ fn decide(
 ) -> State {
     match (on_disk, started_ms) {
         (None, _) => State::Missing,
+        _ if !loaded => State::Stopped,
         (Some(p), _) if p != want => State::Outdated("the service runs another binary or config"),
-        _ if !loaded => State::Outdated("the service is stopped"),
-        (_, None) => State::Outdated("the daemon is not answering"),
+        (_, None) => State::Outdated("the daemon is not answering or is older than this collied"),
         (_, Some(started)) if started < built_ms => {
             State::Outdated("a newer collied binary is installed")
         }
@@ -209,6 +230,15 @@ pub fn stop() -> anyhow::Result<()> {
             "already stopped"
         }
     );
+    Ok(())
+}
+
+/// Unloads the agent without disabling it, so it still comes back at the next login.
+pub fn unload() -> anyhow::Result<()> {
+    let target = format!("{}/{LABEL}", domain());
+    if loaded(&target)? {
+        bootout(&target)?;
+    }
     Ok(())
 }
 
@@ -281,18 +311,27 @@ mod tests {
             decide(Some("other"), want, true, Some(9), 5),
             State::Outdated(_)
         ));
-        assert_eq!(
-            decide(Some(want), want, false, None, 5),
-            State::Outdated("the service is stopped")
-        );
+        assert_eq!(decide(Some("other"), want, false, None, 5), State::Stopped);
+        assert_eq!(decide(Some(want), want, false, None, 5), State::Stopped);
         assert_eq!(
             decide(Some(want), want, true, None, 5),
-            State::Outdated("the daemon is not answering")
+            State::Outdated("the daemon is not answering or is older than this collied")
         );
         assert_eq!(
             decide(Some(want), want, true, Some(4), 5),
             State::Outdated("a newer collied binary is installed")
         );
         assert_eq!(decide(Some(want), want, true, Some(5), 5), State::Current);
+    }
+
+    #[test]
+    fn reads_the_installed_config() {
+        let exe = Path::new("/u/.cargo/bin/collied");
+        let data = Path::new("/u/data");
+        assert_eq!(installed_config(&plist(exe, None, data)), None);
+        assert_eq!(
+            installed_config(&plist(exe, Some(Path::new("/u/a&b.toml")), data)).as_deref(),
+            Some("/u/a&amp;b.toml")
+        );
     }
 }

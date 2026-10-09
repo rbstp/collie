@@ -209,10 +209,8 @@ fn pair_error(e: ConnectError, port: u16) -> CoreError {
                 "not reachable ({why}): the machine may be off or asleep, collied may not be running, or the policy may not allow TCP {port}"
             ),
         },
-        ConnectError::Session(SessionError::Refused(code @ (401 | 403))) => CoreError::Rejected {
-            message: format!(
-                "HTTP {code}, no pairing window is open for this phone: run collied pair on the machine and scan its new code"
-            ),
+        ConnectError::Session(SessionError::Refused(403)) => CoreError::Rejected {
+            message: "HTTP 403, the machine refused this phone: run collied pair on the machine and scan its new code, and check that this phone is signed in to Tailscale as the machine's owner".to_owned(),
         },
         other => other.into(),
     }
@@ -2662,7 +2660,7 @@ mod tests {
         ));
         assert!(matches!(
             pair_error(SessionError::Refused(403).into(), 8457),
-            CoreError::Rejected { message } if message.contains("collied pair") && message.contains("403")
+            CoreError::Rejected { message } if message.contains("collied pair") && message.contains("owner")
         ));
         assert!(matches!(
             pair_error(SessionError::Refused(500).into(), 8457),

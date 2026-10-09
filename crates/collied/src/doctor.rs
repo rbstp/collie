@@ -480,7 +480,7 @@ async fn check_daemon(r: &mut Report, data_dir: &Path) {
         Some(n) => r.line(
             Status::Ok,
             "reach",
-            format!("{n} device(s) of yours can reach this node"),
+            format!("{n} untagged device(s) can reach this node"),
         ),
         None => {}
     }

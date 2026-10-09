@@ -168,11 +168,20 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
             );
             #[cfg(target_os = "macos")]
             {
-                doctor::signed_as_collied().map_err(|e| {
-                    anyhow::anyhow!(
-                        "{e}: run `just collied-install`, then ~/.cargo/bin/collied setup"
-                    )
-                })?;
+                // The service runs this path: only the copy `just collied-install` signs
+                // stays signed after the next cargo build.
+                let installed = config::home_dir()?.join(".cargo/bin/collied");
+                let exe = std::env::current_exe()?.canonicalize()?;
+                doctor::signed_as_collied()
+                    .and_then(|()| match installed.canonicalize() {
+                        Ok(p) if p == exe => Ok(()),
+                        _ => Err(format!("{} is not {}", exe.display(), installed.display())),
+                    })
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "{e}: run `just collied-install`, then ~/.cargo/bin/collied setup"
+                        )
+                    })?;
                 let mut host = SetupHost {
                     config: cli.config.as_deref(),
                     data_dir: &data_dir,
@@ -215,6 +224,25 @@ struct SetupHost<'a> {
 }
 
 #[cfg(target_os = "macos")]
+impl SetupHost<'_> {
+    async fn running_within(&mut self, secs: u64) -> Option<control::StatusInfo> {
+        use collied::setup::Host;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        loop {
+            if let Some(s) = self.status().await
+                && s.backend_state == "Running"
+            {
+                return Some(s);
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
 impl collied::setup::Host for SetupHost<'_> {
     async fn status(&mut self) -> Option<control::StatusInfo> {
         match control::request(self.control_path, &Request::Status).await {
@@ -232,36 +260,36 @@ impl collied::setup::Host for SetupHost<'_> {
         daemon::login(self.data_dir, &config, self.auth_key.take()).await
     }
 
-    fn stop_service(&mut self) -> anyhow::Result<()> {
-        service::stop()
+    fn unload_service(&mut self) -> anyhow::Result<()> {
+        service::unload()
+    }
+
+    fn start_service(&mut self) -> anyhow::Result<()> {
+        service::start()
     }
 
     fn install_service(&mut self) -> anyhow::Result<()> {
         service::install(self.config, self.data_dir)
     }
 
+    async fn settle(&mut self) -> Option<control::StatusInfo> {
+        self.running_within(20).await
+    }
+
     async fn wait_daemon(&mut self) -> anyhow::Result<control::StatusInfo> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        loop {
-            if let Some(s) = self.status().await
-                && s.backend_state == "Running"
-            {
-                return Ok(s);
-            }
-            if std::time::Instant::now() >= deadline {
-                let log = self.data_dir.join(service::STDERR_LOG);
-                let text = std::fs::read_to_string(&log).unwrap_or_default();
-                let lines: Vec<&str> = text.lines().collect();
-                for line in &lines[lines.len().saturating_sub(20)..] {
-                    println!("  {line}");
-                }
-                anyhow::bail!(
-                    "collied did not start within 60 s; the end of {} is above",
-                    log.display()
-                );
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if let Some(s) = self.running_within(60).await {
+            return Ok(s);
         }
+        let log = self.data_dir.join(service::STDERR_LOG);
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        for line in &lines[lines.len().saturating_sub(20)..] {
+            println!("  {line}");
+        }
+        anyhow::bail!(
+            "collied did not start within 60 s; the end of {} is above",
+            log.display()
+        );
     }
 
     async fn doctor(&mut self) -> anyhow::Result<bool> {

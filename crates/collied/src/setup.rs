@@ -14,8 +14,11 @@ pub trait Host {
     async fn status(&mut self) -> Option<StatusInfo>;
     fn service(&mut self, started_ms: Option<u64>) -> anyhow::Result<State>;
     async fn login(&mut self) -> anyhow::Result<()>;
-    fn stop_service(&mut self) -> anyhow::Result<()>;
+    fn unload_service(&mut self) -> anyhow::Result<()>;
+    fn start_service(&mut self) -> anyhow::Result<()>;
     fn install_service(&mut self) -> anyhow::Result<()>;
+    /// Up to 20 s for a daemon that is starting, for example after `just collied-install`.
+    async fn settle(&mut self) -> Option<StatusInfo>;
     async fn wait_daemon(&mut self) -> anyhow::Result<StatusInfo>;
     async fn doctor(&mut self) -> anyhow::Result<bool>;
     fn apns_configured(&mut self) -> anyhow::Result<bool>;
@@ -28,20 +31,32 @@ pub trait Host {
 /// Each step checks its own done state, so a rerun resumes where the last one stopped.
 /// Pairing still needs its own y/N on this machine: nothing here confirms a phone.
 pub async fn run(host: &mut impl Host) -> anyhow::Result<bool> {
+    let running = |s: &Option<StatusInfo>| s.as_ref().is_some_and(|s| s.backend_state == "Running");
     let mut status = host.status().await;
-    if status
-        .as_ref()
-        .is_some_and(|s| s.backend_state == "Running")
-    {
+    let mut loaded = false;
+    if !running(&status) {
+        loaded = !matches!(host.service(None)?, State::Missing | State::Stopped);
+        if loaded && status.is_none() {
+            status = host.settle().await;
+        }
+    }
+    if running(&status) {
         host.say("login: done");
     } else {
         // A crash-looping or logged-out daemon holds the node lock or the control socket.
-        if host.service(None)? != State::Missing {
-            host.say("service: stopping collied for the login; setup starts it again");
-            host.stop_service()?;
+        if loaded {
+            host.say("service: stopping collied for the login; setup starts it again (collied start if you cancel)");
+            host.unload_service()?;
         }
         host.say("login:");
-        host.login().await?;
+        if let Err(e) = host.login().await {
+            if loaded && let Err(s) = host.start_service() {
+                host.say(&format!(
+                    "could not start collied again ({s:#}): run collied start"
+                ));
+            }
+            return Err(e);
+        }
         status = None;
     }
 
@@ -51,12 +66,13 @@ pub async fn run(host: &mut impl Host) -> anyhow::Result<bool> {
             host.say("service: up to date");
             s
         }
-        (State::Missing, Some(_)) => anyhow::bail!(
+        (State::Missing | State::Stopped, Some(_)) => anyhow::bail!(
             "collied is running outside the service (collied run?): stop it, then run collied setup again"
         ),
         (state, _) => {
             host.say(&match state {
                 State::Outdated(why) => format!("service: {why}; installing it again"),
+                State::Stopped => "service: stopped; installing it again".to_owned(),
                 _ => "service: installing".to_owned(),
             });
             host.install_service()?;
@@ -202,6 +218,8 @@ mod tests {
         apns: bool,
         answers: Vec<bool>,
         said: String,
+        settled: Option<StatusInfo>,
+        login_fails: bool,
     }
 
     fn info(peers: usize, user_peers: Option<usize>) -> StatusInfo {
@@ -233,11 +251,20 @@ mod tests {
         }
         async fn login(&mut self) -> anyhow::Result<()> {
             self.log.push("login".into());
+            anyhow::ensure!(!self.login_fails, "login failed");
             Ok(())
         }
-        fn stop_service(&mut self) -> anyhow::Result<()> {
-            self.log.push("stop".into());
+        fn unload_service(&mut self) -> anyhow::Result<()> {
+            self.log.push("unload".into());
             Ok(())
+        }
+        fn start_service(&mut self) -> anyhow::Result<()> {
+            self.log.push("start".into());
+            Ok(())
+        }
+        async fn settle(&mut self) -> Option<StatusInfo> {
+            self.log.push("settle".into());
+            self.settled.clone()
         }
         fn install_service(&mut self) -> anyhow::Result<()> {
             self.log.push("install".into());
@@ -329,7 +356,7 @@ mod tests {
         let (_, f) = run_fake(Fake {
             service: vec![
                 State::Outdated("the daemon is not answering"),
-                State::Outdated("the service is stopped"),
+                State::Stopped,
             ],
             doctor: true,
             apns: true,
@@ -338,16 +365,69 @@ mod tests {
         })
         .await;
         assert_eq!(
-            f.log[..6],
+            f.log[..7],
             [
                 "status",
                 "service None",
-                "stop",
+                "settle",
+                "unload",
                 "login",
                 "service None",
                 "install"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn waits_for_a_restarting_daemon_instead_of_logging_in() {
+        let (r, f) = run_fake(Fake {
+            settled: Some(info(1, Some(1))),
+            service: vec![
+                State::Outdated("the daemon is not answering"),
+                State::Current,
+            ],
+            doctor: true,
+            apns: true,
+            answers: vec![false],
+            ..Fake::default()
+        })
+        .await;
+        assert!(r.unwrap());
+        assert_eq!(
+            f.log,
+            [
+                "status",
+                "service None",
+                "settle",
+                "service Some(1)",
+                "doctor",
+                "ask 1"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_login_starts_the_service_again() {
+        let (r, f) = run_fake(Fake {
+            service: vec![State::Outdated("the daemon is not answering")],
+            login_fails: true,
+            ..Fake::default()
+        })
+        .await;
+        assert!(r.is_err());
+        assert_eq!(f.log[3..], ["unload", "login", "start"]);
+    }
+
+    #[tokio::test]
+    async fn leaves_a_stopped_service_stopped_when_login_fails() {
+        let (r, f) = run_fake(Fake {
+            service: vec![State::Stopped],
+            login_fails: true,
+            ..Fake::default()
+        })
+        .await;
+        assert!(r.is_err());
+        assert_eq!(f.log, ["status", "service None", "login"]);
     }
 
     #[tokio::test]
@@ -409,14 +489,16 @@ mod tests {
 
     #[tokio::test]
     async fn refuses_a_daemon_outside_the_service() {
-        let (r, f) = run_fake(Fake {
-            status: Some(info(0, Some(1))),
-            service: vec![State::Missing],
-            ..Fake::default()
-        })
-        .await;
-        assert!(r.is_err());
-        assert!(!f.log.contains(&"install".to_owned()));
+        for service in [State::Missing, State::Stopped] {
+            let (r, f) = run_fake(Fake {
+                status: Some(info(0, Some(1))),
+                service: vec![service],
+                ..Fake::default()
+            })
+            .await;
+            assert!(r.is_err());
+            assert!(!f.log.contains(&"install".to_owned()));
+        }
     }
 
     #[test]

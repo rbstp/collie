@@ -85,7 +85,7 @@ pub async fn login(
         {
             println!("Tailscale login error: {e}");
             anyhow::ensure!(
-                !e.to_ascii_lowercase().contains("tag"),
+                !tag_error(e),
                 "your user may not own {NODE_TAG}. {}",
                 policy_help(port)
             );
@@ -126,6 +126,11 @@ fn check_tag(st: &Status, data_dir: &Path, port: u16) -> anyhow::Result<()> {
 
 fn login_error(health: &[String]) -> Option<&str> {
     health.iter().find_map(|h| h.strip_prefix(LOGIN_ERROR))
+}
+
+/// Tailscale's text: "requested tags [tag:collie-mac] are invalid or not permitted".
+fn tag_error(e: &str) -> bool {
+    e.contains(NODE_TAG) || e.to_ascii_lowercase().contains("tags")
 }
 
 /// The tailnet policy entries this machine needs.
@@ -258,5 +263,11 @@ mod tests {
             ])),
             Some("requested tags [tag:collie-mac] are invalid or not permitted")
         );
+        assert!(tag_error(&format!(
+            "requested tags [{NODE_TAG}] are invalid or not permitted"
+        )));
+        assert!(!tag_error(
+            "coordination server outage, try again at a later stage"
+        ));
     }
 }

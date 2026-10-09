@@ -60,7 +60,7 @@ pub struct StatusInfo {
     /// None when the daemon predates this field.
     #[serde(default)]
     pub started_ms: Option<u64>,
-    /// Untagged nodes in this node's netmap: the devices the policy lets reach it. None
+    /// Untagged nodes of any user in this node's netmap: the devices the policy lets reach it. None
     /// when the node status failed or the daemon predates this field.
     #[serde(default)]
     pub user_peers: Option<usize>,
