@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use collie_core::{AgentKey, CollieCore, CoreError, TaskOptions, TaskStarted, TerminalSource};
+use collie_core::{
+    AgentKey, CollieCore, CoreError, TaskFolders, TaskOptions, TaskStarted, TerminalSource,
+};
 use collied::config::TasksConfig;
 use collied::control::{Reply, Request};
 use collied::server::{self, ServerHandle};
@@ -87,6 +89,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     }
     std::os::unix::fs::symlink(&outside, projects.join("escape")).unwrap();
     let app_real = std::fs::canonicalize(&app).unwrap();
+    let projects_real = std::fs::canonicalize(&projects).unwrap();
     let outside_real = std::fs::canonicalize(&outside).unwrap();
 
     let herdr = Mock::start(&root.join("herdr.sock"), &app_real, &outside_real);
@@ -314,6 +317,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             agents: vec!["claude".into()],
             default_agent: "claude".into(),
             recent_cwds: vec![app_real.to_str().unwrap().into()],
+            roots: vec![projects_real.to_str().unwrap().into()],
         }
     );
     let before = herdr.mutations();
@@ -334,7 +338,14 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         (s(&app), "codex", "not allowed"),
     ] {
         let err = core
-            .task_new(m.clone(), cwd.clone(), agent.into(), "go".into(), None)
+            .task_new(
+                m.clone(),
+                cwd.clone(),
+                agent.into(),
+                "go".into(),
+                None,
+                None,
+            )
             .await
             .unwrap_err();
         assert!(
@@ -350,6 +361,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             "claude".into(),
             "Write the tests".into(),
             Some("app task".into()),
+            None,
         )
         .await
         .unwrap();
@@ -387,6 +399,72 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         )
     );
     println!("  task.new in {:?}", t.elapsed());
+
+    println!("task.folders lists names only, task.new creates one new folder");
+    assert_eq!(
+        core.task_folders(m.clone(), s(&projects)).await.unwrap(),
+        TaskFolders {
+            path: s(&projects_real),
+            folders: vec!["app".into()],
+            truncated: false,
+        }
+    );
+    let err = core.task_folders(m.clone(), s(&outside)).await.unwrap_err();
+    assert!(
+        matches!(&err, CoreError::InvalidInput { message, .. } if message.contains("outside the allowed roots")),
+        "{err:?}"
+    );
+    let before = herdr.mutations();
+    let fresh = projects_real.join("fresh");
+    let new_task = || {
+        core.task_new(
+            m.clone(),
+            s(&projects),
+            "claude".into(),
+            "Set it up".into(),
+            Some("fresh task".into()),
+            Some("fresh".into()),
+        )
+    };
+    assert_eq!(new_task().await.unwrap().terminal_id, NEW_TERMINAL);
+    assert_eq!(std::fs::read_dir(&fresh).unwrap().count(), 0);
+    assert_eq!(
+        herdr.mutation_calls()[before.len()],
+        (
+            "workspace.create".to_owned(),
+            json!({"cwd": s(&fresh), "label": "fresh task", "focus": false})
+        )
+    );
+    let err = new_task().await.unwrap_err();
+    assert!(
+        matches!(&err, CoreError::InvalidInput { message, .. } if message == "folder already exists"),
+        "{err:?}"
+    );
+    assert_eq!(herdr.mutations().len(), before.len() + 3);
+    let lines = audit_lines(&audit);
+    let audited: Vec<(&Value, &Value)> = lines
+        .iter()
+        .filter(|l| l["method"] == "task.folders" || l["method"] == "task.new")
+        .map(|l| (&l["target"], &l["result"]))
+        .collect();
+    assert_eq!(
+        audited[audited.len() - 4..],
+        [
+            (&json!(s(&projects)), &json!("ok folders=1")),
+            (
+                &json!(s(&outside)),
+                &json!("invalid_params: cwd is outside the allowed roots")
+            ),
+            (
+                &json!(format!("{} (created)", s(&fresh))),
+                &json!(format!("ok workspace=w9 terminal={NEW_TERMINAL}"))
+            ),
+            (
+                &json!(format!("{} new_folder=\"fresh\"", s(&projects))),
+                &json!("invalid_params: folder already exists")
+            ),
+        ]
+    );
 
     println!("a draft typed on the Mac is shown, then replaced, never appended to");
     let input_box =
@@ -524,6 +602,9 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             "workspace.create",
             "agent.start",
             "agent.prompt",
+            "workspace.create",
+            "agent.start",
+            "agent.prompt",
             "agent.send_keys",
             "agent.prompt",
             "agent.prompt",
@@ -633,7 +714,7 @@ async fn live_scenario(
     let s = |p: &Path| p.to_str().unwrap().to_owned();
     for cwd in [s(&work.join("escape")), "/tmp".into()] {
         let err = core
-            .task_new(m.clone(), cwd, "pi".into(), "go".into(), None)
+            .task_new(m.clone(), cwd, "pi".into(), "go".into(), None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, CoreError::InvalidInput { .. }), "{err:?}");
@@ -671,6 +752,7 @@ async fn live_scenario(
             "pi".into(),
             "hello from collie".into(),
             Some("e2e task".into()),
+            None,
         )
         .await
         .unwrap();

@@ -25,7 +25,10 @@ final class FakeCore: AgentCore {
         var hold = false
         var held: [CheckedContinuation<Void, Never>] = []
         var error: CoreError?
-        var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"])
+        var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"], roots: ["/Users/me"])
+        var folders = TaskFolders(path: "/Users/me/git", folders: ["app", "collie", "Cobalt", "docs"], truncated: false)
+        var folderPaths: [String] = []
+        var taskNews: [String] = []
         var started: TaskStarted?
         var uploads: [String] = []
         var cancelledUploads: [String] = []
@@ -193,8 +196,12 @@ final class FakeCore: AgentCore {
         try await call { _ in }
         return state.withLock { $0.options }
     }
-    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
-        try await call { _ in }
+    func taskFolders(machineId: String, path: String) async throws -> TaskFolders {
+        try await call { $0.folderPaths.append(path) }
+        return state.withLock { $0.folders }
+    }
+    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?) async throws -> TaskStarted {
+        try await call { $0.taskNews.append("\(cwd) \(newFolder ?? "-")") }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
@@ -895,6 +902,127 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     await first.value
     #expect(model.optionsError == nil)
     #expect(model.options?.defaultAgent == "codex")
+}
+
+private func prefsFile() throws -> URL {
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir.appending(path: "prefs.json")
+}
+
+@MainActor
+@Test func aNameInTheBaseFolderCompletesAndStartsThere() async throws {
+    let core = FakeCore()
+    core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let other = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "n2", kind: .linux, key: "")
+
+    #expect(try await DevicePrefs.setTaskBase("/Users/me/git/", machineId: "m1", core: core, in: file) == "/Users/me/git")
+    #expect(DevicePrefs.load(from: file).taskBases == ["m1": "/Users/me/git"])
+    core.set(error: .InvalidInput(field: nil, message: "cwd is outside the allowed roots"))
+    await #expect(throws: CoreError.self) {
+        try await DevicePrefs.setTaskBase("/etc", machineId: "m2", core: core, in: file)
+    }
+    #expect(DevicePrefs.load(from: file).taskBases == ["m1": "/Users/me/git"], "a refused folder is never kept")
+    core.set()
+
+    let model = NewTaskModel(core: core, machines: [mac, other], prefsFile: file)
+    await model.loadOptions()
+    #expect(model.base == "/Users/me/git")
+    #expect(model.folders?.folders.count == 4)
+    #expect(core.snapshot.folderPaths == ["/Users/me/git/", "/etc", "/Users/me/git"])
+    model.prompt = "add tests"
+    model.cwd = "co"
+    #expect(model.completions == ["collie", "Cobalt"])
+    #expect(model.folder == "/Users/me/git/co")
+    model.cwd = "collie"
+    #expect(model.completions.isEmpty)
+    #expect(model.canStart)
+    model.cwd = "/Users/me/app"
+    #expect(model.folder == "/Users/me/app")
+    model.cwd = "collie"
+    #expect(await model.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
+    #expect(core.snapshot.taskNews == ["/Users/me/git/collie -"])
+
+    let noBase = NewTaskModel(core: core, machines: [mac, other], preferredMachineId: "m2", prefsFile: file)
+    await noBase.loadOptions()
+    #expect(noBase.base == nil && noBase.folders == nil)
+    noBase.prompt = "add tests"
+    noBase.cwd = "collie"
+    #expect(noBase.folder == nil)
+    #expect(!noBase.canStart)
+    #expect(core.snapshot.folderPaths.count == 3, "no listing without a base folder")
+
+    DevicePrefs.forgetTaskBase(machineId: "m1", in: file)
+    #expect(DevicePrefs.load(from: file).taskBases.isEmpty)
+}
+
+@MainActor
+@Test func aNewFolderSendsItsParentAndName() async throws {
+    let core = FakeCore()
+    core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+
+    let model = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+    await model.loadOptions()
+    model.prompt = "set it up"
+    model.newFolder = true
+    #expect(model.newFolderParent == "/Users/me", "the first root without a base folder")
+    for bad in ["", ".hidden", "a/b", "  "] {
+        model.folderName = bad
+        #expect(!model.canStart, "\(bad)")
+    }
+    model.folderName = " fresh "
+    #expect(model.canStart)
+    #expect(await model.start() != nil)
+
+    core.state.withLock { $0.options.roots = ["/Users/me", "/Volumes/work"] }
+    let twoRoots = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+    await twoRoots.loadOptions()
+    twoRoots.prompt = "set it up"
+    twoRoots.newFolder = true
+    twoRoots.folderName = "other"
+    #expect(twoRoots.newFolderParent == "/Users/me")
+    twoRoots.newFolderRoot = "/Volumes/work"
+    #expect(await twoRoots.start() != nil)
+
+    DevicePrefs.update(in: file) { $0.taskBases["m1"] = "/Users/me/git" }
+    let based = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+    await based.loadOptions()
+    based.prompt = "set it up"
+    based.newFolder = true
+    based.folderName = "COLLIE"
+    #expect(await based.start() != nil)
+    #expect(core.snapshot.taskNews == ["/Users/me fresh", "/Volumes/work other", "/Users/me/git COLLIE"])
+
+    core.state.withLock { $0.started = nil }
+    let failed = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+    await failed.loadOptions()
+    failed.prompt = "set it up"
+    failed.newFolder = true
+    failed.folderName = "brand-new"
+    #expect(await failed.start() == nil)
+    #expect(failed.error != nil && failed.newFolder, "a name that was not created keeps New folder on")
+    failed.folderName = "collie"
+    #expect(await failed.start() == nil)
+    #expect(!failed.newFolder && failed.cwd == "/Users/me/git/collie", "the folder left in place is the next start's folder")
+    #expect(failed.canStart)
+}
+
+@MainActor
+@Test func prefsSavedBeforeTaskBasesStillLoad() throws {
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    try Data(#"{"wrapLines":false,"historyLines":500}"#.utf8).write(to: file)
+    let prefs = DevicePrefs.load(from: file)
+    #expect(prefs == DevicePrefs(wrapLines: false, historyLines: 500))
+    #expect(prefs.taskBases.isEmpty)
+    DevicePrefs.forgetTaskBase(machineId: "m1", in: file)
+    #expect(DevicePrefs.load(from: file) == prefs)
 }
 
 @MainActor

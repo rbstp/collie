@@ -149,6 +149,33 @@ fn attachment_name(s: &str) -> bool {
         && s != ".."
 }
 
+fn folder_name(s: &str) -> bool {
+    (1..=limits::MAX_FOLDER_NAME_BYTES).contains(&s.len())
+        && !s.starts_with('.')
+        && !s
+            .chars()
+            .any(|c| c.is_control() || is_format(c) || is_blank(c) || c == '/' || c == '\\')
+        && s.trim() == s
+}
+
+/// Default_Ignorable code points `is_format` leaves out, plus the braille blank: they
+/// render as nothing, so a name could look empty or like another folder's.
+fn is_blank(c: char) -> bool {
+    matches!(
+        c,
+        '\u{034F}'
+            | '\u{115F}'
+            | '\u{1160}'
+            | '\u{17B4}'
+            | '\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{2800}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FFA0}'
+    )
+}
+
 fn label(s: &str) -> bool {
     let n = s.chars().count();
     (1..=limits::MAX_LABEL_CHARS).contains(&n)
@@ -277,6 +304,15 @@ validated_string!(
     debug = plain,
     check = |s| s.starts_with('/') && s.len() <= limits::MAX_CWD_BYTES && !s.chars().any(char::is_control),
     schema = { "pattern": "^/", "maxLength": limits::MAX_CWD_BYTES }
+);
+
+validated_string!(
+    /// One plain, visible folder name: collied lists or creates it only directly inside a
+    /// folder it resolved under its task roots.
+    FolderName,
+    debug = plain,
+    check = folder_name,
+    schema = { "minLength": 1, "maxLength": limits::MAX_FOLDER_NAME_BYTES, "pattern": "^[^.]" }
 );
 
 validated_string!(
@@ -435,6 +471,39 @@ mod tests {
         let max = "a".repeat(limits::MAX_ATTACHMENT_NAME_CHARS);
         assert!(AttachmentName::new(max.clone()).is_ok());
         assert!(AttachmentName::new(max + "a").is_err());
+    }
+
+    #[test]
+    fn folder_names() {
+        for ok in ["collie", "My Project", "a.b", "été", "x-1_2"] {
+            assert!(FolderName::new(ok).is_ok(), "{ok:?}");
+        }
+        let long = "a".repeat(limits::MAX_FOLDER_NAME_BYTES + 1);
+        for bad in [
+            "",
+            ".",
+            "..",
+            ".git",
+            "a/b",
+            "a\\b",
+            "a\0b",
+            "a\nb",
+            "Icon\r",
+            " x",
+            "x ",
+            "evil\u{202E}gpj",
+            "x\u{200B}y",
+            "\u{3164}",
+            "collie\u{3164}",
+            "x\u{FE0F}",
+            "\u{2800}",
+            "x\u{034F}y",
+            long.as_str(),
+        ] {
+            assert!(FolderName::new(bad).is_err(), "{bad:?}");
+        }
+        assert!(FolderName::new("a".repeat(limits::MAX_FOLDER_NAME_BYTES)).is_ok());
+        assert!(FolderName::new("é".repeat(128)).is_err(), "256 bytes");
     }
 
     #[test]

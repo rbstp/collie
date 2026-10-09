@@ -19,12 +19,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
     ActivityId, AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStarParams, AgentTarget, AgentTypeTextParams, AgentWatchParams,
-    ApprovalId, Cwd, DraftText, Empty, ErrorCode, Key, Label, NoticeDigit, NotificationKey, OpId,
-    PairCompleteParams, PairingInvite, PaneCloseParams, PromptText, PushActivityEndParams,
-    PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams, ReadSource, Request,
-    Response, Signature, SlashCommand, TaskNewParams, TerminalGrantParams, TerminalId, TerminalKey,
-    TerminalRead, TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId,
-    limits,
+    ApprovalId, Cwd, DraftText, Empty, ErrorCode, FolderName, Key, Label, NoticeDigit,
+    NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
+    PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
+    ReadSource, Request, Response, Signature, SlashCommand, TaskFoldersParams, TaskNewParams,
+    TerminalGrantParams, TerminalId, TerminalKey, TerminalRead, TerminalRunParams,
+    TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -483,6 +483,14 @@ pub struct TaskOptions {
     pub agents: Vec<String>,
     pub default_agent: String,
     pub recent_cwds: Vec<String>,
+    pub roots: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TaskFolders {
+    pub path: String,
+    pub folders: Vec<String>,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -1373,6 +1381,34 @@ impl CollieCore {
                 agents: o.agents.into_iter().map(String::from).collect(),
                 default_agent: o.default_agent.into(),
                 recent_cwds: o.recent_cwds.into_iter().map(String::from).collect(),
+                roots: o.roots.into_iter().map(String::from).collect(),
+            }),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
+    pub async fn task_folders(
+        &self,
+        machine_id: String,
+        path: String,
+    ) -> Result<TaskFolders, CoreError> {
+        let request = Request::TaskFolders(TaskFoldersParams {
+            path: Cwd::new(path).map_err(|_| {
+                invalid(
+                    "path",
+                    "folder must be an absolute path of at most 1024 bytes",
+                )
+            })?,
+        });
+        match self.call(&machine_id, request, CALL_TIMEOUT).await? {
+            Response::TaskFolders {
+                path,
+                folders,
+                truncated,
+            } => Ok(TaskFolders {
+                path: path.into(),
+                folders: folders.into_iter().map(String::from).collect(),
+                truncated,
             }),
             other => Err(unexpected(&other).into()),
         }
@@ -1385,6 +1421,7 @@ impl CollieCore {
         agent: String,
         prompt: String,
         label: Option<String>,
+        new_folder: Option<String>,
     ) -> Result<TaskStarted, CoreError> {
         let label = label
             .map(|l| l.trim().to_owned())
@@ -1409,6 +1446,16 @@ impl CollieCore {
             agent: AgentKind::new(agent).map_err(|_| invalid("agent", "unknown agent kind"))?,
             prompt: prompt_text(prompt)?,
             label,
+            new_folder: new_folder
+                .map(|n| {
+                    FolderName::new(n).map_err(|_| {
+                        invalid(
+                            "new_folder",
+                            "folder name must be one plain name of at most 255 bytes, without / or \\, a leading dot, or control or invisible characters",
+                        )
+                    })
+                })
+                .transpose()?,
         });
         match self.mutate(&machine_id, request, TASK_NEW_TIMEOUT).await? {
             Response::TaskStarted {
@@ -3242,9 +3289,34 @@ mod tests {
                 agent.into(),
                 "go".into(),
                 label.map(Into::into),
+                None,
             ))
             .map(|_| ())
         };
+        for bad in ["", ".x", "..", "a/b", "a\u{202E}b", " a"] {
+            assert_eq!(
+                field(
+                    rt.block_on(core.task_new(
+                        m(),
+                        "/src".into(),
+                        "claude".into(),
+                        "go".into(),
+                        None,
+                        Some(bad.into()),
+                    ))
+                    .map(|_| ())
+                ),
+                Some("new_folder".into()),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(
+            field(
+                rt.block_on(core.task_folders(m(), "git".into()))
+                    .map(|_| ())
+            ),
+            Some("path".into())
+        );
         assert_eq!(field(task("src", "claude", None)), Some("cwd".into()));
         assert_eq!(field(task("/src", "Claude", None)), Some("agent".into()));
         assert_eq!(
@@ -3653,7 +3725,16 @@ mod tailnet_tests {
                                 agents: vec![AgentKind::new("claude").unwrap()],
                                 default_agent: AgentKind::new("claude").unwrap(),
                                 recent_cwds: vec![Cwd::new("/src/collie").unwrap()],
+                                roots: vec![Cwd::new("/src").unwrap()],
                             }))
+                        }
+                        Request::TaskFolders(p) => {
+                            assert_eq!(p.path.as_str(), "/src/");
+                            Ok(Response::TaskFolders {
+                                path: Cwd::new("/src").unwrap(),
+                                folders: vec![protocol::FolderName::new("collie").unwrap()],
+                                truncated: false,
+                            })
                         }
                         Request::TaskNew(p) => {
                             assert_eq!(
@@ -3661,6 +3742,7 @@ mod tailnet_tests {
                                 ("/src/collie", "claude", "add tests")
                             );
                             assert_eq!(p.label.unwrap().as_str(), "tests");
+                            assert_eq!(p.new_folder.unwrap().as_str(), "new app");
                             lock(&seen).task_ops.push(p.op_id.as_str().into());
                             Ok(Response::TaskStarted {
                                 workspace_id: WorkspaceId::new("w2").unwrap(),
@@ -4077,6 +4159,16 @@ mod tailnet_tests {
         let options = rt.block_on(core.task_options(id())).unwrap();
         assert_eq!(options.default_agent, "claude");
         assert_eq!(options.recent_cwds, vec!["/src/collie".to_owned()]);
+        assert_eq!(options.roots, vec!["/src".to_owned()]);
+        assert_eq!(
+            rt.block_on(core.task_folders(id(), "/src/".into()))
+                .unwrap(),
+            TaskFolders {
+                path: "/src".into(),
+                folders: vec!["collie".into()],
+                truncated: false,
+            }
+        );
         let started = rt
             .block_on(core.task_new(
                 id(),
@@ -4084,6 +4176,7 @@ mod tailnet_tests {
                 "claude".into(),
                 "add tests".into(),
                 Some(" tests ".into()),
+                Some("new app".into()),
             ))
             .unwrap();
         assert_eq!(

@@ -609,6 +609,12 @@
       ],
       "type": "object"
     },
+    "FolderName": {
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[^.]",
+      "type": "string"
+    },
     "HelloResult": {
       "properties": {
         "collied_version": {
@@ -888,6 +894,34 @@
           "type": "object"
         },
         {
+          "description": "The folders directly inside `path`, its canonical form, sorted; `truncated` when\nsome were left out.",
+          "properties": {
+            "folders": {
+              "items": {
+                "$ref": "#/$defs/FolderName"
+              },
+              "type": "array"
+            },
+            "path": {
+              "$ref": "#/$defs/Cwd"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "task_folders",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "folders",
+            "truncated"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "approvals": {
               "items": {
@@ -1067,12 +1101,19 @@
             "$ref": "#/$defs/Cwd"
           },
           "type": "array"
+        },
+        "roots": {
+          "items": {
+            "$ref": "#/$defs/Cwd"
+          },
+          "type": "array"
         }
       },
       "required": [
         "agents",
         "default_agent",
-        "recent_cwds"
+        "recent_cwds",
+        "roots"
       ],
       "type": "object"
     },

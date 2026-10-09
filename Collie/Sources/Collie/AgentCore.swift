@@ -18,7 +18,8 @@ protocol AgentCore: AnyObject, Sendable {
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws
     func closePane(machineId: String, terminalId: String, confirm: Bool) async throws
     func taskOptions(machineId: String) async throws -> TaskOptions
-    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted
+    func taskFolders(machineId: String, path: String) async throws -> TaskFolders
+    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?) async throws -> TaskStarted
     func flock(machineId: String) async throws -> MachineFlock
     func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String
     func maxAttachmentBytes() -> UInt64

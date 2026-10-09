@@ -20,7 +20,7 @@ private func object(_ data: Data) throws -> NSDictionary {
 
 @Test func prefsFileLoadsAndSavesTheSameJSON() throws {
     let json = #"""
-        {"wrapLines":false,"keepKeyboard":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"watchDecisions":true}
+        {"wrapLines":false,"keepKeyboard":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"watchDecisions":true,"taskBases":{"m1":"/Users/me/git"}}
         """#
     let file = try write(json, as: "prefs.json")
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
@@ -30,7 +30,8 @@ private func object(_ data: Data) throws -> NSDictionary {
             == DevicePrefs(
                 wrapLines: false, keepKeyboard: true,
                 gestures: TerminalGestures(doubleTap: .escape, tripleTap: .paste, pinchResizesText: false, swipeSwitchesAgents: true),
-                fontSize: 13, dictationLanguage: .french, agentsLayout: .inbox, historyLines: 500, watchDecisions: true
+                fontSize: 13, dictationLanguage: .french, agentsLayout: .inbox, historyLines: 500, watchDecisions: true,
+                taskBases: ["m1": "/Users/me/git"]
             )
     )
     prefs.save(to: file)
