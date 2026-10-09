@@ -17,12 +17,14 @@ struct FlockScreen: View {
     @State private var layout = DevicePrefs.load(from: DevicePrefs.file).agentsLayout
     @State private var showsUsage = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationStack(path: $path) {
-            VStack(spacing: 0) {
+            ZStack {
                 if showsUsage {
                     List { UsageSections(entries: model.entries) }
+                        .transition(page(from: .trailing))
                 } else {
                     switch layout {
                     case .grid:
@@ -35,10 +37,12 @@ struct FlockScreen: View {
                             guard let core, scenePhase == .active, !newTask else { return }
                             await previews.run(core: core)
                         }
+                        .transition(page(from: .leading))
                     case .inbox:
                         AgentInbox(
                             entries: model.entries, notice: model.closeNotice, reconnect: reconnect, follows: follows, menu: menu
                         )
+                        .transition(page(from: .leading))
                     case .list:
                         TimelineView(.periodic(from: .now, by: 60)) { context in
                             List {
@@ -97,9 +101,11 @@ struct FlockScreen: View {
                                 }
                             }
                         }
+                        .transition(page(from: .leading))
                     }
                 }
             }
+            .animation(.smooth(duration: 0.3), value: showsUsage)
             .highPriorityGesture(
                 DragGesture(minimumDistance: 30).onEnded { drag in
                     guard !tailnetStarting, let usage = ViewSwitch.target(after: drag.translation) else { return }
@@ -207,6 +213,10 @@ struct FlockScreen: View {
         .followNotice(follows)
     }
 
+    private func page(from edge: Edge) -> AnyTransition {
+        reduceMotion ? .opacity : .move(edge: edge)
+    }
+
     private func approvalsCount(_ entry: MachineFlockEntry) -> Int {
         approvals.map { $0.items.filter { $0.machine.id == entry.id }.count } ?? Int(entry.flock?.approvalsCount ?? 0)
     }
@@ -233,6 +243,7 @@ struct FlockScreen: View {
 struct ViewSwitch: View {
     @Binding var showsUsage: Bool
     @Namespace private var pill
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Whether a drag shows Usage (a swipe left) or Agents (a swipe right), or nil when it is not a horizontal swipe.
     nonisolated static func target(after translation: CGSize) -> Bool? {
@@ -241,14 +252,12 @@ struct ViewSwitch: View {
     }
 
     var body: some View {
-        GlassEffectContainer {
-            HStack(spacing: 0) {
-                segment("Agents", value: false)
-                segment("Usage", value: true)
-            }
-            .padding(3)
-            .glassEffect(.regular.interactive(), in: .capsule)
+        HStack(spacing: 0) {
+            segment("Agents", value: false)
+            segment("Usage", value: true)
         }
+        .padding(3)
+        .glassEffect(.regular.interactive(), in: .capsule)
         .animation(.smooth(duration: 0.3), value: showsUsage)
         .accessibilityRepresentation {
             Picker("View", selection: $showsUsage) {
@@ -265,14 +274,15 @@ struct ViewSwitch: View {
         } label: {
             Text(title)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(showsUsage == value ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                .foregroundStyle(showsUsage == value ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
                 .padding(.horizontal, 14)
-                .padding(.vertical, 6)
+                .frame(minHeight: 38)
                 .background {
                     if showsUsage == value {
-                        Color.clear
-                            .glassEffect(.regular.tint(.accentColor).interactive(), in: .capsule)
-                            .glassEffectID("pill", in: pill)
+                        // Darkens the glass as much as the tab bar's selection does.
+                        Capsule()
+                            .fill(.black.opacity(colorScheme == .dark ? 0.69 : 0.07))
+                            .matchedGeometryEffect(id: "pill", in: pill)
                     }
                 }
                 .contentShape(.capsule)
