@@ -382,6 +382,8 @@ private struct PromptBar: View {
     @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
 
+    private var expanded: Bool { editing || typingCommand || model.dictation.isActive || !model.attachments.isEmpty }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let error = model.promptError {
@@ -393,21 +395,20 @@ private struct PromptBar: View {
             if let problem = model.dictation.problem {
                 DictationProblemRow(problem: problem)
             }
-            if model.dictation.isActive {
-                DictationBar(dictation: model.dictation)
-            }
-            HStack(alignment: .bottom, spacing: 8) {
-                if !model.answering && !model.isTerminal {
-                    Menu {
-                        Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
-                        Button("Files", systemImage: "folder") { pickingFile = true }
-                    } label: {
-                        Image(systemName: "paperclip")
-                            .font(.system(size: 20))
-                            .frame(width: 32, height: 36)
+            PromptInputLayout(expanded: expanded, showsStatus: model.dictation.isActive) {
+                ZStack {
+                    if !model.answering && !model.isTerminal {
+                        Menu {
+                            Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
+                            Button("Files", systemImage: "folder") { pickingFile = true }
+                        } label: {
+                            Image(systemName: "paperclip")
+                                .font(.system(size: 20))
+                                .frame(width: 32, height: 36)
+                        }
+                        .disabled(model.upload != nil || model.attachmentSlots <= 0)
+                        .accessibilityLabel("Attach")
                     }
-                    .disabled(model.upload != nil || model.attachmentSlots <= 0)
-                    .accessibilityLabel("Attach")
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     if !model.attachments.isEmpty {
@@ -421,55 +422,83 @@ private struct PromptBar: View {
                         .disabled(model.sendingPrompt)
                         .scrollIndicators(.hidden)
                     }
-                    if model.isTerminal {
-                        CommandField(text: $model.draft, editing: $typingCommand) {
-                            Task { await model.sendPrompt() }
+                    HStack(alignment: .bottom, spacing: 8) {
+                        if model.isTerminal {
+                            CommandField(text: $model.draft, editing: $typingCommand) {
+                                Task { await model.sendPrompt() }
+                            }
+                        } else {
+                            TextField(
+                                model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: { model.typed($0) }),
+                                axis: .vertical
+                            )
+                                .lineLimit(expanded ? 1...3 : 1...1)
+                                .focused($editing)
+                                .disabled(model.dictation.isActive)
                         }
-                    } else {
-                        TextField(
-                            model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: { model.typed($0) }),
-                            axis: .vertical
-                        )
-                            .lineLimit(1...6)
-                            .focused($editing)
-                            .disabled(model.dictation.isActive)
+                        if expanded && !model.draft.isEmpty {
+                            Button {
+                                if model.isTerminal {
+                                    model.draft = ""
+                                } else {
+                                    model.typed("")
+                                }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 36, height: 36)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(model.dictation.isActive || model.sendingPrompt)
+                            .accessibilityLabel("Clear text")
+                        }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
-                if !model.isTerminal {
-                    DictationButton(dictation: model.dictation, disabled: model.sendingPrompt) {
-                        editing = false
-                        model.startDictation()
+                ZStack {
+                    if model.dictation.isActive {
+                        DictationBar(dictation: model.dictation)
+                            .frame(maxWidth: .infinity)
                     }
                 }
-                if editing || typingCommand {
+                HStack(spacing: 8) {
+                    if !model.isTerminal && !model.dictation.isActive {
+                        DictationButton(dictation: model.dictation, disabled: model.sendingPrompt) {
+                            editing = false
+                            model.startDictation()
+                        }
+                    }
+                    if editing || typingCommand {
+                        Button {
+                            editing = false
+                            typingCommand = false
+                        } label: {
+                            Image(systemName: "keyboard.chevron.compact.down")
+                                .font(.system(size: 20))
+                                .frame(width: 32, height: 36)
+                        }
+                        .accessibilityLabel("Hide keyboard")
+                    }
                     Button {
-                        editing = false
-                        typingCommand = false
+                        if !model.keepsKeyboard {
+                            editing = false
+                            typingCommand = false
+                        }
+                        Task { await model.sendPrompt() }
                     } label: {
-                        Image(systemName: "keyboard.chevron.compact.down")
-                            .font(.system(size: 20))
-                            .frame(width: 32, height: 36)
+                        if model.sendingPrompt {
+                            ProgressView().frame(width: 32, height: 32)
+                        } else {
+                            Image(systemName: "paperplane.circle.fill").font(.system(size: 32))
+                        }
                     }
-                    .accessibilityLabel("Hide keyboard")
+                    .disabled(!model.canSendPrompt)
+                    .accessibilityLabel(model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
                 }
-                Button {
-                    if !model.keepsKeyboard {
-                        editing = false
-                        typingCommand = false
-                    }
-                    Task { await model.sendPrompt() }
-                } label: {
-                    if model.sendingPrompt {
-                        ProgressView().frame(width: 32, height: 32)
-                    } else {
-                        Image(systemName: "paperplane.circle.fill").font(.system(size: 32))
-                    }
-                }
-                .disabled(!model.canSendPrompt)
-                .accessibilityLabel(model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
             }
         }
         .padding(.horizontal)
@@ -599,11 +628,21 @@ struct DictationBar: View {
         HStack(spacing: 8) {
             switch dictation.phase {
             case .preparing(let download?):
-                Text("Downloading speech model").font(.caption).lineLimit(1)
-                ProgressView(value: download).frame(width: 60)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        Text("Downloading speech model").font(.caption).fixedSize()
+                        ProgressView(value: download).frame(width: 60)
+                    }
+                    Text("Downloading…").font(.caption).lineLimit(1)
+                }
             case .listening:
-                Text("Dictating…").font(.caption.weight(.semibold))
-                LevelMeter(level: dictation.level)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        Text("Dictating…").font(.caption.weight(.semibold)).fixedSize()
+                        LevelMeter(level: dictation.level)
+                    }
+                    Text("Dictating…").font(.caption.weight(.semibold)).lineLimit(1)
+                }
             case .idle, .preparing(nil), .finishing:
                 ProgressView().controlSize(.mini)
                 Text(dictation.phase == .finishing ? "Finishing…" : "Starting…").font(.caption)
