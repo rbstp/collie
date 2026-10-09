@@ -2039,8 +2039,11 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         }
         state.approvals.observe(&agents, &workspaces).await;
         for a in lock(&state.turns).observe(&agents, crate::now_ms()) {
+            let Ok(terminal_id) = TerminalId::new(a.terminal_id.clone()) else {
+                continue;
+            };
             state.push.notify_done(push::done_alert(
-                &a.terminal_id,
+                &terminal_id,
                 &approvals::alert_title(a),
                 &approvals::workspace_label(&a.workspace_id, &workspaces),
                 &state.machine.node_id,

@@ -30,6 +30,7 @@ final class AppModel {
     let watch = WatchLink()
     var tab = AppTab.agents
     var openingAgent: AgentRoute?
+    @ObservationIgnored var viewingAgent: AgentRoute?
     private var backgroundedAt: Date?
     @ObservationIgnored private var activityDecisions: Set<String> = []
     @ObservationIgnored private var terminalKeySet = false
@@ -291,6 +292,12 @@ final class AppModel {
         guard let route = Self.route(for: url, machines: machines) else { return }
         tab = .agents
         openingAgent = route
+    }
+
+    /// A done alert for the agent on screen shows no banner or sound.
+    func isViewing(nodeId: String, terminalId: String) -> Bool {
+        guard tab == .agents, let viewingAgent, let machine = machines.first(where: { $0.nodeId == nodeId }) else { return false }
+        return viewingAgent == AgentRoute(machineId: machine.id, terminalId: terminalId)
     }
 
     nonisolated static func route(for url: URL, machines: [Machine]) -> AgentRoute? {

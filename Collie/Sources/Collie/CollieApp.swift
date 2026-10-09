@@ -45,7 +45,7 @@ struct RootView: View {
                     FlockScreen(
                         core: app.core, machines: app.machines, approvals: app.approvals, follows: app.follows,
                         opening: $app.openingAgent, tailnetStarting: !app.isRunning
-                    )
+                    ) { app.viewingAgent = $0 }
                 }
                 Tab("Approvals", systemImage: "checkmark.shield", value: AppTab.approvals) {
                     ApprovalsScreen(model: app.approvals)

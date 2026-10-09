@@ -293,17 +293,17 @@ pub fn approval_clear(node_id: &str, approval_id: &ApprovalId) -> Alert {
 }
 
 /// Labels only, like an approval alert, and no `enc`: nothing about the turn is sent.
-pub fn done_alert(terminal_id: &str, title: &str, workspace: &str, node_id: &str) -> Alert {
+pub fn done_alert(terminal_id: &TerminalId, title: &str, workspace: &str, node_id: &str) -> Alert {
     Alert {
         payload: json!({
             "aps": {
                 "alert": {"title": title, "body": format!("Done in {workspace}")},
-                "thread-id": terminal_id,
+                "thread-id": terminal_id.as_str(),
             },
             "node_id": node_id,
-            "terminal_id": terminal_id,
+            "terminal_id": terminal_id.as_str(),
         }),
-        collapse_id: Some(terminal_id.to_owned()),
+        collapse_id: Some(terminal_id.as_str().to_owned()),
         // Never stored, as `approval_clear`: a stored one would displace a pending approval alert.
         expiration: Some(0),
         context: None,
@@ -1329,7 +1329,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
 
     #[test]
     fn done_alert_carries_labels_only_and_is_never_stored() {
-        let done = done_alert("term_1", "api-fixer", "api", "nMAC");
+        let done = done_alert(&term(1), "api-fixer", "api", "nMAC");
         assert_eq!(
             done.payload,
             json!({
@@ -1536,7 +1536,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
 
         push.register("nB", token('b'), ApnsEnvironment::Production, key(), true)
             .unwrap();
-        push.notify_done(done_alert("term_1", "t", "w", "nMAC"));
+        push.notify_done(done_alert(&term(1), "t", "w", "nMAC"));
         let sent = mock.wait(3).await;
         assert_eq!(
             sent[1].0,
@@ -1546,7 +1546,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         assert_eq!(sent[1].1.payload["terminal_id"], "term_1");
         push.register("nA", token('c'), ApnsEnvironment::Sandbox, key(), true)
             .unwrap();
-        push.notify_done(done_alert("term_1", "t", "w", "nMAC"));
+        push.notify_done(done_alert(&term(1), "t", "w", "nMAC"));
         push.notify(test_alert());
         mock.wait(5).await;
 

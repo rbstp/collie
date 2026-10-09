@@ -106,6 +106,11 @@ mod tests {
 
     #[test]
     fn blocked_time_counts_toward_the_turn() {
+        assert_eq!(
+            run(&mut Turns::default(), &[("working", 0), ("done", 31)]),
+            1,
+            "a turn first seen mid-way is timed from that sight"
+        );
         let mut t = Turns::default();
         let steps = [
             ("idle", 0),

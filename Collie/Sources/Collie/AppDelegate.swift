@@ -49,7 +49,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
     ) {
-        Task { @MainActor in completionHandler([.banner, .list, .sound]) }
+        let response = NotificationResponse(
+            actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: notification.request.content.userInfo
+        )
+        Task { @MainActor in
+            if case .openAgent(let nodeId, let terminalId) = response, self.app.isViewing(nodeId: nodeId, terminalId: terminalId) {
+                completionHandler([])
+            } else {
+                completionHandler([.banner, .list, .sound])
+            }
+        }
     }
 
     nonisolated func userNotificationCenter(
