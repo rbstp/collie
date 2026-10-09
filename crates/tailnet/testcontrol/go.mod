@@ -1,8 +1,8 @@
 module github.com/rbstp/collie/crates/tailnet/testcontrol
 
-go 1.27.1
+go 1.27.2
 
-require tailscale.com v1.104.0
+require tailscale.com v1.104.1
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect

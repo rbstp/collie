@@ -112,7 +112,7 @@ What is and is not covered: [docs/threat-model.md](docs/threat-model.md).
 
 **To build on macOS:** Rust (see `rust-toolchain.toml`), Go, Xcode 27 with the watchOS platform and an iPhone 18 Pro simulator, [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, [cargo-nextest](https://nexte.st), and `jq` (for `just ios-run-device`). The libghostty-vt build script downloads its own pinned Zig.
 
-**To build `collied` on Linux:** Rust (see `rust-toolchain.toml`), Go 1.27.1 or later, a C compiler, libclang (for bindgen), [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st). For `just tray-test`, also node and Python 3.
+**To build `collied` on Linux:** Rust (see `rust-toolchain.toml`), Go 1.27.2 or later, a C compiler, libclang (for bindgen), [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st). For `just tray-test`, also node and Python 3.
 
 The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID and `dev.rbstp` bundle identifiers. Change them to your own before building.
 
