@@ -588,6 +588,7 @@ pub async fn start_with(
         tokio::spawn(accept_loop(listener, state.clone(), rx.clone(), dead_tx)),
         tokio::spawn(control::serve(control, state.clone(), rx.clone())),
         tokio::spawn(upkeep(state.attachments.clone(), rx.clone())),
+        tokio::spawn(codex_usage(state.clone(), rx.clone())),
         tokio::spawn(reconcile(state.clone(), rx)),
     ];
     tracing::info!(host = %state.dns_name, port = state.cfg.port, "listening on the tailnet");
@@ -598,6 +599,20 @@ pub async fn start_with(
         listener_dead,
         _peers_lock: peers_lock,
     })
+}
+
+async fn codex_usage(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(300));
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Some(usage) = crate::usage::fetch_codex_usage().await {
+                    let _ = crate::usage::record_codex(&state.cfg.data_dir, usage);
+                }
+            }
+            _ = shutdown.changed() => return,
+        }
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]

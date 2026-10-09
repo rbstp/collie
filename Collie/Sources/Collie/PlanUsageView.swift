@@ -24,11 +24,54 @@ struct UsageSections: View {
                     .accessibilityLabel("\(entry.machine.label), \(usage.spokenAge(now: context.date))")
                 }
                 TimelineView(.everyMinute) { context in
-                    SubscriptionUsage(usage: usage, now: context.date)
+                    VStack(alignment: .leading, spacing: 12) {
+                        if usage.fiveHour != nil || usage.sevenDay != nil {
+                            SubscriptionUsage(usage: usage, now: context.date)
+                        }
+                        if let codex = usage.codex, codex.resetsAtMs > context.date.unixMs {
+                            CodexSubscriptionUsage(usage: codex, now: context.date)
+                        }
+                    }
                 }
             }
             .opacity(entry.linkDown ? 0.5 : 1)
         }
+    }
+}
+
+private struct CodexSubscriptionUsage: View {
+    let usage: CodexUsage
+    let now: Date
+    @ScaledMetric(relativeTo: .headline) private var logo: CGFloat = 22
+
+    var body: some View {
+        let percent = min(100, Int((Double(usage.used) / Double(usage.limit) * 100).rounded()))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Image("Codex")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: logo, height: logo)
+                    .padding(logo / 3)
+                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: logo / 2, style: .continuous))
+                    .accessibilityHidden(true)
+                Text("Codex").font(.headline)
+            }
+            Text("Monthly usage limit").font(.subheadline)
+            ProgressView(value: Double(percent), total: 100)
+                .tint(ContextRing.tone(UInt8(100 - percent)))
+            HStack {
+                Text("\(usage.used.formatted()) / \(usage.limit.formatted()) credits")
+                Spacer()
+                Text("resets \(Date(timeIntervalSince1970: TimeInterval(usage.resetsAtMs) / 1000).formatted(date: .abbreviated, time: .omitted))")
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+        .opacity(now.unixMs > usage.recordedMs + 10 * 60_000 ? 0.6 : 1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Codex monthly usage limit, \(usage.used) of \(usage.limit) credits used, \(percent) percent")
     }
 }
 

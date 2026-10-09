@@ -550,13 +550,24 @@ impl FlockState {
     /// From a one-shot listing while this connection is closed, so the app does not
     /// publish the older plan it froze with before its next snapshot.
     pub fn listed_plan(&mut self, plan: &protocol::PlanUsage) {
-        if let Some(flock) = &mut self.flock
-            && flock
-                .plan_usage
-                .as_ref()
-                .is_none_or(|p| p.recorded_ms < plan.recorded_ms)
-        {
-            flock.plan_usage = Some(plan.clone());
+        if let Some(flock) = &mut self.flock {
+            let Some(current) = &mut flock.plan_usage else {
+                flock.plan_usage = Some(plan.clone());
+                return;
+            };
+            if current.recorded_ms < plan.recorded_ms {
+                current.five_hour = plan.five_hour.clone();
+                current.seven_day = plan.seven_day.clone();
+                current.recorded_ms = plan.recorded_ms;
+            }
+            if let Some(codex) = &plan.codex
+                && current
+                    .codex
+                    .as_ref()
+                    .is_none_or(|old| old.recorded_ms < codex.recorded_ms)
+            {
+                current.codex = Some(codex.clone());
+            }
         }
     }
 }
@@ -728,6 +739,7 @@ mod tests {
             }),
             seven_day: None,
             recorded_ms: 1,
+            codex: None,
         };
         let with = |seq, used| Flock {
             plan_usage: Some(plan(used)),
@@ -755,6 +767,7 @@ mod tests {
             }),
             seven_day: None,
             recorded_ms,
+            codex: None,
         };
         let used = |s: &FlockState| s.flock.as_ref()?.plan_usage.clone();
         let mut s = FlockState::default();
@@ -765,6 +778,41 @@ mod tests {
         assert_eq!(used(&s), Some(plan(30, 2)));
         s.listed_plan(&plan(20, 1));
         assert_eq!(used(&s), Some(plan(30, 2)));
+    }
+
+    #[test]
+    fn listed_plan_merges_codex_and_claude_by_source() {
+        let mut s = FlockState::default();
+        s.apply_snapshot(flock(1, vec![]));
+        let mut codex = protocol::PlanUsage {
+            five_hour: None,
+            seven_day: None,
+            recorded_ms: 0,
+            codex: Some(protocol::CodexUsage {
+                used: 100,
+                limit: 1_000,
+                resets_at_ms: 10_000,
+                recorded_ms: 20,
+            }),
+        };
+        s.listed_plan(&codex);
+        let mut claude = codex.clone();
+        claude.codex = None;
+        claude.five_hour = Some(protocol::UsageWindow {
+            used_percent: 30,
+            resets_at_ms: 10_000,
+        });
+        claude.recorded_ms = 10;
+        s.listed_plan(&claude);
+        let plan = s.flock.as_ref().unwrap().plan_usage.as_ref().unwrap();
+        assert_eq!(plan.five_hour, claude.five_hour);
+        assert_eq!(plan.codex, codex.codex);
+        codex.codex.as_mut().unwrap().used = 200;
+        codex.codex.as_mut().unwrap().recorded_ms = 30;
+        s.listed_plan(&codex);
+        let plan = s.flock.as_ref().unwrap().plan_usage.as_ref().unwrap();
+        assert_eq!(plan.five_hour, claude.five_hour);
+        assert_eq!(plan.codex, codex.codex);
     }
 
     #[test]

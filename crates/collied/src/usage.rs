@@ -6,11 +6,13 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::SystemTime;
 
-use protocol::{PlanUsage, UsageWindow};
+use protocol::{CodexUsage, PlanUsage, UsageWindow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::peers;
 
@@ -29,6 +31,8 @@ const WINDOW_RANGE: std::ops::RangeInclusive<u64> = 1_000..=100_000_000;
 pub struct Recorded {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<PlanUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex: Option<CodexUsage>,
     /// Context window size per Claude Code session id.
     #[serde(default)]
     pub windows: BTreeMap<String, SessionWindow>,
@@ -59,6 +63,7 @@ pub fn record(data_dir: &Path, input: &[u8], now_ms: u64) -> anyhow::Result<()> 
             five_hour: window(&r["five_hour"]),
             seven_day: window(&r["seven_day"]),
             recorded_ms: now_ms,
+            codex: None,
         });
     let session = v["session_id"]
         .as_str()
@@ -134,7 +139,104 @@ fn merge_plan(old: Option<PlanUsage>, new: PlanUsage, now_ms: u64) -> PlanUsage 
         five_hour,
         seven_day,
         recorded_ms,
+        codex: None,
     }
+}
+
+pub fn record_codex(data_dir: &Path, usage: CodexUsage) -> anyhow::Result<()> {
+    crate::ensure_private_dir(data_dir)?;
+    let _lock = lock(&data_dir.join(USAGE_LOCK))?;
+    let path = data_dir.join(USAGE_FILE);
+    let mut recorded = match peers::load_json::<Recorded>(&path) {
+        Err(peers::Error::Json { .. }) => Recorded::default(),
+        other => other?,
+    };
+    if recorded.codex.as_ref().is_some_and(|old| {
+        old.used == usage.used
+            && old.limit == usage.limit
+            && old.resets_at_ms == usage.resets_at_ms
+            && usage.recorded_ms < old.recorded_ms + RESTAMP_MS
+    }) {
+        return Ok(());
+    }
+    recorded.codex = Some(usage);
+    peers::replace_json(&path, &recorded)?;
+    Ok(())
+}
+
+pub fn parse_codex_usage(response: &[u8], now_ms: u64) -> Option<CodexUsage> {
+    let root: Value = serde_json::from_slice(response).ok()?;
+    let limit = &root["result"]["rateLimits"]["individualLimit"];
+    let number = |v: &Value| v.as_f64().or_else(|| v.as_str()?.parse().ok());
+    let allowance = number(&limit["limit"]).filter(|n| n.is_finite() && *n > 0.0 && *n < 1e9)?;
+    let used = number(&limit["used"]).filter(|n| n.is_finite() && *n >= 0.0 && *n < 1e9)?;
+    let resets = limit["resetsAt"].as_u64()?;
+    let resets_at_ms = resets.checked_mul(1000)?;
+    (resets_at_ms > now_ms).then_some(CodexUsage {
+        used: used.round() as u64,
+        limit: allowance.round() as u64,
+        resets_at_ms,
+        recorded_ms: now_ms,
+    })
+}
+
+pub async fn fetch_codex_usage() -> Option<CodexUsage> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .filter(|path| path.is_absolute())
+        .collect();
+    dirs.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ]);
+    if let Ok(home) = crate::config::home_dir() {
+        dirs.extend([home.join(".cargo/bin"), home.join(".local/bin")]);
+    }
+    let bin = dirs
+        .into_iter()
+        .map(|dir| dir.join("codex"))
+        .find(|path| path.is_file())?;
+    let mut child = tokio::process::Command::new(bin)
+        .arg("app-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .ok()?;
+    let mut stdin = child.stdin.take()?;
+    stdin
+        .write_all(b"{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"collie\",\"version\":\"0.1\"}}}\n")
+        .await
+        .ok()?;
+    stdin.flush().await.ok()?;
+    let stdout = child.stdout.take()?;
+    let mut lines = BufReader::new(stdout).lines();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let line = lines.next_line().await.ok()??;
+            let response: Value = serde_json::from_str(&line).ok()?;
+            if response["id"] == 1 {
+                response["result"].as_object()?;
+                break;
+            }
+        }
+        stdin
+            .write_all(b"{\"method\":\"initialized\",\"params\":{}}\n{\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}\n")
+            .await
+            .ok()?;
+        stdin.flush().await.ok()?;
+        while let Some(line) = lines.next_line().await.ok()? {
+            let response: Value = serde_json::from_str(&line).ok()?;
+            if response["id"] == 2 {
+                return parse_codex_usage(line.as_bytes(), crate::now_ms());
+            }
+        }
+        None
+    })
+    .await
+    .ok()?
 }
 
 fn merge_window(
@@ -219,15 +321,23 @@ impl Usage {
     }
 
     pub fn plan(&self) -> Option<PlanUsage> {
-        self.recorded.plan.clone()
+        let mut plan = self.recorded.plan.clone().unwrap_or(PlanUsage {
+            five_hour: None,
+            seven_day: None,
+            recorded_ms: 0,
+            codex: None,
+        });
+        plan.codex = self.recorded.codex.clone();
+        (self.recorded.plan.is_some() || plan.codex.is_some()).then_some(plan)
     }
 
     /// True once per change of the recorded plan, its stamp included.
     pub fn plan_moved(&mut self) -> bool {
         self.refresh();
-        let moved = self.announced != self.recorded.plan;
+        let plan = self.plan();
+        let moved = self.announced != plan;
         if moved {
-            self.announced = self.recorded.plan.clone();
+            self.announced = plan;
         }
         moved
     }
@@ -284,6 +394,7 @@ mod tests {
                     resets_at_ms: 1_738_857_600_000
                 }),
                 recorded_ms: 1_000,
+                codex: None,
             })
         );
         assert_eq!(r.windows[SESSION].size, 1_000_000);
@@ -293,6 +404,29 @@ mod tests {
         for kept_out in ["cwd", "cost", "transcript", "model", "spend", "314"] {
             assert!(!text.contains(kept_out), "{kept_out} leaked into the file");
         }
+    }
+
+    #[test]
+    fn codex_monthly_limit_preserves_claude_usage() {
+        let (_dir, data) = data();
+        record(&data, INPUT.as_bytes(), 1_000).unwrap();
+        let response = br#"{"id":2,"result":{"rateLimits":{"primary":null,"secondary":null,"individualLimit":{"limit":"10000","used":"1531.7076","remainingPercent":85,"resetsAt":1793491200}}}}"#;
+        let codex = parse_codex_usage(response, 1_000).unwrap();
+        assert_eq!(codex.used, 1532);
+        assert_eq!(codex.limit, 10_000);
+        record_codex(&data, codex.clone()).unwrap();
+        let mut usage = Usage::new(data.join(USAGE_FILE));
+        usage.refresh();
+        let plan = usage.plan().unwrap();
+        assert_eq!(plan.five_hour.unwrap().used_percent, 24);
+        assert_eq!(plan.codex, Some(codex));
+        assert!(
+            parse_codex_usage(
+                br#"{"id":2,"result":{"rateLimits":{"individualLimit":null}}}"#,
+                1_000
+            )
+            .is_none()
+        );
     }
 
     #[test]

@@ -25,7 +25,7 @@ sha2.workspace = true
 subtle = "2.6.1"
 tailnet.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite.workspace = true
 toml = "1.1.8"
 tracing = "0.1.44"

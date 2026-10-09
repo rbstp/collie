@@ -6,7 +6,7 @@ collie is a remote control for [herdr](https://github.com/herdrdev/herdr) coding
 
 - Every herdr agent across several machines, with live terminal views and a sessions inbox
 - Lock-screen, Live Activity and Apple Watch approvals, with the command end-to-end encrypted in the push
-- Claude Code, Codex and GitHub Copilot CLI agents, with remaining context and Claude Code plan usage
+- Claude Code, Codex and GitHub Copilot CLI agents, with remaining context and plan usage
 - Tailnet only: an embedded Tailscale node on each side, no Tailscale app and no open TCP port on the real network
 - Mutual TLS pinned at pairing, with the phone's key in the Secure Enclave
 
@@ -47,7 +47,7 @@ Design details and limits are in [docs/architecture.md](docs/architecture.md).
 - **Grid**: live previews of each agent. Claude Code, Codex and Copilot CLI cards keep the agent's output and drop its input box and status lines; a blocked agent's card shows its whole screen. Long-press a card to star it: starred cards lead their machine's section at twice the height. Stars are kept on the machine until the pane closes or the machine is removed.
 - **Inbox**: agents grouped as Working, Done and Archived, each with its latest reply line, your last prompt, the workspace, the agent kind, the machine and how long ago.
 - **Remaining context**: a small ring shows how much context a Claude Code or Codex agent has left, read from its transcript on the machine.
-- **Plan usage**: the Usage view (the Agents | Usage switch, or swipe left) shows one card per machine with its Claude Code subscription's 5-hour and weekly limits: percent used against the share of the window gone by, reset times, pace, and how old the reading is. It needs the status line tap ([step 7](#getting-started)). Codex records no limits for this plan, so it shows none.
+- **Plan usage**: the Usage view (the Agents | Usage switch, or swipe left) shows one card per machine. Claude Code shows its 5-hour and weekly limits from the status line tap ([step 7](#getting-started)). Codex shows the monthly used and allowed credits and reset date for a credit-metered workspace, read through the local Codex app-server every five minutes.
 
 ### Terminal and input
 
@@ -94,7 +94,7 @@ Security is the first requirement. In short:
 - **Apple Watch**: deciding from the watch is off by default and turning it on needs Face ID or the passcode. A decision then needs the watch unlocked and on the wrist, and goes through the iPhone, which re-checks the setting and only sends an answer it showed the watch, on the same nonce and fingerprint path. There is no Approve always on the watch, and the watch holds no keys.
 - **Terminals**: shell input is command execution, so it is off unless `collied.toml` on that machine turns it on (never from the phone). Every unlock is a grant signed by a second Secure Enclave key after Face ID or the passcode, for one terminal, one session and 5 minutes. `collied` refuses to write to a pane where an agent now runs, and the audit log records each grant and command without its text.
 - **Push notifications**: the cleartext part only says which agent is blocked and where. The command is end-to-end encrypted (ChaCha20-Poly1305) under a per-machine key generated on the phone, and decrypted by the phone's notification extension. Apple still sees agent and workspace names, ids and timing.
-- **Transcripts and plan usage**: only the context percentage, one line of the latest reply and prompt, the plan limits' percentages and reset times, and their timestamps go to the paired phone, never to a log or a push. `collied statusline` keeps only the limits' percentages and reset times and each session's context window size, in a 0600 `usage.json`; the rest of the status line input is dropped.
+- **Transcripts and plan usage**: only the context percentage, one line of the latest reply and prompt, plan usage and its timestamps go to the paired phone, never to a log or a push. `collied statusline` keeps only Claude's limits and each session's context window size in a 0600 `usage.json`; the rest of the status line input is dropped. The daemon also records Codex's monthly used and allowed credits and reset date there; its OAuth token stays with Codex.
 - **Attachments**: size-capped (20 MiB per file, 200 MiB in total), checksummed, stored under sanitized names in fresh random directories of a private cache (0700 directories, 0600 non-executable files), and deleted after 24 hours.
 - **Secrets**: on macOS, the APNs signing key is stored in the login Keychain, readable without a prompt only by the Developer ID-signed `collied`. On Linux it is a systemd user credential, encrypted with the host key and sealed to the TPM2 when one is usable, with a 0600 file as the fallback where `systemd-creds` cannot encrypt. This is weaker than the Keychain: any process running as your user can decrypt it.
 

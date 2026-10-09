@@ -347,6 +347,16 @@ pub struct PlanUsage {
     pub five_hour: Option<UsageWindow>,
     pub seven_day: Option<UsageWindow>,
     pub recorded_ms: u64,
+    #[uniffi(default = None)]
+    pub codex: Option<CodexUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CodexUsage {
+    pub used: u64,
+    pub limit: u64,
+    pub resets_at_ms: u64,
+    pub recorded_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -2509,6 +2519,12 @@ fn plan_usage(u: &protocol::PlanUsage) -> PlanUsage {
         five_hour: u.five_hour.as_ref().map(window),
         seven_day: u.seven_day.as_ref().map(window),
         recorded_ms: u.recorded_ms,
+        codex: u.codex.as_ref().map(|c| CodexUsage {
+            used: c.used,
+            limit: c.limit,
+            resets_at_ms: c.resets_at_ms,
+            recorded_ms: c.recorded_ms,
+        }),
     }
 }
 
@@ -2763,6 +2779,7 @@ mod tests {
                     resets_at_ms: 1_738_857_600_000
                 }),
                 recorded_ms: 1_738_420_000_000,
+                codex: None,
             }
         );
     }

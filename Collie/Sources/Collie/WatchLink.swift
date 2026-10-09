@@ -11,7 +11,7 @@ extension WatchState {
         let nowMs = now.unixMs
         let groups = InboxSection.grouped(InboxItem.items(in: entries), now: now)
         let rows = (groups[.working] ?? []).map { ($0, false) } + (groups[.done] ?? []).map { ($0, true) }
-        let usage = entries.compactMap { $0.flock?.planUsage }.max { $0.recordedMs < $1.recordedMs }
+        let usage = entries.compactMap { $0.flock?.planUsage }.filter { $0.fiveHour != nil }.max { $0.recordedMs < $1.recordedMs }
         self.init(
             approvals: items.filter { $0.approval.expiresAtMs > nowMs }.prefix(Self.maxApprovals).map(WatchApproval.init),
             agents: rows.prefix(Self.maxAgents).map { WatchAgent(item: $0.0, done: $0.1) },
@@ -71,7 +71,7 @@ extension WatchState {
         let fresh = items.sorted { ($0.approval.createdAtMs, $0.id) < ($1.approval.createdAtMs, $1.id) }.map(WatchApproval.init)
         let kept = state.approvals.filter { silent.contains($0.nodeId) }
         state.approvals = Array((fresh + kept).filter { $0.expiresAtMs > nowMs }.prefix(Self.maxApprovals))
-        if let plan = listed.compactMap(\.planUsage).max(by: { $0.recordedMs < $1.recordedMs }) {
+        if let plan = listed.compactMap(\.planUsage).filter({ $0.fiveHour != nil }).max(by: { $0.recordedMs < $1.recordedMs }) {
             state.usage = WatchUsage(plan)
         }
         state.decisionsAllowed = allowed

@@ -239,11 +239,12 @@ extension PlanUsage {
     }
 
     func age(now: Date) -> String {
-        Self.ageSeconds(recordedMs, now: now) < 60 ? "just now" : "\(Elapsed.string(sinceMs: recordedMs, now: now)) ago"
+        let latest = max(recordedMs, codex?.recordedMs ?? 0)
+        return Self.ageSeconds(latest, now: now) < 60 ? "just now" : "\(Elapsed.string(sinceMs: latest, now: now)) ago"
     }
 
     func spokenAge(now: Date) -> String {
-        let seconds = Self.ageSeconds(recordedMs, now: now)
+        let seconds = Self.ageSeconds(max(recordedMs, codex?.recordedMs ?? 0), now: now)
         return seconds < 60 ? "recorded just now" : "recorded \(Self.spoken(seconds: seconds)) ago"
     }
 
