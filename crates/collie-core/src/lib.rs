@@ -1579,6 +1579,7 @@ impl CollieCore {
         apns_token_hex: String,
         environment: PushEnvironment,
         notification_key: Vec<u8>,
+        mute_done: bool,
     ) -> Result<(), CoreError> {
         let notification_key = Zeroizing::new(notification_key);
         if notification_key.len() != 32 {
@@ -1594,6 +1595,7 @@ impl CollieCore {
             environment: environment.into(),
             notification_key: NotificationKey::new(URL_SAFE_NO_PAD.encode(&*notification_key))
                 .expect("32 bytes encode to a canonical 43-char base64url key"),
+            mute_done,
         };
         self.update_push(&machine_id, |reg| reg.push = Some(push.clone()))?;
         self.send_if_connected(&machine_id, Request::PushRegister(push), None)
@@ -2860,11 +2862,11 @@ mod tests {
         let key: Vec<u8> = (1..=32).collect();
         let token = "ab".repeat(32);
         assert!(matches!(
-            core.register_push("m1".into(), "not hex".into(), PushEnvironment::Sandbox, key.clone()),
+            core.register_push("m1".into(), "not hex".into(), PushEnvironment::Sandbox, key.clone(), false),
             Err(CoreError::InvalidInput { field: Some(f), .. }) if f == "apns_token"
         ));
         assert!(matches!(
-            core.register_push("m1".into(), token.clone(), PushEnvironment::Sandbox, vec![1; 31]),
+            core.register_push("m1".into(), token.clone(), PushEnvironment::Sandbox, vec![1; 31], false),
             Err(CoreError::InvalidInput { field: Some(f), .. }) if f == "notification_key"
         ));
         assert!(matches!(
@@ -2872,7 +2874,8 @@ mod tests {
                 "nope".into(),
                 token.clone(),
                 PushEnvironment::Sandbox,
-                key.clone()
+                key.clone(),
+                false
             ),
             Err(CoreError::MachineNotFound)
         ));
@@ -2881,6 +2884,7 @@ mod tests {
             format!(" {token} "),
             PushEnvironment::Production,
             key.clone(),
+            false,
         )
         .unwrap();
         core.register_push(
@@ -2888,6 +2892,7 @@ mod tests {
             token.clone(),
             PushEnvironment::Production,
             vec![9; 32],
+            true,
         )
         .unwrap();
         let push: BTreeMap<String, PushRegisterParams> = lock(&core.inner.push)
@@ -2897,6 +2902,7 @@ mod tests {
             .collect();
         assert_eq!(push.keys().collect::<Vec<_>>(), ["m1", "m2"]);
         assert_eq!(push["m1"].apns_token.as_str(), token);
+        assert!(!push["m1"].mute_done && push["m2"].mute_done);
         assert_eq!(
             push["m1"].environment,
             protocol::ApnsEnvironment::Production
@@ -2997,6 +3003,7 @@ mod tests {
             "ab".repeat(32),
             PushEnvironment::Sandbox,
             vec![3; 32],
+            false,
         )
         .unwrap();
         let methods = |reg: &conn::Registrations| -> Vec<String> {
@@ -4417,8 +4424,14 @@ mod tailnet_tests {
             ("q1".to_owned(), protocol::Decision::Choose)
         );
 
-        core.register_push(id(), TOKEN.into(), PushEnvironment::Sandbox, vec![7; 32])
-            .unwrap();
+        core.register_push(
+            id(),
+            TOKEN.into(),
+            PushEnvironment::Sandbox,
+            vec![7; 32],
+            false,
+        )
+        .unwrap();
         poll("push.register", || {
             (lock(&seen).pushes.len() == 1).then_some(())
         });
@@ -4561,8 +4574,14 @@ mod tailnet_tests {
             let f = rt.block_on(core.flock(id())).unwrap();
             (f.link == LinkPhase::Connected).then_some(())
         });
-        core.register_push(id(), TOKEN.into(), PushEnvironment::Sandbox, vec![7; 32])
-            .unwrap();
+        core.register_push(
+            id(),
+            TOKEN.into(),
+            PushEnvironment::Sandbox,
+            vec![7; 32],
+            false,
+        )
+        .unwrap();
         poll("token registered again by the new process", || {
             (lock(&seen).pushes.len() == 4).then_some(())
         });

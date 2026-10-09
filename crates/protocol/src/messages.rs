@@ -624,6 +624,9 @@ pub struct PushRegisterParams {
     pub apns_token: PushToken,
     pub environment: ApnsEnvironment,
     pub notification_key: NotificationKey,
+    /// No alert when an agent finishes a turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mute_done: bool,
 }
 
 /// A Live Activity's update token. collied pushes the followed terminal's status to it,
@@ -1432,7 +1435,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 13);
+        assert_eq!(crate::PROTOCOL_VERSION, 14);
     }
 
     #[test]
@@ -1619,6 +1622,33 @@ mod tests {
         let older: ErrorBody =
             serde_json::from_str(r#"{"code":"not_found","message":"m"}"#).unwrap();
         assert_eq!(older.draft, None);
+    }
+
+    #[test]
+    fn push_register_mute_done_is_additive() {
+        let frame = |extra: &str| {
+            format!(
+                r#"{{"id":1,"method":"push.register","params":{{"apns_token":"{}","environment":"sandbox","notification_key":"{}"{extra}}}}}"#,
+                "ab".repeat(32),
+                "A".repeat(43)
+            )
+        };
+        for (extra, muted) in [
+            ("", false),
+            (r#","mute_done":false"#, false),
+            (r#","mute_done":true"#, true),
+        ] {
+            let Request::PushRegister(p) = parse(&frame(extra)).unwrap().request else {
+                panic!("not a push.register");
+            };
+            assert_eq!(p.mute_done, muted, "{extra}");
+            let json = serde_json::to_string(&p).unwrap();
+            assert_eq!(json.contains("mute_done"), muted, "{json}");
+        }
+        assert_eq!(
+            parse(&frame(r#","mute_done":"yes""#)).unwrap_err().code,
+            ErrorCode::InvalidParams
+        );
     }
 
     #[test]

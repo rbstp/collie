@@ -30,6 +30,7 @@ final class AppModel {
     let watch = WatchLink()
     var tab = AppTab.agents
     var openingAgent: AgentRoute?
+    @ObservationIgnored var viewingAgent: AgentRoute?
     private var backgroundedAt: Date?
     @ObservationIgnored private var activityDecisions: Set<String> = []
     @ObservationIgnored private var terminalKeySet = false
@@ -249,13 +250,14 @@ final class AppModel {
         guard let core else { return }
         let environment = PushEnvironment.current
         let hex = token.map { String(format: "%02x", $0) }.joined()
+        let muteDone = !DevicePrefs.load(from: DevicePrefs.file).doneAlerts
         var failure: (any Error)?
         for machine in core.machines() {
             do {
                 let key = try NotificationKey.loadOrCreate(nodeId: machine.nodeId)
                 try core.registerPush(
                     machineId: machine.id, apnsTokenHex: hex, environment: environment,
-                    notificationKey: key.withUnsafeBytes { Data($0) }
+                    notificationKey: key.withUnsafeBytes { Data($0) }, muteDone: muteDone
                 )
             } catch {
                 failure = failure ?? error
@@ -268,6 +270,12 @@ final class AppModel {
         } else {
             pushStatus = environment == .production ? "registered" : "registered (sandbox)"
         }
+    }
+
+    /// Reaches each connected Mac now and the others on their next connection.
+    func setDoneAlerts(_ on: Bool) {
+        DevicePrefs.update(in: DevicePrefs.file) { $0.doneAlerts = on }
+        if let pushToken { registerPush(token: pushToken) }
     }
 
     func pushRegistrationFailed(_ error: any Error) {
@@ -284,6 +292,12 @@ final class AppModel {
         guard let route = Self.route(for: url, machines: machines) else { return }
         tab = .agents
         openingAgent = route
+    }
+
+    /// A done alert for the agent on screen shows no banner or sound.
+    func isViewing(nodeId: String, terminalId: String) -> Bool {
+        guard tab == .agents, let viewingAgent, let machine = machines.first(where: { $0.nodeId == nodeId }) else { return false }
+        return viewingAgent == AgentRoute(machineId: machine.id, terminalId: terminalId)
     }
 
     nonisolated static func route(for url: URL, machines: [Machine]) -> AgentRoute? {

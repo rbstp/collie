@@ -262,6 +262,7 @@ fn phase3_expired_approvals() {
             TOKEN.into(),
             PushEnvironment::Sandbox,
             NOTIFY_KEY.to_vec(),
+            false,
         )
         .unwrap();
         println!("in-app decide on an expired approval");
@@ -356,6 +357,7 @@ fn live_activity_follows_an_agent() {
             TOKEN.into(),
             PushEnvironment::Production,
             NOTIFY_KEY.to_vec(),
+            false,
         )
         .unwrap();
         core.register_activity_token(
@@ -571,6 +573,7 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
         TOKEN.into(),
         PushEnvironment::Sandbox,
         NOTIFY_KEY.to_vec(),
+        false,
     )
     .unwrap();
     wait_for("push.register", || rig.registrations() == 1).await;
@@ -765,6 +768,7 @@ async fn after_restart(rig: &Rig, core: &Arc<CollieCore>, m: &str, phone_id: &st
         TOKEN.into(),
         PushEnvironment::Sandbox,
         NOTIFY_KEY.to_vec(),
+        false,
     )
     .unwrap();
     wait_for("push.register from the new process", || {

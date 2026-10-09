@@ -528,6 +528,10 @@
         "environment": {
           "$ref": "#/$defs/ApnsEnvironment"
         },
+        "mute_done": {
+          "description": "No alert when an agent finishes a turn.",
+          "type": "boolean"
+        },
         "notification_key": {
           "$ref": "#/$defs/NotificationKey"
         }

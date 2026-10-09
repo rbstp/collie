@@ -44,6 +44,7 @@ use crate::peers::{self, Peer, Store};
 use crate::push::{self, ActivityError, Push};
 use crate::terminal::{self, Grants};
 use crate::transcript::Transcripts;
+use crate::turns::Turns;
 use crate::{config, herdr, lock};
 
 const MAX_CONNECTIONS: usize = 64;
@@ -195,6 +196,7 @@ pub struct State {
     stars: Mutex<Stars>,
     transcripts: Mutex<Transcripts>,
     live: Mutex<activity::Live>,
+    turns: Mutex<Turns>,
     events: broadcast::Sender<Event>,
     drive: Arc<Driver>,
     pub(crate) approvals: Arc<Approvals>,
@@ -558,6 +560,7 @@ pub async fn start_with(
         stars: Mutex::new(stars),
         transcripts: Mutex::new(transcripts),
         live: Mutex::new(activity::Live::default()),
+        turns: Mutex::new(Turns::default()),
         events,
         drive,
         approvals,
@@ -1207,7 +1210,13 @@ impl Session<'_> {
             Request::PushRegister(p) => (
                 self.state
                     .push
-                    .register(&peer, p.apns_token, p.environment, p.notification_key)
+                    .register(
+                        &peer,
+                        p.apns_token,
+                        p.environment,
+                        p.notification_key,
+                        p.mute_done,
+                    )
                     .map(|()| Response::Ok)
                     .map_err(|e| {
                         tracing::error!(error = %e, "push.register");
@@ -2029,6 +2038,17 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             }
         }
         state.approvals.observe(&agents, &workspaces).await;
+        for a in lock(&state.turns).observe(&agents, crate::now_ms()) {
+            let Ok(terminal_id) = TerminalId::new(a.terminal_id.clone()) else {
+                continue;
+            };
+            state.push.notify_done(push::done_alert(
+                &terminal_id,
+                &approvals::alert_title(a),
+                &approvals::workspace_label(&a.workspace_id, &workspaces),
+                &state.machine.node_id,
+            ));
+        }
         let pending = state.approvals.pending();
         lock(&state.live).observe(
             &state.push,

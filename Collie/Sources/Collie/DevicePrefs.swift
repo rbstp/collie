@@ -10,6 +10,7 @@ struct DevicePrefs: StateFile, Equatable {
     var agentsLayout = AgentsLayout.grid
     var historyLines: UInt16 = 200
     var watchDecisions = false
+    var doneAlerts = true
     /// Per machine id: the canonical folder collied returned when it was saved.
     var taskBases: [String: String] = [:]
 
@@ -54,6 +55,7 @@ extension DevicePrefs {
         agentsLayout = (try? container.decodeIfPresent(AgentsLayout.self, forKey: .agentsLayout)) ?? defaults.agentsLayout
         historyLines = try container.decodeIfPresent(UInt16.self, forKey: .historyLines) ?? defaults.historyLines
         watchDecisions = try container.decodeIfPresent(Bool.self, forKey: .watchDecisions) ?? defaults.watchDecisions
+        doneAlerts = try container.decodeIfPresent(Bool.self, forKey: .doneAlerts) ?? defaults.doneAlerts
         taskBases = try container.decodeIfPresent([String: String].self, forKey: .taskBases) ?? defaults.taskBases
     }
 

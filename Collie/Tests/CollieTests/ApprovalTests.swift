@@ -20,6 +20,14 @@ import UserNotifications
     #expect(NotificationResponse(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: info) == .open(link))
     #expect(NotificationResponse(actionIdentifier: UNNotificationDismissActionIdentifier, userInfo: info) == .ignore)
     #expect(NotificationResponse(actionIdentifier: "APPROVE", userInfo: ["approval_id": "ap_1"]) == .ignore)
+
+    let done: [AnyHashable: Any] = ["node_id": "nMAC123", "terminal_id": "term_1", "aps": ["thread-id": "term_1"]]
+    #expect(
+        NotificationResponse(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: done)
+            == .openAgent(nodeId: "nMAC123", terminalId: "term_1")
+    )
+    #expect(NotificationResponse(actionIdentifier: UNNotificationDismissActionIdentifier, userInfo: done) == .ignore)
+    #expect(NotificationResponse(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: ["node_id": "n/x", "terminal_id": "t"]) == .ignore)
 }
 
 @Test func approvalCategoryNeedsAuthenticationForBothActions() throws {

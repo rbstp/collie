@@ -45,6 +45,8 @@ pub struct Device {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notification_key: Option<NotificationKey>,
     pub registered_at: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mute_done: bool,
 }
 
 /// A Live Activity update token, bound to the paired device that registered it.
@@ -72,6 +74,7 @@ impl Activity {
             environment: self.environment,
             notification_key: None,
             registered_at: self.registered_at,
+            mute_done: false,
         }
     }
 }
@@ -289,6 +292,25 @@ pub fn approval_clear(node_id: &str, approval_id: &ApprovalId) -> Alert {
     }
 }
 
+/// Labels only, like an approval alert, and no `enc`: nothing about the turn is sent.
+pub fn done_alert(terminal_id: &TerminalId, title: &str, workspace: &str, node_id: &str) -> Alert {
+    Alert {
+        payload: json!({
+            "aps": {
+                "alert": {"title": title, "body": format!("Done in {workspace}")},
+                "thread-id": terminal_id.as_str(),
+            },
+            "node_id": node_id,
+            "terminal_id": terminal_id.as_str(),
+        }),
+        collapse_id: Some(terminal_id.as_str().to_owned()),
+        // Never stored, as `approval_clear`: a stored one would displace a pending approval alert.
+        expiration: Some(0),
+        context: None,
+        delivery: Delivery::Alert,
+    }
+}
+
 pub fn test_alert() -> Alert {
     Alert {
         payload: json!({
@@ -349,6 +371,7 @@ impl Push {
         token: PushToken,
         environment: ApnsEnvironment,
         notification_key: NotificationKey,
+        mute_done: bool,
     ) -> Result<(), peers::Error> {
         // Checked under the devices lock: revoke removes the peer before its `forget`
         // takes this lock, so a racing registration is either skipped here or forgotten.
@@ -364,6 +387,7 @@ impl Push {
                 environment,
                 notification_key: Some(notification_key),
                 registered_at: crate::now_ms(),
+                mute_done,
             });
         })
     }
@@ -485,6 +509,17 @@ impl Push {
 
     pub fn notify(&self, alert: Alert) {
         self.enqueue(Job::Alert(self.devices(), alert));
+    }
+
+    pub fn notify_done(&self, alert: Alert) {
+        let devices: Vec<Device> = self
+            .devices()
+            .into_iter()
+            .filter(|d| !d.mute_done)
+            .collect();
+        if !devices.is_empty() {
+            self.enqueue(Job::Alert(devices, alert));
+        }
     }
 
     /// Sends `fallback` as an approval alert if `alert` reaches no Live Activity.
@@ -1292,6 +1327,33 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         assert_eq!(clear.for_device(&device(Some(key()))), clear);
     }
 
+    #[test]
+    fn done_alert_carries_labels_only_and_is_never_stored() {
+        let done = done_alert(&term(1), "api-fixer", "api", "nMAC");
+        assert_eq!(
+            done.payload,
+            json!({
+                "aps": {
+                    "alert": {"title": "api-fixer", "body": "Done in api"},
+                    "thread-id": "term_1",
+                },
+                "node_id": "nMAC",
+                "terminal_id": "term_1",
+            })
+        );
+        assert_eq!(
+            done.headers("dev.rbstp.collie"),
+            Headers {
+                push_type: PushType::Alert,
+                topic: "dev.rbstp.collie".into(),
+                priority: 10,
+                expiration: Some(0),
+                collapse_id: Some("term_1".into()),
+            }
+        );
+        assert_eq!(done.for_device(&device(Some(key()))), done);
+    }
+
     pub fn key() -> NotificationKey {
         NotificationKey::new(URL_SAFE_NO_PAD.encode((1..=32).collect::<Vec<u8>>())).unwrap()
     }
@@ -1303,6 +1365,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             environment: ApnsEnvironment::Sandbox,
             notification_key,
             registered_at: 0,
+            mute_done: false,
         }
     }
 
@@ -1418,17 +1481,29 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             Arc::new(move |id| id != "nRevoked" || !revoked.load(Ordering::SeqCst))
         };
         let push = Push::open(path.clone(), Some(mock.clone()), paired).unwrap();
-        push.register("nA", token('a'), ApnsEnvironment::Sandbox, key())
+        push.register("nA", token('a'), ApnsEnvironment::Sandbox, key(), false)
             .unwrap();
-        push.register("nB", token('b'), ApnsEnvironment::Production, key())
+        push.register("nB", token('b'), ApnsEnvironment::Production, key(), false)
             .unwrap();
-        push.register("nA", token('c'), ApnsEnvironment::Sandbox, key())
+        push.register("nA", token('c'), ApnsEnvironment::Sandbox, key(), false)
             .unwrap();
-        push.register("nRevoked", token('d'), ApnsEnvironment::Sandbox, key())
-            .unwrap();
+        push.register(
+            "nRevoked",
+            token('d'),
+            ApnsEnvironment::Sandbox,
+            key(),
+            false,
+        )
+        .unwrap();
         revoked.store(true, Ordering::SeqCst);
-        push.register("nRevoked", token('e'), ApnsEnvironment::Sandbox, key())
-            .unwrap();
+        push.register(
+            "nRevoked",
+            token('e'),
+            ApnsEnvironment::Sandbox,
+            key(),
+            false,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
@@ -1459,7 +1534,24 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         assert_eq!(stored.devices.len(), 2);
         assert_eq!(stored.devices[0].stable_id, "nA");
 
+        push.register("nB", token('b'), ApnsEnvironment::Production, key(), true)
+            .unwrap();
+        push.notify_done(done_alert(&term(1), "t", "w", "nMAC"));
+        let sent = mock.wait(3).await;
+        assert_eq!(
+            sent[1].0,
+            token('c').as_str(),
+            "never sent to a muted device"
+        );
+        assert_eq!(sent[1].1.payload["terminal_id"], "term_1");
+        push.register("nA", token('c'), ApnsEnvironment::Sandbox, key(), true)
+            .unwrap();
+        push.notify_done(done_alert(&term(1), "t", "w", "nMAC"));
+        push.notify(test_alert());
+        mock.wait(5).await;
+
         push.forget("nA").unwrap();
+        push.forget("nB").unwrap();
         push.forget("nRevoked").unwrap();
         assert!(push.devices().is_empty());
         let reopened = Push::open(path, None, Arc::new(|_| true)).unwrap();
@@ -1495,9 +1587,9 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             Err(ActivityError::NoDevice),
             "push.register comes first"
         );
-        push.register("nA", token('a'), ApnsEnvironment::Sandbox, key())
+        push.register("nA", token('a'), ApnsEnvironment::Sandbox, key(), false)
             .unwrap();
-        push.register("nB", token('b'), ApnsEnvironment::Production, key())
+        push.register("nB", token('b'), ApnsEnvironment::Production, key(), false)
             .unwrap();
         for i in 0..MAX_ACTIVITIES {
             push.register_activity("nA", aid(i), term(i), long_token(i), true)
@@ -1640,7 +1732,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         )
         .unwrap();
         for (id, c) in [("nA", 'a'), ("nB", 'b'), ("nC", 'c')] {
-            push.register(id, token(c), ApnsEnvironment::Sandbox, key())
+            push.register(id, token(c), ApnsEnvironment::Sandbox, key(), false)
                 .unwrap();
         }
         push.register_activity("nA", aid(1), term(1), long_token(1), true)
@@ -1689,7 +1781,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         let offline =
             Push::open(dir.path().join("offline.json"), None, Arc::new(|_| true)).unwrap();
         offline
-            .register("nA", token('a'), ApnsEnvironment::Sandbox, key())
+            .register("nA", token('a'), ApnsEnvironment::Sandbox, key(), false)
             .unwrap();
         offline
             .register_activity("nA", aid(1), term(1), long_token(1), true)
@@ -1711,7 +1803,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             Arc::new(|_| true),
         )
         .unwrap();
-        push.register("nA", token('a'), ApnsEnvironment::Sandbox, key())
+        push.register("nA", token('a'), ApnsEnvironment::Sandbox, key(), false)
             .unwrap();
         for i in 1..=3 {
             push.register_activity("nA", aid(i), term(i), long_token(i), true)
@@ -1787,6 +1879,8 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         let old = r#"{"devices":[{"stable_id":"nA","token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","environment":"sandbox","registered_at":1}]}"#;
         let d: Devices = serde_json::from_str(old).unwrap();
         assert!(d.activities.is_empty());
+        assert!(!d.devices[0].mute_done);
+        assert!(!serde_json::to_string(&d).unwrap().contains("mute_done"));
         let a = Activity {
             stable_id: "nA".into(),
             activity_id: aid(0),
