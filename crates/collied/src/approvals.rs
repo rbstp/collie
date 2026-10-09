@@ -246,7 +246,8 @@ pub async fn open_to(
 ) -> Result<Option<String>, herdr::Error> {
     let kind = a.agent.as_deref().unwrap_or_default();
     let explain = herdr::agent_explain(herdr, &a.pane_id).await?;
-    let text = herdr::detection_text(herdr, &a.pane_id).await?;
+    let text =
+        prompt::without_deny_countdown(kind, &herdr::detection_text(herdr, &a.pane_id).await?);
     let rule = explain.matched_rule.map(|r| r.id);
     Ok(open(kind, rule.as_deref(), &text).then_some(text))
 }
@@ -414,7 +415,10 @@ impl Approvals {
     async fn screen(&self, a: &AgentInfo) -> Result<Screen, herdr::Error> {
         let kind = a.agent.as_deref().unwrap_or_default();
         let explain = herdr::agent_explain(&self.herdr, &a.pane_id).await?;
-        let text = herdr::detection_text(&self.herdr, &a.pane_id).await?;
+        let text = prompt::without_deny_countdown(
+            kind,
+            &herdr::detection_text(&self.herdr, &a.pane_id).await?,
+        );
         let rule = explain.matched_rule.map(|r| r.id);
         let menu = prompt::uses_menu(kind, rule.as_deref())
             .then(|| Menu::parse(&text))

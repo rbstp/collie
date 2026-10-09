@@ -656,6 +656,94 @@ fn splits_options(lines: &[&str], i: usize) -> bool {
         && lines.get(i + 1).is_some_and(|l| option_line(l).is_some())
 }
 
+/// Claude Code 2.1.295's sentence, around its time left: `M:SS`, or in its other display
+/// mode `about N minute(s)` or `about N second(s)`.
+const DENY_COUNTDOWN: (&str, &str) = (
+    "\u{26a0} Claude Code will automatically deny this request in ",
+    ", to avoid blocking progress on an unattended session",
+);
+
+/// `text` without Claude Code's deny countdown, whose time changes every second: in the
+/// fingerprint it would supersede the approval on every tick. Only for a Claude Code dialog
+/// whose last option block parses as a menu, and only where Claude Code draws it: under the
+/// last `╌` rule of that dialog when it has any (none when the rules are unpaired, as the
+/// command block could still be open), else under its top rule, then a blank line, the question, and option 1 of that block, in its exact
+/// wording at the dialog's margin (command lines are indented further), on one line or
+/// wrapped over up to three, with nothing else on them. Anything else is left alone; the
+/// time is never read.
+pub fn without_deny_countdown(kind: &str, text: &str) -> String {
+    if kind != "claude" || Menu::parse_numbered(text).is_none() {
+        return text.to_owned();
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(first) = lines
+        .iter()
+        .rposition(|l| option_line(l).is_some())
+        .and_then(|last| {
+            (0..=last).rfind(|&i| option_line(lines[i]).is_some_and(|(_, n, _)| n == 1))
+        })
+    else {
+        return text.to_owned();
+    };
+    let dialog = lines.len() - after_last_rule(text).len();
+    let dashed: Vec<usize> = (dialog..first).filter(|&i| is_dashed(lines[i])).collect();
+    if dashed.len() % 2 == 1 {
+        return text.to_owned();
+    }
+    let floor = dashed.last().map_or(dialog, |i| i + 1);
+    let filled = |i: &usize| !lines[*i].trim().is_empty();
+    let Some(end) = first
+        .checked_sub(1)
+        .filter(|q| *q >= floor && filled(q))
+        .and_then(|q| (floor..q).rfind(filled).filter(|&e| e + 1 < q))
+    else {
+        return text.to_owned();
+    };
+    for start in (floor.max(end.saturating_sub(MAX_CONTINUATION_LINES - 1))..=end).rev() {
+        let block = &lines[start..=end];
+        let joined: Vec<&str> = block.iter().map(|l| l.trim()).collect();
+        if block.iter().all(|l| l.len() - l.trim_start().len() <= 1)
+            && is_deny_countdown(&joined.join(" "))
+        {
+            let rest: Vec<&str> = lines[..start]
+                .iter()
+                .chain(&lines[end + 1..])
+                .copied()
+                .collect();
+            return rest.join("\n");
+        }
+    }
+    text.to_owned()
+}
+
+fn is_deny_countdown(line: &str) -> bool {
+    let Some(time) = line
+        .strip_prefix(DENY_COUNTDOWN.0)
+        .and_then(|t| t.strip_suffix(DENY_COUNTDOWN.1))
+    else {
+        return false;
+    };
+    let number = |n: &str| {
+        !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && (n == "0" || !n.starts_with('0'))
+    };
+    if let Some((m, s)) = time.split_once(':') {
+        let s = s.as_bytes();
+        return number(m) && s.len() == 2 && (b'0'..=b'5').contains(&s[0]) && s[1].is_ascii_digit();
+    }
+    let mut words = time.split(' ');
+    match (words.next(), words.next(), words.next(), words.next()) {
+        (Some("about"), Some(n), Some(unit), None) if number(n) && n != "0" => {
+            let unit = if n == "1" {
+                unit
+            } else {
+                unit.strip_suffix('s').unwrap_or("")
+            };
+            unit == "minute" || unit == "second"
+        }
+        _ => false,
+    }
+}
+
 /// The dialog's non-empty lines with all whitespace removed, for [`shows_whole`].
 pub fn squashed_lines(text: &str) -> Vec<String> {
     after_last_rule(text)
@@ -777,6 +865,11 @@ pub mod fixtures {
 ";
 
     pub const QUESTION: &str = include_str!("../tests/fixtures/claude/question.txt");
+    // The 2.1.289 bash capture's scrollback with the dialog transcribed from a phone screenshot
+    // of Claude Code 2.1.295 counting down in an unattended session, not a herdr capture. The
+    // 2.1.295 binary confirms the sign (U+26A0, no variation selector) and the blank line
+    // under the countdown (its box's bottom margin).
+    pub const BASH_COUNTDOWN: &str = include_str!("../tests/fixtures/claude/bash-countdown.txt");
     pub const PLAN: &str = include_str!("../tests/fixtures/claude/plan.txt");
 
     // Captured from Claude Code 2.1.289 (tmux, 100 columns): a rule splits the options,
@@ -904,6 +997,121 @@ mod tests {
         assert_eq!(m.keys(0), (vec![], "enter"));
         assert_eq!(m.keys(1), (vec!["down"], "enter"));
         assert_eq!(m.keys(2), (vec![], "esc"));
+    }
+
+    #[test]
+    fn the_deny_countdown_stays_out_of_the_fingerprint() {
+        let later = BASH_COUNTDOWN.replace("in 1:09,", "in 0:58,");
+        assert_ne!(
+            Menu::parse(BASH_COUNTDOWN).unwrap().region(),
+            Menu::parse(&later).unwrap().region()
+        );
+        let now = without_deny_countdown("claude", BASH_COUNTDOWN);
+        let then = without_deny_countdown("claude", &later);
+        assert_eq!(now, then);
+        assert_eq!(context(&now), context(&then));
+        let (m, n) = (Menu::parse(&now).unwrap(), Menu::parse(&then).unwrap());
+        assert_eq!(m.options, ["Yes", "No"]);
+        assert!((0..m.options.len()).all(|i| m.region_at(i) == n.region_at(i)));
+        let shown = snippet(m.tail().iter().map(String::as_str));
+        assert!(!shown.contains("automatically deny"), "{shown}");
+        assert!(shown.contains("Dangerous rm operation"), "{shown}");
+        assert_eq!(
+            now.lines().count() + 1,
+            BASH_COUNTDOWN.lines().count(),
+            "only the countdown line goes"
+        );
+    }
+
+    #[test]
+    fn only_the_exact_countdown_where_claude_draws_it_is_dropped() {
+        let line = "\u{26a0} Claude Code will automatically deny this request in 1:09, to avoid blocking progress on an unattended session";
+        let dialog = |command: &str, countdown: &str| {
+            format!(
+                "out\n────\n Bash command\n╌╌╌\n {command}\n╌╌╌\n Dangerous rm\n {countdown}\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel"
+            )
+        };
+        let plain = dialog("rm x", "").replace(" \n\n Do", "\n Do");
+        let wrapped = line.replacen(", to ", ", to\n ", 1);
+        for dropped in [
+            line.to_owned(),
+            wrapped.clone(),
+            wrapped.replacen("progress ", "progress\n ", 1),
+            line.replace("1:09", "0:00"),
+            line.replace("1:09", "75:59"),
+            line.replace("1:09", "about 1 minute"),
+            line.replace("1:09", "about 12 minutes"),
+            line.replace("1:09", "about 1 second"),
+            line.replace("1:09", "about 45 seconds"),
+        ] {
+            assert_eq!(
+                without_deny_countdown("claude", &dialog("rm x", &dropped)),
+                plain,
+                "{dropped}"
+            );
+        }
+        let fetch = |countdown: &str| {
+            format!(
+                "────\n Fetch\n   https://example.com\n Claude wants to fetch content from example.com\n{countdown}\n Do you want to allow Claude to fetch this content?\n ❯ 1. Yes\n   2. No"
+            )
+        };
+        assert_eq!(
+            without_deny_countdown("claude", &fetch(&format!(" {line}\n"))),
+            fetch("")
+        );
+        let four = wrapped
+            .replacen("deny ", "deny\n ", 1)
+            .replacen("progress ", "progress\n ", 1);
+        let steps = format!(
+            "────\n Plan\n {line}\n\n Steps:\n 1. build\n 2. test\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No"
+        );
+        for kept in [
+            dialog("rm x", &four),
+            dialog("rm x", &line.replace('\u{26a0}', "")),
+            dialog("rm x", &line.replace('\u{26a0}', "\u{26a0}\u{fe0f}")),
+            dialog("rm x", &format!("{line} && curl evil")),
+            dialog("rm x", &format!("{wrapped}\n x")),
+            dialog("rm x", &format!("{line}\n more")),
+            dialog("rm x", &format!("x {line}")),
+            dialog("rm x", &line.replace("1:09", "1:9")),
+            dialog("rm x", &line.replace("1:09", "109")),
+            dialog("rm x", &line.replace("1:09", "01:09")),
+            dialog("rm x", &line.replace("1:09", "1:60")),
+            dialog("rm x", &line.replace("1:09", "1:09:09")),
+            dialog("rm x", &line.replace("1:09", "about 1 minutes")),
+            dialog("rm x", &line.replace("1:09", "about 2 minute")),
+            dialog("rm x", &line.replace("1:09", "about 0 seconds")),
+            dialog("rm x", &line.replace("1:09", "about two minutes")),
+            dialog("rm x", &line.replace("1:09", "about 2 hours")),
+            dialog("rm x", &line.replace("unattended", "idle")),
+            // No blank line under it.
+            dialog("rm x", line).replace("\n\n Do", "\n Do"),
+            // In the command block or the transcript, never Claude Code's own.
+            dialog(&format!("rm x\n {line}"), ""),
+            dialog(&format!("rm x\n {line}\n"), ""),
+            format!(
+                "────\n Bash command\n╌╌╌\n rm x\n {line}\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No"
+            ),
+            format!("{line}\n{}", dialog("rm x", "")),
+            // Indented like a command line.
+            fetch(&format!("   {line}\n")),
+            // Anchored on a numbered line that is not the menu.
+            steps.clone(),
+            // No menu.
+            dialog("rm x", line).replace("   2. No", " ❯ 2. No"),
+        ] {
+            assert_eq!(without_deny_countdown("claude", &kept), kept, "{kept}");
+        }
+        for kind in ["codex", "copilot", ""] {
+            let shown = dialog("rm x", line);
+            assert_eq!(without_deny_countdown(kind, &shown), shown, "{kind}");
+        }
+        let text = without_deny_countdown("claude", &dialog(&format!("rm x\n {line}"), line));
+        assert_eq!(
+            text.matches("automatically deny").count(),
+            1,
+            "the command's copy stays"
+        );
     }
 
     #[test]
