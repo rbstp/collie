@@ -3,7 +3,6 @@ import Quickshell
 import "CollieTray"
 import "CollieTray/Printable.js" as Printable
 
-// Drives Service.qml against Linux/Tests/fake_collied.py; run-service-test.py checks both sides.
 ShellRoot {
   id: harness
   property var states: []
