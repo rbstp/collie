@@ -79,3 +79,10 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(PlanUsage.spoken(seconds: 277_200) == "3 days, 5 hours")
     #expect(PlanUsage.spoken(seconds: 30) == "1 minute")
 }
+
+@Test func aHorizontalSwipeMovesBetweenAgentsAndUsage() {
+    #expect(ViewSwitch.target(after: CGSize(width: -120, height: 10)) == true)
+    #expect(ViewSwitch.target(after: CGSize(width: 120, height: -10)) == false)
+    #expect(ViewSwitch.target(after: CGSize(width: -40, height: 0)) == nil)
+    #expect(ViewSwitch.target(after: CGSize(width: -120, height: 90)) == nil)
+}
