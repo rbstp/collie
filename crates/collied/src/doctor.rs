@@ -41,6 +41,7 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     let mut r = Report { failed: false };
     let data_dir = config::data_dir()?;
     let explicit = config_path.is_some();
+    let config_path_arg = config_path.clone();
     let config_path = config_path.unwrap_or_else(|| data_dir.join(config::CONFIG_FILE));
 
     let config = match config::load(&config_path, explicit) {
@@ -64,7 +65,9 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
 
     let (s, d) = check_private(&data_dir, Kind::Dir, (Status::Warn, "missing"));
     r.line(s, "data dir", d);
-    check_daemon(&mut r, &data_dir).await;
+    let started_ms = check_daemon(&mut r, &data_dir).await;
+    let (s, d) = check_service(config_path_arg.as_deref(), &data_dir, started_ms);
+    r.line(s, "service", d);
     match &config {
         Some(config) => {
             check_herdr(&mut r, config).await;
@@ -91,7 +94,11 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     r.line(s, "attachments", format!("{d}, {stored} bytes stored"));
     match config.as_ref().map(|c| &c.apns) {
         Some(Some(apns)) => check_apns(&mut r, apns, &data_dir.join(config::APNS_DIR)),
-        Some(None) => r.line(Status::Warn, "apns", "not configured"),
+        Some(None) => r.line(
+            Status::Warn,
+            "apns",
+            "not configured (collied setup offers it)",
+        ),
         None => {}
     }
     #[cfg(target_os = "macos")]
@@ -410,19 +417,53 @@ fn check_signature() -> (Status, String) {
     }
 }
 
-async fn check_daemon(r: &mut Report, data_dir: &Path) {
+fn check_service(
+    config: Option<&Path>,
+    data_dir: &Path,
+    started_ms: Option<u64>,
+) -> (Status, String) {
+    use crate::service::{self, State};
+    if let Err(e) = service::installed_exe() {
+        return (Status::Warn, format!("not checked: {e:#}"));
+    }
+    match service::state(config, data_dir, started_ms) {
+        Ok(State::Current) => (Status::Ok, format!("up to date{}", service::note())),
+        Ok(State::Outdated(why)) => (Status::Warn, format!("{why}: run collied setup")),
+        Ok(State::Missing | State::Stopped) if started_ms.is_some() => (
+            Status::Warn,
+            "collied is running outside the service (collied run?): stop it, then run collied setup"
+                .to_owned(),
+        ),
+        Ok(State::Stopped) => (
+            Status::Warn,
+            "stopped: collied start, or collied setup".to_owned(),
+        ),
+        Ok(State::Missing) => (Status::Warn, "not installed: run collied setup".to_owned()),
+        Err(e) => (Status::Warn, format!("{e:#}")),
+    }
+}
+
+/// The daemon's start time, when it answers.
+async fn check_daemon(r: &mut Report, data_dir: &Path) -> Option<u64> {
     let socket = data_dir.join(config::CONTROL_SOCKET);
     let info = match control::request(&socket, &Request::Status).await {
         Ok(Some(Reply::Status(info))) => info,
-        Ok(None) => return r.line(Status::Warn, "daemon", "not running"),
+        Ok(None) => {
+            r.line(Status::Warn, "daemon", "not running");
+            return None;
+        }
         Ok(Some(other)) => {
-            return r.line(
+            r.line(
                 Status::Fail,
                 "daemon",
                 format!("unexpected reply {other:?}"),
             );
+            return None;
         }
-        Err(e) => return r.line(Status::Fail, "daemon", format!("{}: {e}", socket.display())),
+        Err(e) => {
+            r.line(Status::Fail, "daemon", format!("{}: {e}", socket.display()));
+            return None;
+        }
     };
     let (s, d) = check_private(&socket, Kind::Socket, (Status::Fail, "missing"));
     r.line(s, "control", d);
@@ -497,6 +538,7 @@ async fn check_daemon(r: &mut Report, data_dir: &Path) {
         ),
         Err(e) => r.line(Status::Fail, "listen", e.to_string()),
     }
+    info.started_ms
 }
 
 #[derive(Clone, Copy)]

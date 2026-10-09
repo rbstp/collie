@@ -24,7 +24,7 @@ The phone only dials (TCP to the Mac on port 8457). The Mac only listens through
 
 ## Linux node
 
-- Same as the Mac node, with `tag:collie-linux` instead of `tag:collie-mac`, hostname `collie-<hostname>`, and node state in `$XDG_DATA_HOME/collie/tsnet` (else `~/.local/share/collie/tsnet`), 0700.
+- Same as the Mac node, with `tag:collie-linux` instead of `tag:collie-mac`, hostname `collie-<hostname>`, and node state in `$XDG_DATA_HOME/collie/tsnet` (else `~/.local/share/collie/tsnet`), 0700. The login error, the `reach` line and `collied setup` print the entries for `tag:collie-linux`.
 - `collied login` and `collied run` refuse a node whose own tags do not include `tag:collie-linux`. Logging in again does not change the tags of a node that is already registered: remove it in the admin console (Machines), delete the `tsnet` directory, check that your user is a tag owner of `tag:collie-linux`, then run `collied login` again (phones pair again).
 - A system Tailscale (`tailscaled`, the `tailscale` CLI) on the same machine is a different node and plays no part in collie. The two run side by side: the embedded node has its own state and keys, uses a userspace netstack (no TUN device, no routes) and its own WireGuard UDP port.
 - The phone accepts a Linux node at pairing and from then on requires `tag:collie-linux` on it.

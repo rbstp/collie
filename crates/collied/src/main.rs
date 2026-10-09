@@ -24,7 +24,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Set up or update this machine: login, service, doctor, push notifications and
-    /// pairing, each skipped when already done (interactive, macOS).
+    /// pairing, each skipped when already done (interactive).
     Setup,
     /// Join the tailnet as tag:collie-mac on macOS, tag:collie-linux on Linux
     /// (interactive, or COLLIE_TS_AUTHKEY).
@@ -71,7 +71,8 @@ enum Command {
 enum ApnsCommand {
     /// Send a test alert to every registered device of a paired phone.
     Test,
-    /// Move a .p8 key into the login Keychain, then offer to delete the file.
+    /// Store a .p8 key (login Keychain on macOS, systemd credential on Linux), then offer
+    /// to delete the file.
     Import { path: PathBuf },
 }
 
@@ -162,34 +163,28 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
                 std::io::stdin().is_terminal(),
                 "collied setup is interactive: run it in a terminal"
             );
-            #[cfg(target_os = "linux")]
-            anyhow::bail!(
-                "collied setup is macOS only for now: follow the Linux steps in the README"
-            );
             #[cfg(target_os = "macos")]
-            {
-                // The service runs this path: only the copy `just collied-install` signs
-                // stays signed after the next cargo build.
-                let installed = config::home_dir()?.join(".cargo/bin/collied");
-                let exe = std::env::current_exe()?.canonicalize()?;
-                doctor::signed_as_collied()
-                    .and_then(|()| match installed.canonicalize() {
-                        Ok(p) if p == exe => Ok(()),
-                        _ => Err(format!("{} is not {}", exe.display(), installed.display())),
-                    })
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "{e}: run `just collied-install`, then ~/.cargo/bin/collied setup"
-                        )
-                    })?;
-                let mut host = SetupHost {
-                    config: cli.config.as_deref(),
-                    data_dir: &data_dir,
-                    control_path: &control_path,
-                    auth_key,
-                };
-                return collied::setup::run(&mut host).await;
-            }
+            let signed = doctor::signed_as_collied();
+            #[cfg(target_os = "linux")]
+            let signed: Result<(), String> = Ok(());
+            signed
+                .and_then(|()| {
+                    service::installed_exe()
+                        .map(drop)
+                        .map_err(|e| e.to_string())
+                })
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "{e}: run `just collied-install`, then ~/.cargo/bin/collied setup"
+                    )
+                })?;
+            let mut host = SetupHost {
+                config: cli.config.as_deref(),
+                data_dir: &data_dir,
+                control_path: &control_path,
+                auth_key,
+            };
+            return collied::setup::run(&mut host).await;
         }
         Command::Login => {
             let config = load_config(cli.config.as_deref(), &data_dir)?;
@@ -215,7 +210,6 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
     Ok(true)
 }
 
-#[cfg(target_os = "macos")]
 struct SetupHost<'a> {
     config: Option<&'a Path>,
     data_dir: &'a Path,
@@ -223,26 +217,33 @@ struct SetupHost<'a> {
     auth_key: Option<Zeroizing<String>>,
 }
 
-#[cfg(target_os = "macos")]
 impl SetupHost<'_> {
     async fn running_within(&mut self, secs: u64) -> Option<control::StatusInfo> {
         use collied::setup::Host;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        let mut running: Option<(std::time::Instant, control::StatusInfo)> = None;
         loop {
+            let now = std::time::Instant::now();
             if let Some(s) = self.status().await
                 && s.backend_state == "Running"
             {
-                return Some(s);
+                // A node that just started may not have its peers yet: no false policy hint.
+                let since = running.as_ref().map_or(now, |(t, _)| *t);
+                if s.user_peers != Some(0) || now >= since + std::time::Duration::from_secs(10) {
+                    return Some(s);
+                }
+                running = Some((since, s));
+            } else {
+                running = None;
             }
-            if std::time::Instant::now() >= deadline {
-                return None;
+            if now >= deadline {
+                return running.map(|(_, s)| s);
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
     }
 }
 
-#[cfg(target_os = "macos")]
 impl collied::setup::Host for SetupHost<'_> {
     async fn status(&mut self) -> Option<control::StatusInfo> {
         match control::request(self.control_path, &Request::Status).await {
@@ -280,16 +281,15 @@ impl collied::setup::Host for SetupHost<'_> {
         if let Some(s) = self.running_within(60).await {
             return Ok(s);
         }
-        let log = self.data_dir.join(service::STDERR_LOG);
-        let text = std::fs::read_to_string(&log).unwrap_or_default();
-        let lines: Vec<&str> = text.lines().collect();
-        for line in &lines[lines.len().saturating_sub(20)..] {
+        let (log, lines) = service::log_tail(self.data_dir);
+        anyhow::ensure!(
+            !lines.is_empty(),
+            "collied did not start within 60 s, and {log} shows nothing: check it directly"
+        );
+        for line in &lines {
             println!("  {line}");
         }
-        anyhow::bail!(
-            "collied did not start within 60 s; the end of {} is above",
-            log.display()
-        );
+        anyhow::bail!("collied did not start within 60 s; the end of {log} is above");
     }
 
     async fn doctor(&mut self) -> anyhow::Result<bool> {
@@ -347,7 +347,6 @@ impl collied::setup::Host for SetupHost<'_> {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn prompt(question: &str) -> anyhow::Result<String> {
     // Discard anything typed before the question was shown.
     let _ = rustix::termios::tcflush(std::io::stdin(), rustix::termios::QueueSelector::IFlush);

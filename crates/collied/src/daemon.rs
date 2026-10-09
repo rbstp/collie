@@ -52,7 +52,7 @@ pub async fn login(
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
         !control::daemon_running(&data_dir.join(config::CONTROL_SOCKET)).await,
-        "collied is running; stop it (collied service uninstall) before logging in"
+        "collied is running; stop it (collied stop) before logging in"
     );
     let (node, _lock) = mac_node(data_dir, config, auth_key)?;
     node.start()?;
