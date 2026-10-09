@@ -35,16 +35,24 @@ struct CollieApp: App {
 
 struct RootView: View {
     @Bindable var app: AppModel
+    @State private var agentsReselected = 0
 
     var body: some View {
         if let error = app.startupError {
             ContentUnavailableView("collie could not start", systemImage: "exclamationmark.triangle", description: Text(error))
         } else if app.showsMain {
-            TabView(selection: $app.tab) {
+            TabView(
+                selection: Binding {
+                    app.tab
+                } set: { tab in
+                    if tab == .agents, app.tab == .agents { agentsReselected += 1 }
+                    app.tab = tab
+                }
+            ) {
                 Tab("Agents", systemImage: "square.grid.2x2", value: AppTab.agents) {
                     FlockScreen(
                         core: app.core, machines: app.machines, approvals: app.approvals, follows: app.follows,
-                        opening: $app.openingAgent, tailnetStarting: !app.isRunning
+                        opening: $app.openingAgent, tailnetStarting: !app.isRunning, reselected: agentsReselected
                     ) { app.viewingAgent = $0 }
                 }
                 Tab("Approvals", systemImage: "checkmark.shield", value: AppTab.approvals) {

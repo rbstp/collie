@@ -8,6 +8,7 @@ struct FlockScreen: View {
     let follows: FollowModel?
     @Binding var opening: AgentRoute?
     var tailnetStarting = false
+    var reselected = 0
     var viewing: (AgentRoute?) -> Void = { _ in }
     @State private var model = FlockModel()
     @State private var path: [AgentRoute] = []
@@ -99,6 +100,12 @@ struct FlockScreen: View {
                     }
                 }
             }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 30).onEnded { drag in
+                    guard !tailnetStarting, let usage = ViewSwitch.target(after: drag.translation) else { return }
+                    showsUsage = usage
+                }
+            )
             .navigationTitle("Agents")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(removing: .title)
@@ -190,6 +197,7 @@ struct FlockScreen: View {
                 DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout }
             }
             .onChange(of: path, initial: true) { _, path in viewing(path.last) }
+            .onChange(of: reselected) { showsUsage = false }
             .onChange(of: opening, initial: true) { _, route in
                 guard let route else { return }
                 path = [route]
@@ -222,9 +230,15 @@ struct FlockScreen: View {
     }
 }
 
-private struct ViewSwitch: View {
+struct ViewSwitch: View {
     @Binding var showsUsage: Bool
     @Namespace private var pill
+
+    /// Whether a drag shows Usage (a swipe left) or Agents (a swipe right), or nil when it is not a horizontal swipe.
+    nonisolated static func target(after translation: CGSize) -> Bool? {
+        guard abs(translation.width) > 60, abs(translation.width) > 2 * abs(translation.height) else { return nil }
+        return translation.width < 0
+    }
 
     var body: some View {
         GlassEffectContainer {
