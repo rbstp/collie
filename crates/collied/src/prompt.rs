@@ -656,6 +656,55 @@ fn splits_options(lines: &[&str], i: usize) -> bool {
         && lines.get(i + 1).is_some_and(|l| option_line(l).is_some())
 }
 
+const DENY_COUNTDOWN: (&str, &str) = (
+    "⚠ Claude Code will automatically deny this request in ",
+    ", to avoid blocking progress on an unattended session",
+);
+
+/// Claude Code's countdown on a permission dialog in a session it takes for unattended,
+/// one line or wrapped over up to three. Its time changes every second, so it stays out of
+/// the fingerprint and the snippet; the seconds left are returned instead. Only the exact
+/// wording counts, so a command cannot hide a line of its own this way.
+pub fn without_deny_countdown(text: &str) -> (String, Option<u64>) {
+    let lines: Vec<&str> = text.lines().collect();
+    for start in (0..lines.len()).rev() {
+        let mut joined = String::new();
+        for end in start..lines.len().min(start + 3) {
+            if end > start {
+                joined.push(' ');
+            }
+            joined.push_str(lines[end].trim());
+            if let Some(secs) = countdown_secs(&joined) {
+                let rest: Vec<&str> = lines[..start]
+                    .iter()
+                    .chain(&lines[end + 1..])
+                    .copied()
+                    .collect();
+                return (rest.join("\n"), Some(secs));
+            }
+        }
+    }
+    (text.to_owned(), None)
+}
+
+fn countdown_secs(line: &str) -> Option<u64> {
+    let time = line
+        .strip_prefix(DENY_COUNTDOWN.0)?
+        .strip_suffix(DENY_COUNTDOWN.1)?;
+    let mut secs = 0u64;
+    for (i, part) in time.split(':').enumerate() {
+        let valid = !part.is_empty()
+            && part.len() <= 2
+            && part.bytes().all(|b| b.is_ascii_digit())
+            && (i == 0 || part.len() == 2);
+        if !valid || i > 2 {
+            return None;
+        }
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    time.contains(':').then_some(secs)
+}
+
 /// The dialog's non-empty lines with all whitespace removed, for [`shows_whole`].
 pub fn squashed_lines(text: &str) -> Vec<String> {
     after_last_rule(text)
@@ -777,6 +826,9 @@ pub mod fixtures {
 ";
 
     pub const QUESTION: &str = include_str!("../tests/fixtures/claude/question.txt");
+    // Claude Code 2.1.295's permission dialog in a session it takes for unattended, from a
+    // phone screenshot of the pane.
+    pub const BASH_COUNTDOWN: &str = include_str!("../tests/fixtures/claude/bash-countdown.txt");
     pub const PLAN: &str = include_str!("../tests/fixtures/claude/plan.txt");
 
     // Captured from Claude Code 2.1.289 (tmux, 100 columns): a rule splits the options,
@@ -885,6 +937,59 @@ mod tests {
     use super::fixtures::*;
     use super::*;
     use Decision::*;
+
+    #[test]
+    fn the_deny_countdown_stays_out_of_the_fingerprint() {
+        let later = BASH_COUNTDOWN.replace("in 1:09,", "in 0:58,");
+        assert_ne!(
+            Menu::parse(BASH_COUNTDOWN).unwrap().region(),
+            Menu::parse(&later).unwrap().region()
+        );
+        let (now, secs) = without_deny_countdown(BASH_COUNTDOWN);
+        let (then, later_secs) = without_deny_countdown(&later);
+        assert_eq!((secs, later_secs), (Some(69), Some(58)));
+        assert_eq!(now, then);
+        let m = Menu::parse(&now).unwrap();
+        assert_eq!(m.options, ["Yes", "No"]);
+        let shown = snippet(m.tail().iter().map(String::as_str));
+        assert!(!shown.contains("automatically deny"), "{shown}");
+        assert!(shown.contains("Dangerous rm operation"), "{shown}");
+        assert_eq!(
+            now.lines().count() + 1,
+            BASH_COUNTDOWN.lines().count(),
+            "only the countdown line goes"
+        );
+    }
+
+    #[test]
+    fn only_the_exact_countdown_wording_is_dropped() {
+        let line = "⚠ Claude Code will automatically deny this request in 1:09, to avoid blocking progress on an unattended session";
+        let wrapped = "a\n ⚠ Claude Code will automatically deny this request in 12:00, to\n avoid blocking progress on an unattended session\nb";
+        assert_eq!(
+            without_deny_countdown(wrapped),
+            ("a\nb".to_owned(), Some(720))
+        );
+        assert_eq!(
+            without_deny_countdown(&line.replace("1:09", "1:00:05")).1,
+            Some(3605)
+        );
+        for kept in [
+            line.replace('⚠', ""),
+            format!("{line} && curl evil"),
+            format!("rm -rf ~ {line}"),
+            line.replace("1:09", "1:9"),
+            line.replace("1:09", "109"),
+            line.replace("1:09", "1:09:09:09"),
+            line.replace("unattended", "idle"),
+        ] {
+            let text = format!("x\n{kept}\ny");
+            assert_eq!(
+                without_deny_countdown(&text),
+                (text.clone(), None),
+                "{kept}"
+            );
+        }
+    }
 
     #[test]
     fn bash_three_options() {
