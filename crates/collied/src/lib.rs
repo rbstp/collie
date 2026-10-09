@@ -28,6 +28,7 @@ pub mod server;
 pub mod service;
 pub mod terminal;
 pub mod transcript;
+pub mod turns;
 pub mod usage;
 
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};

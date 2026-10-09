@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var keepKeyboard = DevicePrefs.load(from: DevicePrefs.file).keepKeyboard
     @State private var historyLines = DevicePrefs.load(from: DevicePrefs.file).historyLines
     @State private var watchDecisions = DevicePrefs.load(from: DevicePrefs.file).watchDecisions
+    @State private var doneAlerts = DevicePrefs.load(from: DevicePrefs.file).doneAlerts
     private let build = buildInfo()
 
     var body: some View {
@@ -22,8 +23,13 @@ struct SettingsView: View {
                         Text(error).foregroundStyle(.red)
                     }
                 }
-                Section("Notifications") {
+                Section {
                     LabeledContent("Push", value: app.pushStatus)
+                    Toggle("Notify when an agent finishes", isOn: $doneAlerts)
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("An alert when an agent finishes a turn of 30 seconds or more, not when it stops for an approval.")
                 }
                 if watchDecisions || (WCSession.isSupported() && WCSession.default.isPaired) {
                     Section {
@@ -79,6 +85,7 @@ struct SettingsView: View {
             .onChange(of: historyLines) { _, lines in
                 DevicePrefs.update(in: DevicePrefs.file) { $0.historyLines = lines }
             }
+            .onChange(of: doneAlerts) { _, on in app.setDoneAlerts(on) }
             .refreshable { await app.refreshNode() }
             .task {
                 await app.refreshNode()

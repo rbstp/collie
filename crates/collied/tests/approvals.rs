@@ -349,7 +349,7 @@ impl Rig {
             Arc::new(|_| true),
         )
         .unwrap();
-        push.register(PHONE, token(), ApnsEnvironment::Sandbox, key())
+        push.register(PHONE, token(), ApnsEnvironment::Sandbox, key(), false)
             .unwrap();
         let audit = dir.path().join("audit.log");
         let audit_log = Arc::new(Audit::open(&audit).unwrap());
@@ -1299,7 +1299,7 @@ fn open_offered(state: &Value) -> Value {
 async fn a_followed_terminal_alerts_on_its_activity_only() {
     let mut rig = Rig::start(TTL).await;
     rig.push
-        .register(OTHER, other_token(), ApnsEnvironment::Sandbox, key())
+        .register(OTHER, other_token(), ApnsEnvironment::Sandbox, key(), false)
         .unwrap();
     rig.push
         .register_activity(

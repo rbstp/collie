@@ -73,6 +73,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             await app.decideFromNotification(link, decision, agent: agent, thread: thread)
         case .open(let link):
             app.open(link)
+        case .openAgent(let nodeId, let terminalId):
+            if let machine = app.machines.first(where: { $0.nodeId == nodeId }),
+                let link = AgentLink(machineId: machine.id, terminalId: terminalId)
+            {
+                app.open(link.url)
+            }
         case .ignore:
             break
         }

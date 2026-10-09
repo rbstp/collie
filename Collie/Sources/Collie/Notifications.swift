@@ -77,11 +77,20 @@ enum ApprovalNotification {
 enum NotificationResponse: Equatable, Sendable {
     case decide(ApprovalLink, ApprovalDecision)
     case open(ApprovalLink)
+    /// A tap on a done alert: that agent, on the Mac with this node id.
+    case openAgent(nodeId: String, terminalId: String)
     case ignore
 
     init(actionIdentifier: String, userInfo: [AnyHashable: Any]) {
         guard let link = ApprovalLink(userInfo: userInfo) else {
-            self = .ignore
+            if actionIdentifier == UNNotificationDefaultActionIdentifier,
+                let nodeId = userInfo["node_id"] as? String, ProtocolId.valid(nodeId, extra: "-_"),
+                let terminalId = userInfo["terminal_id"] as? String
+            {
+                self = .openAgent(nodeId: nodeId, terminalId: terminalId)
+            } else {
+                self = .ignore
+            }
             return
         }
         if let decision = ApprovalNotification.decision(forAction: actionIdentifier) {

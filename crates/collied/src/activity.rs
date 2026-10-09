@@ -535,6 +535,7 @@ mod tests {
                 environment: ApnsEnvironment::Sandbox,
                 notification_key: Some(push::tests::key()),
                 registered_at: 0,
+                mute_done: false,
             },
             terminal_id: approval.terminal_id.clone(),
             approval_id: approval.approval_id.clone(),
