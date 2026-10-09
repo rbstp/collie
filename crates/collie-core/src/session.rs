@@ -913,6 +913,7 @@ mod tests {
             truncated: false,
             wraps: Vec::new(),
             splits: Vec::new(),
+            copilot_scrollbar: false,
         }
     }
 
@@ -1362,6 +1363,7 @@ mod tests {
                 truncated: false,
                 wraps: None,
                 splits: None,
+                copilot_scrollbar: None,
             };
             write(
                 &mut ws,
@@ -1437,6 +1439,7 @@ mod tests {
                 truncated: false,
                 wraps: None,
                 splits: None,
+                copilot_scrollbar: None,
             };
             write(
                 &mut ws,

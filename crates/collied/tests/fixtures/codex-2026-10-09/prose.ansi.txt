@@ -1,0 +1,2 @@
+[0m[2m• [0mThe current reflow path runs only for Claude, as issue 176 describes. I’m comparing captured Codex and Copilot screens so continuation detection joins prose while leaving code, tables,
+  diffs, and interactive rows alone.
