@@ -60,8 +60,6 @@ struct Screen {
     cursor_at: Vec<[u8; 32]>,
     snippet: String,
     context: String,
-    /// Seconds until Claude Code denies the request on its own, when its dialog says.
-    deny_in_secs: Option<u64>,
 }
 
 impl Screen {
@@ -157,14 +155,6 @@ pub struct Approvals {
     pending_count: watch::Sender<usize>,
 }
 
-/// Under this, Claude Code denies before anyone could act on an alert.
-const MIN_ALERT_SECS: u64 = 5;
-
-/// An approval never outlives Claude Code's own deny deadline.
-fn ttl(ttl: Duration, deny_in_secs: Option<u64>) -> Duration {
-    deny_in_secs.map_or(ttl, |s| ttl.min(Duration::from_secs(s)))
-}
-
 fn is_blocked(a: &AgentInfo) -> bool {
     flock::status(&a.agent_status) == AgentStatus::Blocked
 }
@@ -256,8 +246,8 @@ pub async fn open_to(
 ) -> Result<Option<String>, herdr::Error> {
     let kind = a.agent.as_deref().unwrap_or_default();
     let explain = herdr::agent_explain(herdr, &a.pane_id).await?;
-    let (text, _) =
-        prompt::without_deny_countdown(&herdr::detection_text(herdr, &a.pane_id).await?);
+    let text =
+        prompt::without_deny_countdown(kind, &herdr::detection_text(herdr, &a.pane_id).await?);
     let rule = explain.matched_rule.map(|r| r.id);
     Ok(open(kind, rule.as_deref(), &text).then_some(text))
 }
@@ -425,8 +415,10 @@ impl Approvals {
     async fn screen(&self, a: &AgentInfo) -> Result<Screen, herdr::Error> {
         let kind = a.agent.as_deref().unwrap_or_default();
         let explain = herdr::agent_explain(&self.herdr, &a.pane_id).await?;
-        let (text, deny_in_secs) =
-            prompt::without_deny_countdown(&herdr::detection_text(&self.herdr, &a.pane_id).await?);
+        let text = prompt::without_deny_countdown(
+            kind,
+            &herdr::detection_text(&self.herdr, &a.pane_id).await?,
+        );
         let rule = explain.matched_rule.map(|r| r.id);
         let menu = prompt::uses_menu(kind, rule.as_deref())
             .then(|| Menu::parse(&text))
@@ -470,7 +462,6 @@ impl Approvals {
             offered,
             snippet,
             context: prompt::context(&text),
-            deny_in_secs,
         })
     }
 
@@ -509,7 +500,7 @@ impl Approvals {
             supports_note: screen.supports_note,
             nonce: Nonce::new(random(protocol::limits::NONCE_BYTES)?)?,
             created_at_ms: now,
-            expires_at_ms: now + ttl(self.ttl, screen.deny_in_secs).as_millis() as u64,
+            expires_at_ms: now + self.ttl.as_millis() as u64,
         };
         let context = tool
             .as_ref()
@@ -519,8 +510,7 @@ impl Approvals {
             if inner.pending.contains_key(&a.terminal_id) {
                 return Ok(());
             }
-            let alert = screen.deny_in_secs.is_none_or(|s| s >= MIN_ALERT_SECS)
-                && inner.alert_due(&a.terminal_id, &screen, &approval);
+            let alert = inner.alert_due(&a.terminal_id, &screen, &approval);
             if alert {
                 inner
                     .notified
@@ -1004,15 +994,6 @@ mod tests {
         let n2 = Nonce::new(random(32).unwrap()).unwrap();
         assert_ne!(n1, n2);
         assert!(ApprovalId::new(random(16).unwrap()).is_ok());
-    }
-
-    #[test]
-    fn claude_codes_deadline_bounds_the_approval() {
-        let ten = Duration::from_secs(600);
-        assert_eq!(ttl(ten, None), ten);
-        assert_eq!(ttl(ten, Some(69)), Duration::from_secs(69));
-        assert_eq!(ttl(ten, Some(3600)), ten);
-        assert_eq!(ttl(ten, Some(0)), Duration::ZERO);
     }
 
     #[test]

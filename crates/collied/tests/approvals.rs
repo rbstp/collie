@@ -769,7 +769,7 @@ async fn a_ticking_deny_countdown_neither_reissues_nor_supersedes() {
     let mut rig = Rig::start(TTL).await;
     rig.herdr.with(|h| h.text = BASH_COUNTDOWN.into());
     let a = rig.needed().await;
-    assert_eq!(a.expires_at_ms - a.created_at_ms, 69_000);
+    assert_eq!(a.expires_at_ms - a.created_at_ms, TTL.as_millis() as u64);
     assert!(!a.snippet.contains("automatically deny"), "{}", a.snippet);
     rig.herdr
         .with(|h| h.text = BASH_COUNTDOWN.replace("in 1:09,", "in 0:58,"));
