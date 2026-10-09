@@ -46,6 +46,25 @@ enum ApprovalClear {
     }
 }
 
+enum DoneNotification {
+    static func identifiers(_ delivered: [(id: String, userInfo: [AnyHashable: Any])]) -> [String] {
+        delivered.compactMap { note in
+            guard note.userInfo["approval_id"] == nil,
+                let nodeId = note.userInfo["node_id"] as? String,
+                let terminalId = note.userInfo["terminal_id"] as? String,
+                ProtocolId.valid(nodeId, extra: "-_"), ProtocolId.valid(terminalId, extra: "-_")
+            else { return nil }
+            return note.id
+        }
+    }
+
+    static func removeDelivered() async {
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications().map { (id: $0.request.identifier, userInfo: $0.request.content.userInfo) }
+        center.removeDeliveredNotifications(withIdentifiers: identifiers(delivered))
+    }
+}
+
 enum ApprovalNotification {
     static let category = "APPROVAL"
     static let approveAction = "APPROVE"

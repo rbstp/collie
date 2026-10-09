@@ -81,6 +81,18 @@ import UserNotifications
     #expect(ApprovalClear.identifiers(delivered, naming: link) == ["a", "b"])
 }
 
+@Test func openingCollieClearsOnlyDoneNotifications() {
+    let delivered: [(id: String, userInfo: [AnyHashable: Any])] = [
+        ("done-a", ["node_id": "nMAC", "terminal_id": "term_1"]),
+        ("approval", ["node_id": "nMAC", "approval_id": "ap_1"]),
+        ("follow-up", ["node_id": "nMAC"]),
+        ("mixed", ["node_id": "nMAC", "terminal_id": "term_2", "approval_id": "ap_2"]),
+        ("bad-terminal", ["node_id": "nMAC", "terminal_id": "../term"]),
+        ("done-b", ["node_id": "nOTHER", "terminal_id": "term_3"]),
+    ]
+    #expect(DoneNotification.identifiers(delivered) == ["done-a", "done-b"])
+}
+
 @Test func reachabilityParsing() {
     let json = Data(
         #"{"nUP":{"last_ok_ms":200,"last_fail_ms":100},"nDOWN":{"last_ok_ms":100,"last_fail_ms":200},"nNEVER":{"last_ok_ms":null,"last_fail_ms":5},"nNEW":{"last_ok_ms":7,"last_fail_ms":null}}"#.utf8

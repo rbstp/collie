@@ -89,6 +89,9 @@ final class AppModel {
     }
 
     func launch() async {
+        if UIApplication.shared.applicationState == .active {
+            await DoneNotification.removeDelivered()
+        }
         guard let core else { return }
         if core.tailnetConfigured() || ProcessInfo.processInfo.arguments.contains("--measure-cold-start") {
             await start(authKey: nil)
@@ -223,6 +226,7 @@ final class AppModel {
                 }
             }
         case .active:
+            Task { await DoneNotification.removeDelivered() }
             loadTerminalKey()
             Task { await refreshNode() }
             if let since = backgroundedAt {
