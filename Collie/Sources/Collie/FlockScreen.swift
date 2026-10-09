@@ -100,7 +100,7 @@ struct FlockScreen: View {
                     }
                 }
             }
-            .simultaneousGesture(
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 30).onEnded { drag in
                     guard !tailnetStarting, let usage = ViewSwitch.target(after: drag.translation) else { return }
                     showsUsage = usage
