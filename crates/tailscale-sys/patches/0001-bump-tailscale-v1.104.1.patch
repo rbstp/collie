@@ -1,12 +1,12 @@
 diff --git a/go.mod b/go.mod
-index c99f4c5..e70a09c 100644
+index c99f4c5..80f1389 100644
 --- a/go.mod
 +++ b/go.mod
 @@ -1,101 +1,106 @@
  module github.com/tailscale/libtailscale
  
 -go 1.25.5
-+go 1.27.1
++go 1.27.2
  
 -require tailscale.com v1.94.1
 +require (
