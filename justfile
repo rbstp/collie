@@ -200,8 +200,8 @@ mac-notarize profile="collie":
 tray-test:
     cmp Mac/CollieBar/Assets.xcassets/MenuIcon.imageset/MenuIcon.svg Linux/CollieTray/MenuIcon.svg
     omarchy-plugin-validate Linux/CollieTray
-    node --test Linux/Tests/
-    python3 -I Linux/Tests/run-service-test.py
+    node --test Linux/Tests/model.test.cjs
+    node Linux/Tests/run-service-test.cjs
 
 # Copies the Omarchy bar widget to ~/.config/omarchy/plugins/rbstp.collie and puts it on the bar.
 [linux]
