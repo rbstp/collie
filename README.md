@@ -6,7 +6,7 @@ collie is a remote control for [herdr](https://github.com/herdrdev/herdr) coding
 
 - Every herdr agent across several machines, with live terminal views and a sessions inbox
 - Lock-screen, Live Activity and Apple Watch approvals, with the command end-to-end encrypted in the push
-- Claude Code, Codex and GitHub Copilot CLI agents, with Claude Code plan usage and remaining context
+- Claude Code, Codex and GitHub Copilot CLI agents, with remaining context and Claude Code plan usage
 - Tailnet only: an embedded Tailscale node on each side, no Tailscale app and no open TCP port on the real network
 - Mutual TLS pinned at pairing, with the phone's key in the Secure Enclave
 
@@ -38,7 +38,7 @@ No Tailscale app is needed on either device, and no TCP port is opened outside t
 
 ## Features
 
-How each feature works, with its limits, is in [docs/architecture.md](docs/architecture.md).
+Design details and limits are in [docs/architecture.md](docs/architecture.md).
 
 ### Agents
 
@@ -60,7 +60,7 @@ How each feature works, with its limits, is in [docs/architecture.md](docs/archi
 - **Claude Code notices**: the options of a notice above the input box (the "Heads up" tip, its explanation and feedback row, the session rating question, or a plugin that draws its options the same way) show as buttons. A tap sends that one digit, without Enter, only while the screen still shows that option above an empty input box. Chat in main session and Turn off suggestions only fill the input box; nothing is sent until you send it. The tip feedback options send Anthropic a feedback signal about the tip, never its text or the transcript. Follow-ups to a rating are answered on the machine.
 - **Dictation**: the mic button dictates into the prompt field with Apple's on-device speech models, in English (US) or French (Canada). Audio never leaves the phone.
 - **Attachments**: up to 10 photos or files per prompt, uploaded over the tailnet and shown as removable thumbnails. The agent receives their paths on the machine; files are deleted after 24 hours.
-- **New task**: start Claude Code, Codex or GitHub Copilot CLI in a new workspace. Each machine can have a base folder (Machines > the machine > Base folder, a full path such as `/Users/you/git`) inside one of `collied`'s task roots (`[tasks] roots`, the home folder by default). Typing a name then means that folder inside the base, with matching folders offered as you type, and Browse lists the base's folders. Recent folders and absolute paths also work. New folder creates one empty folder and starts the agent there; it stays if the agent fails to start.
+- **New task**: start Claude Code, Codex or GitHub Copilot CLI in a new workspace. Each machine can have a base folder (Machines > the machine > Base folder, a full path such as `/Users/you/git`, since `~` is not expanded) inside one of `collied`'s task roots (`[tasks] roots`, the home folder by default). Typing a name then means that folder inside the base, with matching folders offered as you type, and Browse lists the base's folders. Recent folders and absolute paths also work. New folder creates one empty folder (no `git init`) in the base, or in a task root when no base is set, and starts the agent there; it stays if the agent fails to start.
 - **Terminals** (off by default, enabled per machine in `collied.toml`): plain shell panes, listed under Terminals. When an agent exits, its screen becomes the pane's shell. Face ID or the passcode unlocks a terminal for 5 minutes; the command field then runs one line at a time and the key strip sends `esc ⇥ ^C ← ↑ ↓ → ⏎`.
 
 ### Approvals and notifications
@@ -69,7 +69,7 @@ How each feature works, with its limits, is in [docs/architecture.md](docs/archi
 - **In-app answers**: add a note to an approval or a denial, send feedback on a plan, and answer Claude Code's question menus by picking an option or typing an answer. Notes and answers are one line, without control, bidi or invisible formatting characters, so the agent receives exactly the text you see. Claude Code's folder trust prompt is answered the same way: Approve trusts the folder, Deny ends the session. Settings pickers such as `/effort` and `/config` raise no notification.
 - **Other agents**: approvals are for Claude Code only. A blocked Codex or Copilot agent still sends a notification, without Approve or Deny and never on a Live Activity, and is answered on the machine.
 - **Done alerts**: when an agent finishes a turn that took 30 seconds or more, a notification with its name and workspace, one per agent and none while it is on screen. A tap opens the agent. Settings > Notifications > Notify when an agent finishes turns it off.
-- **Live Activities**: "Follow on Lock Screen" shows up to 5 agents in a Live Activity and the Dynamic Island, with their status and how long they have been in it. When a followed agent blocks on a permission prompt, the activity shows the command with Approve and Deny buttons. Following is off by default.
+- **Live Activities**: "Follow on Lock Screen" (the agent screen's menu, or a long press on the agent) shows up to 5 agents in a Live Activity and the Dynamic Island, with their status and how long they have been in it. When a followed agent blocks on a permission prompt, the activity shows the command with Approve and Deny buttons; other prompts arrive as a notification. Following is off by default.
 
 ### Apple Watch
 
@@ -184,13 +184,13 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
 
 | Command | Purpose |
 |---|---|
-| `collied status` | The running daemon's state: its tags and the herdr agents it sees |
-| `collied doctor` | Checks configuration, permissions, herdr reachability, push, hooks and plan usage |
+| `collied status` | The running daemon's state: its node and tags, sessions, paired phones, herdr version and the agents it sees |
+| `collied doctor` | Checks the config, service, herdr, the tailnet node, its tag and reach, push, hooks and plan usage |
 | `collied peers list` | Lists paired phones |
 | `collied peers revoke <label or StableID>` | Revokes a phone and closes its live sessions (removing the machine in the app does the same when it is reachable) |
 | `collied stop` | Turns `collied` off and keeps it off, across reboots, until `collied start` |
 | `collied start` | Starts it again |
-| `collied service uninstall` | Removes the launchd agent or systemd user unit |
+| `collied service uninstall` | Stops and removes the launchd agent or systemd user unit |
 
 **Configuration and data**: on macOS, `collied.toml` is in `~/Library/Application Support/collie/`. On Linux, the data directory is `$XDG_DATA_HOME/collie`, else `~/.local/share/collie`, and holds `collied.toml`, the node state, paired phones and the audit log. Logs go to the user journal (`journalctl --user -u collied`). A systemd user unit runs while you have a session; `loginctl enable-linger` (optional) keeps it running without a login.
 
@@ -247,7 +247,7 @@ scripts/           libghostty-vt xcframework build
 
 ## Documentation
 
-- [Architecture](docs/architecture.md): design, protocol behavior, herdr and Tailscale integration, and each feature in detail
+- [Architecture](docs/architecture.md): design, protocol behavior, herdr and Tailscale integration, and how the main features work
 - [Threat model](docs/threat-model.md): assets, trust boundaries, threats and what is not covered
 - [Tailnet setup](docs/tailnet.md): the policy file, tags, owner, key expiry and revocation
 - [Release](docs/release.md): Apple setup, APNs, TestFlight, notarization and `collied` on Linux
@@ -255,7 +255,7 @@ scripts/           libghostty-vt xcframework build
 
 ## Contributing
 
-Bugs and feature requests are tracked as [GitHub issues](https://github.com/rbstp/collie/issues). Before opening a pull request, run `just lint` and `just test` (and `just ios-test` for app changes).
+Bugs and feature requests are tracked as [GitHub issues](https://github.com/rbstp/collie/issues). Before opening a pull request, run `just lint` and `just test`, plus the tests of any app you changed (`just ios-test`, `just mac-test` or `just tray-test`).
 
 ## License
 
