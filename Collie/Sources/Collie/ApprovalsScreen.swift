@@ -65,6 +65,7 @@ struct ApprovalCard: View {
     let model: ApprovalsModel
     let item: ApprovalItem
     var showsMachine = false
+    var questionInSession = false
 
     private var approval: PendingApproval { item.approval }
     private var expanded: Bool { model.expanded.contains(item.id) }
@@ -115,7 +116,7 @@ struct ApprovalCard: View {
                 NoteField(model: model, item: item)
             }
             if approval.answeredInTerminal {
-                Label("Answer it in the terminal on \(item.machine.label)", systemImage: "terminal")
+                Label(questionInSession ? "Answer the question in this session" : "Answer it in the terminal on \(item.machine.label)", systemImage: "terminal")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {

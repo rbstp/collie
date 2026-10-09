@@ -394,6 +394,7 @@
         "up",
         "down",
         "left",
+        "shift+left",
         "right",
         "tab",
         "shift+tab",

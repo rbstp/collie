@@ -60,6 +60,8 @@ Which storage backend should the cache use?
 Enter to select · ↑/↓ to navigate · Esc to cancel
 ";
 const PLAN: &str = include_str!("fixtures/claude/plan.txt");
+const CODEX_QUEUED_QUESTION: &str = "Working\nQueued follow-up inputs\n  ? 1 question\n    ⇧← to answer\n› Ask Codex to do anything\n⚠ 1 warning · f2 to view\n";
+const CODEX_QUESTION_OPEN: &str = "Which database should we use?\n\n  › 1. SQLite\n    2. Redis\n    3. Other\n\n  enter submit   ⌃] skip   ⇧→ main prompt\n";
 // Claude Code 2.1.289 in herdr 0.9.3 (rule legacy_no_prompt_blocker).
 const PLAN_LIVE: &str = include_str!("fixtures/claude-2.1.289/plan.detection.txt");
 const PLAN_TYPED_LIVE: &str =
@@ -2804,6 +2806,133 @@ async fn typed_text_goes_into_the_question_field_then_enter() {
     );
     assert_eq!(herdr.params("pane.send_text").len(), 4);
     assert_eq!(herdr.params("agent.send_keys").len(), 3);
+}
+
+#[tokio::test]
+async fn codex_question_opens_and_a_typed_answer_submits_without_approving() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["codex"], &base);
+    herdr.with(|h| {
+        h.text = CODEX_QUEUED_QUESTION.into();
+        h.rule = Some("osc_title_blocked".into());
+    });
+    let mut open = keys(CODEX_BLOCKED);
+    open.keys = vec![Key::ShiftLeft];
+    assert_eq!(
+        drive.send_keys(open.clone(), &yes()).await,
+        (
+            Ok(Response::Ok),
+            Some(format!("{CODEX_BLOCKED} open question"))
+        )
+    );
+    assert_eq!(
+        herdr.params("agent.send_keys"),
+        [json!({"target": "w7:p1", "keys": ["shift+left"]})]
+    );
+
+    let filled = CODEX_QUESTION_OPEN
+        .replace("  › 1. SQLite", "    1. SQLite")
+        .replace("    3. Other", "  › 3. DuckDB");
+    herdr.with(|h| h.screens = [CODEX_QUESTION_OPEN.into(), filled].into());
+    assert_eq!(
+        drive
+            .type_text(typed(CODEX_BLOCKED, "DuckDB"), &yes())
+            .await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        [json!({"pane_id": "w7:p1", "text": "\u{1b}[200~DuckDB\u{1b}[201~"})]
+    );
+    assert_eq!(
+        herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["shift+left"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]})
+        ]
+    );
+
+    herdr.with(|h| h.screens = [CODEX_QUESTION_OPEN.into()].into());
+    let enters = herdr.params("agent.send_keys").len();
+    assert_eq!(
+        code(
+            drive
+                .type_text(typed(CODEX_BLOCKED, "SQLite"), &yes())
+                .await
+        ),
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(herdr.params("agent.send_keys").len(), enters);
+
+    let mut changed = herdr.with(|h| h.snapshot["agents"][1].clone());
+    changed["state_change_seq"] = json!(999);
+    herdr.with(|h| {
+        h.screens = [CODEX_QUESTION_OPEN.into()].into();
+        h.gets.extend([h.snapshot["agents"][1].clone(), changed]);
+    });
+    assert_eq!(
+        code(
+            drive
+                .type_text(typed(CODEX_BLOCKED, "DuckDB"), &yes())
+                .await
+        ),
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(herdr.params("agent.send_keys").len(), 2);
+
+    let approval = "Would you like to run the following command?\n› 1. Yes, proceed\n  2. No\nPress enter to confirm or esc to cancel\n";
+    herdr.with(|h| {
+        h.text = approval.into();
+        h.screens.clear();
+    });
+    let writes = herdr.mutations();
+    assert_eq!(
+        code(drive.send_keys(open, &yes()).await.0),
+        ErrorCode::AgentBlocked
+    );
+    assert_eq!(
+        code(drive.type_text(typed(CODEX_BLOCKED, "yes"), &yes()).await),
+        ErrorCode::AgentBlocked
+    );
+    assert_eq!(herdr.mutations(), writes);
+}
+
+#[tokio::test]
+async fn codex_question_options_use_arrows_and_enter_without_approving() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["codex"], &base);
+    herdr.with(|h| {
+        h.text = CODEX_QUESTION_OPEN.into();
+        h.rule = Some("osc_title_blocked".into());
+    });
+    let mut down = keys(CODEX_BLOCKED);
+    down.keys = vec![Key::Down];
+    let mut enter = keys(CODEX_BLOCKED);
+    enter.keys = vec![Key::Enter];
+    assert!(drive.send_keys(down.clone(), &yes()).await.0.is_ok());
+    assert!(drive.send_keys(enter.clone(), &yes()).await.0.is_ok());
+    assert_eq!(
+        herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]})
+        ]
+    );
+
+    down.keys.push(Key::Enter);
+    assert_eq!(
+        code(drive.send_keys(down, &yes()).await.0),
+        ErrorCode::AgentBlocked
+    );
+    let approval = "Would you like to run the following command?\n› 1. Yes, proceed\n  2. No\nPress enter to confirm or esc to cancel\n";
+    herdr.with(|h| h.text = approval.into());
+    assert_eq!(
+        code(drive.send_keys(enter, &yes()).await.0),
+        ErrorCode::AgentBlocked
+    );
+    assert_eq!(herdr.params("agent.send_keys").len(), 2);
 }
 
 #[tokio::test]

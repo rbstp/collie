@@ -587,13 +587,64 @@ impl Driver {
         auth: &Authorized,
     ) -> (Reply, Option<String>) {
         let _box = self.box_writes.lock().await;
+        if p.keys.contains(&Key::ShiftLeft) {
+            if p.keys != [Key::ShiftLeft] {
+                return (
+                    fail(ErrorCode::InvalidParams, "send Shift+Left alone"),
+                    None,
+                );
+            }
+            let (a, screen) = match self
+                .writable_agent(&p.terminal_id, prompt::codex_question_queued)
+                .await
+            {
+                Ok(found) => found,
+                Err(e) => return (Err(e), None),
+            };
+            let text = match screen {
+                Some(text) => text,
+                None => match herdr::detection_text(&self.herdr, &a.pane_id).await {
+                    Ok(text) => text,
+                    Err(e) => return (Err(herdr_fail(e)), None),
+                },
+            };
+            if !prompt::codex_question_queued(a.agent.as_deref().unwrap_or_default(), None, &text) {
+                return (
+                    fail(
+                        ErrorCode::AgentNotReady,
+                        "no queued Codex question is visible",
+                    ),
+                    None,
+                );
+            }
+            let sent = async {
+                authorized(auth)?;
+                herdr::agent_send_keys(&self.herdr, &a.pane_id, &["shift+left"])
+                    .await
+                    .map_err(herdr_fail)?;
+                Ok(Response::Ok)
+            };
+            return (
+                sent.await,
+                Some(format!("{} open question", p.terminal_id.as_str())),
+            );
+        }
         let (a, screen) = match self
-            .writable_agent(&p.terminal_id, prompt::open_to_keys)
+            .writable_agent(&p.terminal_id, prompt::open_to_keys_or_codex_question)
             .await
         {
             Ok(found) => found,
             Err(e) => return (Err(e), None),
         };
+        if a.agent.as_deref() == Some("codex")
+            && screen.is_some()
+            && (p.keys.len() != 1 || !matches!(p.keys[0], Key::Up | Key::Down | Key::Enter))
+        {
+            return (
+                fail(ErrorCode::AgentBlocked, "send one question key at a time"),
+                None,
+            );
+        }
         if a.agent.as_deref() == Some("claude") {
             // A dialog scrolled out of view leaves the agent idle: keys would answer it unseen.
             let scrolled = match &screen {
@@ -642,9 +693,60 @@ impl Driver {
     /// option. Only arrows, the text and Enter are sent: never shift+tab, which on a plan
     /// approves it with the feedback.
     pub async fn type_text(&self, p: AgentTypeTextParams, auth: &Authorized) -> Reply {
+        let _box = self.box_writes.lock().await;
         let (a, screen) = self
             .writable_agent(&p.terminal_id, prompt::open_to_text)
             .await?;
+        if a.agent.as_deref() == Some("codex") {
+            let before = match screen {
+                Some(text) => text,
+                None => herdr::detection_text(&self.herdr, &a.pane_id)
+                    .await
+                    .map_err(herdr_fail)?,
+            };
+            let Some(question) = prompt::codex_question_identity(&before) else {
+                return fail(ErrorCode::AgentNotReady, "no Codex question is open");
+            };
+            if prompt::codex_answer_visible(&before, &before, p.text.as_str()) {
+                return fail(
+                    ErrorCode::AgentNotReady,
+                    "the question already shows that answer",
+                );
+            }
+            authorized(auth)?;
+            let paste = format!("\u{1b}[200~{}\u{1b}[201~", p.text.as_str());
+            herdr::pane_send_text(&self.herdr, &a.pane_id, &paste)
+                .await
+                .map_err(herdr_fail)?;
+            let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
+            loop {
+                tokio::time::sleep(SCREEN_POLL).await;
+                let current = herdr::agent_get(&self.herdr, &a.pane_id)
+                    .await
+                    .map_err(herdr_fail)?;
+                if !matches!(check_ready(&a, &current), Err((ErrorCode::AgentBlocked, _)))
+                    || current.state_change_seq != a.state_change_seq
+                {
+                    return fail(ErrorCode::AgentNotReady, TYPED_NOT_SENT);
+                }
+                let text = herdr::detection_text(&self.herdr, &a.pane_id)
+                    .await
+                    .map_err(herdr_fail)?;
+                if prompt::codex_question_identity(&text).as_deref() == Some(&question)
+                    && prompt::codex_answer_visible(&before, &text, p.text.as_str())
+                {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return fail(ErrorCode::AgentNotReady, TYPED_NOT_SENT);
+                }
+            }
+            authorized(auth)?;
+            herdr::agent_send_keys(&self.herdr, &a.pane_id, &["enter"])
+                .await
+                .map_err(herdr_fail)?;
+            return Ok(Response::Ok);
+        }
         let Some(screen) = screen else {
             return fail(
                 ErrorCode::AgentNotReady,

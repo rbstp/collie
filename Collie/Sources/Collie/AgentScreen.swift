@@ -46,7 +46,7 @@ struct AgentScreen: View {
             }
             if let approvals {
                 ForEach(approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)) { item in
-                    ApprovalCard(model: approvals, item: item)
+                    ApprovalCard(model: approvals, item: item, questionInSession: model.codexQuestionQueued || model.codexQuestionOpen)
                         .padding(.horizontal)
                         .background(Color.red.opacity(0.08))
                 }
@@ -350,7 +350,7 @@ private struct KeyStrip: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(model.isTerminal ? AgentKey.terminalStrip : AgentKey.strip, id: \.self) { key in
+            ForEach(model.keyStrip, id: \.self) { key in
                 Button {
                     model.tap(key)
                 } label: {
@@ -364,10 +364,9 @@ private struct KeyStrip: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(key.accessibilityName)
-                .disabled(model.commandShown && (key == .enter || key == .ctrlEnter))
+                .disabled(!model.accepts(key) || model.commandShown && (key == .enter || key == .ctrlEnter))
             }
         }
-        .disabled(!model.acceptsKeys)
         .padding(.horizontal)
         .padding(.top, 8)
         .sensoryFeedback(.impact(weight: .light), trigger: model.keyTaps)
