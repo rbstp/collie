@@ -479,6 +479,8 @@ pub enum Key {
     Down,
     #[serde(rename = "left")]
     Left,
+    #[serde(rename = "shift+left")]
+    ShiftLeft,
     #[serde(rename = "right")]
     Right,
     #[serde(rename = "tab")]
@@ -499,6 +501,7 @@ impl Key {
             Self::Up => "up",
             Self::Down => "down",
             Self::Left => "left",
+            Self::ShiftLeft => "shift+left",
             Self::Right => "right",
             Self::Tab => "tab",
             Self::ShiftTab => "shift+tab",

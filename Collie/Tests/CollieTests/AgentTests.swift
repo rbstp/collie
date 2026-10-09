@@ -1454,6 +1454,56 @@ private func noticeShown(
     #expect(core.snapshot.prompts == ["/Users/me/Library/Caches/dev.rbstp.collied/attachments/a.png/a.png again"])
 }
 
+@MainActor
+@Test func codexQuestionCanOpenAndSendWhileApprovalHintIsPresent() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "codex"
+        $0.status = .blocked
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent,
+            ansi: "Queued follow-up inputs\n? 1 question\n⇧←\u{1B}[0m to answer\n⚠ 1 warning · f2 to view", truncated: false
+        )
+    }
+    let model = agentModel(core)
+    model.poll()
+    model.blocked = .terminal
+    #expect(model.codexQuestionQueued && !model.answering && !model.canSendPrompt)
+    #expect(model.keyStrip[5] == .shiftLeft)
+    #expect(model.accepts(.shiftLeft) && !model.accepts(.enter))
+    model.typed("other input")
+    core.set(error: .AgentBlocked)
+    await model.sendPrompt()
+    #expect(model.promptError?.contains("⇧←") == true)
+    core.set()
+    model.typed("")
+    await model.tap(.shiftLeft)?.value
+    #expect(core.snapshot.keys == [[.shiftLeft]])
+    core.state.withLock {
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent,
+            ansi: "Which database?\n› 1. SQLite\n  2. Redis\n  3. Other\nenter\u{1B}[0m submit   ⇧→ main prompt", truncated: false
+        )
+        $0.outputRevision += 1
+    }
+    model.poll()
+    #expect(model.answering && !model.codexQuestionQueued)
+    model.typed("DuckDB")
+    await model.sendPrompt()
+    #expect(core.snapshot.typed == ["DuckDB"])
+    #expect(core.snapshot.prompts == ["other input"])
+}
+
+@MainActor
+@Test func claudeKeepsTabInTheKeyStrip() {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    #expect(model.keyStrip[5] == .tab)
+    #expect(!model.accepts(.shiftLeft))
+}
+
 private final class FakeUnlocker: TerminalUnlocker {
     let signs: Bool
     let passcodeSet: Bool

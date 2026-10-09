@@ -172,8 +172,26 @@ final class AgentModel {
 
     var acceptsKeys: Bool { isTerminal ? !unlocking : blocked != .optionsOnly && blocked != .terminal && !jumpBanner }
 
+    var keyStrip: [AgentKey] {
+        isTerminal ? AgentKey.terminalStrip : agent?.kind == "codex" ? AgentKey.codexStrip : AgentKey.strip
+    }
+
+    func accepts(_ key: AgentKey) -> Bool {
+        if key == .shiftLeft { return codexQuestionQueued }
+        return acceptsKeys
+    }
+
+    var codexQuestionQueued: Bool {
+        agent?.kind == "codex" && ansi.contains("Queued follow-up inputs")
+            && ansi.contains("⇧←") && ansi.contains("to answer")
+    }
+
+    var codexQuestionOpen: Bool {
+        agent?.kind == "codex" && ansi.contains("submit") && ansi.contains("main prompt") && ansi.contains("›")
+    }
+
     /// Typed text answers the blocking prompt instead of prompting the agent.
-    var answering: Bool { !isTerminal && blocked == .keysAndText }
+    var answering: Bool { !isTerminal && (blocked == .keysAndText || codexQuestionOpen) }
 
     /// What the screen says in place of the agent's prompt.
     var paneNotice: String? {
@@ -209,7 +227,19 @@ final class AgentModel {
 
     var canSendPrompt: Bool {
         if isTerminal { return !sendingPrompt && !unlocking && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        return !sendingPrompt && !dictation.isActive && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
+        return !sendingPrompt && !dictation.isActive
+            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
+    }
+
+    func openCodexQuestion() async {
+        guard codexQuestionQueued else { return }
+        promptError = nil
+        do {
+            try await core.sendKeys(machineId: route.machineId, terminalId: route.terminalId, keys: [.shiftLeft])
+            await refresh()
+        } catch {
+            promptError = Self.message(for: error)
+        }
     }
 
     /// Runs while the screen is visible: watch, poll the core, unwatch on cancel. collied pushes at about
@@ -503,7 +533,11 @@ final class AgentModel {
                 let mine = Self.slashToken(draft)
                 if !mine.isEmpty, Self.boxToken(current)?.hasPrefix(mine) == true { adopt(current) } else { macDraft = current }
             }
-            promptError = Self.message(for: error)
+            if case .AgentBlocked = error as? CoreError, codexQuestionQueued {
+                promptError = "Tap ⇧← to view and answer the pending question."
+            } else {
+                promptError = Self.message(for: error)
+            }
         }
     }
 
@@ -655,8 +689,9 @@ final class AgentModel {
     /// Keys go out in tap order: taps made while a send is in flight are batched into the next call.
     @discardableResult
     func tap(_ key: AgentKey) -> Task<Void, Never>? {
-        guard acceptsKeys, !(commandShown && (key == .enter || key == .ctrlEnter)) else { return nil }
+        guard accepts(key), !(commandShown && (key == .enter || key == .ctrlEnter)) else { return nil }
         keyTaps += 1
+        if key == .shiftLeft { return Task { await openCodexQuestion() } }
         queuedKeys.append(key)
         guard !sendingKeys else { return nil }
         sendingKeys = true
@@ -834,6 +869,7 @@ struct CloseConfirmation: Equatable {
 
 extension AgentKey {
     static let strip: [AgentKey] = [.esc, .left, .up, .down, .right, .tab, .shiftTab, .enter, .ctrlEnter]
+    static let codexStrip: [AgentKey] = [.esc, .left, .up, .down, .right, .shiftLeft, .shiftTab, .enter, .ctrlEnter]
     static let terminalStrip: [AgentKey] = [.esc, .tab, .ctrlC, .left, .up, .down, .right, .enter]
 
     var symbol: String {
@@ -843,6 +879,7 @@ extension AgentKey {
         case .up: "↑"
         case .down: "↓"
         case .left: "←"
+        case .shiftLeft: "⇧←"
         case .right: "→"
         case .tab: "⇥"
         case .shiftTab: "⇧⇥"
@@ -858,6 +895,7 @@ extension AgentKey {
         case .up: "Up arrow"
         case .down: "Down arrow"
         case .left: "Left arrow"
+        case .shiftLeft: "Shift Left arrow"
         case .right: "Right arrow"
         case .tab: "Tab"
         case .shiftTab: "Shift Tab"
