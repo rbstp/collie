@@ -60,6 +60,8 @@ struct Screen {
     cursor_at: Vec<[u8; 32]>,
     snippet: String,
     context: String,
+    /// Seconds until Claude Code denies the request on its own, when its dialog says.
+    deny_in_secs: Option<u64>,
 }
 
 impl Screen {
@@ -153,6 +155,11 @@ pub struct Approvals {
     budget: Duration,
     inner: Mutex<Inner>,
     pending_count: watch::Sender<usize>,
+}
+
+/// An approval never outlives Claude Code's own deny deadline.
+fn ttl(ttl: Duration, deny_in_secs: Option<u64>) -> Duration {
+    deny_in_secs.map_or(ttl, |s| ttl.min(Duration::from_secs(s)))
 }
 
 fn is_blocked(a: &AgentInfo) -> bool {
@@ -414,7 +421,8 @@ impl Approvals {
     async fn screen(&self, a: &AgentInfo) -> Result<Screen, herdr::Error> {
         let kind = a.agent.as_deref().unwrap_or_default();
         let explain = herdr::agent_explain(&self.herdr, &a.pane_id).await?;
-        let text = herdr::detection_text(&self.herdr, &a.pane_id).await?;
+        let (text, deny_in_secs) =
+            prompt::without_deny_countdown(&herdr::detection_text(&self.herdr, &a.pane_id).await?);
         let rule = explain.matched_rule.map(|r| r.id);
         let menu = prompt::uses_menu(kind, rule.as_deref())
             .then(|| Menu::parse(&text))
@@ -458,6 +466,7 @@ impl Approvals {
             offered,
             snippet,
             context: prompt::context(&text),
+            deny_in_secs,
         })
     }
 
@@ -496,7 +505,7 @@ impl Approvals {
             supports_note: screen.supports_note,
             nonce: Nonce::new(random(protocol::limits::NONCE_BYTES)?)?,
             created_at_ms: now,
-            expires_at_ms: now + self.ttl.as_millis() as u64,
+            expires_at_ms: now + ttl(self.ttl, screen.deny_in_secs).as_millis() as u64,
         };
         let context = tool
             .as_ref()
@@ -990,6 +999,14 @@ mod tests {
         let n2 = Nonce::new(random(32).unwrap()).unwrap();
         assert_ne!(n1, n2);
         assert!(ApprovalId::new(random(16).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn claude_codes_deadline_bounds_the_approval() {
+        let ten = Duration::from_secs(600);
+        assert_eq!(ttl(ten, None), ten);
+        assert_eq!(ttl(ten, Some(69)), Duration::from_secs(69));
+        assert_eq!(ttl(ten, Some(3600)), ten);
     }
 
     #[test]
