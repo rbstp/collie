@@ -217,9 +217,12 @@ tray-install:
     trap 'rm -rf "$tmp"' EXIT
     cp Linux/CollieTray/{manifest.json,Service.qml,Panel.qml,Model.js,Printable.js,MenuIcon.svg} "$tmp"
     chmod 0755 "$tmp"
+    updating=false
+    [ -d "$dest" ] && updating=true
     rm -rf "$dest"
     mv "$tmp" "$dest"
-    omarchy-shell shell rescanPlugins >/dev/null
+    # The shell's hot reload can keep a changed widget's old component cached.
+    if $updating; then omarchy restart shell >/dev/null; else omarchy-shell shell rescanPlugins >/dev/null; fi
     if ! jq -e '[.bar.layout[]?[]? | (.id? // .)] | index("rbstp.collie")' "$HOME/.config/omarchy/shell.json" >/dev/null 2>&1; then
         omarchy plugin enable rbstp.collie right
     fi

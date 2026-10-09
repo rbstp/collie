@@ -51,6 +51,7 @@ Panel {
     onTriggered: root.nowMs = Date.now()
   }
 
+  // The SVG is the mask, the bar's colour the fill: a tint follows the theme.
   component Silhouette: Item {
     id: silhouette
     property color color: root.foreground
@@ -66,11 +67,21 @@ Panel {
       layer.enabled: true
     }
 
+    Rectangle {
+      id: fill
+      anchors.fill: parent
+      color: silhouette.color
+      visible: false
+      layer.enabled: true
+    }
+
     MultiEffect {
-      anchors.fill: glyph
-      source: glyph
-      colorization: 1.0
-      colorizationColor: silhouette.color
+      anchors.fill: parent
+      source: fill
+      maskEnabled: true
+      maskSource: glyph
+      maskThresholdMin: 0.5
+      maskSpreadAtMin: 1.0
     }
   }
 
