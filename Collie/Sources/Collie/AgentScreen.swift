@@ -439,7 +439,10 @@ private struct PromptBar: View {
                 .padding(.vertical, 8)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
                 if !model.isTerminal {
-                    DictationButton(model: model) { editing = false }
+                    DictationButton(dictation: model.dictation, disabled: model.sendingPrompt) {
+                        editing = false
+                        model.startDictation()
+                    }
                 }
                 if editing || typingCommand {
                     Button {
@@ -560,12 +563,12 @@ private struct CommandField: UIViewRepresentable {
     }
 }
 
-private struct DictationButton: View {
-    let model: AgentModel
+struct DictationButton: View {
+    let dictation: DictationModel
+    let disabled: Bool
     let starting: () -> Void
 
     var body: some View {
-        let dictation = model.dictation
         Menu {
             Picker(
                 "Dictation language",
@@ -582,15 +585,14 @@ private struct DictationButton: View {
                 dictation.stop()
             } else {
                 starting()
-                model.startDictation()
             }
         }
-        .disabled(model.sendingPrompt)
+        .disabled(disabled)
         .accessibilityLabel(dictation.isActive ? "Stop dictation" : "Dictate in \(dictation.language.label)")
     }
 }
 
-private struct DictationBar: View {
+struct DictationBar: View {
     let dictation: DictationModel
 
     var body: some View {
@@ -644,7 +646,7 @@ private struct LevelMeter: View {
     }
 }
 
-private struct DictationProblemRow: View {
+struct DictationProblemRow: View {
     let problem: DictationProblem
     @Environment(\.openURL) private var openURL
 
@@ -658,7 +660,7 @@ private struct DictationProblemRow: View {
     }
 }
 
-private struct AttachmentThumbnail: View {
+struct AttachmentThumbnail: View {
     let file: AttachedFile
     let remove: () -> Void
 
@@ -699,7 +701,7 @@ private struct AttachmentThumbnail: View {
     }
 }
 
-private struct UploadChip: View {
+struct UploadChip: View {
     let upload: AttachmentUpload
     let cancel: () -> Void
 

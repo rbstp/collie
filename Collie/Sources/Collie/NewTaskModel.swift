@@ -14,7 +14,14 @@ final class NewTaskModel {
 
     private let core: any AgentCore
     private let prefsFile: URL?
-    var machineId: String?
+    var machineId: String? {
+        didSet {
+            guard oldValue != machineId else { return }
+            cancelUpload(on: oldValue)
+            attachments = []
+            attachmentError = nil
+        }
+    }
     private(set) var options: TaskOptions?
     private(set) var optionsError: String?
     private(set) var base: String?
@@ -27,13 +34,24 @@ final class NewTaskModel {
     var agent = ""
     var prompt = ""
     var label = ""
+    private(set) var attachments: [AttachedFile] = []
+    private(set) var upload: AttachmentUpload?
+    private(set) var attachmentError: String?
+    private var uploadTask: Task<Void, Never>?
+    let dictation: DictationModel
     private(set) var phase = Phase.editing
     private(set) var error: String?
     private(set) var cancelled = false
 
-    init(core: any AgentCore, machines: [Machine], preferredMachineId: String? = nil, prefsFile: URL? = DevicePrefs.file) {
+    init(
+        core: any AgentCore, machines: [Machine], preferredMachineId: String? = nil,
+        prefsFile: URL? = DevicePrefs.file, dictationEngine: any DictationEngine = SpeechDictationEngine()
+    ) {
         self.core = core
         self.prefsFile = prefsFile
+        dictation = DictationModel(
+            engine: dictationEngine, language: DevicePrefs.load(from: prefsFile).dictationLanguage, prefsFile: prefsFile
+        )
         machineId = machines.first { $0.id == preferredMachineId }?.id ?? machines.first?.id
     }
 
@@ -61,8 +79,87 @@ final class NewTaskModel {
     }
 
     var canStart: Bool {
-        guard phase == .editing, machineId != nil, !agent.isEmpty, !trimmed(prompt).isEmpty else { return false }
+        guard phase == .editing, machineId != nil, !agent.isEmpty, upload == nil, !dictation.isActive,
+            !trimmed(prompt).isEmpty || !attachments.isEmpty else { return false }
         return newFolder ? newFolderParent != nil && newFolderNameIsValid : folder != nil
+    }
+
+    var attachmentSlots: Int { Attachment.maxPerPrompt - attachments.count }
+
+    func remove(_ file: AttachedFile) {
+        attachments.removeAll { $0.id == file.id }
+    }
+
+    @discardableResult
+    func startDictation() -> Task<Void, Never>? {
+        guard phase == .editing else { return nil }
+        return dictation.start(appendingTo: prompt) { [weak self] in self?.prompt = $0 }
+    }
+
+    @discardableResult
+    func attach(_ items: [PendingAttachment]) -> Task<Void, Never>? {
+        guard phase == .editing, upload == nil, !items.isEmpty, let machineId else { return nil }
+        attachmentError = nil
+        let slots = max(attachmentSlots, 0)
+        var firstError: (any Error)? = items.count > slots ? AttachmentError.tooMany(limit: Attachment.maxPerPrompt) : nil
+        let batch = Array(items.prefix(slots))
+        guard !batch.isEmpty else {
+            attachmentError = firstError.map(AgentModel.message(for:))
+            return nil
+        }
+        let limit = core.maxAttachmentBytes()
+        let first = UUID()
+        upload = AttachmentUpload(id: first, name: batch[0].name, count: batch.count)
+        let task = Task { [self] in
+            for (offset, item) in batch.enumerated() {
+                if Task.isCancelled { break }
+                let id = offset == 0 ? first : UUID()
+                upload = AttachmentUpload(id: id, name: item.name, index: offset + 1, count: batch.count)
+                do {
+                    let data = try await item.load(limit)
+                    try Attachment.check(data, limit: limit)
+                    try Task.checkCancellation()
+                    if upload?.id == id { upload?.total = UInt64(data.count) }
+                    let progress = UploadProgressRelay { [weak self] sent, total in
+                        Task { @MainActor in self?.uploaded(id, sent: sent, total: total) }
+                    }
+                    let path = try await core.uploadAttachment(machineId: machineId, name: item.name, data: data, progress: progress)
+                    var file = AttachedFile(path: path, name: item.name)
+                    if file.kind == .image { file.thumbnail = await Attachment.thumbnail(from: data) }
+                    try Task.checkCancellation()
+                    attachments.append(file)
+                } catch {
+                    if Task.isCancelled || error is CancellationError { break }
+                    firstError = firstError ?? error
+                }
+            }
+            if !Task.isCancelled, let firstError { attachmentError = AgentModel.message(for: firstError) }
+            if !Task.isCancelled { upload = nil }
+        }
+        uploadTask = task
+        return task
+    }
+
+    func attachFailed(_ error: any Error) {
+        attachmentError = AgentModel.message(for: error)
+    }
+
+    func cancelUpload() {
+        cancelUpload(on: machineId)
+    }
+
+    private func cancelUpload(on machineId: String?) {
+        guard upload != nil else { return }
+        if let machineId { core.cancelUploads(machineId: machineId) }
+        uploadTask?.cancel()
+        uploadTask = nil
+        upload = nil
+    }
+
+    private func uploaded(_ id: UUID, sent: UInt64, total: UInt64) {
+        guard upload?.id == id, let current = upload, sent >= current.sent else { return }
+        upload?.sent = sent
+        upload?.total = total
     }
 
     func loadOptions() async {
@@ -100,12 +197,13 @@ final class NewTaskModel {
     /// cancelled, even if the task started.
     func start() async -> AgentRoute? {
         guard canStart, !cancelled, let machineId, let cwd = newFolder ? newFolderParent : folder else { return nil }
+        let text = (attachments.map(\.path) + [trimmed(prompt)].filter { !$0.isEmpty }).joined(separator: " ")
         phase = .starting
         error = nil
         let started: TaskStarted
         do {
             started = try await core.taskNew(
-                machineId: machineId, cwd: cwd, agent: agent, prompt: trimmed(prompt),
+                machineId: machineId, cwd: cwd, agent: agent, prompt: text,
                 label: trimmed(label).nilIfEmpty, newFolder: newFolder ? trimmed(folderName) : nil
             )
         } catch {
@@ -138,6 +236,8 @@ final class NewTaskModel {
 
     func cancel() {
         cancelled = true
+        dictation.cancel()
+        cancelUpload()
     }
 
     private func trimmed(_ s: String) -> String {

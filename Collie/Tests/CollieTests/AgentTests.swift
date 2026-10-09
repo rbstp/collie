@@ -29,6 +29,7 @@ final class FakeCore: AgentCore {
         var folders = TaskFolders(path: "/Users/me/git", folders: ["app", "collie", "Cobalt", "docs"], truncated: false)
         var folderPaths: [String] = []
         var taskNews: [String] = []
+        var taskPrompts: [String] = []
         var started: TaskStarted?
         var uploads: [String] = []
         var cancelledUploads: [String] = []
@@ -201,7 +202,10 @@ final class FakeCore: AgentCore {
         return state.withLock { $0.folders }
     }
     func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?) async throws -> TaskStarted {
-        try await call { $0.taskNews.append("\(cwd) \(newFolder ?? "-")") }
+        try await call {
+            $0.taskNews.append("\(cwd) \(newFolder ?? "-")")
+            $0.taskPrompts.append(prompt)
+        }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
@@ -1011,6 +1015,62 @@ private func prefsFile() throws -> URL {
     #expect(await failed.start() == nil)
     #expect(!failed.newFolder && failed.cwd == "/Users/me/git/collie", "the folder left in place is the next start's folder")
     #expect(failed.canStart)
+}
+
+@MainActor
+@Test func newTaskUploadsFilesIntoItsInitialPromptAndClearsThemOnMachineChange() async {
+    let core = FakeCore()
+    core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let other = Machine(id: "m2", label: "Other", host: "other.ts.net", port: 8457, nodeId: "n2", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac, other], prefsFile: nil)
+    await model.loadOptions()
+    model.cwd = "/Users/me/app"
+    #expect(!model.canStart)
+
+    await model.attach([PendingAttachment(name: "notes.txt") { _ in Data("notes".utf8) }])?.value
+    #expect(model.attachments.count == 1)
+    #expect(model.canStart)
+    model.prompt = "review this"
+    #expect(await model.start() != nil)
+    #expect(core.snapshot.taskPrompts == ["/Users/me/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/notes.txt review this"])
+
+    model.machineId = "m2"
+    #expect(model.attachments.isEmpty)
+    #expect(core.snapshot.cancelledUploads.isEmpty)
+}
+
+@MainActor
+@Test func newTaskRejectsAnOversizedAttachmentWithoutStarting() async {
+    let core = FakeCore()
+    core.state.withLock { $0.maxAttachmentBytes = 2 }
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
+    await model.loadOptions()
+    model.cwd = "/Users/me/app"
+    await model.attach([PendingAttachment(name: "notes.txt") { _ in Data("notes".utf8) }])?.value
+    #expect(model.attachments.isEmpty)
+    #expect(model.attachmentError != nil)
+    #expect(core.snapshot.uploads.isEmpty)
+    #expect(!model.canStart)
+}
+
+@MainActor
+@Test func newTaskCancelsAnUploadWhenItsMachineChanges() async {
+    let core = FakeCore()
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let other = Machine(id: "m2", label: "Other", host: "other.ts.net", port: 8457, nodeId: "n2", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac, other], prefsFile: nil)
+    await model.loadOptions()
+    core.set(hold: true)
+    let upload = model.attach([PendingAttachment(name: "notes.txt") { _ in Data("notes".utf8) }])
+    await core.waitHeld(1)
+    model.machineId = "m2"
+    core.release()
+    await upload?.value
+    #expect(model.attachments.isEmpty)
+    #expect(model.upload == nil)
+    #expect(core.snapshot.cancelledUploads == ["m1"])
 }
 
 @MainActor

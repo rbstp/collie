@@ -1,4 +1,5 @@
 import CollieCore
+import PhotosUI
 import SwiftUI
 
 struct NewTaskSheet: View {
@@ -6,7 +7,12 @@ struct NewTaskSheet: View {
     let onStarted: (AgentRoute) -> Void
     @State private var model: NewTaskModel
     @State private var startTask: Task<Void, Never>?
+    @State private var pickingPhoto = false
+    @State private var photos: [PhotosPickerItem] = []
+    @State private var pickingFile = false
+    @FocusState private var editingPrompt: Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     init(
         core: any AgentCore, machines: [Machine], preferredMachineId: String?,
@@ -114,8 +120,49 @@ struct NewTaskSheet: View {
                 }
 
                 Section("Prompt") {
+                    if let error = model.attachmentError {
+                        Text(error).font(.footnote).foregroundStyle(.red)
+                    }
+                    if let upload = model.upload {
+                        UploadChip(upload: upload) { model.cancelUpload() }
+                    }
+                    if let problem = model.dictation.problem {
+                        DictationProblemRow(problem: problem)
+                    }
+                    if model.dictation.isActive {
+                        DictationBar(dictation: model.dictation)
+                    }
+                    if !model.attachments.isEmpty {
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 8) {
+                                ForEach(model.attachments) { file in
+                                    AttachmentThumbnail(file: file) { model.remove(file) }
+                                }
+                            }
+                        }
+                        .scrollIndicators(.hidden)
+                    }
                     TextField("What should the agent do?", text: $model.prompt, axis: .vertical)
-                        .lineLimit(3...10)
+                        .lineLimit(1...5)
+                        .focused($editingPrompt)
+                        .disabled(model.dictation.isActive)
+                    HStack {
+                        Menu {
+                            Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
+                            Button("Files", systemImage: "folder") { pickingFile = true }
+                        } label: {
+                            Image(systemName: "paperclip")
+                                .font(.system(size: 20))
+                                .frame(width: 32, height: 36)
+                        }
+                        .disabled(model.upload != nil || model.attachmentSlots <= 0 || model.phase != .editing)
+                        .accessibilityLabel("Attach")
+                        Spacer()
+                        DictationButton(dictation: model.dictation, disabled: model.phase != .editing) {
+                            editingPrompt = false
+                            model.startDictation()
+                        }
+                    }
                 }
 
                 Section {
@@ -159,6 +206,36 @@ struct NewTaskSheet: View {
                 }
             }
             .task(id: model.machineId) { await model.loadOptions() }
+            .photosPicker(
+                isPresented: $pickingPhoto, selection: $photos, maxSelectionCount: max(model.attachmentSlots, 1),
+                matching: .images
+            )
+            .onChange(of: photos) { _, items in
+                guard !items.isEmpty else { return }
+                photos = []
+                let now = Date.now
+                model.attach(items.enumerated().map { offset, item in
+                    PendingAttachment(name: Attachment.photoName(at: now, index: offset + 1)) { _ in
+                        guard let data = try await item.loadTransferable(type: Data.self) else {
+                            throw AttachmentError.unreadablePhoto
+                        }
+                        return try Attachment.jpeg(from: data)
+                    }
+                })
+            }
+            .fileImporter(isPresented: $pickingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+                switch result {
+                case .success(let urls):
+                    model.attach(urls.map { url in
+                        PendingAttachment(name: Attachment.suggestedName(url.lastPathComponent)) { limit in
+                            try Attachment.read(url, limit: limit)
+                        }
+                    })
+                case .failure(let error):
+                    model.attachFailed(error)
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in model.dictation.scenePhaseChanged(to: phase) }
             .onDisappear(perform: cancel)
         }
     }
