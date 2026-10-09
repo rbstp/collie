@@ -287,6 +287,7 @@ impl Driver {
             let text = herdr::detection_text(&self.herdr, &a.pane_id)
                 .await
                 .map_err(herdr_fail)?;
+            let (text, _) = prompt::without_deny_countdown(&text);
             if Menu::parse(&text).is_some_and(|m| done(&m)) {
                 return Ok(());
             }

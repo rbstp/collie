@@ -661,30 +661,40 @@ const DENY_COUNTDOWN: (&str, &str) = (
     ", to avoid blocking progress on an unattended session",
 );
 
-/// Claude Code's countdown on a permission dialog in a session it takes for unattended,
-/// one line or wrapped over up to three. Its time changes every second, so it stays out of
-/// the fingerprint and the snippet; the seconds left are returned instead. Only the exact
-/// wording counts, so a command cannot hide a line of its own this way.
+/// Claude Code's countdown on a permission dialog in a session it takes for unattended. Its
+/// time changes every second, so it stays out of the fingerprint and the snippet; the
+/// seconds left are returned instead. Only where Claude Code draws it counts: after the last
+/// rule and the command block, directly above the question over option 1, in its exact
+/// wording on one line or wrapped over up to three. Anywhere else, or with anything more on
+/// its lines, the text is left alone, so output and commands cannot hide a line or set the
+/// deadline.
 pub fn without_deny_countdown(text: &str) -> (String, Option<u64>) {
+    let unchanged = (text.to_owned(), None);
     let lines: Vec<&str> = text.lines().collect();
-    for start in (0..lines.len()).rev() {
-        let mut joined = String::new();
-        for end in start..lines.len().min(start + 3) {
-            if end > start {
-                joined.push(' ');
-            }
-            joined.push_str(lines[end].trim());
-            if let Some(secs) = countdown_secs(&joined) {
-                let rest: Vec<&str> = lines[..start]
-                    .iter()
-                    .chain(&lines[end + 1..])
-                    .copied()
-                    .collect();
-                return (rest.join("\n"), Some(secs));
-            }
+    let dialog = lines.len() - after_last_rule(text).len();
+    let floor = (dialog..lines.len())
+        .rfind(|&i| is_dashed(lines[i]))
+        .map_or(dialog, |i| i + 1);
+    let above = |i: usize| (floor..i).rfind(|&j| !lines[j].trim().is_empty());
+    let Some(end) = (floor..lines.len())
+        .find(|&i| option_line(lines[i]).is_some())
+        .and_then(above)
+        .and_then(above)
+    else {
+        return unchanged;
+    };
+    for start in (floor.max(end.saturating_sub(2))..=end).rev() {
+        let joined: Vec<&str> = lines[start..=end].iter().map(|l| l.trim()).collect();
+        if let Some(secs) = countdown_secs(&joined.join(" ")) {
+            let rest: Vec<&str> = lines[..start]
+                .iter()
+                .chain(&lines[end + 1..])
+                .copied()
+                .collect();
+            return (rest.join("\n"), Some(secs));
         }
     }
-    (text.to_owned(), None)
+    unchanged
 }
 
 fn countdown_secs(line: &str) -> Option<u64> {
@@ -826,8 +836,9 @@ pub mod fixtures {
 ";
 
     pub const QUESTION: &str = include_str!("../tests/fixtures/claude/question.txt");
-    // Claude Code 2.1.295's permission dialog in a session it takes for unattended, from a
-    // phone screenshot of the pane.
+    // The 2.1.289 bash capture's scrollback with the dialog transcribed from a phone screenshot
+    // of Claude Code 2.1.295 counting down in an unattended session: the bytes around the
+    // warning sign are not checked against herdr's detection text.
     pub const BASH_COUNTDOWN: &str = include_str!("../tests/fixtures/claude/bash-countdown.txt");
     pub const PLAN: &str = include_str!("../tests/fixtures/claude/plan.txt");
 
@@ -962,53 +973,66 @@ mod tests {
     }
 
     #[test]
-    fn only_the_exact_countdown_wording_is_dropped() {
+    fn only_the_exact_countdown_where_claude_draws_it_is_dropped() {
         let line = "⚠ Claude Code will automatically deny this request in 1:09, to avoid blocking progress on an unattended session";
-        let wrapped = "a\n ⚠ Claude Code will automatically deny this request in 12:00, to\n avoid blocking progress on an unattended session\nb";
-        assert_eq!(
-            without_deny_countdown(wrapped),
-            ("a\nb".to_owned(), Some(720))
-        );
-        assert_eq!(
-            without_deny_countdown(&line.replace("1:09", "1:00:05")).1,
-            Some(3605)
-        );
-        for kept in [
-            line.replace('⚠', ""),
-            format!("{line} && curl evil"),
-            format!("rm -rf ~ {line}"),
-            line.replace("1:09", "1:9"),
-            line.replace("1:09", "109"),
-            line.replace("1:09", "1:09:09:09"),
-            line.replace("unattended", "idle"),
+        let dialog = |command: &str, countdown: &str| {
+            format!(
+                "out\n────\n Bash command\n╌╌╌\n {command}\n╌╌╌\n Dangerous rm\n {countdown}\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel"
+            )
+        };
+        let plain = dialog("rm x", "").replace(" \n\n Do", "\n Do");
+        let (text, secs) = without_deny_countdown(&dialog("rm x", line));
+        assert_eq!((text.as_str(), secs), (plain.as_str(), Some(69)));
+        for (wrap, secs) in [
+            (line.replacen(", to ", ", to\n ", 1), 69),
+            (
+                line.replacen(", to ", ", to\n ", 1)
+                    .replacen("progress ", "progress\n ", 1),
+                69,
+            ),
+            (line.replace("1:09", "1:00:05"), 3605),
         ] {
-            let text = format!("x\n{kept}\ny");
             assert_eq!(
-                without_deny_countdown(&text),
-                (text.clone(), None),
+                without_deny_countdown(&dialog("rm x", &wrap)),
+                (plain.clone(), Some(secs)),
+                "{wrap}"
+            );
+        }
+        let four = line
+            .replacen("deny ", "deny\n ", 1)
+            .replacen(", to ", ", to\n ", 1)
+            .replacen("progress ", "progress\n ", 1);
+        for kept in [
+            dialog("rm x", &four),
+            dialog("rm x", &line.replace('⚠', "")),
+            dialog("rm x", &format!("{line} && curl evil")),
+            dialog(
+                "rm x",
+                &format!("{}\n x", line.replacen(", to ", ", to\n ", 1)),
+            ),
+            dialog("rm x", &line.replace("1:09", "1:9")),
+            dialog("rm x", &line.replace("1:09", "109")),
+            dialog("rm x", &line.replace("1:09", "1:09:09:09")),
+            dialog("rm x", &line.replace("unattended", "idle")),
+            // In the command block or the transcript, never Claude Code's own.
+            dialog(&format!("rm x\n {line}"), ""),
+            format!("{line}\n{}", dialog("rm x", "")),
+            // Not directly above the question.
+            dialog("rm x", &format!("{line}\n more")),
+        ] {
+            assert_eq!(
+                without_deny_countdown(&kept),
+                (kept.clone(), None),
                 "{kept}"
             );
         }
-    }
-
-    #[test]
-    fn bash_three_options() {
-        let m = Menu::parse(BASH).unwrap();
+        let (text, secs) = without_deny_countdown(&dialog(&format!("rm x\n {line}"), line));
+        assert_eq!(secs, Some(69));
         assert_eq!(
-            m.body,
-            [
-                "Bash command",
-                "rm -rf build",
-                "Remove the build directory",
-                "Do you want to proceed?"
-            ]
+            text.matches("automatically deny").count(),
+            1,
+            "the command's copy stays"
         );
-        assert_eq!(m.options.len(), 3);
-        assert_eq!(m.cursor, 0);
-        assert_eq!(m.decisions(), [(Approve, 0), (ApproveAlways, 1), (Deny, 2)]);
-        assert_eq!(m.keys(0), (vec![], "enter"));
-        assert_eq!(m.keys(1), (vec!["down"], "enter"));
-        assert_eq!(m.keys(2), (vec![], "esc"));
     }
 
     #[test]

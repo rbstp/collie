@@ -33,6 +33,7 @@ const TTL: Duration = Duration::from_secs(600);
 const SETTLE: Duration = Duration::from_millis(600);
 
 const BASH: &str = include_str!("fixtures/claude/bash.txt");
+const BASH_COUNTDOWN: &str = include_str!("fixtures/claude/bash-countdown.txt");
 const QUESTION: &str = include_str!("fixtures/claude/question.txt");
 const PLAN: &str = include_str!("fixtures/claude/plan.txt");
 
@@ -761,6 +762,26 @@ async fn expired_approvals_are_rejected_and_reissued_with_a_fresh_alert() {
     ));
     assert!(rig.mutations().is_empty());
     assert!(rig.audit()[0]["result"] == "approve: rejected: expired");
+}
+
+#[tokio::test]
+async fn a_ticking_deny_countdown_neither_reissues_nor_supersedes() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| h.text = BASH_COUNTDOWN.into());
+    let a = rig.needed().await;
+    assert_eq!(a.expires_at_ms - a.created_at_ms, 69_000);
+    assert!(!a.snippet.contains("automatically deny"), "{}", a.snippet);
+    rig.herdr
+        .with(|h| h.text = BASH_COUNTDOWN.replace("in 1:09,", "in 0:58,"));
+    rig.observe().await;
+    rig.no_event();
+    assert_eq!(
+        resolved(rig.decide(&a, Decision::Approve, &a.nonce).await),
+        ApprovalOutcome::Applied {
+            decision: Decision::Approve,
+            by: LABEL.into()
+        }
+    );
 }
 
 #[tokio::test]
