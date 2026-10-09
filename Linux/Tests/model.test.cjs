@@ -54,13 +54,13 @@ test("printable escapes what the phone could hide, like CollieBar", () => {
 const UNIT = `# Written by \`collied service install\`; rewritten on every install.
 [Service]
 Type=exec
-ExecStart="/home/me/50%% off/.cargo/bin/collied" "--config" "/home/me/a b\\"$$HOME%%h\\\\;.toml" "run"
+ExecStart="/home/me/50%% off$$/.cargo/bin/collied" "--config" "/home/me/a b\\"$$HOME%%h\\\\;.toml" "run"
 Environment="XDG_DATA_HOME=/home/me/$data%%"
 Environment="XDG_CACHE_HOME=/home/me/.cache"
 `;
 
 test("the unit gives the executable and the data dir", () => {
-  assert.deepEqual(M.unitInfo(UNIT), { exe: "/home/me/50% off/.cargo/bin/collied", dataHome: "/home/me/$data%" });
+  assert.deepEqual(M.unitInfo(UNIT), { exe: "/home/me/50% off$$/.cargo/bin/collied", dataHome: "/home/me/$data%" });
   assert.deepEqual(M.unitInfo(""), { exe: "", dataHome: "" });
   assert.deepEqual(M.unitInfo('ExecStart="relative/collied" "run"\nEnvironment="XDG_DATA_HOME=rel"'), { exe: "", dataHome: "" });
   assert.equal(M.unquote('a\\"b\\\\c%%d$$e', true), 'a"b\\c%d$e');

@@ -223,7 +223,12 @@ tray-install:
     mv "$tmp" "$dest"
     # The shell's hot reload can keep a changed widget's old component cached.
     if $updating; then omarchy restart shell >/dev/null; else omarchy-shell shell rescanPlugins >/dev/null; fi
-    if ! jq -e '[.bar.layout[]?[]? | (.id? // .)] | index("rbstp.collie")' "$HOME/.config/omarchy/shell.json" >/dev/null 2>&1; then
-        omarchy plugin enable rbstp.collie right
-    fi
+    # The shell answers "not ready" until it has found the plugin; on the bar already is ok.
+    r=""
+    for _ in $(seq 100); do
+        r="$(omarchy-shell shell putBarWidget rbstp.collie '{"section":"right"}' 2>&1 || true)"
+        [ "$r" = ok ] && break
+        sleep 0.1
+    done
+    [ "$r" = ok ] || { echo "tray-install: could not put rbstp.collie on the bar: $r" >&2; exit 1; }
     echo "installed $dest"

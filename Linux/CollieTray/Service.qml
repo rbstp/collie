@@ -73,9 +73,11 @@ Item {
     if (busy) return
     if (unit.exe === "") {
       lastError = "not installed: run collied service install"
+      if (then) then(false)
       return
     }
     busy = true
+    colliedProc.launched = false
     colliedProc.then = then || null
     colliedProc.command = [unit.exe, command]
     colliedProc.running = true
@@ -130,6 +132,7 @@ Item {
     if (r.type === "invite" && typeof r.uri === "string") {
       deadline = Date.now() + (r.expires_in_secs || 120) * 1000
       qrProc.uri = r.uri
+      qrProc.began = false
       qrProc.running = true
     } else if (r.type === "confirm" && (phase === "invite" || phase === "connecting")) {
       candidate = r
@@ -286,6 +289,7 @@ Item {
     property var then: null
     property int code: -1
     property int pendingStreams: 0
+    property bool launched: false
 
     function settle() {
       if (running || pendingStreams > 0) return
@@ -314,7 +318,18 @@ Item {
         colliedProc.settle()
       }
     }
-    onStarted: pendingStreams = 2
+    onStarted: {
+      launched = true
+      pendingStreams = 2
+    }
+    onRunningChanged: {
+      if (running || launched || !root.busy) return
+      root.busy = false
+      root.lastError = Printable.printable("cannot run " + command[0])
+      var then = colliedProc.then
+      colliedProc.then = null
+      if (then) then(false)
+    }
     onExited: function(exitCode) {
       code = exitCode
       Qt.callLater(settle)
@@ -325,9 +340,11 @@ Item {
   Process {
     id: qrProc
     property string uri: ""
+    property bool began: false
     command: ["qrencode", "-l", "M", "-t", "ASCII", "-m", "0"]
     stdinEnabled: true
     onStarted: {
+      began = true
       write(uri)
       uri = ""
       stdinEnabled = false
@@ -345,6 +362,7 @@ Item {
         }
       }
     }
+    onRunningChanged: if (!running && !began && root.pairConn && root.phase === "connecting") root.pairFinish("cannot draw the pairing QR")
     onExited: function(exitCode) {
       stdinEnabled = true
       if (exitCode !== 0 && root.pairConn && root.phase === "connecting") root.pairFinish("cannot draw the pairing QR")

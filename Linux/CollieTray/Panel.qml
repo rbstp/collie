@@ -27,8 +27,9 @@ Panel {
   }
 
   function escapeKey() {
-    if (phase === "confirm" && !svc.answered) svc.pairAnswer(false)
-    else if (phase !== "") svc.pairCancel()
+    if (phase === "confirm") {
+      if (!svc.answered) svc.pairAnswer(false)
+    } else if (phase !== "") svc.pairCancel()
     else root.close()
   }
 
@@ -42,6 +43,9 @@ Panel {
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     } else svc.pairCancel()
   }
+
+  // A bar that goes away with its screen takes the pairing with it, as closing does.
+  Component.onDestruction: if (opened && svc) svc.pairCancel()
 
   Timer {
     interval: 1000
@@ -99,6 +103,7 @@ Panel {
     leftAlign: true
     foreground: root.foreground
     fontFamily: root.fontFamily
+    opacity: enabled ? 1.0 : 0.4
   }
 
   BarIconButton {
@@ -314,6 +319,7 @@ Panel {
               foreground: root.foreground
               fontFamily: root.fontFamily
               enabled: !!root.svc && !root.svc.answered
+              opacity: enabled ? 1.0 : 0.4
               onClicked: root.svc.pairAnswer(false)
             }
             Button {
@@ -323,6 +329,7 @@ Panel {
               foreground: root.foreground
               fontFamily: root.fontFamily
               enabled: !!root.svc && root.svc.armed && !root.svc.answered && root.secondsLeft > 0
+              opacity: enabled ? 1.0 : 0.4
               onClicked: root.svc.pairAnswer(true)
             }
           }

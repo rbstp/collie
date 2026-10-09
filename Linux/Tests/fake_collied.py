@@ -7,7 +7,7 @@ import threading
 import time
 
 path, log_path = sys.argv[1], sys.argv[2]
-seen = {"watch": 0, "pair": [], "lines": []}
+seen = {"watch": 0, "pairs": 0, "pair": [], "lines": []}
 lock = threading.Lock()
 
 
@@ -35,11 +35,12 @@ def watch(conn, f):
 
 def pair(conn, f):
     with lock:
-        n = len(seen["pair"]) + 1
+        seen["pairs"] += 1
+        n = seen["pairs"]
     entry = {}
     send(f, {"type": "invite", "uri": "collie://pair#v=2&c=SECRETCODE", "expires_in_secs": 120})
     if n == 1:
-        time.sleep(0.3)
+        time.sleep(1.0)
         send(f, {"type": "confirm", "device_label": "Rich\u2019s \u202eiPhone", "node_name": "phone.ts.net",
                  "stable_id": "nPHONE", "login": "me@example.com", "user_id": 7, "tls_key": "k",
                  "terminal_key": None, "replaces": False, "previous_terminal_key": None})
@@ -48,6 +49,10 @@ def pair(conn, f):
         line = f.readline()
         entry = {"line": line.decode(), "after": round(time.monotonic() - sent, 2)}
         send(f, {"type": "pair_done", "paired": True, "detail": "paired iPhone (nPHONE)"})
+        try:
+            entry["extra"] = f.read().decode()
+        except OSError:
+            entry["extra"] = None
     else:
         conn.settimeout(5)
         entry = {"eof": conn.recv(100) == b""}

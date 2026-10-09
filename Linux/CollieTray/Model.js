@@ -41,7 +41,8 @@ function unitPath(configHome, home) {
   return (absolute(configHome) || home + "/.config") + "/systemd/user/collied.service"
 }
 
-// Undoes the quoting `collied service install` writes: \" \\ %% and, in arguments, $$.
+// Undoes the quoting `collied service install` writes: \" \\ %% and, with `dollar`, the $$ of
+// arguments (the executable keeps its $ as written).
 function unquote(q, dollar) {
   var out = ""
   for (var i = 0; i < q.length; i++) {
@@ -75,7 +76,7 @@ function unitInfo(text) {
     var line = lines[i]
     if (line.indexOf("ExecStart=") === 0) {
       var exe = firstQuoted(line.slice("ExecStart=".length))
-      if (exe !== null) info.exe = absolute(unquote(exe, true))
+      if (exe !== null) info.exe = absolute(unquote(exe, false))
     } else if (line.indexOf('Environment="XDG_DATA_HOME=') === 0) {
       var value = firstQuoted(line.slice("Environment=".length))
       if (value !== null) info.dataHome = absolute(unquote(value, false).slice("XDG_DATA_HOME=".length))

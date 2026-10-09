@@ -51,6 +51,9 @@ with tempfile.TemporaryDirectory() as tmp:
         check(all(s in it for s in want), f"watch states {states} lack {want} in order")
         check(notes.get("answeredBeforeArmed") is False, "Pair answered before it was armed")
         check(notes.get("answered") is True, "Pair not answered once armed")
+        check(notes.get("answeredBeforeClick") is False, "Pair confirmed on its own once armed")
+        check(notes.get("attempts", 0) >= 2, f"no failed connect before collied came up: {notes.get('attempts')} watch attempts")
+        check(notes.get("busyAfterToggle") is False, f"busy after toggle {notes.get('busyAfterToggle')!r}")
         check(notes.get("qrSize", 0) >= 21, f"QR size {notes.get('qrSize')}")
         check(notes.get("firstDone") == "paired iPhone (nPHONE)", f"pairing ended with {notes.get('firstDone')!r}")
         check(notes.get("cancelPhase") == "invite" and notes.get("afterCancel") == "", f"cancel phases {notes}")
@@ -61,6 +64,7 @@ with tempfile.TemporaryDirectory() as tmp:
     if len(seen["pair"]) == 2:
         first, second = seen["pair"]
         check(first.get("line") == '{"cmd":"confirm","accept":true}\n', f"confirm line {first}")
+        check(first.get("extra") == "", f"more than one confirm line, or no EOF after pair_done: {first.get('extra')!r}")
         check(first.get("after", 0) >= 1.0, f"confirm sent {first.get('after')} s after the candidate, before Pair was armed")
         check(second.get("eof") is True, "cancel did not close the connection")
     check(set(seen["lines"]) <= {'{"cmd":"watch"}\n', '{"cmd":"pair"}\n', '{"cmd":"peers_list"}\n'}, f"unexpected requests {seen['lines']}")
