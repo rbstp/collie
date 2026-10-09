@@ -78,6 +78,26 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
 }
 
 @MainActor
+@Test func newTaskDictationAppendsToItsPromptAndBlocksStartWhileListening() async {
+    let engine = FakeDictationEngine()
+    let core = FakeCore()
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac], prefsFile: nil, dictationEngine: engine)
+    await model.loadOptions()
+    model.cwd = "/Users/me/app"
+    model.prompt = "fix"
+    model.startDictation()
+    await until { model.dictation.phase == .listening }
+    #expect(!model.canStart)
+    await engine.send(.final("the build"))
+    await until { model.prompt == "fix the build" }
+    model.dictation.stop()
+    await until { !model.dictation.isActive }
+    #expect(model.prompt == "fix the build")
+    #expect(model.canStart)
+}
+
+@MainActor
 @Test func dictationAppendsVolatileThenFinalTextAndStopsWithoutSending() async {
     let engine = FakeDictationEngine()
     let model = await dictating(engine)
