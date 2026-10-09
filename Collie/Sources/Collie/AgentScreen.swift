@@ -396,7 +396,56 @@ private struct PromptBar: View {
             if model.dictation.isActive {
                 DictationBar(dictation: model.dictation)
             }
-            HStack(alignment: .bottom, spacing: 8) {
+            VStack(alignment: .leading, spacing: 8) {
+                if !model.attachments.isEmpty {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 8) {
+                            ForEach(model.attachments) { file in
+                                AttachmentThumbnail(file: file) { model.remove(file) }
+                            }
+                        }
+                    }
+                    .disabled(model.sendingPrompt)
+                    .scrollIndicators(.hidden)
+                }
+                HStack(alignment: .bottom, spacing: 8) {
+                    if model.isTerminal {
+                        CommandField(text: $model.draft, editing: $typingCommand) {
+                            Task { await model.sendPrompt() }
+                        }
+                    } else {
+                        TextField(
+                            model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: { model.typed($0) }),
+                            axis: .vertical
+                        )
+                            .lineLimit(1...3)
+                            .focused($editing)
+                            .disabled(model.dictation.isActive)
+                    }
+                    if !model.draft.isEmpty {
+                        Button {
+                            if model.isTerminal {
+                                model.draft = ""
+                            } else {
+                                model.typed("")
+                            }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 36, height: 36)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(model.dictation.isActive || model.sendingPrompt)
+                        .accessibilityLabel("Clear text")
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
+            HStack(spacing: 8) {
                 if !model.answering && !model.isTerminal {
                     Menu {
                         Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
@@ -409,41 +458,13 @@ private struct PromptBar: View {
                     .disabled(model.upload != nil || model.attachmentSlots <= 0)
                     .accessibilityLabel("Attach")
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    if !model.attachments.isEmpty {
-                        ScrollView(.horizontal) {
-                            HStack(spacing: 8) {
-                                ForEach(model.attachments) { file in
-                                    AttachmentThumbnail(file: file) { model.remove(file) }
-                                }
-                            }
-                        }
-                        .disabled(model.sendingPrompt)
-                        .scrollIndicators(.hidden)
-                    }
-                    if model.isTerminal {
-                        CommandField(text: $model.draft, editing: $typingCommand) {
-                            Task { await model.sendPrompt() }
-                        }
-                    } else {
-                        TextField(
-                            model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: { model.typed($0) }),
-                            axis: .vertical
-                        )
-                            .lineLimit(1...6)
-                            .focused($editing)
-                            .disabled(model.dictation.isActive)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
                 if !model.isTerminal {
                     DictationButton(dictation: model.dictation, disabled: model.sendingPrompt) {
                         editing = false
                         model.startDictation()
                     }
                 }
+                Spacer(minLength: 0)
                 if editing || typingCommand {
                     Button {
                         editing = false
