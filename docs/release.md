@@ -64,6 +64,8 @@ Team `RM3UT3MMSR`, in the Apple Developer portal and App Store Connect:
    collied apns test                         # needs a paired phone (see collied on Linux)
    ```
 
+   `collied setup` offers these steps on Linux too, the same way as on macOS; the import picks the credential or the 0600 fallback as below.
+
    Import writes the credential to `apns/<KEY_ID>.cred` in the data directory. systemd picks the seal, not collied: host key and TPM2 when a TPM2 is usable, host key only otherwise. Doctor's apns line says which, and warns when a TPM2 becomes usable after a host-only import. Import keeps an existing credential that decrypts to the same key, so to bind it to the TPM2, delete `apns/<KEY_ID>.cred` and import the `.p8` again. Where systemd-creds cannot encrypt (for example no `systemd-creds.socket`, systemd older than 256, a container), import falls back to a 0600 copy at `apns/AuthKey_<KEY_ID>.p8` in the data directory, sets `key_path` to it and says so. Doctor reports the fallback, and warns once systemd-creds works: import that file to encrypt it. The credential stops decrypting after an OS reinstall, a machine-id change, a uid or user name change, or a move to another machine: keep a copy of the `.p8` offline and import it again. Revoke the key in the portal if the machine is compromised.
 
 ## Menu bar app notarization (optional)
@@ -84,11 +86,12 @@ There is no package. Install from a checkout, with the prerequisites in the READ
 ```sh
 just setup                # submodules
 just collied-install      # release build to ~/.cargo/bin/collied as a fresh inode
-collied login             # advertises tag:collie-linux, refuses until the node has it
-collied service install   # systemd user unit, ~/.config/systemd/user/collied.service
+collied setup             # login, service install, doctor, APNs, pairing
 ```
 
-Update: `git pull`, `just setup`, `just collied-install`, which restarts the user unit if it is active.
+`collied setup` runs `collied login` (advertises tag:collie-linux, refuses until the node has it), `collied service install` (systemd user unit, `~/.config/systemd/user/collied.service`), `collied doctor`, the APNs import and `collied pair`, each skipped when already done.
+
+Update: `git pull`, `just setup`, `just collied-install`, which restarts the user unit if it is active, then `collied setup`, which keeps the node and the paired phones.
 
 ## Repository secrets
 

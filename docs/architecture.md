@@ -437,9 +437,9 @@ The lock screen and the Dynamic Island show an agent only while the user follows
 - `enc` is sealed once per device and approval and repeated on later updates (refresh, new token), so coalescing still sees an unchanged state. Once the approval resolves (applied, denied, superseded, expired) or the agent leaves `blocked`, the next update omits `approvalId` and `enc`; it is a normal coalesced update without alert. An `end` never carries them.
 - On the phone, `AgentActivityAttributes` carries the Mac's `nodeId`. The widget reads the notification key for it from the shared Keychain access group, opens `enc` (`PushContext.open`) and shows the command on the lock screen and in the expanded Dynamic Island (`privacySensitive`: redacted while locked), else "Approval needed" without buttons. Approve and Deny, shown only with a command that decrypts, are `Button(intent:)` with a `LiveActivityIntent` whose `authenticationPolicy` is `.requiresAuthentication`: iOS makes the user unlock first, then the intent runs in the app process and takes the same path as the notification actions (`decideFromNotification`, background budget; the nonce comes from the Mac over the tailnet).
 
-## `collied setup` (macOS)
+## `collied setup`
 
-One interactive command for adding a Mac or updating one in place. It reuses the subcommands' code (`daemon::login`, `service::install`, `doctor::run`, `push::import`, the `pair` flow) through a small `setup::Host` trait, so the order and the skip rules are unit tested against a fake without touching launchd, the tailnet or the Keychain. Each step checks its own done state, so a rerun resumes where the last one stopped:
+One interactive command for adding a Mac or a Linux machine, or updating one in place. It reuses the subcommands' code (`daemon::login`, `service::install`, `doctor::run`, `push::import`, the `pair` flow) through a small `setup::Host` trait, so the order and the skip rules are unit tested against a fake without touching launchd, systemd, the tailnet, the Keychain or systemd-creds. One `Host` implementation serves both OSes; only the service backend (`service::state`, `unload`, `install`, `log_tail`) differs. Each step checks its own done state, so a rerun resumes where the last one stopped:
 
 | Step | Done when | Otherwise |
 |---|---|---|
@@ -449,7 +449,18 @@ One interactive command for adding a Mac or updating one in place. It reuses the
 | APNs | `[apns]` is in `collied.toml` | offer it: ask for the `.p8` (key ID from `AuthKey_<KEY_ID>.p8`), team and bundle IDs, append `[apns]` (new file 0600, else the atomic rewrite keeping the mode), `apns import`; put the old config back if the import fails; restart the service so the daemon reads it |
 | pair | never: phones may need to pair again after an update | offer `collied pair` |
 
-Before any step it refuses unless stdin is a terminal, so `yes | collied setup` cannot answer the pairing prompt, and unless the running binary is `~/.cargo/bin/collied`, Developer ID signed as `dev.rbstp.collied` (the check `apns import` already makes), so it never installs an unsigned agent or one pointing at `target/release`, which the next `cargo build` replaces unsigned. It never confirms a pairing: the `y` on the computer, after the `tcflush`, stays the only confirmation. On Linux it says to follow the README steps for now.
+Before any step it refuses unless stdin is a terminal, so `yes | collied setup` cannot answer the pairing prompt, and unless the running binary is `~/.cargo/bin/collied`, on macOS also Developer ID signed as `dev.rbstp.collied` (the check `apns import` already makes), so it never installs an unsigned agent or one pointing at `target/release`, which the next `cargo build` replaces (unsigned, on macOS). It never confirms a pairing: the `y` on the computer, after the `tcflush`, stays the only confirmation.
+
+On Linux the service rows read:
+
+| Step | Done when | Otherwise |
+|---|---|---|
+| login | as on macOS; "loaded" is any `ActiveState` but `inactive` and `failed`, so a unit waiting to restart after a crash (`activating`) counts | `systemctl --user stop` (the unit stays enabled), then `collied login`; if login fails, `collied start` |
+| service | the unit file on disk is the one `install` would write (executable, `--config`, pinned `XDG_*_HOME`), the unit is loaded, and the daemon's `started_ms` is not older than the binary's mtime | `service install` (`daemon-reload`, `enable`, `restart`), then wait up to 60 s; on a timeout print the last 20 lines of `journalctl --user -u collied.service` |
+
+Before deciding, `service::state` stops setup when the user manager loads `collied.service` from another file, when the unit pins another `XDG_DATA_HOME` than setup's (that data dir holds another node: setup would otherwise log in a new one), or when the unit runs another `--config`. The APNs step is the same code: `push::import` encrypts the key with `systemd-creds` or falls back to the 0600 file, and never prints it.
+
+Doctor's `service` line reports the same state on both OSes: `up to date`, or a warn naming what setup would do. On Linux it adds that the unit stops at logout when the user does not linger (`loginctl show-user`).
 
 The control socket's `status` reply gained `started_ms` (when the daemon started) and `user_peers` (untagged nodes of any user in the node's netmap, which for a tag-owned node are the devices the policy lets reach it), both with serde defaults; an older daemon reports neither, which setup treats as outdated. The phone protocol is unchanged.
 

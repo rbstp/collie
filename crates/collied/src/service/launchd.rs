@@ -6,7 +6,7 @@ use std::process::Command;
 
 use anyhow::Context;
 
-use super::State;
+use super::{State, built_ms, decide};
 
 pub const LABEL: &str = "dev.rbstp.collied";
 pub const STDOUT_LOG: &str = "collied.out.log";
@@ -115,10 +115,7 @@ pub fn state(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e.into()),
     };
-    let built_ms = std::fs::metadata(&exe)?
-        .modified()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64);
+    let built_ms = built_ms(&exe)?;
     if let Some(theirs) = on_disk.as_deref().and_then(installed_config) {
         anyhow::ensure!(
             config
@@ -148,25 +145,6 @@ fn installed_config(plist: &str) -> Option<String> {
         .strip_prefix("<string>")?
         .strip_suffix("</string>")?;
     Some(arg.to_owned())
-}
-
-fn decide(
-    on_disk: Option<&str>,
-    want: &str,
-    loaded: bool,
-    started_ms: Option<u64>,
-    built_ms: u64,
-) -> State {
-    match (on_disk, started_ms) {
-        (None, _) => State::Missing,
-        _ if !loaded => State::Stopped,
-        (Some(p), _) if p != want => State::Outdated("the service runs another binary or config"),
-        (_, None) => State::Outdated("the daemon is not answering or is older than this collied"),
-        (_, Some(started)) if started < built_ms => {
-            State::Outdated("a newer collied binary is installed")
-        }
-        _ => State::Current,
-    }
 }
 
 pub fn install(config: Option<&Path>, data_dir: &Path) -> anyhow::Result<()> {
@@ -231,6 +209,19 @@ pub fn stop() -> anyhow::Result<()> {
         }
     );
     Ok(())
+}
+
+pub fn note() -> String {
+    String::new()
+}
+
+/// The end of the daemon's stderr log, and where it is.
+pub fn log_tail(data_dir: &Path) -> (String, Vec<String>) {
+    let log = data_dir.join(STDERR_LOG);
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let tail = lines[lines.len().saturating_sub(20)..].to_vec();
+    (log.display().to_string(), tail)
 }
 
 /// Unloads the agent without disabling it, so it still comes back at the next login.
@@ -301,27 +292,6 @@ mod tests {
         assert!(p.contains("<key>RunAtLoad</key>\n    <true/>"));
         assert!(p.contains("Application Support/collie/collied.err.log"));
         assert!(!p.contains("UserName") && !p.contains("Sockets"));
-    }
-
-    #[test]
-    fn state_follows_plist_job_and_binary() {
-        let want = "plist";
-        assert_eq!(decide(None, want, true, Some(9), 5), State::Missing);
-        assert!(matches!(
-            decide(Some("other"), want, true, Some(9), 5),
-            State::Outdated(_)
-        ));
-        assert_eq!(decide(Some("other"), want, false, None, 5), State::Stopped);
-        assert_eq!(decide(Some(want), want, false, None, 5), State::Stopped);
-        assert_eq!(
-            decide(Some(want), want, true, None, 5),
-            State::Outdated("the daemon is not answering or is older than this collied")
-        );
-        assert_eq!(
-            decide(Some(want), want, true, Some(4), 5),
-            State::Outdated("a newer collied binary is installed")
-        );
-        assert_eq!(decide(Some(want), want, true, Some(5), 5), State::Current);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::Context;
 
+use super::{State, built_ms, decide};
 use crate::config;
 
 pub const UNIT: &str = "collied.service";
@@ -157,16 +158,136 @@ fn active() -> anyhow::Result<bool> {
     quiet(&["is-active", "--quiet", UNIT])
 }
 
-/// Where the user manager loads the unit from, so a unit written where the manager does
-/// not look fails here instead of silently never starting.
-fn fragment() -> anyhow::Result<String> {
+fn show(property: &str) -> anyhow::Result<String> {
     let out = Command::new(crate::system_bin("systemctl"))
-        .args(["--user", "show", "--property=FragmentPath", "--value", UNIT])
+        .args([
+            "--user",
+            "show",
+            &format!("--property={property}"),
+            "--value",
+            UNIT,
+        ])
         .stderr(Stdio::null())
         .output()
         .context("run systemctl --user show")?;
     anyhow::ensure!(out.status.success(), "systemctl --user show {UNIT} failed");
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// Where the user manager loads the unit from, so a unit written where the manager does
+/// not look fails here instead of silently never starting.
+fn fragment() -> anyhow::Result<String> {
+    show("FragmentPath")
+}
+
+/// Running, starting, or waiting to restart after a crash: anything that may hold the node
+/// lock or the control socket.
+fn loaded() -> anyhow::Result<bool> {
+    Ok(!matches!(
+        show("ActiveState")?.as_str(),
+        "inactive" | "failed" | ""
+    ))
+}
+
+fn pinned_env() -> anyhow::Result<Vec<(&'static str, PathBuf)>> {
+    PINNED_ENV
+        .iter()
+        .map(|(k, fallback)| Ok((*k, config::xdg_dir(k, fallback)?)))
+        .collect()
+}
+
+/// Whether `install` would change anything, given when the running daemon started.
+pub fn state(
+    config: Option<&Path>,
+    data_dir: &Path,
+    started_ms: Option<u64>,
+) -> anyhow::Result<State> {
+    let exe = std::env::current_exe()?.canonicalize()?;
+    let config = config.map(Path::canonicalize).transpose()?;
+    let path = unit_path()?;
+    let on_disk = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e.into()),
+    };
+    let loaded_from = fragment()?;
+    anyhow::ensure!(
+        loaded_from.is_empty() || Path::new(&loaded_from) == path,
+        "the user manager loads {UNIT} from {loaded_from:?}, not {}: remove that unit or align XDG_CONFIG_HOME",
+        path.display()
+    );
+    let env = pinned_env()?;
+    let want = unit(&exe, config.as_deref(), &env)?;
+    if let Some(text) = on_disk.as_deref() {
+        // Another data dir would mean another node: setup would log in a new one.
+        let theirs = pinned(text, "XDG_DATA_HOME");
+        let ours = pinned(&want, "XDG_DATA_HOME");
+        anyhow::ensure!(
+            theirs.is_none() || theirs == ours,
+            "the service runs with XDG_DATA_HOME={0}, but this shell's data dir is {1}: run XDG_DATA_HOME='{0}' collied setup",
+            theirs
+                .as_deref()
+                .map_or(String::new(), |t| unquote(t, false)),
+            data_dir.display()
+        );
+        if let Some(theirs) = installed_config(text) {
+            let ours = config
+                .as_deref()
+                .map(|c| utf8(c).and_then(quote_arg))
+                .transpose()?;
+            anyhow::ensure!(
+                ours.as_deref() == Some(theirs),
+                "the service runs with --config {0}: run collied --config '{0}' setup",
+                unquote(theirs, true)
+            );
+        }
+    }
+    Ok(decide(
+        on_disk.as_deref(),
+        &want,
+        loaded()?,
+        started_ms,
+        built_ms(&exe)?,
+    ))
+}
+
+/// The quoted `--config` argument of a unit written by `unit`.
+fn installed_config(unit: &str) -> Option<&str> {
+    let exec = unit.lines().find_map(|l| l.strip_prefix("ExecStart="))?;
+    let (_, rest) = exec.split_once(" \"--config\" ")?;
+    rest.strip_suffix(" \"run\"")
+}
+
+/// The quoted value of a pinned `Environment=` variable.
+fn pinned(unit: &str, key: &str) -> Option<String> {
+    let prefix = format!("Environment=\"{key}=");
+    unit.lines()
+        .find_map(|l| l.strip_prefix(&prefix))
+        .map(|v| format!("\"{v}"))
+}
+
+/// Undoes `quoted`, for showing a path back.
+fn unquote(q: &str, dollar: bool) -> String {
+    let inner = q
+        .strip_prefix('"')
+        .and_then(|q| q.strip_suffix('"'))
+        .unwrap_or(q);
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match (c, chars.clone().next()) {
+            ('\\', Some(n @ ('"' | '\\'))) | ('%', Some(n @ '%')) => {
+                out.push(n);
+                chars.next();
+            }
+            ('$', Some('$')) if dollar => {
+                out.push('$');
+                chars.next();
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn installed() -> anyhow::Result<PathBuf> {
@@ -179,10 +300,7 @@ pub fn install(config: Option<&Path>, data_dir: &Path) -> anyhow::Result<()> {
     crate::ensure_private_dir(data_dir)?;
     let exe = std::env::current_exe()?.canonicalize()?;
     let config = config.map(Path::canonicalize).transpose()?;
-    let env = PINNED_ENV
-        .iter()
-        .map(|(k, fallback)| Ok((*k, config::xdg_dir(k, fallback)?)))
-        .collect::<anyhow::Result<Vec<_>>>()?;
+    let env = pinned_env()?;
     let text = unit(&exe, config.as_deref(), &env)?;
     let path = unit_path()?;
     if let Some(dir) = path.parent() {
@@ -240,6 +358,59 @@ pub fn stop() -> anyhow::Result<()> {
         }
     );
     Ok(())
+}
+
+/// What a user unit needs beyond being current: lingering, to keep running after logout.
+pub fn note() -> String {
+    let out = Command::new(crate::system_bin("loginctl"))
+        .args(["show-user", &rustix::process::getuid().as_raw().to_string()])
+        .args(["--property=Linger", "--value"])
+        .stderr(Stdio::null())
+        .output();
+    match out {
+        Ok(o) if String::from_utf8_lossy(&o.stdout).trim() == "no" => {
+            "; stops when you log out (loginctl enable-linger keeps it running)".to_owned()
+        }
+        _ => String::new(),
+    }
+}
+
+/// Stops the unit without disabling it, so it still comes back at the next login.
+pub fn unload() -> anyhow::Result<()> {
+    if loaded()? {
+        anyhow::ensure!(
+            systemctl(&["stop", UNIT])?,
+            "systemctl --user stop {UNIT} failed"
+        );
+    }
+    let _ = quiet(&["reset-failed", UNIT]);
+    Ok(())
+}
+
+/// The end of the unit's journal, and where it is.
+pub fn log_tail(_: &Path) -> (String, Vec<String>) {
+    let out = Command::new(crate::system_bin("journalctl"))
+        .args([
+            "--user",
+            "--unit",
+            UNIT,
+            "--lines",
+            "20",
+            "--no-pager",
+            "--output",
+            "cat",
+        ])
+        .stderr(Stdio::null())
+        .output();
+    let lines = out
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    (format!("journalctl --user -u {UNIT}"), lines)
 }
 
 pub fn start() -> anyhow::Result<()> {
@@ -331,6 +502,20 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let latin1 = Path::new(std::ffi::OsStr::from_bytes(b"/caf\xe9.toml"));
         assert!(unit(Path::new("/c"), Some(latin1), &[]).is_err());
+    }
+
+    #[test]
+    fn reads_the_installed_config_and_data_dir() {
+        let exe = Path::new("/u/.cargo/bin/collied");
+        let env = [("XDG_DATA_HOME", PathBuf::from("/u/$d%"))];
+        assert_eq!(installed_config(&unit(exe, None, &env).unwrap()), None);
+        let u = unit(exe, Some(Path::new(NASTY)), &env).unwrap();
+        let theirs = installed_config(&u).unwrap();
+        assert_eq!(theirs, quote_arg(NASTY).unwrap());
+        assert_eq!(unquote(theirs, true), NASTY);
+        let data = pinned(&u, "XDG_DATA_HOME").unwrap();
+        assert_eq!(unquote(&data, false), "/u/$d%");
+        assert_eq!(pinned(&u, "XDG_CACHE_HOME"), None);
     }
 
     // What systemd itself makes of the unit, where systemd-analyze exists.
