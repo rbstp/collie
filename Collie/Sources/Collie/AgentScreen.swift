@@ -393,9 +393,6 @@ private struct PromptBar: View {
             if let problem = model.dictation.problem {
                 DictationProblemRow(problem: problem)
             }
-            if model.dictation.isActive {
-                DictationBar(dictation: model.dictation)
-            }
             VStack(alignment: .leading, spacing: 8) {
                 if !model.attachments.isEmpty {
                     ScrollView(.horizontal) {
@@ -458,13 +455,18 @@ private struct PromptBar: View {
                     .disabled(model.upload != nil || model.attachmentSlots <= 0)
                     .accessibilityLabel("Attach")
                 }
-                if !model.isTerminal {
+                if model.dictation.isActive {
+                    DictationBar(dictation: model.dictation)
+                        .frame(maxWidth: .infinity)
+                } else if !model.isTerminal {
                     DictationButton(dictation: model.dictation, disabled: model.sendingPrompt) {
                         editing = false
                         model.startDictation()
                     }
                 }
-                Spacer(minLength: 0)
+                if !model.dictation.isActive {
+                    Spacer(minLength: 0)
+                }
                 if editing || typingCommand {
                     Button {
                         editing = false
@@ -620,11 +622,21 @@ struct DictationBar: View {
         HStack(spacing: 8) {
             switch dictation.phase {
             case .preparing(let download?):
-                Text("Downloading speech model").font(.caption).lineLimit(1)
-                ProgressView(value: download).frame(width: 60)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        Text("Downloading speech model").font(.caption).fixedSize()
+                        ProgressView(value: download).frame(width: 60)
+                    }
+                    Text("Downloading…").font(.caption).lineLimit(1)
+                }
             case .listening:
-                Text("Dictating…").font(.caption.weight(.semibold))
-                LevelMeter(level: dictation.level)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        Text("Dictating…").font(.caption.weight(.semibold)).fixedSize()
+                        LevelMeter(level: dictation.level)
+                    }
+                    Text("Dictating…").font(.caption.weight(.semibold)).lineLimit(1)
+                }
             case .idle, .preparing(nil), .finishing:
                 ProgressView().controlSize(.mini)
                 Text(dictation.phase == .finishing ? "Finishing…" : "Starting…").font(.caption)
