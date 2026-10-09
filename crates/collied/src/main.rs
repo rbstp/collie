@@ -221,14 +221,21 @@ impl SetupHost<'_> {
     async fn running_within(&mut self, secs: u64) -> Option<control::StatusInfo> {
         use collied::setup::Host;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        let mut running: Option<(std::time::Instant, control::StatusInfo)> = None;
         loop {
+            let now = std::time::Instant::now();
             if let Some(s) = self.status().await
                 && s.backend_state == "Running"
             {
-                return Some(s);
+                // A node that just started may not have its peers yet: no false policy hint.
+                let since = running.as_ref().map_or(now, |(t, _)| *t);
+                if s.user_peers != Some(0) || now >= since + std::time::Duration::from_secs(10) {
+                    return Some(s);
+                }
+                running = Some((since, s));
             }
-            if std::time::Instant::now() >= deadline {
-                return None;
+            if now >= deadline {
+                return running.map(|(_, s)| s);
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
