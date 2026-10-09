@@ -11,7 +11,7 @@ index c99f4c5..e70a09c 100644
 -require tailscale.com v1.94.1
 +require (
 +	golang.org/x/sys v0.48.0
-+	tailscale.com v1.104.0
++	tailscale.com v1.104.1
 +)
  
  require (
@@ -653,5 +653,5 @@ index ab4339a..88f0c42 100644
 -tailscale.com v1.94.1/go.mod h1:gLnVrEOP32GWvroaAHHGhjSGMPJ1i4DvqNwEg+Yuov4=
 +software.sslmate.com/src/go-pkcs12 v0.7.3 h1:JBQD3FDqYjTeyDAeZQklj2ar88ykBLtALloPJHyAauU=
 +software.sslmate.com/src/go-pkcs12 v0.7.3/go.mod h1:Qiz0EyvDRJjjxGyUQa2cCNZn/wMyzrRJ/qcDXOQazLI=
-+tailscale.com v1.104.0 h1:7LgglawekeutAexqXUzSxP/Kqo3HHwF/SkcbX5HpiU4=
-+tailscale.com v1.104.0/go.mod h1:Cb1XjScRgSOeRD7NW6uCEznme782WiOU9IxqyTWoRf0=
++tailscale.com v1.104.1 h1:9GNOm9Izqll9RH5jA5NWcLiCzXi/WtqY4EHQY2Dy2zk=
++tailscale.com v1.104.1/go.mod h1:Cb1XjScRgSOeRD7NW6uCEznme782WiOU9IxqyTWoRf0=

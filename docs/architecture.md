@@ -51,7 +51,7 @@ On Linux, collied is a systemd user unit, its node is `tag:collie-linux` and the
 
 ## Tailscale (libtailscale, pinned commit, never tagged upstream)
 
-- libtailscale `main@59d4bb8` as a git submodule; `tailscale-sys/patches` bumps tailscale.com v1.94.1 → v1.104.0 (latest, also fixes the Go 1.27 jsonv2 build break). Requires Go ≥ 1.27.1; builds use `GOTOOLCHAIN=local`, `-mod=vendor` (vendored with `go mod vendor`, below), `-trimpath`, `-buildvcs=false`, `-ldflags=-w`.
+- libtailscale `main@59d4bb8` as a git submodule; `tailscale-sys/patches` bumps tailscale.com v1.94.1 → v1.104.1 (latest, also fixes the Go 1.27 jsonv2 build break). Requires Go ≥ 1.27.1; builds use `GOTOOLCHAIN=local`, `-mod=vendor` (vendored with `go mod vendor`, below), `-trimpath`, `-buildvcs=false`, `-ldflags=-w`.
 - **`tailscale_getremoteaddr` is unsafe for identity**: its map is keyed by the Go-side fd number, so with concurrent fd churn it returned the wrong peer 17% of the time in testing. Plus `tailscale_loopback` would open a 127.0.0.1 TCP listener (SOCKS5 + LocalAPI) on the machine. Both are avoided with a small patch series applied by `tailscale-sys`:
   1. `tailscale_accept_with_addr` returns the peer `ip:port` carried in the same `sendmsg` as the fd; the racy fd-keyed map is no longer written.
   2. `tailscale_whois_json(sd, addr)` via the in-memory LocalClient (same mechanism as `tailscale_status_json`).
