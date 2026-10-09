@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "rbstp.collie",
+  "name": "Collie",
+  "version": "0.1.0",
+  "author": "Richard Boisvert",
+  "license": "Apache-2.0",
+  "description": "collied in the bar: running or off, pending approvals, pairing a phone, paired phones and the audit log.",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Collie",
+    "description": "Turn collied on and off, pair a phone, list paired phones and open the audit log.",
+    "category": "Development",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {},
+    "schema": []
+  }
+}
