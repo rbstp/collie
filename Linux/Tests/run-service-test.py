@@ -25,14 +25,16 @@ with tempfile.TemporaryDirectory() as tmp:
     shutil.copytree(here / "service", config)
     shutil.copytree(here.parent / "CollieTray", config / "CollieTray")
     sock, log = data_home / "collie/control.sock", tmp / "seen.json"
-    server = subprocess.Popen([sys.executable, here / "fake_collied.py", sock, log])
-    time.sleep(0.3)
     env = dict(os.environ, HOME=str(tmp), XDG_CONFIG_HOME=str(config_home), XDG_DATA_HOME="/nonexistent")
+    # collied starts after the widget, so its first connects fail and it must retry.
+    shell = subprocess.Popen(["qs", "-p", config], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    time.sleep(3)
+    server = subprocess.Popen([sys.executable, here / "fake_collied.py", sock, log])
     try:
-        out = subprocess.run(["qs", "-p", config], env=env, capture_output=True, text=True, timeout=30)
+        text, _ = shell.communicate(timeout=30)
     finally:
+        shell.kill()
         server.kill()
-    text = out.stdout + out.stderr
     result = next((json.loads(l.split("RESULT ", 1)[1]) for l in text.splitlines() if "RESULT " in l), None)
     seen = json.loads(log.read_text()) if log.exists() else {"watch": 0, "pair": [], "lines": []}
     failures = []
@@ -53,7 +55,7 @@ with tempfile.TemporaryDirectory() as tmp:
         check(notes.get("firstDone") == "paired iPhone (nPHONE)", f"pairing ended with {notes.get('firstDone')!r}")
         check(notes.get("cancelPhase") == "invite" and notes.get("afterCancel") == "", f"cancel phases {notes}")
         check(notes.get("peers") == ["a\\u{202e}b"], f"peers {notes.get('peers')}")
-        check(notes.get("printable") == "ab\\u{202e}cd’\U0001f600\\n\\u{301}", f"printable in qs {notes.get('printable')!r}")
+        check(notes.get("printable") == "ab\\u{202e}cd\u2019\U0001f600\\n\\u{301}", f"printable in qs {notes.get('printable')!r}")
         check(notes.get("lastError") == "", f"lastError {notes.get('lastError')!r}")
     check(len(seen["pair"]) == 2, f"pair connections {seen['pair']}")
     if len(seen["pair"]) == 2:

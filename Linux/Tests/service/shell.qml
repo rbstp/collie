@@ -18,7 +18,13 @@ ShellRoot {
 
   Service {
     id: svc
-    onStateChanged: harness.states = harness.states.concat([svc.state + ":" + svc.pending])
+    onStateChanged: {
+      harness.states = harness.states.concat([svc.state + ":" + svc.pending])
+      if (state === "running" && !scenario.running && !harness.notes.started) {
+        harness.note("started", true)
+        scenario.start()
+      }
+    }
     onPendingChanged: harness.states = harness.states.concat([svc.state + ":" + svc.pending])
     onPhaseChanged: {
       if (phase === "confirm") {
@@ -48,15 +54,30 @@ ShellRoot {
   }
   Timer { id: cancelDrop; interval: 800; onTriggered: { harness.note("cancelPhase", svc.phase); svc.pairCancel(); harness.note("afterCancel", svc.phase) } }
 
-  Timer { interval: 900; running: true; onTriggered: svc.pairStart() }
-  Timer { interval: 5000; running: true; onTriggered: svc.refresh() }
-  Timer { interval: 6000; running: true; onTriggered: { harness.note("peers", svc.peers.map(function(p) { return Printable.printable(p.label) })); svc.toggle() } }
+  // Times from the first running state: collied starts after the widget.
+  property int tick: 0
   Timer {
-    interval: 8500
-    running: true
+    id: scenario
+    interval: 100
+    repeat: true
     onTriggered: {
+      harness.tick++
+      if (harness.tick === 4) svc.pairStart()
+      if (harness.tick === 60) svc.refresh()
+      if (harness.tick === 65) {
+        harness.note("peers", svc.peers.map(function(p) { return Printable.printable(p.label) }))
+        svc.toggle()
+      }
+      if (harness.tick === 90) harness.finish()
+    }
+  }
+  Timer { interval: 25000; running: true; onTriggered: harness.finish() }
+
+  function finish() {
+    scenario.stop()
+    {
       harness.note("lastError", svc.lastError)
-      harness.note("printable", Printable.printable("ab‮cd’\u{1f600}\ń"))
+      harness.note("printable", Printable.printable("ab\u202ecd\u2019\u{1f600}\n\u0301"))
       console.log("RESULT " + JSON.stringify({ states: harness.states, notes: harness.notes }))
       Qt.quit()
     }

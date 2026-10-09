@@ -40,7 +40,7 @@ def pair(conn, f):
     send(f, {"type": "invite", "uri": "collie://pair#v=2&c=SECRETCODE", "expires_in_secs": 120})
     if n == 1:
         time.sleep(0.3)
-        send(f, {"type": "confirm", "device_label": "Rich’s ‮iPhone", "node_name": "phone.ts.net",
+        send(f, {"type": "confirm", "device_label": "Rich\u2019s \u202eiPhone", "node_name": "phone.ts.net",
                  "stable_id": "nPHONE", "login": "me@example.com", "user_id": 7, "tls_key": "k",
                  "terminal_key": None, "replaces": False, "previous_terminal_key": None})
         sent = time.monotonic()
@@ -68,7 +68,7 @@ def handle(conn):
             pair(conn, f)
         elif cmd == "peers_list":
             send(f, {"type": "peers", "owner_user_id": 7, "peers": [
-                {"stable_id": "nPHONE", "user_id": 7, "login": "me@example.com", "label": "a‮b", "paired_at": 1}]})
+                {"stable_id": "nPHONE", "user_id": 7, "login": "me@example.com", "label": "a\u202eb", "paired_at": 1}]})
     except OSError:
         pass
     finally:

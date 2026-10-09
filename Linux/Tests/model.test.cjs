@@ -38,16 +38,16 @@ test("terminal key change matches collied", () => {
 });
 
 test("printable escapes what the phone could hide, like CollieBar", () => {
-  assert.equal(printable('Rich’s "iPhone" \\ 15'), 'Rich’s "iPhone" \\ 15');
-  assert.equal(printable("ab‮cd"), "ab\\u{202e}cd");
-  assert.equal(printable("a​b⁦"), "a\\u{200b}b\\u{2066}");
+  assert.equal(printable('Rich\u2019s "iPhone" \\ 15'), 'Rich\u2019s "iPhone" \\ 15');
+  assert.equal(printable("ab\u202ecd"), "ab\\u{202e}cd");
+  assert.equal(printable("a\u200bb\u2066"), "a\\u{200b}b\\u{2066}");
   assert.equal(printable("a\nb\tc\r"), "a\\nb\\tc\\r");
   assert.equal(printable("\u001b[31mred"), "\\u{1b}[31mred");
-  assert.equal(printable("x\u007f "), "x\\u{7f}\\u{2028}");
-  assert.equal(printable("a b́c　d️eㅤ"), "a\\u{a0}b\\u{301}c\\u{3000}d\\u{fe0f}e\\u{3164}");
+  assert.equal(printable("x\u007f\u2028"), "x\\u{7f}\\u{2028}");
+  assert.equal(printable("a\u00a0b\u0301c\u3000d\ufe0fe\u3164"), "a\\u{a0}b\\u{301}c\\u{3000}d\\u{fe0f}e\\u{3164}");
   assert.equal(printable("\0"), "\\0");
   assert.equal(printable("\ud800x\u{e0001}\u{10ffff}"), "\\u{d800}x\\u{e0001}\\u{10ffff}");
-  assert.equal(printable("\u{1f600} café 日本"), "\u{1f600} café 日本");
+  assert.equal(printable("\u{1f600} caf\u00e9 \u65e5\u672c"), "\u{1f600} caf\u00e9 \u65e5\u672c");
 });
 
 // What `collied service install` writes (crates/collied/src/service/systemd.rs).

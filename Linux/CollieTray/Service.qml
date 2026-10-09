@@ -203,38 +203,61 @@ Item {
   }
 
   // An open watch connection is a running collied; one older than watch answers an error.
-  Socket {
-    id: watchSocket
-    property bool outdated: false
-    path: root.socketPath
-    connected: true
-    onConnectionStateChanged: {
-      if (connected) {
+  // A Socket never connects again after a failed attempt, so each attempt gets a new one.
+  property var watchConn: null
+  property bool outdated: false
+
+  function watch() {
+    if (watchConn) return
+    var s = lineSocket.createObject(root, { path: socketPath })
+    watchConn = s
+    function drop() {
+      if (watchConn !== s) return
+      watchConn = null
+      s.destroy()
+      if (!outdated) apply("off", 0)
+      retryTimer.restart()
+    }
+    s.lineReceived.connect(function(line) {
+      if (watchConn !== s) return
+      var r = Model.parseReply(line)
+      if (r.type === "watch") {
         outdated = false
-        write(Model.WATCH)
-        flush()
-      } else if (!outdated) root.apply("off", 0)
-    }
-    onError: if (!connected) root.apply("off", 0)
-    parser: SplitParser {
-      onRead: function(line) {
-        var r = Model.parseReply(line)
-        if (r.type === "watch") root.apply("running", Number(r.pending_approvals) || 0)
-        else if (r.type === "error") {
-          watchSocket.outdated = true
-          root.apply("outdated", 0)
-        }
+        apply("running", Number(r.pending_approvals) || 0)
+      } else if (r.type === "error") {
+        outdated = true
+        apply("outdated", 0)
       }
-    }
+    })
+    s.connectionStateChanged.connect(function() {
+      if (s.connected) {
+        s.write(Model.WATCH)
+        s.flush()
+      } else drop()
+    })
+    s.error.connect(function() {
+      if (!s.connected) {
+        outdated = false
+        drop()
+      }
+    })
+    s.connected = true
   }
 
-  onSocketPathChanged: watchSocket.connected = false
+  Component.onCompleted: watch()
+
+  onSocketPathChanged: {
+    if (!watchConn) return
+    var s = watchConn
+    watchConn = null
+    s.destroy()
+    watch()
+  }
 
   Timer {
+    id: retryTimer
     interval: 2000
-    repeat: true
-    running: !watchSocket.connected
-    onTriggered: watchSocket.connected = true
+    onTriggered: root.watch()
   }
 
   // The tailnet can take up to a minute to come up.
