@@ -194,3 +194,33 @@ mac-notarize profile="collie":
     dest="$HOME/Applications/CollieBar.app"
     if [ -d "$dest" ]; then xcrun stapler staple "$dest"; fi
     spctl --assess --type execute --verbose=2 "$app"
+
+# The Omarchy bar widget's tests: wire format and parsing under node, Service.qml in qs against a fake collied.
+[linux]
+tray-test:
+    cmp Mac/CollieBar/Assets.xcassets/MenuIcon.imageset/MenuIcon.svg Linux/CollieTray/MenuIcon.svg
+    omarchy-plugin-validate Linux/CollieTray
+    node --test Linux/Tests/
+    python3 -I Linux/Tests/run-service-test.py
+
+# Copies the Omarchy bar widget to ~/.config/omarchy/plugins/rbstp.collie and puts it on the bar.
+[linux]
+tray-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    omarchy-plugin-validate Linux/CollieTray
+    plugins="$HOME/.config/omarchy/plugins"
+    dest="$plugins/rbstp.collie"
+    mkdir -p "$plugins"
+    # A dot directory: the shell's watcher ignores it, so the copy reloads plugins once, at the swap.
+    tmp="$(mktemp -d "$plugins/.rbstp.collie.XXXXXX")"
+    trap 'rm -rf "$tmp"' EXIT
+    cp Linux/CollieTray/{manifest.json,Service.qml,Panel.qml,Model.js,Printable.js,MenuIcon.svg} "$tmp"
+    chmod 0755 "$tmp"
+    rm -rf "$dest"
+    mv "$tmp" "$dest"
+    omarchy-shell shell rescanPlugins >/dev/null
+    if ! jq -e '[.bar.layout[]?[]? | (.id? // .)] | index("rbstp.collie")' "$HOME/.config/omarchy/shell.json" >/dev/null 2>&1; then
+        omarchy plugin enable rbstp.collie right
+    fi
+    echo "installed $dest"

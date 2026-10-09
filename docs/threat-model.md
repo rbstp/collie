@@ -131,6 +131,16 @@ Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the t
 | Residual | Same-UID code can drive the control socket or the app itself, as under [Same-UID malware on the Mac](#same-uid-malware-on-the-mac): it can already answer the y/N prompt. The QR is on screen for up to 120 s, like the terminal's. |
 | Phase | Built |
 
+### Bar widget (Linux)
+
+| | |
+|---|---|
+| Assets | The invite while its QR is shown; the y/N decision on a candidate phone; the state of collied |
+| Attack | A stray click or key approves a phone; the invite leaks into argv, a file or the shell's log; phone strings render as rich text or disguise the candidate; the audit log is edited through the viewer; the widget becomes a way in from the network. |
+| Mitigations | A plugin of the Omarchy shell, a local client of the 0600, same-UID control socket only, with CollieBar's three requests; no listener, no network access, no change to collied. The invite reaches `qrencode` on stdin only, is never logged, shown as text or kept after the pairing. Pair is bound to no key, is live only 1 s after the candidate appears, and sends one answer; collied refuses after 60 s; closing the panel cancels. Phone strings are escaped like `collied::printable` and drawn as plain text. Commands run by argv, never a shell string. The audit log opens in `less` with `LESSSECURE=1` (built). |
+| Residual | Same-UID code can drive the control socket, the shell or the plugin files under `~/.config/omarchy/plugins`, as under [Same-UID malware on the Mac](#same-uid-malware-on-the-mac). Any other shell plugin runs in the same Quickshell process. The QR is on screen for up to 120 s. |
+| Phase | Built |
+
 ### `collied setup`
 
 | | |

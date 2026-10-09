@@ -82,6 +82,7 @@ Outside the phases: an audit log viewer, and smaller fixes tracked as [issues](h
 - A Tailscale account whose policy file you can edit.
 - To build on macOS: Rust (see `rust-toolchain.toml`), Go, Xcode 27 with the watchOS platform and an iPhone 18 Pro simulator, [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, [cargo-nextest](https://nexte.st), and `jq` (for `just ios-run-device`). The libghostty-vt build script downloads its own pinned Zig.
 - To build collied on Linux: Rust (see `rust-toolchain.toml`), Go 1.27.1 or later, a C compiler, libclang (for bindgen), [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st).
+- For the Linux bar widget (optional): Omarchy 4 (its shell runs on Quickshell 0.3) with `qrencode`, which Omarchy installs; node and Python 3 for `just tray-test`.
 - An Apple Developer account with a Developer ID Application certificate (collied is always signed on macOS; it is not signed on Linux), and an APNs key for push notifications.
 
 The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID and `dev.rbstp` bundle identifiers. Change them to your own before building.
@@ -156,7 +157,9 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
 
    The phone must have a passcode, and must be paired after both sides are updated: the pairing records the phone's terminal key. A phone paired before shows "Pair this phone again to use terminals on this machine".
 
-9. **Menu bar app** (optional, macOS): `just mac-install` builds CollieBar, signs it with the same Developer ID and installs it to `~/Applications`. Its icon is bright while collied runs, dim when it is off, with a dot while an approval is pending. The menu turns collied off and on (`collied stop` and `collied start`), pairs a phone (the QR, then Pair or Don't Pair on the Mac), lists the paired phones, opens the audit log, and quits, which stops collied. Open at Login in the menu starts it at login; it is off by default. It is not notarized: that is optional, only for another Mac ([docs/release.md](docs/release.md)).
+9. **Menu bar app** (optional): on macOS, `just mac-install` builds CollieBar, signs it with the same Developer ID and installs it to `~/Applications`. Its icon is bright while collied runs, dim when it is off, with a dot while an approval is pending. The menu turns collied off and on (`collied stop` and `collied start`), pairs a phone (the QR, then Pair or Don't Pair on the Mac), lists the paired phones, opens the audit log, and quits, which stops collied. Open at Login in the menu starts it at login; it is off by default. It is not notarized: that is optional, only for another Mac ([docs/release.md](docs/release.md)).
+
+   On Linux with [Omarchy](https://omarchy.org), the same menu is a bar widget in the Omarchy shell (Quickshell): `just tray-install` copies `Linux/CollieTray` to `~/.config/omarchy/plugins/rbstp.collie` and puts it on the right of the bar. It has the same icon states and items: Turn Off or Turn On, Pair a Phone (the QR, then Pair or Don't Pair on the machine), the paired phones and Open Audit Log, which opens it read-only in a terminal. Quit stops collied and takes the widget off the bar (`omarchy plugin enable rbstp.collie` puts it back). It loads with the shell, so it is there at every login while enabled. Update it with `git pull` and `just tray-install`.
 
 List paired phones with `collied peers list`, revoke one with `collied peers revoke <label or StableID>` (removing the machine in the app does the same when the machine is reachable), and inspect the daemon with `collied status` (its tags and the herdr agents it sees).
 
@@ -182,6 +185,8 @@ List paired phones with `collied peers list`, revoke one with `collied peers rev
 | `just mac-test` | The menu bar app's unit tests (never touches the real control socket) |
 | `just mac-install` | Builds the menu bar app, signs it with the Developer ID and the hardened runtime, installs it to `~/Applications` and opens it |
 | `just mac-notarize` | Optional: notarizes and staples the app `mac-install` signed, with a `notarytool` keychain profile |
+| `just tray-test` | The Omarchy bar widget's tests (Linux): the icon matches the Mac's, the plugin validates, the wire format and parsing under node, and `Service.qml` in `qs` against a fake collied (never the real control socket) |
+| `just tray-install` | Copies the Omarchy bar widget to `~/.config/omarchy/plugins/rbstp.collie` and puts it on the bar (Linux) |
 | `just collied-install` | Release build of collied, installed to `~/.cargo/bin`. On macOS it is signed and restarts the launchd agent if it is installed. On Linux it is not signed and restarts the systemd user unit if it is active |
 
 CI runs on macOS: lint, the Rust tests, the GhosttyTerminal package tests, and the iOS simulator build and tests, on every pull request and on pushes to `master`. Merging a pull request that changes code into `master` uploads a build to the maintainer's TestFlight ([docs/release.md](docs/release.md)).
@@ -200,6 +205,7 @@ crates/
   e2e/             End-to-end tests: phone core against collied over a local test tailnet
 Collie/            iOS app (XcodeGen project.yml), ColliePush and CollieWidgets extensions, CollieWatch app and its CollieWatchWidgets complication, GhosttyTerminal package
 Mac/               macOS menu bar app CollieBar (XcodeGen project.yml), a client of collied's control socket
+Linux/             Omarchy bar widget CollieTray (a Quickshell plugin), a client of collied's control socket, and its tests
 docs/              Architecture, threat model, tailnet setup, release, protocol schemas
 scripts/           libghostty-vt xcframework build
 ```
