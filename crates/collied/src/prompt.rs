@@ -666,8 +666,8 @@ const DENY_COUNTDOWN: (&str, &str) = (
 /// `text` without Claude Code's deny countdown, whose time changes every second: in the
 /// fingerprint it would supersede the approval on every tick. Only for a Claude Code dialog
 /// whose last option block parses as a menu, and only where Claude Code draws it: under the
-/// last `╌` rule of that dialog (none when the rules are unpaired, as the command block could
-/// still be open), then a blank line, the question, and option 1 of that block, in its exact
+/// last `╌` rule of that dialog when it has any (none when the rules are unpaired, as the
+/// command block could still be open), else under its top rule, then a blank line, the question, and option 1 of that block, in its exact
 /// wording at the dialog's margin (command lines are indented further), on one line or
 /// wrapped over up to three, with nothing else on them. Anything else is left alone; the
 /// time is never read.
