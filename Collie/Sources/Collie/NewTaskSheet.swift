@@ -10,11 +10,14 @@ struct NewTaskSheet: View {
     @State private var pickingPhoto = false
     @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
+    @State private var dictationExpanded = false
     @FocusState private var editingPrompt: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
-    private var expandedPrompt: Bool { editingPrompt || model.dictation.isActive || !model.attachments.isEmpty }
+    private var expandedPrompt: Bool {
+        editingPrompt || model.dictation.isActive || !model.attachments.isEmpty || (dictationExpanded && !model.prompt.isEmpty)
+    }
 
     init(
         core: any AgentCore, machines: [Machine], preferredMachineId: String?,
@@ -156,7 +159,7 @@ struct NewTaskSheet: View {
                         }
                         HStack(alignment: .bottom, spacing: 8) {
                             TextField("What should the agent do?", text: $model.prompt, axis: .vertical)
-                                .lineLimit(expandedPrompt ? 1...3 : 1...1)
+                                .lineLimit(expandedPrompt ? 1...5 : 1...1)
                                 .focused($editingPrompt)
                                 .disabled(model.dictation.isActive)
                             if expandedPrompt && !model.prompt.isEmpty {
@@ -187,7 +190,7 @@ struct NewTaskSheet: View {
                             if !model.dictation.isActive {
                                 DictationButton(dictation: model.dictation, disabled: model.phase != .editing) {
                                     editingPrompt = false
-                                    model.startDictation()
+                                    dictationExpanded = model.startDictation() != nil
                                 }
                             }
                         }
@@ -265,7 +268,16 @@ struct NewTaskSheet: View {
                 }
             }
             .onChange(of: scenePhase) { _, phase in model.dictation.scenePhaseChanged(to: phase) }
-            .onDisappear(perform: cancel)
+            .onChange(of: model.prompt.isEmpty) { _, empty in
+                if empty && !model.dictation.isActive { dictationExpanded = false }
+            }
+            .onChange(of: model.dictation.isActive) { _, active in
+                if !active && model.prompt.isEmpty { dictationExpanded = false }
+            }
+            .onDisappear {
+                dictationExpanded = false
+                cancel()
+            }
         }
     }
 }

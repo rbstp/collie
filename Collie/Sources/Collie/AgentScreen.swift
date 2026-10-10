@@ -377,11 +377,14 @@ private struct PromptBar: View {
     @Bindable var model: AgentModel
     @FocusState private var editing: Bool
     @State private var typingCommand = false
+    @State private var dictationExpanded = false
     @State private var pickingPhoto = false
     @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
 
-    private var expanded: Bool { editing || typingCommand || model.dictation.isActive || !model.attachments.isEmpty }
+    private var expanded: Bool {
+        editing || typingCommand || model.dictation.isActive || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -431,7 +434,7 @@ private struct PromptBar: View {
                                 model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: { model.typed($0) }),
                                 axis: .vertical
                             )
-                                .lineLimit(expanded ? 1...3 : 1...1)
+                                .lineLimit(expanded ? 1...5 : 1...1)
                                 .focused($editing)
                                 .disabled(model.dictation.isActive)
                         }
@@ -468,7 +471,7 @@ private struct PromptBar: View {
                     if !model.isTerminal && !model.dictation.isActive {
                         DictationButton(dictation: model.dictation, disabled: model.sendingPrompt) {
                             editing = false
-                            model.startDictation()
+                            dictationExpanded = model.startDictation() != nil
                         }
                     }
                     if editing || typingCommand {
@@ -529,6 +532,13 @@ private struct PromptBar: View {
                 model.attachFailed(error)
             }
         }
+        .onChange(of: model.draft.isEmpty) { _, empty in
+            if empty && !model.dictation.isActive { dictationExpanded = false }
+        }
+        .onChange(of: model.dictation.isActive) { _, active in
+            if !active && model.draft.isEmpty { dictationExpanded = false }
+        }
+        .onDisappear { dictationExpanded = false }
     }
 }
 
