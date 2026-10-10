@@ -164,18 +164,22 @@ struct WatchUsage: Codable, Equatable, Sendable {
 
     static var file: URL? { AppGroup.container?.appending(path: "watch-usage.json") }
 
-    static func load() -> WatchUsage? {
+    static func load(from file: URL? = Self.file) -> WatchUsage? {
         file.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(Self.self, from: $0) }
     }
 
-    func save() {
-        guard let file = Self.file, let data = try? JSONEncoder().encode(self) else { return }
-        try? data.write(to: file, options: .atomic)
-    }
-
-    static func clear() {
-        guard let file else { return }
-        try? FileManager.default.removeItem(at: file)
+    static func updateCache(_ usage: Self?, at file: URL? = Self.file) -> Bool {
+        guard let file else { return false }
+        do {
+            if let usage {
+                try JSONEncoder().encode(usage).write(to: file, options: .atomic)
+            } else if FileManager.default.fileExists(atPath: file.path) {
+                try FileManager.default.removeItem(at: file)
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 }
 

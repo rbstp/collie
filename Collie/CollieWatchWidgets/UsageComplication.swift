@@ -37,9 +37,10 @@ struct UsageProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
+        let now = Date.now
         let usage = WatchUsage.load()
-        let entries = (usage?.timelineDates(now: .now) ?? [.now]).map { UsageEntry(date: $0, usage: usage) }
-        completion(Timeline(entries: entries, policy: entries.count > 1 ? .atEnd : .never))
+        let entries = (usage?.timelineDates(now: now) ?? [now]).map { UsageEntry(date: $0, usage: usage) }
+        completion(Timeline(entries: entries, policy: entries.count > 1 ? .atEnd : .after(now.addingTimeInterval(15 * 60))))
     }
 }
 

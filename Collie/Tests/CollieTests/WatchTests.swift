@@ -527,3 +527,31 @@ private func prefsFile() throws -> URL {
     #expect(tomorrow.last == now.addingTimeInterval(2 * 86400))
     #expect(usage.windows(now: tomorrow[0])[0] == nil)
 }
+
+@Test func watchUsageCacheRecoversWithUnchangedReadings() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appending(path: "watch-usage.json")
+    let usage = WatchUsage(fiveHourUsed: 0, fiveHourResetsAtMs: nowMs + 3_600_000, sevenDayUsed: 98,
+                           sevenDayResetsAtMs: nowMs + 3 * 86_400_000, claudeRecordedMs: nowMs)
+    #expect(WatchUsage.load(from: file) == nil)
+    #expect(WatchUsage.updateCache(usage, at: file))
+    #expect(WatchUsage.load(from: file) == usage)
+    try FileManager.default.removeItem(at: file)
+    #expect(WatchUsage.updateCache(usage, at: file))
+    #expect(WatchUsage.load(from: file) == usage)
+    try Data("invalid".utf8).write(to: file)
+    #expect(WatchUsage.load(from: file) == nil)
+    #expect(WatchUsage.updateCache(usage, at: file))
+    #expect(WatchUsage.load(from: file) == usage)
+    #expect(WatchUsage.updateCache(nil, at: file))
+    #expect(WatchUsage.load(from: file) == nil)
+    #expect(WatchUsage.updateCache(nil, at: file))
+    try FileManager.default.removeItem(at: directory)
+    #expect(!WatchUsage.updateCache(usage, at: file))
+    #expect(!WatchUsage.updateCache(usage, at: nil))
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    #expect(WatchUsage.updateCache(usage, at: file))
+    #expect(WatchUsage.load(from: file) == usage)
+}
