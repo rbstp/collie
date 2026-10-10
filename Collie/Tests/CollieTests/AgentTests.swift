@@ -1606,6 +1606,29 @@ private func noticeShown(
 }
 
 @MainActor
+@Test func codexTextOnlyQuestionCanSendAnAnswer() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "codex"
+        $0.status = .blocked
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent,
+            ansi: "Queued follow-up inputs\n\n1 of 2\n\nWhich missing agent do you see in All?\n\nType your answer\n\nenter\u{1B}[0m submit   ⌃] skip   ⇧→ main prompt   ⇧← next question", truncated: false
+        )
+    }
+    let model = agentModel(core)
+    model.poll()
+    model.blocked = .terminal
+    #expect(model.codexQuestionOpen && model.answering)
+    #expect(model.blockedHint == nil)
+    model.typed("It is in Done")
+    #expect(model.canSendPrompt)
+    await model.sendPrompt()
+    #expect(core.snapshot.typed == ["It is in Done"])
+    #expect(core.snapshot.prompts.isEmpty)
+}
+
+@MainActor
 @Test func claudeKeepsTabInTheKeyStrip() {
     let core = FakeCore()
     core.state.withLock { $0.kind = "claude" }

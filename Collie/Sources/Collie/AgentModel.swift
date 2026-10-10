@@ -189,7 +189,11 @@ final class AgentModel {
     }
 
     var codexQuestionOpen: Bool {
-        agent?.kind == "codex" && ansi.contains("submit") && ansi.contains("main prompt") && ansi.contains("›")
+        guard agent?.kind == "codex" else { return false }
+        let lines = ansi.components(separatedBy: .newlines)
+        guard let footer = lines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return false }
+        return footer.contains("enter") && footer.contains("submit") && footer.contains("main prompt")
+            && lines.suffix(25).contains { $0.contains("›") || $0.contains("Queued follow-up inputs") }
     }
 
     /// Typed text answers the blocking prompt instead of prompting the agent.
@@ -219,7 +223,8 @@ final class AgentModel {
     var canUnlock: Bool { isTerminal && terminalLocked && !terminalKeyMissing && !unlocking }
 
     var blockedHint: String? {
-        switch blocked {
+        if codexQuestionOpen { return nil }
+        return switch blocked {
         case nil, .terminal: nil
         case .optionsOnly: "Choose an option above."
         case .keys: "Choose an option above or use the arrow keys."
