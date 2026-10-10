@@ -1565,7 +1565,7 @@ private func noticeShown(
     let core = FakeCore()
     core.state.withLock {
         $0.kind = "codex"
-        $0.status = .blocked
+        $0.status = .working
         $0.output = TerminalSnapshot(
             terminalId: "term_1", source: .recent,
             ansi: "Queued follow-up inputs\n? 1 question\n⇧←\u{1B}[0m to answer\n⚠ 1 warning · f2 to view", truncated: false
@@ -1573,11 +1573,11 @@ private func noticeShown(
     }
     let model = agentModel(core)
     model.poll()
-    model.blocked = .terminal
     #expect(model.codexQuestionQueued && !model.answering && !model.canSendPrompt)
     #expect(model.keyStrip[5] == .shiftLeft)
-    #expect(model.accepts(.shiftLeft) && !model.accepts(.enter))
+    #expect(model.accepts(.shiftLeft) && !model.accepts(.enter) && !model.accepts(.left))
     model.typed("other input")
+    #expect(!model.canSendPrompt)
     core.set(error: .AgentBlocked)
     await model.sendPrompt()
     #expect(model.promptError?.contains("⇧←") == true)
@@ -1595,7 +1595,7 @@ private func noticeShown(
     model.poll()
     #expect(model.answering && !model.codexQuestionQueued)
     #expect(model.accepts(.up) && model.accepts(.down) && model.accepts(.enter))
-    #expect(!model.accepts(.left) && !model.accepts(.shiftLeft))
+    #expect(!model.accepts(.left) && model.accepts(.shiftLeft))
     await model.tap(.down)?.value
     await model.tap(.enter)?.value
     #expect(core.snapshot.keys == [[.shiftLeft], [.down], [.enter]])
@@ -1606,11 +1606,25 @@ private func noticeShown(
 }
 
 @MainActor
+@Test func codexShiftLeftIsAlwaysAvailable() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "codex"
+        $0.status = .working
+    }
+    let model = agentModel(core)
+    model.poll()
+    #expect(!model.codexQuestionQueued && model.accepts(.shiftLeft))
+    await model.tap(.shiftLeft)?.value
+    #expect(core.snapshot.keys == [[.shiftLeft]])
+}
+
+@MainActor
 @Test func codexTextOnlyQuestionCanSendAnAnswer() async {
     let core = FakeCore()
     core.state.withLock {
         $0.kind = "codex"
-        $0.status = .blocked
+        $0.status = .working
         $0.output = TerminalSnapshot(
             terminalId: "term_1", source: .recent,
             ansi: "Queued follow-up inputs\n\n1 of 2\n\nWhich missing agent do you see in All?\n\nType your answer\n\nenter\u{1B}[0m submit   ⌃] skip   ⇧→ main prompt   ⇧← next question\n\u{1B}[0m", truncated: false
@@ -1626,7 +1640,14 @@ private func noticeShown(
     await model.sendPrompt()
     #expect(core.snapshot.typed == ["It is in Done"])
     #expect(core.snapshot.prompts.isEmpty)
-    core.state.withLock { $0.status = .working }
+    core.state.withLock {
+        $0.status = .working
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent,
+            ansi: "› Ask Codex to do anything\nWorking", truncated: false
+        )
+        $0.outputRevision += 1
+    }
     model.poll()
     #expect(!model.codexQuestionOpen && !model.answering)
     await attach(model, core, "a.png")
