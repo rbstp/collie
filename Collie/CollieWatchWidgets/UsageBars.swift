@@ -52,6 +52,13 @@ private struct UsageBarRow: View {
                     }
                     .progressViewStyle(.linear)
                     .tint(WatchUsage.usedColor(window.used))
+                    .overlay {
+                        GeometryReader { geometry in
+                            Capsule().fill(.white)
+                                .frame(width: 1, height: 6)
+                                .position(x: min(max(geometry.size.width * window.remainingUsage, 0.5), geometry.size.width - 0.5), y: geometry.size.height / 2)
+                        }
+                    }
                     .accessibilityHidden(true)
                 } else {
                     Text("No data")

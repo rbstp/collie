@@ -86,3 +86,21 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(ViewSwitch.target(after: CGSize(width: -40, height: 0)) == nil)
     #expect(ViewSwitch.target(after: CGSize(width: -120, height: 90)) == nil)
 }
+
+@Test func codexPaceUsesTheElapsedCalendarMonth() throws {
+    for (start, reset) in [
+        ("2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z"),
+        ("2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z"),
+        ("2028-02-01T00:00:00Z", "2028-03-01T00:00:00Z"),
+        ("2026-12-01T00:00:00Z", "2027-01-01T00:00:00Z"),
+    ] {
+        let beginning = try #require(ISO8601DateFormatter().date(from: start))
+        let end = try #require(ISO8601DateFormatter().date(from: reset))
+        let usage = CodexUsage(used: 50, limit: 100, resetsAtMs: end.unixMs, recordedMs: beginning.unixMs)
+        #expect(usage.elapsed(now: beginning.addingTimeInterval(-1)) == 0)
+        #expect(usage.elapsed(now: beginning) == 0)
+        #expect(usage.elapsed(now: beginning.addingTimeInterval(end.timeIntervalSince(beginning) / 2)) == 0.5)
+        #expect(usage.elapsed(now: end) == 1)
+        #expect(usage.elapsed(now: end.addingTimeInterval(1)) == 1)
+    }
+}

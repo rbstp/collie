@@ -83,6 +83,13 @@ struct WatchUsage: Codable, Equatable, Sendable {
     struct Window {
         let used: UInt8
         let interval: ClosedRange<Date>
+
+        var remainingUsage: Double { 1 - Double(min(used, 100)) / 100 }
+
+        var ringMarkerAngle: Double? {
+            guard (4...96).contains(used) else { return nil }
+            return remainingUsage * 360
+        }
     }
 
     func windows(now: Date) -> [Window?] {
@@ -100,12 +107,16 @@ struct WatchUsage: Codable, Equatable, Sendable {
         if let length {
             start = end.addingTimeInterval(-length)
         } else {
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-            guard let previousMonth = calendar.date(byAdding: .month, value: -1, to: end) else { return nil }
-            start = previousMonth
+            guard let interval = Self.monthlyInterval(endingAt: end) else { return nil }
+            start = interval.lowerBound
         }
         return Window(used: used, interval: start...end)
+    }
+
+    static func monthlyInterval(endingAt end: Date) -> ClosedRange<Date>? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar.date(byAdding: .month, value: -1, to: end).map { $0...end }
     }
 
     func timelineDates(now: Date) -> [Date] {

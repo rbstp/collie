@@ -45,7 +45,7 @@ private struct CodexSubscriptionUsage: View {
     @ScaledMetric(relativeTo: .headline) private var logo: CGFloat = 22
 
     var body: some View {
-        let percent = min(100, Int((Double(usage.used) / Double(usage.limit) * 100).rounded()))
+        let percent = usage.limit > 0 ? UInt8(min(100, (Double(usage.used) / Double(usage.limit) * 100).rounded())) : 0
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Image("Codex")
@@ -58,8 +58,7 @@ private struct CodexSubscriptionUsage: View {
                 Text("Codex").font(.headline)
             }
             Text("Monthly usage limit").font(.subheadline)
-            ProgressView(value: Double(percent), total: 100)
-                .tint(ContextRing.tone(UInt8(100 - percent)))
+            UsageBar(used: percent, elapsed: usage.elapsed(now: now))
             HStack {
                 Text("\(usage.used.formatted()) / \(usage.limit.formatted()) credits")
                 Spacer()
@@ -71,7 +70,7 @@ private struct CodexSubscriptionUsage: View {
         .padding(.vertical, 4)
         .opacity(now.unixMs > usage.recordedMs + 10 * 60_000 ? 0.6 : 1)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Codex monthly usage limit, \(usage.used) of \(usage.limit) credits used, \(percent) percent")
+        .accessibilityLabel("Codex monthly usage limit, \(usage.used) of \(usage.limit) credits used, \(percent) percent, \(Int((usage.elapsed(now: now) * 100).rounded())) percent of the month elapsed")
     }
 }
 
@@ -106,7 +105,7 @@ private struct SubscriptionUsage: View {
                                         Text("\(limit.used)%")
                                     }
                                     Text(limit.resets(now: now)).foregroundStyle(.secondary)
-                                    UsageBar(limit: limit)
+                                    UsageBar(used: limit.used, elapsed: limit.elapsed)
                                 }
                             }
                         }
@@ -115,7 +114,7 @@ private struct SubscriptionUsage: View {
                             ForEach(limits, id: \.label) { limit in
                                 GridRow {
                                     Text(limit.label).foregroundStyle(.secondary)
-                                    UsageBar(limit: limit)
+                                    UsageBar(used: limit.used, elapsed: limit.elapsed)
                                     Text("\(limit.used)%").gridColumnAlignment(.trailing)
                                     Text(limit.resets(now: now)).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
                                 }
@@ -136,18 +135,19 @@ private struct SubscriptionUsage: View {
 
 /// Percent used, in the context ring's palette, with a tick where the window's elapsed share is.
 private struct UsageBar: View {
-    let limit: UsageLimit
+    let used: UInt8
+    let elapsed: Double
 
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
             ZStack(alignment: .leading) {
                 Capsule().fill(.quaternary).frame(height: 4)
-                Capsule().fill(ContextRing.tone(limit.left)).frame(width: width * Double(limit.used) / 100, height: 4)
+                Capsule().fill(ContextRing.tone(100 - used)).frame(width: width * Double(used) / 100, height: 4)
                 Capsule()
                     .fill(.secondary)
                     .frame(width: 2, height: 12)
-                    .offset(x: min(max(width * limit.elapsed - 1, 0), width - 2))
+                    .offset(x: min(max(width * elapsed - 1, 0), width - 2))
             }
             .frame(maxHeight: .infinity)
         }
