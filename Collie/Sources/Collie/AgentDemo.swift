@@ -178,6 +178,10 @@ final class DemoAgentCore: ActivityCore {
         throw CoreError.NotImplemented
     }
 
+    func archiveTask(machineId: String, terminalId: String, confirm: Bool) async throws -> String {
+        throw CoreError.NotImplemented
+    }
+
     func taskOptions(machineId: String) async throws -> TaskOptions {
         throw CoreError.NotImplemented
     }
@@ -189,6 +193,10 @@ final class DemoAgentCore: ActivityCore {
     func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?) async throws -> TaskStarted {
         throw CoreError.NotImplemented
     }
+
+    func taskWorktrees(machineId: String, cwd: String) async throws -> WorktreeListing { throw CoreError.NotImplemented }
+    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted { throw CoreError.NotImplemented }
+    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted { throw CoreError.NotImplemented }
 
     func flock(machineId: String) async throws -> MachineFlock { demoFlock }
 

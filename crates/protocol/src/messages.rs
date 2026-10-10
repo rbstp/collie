@@ -59,6 +59,10 @@ pub enum Request {
     TaskNew(TaskNewParams),
     #[serde(rename = "task.folders")]
     TaskFolders(TaskFoldersParams),
+    #[serde(rename = "task.worktrees")]
+    TaskWorktrees(TaskWorktreesParams),
+    #[serde(rename = "task.archive")]
+    TaskArchive(TaskArchiveParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseParams),
     #[serde(rename = "pane.close")]
@@ -120,6 +124,8 @@ impl Request {
         "agent.star",
         "task.new",
         "task.folders",
+        "task.worktrees",
+        "task.archive",
         "workspace.close",
         "pane.close",
         "approval.list",
@@ -160,6 +166,8 @@ impl Request {
             Self::AgentStar(_) => "agent.star",
             Self::TaskNew(_) => "task.new",
             Self::TaskFolders(_) => "task.folders",
+            Self::TaskWorktrees(_) => "task.worktrees",
+            Self::TaskArchive(_) => "task.archive",
             Self::WorkspaceClose(_) => "workspace.close",
             Self::PaneClose(_) => "pane.close",
             Self::ApprovalList(_) => "approval.list",
@@ -200,6 +208,8 @@ impl Request {
             | Self::AgentStar(_)
             | Self::TaskNew(_)
             | Self::TaskFolders(_)
+            | Self::TaskWorktrees(_)
+            | Self::TaskArchive(_)
             | Self::WorkspaceClose(_)
             | Self::PaneClose(_)
             | Self::AttachmentBegin(_)
@@ -554,6 +564,30 @@ pub struct TaskNewParams {
     /// When set, collied creates this empty folder directly inside `cwd` and starts there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_folder: Option<FolderName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<TaskWorktree>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskWorktree {
+    Create { branch: String },
+    Open { path: Cwd },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskWorktreesParams {
+    pub cwd: Cwd,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskArchiveParams {
+    pub op_id: OpId,
+    pub terminal_id: TerminalId,
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -722,9 +756,16 @@ pub enum Response {
     Flock(Flock),
     Terminal(TerminalRead),
     TaskOptions(TaskOptions),
+    TaskWorktrees {
+        source: Cwd,
+        worktrees: Vec<TaskWorktreeInfo>,
+    },
     TaskStarted {
         workspace_id: WorkspaceId,
         terminal_id: TerminalId,
+    },
+    TaskArchived {
+        message: String,
     },
     /// The folders directly inside `path`, its canonical form, sorted; `truncated` when
     /// some were left out.
@@ -1008,6 +1049,13 @@ pub struct TaskOptions {
     pub default_agent: AgentKind,
     pub recent_cwds: Vec<Cwd>,
     pub roots: Vec<Cwd>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskWorktreeInfo {
+    pub path: Cwd,
+    pub branch: Option<String>,
+    pub open: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1474,7 +1522,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 14);
+        assert_eq!(crate::PROTOCOL_VERSION, 16);
     }
 
     #[test]
@@ -1520,6 +1568,58 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn worktree_requests_are_explicit_and_bounded() {
+        let list = parse(r#"{"id":1,"method":"task.worktrees","params":{"cwd":"/repo"}}"#).unwrap();
+        assert_eq!(list.request.class(), MethodClass::Drive);
+        assert_eq!(list.request.method(), "task.worktrees");
+        let task = |worktree: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"task.new","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","cwd":"/repo","agent":"claude","prompt":"go","worktree":{worktree}}}}}"#
+            ))
+        };
+        for choice in [
+            r#"{"mode":"create","branch":"feature"}"#,
+            r#"{"mode":"open","path":"/repo/feature"}"#,
+        ] {
+            let frame = task(choice).unwrap();
+            assert_eq!(
+                parse(&serde_json::to_string(&frame).unwrap()).unwrap(),
+                frame
+            );
+        }
+        for choice in [
+            r#"{"mode":"create","branch":"feature","path":"/repo/feature"}"#,
+            r#"{"mode":"open","path":"/repo/feature","extra":true}"#,
+            r#"{"mode":"remove","path":"/repo/feature"}"#,
+        ] {
+            assert_eq!(task(choice).unwrap_err().code, ErrorCode::InvalidParams);
+        }
+    }
+
+    #[test]
+    fn archive_requires_explicit_confirmation_and_replays_as_one_request() {
+        let frame = parse(r#"{"id":1,"method":"task.archive","params":{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"term","confirm":true}}"#).unwrap();
+        assert_eq!(frame.request.class(), MethodClass::Drive);
+        assert_eq!(frame.request.method(), "task.archive");
+        assert_eq!(
+            parse(&serde_json::to_string(&frame).unwrap()).unwrap(),
+            frame
+        );
+        for params in [
+            r#"{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"term","confirm":true,"force":false}"#,
+            r#"{"terminal_id":"term","confirm":true}"#,
+        ] {
+            let bad = format!(r#"{{"id":1,"method":"task.archive","params":{params}}}"#);
+            assert_eq!(parse(&bad).unwrap_err().code, ErrorCode::InvalidParams);
+        }
+        let omitted = parse(r#"{"id":1,"method":"task.archive","params":{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"term"}}"#).unwrap();
+        let Request::TaskArchive(params) = omitted.request else {
+            panic!("not archive")
+        };
+        assert!(!params.confirm);
     }
 
     #[test]

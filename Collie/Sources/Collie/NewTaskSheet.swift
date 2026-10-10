@@ -44,67 +44,120 @@ struct NewTaskSheet: View {
                     }
                 }
 
-                Section {
-                    Toggle("New folder", isOn: $model.newFolder)
-                    if model.newFolder {
-                        if model.base == nil, let roots = model.options?.roots, roots.count > 1 {
-                            Picker("In", selection: Binding(get: { model.newFolderParent }, set: { model.newFolderRoot = $0 })) {
-                                ForEach(roots, id: \.self) { Text($0).tag(Optional($0)) }
-                            }
-                        }
-                        TextField("Folder name", text: $model.folderName)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .font(.body.monospaced())
-                    } else {
-                        TextField(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project", text: $model.cwd)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .font(.body.monospaced())
-                        ForEach(model.completions, id: \.self) { name in
-                            Button {
-                                model.cwd = name
-                            } label: {
-                                Label(name, systemImage: "folder").font(.footnote.monospaced())
-                            }
-                            .foregroundStyle(.primary)
-                        }
-                        if let folders = model.folders {
-                            NavigationLink {
-                                FolderBrowser(folders: folders, selected: $model.cwd)
-                            } label: {
-                                Text("Browse \(folders.path)").lineLimit(1).truncationMode(.head)
-                            }
-                        }
-                        ForEach(model.options?.recentCwds ?? [], id: \.self) { cwd in
-                            Button {
-                                model.cwd = cwd
-                            } label: {
-                                HStack {
-                                    Text(cwd).font(.footnote.monospaced()).lineLimit(1).truncationMode(.head)
-                                    Spacer()
-                                    if model.cwd == cwd {
-                                        Image(systemName: "checkmark").foregroundStyle(.tint)
-                                    }
+                Picker("Location", selection: $model.location) {
+                    ForEach(NewTaskModel.Location.allCases, id: \.self) { location in
+                        Text(location.rawValue).tag(location)
+                    }
+                }
+
+                if model.location == .folder {
+                    Section {
+                        Toggle("New folder", isOn: $model.newFolder)
+                        if model.newFolder {
+                            if model.base == nil, let roots = model.options?.roots, roots.count > 1 {
+                                Picker("In", selection: Binding(get: { model.newFolderParent }, set: { model.newFolderRoot = $0 })) {
+                                    ForEach(roots, id: \.self) { Text($0).tag(Optional($0)) }
                                 }
                             }
-                            .foregroundStyle(.primary)
+                            TextField("Folder name", text: $model.folderName)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .font(.body.monospaced())
+                        } else {
+                            TextField(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project", text: $model.cwd)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .font(.body.monospaced())
+                            ForEach(model.completions, id: \.self) { name in
+                                Button {
+                                    model.cwd = name
+                                } label: {
+                                    Label(name, systemImage: "folder").font(.footnote.monospaced())
+                                }
+                                .foregroundStyle(.primary)
+                            }
+                            if let folders = model.folders {
+                                NavigationLink {
+                                    FolderBrowser(folders: folders, selected: $model.cwd)
+                                } label: {
+                                    Text("Browse \(folders.path)").lineLimit(1).truncationMode(.head)
+                                }
+                            }
+                            ForEach(model.options?.recentCwds ?? [], id: \.self) { cwd in
+                                Button {
+                                    model.cwd = cwd
+                                } label: {
+                                    HStack {
+                                        Text(cwd).font(.footnote.monospaced()).lineLimit(1).truncationMode(.head)
+                                        Spacer()
+                                        if model.cwd == cwd {
+                                            Image(systemName: "checkmark").foregroundStyle(.tint)
+                                        }
+                                    }
+                                }
+                                .foregroundStyle(.primary)
+                            }
+                        }
+                    } header: {
+                        Text("Folder")
+                    } footer: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if model.newFolder, let parent = model.newFolderParent {
+                                let name = model.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                Text("Creates \(parent)/\(name.isEmpty ? "name" : name) (empty) and starts the agent there.")
+                            }
+                            if let error = model.optionsError {
+                                Text(error).foregroundStyle(.red)
+                            }
+                            if let error = model.foldersError {
+                                Text(error).foregroundStyle(.red)
+                            }
                         }
                     }
-                } header: {
-                    Text("Folder")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if model.newFolder, let parent = model.newFolderParent {
-                            let name = model.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
-                            Text("Creates \(parent)/\(name.isEmpty ? "name" : name) (empty) and starts the agent there.")
+                } else {
+                    Section("Git worktree") {
+                        Picker("Action", selection: $model.worktreeAction) {
+                            ForEach(NewTaskModel.WorktreeAction.allCases, id: \.self) { action in
+                                Text(action.rawValue).tag(action)
+                            }
                         }
-                        if let error = model.optionsError {
-                            Text(error).foregroundStyle(.red)
+                        TextField("Source repository path", text: $model.source)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .font(.body.monospaced())
+                        if model.worktrees == nil, model.worktreesError == nil, !model.source.isEmpty {
+                            ProgressView("Checking repository…")
                         }
-                        if let error = model.foldersError {
-                            Text(error).foregroundStyle(.red)
+                        if let listed = model.worktrees {
+                            Text("Repository: \(listed.source)").font(.footnote.monospaced())
+                            if model.worktreeAction == .create {
+                                TextField("Branch name (optional)", text: $model.branch)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                if let path = model.createPath {
+                                    Text("Create \(model.createBranch) at \(path)")
+                                        .font(.footnote)
+                                }
+                            } else {
+                                ForEach(listed.worktrees, id: \.path) { checkout in
+                                    Button {
+                                        model.checkoutPath = checkout.path
+                                    } label: {
+                                        HStack {
+                                            VStack(alignment: .leading) {
+                                                Text(checkout.branch ?? "Detached")
+                                                Text(checkout.path).font(.footnote.monospaced())
+                                            }
+                                            Spacer()
+                                            if checkout.open { Text("Open").font(.footnote) }
+                                            if model.checkoutPath == checkout.path { Image(systemName: "checkmark") }
+                                        }
+                                    }
+                                    .foregroundStyle(.primary)
+                                }
+                            }
                         }
+                        if let error = model.worktreesError { Text(error).foregroundStyle(.red) }
                     }
                 }
 
@@ -238,6 +291,14 @@ struct NewTaskSheet: View {
                 }
             }
             .task(id: model.machineId) { await model.loadOptions() }
+            .task(id: model.location == .worktree ? "\(model.worktreeAction.rawValue):\(model.source)" : nil) {
+                guard model.location == .worktree, !model.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                await model.loadWorktrees()
+            }
             .photosPicker(
                 isPresented: $pickingPhoto, selection: $photos, maxSelectionCount: max(model.attachmentSlots, 1),
                 matching: .images

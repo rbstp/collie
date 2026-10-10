@@ -75,6 +75,7 @@ final class AgentModel {
 
     var close = CloseConfirmation()
     private(set) var closed = false
+    private(set) var archiveMessage: String?
 
     let dictation: DictationModel
 
@@ -773,11 +774,19 @@ final class AgentModel {
     func performClose() async {
         guard let target = close.confirm() else { return }
         do {
-            try await core.closeConfirmed(target, route: route)
-            closed = true
+            if let message = try await core.closeConfirmed(target, route: route) {
+                archiveMessage = message
+            } else {
+                closed = true
+            }
         } catch {
             notice = Self.message(for: error)
         }
+    }
+
+    func finishArchive() {
+        archiveMessage = nil
+        closed = true
     }
 
     private func watch(_ terminalId: String?) {
@@ -817,12 +826,16 @@ final class AgentModel {
 
 extension AgentCore {
     /// Only for a target that `CloseConfirmation.confirm()` returned.
-    func closeConfirmed(_ target: CloseTarget, route: AgentRoute) async throws {
+    func closeConfirmed(_ target: CloseTarget, route: AgentRoute) async throws -> String? {
         switch target {
         case .pane:
             try await closePane(machineId: route.machineId, terminalId: route.terminalId, confirm: true)
+            return nil
         case .workspace(let workspaceId):
             try await closeWorkspace(machineId: route.machineId, workspaceId: workspaceId, confirm: true)
+            return nil
+        case .archive:
+            return try await archiveTask(machineId: route.machineId, terminalId: route.terminalId, confirm: true)
         }
     }
 }
@@ -830,6 +843,7 @@ extension AgentCore {
 enum CloseTarget: Equatable {
     case pane
     case workspace(id: String)
+    case archive
 }
 
 /// Destructive closes need an explicit confirmation before the core sees `confirm: true`.

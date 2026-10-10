@@ -592,6 +592,26 @@
       "pattern": "^(/[A-Za-z0-9_:.-]{0,63})?$",
       "type": "string"
     },
+    "TaskArchiveParams": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "default": false,
+          "type": "boolean"
+        },
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "op_id",
+        "terminal_id"
+      ],
+      "type": "object"
+    },
     "TaskFoldersParams": {
       "additionalProperties": false,
       "properties": {
@@ -639,6 +659,16 @@
         },
         "prompt": {
           "$ref": "#/$defs/PromptText"
+        },
+        "worktree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskWorktree"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -646,6 +676,56 @@
         "cwd",
         "agent",
         "prompt"
+      ],
+      "type": "object"
+    },
+    "TaskWorktree": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "branch": {
+              "type": "string"
+            },
+            "mode": {
+              "const": "create",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "branch"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "open",
+              "type": "string"
+            },
+            "path": {
+              "$ref": "#/$defs/Cwd"
+            }
+          },
+          "required": [
+            "mode",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TaskWorktreesParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cwd": {
+          "$ref": "#/$defs/Cwd"
+        }
+      },
+      "required": [
+        "cwd"
       ],
       "type": "object"
     },
@@ -1049,6 +1129,38 @@
         },
         "params": {
           "$ref": "#/$defs/TaskFoldersParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.worktrees",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TaskWorktreesParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.archive",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TaskArchiveParams"
         }
       },
       "required": [

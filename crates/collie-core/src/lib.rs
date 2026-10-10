@@ -22,9 +22,10 @@ use protocol::{
     ApprovalId, Cwd, DraftText, Empty, ErrorCode, FolderName, Key, Label, NoticeDigit,
     NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
     PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
-    ReadSource, Request, Response, Signature, SlashCommand, TaskFoldersParams, TaskNewParams,
-    TerminalGrantParams, TerminalId, TerminalKey, TerminalRead, TerminalRunParams,
-    TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
+    ReadSource, Request, Response, Signature, SlashCommand, TaskArchiveParams, TaskFoldersParams,
+    TaskNewParams, TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId, TerminalKey,
+    TerminalRead, TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId,
+    limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -60,6 +61,7 @@ const PAIR_CONFIRM_TIMEOUT: Duration = Duration::from_secs(75);
 const DRIVE_TIMEOUT: Duration = Duration::from_secs(30);
 /// herdr's `agent.start` waits up to 30 s for the agent before collied prompts it.
 const TASK_NEW_TIMEOUT: Duration = Duration::from_secs(90);
+const TASK_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(150);
 /// An unanswered mutation's `op_id` is reused for an identical retry within this window.
 /// Longer than any mutation timeout, shorter than collied's 600 s outcome cache.
 const OP_REUSE_WINDOW: Duration = Duration::from_secs(180);
@@ -536,6 +538,19 @@ pub struct TaskStarted {
     pub terminal_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct WorktreeListing {
+    pub source: String,
+    pub worktrees: Vec<WorktreeChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct WorktreeChoice {
+    pub path: String,
+    pub branch: Option<String>,
+    pub open: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum PushEnvironment {
     Sandbox,
@@ -569,6 +584,51 @@ pub struct ColdStartReport {
     pub auth_url_present: bool,
     pub status_polls: u32,
     pub build: BuildInfo,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn task_new_inner(
+    core: &CollieCore,
+    machine_id: String,
+    cwd: String,
+    agent: String,
+    prompt: String,
+    label: Option<String>,
+    new_folder: Option<String>,
+    worktree: Option<TaskWorktree>,
+) -> Result<TaskStarted, CoreError> {
+    let label = label
+        .map(|l| l.trim().to_owned())
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            Label::new(l).map_err(|_| {
+                invalid(
+                    "label",
+                    "label must be 1 to 64 characters without control characters",
+                )
+            })
+        })
+        .transpose()?;
+    let request = Request::TaskNew(TaskNewParams {
+        op_id: new_op_id(),
+        cwd: Cwd::new(cwd).map_err(|_| invalid("cwd", "folder must be an absolute path of at most 1024 bytes"))?,
+        agent: AgentKind::new(agent).map_err(|_| invalid("agent", "unknown agent kind"))?,
+        prompt: prompt_text(prompt)?,
+        label,
+        new_folder: new_folder.map(|n| FolderName::new(n)
+            .map_err(|_| invalid("new_folder", "folder name must be one plain name of at most 255 bytes, without / or \\, a leading dot, or control or invisible characters"))).transpose()?,
+        worktree,
+    });
+    match core.mutate(&machine_id, request, TASK_NEW_TIMEOUT).await? {
+        Response::TaskStarted {
+            workspace_id,
+            terminal_id,
+        } => Ok(TaskStarted {
+            workspace_id: workspace_id.into(),
+            terminal_id: terminal_id.into(),
+        }),
+        other => Err(unexpected(&other).into()),
+    }
 }
 
 #[uniffi::export]
@@ -1460,50 +1520,79 @@ impl CollieCore {
         label: Option<String>,
         new_folder: Option<String>,
     ) -> Result<TaskStarted, CoreError> {
-        let label = label
-            .map(|l| l.trim().to_owned())
-            .filter(|l| !l.is_empty())
-            .map(|l| {
-                Label::new(l).map_err(|_| {
-                    invalid(
-                        "label",
-                        "label must be 1 to 64 characters without control characters",
-                    )
-                })
-            })
-            .transpose()?;
-        let request = Request::TaskNew(TaskNewParams {
-            op_id: new_op_id(),
-            cwd: Cwd::new(cwd).map_err(|_| {
-                invalid(
-                    "cwd",
-                    "folder must be an absolute path of at most 1024 bytes",
-                )
-            })?,
-            agent: AgentKind::new(agent).map_err(|_| invalid("agent", "unknown agent kind"))?,
-            prompt: prompt_text(prompt)?,
-            label,
-            new_folder: new_folder
-                .map(|n| {
-                    FolderName::new(n).map_err(|_| {
-                        invalid(
-                            "new_folder",
-                            "folder name must be one plain name of at most 255 bytes, without / or \\, a leading dot, or control or invisible characters",
-                        )
-                    })
-                })
-                .transpose()?,
+        task_new_inner(
+            self, machine_id, cwd, agent, prompt, label, new_folder, None,
+        )
+        .await
+    }
+
+    pub async fn task_worktrees(
+        &self,
+        machine_id: String,
+        cwd: String,
+    ) -> Result<WorktreeListing, CoreError> {
+        let request = Request::TaskWorktrees(TaskWorktreesParams {
+            cwd: Cwd::new(cwd).map_err(|_| invalid("cwd", "invalid source path"))?,
         });
-        match self.mutate(&machine_id, request, TASK_NEW_TIMEOUT).await? {
-            Response::TaskStarted {
-                workspace_id,
-                terminal_id,
-            } => Ok(TaskStarted {
-                workspace_id: workspace_id.into(),
-                terminal_id: terminal_id.into(),
+        match self.call(&machine_id, request, CALL_TIMEOUT).await? {
+            Response::TaskWorktrees { source, worktrees } => Ok(WorktreeListing {
+                source: source.into(),
+                worktrees: worktrees
+                    .into_iter()
+                    .map(|w| WorktreeChoice {
+                        path: w.path.into(),
+                        branch: w.branch,
+                        open: w.open,
+                    })
+                    .collect(),
             }),
             other => Err(unexpected(&other).into()),
         }
+    }
+
+    pub async fn task_worktree_create(
+        &self,
+        machine_id: String,
+        cwd: String,
+        branch: String,
+        agent: String,
+        prompt: String,
+        label: Option<String>,
+    ) -> Result<TaskStarted, CoreError> {
+        task_new_inner(
+            self,
+            machine_id,
+            cwd,
+            agent,
+            prompt,
+            label,
+            None,
+            Some(TaskWorktree::Create { branch }),
+        )
+        .await
+    }
+
+    pub async fn task_worktree_open(
+        &self,
+        machine_id: String,
+        cwd: String,
+        path: String,
+        agent: String,
+        prompt: String,
+        label: Option<String>,
+    ) -> Result<TaskStarted, CoreError> {
+        let path = Cwd::new(path).map_err(|_| invalid("path", "invalid checkout path"))?;
+        task_new_inner(
+            self,
+            machine_id,
+            cwd,
+            agent,
+            prompt,
+            label,
+            None,
+            Some(TaskWorktree::Open { path }),
+        )
+        .await
     }
 
     /// Fails with `ConfirmRequired` unless `confirm` is true.
@@ -1519,6 +1608,26 @@ impl CollieCore {
             confirm,
         });
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    pub async fn archive_task(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        confirm: bool,
+    ) -> Result<String, CoreError> {
+        let request = Request::TaskArchive(TaskArchiveParams {
+            op_id: new_op_id(),
+            terminal_id: terminal(terminal_id)?,
+            confirm,
+        });
+        match self
+            .mutate(&machine_id, request, TASK_ARCHIVE_TIMEOUT)
+            .await?
+        {
+            Response::TaskArchived { message } => Ok(message),
+            other => Err(unexpected(&other).into()),
+        }
     }
 
     /// Uses the nonce collie-core holds from the flock and `approval.needed`, fetching
@@ -2536,6 +2645,7 @@ fn op_id_mut(request: &mut Request) -> Option<&mut OpId> {
         Request::AgentSendKeys(p) => Some(&mut p.op_id),
         Request::AgentTypeText(p) => Some(&mut p.op_id),
         Request::TaskNew(p) => Some(&mut p.op_id),
+        Request::TaskArchive(p) => Some(&mut p.op_id),
         Request::TerminalRun(p) => Some(&mut p.op_id),
         Request::TerminalSendKeys(p) => Some(&mut p.op_id),
         _ => None,
@@ -2877,6 +2987,20 @@ mod tests {
         let fresh = op(&mut elsewhere);
         core.inner.claim_op("m2", &mut elsewhere);
         assert_eq!(op(&mut elsewhere), fresh, "keyed per machine");
+
+        let archive = || {
+            Request::TaskArchive(TaskArchiveParams {
+                op_id: new_op_id(),
+                terminal_id: TerminalId::new("term_1").unwrap(),
+                confirm: true,
+            })
+        };
+        let mut first_archive = archive();
+        let archive_id = op(&mut first_archive);
+        core.inner.claim_op("m1", &mut first_archive);
+        let mut archive_retry = archive();
+        core.inner.claim_op("m1", &mut archive_retry);
+        assert_eq!(op(&mut archive_retry), archive_id);
 
         lock(&core.inner.ops).remove(&key);
         let mut after = prompt("run the tests");

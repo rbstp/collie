@@ -9,6 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+const WORKTREE_REMOVE_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_LINE: u64 = 1 << 20;
 const MAX_SESSION_NAME_LEN: usize = 64;
 const DEFAULT_SESSION_NAME: &str = "default";
@@ -148,6 +149,15 @@ pub struct WorkspaceInfo {
     pub label: String,
     pub active_tab_id: Option<String>,
     pub agent_status: String,
+    #[serde(default)]
+    pub worktree: Option<WorkspaceWorktreeInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkspaceWorktreeInfo {
+    pub repo_root: String,
+    pub checkout_path: String,
+    pub is_linked_worktree: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -263,6 +273,59 @@ pub struct WorkspaceCreated {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WorkspaceCreatedResult {
     WorkspaceCreated(WorkspaceCreated),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub branch: Option<String>,
+    pub open_workspace_id: Option<String>,
+    pub is_bare: bool,
+    pub is_linked_worktree: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorktreeList {
+    pub source: WorktreeSource,
+    pub worktrees: Vec<WorktreeInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorktreeSource {
+    pub source_checkout_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorktreeWorkspace {
+    pub workspace: WorkspaceInfo,
+    pub root_pane: PaneInfo,
+    pub worktree: WorktreeInfo,
+    #[serde(default)]
+    pub already_open: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WorktreeListResult {
+    WorktreeList(WorktreeList),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WorktreeCreateResult {
+    WorktreeCreated(WorktreeWorkspace),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WorktreeOpenResult {
+    WorktreeOpened(WorktreeWorkspace),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WorktreeRemoveResult {
+    WorktreeRemoved { worktree: WorktreeInfo },
 }
 
 #[derive(Deserialize)]
@@ -517,6 +580,54 @@ pub async fn workspace_create(
     Ok(created)
 }
 
+pub async fn worktree_list(socket: &Path, cwd: &str) -> Result<WorktreeList, Error> {
+    let WorktreeListResult::WorktreeList(list) =
+        call(socket, "worktree.list", json!({ "cwd": cwd })).await?;
+    Ok(list)
+}
+
+pub async fn worktree_create(
+    socket: &Path,
+    cwd: &str,
+    branch: &str,
+    path: &str,
+    label: Option<&str>,
+) -> Result<WorktreeWorkspace, Error> {
+    let WorktreeCreateResult::WorktreeCreated(created) = call(
+        socket,
+        "worktree.create",
+        json!({ "cwd": cwd, "branch": branch, "path": path, "label": label, "focus": false }),
+    )
+    .await?;
+    Ok(created)
+}
+
+pub async fn worktree_open(
+    socket: &Path,
+    cwd: &str,
+    path: &str,
+    label: Option<&str>,
+) -> Result<WorktreeWorkspace, Error> {
+    let WorktreeOpenResult::WorktreeOpened(opened) = call(
+        socket,
+        "worktree.open",
+        json!({ "cwd": cwd, "path": path, "label": label, "focus": false }),
+    )
+    .await?;
+    Ok(opened)
+}
+
+pub async fn worktree_remove(socket: &Path, workspace_id: &str) -> Result<WorktreeInfo, Error> {
+    let WorktreeRemoveResult::WorktreeRemoved { worktree } = call_with_timeout(
+        socket,
+        "worktree.remove",
+        json!({ "workspace_id": workspace_id, "force": true }),
+        WORKTREE_REMOVE_TIMEOUT,
+    )
+    .await?;
+    Ok(worktree)
+}
+
 pub async fn workspace_close(socket: &Path, workspace_id: &str) -> Result<(), Error> {
     let OkResult::Ok {} = call(
         socket,
@@ -542,6 +653,15 @@ fn without_nulls(params: Value) -> Value {
 }
 
 async fn call<R: DeserializeOwned>(socket: &Path, method: &str, params: Value) -> Result<R, Error> {
+    call_with_timeout(socket, method, params, TIMEOUT).await
+}
+
+async fn call_with_timeout<R: DeserializeOwned>(
+    socket: &Path,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<R, Error> {
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
     let id = format!("collied-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
     let mut line = serde_json::to_vec(&json!({
@@ -552,7 +672,7 @@ async fn call<R: DeserializeOwned>(socket: &Path, method: &str, params: Value) -
     line.push(b'\n');
     tracing::debug!(socket = %socket.display(), method, id, "herdr request");
 
-    let raw = tokio::time::timeout(TIMEOUT, async {
+    let raw = tokio::time::timeout(timeout, async {
         let mut stream = UnixStream::connect(socket).await?;
         stream.write_all(&line).await?;
         let mut buf = Vec::new();
