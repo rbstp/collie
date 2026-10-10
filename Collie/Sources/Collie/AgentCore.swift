@@ -6,6 +6,7 @@ protocol AgentCore: AnyObject, Sendable {
     func agentView(machineId: String, terminalId: String, afterRevision: UInt64) -> AgentView?
     func watchAgent(machineId: String, terminalId: String?, lines: UInt16) async throws
     func agentRead(machineId: String, terminalId: String, source: TerminalSource, lines: UInt16?) async throws -> TerminalSnapshot
+    func agentHistory(machineId: String, terminalId: String, before: String?, after: String?, query: String?) async throws -> HistoryPage
     func agentChanges(machineId: String, terminalId: String) async throws -> GitChanges
     func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff
     func agentDraft(machineId: String, terminalId: String) async throws -> String?
@@ -42,4 +43,10 @@ extension CollieCore: AgentCore {}
 struct AgentRoute: Hashable, Codable {
     let machineId: String
     let terminalId: String
+}
+
+extension AgentCore {
+    func agentHistory(machineId: String, terminalId: String, before: String?, after: String?, query: String?) async throws -> HistoryPage {
+        throw CoreError.NotImplemented
+    }
 }

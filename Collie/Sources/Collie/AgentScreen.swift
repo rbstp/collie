@@ -15,6 +15,7 @@ struct AgentScreen: View {
     let opened: (AgentSummary) -> Void
     @State private var recordedOpen = false
     @State private var showingChanges = false
+    @State private var showingChat = true
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
@@ -59,37 +60,50 @@ struct AgentScreen: View {
                     Text(notice).font(.footnote).padding(.horizontal).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            AgentTerminal(
-                ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
-                perform: perform, resized: { model.fontSize = $0 },
-                // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
-                neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
-                switchAgent: switchAgent
-            ) { await model.refresh() }
-                .overlay {
-                    if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
-                        ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
-                    }
+            if !model.isTerminal {
+                Picker("Session view", selection: $showingChat) {
+                    Text("Chat").tag(true)
+                    Text("Terminal").tag(false)
                 }
-                .overlay(alignment: .bottom) {
-                    if model.jumpBanner {
-                        Button("Jump to bottom", systemImage: "arrow.down") {
-                            Task { await model.jumpToBottom() }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.bottom, 6)
+            }
+            if showingChat && !model.isTerminal {
+                ConversationView(model: model.conversation, load: model.history) { showingChat = false }
+            } else {
+                AgentTerminal(
+                    ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
+                    perform: perform, resized: { model.fontSize = $0 },
+                    // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
+                    neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
+                    switchAgent: switchAgent
+                ) { await model.refresh() }
+                    .overlay {
+                        if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
+                            ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.bottom, 8)
                     }
-                    if !model.noticeOptions.isEmpty {
-                        ViewThatFits(in: .horizontal) {
-                            HStack { noticeButtons }
-                            VStack { noticeButtons }
+                    .overlay(alignment: .bottom) {
+                        if model.jumpBanner {
+                            Button("Jump to bottom", systemImage: "arrow.down") {
+                                Task { await model.jumpToBottom() }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .padding(.bottom, 8)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .padding([.horizontal, .bottom], 8)
-                        .accessibilityElement(children: .contain)
-                        .accessibilityLabel("Claude Code notice")
+                        if !model.noticeOptions.isEmpty {
+                            ViewThatFits(in: .horizontal) {
+                                HStack { noticeButtons }
+                                VStack { noticeButtons }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .padding([.horizontal, .bottom], 8)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel("Claude Code notice")
+                        }
                     }
-                }
+            }
             if let notice = model.notice ?? model.blockedHint {
                 Label(notice, systemImage: "exclamationmark.triangle")
                     .font(.footnote)

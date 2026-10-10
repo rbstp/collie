@@ -50,6 +50,49 @@ pub struct GitDiff {
     pub truncated: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryParams {
+    pub terminal_id: TerminalId,
+    pub before: Option<String>,
+    pub after: Option<String>,
+    pub query: Option<String>,
+}
+
+impl HistoryParams {
+    pub fn is_valid(&self) -> bool {
+        !(self.before.is_some() && self.after.is_some())
+            && self
+                .before
+                .iter()
+                .chain(self.after.iter())
+                .all(|s| s.len() <= 256)
+            && self.query.as_ref().is_none_or(|s| s.len() <= 256)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HistoryMessage {
+    pub id: String,
+    pub role: String,
+    pub text: String,
+    pub tool: Option<String>,
+    pub call_id: Option<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HistoryPage {
+    pub session: Option<String>,
+    pub available: bool,
+    pub reset: bool,
+    pub messages: Vec<HistoryMessage>,
+    pub before: Option<String>,
+    pub after: Option<String>,
+    pub more: bool,
+    pub omitted: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct ClientFrame {
     pub id: RequestId,
@@ -71,6 +114,8 @@ pub enum Request {
     FlockSnapshot(Empty),
     #[serde(rename = "agent.read")]
     AgentRead(ReadParams),
+    #[serde(rename = "agent.history")]
+    AgentHistory(HistoryParams),
     #[serde(rename = "pane.read")]
     PaneRead(ReadParams),
     #[serde(rename = "agent.watch")]
@@ -155,6 +200,7 @@ impl Request {
         "unpair",
         "flock.snapshot",
         "agent.read",
+        "agent.history",
         "pane.read",
         "agent.watch",
         "task.options",
@@ -199,6 +245,7 @@ impl Request {
             Self::Unpair(_) => "unpair",
             Self::FlockSnapshot(_) => "flock.snapshot",
             Self::AgentRead(_) => "agent.read",
+            Self::AgentHistory(_) => "agent.history",
             Self::PaneRead(_) => "pane.read",
             Self::AgentWatch(_) => "agent.watch",
             Self::TaskOptions(_) => "task.options",
@@ -242,6 +289,7 @@ impl Request {
             Self::Hello(_) | Self::PairComplete(_) | Self::Unpair(_) => MethodClass::Session,
             Self::FlockSnapshot(_)
             | Self::AgentRead(_)
+            | Self::AgentHistory(_)
             | Self::PaneRead(_)
             | Self::AgentWatch(_)
             | Self::TaskOptions(_)
@@ -809,6 +857,7 @@ pub enum Response {
     TaskOptions(TaskOptions),
     GitChanges(GitChanges),
     GitDiff(GitDiff),
+    History(HistoryPage),
     TaskWorktrees {
         source: Cwd,
         worktrees: Vec<TaskWorktreeInfo>,
@@ -1319,6 +1368,7 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
         .map_err(|e| FrameError::new(id, ErrorCode::InvalidParams, e.to_string()))?;
     let valid = match &request {
         Request::AgentRead(p) | Request::PaneRead(p) => p.is_valid(),
+        Request::AgentHistory(p) => p.is_valid(),
         Request::AgentSendKeys(p) => p.is_valid(),
         Request::AgentTypeText(p) => p.is_valid(),
         Request::TerminalRun(p) => p.is_valid(),
@@ -1346,6 +1396,31 @@ mod tests {
 
     fn parse(s: &str) -> Result<ClientFrame, FrameError> {
         parse_client_frame(s.as_bytes())
+    }
+
+    #[test]
+    fn history_is_bounded_and_read_only() {
+        let request = |params: serde_json::Value| {
+            serde_json::to_vec(&serde_json::json!({
+                "id": 1, "method": "agent.history", "params": params,
+            }))
+            .unwrap()
+        };
+        let valid = parse_client_frame(&request(serde_json::json!({"terminal_id":"t1"}))).unwrap();
+        assert_eq!(valid.request.class(), MethodClass::Read);
+        for extra in [
+            serde_json::json!({"before":"a","after":"b"}),
+            serde_json::json!({"query":"x".repeat(257)}),
+            serde_json::json!({"before":"x".repeat(257)}),
+            serde_json::json!({"path":"/private/file"}),
+        ] {
+            let mut params = serde_json::json!({"terminal_id":"t1"});
+            params
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert!(parse_client_frame(&request(params)).is_err());
+        }
     }
 
     #[test]

@@ -419,6 +419,36 @@
       ],
       "type": "object"
     },
+    "HistoryParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id"
+      ],
+      "type": "object"
+    },
     "Key": {
       "enum": [
         "enter",
@@ -937,6 +967,22 @@
         },
         "params": {
           "$ref": "#/$defs/ReadParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.history",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/HistoryParams"
         }
       },
       "required": [

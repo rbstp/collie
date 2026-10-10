@@ -61,8 +61,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private var loupe: UITextLoupeSession?
     private let startHandle = SelectionHandle(edge: .start)
     private let endHandle = SelectionHandle(edge: .end)
-    private let copyButton = UIButton(configuration: .filled())
-    private let openButton = UIButton(configuration: .filled())
+    private let copyButton = UIButton(configuration: .glass())
+    private let openButton = UIButton(configuration: .glass())
     private let menu = UIStackView()
     /// Where the pop-up points, relative to the visible area so it stays put while the
     /// content decelerates.

@@ -775,6 +775,89 @@
       ],
       "type": "object"
     },
+    "HistoryMessage": {
+      "properties": {
+        "call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "tool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "text",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "HistoryPage": {
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/HistoryMessage"
+          },
+          "type": "array"
+        },
+        "more": {
+          "type": "boolean"
+        },
+        "omitted": {
+          "type": "boolean"
+        },
+        "reset": {
+          "type": "boolean"
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "available",
+        "reset",
+        "messages",
+        "more",
+        "omitted"
+      ],
+      "type": "object"
+    },
     "MachineInfo": {
       "description": "`node_id` is the Tailscale stable node ID; the phone pins it at pairing time.",
       "properties": {
@@ -1036,6 +1119,19 @@
           "properties": {
             "type": {
               "const": "git_diff",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/HistoryPage",
+          "properties": {
+            "type": {
+              "const": "history",
               "type": "string"
             }
           },

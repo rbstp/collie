@@ -43,6 +43,7 @@ final class AgentModel {
     private var revision: UInt64 = 0
 
     let gitReview = GitReview()
+    let conversation = ConversationModel()
     var draft = ""
     /// What the phone last saw in the Mac's input box: nil when unknown. A send replaces exactly this text.
     private(set) var macDraft: String?
@@ -258,6 +259,10 @@ final class AgentModel {
 
     /// Runs while the screen is visible: watch, poll the core, unwatch on cancel. collied pushes at about
     /// 4 Hz; a shell polls at 10 Hz so its echo does not wait up to another 250 ms.
+    func history(before: String?, after: String?, query: String?) async throws -> HistoryPage {
+        try await core.agentHistory(machineId: route.machineId, terminalId: route.terminalId, before: before, after: after, query: query)
+    }
+
     func run() async {
         Self.watchers[route.machineId] = ObjectIdentifier(self)
         watch(route.terminalId)

@@ -48,7 +48,7 @@ struct SettingsView: View {
                     Toggle("Keep keyboard open after sending", isOn: $keepKeyboard)
                 }
                 Section("Terminal") {
-                    Picker("History", selection: $historyLines) {
+                    Picker("Scrollback", selection: $historyLines) {
                         ForEach(DevicePrefs.historyChoices, id: \.self) { Text("\($0) lines") }
                     }
                     NavigationLink("Gestures") { GesturesView() }

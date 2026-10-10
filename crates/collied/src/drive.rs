@@ -197,7 +197,7 @@ impl Driver {
     }
 
     /// Never trusts a cached `pane_id`: it changes on cross-workspace moves.
-    async fn find_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
+    pub(crate) async fn find_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
         herdr::agent_list(&self.herdr)
             .await
             .map_err(herdr_fail)?

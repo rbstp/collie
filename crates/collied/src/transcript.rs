@@ -1,5 +1,4 @@
-//! What collied derives from an agent's own transcript on this machine. The transcript
-//! holds the whole conversation; only the `Derived` values ever leave the machine.
+mod history;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
