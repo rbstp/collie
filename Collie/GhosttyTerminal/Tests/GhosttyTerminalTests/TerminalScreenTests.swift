@@ -307,6 +307,19 @@ private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB
     }
 }
 
+@Test func codexLongComposerKeepsItsShadedIndent() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    for text in [String(repeating: "test word ", count: 15), "/" + String(repeating: "longpath", count: 20)] {
+        let input = "\u{1B}[0m\u{1B}[48;2;42;42;50m› \u{1B}[0m\u{1B}[48;2;42;42;50m"
+            + text + String(repeating: " ", count: 120) + "\u{1B}[0m"
+        let frame = screen.render(ansiSnapshot: input, wrapColumns: 50)
+        #expect(frame.rows > 2)
+        for row in 0..<frame.rows {
+            #expect(painted(frame, row: row, TerminalRGB(42, 42, 50)) == 0..<50, "\(row)")
+        }
+    }
+}
+
 @Test func paddedPanelsKeepOneRowPerLine() throws {
     let screen = try #require(TerminalScreen(background: bg, foreground: fg))
     let line = { (count: Int) in String(repeating: "\u{2500}", count: count) }
