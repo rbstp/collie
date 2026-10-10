@@ -913,6 +913,7 @@ struct Session<'a> {
 }
 
 struct Finished {
+    method: &'static str,
     id: u32,
     target: Option<String>,
     reply: Reply,
@@ -1015,7 +1016,8 @@ impl Session<'_> {
             }
             Step::Finished(Some(Ok(done))) => {
                 self.starting = None;
-                self.finish("task.new", done).await
+                let method = done.method;
+                self.finish(method, done).await
             }
             Step::Finished(_) => self.task_lost().await,
             Step::Message(Some(Ok(Message::Text(text)))) => {
@@ -1115,6 +1117,7 @@ impl Session<'_> {
         {
             let reply = err(ErrorCode::TerminalsDisabled, TERMINALS_OFF);
             let done = Finished {
+                method,
                 id,
                 target,
                 reply,
@@ -1211,6 +1214,7 @@ impl Session<'_> {
                 self.tasks.spawn(async move {
                     let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
                     Finished {
+                        method,
                         id,
                         target,
                         reply,
@@ -1221,6 +1225,30 @@ impl Session<'_> {
             }
             Request::TaskFolders(p) => (drive.task_folders(p, &auth).await, None),
             Request::TaskWorktrees(p) => (drive.task_worktrees(p, &auth).await, None),
+            Request::TaskArchive(_) if !self.tasks.is_empty() => (
+                err(
+                    ErrorCode::RateLimited,
+                    "a task is already starting or archiving",
+                ),
+                None,
+            ),
+            Request::TaskArchive(p) => {
+                let (op_id, d) = (p.op_id.clone(), drive.clone());
+                let op = self.audited(method, target.clone(), async move {
+                    (d.task_archive(p, &auth).await, None)
+                });
+                self.tasks.spawn(async move {
+                    let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                    Finished {
+                        method,
+                        id,
+                        target,
+                        reply,
+                        origin: Some(origin),
+                    }
+                });
+                return Flow::Continue;
+            }
             Request::WorkspaceClose(p) => (drive.workspace_close(p, &auth).await, None),
             Request::PaneClose(p) => (drive.pane_close(p, &auth).await, None),
             Request::ApprovalList(_) => (
@@ -1388,6 +1416,7 @@ impl Session<'_> {
         self.finish(
             method,
             Finished {
+                method,
                 id,
                 target,
                 reply,
@@ -1422,6 +1451,7 @@ impl Session<'_> {
         self.finish(
             "task.new",
             Finished {
+                method: "task.new",
                 id,
                 target,
                 reply: err(ErrorCode::Internal, "task.new failed"),
@@ -1837,6 +1867,7 @@ fn audit_target(request: &Request) -> Option<String> {
         }
         Request::TaskFolders(p) => p.path.as_str(),
         Request::TaskWorktrees(p) => p.cwd.as_str(),
+        Request::TaskArchive(p) => p.terminal_id.as_str(),
         Request::PushActivityToken(p) => {
             return Some(activity::target(&p.terminal_id, &p.activity_id));
         }

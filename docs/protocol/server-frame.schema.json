@@ -964,6 +964,22 @@
           "type": "object"
         },
         {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "const": "task_archived",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
           "description": "The folders directly inside `path`, its canonical form, sorted; `truncated` when\nsome were left out.",
           "properties": {
             "folders": {

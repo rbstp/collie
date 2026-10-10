@@ -22,9 +22,10 @@ use protocol::{
     ApprovalId, Cwd, DraftText, Empty, ErrorCode, FolderName, Key, Label, NoticeDigit,
     NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
     PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
-    ReadSource, Request, Response, Signature, SlashCommand, TaskFoldersParams, TaskNewParams,
-    TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId, TerminalKey, TerminalRead,
-    TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
+    ReadSource, Request, Response, Signature, SlashCommand, TaskArchiveParams, TaskFoldersParams,
+    TaskNewParams, TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId, TerminalKey,
+    TerminalRead, TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId,
+    limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -60,6 +61,7 @@ const PAIR_CONFIRM_TIMEOUT: Duration = Duration::from_secs(75);
 const DRIVE_TIMEOUT: Duration = Duration::from_secs(30);
 /// herdr's `agent.start` waits up to 30 s for the agent before collied prompts it.
 const TASK_NEW_TIMEOUT: Duration = Duration::from_secs(90);
+const TASK_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(150);
 /// An unanswered mutation's `op_id` is reused for an identical retry within this window.
 /// Longer than any mutation timeout, shorter than collied's 600 s outcome cache.
 const OP_REUSE_WINDOW: Duration = Duration::from_secs(180);
@@ -1608,6 +1610,26 @@ impl CollieCore {
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
     }
 
+    pub async fn archive_task(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        confirm: bool,
+    ) -> Result<String, CoreError> {
+        let request = Request::TaskArchive(TaskArchiveParams {
+            op_id: new_op_id(),
+            terminal_id: terminal(terminal_id)?,
+            confirm,
+        });
+        match self
+            .mutate(&machine_id, request, TASK_ARCHIVE_TIMEOUT)
+            .await?
+        {
+            Response::TaskArchived { message } => Ok(message),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
     /// Uses the nonce collie-core holds from the flock and `approval.needed`, fetching
     /// `approval.list` when it has none. Not retried: the nonce is single use. `note`, one
     /// line, goes with Approve or Deny on an approval with `supports_note`.
@@ -2623,6 +2645,7 @@ fn op_id_mut(request: &mut Request) -> Option<&mut OpId> {
         Request::AgentSendKeys(p) => Some(&mut p.op_id),
         Request::AgentTypeText(p) => Some(&mut p.op_id),
         Request::TaskNew(p) => Some(&mut p.op_id),
+        Request::TaskArchive(p) => Some(&mut p.op_id),
         Request::TerminalRun(p) => Some(&mut p.op_id),
         Request::TerminalSendKeys(p) => Some(&mut p.op_id),
         _ => None,
@@ -2964,6 +2987,20 @@ mod tests {
         let fresh = op(&mut elsewhere);
         core.inner.claim_op("m2", &mut elsewhere);
         assert_eq!(op(&mut elsewhere), fresh, "keyed per machine");
+
+        let archive = || {
+            Request::TaskArchive(TaskArchiveParams {
+                op_id: new_op_id(),
+                terminal_id: TerminalId::new("term_1").unwrap(),
+                confirm: true,
+            })
+        };
+        let mut first_archive = archive();
+        let archive_id = op(&mut first_archive);
+        core.inner.claim_op("m1", &mut first_archive);
+        let mut archive_retry = archive();
+        core.inner.claim_op("m1", &mut archive_retry);
+        assert_eq!(op(&mut archive_retry), archive_id);
 
         lock(&core.inner.ops).remove(&key);
         let mut after = prompt("run the tests");

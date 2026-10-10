@@ -8,8 +8,8 @@ use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentTypeTextParams, Cwd, DraftText, ErrorCode, FolderName, Key, Label,
     NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request, Response,
-    SlashCommand, TaskNewParams, TaskWorktree, TaskWorktreesParams, TerminalId, TerminalRunParams,
-    WorkspaceCloseParams, WorkspaceId,
+    SlashCommand, TaskArchiveParams, TaskNewParams, TaskWorktree, TaskWorktreesParams, TerminalId,
+    TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -104,7 +104,7 @@ const SLASH_STA: &str = include_str!("fixtures/claude-2.1.293/slash-sta.ansi.txt
 const SLASH_STAT: &str = include_str!("fixtures/claude-2.1.293/slash-stat.ansi.txt");
 const SLASH_STATU: &str = include_str!("fixtures/claude-2.1.293/slash-statu.ansi.txt");
 const SLASH_STATSTATU: &str = include_str!("fixtures/claude-2.1.293/slash-statstatu.ansi.txt");
-const MUTATING: [&str; 12] = [
+const MUTATING: [&str; 13] = [
     "agent.prompt",
     "agent.send_keys",
     "agent.focus",
@@ -112,6 +112,7 @@ const MUTATING: [&str; 12] = [
     "workspace.create",
     "worktree.create",
     "worktree.open",
+    "worktree.remove",
     "workspace.close",
     "pane.close",
     "pane.send_text",
@@ -136,6 +137,7 @@ struct Herdr {
     zoomed: bool,
     worktree_path: Option<String>,
     worktree_open: bool,
+    worktree_workspace_id: Option<String>,
     pane_occupied: bool,
 }
 
@@ -342,7 +344,7 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
             "worktrees": h.worktree_path.iter().map(|path| json!({
                 "path": path, "branch": "feature", "label": "feature", "is_bare": false,
                 "is_detached": false, "is_prunable": false, "is_linked_worktree": true,
-                "open_workspace_id": if h.worktree_open { Some("w9") } else { None }
+                "open_workspace_id": if h.worktree_open { h.worktree_workspace_id.as_deref().or(Some("w9")) } else { None }
             })).collect::<Vec<_>>()
         }),
         "worktree.create" | "worktree.open" => {
@@ -364,6 +366,12 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
                 "already_open": h.worktree_open
             })
         }
+        "worktree.remove" => json!({"type": "worktree_removed",
+            "workspace_id": p["workspace_id"], "force": p["force"],
+            "worktree": {"path": h.worktree_path.as_deref().unwrap_or("/missing"),
+                "branch": "feature", "open_workspace_id": null,
+                "is_bare": false, "is_linked_worktree": true}
+        }),
         "agent.start" => {
             h.started = p["name"].as_str().map(str::to_owned);
             json!({"type": "agent_started", "argv": [p["kind"]], "agent": started_agent("unknown", false, true)})
@@ -2226,6 +2234,89 @@ async fn closes_need_confirmation() {
         code(drive.workspace_close(ws(true), &yes()).await),
         ErrorCode::NotFound
     );
+}
+
+#[tokio::test]
+async fn archive_closes_regular_pane_without_removing_its_folder() {
+    let herdr = Mock::start();
+    let (_dir, base) = root();
+    let folder = base.join("root/a");
+    herdr.with(|h| h.snapshot["panes"][1]["cwd"] = json!(folder));
+    let drive = herdr.driver(&["claude"], &base.join("root"));
+    let p = |confirm| TaskArchiveParams {
+        op_id: op('A'),
+        terminal_id: tid(SHELL),
+        confirm,
+    };
+    assert_eq!(
+        code(drive.task_archive(p(false), &yes()).await),
+        ErrorCode::ConfirmRequired
+    );
+    assert_eq!(
+        code(drive.task_archive(p(true), &no()).await),
+        ErrorCode::NotPaired
+    );
+    assert!(herdr.mutations().is_empty());
+    let Response::TaskArchived { message } = drive.task_archive(p(true), &yes()).await.unwrap()
+    else {
+        panic!("unexpected response");
+    };
+    assert!(message.contains("folder was left in place"), "{message}");
+    assert!(folder.exists());
+    assert_eq!(
+        herdr.params("pane.close"),
+        vec![json!({"pane_id": "w7:p2"})]
+    );
+    assert!(herdr.params("worktree.remove").is_empty());
+}
+
+#[tokio::test]
+async fn archive_force_removes_only_the_linked_worktree_workspace() {
+    let herdr = Mock::start();
+    let (_dir, base) = root();
+    let source = base.join("root/a");
+    let checkout = source.join(".worktree/feature");
+    std::fs::create_dir_all(&checkout).unwrap();
+    herdr.with(|h| {
+        h.worktree_path = Some(checkout.to_str().unwrap().into());
+        h.worktree_open = true;
+        h.worktree_workspace_id = Some("w7".into());
+        h.snapshot["workspaces"][1]["worktree"] = json!({
+            "repo_root": source, "checkout_path": checkout, "is_linked_worktree": true
+        });
+        h.snapshot["panes"][1]["cwd"] = json!(checkout);
+    });
+    let drive = herdr.driver(&["claude"], &base.join("root"));
+    let p = TaskArchiveParams {
+        op_id: op('A'),
+        terminal_id: tid(SHELL),
+        confirm: true,
+    };
+    herdr.fail_next("worktree.remove", &["worktree_not_found"]);
+    let error = drive.task_archive(p.clone(), &yes()).await.unwrap_err();
+    assert!(error.1.contains("gh poi was skipped"));
+    herdr.with(|h| h.calls.clear());
+    let Response::TaskArchived { message } = drive.task_archive(p.clone(), &yes()).await.unwrap()
+    else {
+        panic!("unexpected response");
+    };
+    assert!(message.contains("Removed worktree checkout"), "{message}");
+    assert_eq!(
+        herdr.params("worktree.remove"),
+        vec![json!({"workspace_id": "w7", "force": true})]
+    );
+    assert!(herdr.params("pane.close").is_empty());
+    assert!(herdr.params("workspace.close").is_empty());
+
+    herdr.with(|h| {
+        h.calls.clear();
+        h.snapshot["workspaces"][1]["worktree"]["checkout_path"] = json!(base.join("outside"));
+    });
+    assert_eq!(
+        code(drive.task_archive(p, &yes()).await),
+        ErrorCode::InvalidParams
+    );
+    assert!(herdr.mutations().is_empty());
 }
 
 #[tokio::test]

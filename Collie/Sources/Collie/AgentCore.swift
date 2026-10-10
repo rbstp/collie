@@ -17,6 +17,7 @@ protocol AgentCore: AnyObject, Sendable {
     func star(machineId: String, terminalId: String, starred: Bool) async throws
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws
     func closePane(machineId: String, terminalId: String, confirm: Bool) async throws
+    func archiveTask(machineId: String, terminalId: String, confirm: Bool) async throws -> String
     func taskOptions(machineId: String) async throws -> TaskOptions
     func taskFolders(machineId: String, path: String) async throws -> TaskFolders
     func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?) async throws -> TaskStarted

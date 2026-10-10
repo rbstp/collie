@@ -131,11 +131,22 @@ struct AgentScreen: View {
                         }
                     }
                     .disabled(model.agent == nil && model.terminal == nil)
+                    Button("Archive", systemImage: "archivebox", role: .destructive) {
+                        model.close.begin(.archive)
+                    }
                 }
             }
         }
         .onChange(of: blocked, initial: true) { _, blocked in model.blocked = blocked }
         .closeConfirmation($model.close) { await model.performClose() }
+        .alert("Archive result", isPresented: Binding(
+            get: { model.archiveMessage != nil },
+            set: { if !$0 { model.finishArchive() } }
+        )) {
+            Button("Done") { model.finishArchive() }
+        } message: {
+            Text(model.archiveMessage ?? "")
+        }
         .onChange(of: model.closed) { _, closed in
             if closed { dismiss() }
         }
@@ -193,17 +204,31 @@ private struct CloseDialogs: ViewModifier {
     }
 
     private var title: String {
-        close.target == .pane ? "Close this pane?" : "Close this workspace?"
+        switch close.target {
+        case .pane: "Close this pane?"
+        case .workspace: "Close this workspace?"
+        case .archive: "Archive this task?"
+        case nil: ""
+        }
     }
 
     private var action: String {
-        close.target == .pane ? "Close pane" : "Close workspace"
+        switch close.target {
+        case .pane: "Close pane"
+        case .workspace: "Close workspace"
+        case .archive: "Archive"
+        case nil: ""
+        }
     }
 
     private var message: String {
-        close.target == .pane
-            ? "The agent and its shell on the machine are ended."
-            : "Every agent and shell in the workspace on the machine is ended."
+        switch close.target {
+        case .pane: "The agent and its shell on the machine are ended."
+        case .workspace: "Every agent and shell in the workspace on the machine is ended."
+        case .archive:
+            "A linked worktree checkout and its uncommitted changes are deleted, closing its workspace. For a regular folder, only this pane closes and the folder remains. gh poi can also remove other merged branches and their worktrees in the repository."
+        case nil: ""
+        }
     }
 }
 

@@ -197,6 +197,10 @@ final class FakeCore: AgentCore {
     func closePane(machineId: String, terminalId: String, confirm: Bool) async throws {
         try await call { $0.closes.append("pane \(terminalId) confirm=\(confirm)") }
     }
+    func archiveTask(machineId: String, terminalId: String, confirm: Bool) async throws -> String {
+        try await call { $0.closes.append("archive \(terminalId) confirm=\(confirm)") }
+        return "Checkout removed; gh poi completed."
+    }
     func taskOptions(machineId: String) async throws -> TaskOptions {
         try await call { _ in }
         return state.withLock { $0.options }
@@ -767,6 +771,18 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     other.close.advance()
     await other.performClose()
     #expect(core.snapshot.closes.last == "workspace w9 confirm=true")
+
+    let archived = agentModel(core)
+    archived.close.begin(.archive)
+    await archived.performClose()
+    #expect(core.snapshot.closes.count == 2)
+    archived.close.advance()
+    await archived.performClose()
+    #expect(core.snapshot.closes.last == "archive term_1 confirm=true")
+    #expect(archived.archiveMessage == "Checkout removed; gh poi completed.")
+    #expect(!archived.closed)
+    archived.finishArchive()
+    #expect(archived.closed)
 }
 
 @MainActor
@@ -798,6 +814,13 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     #expect(await model.performClose(core: core) == false)
     #expect(core.snapshot.closes.last == "workspace w7 confirm=true")
     #expect(model.closeNotice?.contains("approval") == true)
+
+    core.set(error: nil)
+    model.beginClose(.archive, route: route)
+    model.close.advance()
+    #expect(await model.performClose(core: core))
+    #expect(core.snapshot.closes.last == "archive term_2 confirm=true")
+    #expect(model.closeNotice == "Checkout removed; gh poi completed.")
 }
 
 @MainActor

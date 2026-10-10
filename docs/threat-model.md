@@ -253,6 +253,16 @@ Codex follow-up questions use a separate screen check. `shift+left` is accepted 
 | Residual | Empty folders can pile up under the base, as fast as the shared rate limit lets new tasks start (one at a time per session). A folder stays if the agent then fails to start; the error names it. herdr opens the path by name after collied's check, as for any `task.new`, so a process running as the user could swap it in between ([Same-UID malware on the Mac](#same-uid-malware-on-the-mac)). The names of folders directly inside any visible folder under the roots (the home folder by default) are visible to the paired phone, which could already have an agent list them. The base folder is a phone setting: collied re-checks every path against the roots, whatever the phone stored. |
 | Phase | Built |
 
+### Task archive from the phone
+
+| | |
+|---|---|
+| Assets | A task's checkout and uncommitted files; merged branches and worktrees in its repository |
+| Attack | A paired phone archives another task or removes files outside the configured task roots. A replay repeats cleanup. |
+| Mitigations | `task.archive` requires confirmation, a paired full session and an `op_id` for one cached outcome. collied locates the terminal and its workspace in a fresh herdr snapshot, checks the linked checkout and repository against the task roots, verifies that herdr associates that checkout with the workspace, and re-checks authorization before `worktree.remove`. For a regular folder it closes only the pane. It runs `gh poi` from a repository inside the roots, with `GH_TOKEN` removed, and reports cleanup failures separately from the close or removal. |
+| Residual | Archive deliberately forces removal of a linked worktree, including uncommitted changes. `gh poi` may remove other merged branches and worktrees in the repository, even when archiving from a regular folder. Repository paths can change between checks and subprocess execution under the same user account. |
+| Phase | Built |
+
 ### Shell input from the phone
 
 | | |

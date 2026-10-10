@@ -60,8 +60,7 @@ final class FlockModel {
     func performClose(core: any AgentCore) async -> Bool {
         guard let route = closing, let target = close.confirm() else { return false }
         do {
-            try await core.closeConfirmed(target, route: route)
-            closeNotice = nil
+            closeNotice = try await core.closeConfirmed(target, route: route)
             return true
         } catch {
             let message = AgentModel.message(for: error)

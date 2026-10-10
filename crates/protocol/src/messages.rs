@@ -61,6 +61,8 @@ pub enum Request {
     TaskFolders(TaskFoldersParams),
     #[serde(rename = "task.worktrees")]
     TaskWorktrees(TaskWorktreesParams),
+    #[serde(rename = "task.archive")]
+    TaskArchive(TaskArchiveParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseParams),
     #[serde(rename = "pane.close")]
@@ -123,6 +125,7 @@ impl Request {
         "task.new",
         "task.folders",
         "task.worktrees",
+        "task.archive",
         "workspace.close",
         "pane.close",
         "approval.list",
@@ -164,6 +167,7 @@ impl Request {
             Self::TaskNew(_) => "task.new",
             Self::TaskFolders(_) => "task.folders",
             Self::TaskWorktrees(_) => "task.worktrees",
+            Self::TaskArchive(_) => "task.archive",
             Self::WorkspaceClose(_) => "workspace.close",
             Self::PaneClose(_) => "pane.close",
             Self::ApprovalList(_) => "approval.list",
@@ -205,6 +209,7 @@ impl Request {
             | Self::TaskNew(_)
             | Self::TaskFolders(_)
             | Self::TaskWorktrees(_)
+            | Self::TaskArchive(_)
             | Self::WorkspaceClose(_)
             | Self::PaneClose(_)
             | Self::AttachmentBegin(_)
@@ -578,6 +583,15 @@ pub struct TaskWorktreesParams {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct TaskArchiveParams {
+    pub op_id: OpId,
+    pub terminal_id: TerminalId,
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TaskFoldersParams {
     pub path: Cwd,
 }
@@ -749,6 +763,9 @@ pub enum Response {
     TaskStarted {
         workspace_id: WorkspaceId,
         terminal_id: TerminalId,
+    },
+    TaskArchived {
+        message: String,
     },
     /// The folders directly inside `path`, its canonical form, sorted; `truncated` when
     /// some were left out.
@@ -1505,7 +1522,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 15);
+        assert_eq!(crate::PROTOCOL_VERSION, 16);
     }
 
     #[test]
@@ -1580,6 +1597,29 @@ mod tests {
         ] {
             assert_eq!(task(choice).unwrap_err().code, ErrorCode::InvalidParams);
         }
+    }
+
+    #[test]
+    fn archive_requires_explicit_confirmation_and_replays_as_one_request() {
+        let frame = parse(r#"{"id":1,"method":"task.archive","params":{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"term","confirm":true}}"#).unwrap();
+        assert_eq!(frame.request.class(), MethodClass::Drive);
+        assert_eq!(frame.request.method(), "task.archive");
+        assert_eq!(
+            parse(&serde_json::to_string(&frame).unwrap()).unwrap(),
+            frame
+        );
+        for params in [
+            r#"{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"term","confirm":true,"force":false}"#,
+            r#"{"terminal_id":"term","confirm":true}"#,
+        ] {
+            let bad = format!(r#"{{"id":1,"method":"task.archive","params":{params}}}"#);
+            assert_eq!(parse(&bad).unwrap_err().code, ErrorCode::InvalidParams);
+        }
+        let omitted = parse(r#"{"id":1,"method":"task.archive","params":{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"term"}}"#).unwrap();
+        let Request::TaskArchive(params) = omitted.request else {
+            panic!("not archive")
+        };
+        assert!(!params.confirm);
     }
 
     #[test]

@@ -178,6 +178,10 @@ final class DemoAgentCore: ActivityCore {
         throw CoreError.NotImplemented
     }
 
+    func archiveTask(machineId: String, terminalId: String, confirm: Bool) async throws -> String {
+        throw CoreError.NotImplemented
+    }
+
     func taskOptions(machineId: String) async throws -> TaskOptions {
         throw CoreError.NotImplemented
     }

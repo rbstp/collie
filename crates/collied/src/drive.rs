@@ -3,6 +3,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::iter::Peekable;
 use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
+use std::process::Stdio;
 use std::str::Chars;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -11,13 +12,15 @@ use anyhow::Context;
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, Cwd, ErrorCode, FolderName, Key, OpId,
-    OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskFoldersParams,
-    TaskNewParams, TaskOptions, TaskWorktree, TaskWorktreeInfo, TaskWorktreesParams, TerminalId,
-    TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId, limits,
+    OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskArchiveParams,
+    TaskFoldersParams, TaskNewParams, TaskOptions, TaskWorktree, TaskWorktreeInfo,
+    TaskWorktreesParams, TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams,
+    WorkspaceId, limits,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
+use tokio::{process::Command, time::timeout};
 
 use crate::draft::{self, InputBox};
 use crate::herdr::{self, AgentInfo, PaneInfo};
@@ -1451,6 +1454,149 @@ impl Driver {
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
+    }
+
+    pub async fn task_archive(&self, p: TaskArchiveParams, auth: &Authorized) -> Reply {
+        if !p.confirm {
+            return fail(ErrorCode::ConfirmRequired, "confirm must be true");
+        }
+        authorized(auth)?;
+        let snapshot = herdr::session_snapshot(&self.herdr)
+            .await
+            .map_err(herdr_fail)?;
+        let pane = snapshot
+            .panes
+            .iter()
+            .find(|pane| pane.terminal_id == p.terminal_id.as_str())
+            .ok_or_else(|| (ErrorCode::NotFound, "no such terminal".to_owned()))?;
+        let workspace = snapshot
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.workspace_id == pane.workspace_id)
+            .ok_or_else(|| (ErrorCode::NotFound, "no such workspace".to_owned()))?;
+        let linked = workspace
+            .worktree
+            .as_ref()
+            .filter(|worktree| worktree.is_linked_worktree);
+        let (repo, closed) = if let Some(worktree) = linked {
+            let checkout = resolve_cwd(&worktree.checkout_path, &self.roots).map_err(invalid)?;
+            if checkout.as_str() != worktree.checkout_path {
+                return Err(invalid("worktree checkout path changed"));
+            }
+            let repo = resolve_cwd(&worktree.repo_root, &self.roots).map_err(invalid)?;
+            let listed = herdr::worktree_list(&self.herdr, checkout.as_str())
+                .await
+                .map_err(herdr_fail)?;
+            if !listed.worktrees.iter().any(|item| {
+                item.path == checkout.as_str()
+                    && item.open_workspace_id.as_deref() == Some(&pane.workspace_id)
+                    && item.is_linked_worktree
+                    && !item.is_bare
+            }) {
+                return Err(invalid("worktree is no longer linked to this workspace"));
+            }
+            authorized(auth)?;
+            let removed = herdr::worktree_remove(&self.herdr, &pane.workspace_id)
+                .await
+                .map_err(|error| {
+                    let (code, message) = herdr_fail(error);
+                    (
+                        code,
+                        format!("Worktree removal could not be verified ({message}); gh poi was skipped."),
+                    )
+                })?;
+            if removed.path != checkout.as_str() {
+                return Ok(Response::TaskArchived {
+                    message: format!(
+                        "Herdr removed a checkout but reported a different path; branch cleanup was skipped. Expected {}, got {}.",
+                        checkout.as_str(),
+                        removed.path
+                    ),
+                });
+            }
+            (
+                Some(repo),
+                format!(
+                    "Removed worktree checkout {} and closed its workspace.",
+                    checkout.as_str()
+                ),
+            )
+        } else {
+            let repo = pane
+                .cwd
+                .as_deref()
+                .and_then(|cwd| resolve_cwd(cwd, &self.roots).ok());
+            authorized(auth)?;
+            herdr::pane_close(&self.herdr, &pane.pane_id)
+                .await
+                .map_err(herdr_fail)?;
+            (
+                repo,
+                "Closed pane. Its folder was left in place.".to_owned(),
+            )
+        };
+        let cleanup = if let Some(repo) = repo.and_then(|repo| git_repository(&repo, &self.roots)) {
+            if !auth() {
+                "Authorization ended; gh poi was skipped.".to_owned()
+            } else {
+                match run_poi(&repo).await {
+                    Ok(()) => format!("gh poi completed in {}.", repo.as_str()),
+                    Err(reason) => {
+                        format!(
+                            "gh poi did not complete ({reason}); branch cleanup may be partial."
+                        )
+                    }
+                }
+            }
+        } else {
+            "No repository was available for gh poi; branch cleanup was skipped.".to_owned()
+        };
+        Ok(Response::TaskArchived {
+            message: format!("{closed} {cleanup}"),
+        })
+    }
+}
+
+fn git_repository(cwd: &Cwd, roots: &[PathBuf]) -> Option<Cwd> {
+    let output = std::process::Command::new("git")
+        .args(["-C", cwd.as_str(), "rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let root = std::str::from_utf8(&output.stdout).ok()?.trim();
+    resolve_cwd(root, roots).ok()
+}
+
+async fn run_poi(repo: &Cwd) -> Result<(), &'static str> {
+    let gh = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+        .unwrap_or("gh");
+    let path = format!(
+        "/opt/homebrew/bin:/usr/local/bin:{}",
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut command = Command::new(gh);
+    command
+        .arg("poi")
+        .current_dir(repo.as_str())
+        .env("PATH", path)
+        .env_remove("GH_TOKEN")
+        .env("GH_PROMPT_DISABLED", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let output = timeout(Duration::from_secs(60), command.output())
+        .await
+        .map_err(|_| "timed out")?
+        .map_err(|_| "unavailable")?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err("command failed")
     }
 }
 
