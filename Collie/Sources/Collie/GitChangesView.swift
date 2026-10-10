@@ -47,6 +47,21 @@ final class GitReview {
         return comment.id
     }
 
+    func text(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { self.comments.first { $0.id == id }?.text ?? "" },
+            set: { text in
+                guard !self.sending, let index = self.comments.firstIndex(where: { $0.id == id }) else { return }
+                self.comments[index].text = text
+            }
+        )
+    }
+
+    func remove(id: UUID) {
+        guard !sending else { return }
+        comments.removeAll { $0.id == id }
+    }
+
     func send(using agent: AgentModel) async -> Bool {
         guard !sending, ready else { return false }
         sending = true
@@ -87,8 +102,8 @@ struct GitChangesView: View {
             List {
                 if !review.comments.isEmpty {
                     Section("Feedback (\(review.comments.count))") {
-                        ForEach($review.comments) { $comment in
-                            GitCommentEditor(comment: $comment) { review.comments.removeAll { $0.id == comment.id } }
+                        ForEach(review.comments) { comment in
+                            GitCommentEditor(comment: comment, text: review.text(for: comment.id)) { review.remove(id: comment.id) }
                         }
                         .disabled(review.sending)
                     }
@@ -209,9 +224,12 @@ private struct GitDiffView: View {
                         }
                     }
                     if loading { ProgressView("Loading diff…") }
-                    ForEach($review.comments) { $comment in
+                    ForEach(review.comments) { comment in
                         if comment.root == root && comment.file.path == file.path && comment.file.section == file.section {
-                            GitCommentEditor(comment: $comment, editing: $editing) { review.comments.removeAll { $0.id == comment.id } }
+                            GitCommentEditor(comment: comment, text: review.text(for: comment.id), editing: $editing) {
+                                if editing == comment.id { editing = nil }
+                                review.remove(id: comment.id)
+                            }
                                 .id(comment.id)
                                 .disabled(review.sending)
                         }
@@ -266,7 +284,8 @@ private struct GitDiffView: View {
 }
 
 private struct GitCommentEditor: View {
-    @Binding var comment: GitComment
+    let comment: GitComment
+    @Binding var text: String
     var editing: FocusState<UUID?>.Binding?
     let remove: () -> Void
 
@@ -289,7 +308,7 @@ private struct GitCommentEditor: View {
     }
 
     private var field: some View {
-        TextField("Feedback", text: $comment.text, axis: .vertical).lineLimit(2...8)
+        TextField("Feedback", text: $text, axis: .vertical).lineLimit(2...8)
     }
 }
 

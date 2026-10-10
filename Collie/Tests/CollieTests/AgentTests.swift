@@ -2247,6 +2247,41 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
 }
 
 @MainActor
+@Test(arguments: [0, 1, 2])
+func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
+    let review = GitReview()
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
+    let ids = try (0..<3).map { index in
+        try #require(review.add(root: "/worktree", file: file, selection: "line \(index)"))
+    }
+    let bindings = ids.map { review.text(for: $0) }
+    for index in ids.indices { bindings[index].wrappedValue = "Feedback \(index)" }
+
+    review.remove(id: ids[removedIndex])
+    review.remove(id: ids[removedIndex])
+    #expect(bindings[removedIndex].wrappedValue.isEmpty)
+    bindings[removedIndex].wrappedValue = "Late update from the removed editor"
+    #expect(review.comments.map(\.id) == ids.filter { $0 != ids[removedIndex] })
+    for index in ids.indices where index != removedIndex {
+        #expect(bindings[index].wrappedValue == "Feedback \(index)")
+        bindings[index].wrappedValue = "Edited \(index)"
+        #expect(review.comments.first { $0.id == ids[index] }?.text == "Edited \(index)")
+    }
+
+    for id in ids { review.remove(id: id) }
+    #expect(review.comments.isEmpty)
+    #expect(!review.ready)
+    let next = try #require(review.add(root: "/worktree", file: file, selection: ""))
+    review.text(for: next).wrappedValue = "New feedback"
+    for binding in bindings {
+        #expect(binding.wrappedValue.isEmpty)
+        binding.wrappedValue = "Late update after removing the last editor"
+    }
+    #expect(review.comments.count == 1)
+    #expect(review.comments.first?.text == "New feedback")
+}
+
+@MainActor
 @Test func gitReviewCollectsFilesAndSendsOnceWithoutTouchingTheComposer() async throws {
     let core = FakeCore()
     let model = await slashReady(core)
@@ -2321,14 +2356,23 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     review.comments = []
     review.add(root: "/worktree", file: file, selection: "")
     review.comments[0].text = "Please simplify."
+    let id = review.comments[0].id
+    let binding = review.text(for: id)
     core.set(hold: true)
     let sending = Task { await review.send(using: model) }
     await core.waitHeld(1)
     #expect(!(await review.send(using: model)))
     #expect(review.add(root: "/worktree", file: file, selection: "") == nil)
+    review.remove(id: id)
+    binding.wrappedValue = "Late update while sending"
+    #expect(review.comments.count == 1)
+    #expect(binding.wrappedValue == "Please simplify.")
     core.release()
     #expect(await sending.value)
-    #expect(core.snapshot.prompts.count == 1)
+    #expect(core.snapshot.prompts == ["Feedback for file.swift: Please simplify."])
+    #expect(review.comments.isEmpty)
+    #expect(binding.wrappedValue.isEmpty)
+    binding.wrappedValue = "Late update after sending"
     #expect(review.comments.isEmpty)
 }
 
