@@ -202,27 +202,34 @@ private struct FeedbackField: View {
 }
 
 private struct DecisionButtons: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let model: ApprovalsModel
     let item: ApprovalItem
     let expired: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            ForEach(item.approval.options, id: \.self) { decision in
-                Button(role: decision == .deny ? .destructive : nil) {
-                    Task { await model.decide(item, decision) }
-                } label: {
-                    Group {
-                        if model.steps[item.id] == .sending(decision) {
-                            ProgressView()
-                        } else {
-                            Text(decision.title).lineLimit(1).minimumScaleFactor(0.6)
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+        GlassEffectContainer(spacing: 8) {
+            layout {
+                ForEach(item.approval.options, id: \.self) { decision in
+                    Button(role: decision == .deny ? .destructive : nil) {
+                        Task { await model.decide(item, decision) }
+                    } label: {
+                        Group {
+                            if model.steps[item.id] == .sending(decision) {
+                                ProgressView()
+                            } else {
+                                Text(decision.title)
+                                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                                    .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 1 : 0.6)
+                            }
                         }
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: .infinity)
+                    .modifier(DecisionStyle(prominent: decision == .approve))
+                    .disabled(model.note(for: item) != nil && !item.approval.takesNote(with: decision))
                 }
-                .modifier(DecisionStyle(prominent: decision == .approve))
-                .disabled(model.note(for: item) != nil && !item.approval.takesNote(with: decision))
             }
         }
         .disabled(expired || item.unreachable || model.steps[item.id] != nil)
@@ -308,9 +315,9 @@ private struct DecisionStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         if prominent {
-            content.buttonStyle(.borderedProminent)
+            content.buttonStyle(.glassProminent).tint(.green)
         } else {
-            content.buttonStyle(.bordered)
+            content.buttonStyle(.glass)
         }
     }
 }

@@ -25,6 +25,7 @@ struct OnboardingView: View {
                     } label: {
                         Label("Sign in to Tailscale", systemImage: "person.badge.key")
                     }
+                    .buttonStyle(.glassProminent)
                     .disabled(app.signingIn)
                 } footer: {
                     Text("Opens the Tailscale login page. Sign in with the account that owns your machines.")
@@ -39,6 +40,7 @@ struct OnboardingView: View {
                         authKey = ""
                         signIn { await app.signIn(authKey: key) }
                     }
+                    .buttonStyle(.glass)
                     .disabled(app.signingIn || authKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } header: {
                     Text("Auth key")

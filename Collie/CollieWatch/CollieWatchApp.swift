@@ -466,8 +466,12 @@ private struct ApprovalDetail: View {
                     Text(verbatim: command).font(.footnote.monospaced())
                 }
                 Text(verbatim: approval.snippet).font(.footnote).foregroundStyle(.secondary)
-                TimelineView(.explicit([expiry])) { _ in
-                    actions(expired: Date.now >= expiry)
+                GlassEffectContainer(spacing: 8) {
+                    TimelineView(.explicit([expiry])) { _ in
+                        VStack(spacing: 8) {
+                            actions(expired: Date.now >= expiry)
+                        }
+                    }
                 }
                 if let notice = model.notice {
                     Text(verbatim: "\(notice.title): \(notice.body)").font(.footnote)
@@ -493,12 +497,13 @@ private struct ApprovalDetail: View {
         } else if !approval.options.isEmpty {
             if approval.offers(.approve) {
                 Button("Approve") { decide(.approve) }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .tint(.green)
                     .disabled(expired || model.sending != nil)
             }
             if approval.offers(.deny) {
                 Button("Deny", role: .destructive) { decide(.deny) }
+                    .buttonStyle(.glass)
                     .disabled(expired || model.sending != nil)
             }
         } else {
@@ -508,6 +513,7 @@ private struct ApprovalDetail: View {
                 } label: {
                     Text(verbatim: "\(Int(choice.index) + 1). \(choice.label)")
                 }
+                .buttonStyle(.glass)
                 .disabled(expired || model.sending != nil)
             }
         }
