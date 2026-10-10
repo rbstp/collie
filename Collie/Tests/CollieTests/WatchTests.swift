@@ -111,28 +111,104 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     let state = WatchState(items: [], entries: [entry(mac, [], usage: older), entry(linux, [], usage: newer)], allowed: true, live: false, now: now)
     let usage = try #require(state.usage)
     #expect(usage == WatchUsage(fiveHourUsed: 73, fiveHourResetsAtMs: nowMs + 60_000))
-    #expect(usage.fiveHour(now: now) == 73)
-    #expect(usage.fiveHour(now: now.addingTimeInterval(60)) == nil)
-    #expect(WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nil).fiveHour(now: now) == nil)
+    #expect(usage.windows(now: now)[0]?.used == 73)
+    #expect(usage.windows(now: now.addingTimeInterval(60))[0]?.used == nil)
+    #expect(WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nil).windows(now: now)[0]?.used == nil)
     #expect(WatchState(items: [], entries: [entry(mac, [])], allowed: true, live: true, now: now).usage == nil)
 }
 
-@Test func watchComplicationRunsTheRingDownToTheReset() {
-    let usage = WatchUsage(fiveHourUsed: 29, fiveHourResetsAtMs: nowMs + 9_000_000)
-    #expect(usage.timelineDates(now: now) == [0, 1_800, 5_400, 9_000].map { now.addingTimeInterval($0) })
-    #expect(usage.timelineDates(now: now.addingTimeInterval(6_000)) == [6_000, 9_000].map { now.addingTimeInterval($0) })
-    let full = WatchUsage(fiveHourUsed: 29, fiveHourResetsAtMs: nowMs + 18_000_000)
-    #expect(full.timelineDates(now: now).count == 4)
-    #expect(usage.fiveHourSecondsLeft(now: now) == 9_000)
-    #expect(usage.fiveHourSecondsLeft(now: now.addingTimeInterval(9_000)) == nil)
-    #expect(usage.timelineDates(now: now.addingTimeInterval(9_000)) == [now.addingTimeInterval(9_000)])
-    #expect(WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nil).timelineDates(now: now) == [now])
-
-    #expect(WatchUsage.ringColor(secondsLeft: 7_201) == .green)
-    #expect(WatchUsage.ringColor(secondsLeft: 7_200) == .yellow)
-    #expect(WatchUsage.ringColor(secondsLeft: 3_601) == .yellow)
-    #expect(WatchUsage.ringColor(secondsLeft: 3_600) == .red)
+@Test func watchComplicationExpiresEachRingIndependently() throws {
+    let usage = WatchUsage(
+        fiveHourUsed: 29, fiveHourResetsAtMs: nowMs + 9_000_000,
+        sevenDayUsed: 73, sevenDayResetsAtMs: nowMs + 86_400_000,
+        codexUsed: 90, codexResetsAtMs: nowMs + 86_400_000
+    )
+    let windows = usage.windows(now: now)
+    #expect(windows.map { $0?.used } == [29, 73, 90])
+    #expect(try #require(windows[0]).interval.upperBound.timeIntervalSince(now) == 9_000)
+    #expect(try #require(windows[0]).interval.upperBound.timeIntervalSince(windows[0]!.interval.lowerBound) == 18_000)
+    #expect(try #require(windows[1]).interval.upperBound.timeIntervalSince(windows[1]!.interval.lowerBound) == 604_800)
+    #expect(usage.timelineDates(now: now) == [0, 9_000, 86_400].map { now.addingTimeInterval($0) })
+    #expect(usage.windows(now: now.addingTimeInterval(9_000)).map { $0?.used } == [nil, 73, 90])
+    #expect(usage.windows(now: now.addingTimeInterval(86_400)).allSatisfy { $0 == nil })
+    #expect(usage.timelineDates(now: now.addingTimeInterval(86_400)) == [now.addingTimeInterval(86_400)])
+    #expect(WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nowMs + 60_000).timelineDates(now: now) == [now])
     #expect([0, 60, 61, 85, 86, 100].map(WatchUsage.usedColor) == [.green, .green, .yellow, .yellow, .red, .red])
+}
+
+@Test func watchCodexRingUsesCalendarMonths() throws {
+    for (reset, start, days) in [
+        ("2026-11-01T00:00:00Z", "2026-10-01T00:00:00Z", 31),
+        ("2026-03-01T00:00:00Z", "2026-02-01T00:00:00Z", 28),
+        ("2028-03-01T00:00:00Z", "2028-02-01T00:00:00Z", 29),
+        ("2027-01-01T00:00:00Z", "2026-12-01T00:00:00Z", 31),
+    ] {
+        let end = try #require(ISO8601DateFormatter().date(from: reset))
+        let beginning = try #require(ISO8601DateFormatter().date(from: start))
+        let usage = WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nil, codexUsed: 42, codexResetsAtMs: end.unixMs)
+        let window = try #require(usage.windows(now: beginning)[2])
+        #expect(window.interval == beginning...end)
+        #expect(window.interval.upperBound.timeIntervalSince(window.interval.lowerBound) == Double(days * 86_400))
+        #expect(usage.windows(now: end)[2] == nil)
+    }
+}
+
+@Test func watchUsageDecodesOlderCachedReadings() throws {
+    let data = Data(#"{"fiveHourUsed":42,"fiveHourResetsAtMs":2000000060000}"#.utf8)
+    let usage = try JSONDecoder().decode(WatchUsage.self, from: data)
+    #expect(usage.windows(now: now).map { $0?.used } == [42, nil, nil])
+    #expect(try JSONDecoder().decode(WatchUsage.self, from: JSONEncoder().encode(usage)) == usage)
+}
+
+@Test func watchReceivesWeeklyAndCodexUsageWithoutFiveHourUsage() throws {
+    let reset = nowMs + 86_400_000
+    for used in [UInt64(1532), 10_001] {
+        let plan = PlanUsage(
+            fiveHour: nil, sevenDay: UsageWindow(usedPercent: 150, resetsAtMs: reset), recordedMs: nowMs,
+            codex: CodexUsage(used: used, limit: 10_000, resetsAtMs: reset, recordedMs: nowMs)
+        )
+        let foreground = WatchState(items: [], entries: [entry(mac, [], usage: plan)], allowed: false, live: true, now: now)
+        let background = WatchState.refreshed(
+            nil, listed: [MachineApprovals(machineId: mac.id, approvals: [], planUsage: plan)], machines: [mac], allowed: false, now: now
+        )
+        let usage = try #require(foreground.usage)
+        #expect(background.usage == usage)
+        #expect(usage.windows(now: now).map { $0?.used } == [nil, 100, used > 10_000 ? 100 : 15])
+        #expect(try JSONDecoder().decode(WatchUsage.self, from: JSONEncoder().encode(usage)) == usage)
+    }
+    let codexOnly = PlanUsage(
+        fiveHour: nil, sevenDay: nil, recordedMs: nowMs,
+        codex: CodexUsage(used: 42, limit: 100, resetsAtMs: reset, recordedMs: nowMs)
+    )
+    #expect(WatchState(items: [], entries: [entry(mac, [], usage: codexOnly)], allowed: false, live: true, now: now).usage?.codexUsed == 42)
+    let invalid = PlanUsage(
+        fiveHour: nil, sevenDay: nil, recordedMs: nowMs,
+        codex: CodexUsage(used: 42, limit: 0, resetsAtMs: reset, recordedMs: nowMs)
+    )
+    #expect(WatchUsage(invalid).windows(now: now).allSatisfy { $0 == nil })
+}
+
+@Test func watchKeepsClaudeWhenAnotherMachineOnlyHasCodex() throws {
+    let linux = Machine(id: "m2", label: "Linux", host: "linux.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
+    let reset = nowMs + 86_400_000
+    let claude = PlanUsage(
+        fiveHour: UsageWindow(usedPercent: 42, resetsAtMs: reset), sevenDay: UsageWindow(usedPercent: 73, resetsAtMs: reset), recordedMs: nowMs,
+        codex: CodexUsage(used: 10, limit: 100, resetsAtMs: reset, recordedMs: nowMs - 1_000)
+    )
+    let codex = PlanUsage(
+        fiveHour: nil, sevenDay: nil, recordedMs: nowMs + 1_000,
+        codex: CodexUsage(used: 90, limit: 100, resetsAtMs: reset, recordedMs: nowMs)
+    )
+    let state = WatchState(items: [], entries: [entry(mac, [], usage: claude), entry(linux, [], usage: codex)], allowed: false, live: true, now: now)
+    let usage = try #require(state.usage)
+    #expect(usage.windows(now: now).map { $0?.used } == [42, 73, 90])
+    let refreshed = WatchState.refreshed(
+        nil, listed: [MachineApprovals(machineId: mac.id, approvals: [], planUsage: claude), MachineApprovals(machineId: linux.id, approvals: [], planUsage: codex)],
+        machines: [mac, linux], allowed: false, now: now
+    )
+    #expect(refreshed.usage == usage)
+    let cleared = WatchState.refreshed(state, listed: [MachineApprovals(machineId: mac.id, approvals: [])], machines: [mac], allowed: false, now: now)
+    #expect(cleared.usage == nil)
 }
 
 @Test func watchGetsAgentChangesAloneOnlyWhileItsAppIsReachable() {
