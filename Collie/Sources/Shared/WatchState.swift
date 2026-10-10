@@ -113,7 +113,18 @@ struct WatchUsage: Codable, Equatable, Sendable {
     }
 
     static func usedColor(_ used: UInt8) -> Color {
-        used <= 60 ? .green : used <= 85 ? .yellow : .red
+        let stops: [(Double, Color)] = [
+            (0, Color(red: 0.15, green: 1, blue: 0.3)),
+            (60, Color(red: 1, green: 0.85, blue: 0)),
+            (80, Color(red: 1, green: 0.45, blue: 0)),
+            (90, Color(red: 1, green: 0.15, blue: 0.1)),
+            (100, Color(red: 0.65, green: 0.02, blue: 0.08)),
+        ]
+        let percent = Double(min(used, 100))
+        for (lower, upper) in zip(stops, stops.dropFirst()) where percent <= upper.0 {
+            return lower.1.mix(with: upper.1, by: (percent - lower.0) / (upper.0 - lower.0))
+        }
+        return stops[stops.count - 1].1
     }
 
     static var file: URL? { AppGroup.container?.appending(path: "watch-usage.json") }

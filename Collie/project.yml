@@ -33,6 +33,7 @@ targets:
       - path: Sources/Shared
       - path: Resources/PrivacyInfo.xcprivacy
       - path: Resources/Assets.xcassets
+      - path: Resources/UsageAssets.xcassets
     dependencies:
       - package: CollieCore
       - package: GhosttyTerminal
@@ -157,6 +158,7 @@ targets:
     platform: watchOS
     sources:
       - path: CollieWatchWidgets
+      - path: Resources/UsageAssets.xcassets
       - path: Sources/Shared/WatchState.swift
       - path: Sources/Shared/PushHint.swift
     settings:

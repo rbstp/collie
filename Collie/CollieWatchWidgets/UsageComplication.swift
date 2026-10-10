@@ -5,11 +5,10 @@ import WidgetKit
 struct UsageComplication: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: WatchUsage.widgetKind, provider: UsageProvider()) { entry in
-            UsageRings(usage: entry.usage, now: entry.date)
-                .containerBackground(for: .widget) { AccessoryWidgetBackground() }
+            UsageWidgetView(entry: entry)
         }
         .configurationDisplayName("Plan usage")
-        .supportedFamilies([.accessoryCircular])
+        .supportedFamilies([.accessoryCircular, .accessoryRectangular])
     }
 }
 
@@ -40,6 +39,28 @@ struct UsageProvider: TimelineProvider {
         let usage = WatchUsage.load()
         let entries = (usage?.timelineDates(now: .now) ?? [.now]).map { UsageEntry(date: $0, usage: usage) }
         completion(Timeline(entries: entries, policy: entries.count > 1 ? .atEnd : .never))
+    }
+}
+
+private struct UsageWidgetView: View {
+    let entry: UsageEntry
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        Group {
+            if family == .accessoryRectangular {
+                UsageBars(usage: entry.usage, now: entry.date)
+            } else {
+                UsageRings(usage: entry.usage, now: entry.date)
+            }
+        }
+        .containerBackground(for: .widget) {
+            if family == .accessoryRectangular {
+                Color.black
+            } else {
+                AccessoryWidgetBackground()
+            }
+        }
     }
 }
 

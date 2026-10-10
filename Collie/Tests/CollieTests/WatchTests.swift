@@ -1,6 +1,7 @@
 import CollieCore
 import Foundation
 import Synchronization
+import SwiftUI
 import Testing
 
 @testable import Collie
@@ -133,7 +134,24 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(usage.windows(now: now.addingTimeInterval(86_400)).allSatisfy { $0 == nil })
     #expect(usage.timelineDates(now: now.addingTimeInterval(86_400)) == [now.addingTimeInterval(86_400)])
     #expect(WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nowMs + 60_000).timelineDates(now: now) == [now])
-    #expect([0, 60, 61, 85, 86, 100].map(WatchUsage.usedColor) == [.green, .green, .yellow, .yellow, .red, .red])
+}
+
+@Test func watchUsageColorsBlendFromBrightGreenToDeepRed() {
+    let environment = EnvironmentValues()
+    let colors = [0, 60, 80, 90, 98, 100].map { WatchUsage.usedColor(UInt8($0)).resolve(in: environment) }
+    #expect(colors[0].green > 0.95 && colors[0].red < 0.2)
+    #expect(colors[1].red > 0.95 && colors[1].green > 0.8 && colors[1].blue < 0.05)
+    #expect(colors[2].red > 0.95 && colors[2].green > 0.4 && colors[2].green < 0.5)
+    #expect(colors[3].red > 0.95 && colors[3].green < 0.2)
+    #expect(colors[4].red < colors[3].red && colors[4].red > 0.6 && colors[4].green < colors[3].green)
+    #expect(WatchUsage.usedColor(255).resolve(in: environment) == colors[5])
+    for percent in 1...100 {
+        let previous = WatchUsage.usedColor(UInt8(percent - 1)).resolve(in: environment)
+        let current = WatchUsage.usedColor(UInt8(percent)).resolve(in: environment)
+        #expect(abs(current.red - previous.red) < 0.1)
+        #expect(abs(current.green - previous.green) < 0.1)
+        #expect(abs(current.blue - previous.blue) < 0.1)
+    }
 }
 
 @Test func watchCodexRingUsesCalendarMonths() throws {
