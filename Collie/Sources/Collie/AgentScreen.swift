@@ -415,6 +415,7 @@ private struct PromptBar: View {
     @State private var pickingPhoto = false
     @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
+    @State private var pickingPrompt = false
 
     private var expanded: Bool {
         editing || typingCommand || model.dictation.isActive || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
@@ -436,14 +437,19 @@ private struct PromptBar: View {
                     if !model.answering && !model.isTerminal {
                         Menu {
                             Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
+                                .disabled(model.attachmentSlots <= 0)
                             Button("Files", systemImage: "folder") { pickingFile = true }
+                                .disabled(model.attachmentSlots <= 0)
+                            Divider()
+                            Button("Saved prompts", systemImage: "text.badge.plus") { pickingPrompt = true }
+                                .disabled(model.dictation.isActive || model.sendingPrompt)
                         } label: {
                             Image(systemName: "paperclip")
                                 .font(.system(size: 20))
                                 .frame(width: 32, height: 36)
                         }
-                        .disabled(model.upload != nil || model.attachmentSlots <= 0)
-                        .accessibilityLabel("Attach")
+                        .disabled(model.upload != nil || model.sendingPrompt)
+                        .accessibilityLabel("Attachments and saved prompts")
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
@@ -539,6 +545,14 @@ private struct PromptBar: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
+        .sheet(isPresented: $pickingPrompt) {
+            NavigationStack {
+                PromptShortcutsView { shortcut in
+                    model.insert(shortcut)
+                    editing = true
+                }
+            }
+        }
         .photosPicker(
             isPresented: $pickingPhoto, selection: $photos, maxSelectionCount: max(model.attachmentSlots, 1),
             matching: .images

@@ -10,6 +10,7 @@ struct NewTaskSheet: View {
     @State private var pickingPhoto = false
     @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
+    @State private var pickingPrompt = false
     @State private var dictationExpanded = false
     @FocusState private var editingPrompt: Bool
     @Environment(\.dismiss) private var dismiss
@@ -201,14 +202,19 @@ struct NewTaskSheet: View {
                         ZStack {
                             Menu {
                                 Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
+                                    .disabled(model.attachmentSlots <= 0)
                                 Button("Files", systemImage: "folder") { pickingFile = true }
+                                    .disabled(model.attachmentSlots <= 0)
+                                Divider()
+                                Button("Saved prompts", systemImage: "text.badge.plus") { pickingPrompt = true }
+                                    .disabled(model.dictation.isActive)
                             } label: {
                                 Image(systemName: "paperclip")
                                     .font(.system(size: 20))
                                     .frame(width: 32, height: 36)
                             }
-                            .disabled(model.upload != nil || model.attachmentSlots <= 0 || model.phase != .editing)
-                            .accessibilityLabel("Attach")
+                            .disabled(model.upload != nil || model.phase != .editing)
+                            .accessibilityLabel("Attachments and saved prompts")
                         }
                         HStack(alignment: .bottom, spacing: 8) {
                             TextField("What should the agent do?", text: $model.prompt, axis: .vertical)
@@ -298,6 +304,15 @@ struct NewTaskSheet: View {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled else { return }
                 await model.loadWorktrees()
+            }
+            .sheet(isPresented: $pickingPrompt) {
+                NavigationStack {
+                    PromptShortcutsView { shortcut in
+                        guard model.phase == .editing, !model.dictation.isActive else { return }
+                        model.prompt = shortcut.appending(to: model.prompt)
+                        editingPrompt = true
+                    }
+                }
             }
             .photosPicker(
                 isPresented: $pickingPhoto, selection: $photos, maxSelectionCount: max(model.attachmentSlots, 1),
