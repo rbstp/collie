@@ -16,6 +16,7 @@ struct AgentScreen: View {
     @State private var recordedOpen = false
     @State private var showingChanges = false
     @State private var showingChat = true
+    @State private var searchingChat = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
@@ -70,7 +71,7 @@ struct AgentScreen: View {
                 .padding(.bottom, 6)
             }
             if showingChat && !model.isTerminal {
-                ConversationView(model: model.conversation, load: model.history) { showingChat = false }
+                ConversationView(model: model.conversation, searching: $searchingChat, load: model.history) { showingChat = false }
             } else {
                 AgentTerminal(
                     ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
@@ -112,7 +113,11 @@ struct AgentScreen: View {
                     .padding(.horizontal)
                     .padding(.top, 6)
             }
-            KeyStrip(model: model)
+            if showingChat && !model.isTerminal && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown) {
+                Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
+                    .font(.footnote).buttonStyle(.glass).padding(.top, 6)
+            }
+            if !showingChat || model.isTerminal { KeyStrip(model: model) }
             PromptBar(model: model)
         }
         .navigationTitle(model.agent?.displayTitle ?? model.terminal?.displayTitle ?? "Agent")
@@ -120,11 +125,14 @@ struct AgentScreen: View {
         .toolbar(.hidden, for: .tabBar)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Toggle(isOn: $model.wrapLines) {
-                    // SF Symbols has no wrap-text glyph; WrapLines is a drawn template image.
-                    Label("Wrap lines", image: "WrapLines")
+                if showingChat && !model.isTerminal {
+                    Button("Search conversation", systemImage: "magnifyingglass") { searchingChat.toggle() }
+                } else {
+                    Toggle(isOn: $model.wrapLines) {
+                        Label("Wrap lines", image: "WrapLines")
+                    }
+                    .toggleStyle(.button)
                 }
-                .toggleStyle(.button)
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu("More", systemImage: "ellipsis") {

@@ -1,5 +1,6 @@
 import CollieCore
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import Collie
@@ -139,4 +140,95 @@ private func page(_ messages: [HistoryMessage], session: String = "s1", reset: B
     #expect(query.utf8.count <= 256)
     #expect(query.allSatisfy { String($0) == emoji })
     #expect(ConversationModel.boundedQuery("Résumé") == "Résumé")
+}
+
+private func tool(_ id: String, call: String? = nil, result: Bool = false) -> HistoryMessage {
+    HistoryMessage(id: id, role: result ? "tool" : "assistant", text: "body", tool: result ? "Result" : "exec", callId: call, truncated: false)
+}
+
+@Test func conversationGroupsActivityAndPairsInterleavedResults() {
+    let rows = ConversationRow.build([
+        message("before"), tool("a", call: "one"), tool("b", call: "two"),
+        tool("br", call: "two", result: true), tool("ar", call: "one", result: true), message("after"),
+    ])
+    #expect(rows.count == 3)
+    #expect(rows[0].message?.id == "before")
+    #expect(rows[1].tools.count == 2)
+    #expect(rows[1].tools[0].records.map(\.id) == ["a", "ar"])
+    #expect(rows[1].tools[1].records.map(\.id) == ["b", "br"])
+    #expect(rows[2].message?.id == "after")
+}
+
+@Test func conversationActivityKeepsItsAnchorAcrossPagesAndLiveUpdates() {
+    let initial = ConversationRow.build([tool("result", call: "one", result: true)])
+    let prepended = ConversationRow.build([tool("call", call: "one"), tool("result", call: "one", result: true)], previous: initial)
+    #expect(prepended[0].id == initial[0].id)
+    #expect(prepended[0].tools.count == 1)
+    #expect(prepended[0].tools[0].name == "exec")
+    let appended = ConversationRow.build([
+        tool("call", call: "one"), tool("result", call: "one", result: true), tool("next", call: "two"), message("reply"),
+    ], previous: prepended)
+    #expect(appended[0].id == initial[0].id)
+    #expect(appended[0].tools.count == 2)
+}
+
+@Test func conversationKeepsUnpairedToolsAndEverySearchMatchVisible() {
+    let records = [tool("orphan", call: "missing", result: true), tool("anonymous"), tool("another"), message("reply")]
+    let rows = ConversationRow.build(records)
+    #expect(rows[0].tools.count == 3)
+    #expect(rows[0].tools[0].name == "Tool result")
+    #expect(Set(rows.flatMap(\.recordIDs)) == Set(records.map(\.id)))
+    let matches = ConversationRow.build(records, previous: rows, searching: true)
+    #expect(matches.count == records.count)
+    #expect(matches.allSatisfy { $0.message != nil && $0.tools.isEmpty })
+    #expect(matches.map(\.id) == records.map { "message:\($0.id)" })
+}
+
+@MainActor
+@Test func conversationModelClearsGroupedActivityOnSessionChangeAndSearch() {
+    let model = ConversationModel()
+    model.apply(page([tool("a"), tool("b"), message("reply")]), older: false)
+    #expect(model.rows.count == 2)
+    model.begin(query: "body")
+    #expect(model.rows.isEmpty)
+    model.apply(page([tool("a"), tool("b")]), older: false)
+    #expect(model.rows.count == 2)
+    model.apply(page([message("new")], session: "other"), older: false)
+    #expect(model.rows.map(\.id) == ["message:new"])
+}
+
+@Test func conversationMarkdownUsesParagraphSpacingAndPreservesCodeBlankLines() {
+    let blocks = ConversationMarkdown.blocks("\nFirst\n\n\nSecond\n\n```\na\n\n  b\n```\n")
+    #expect(blocks.count == 3)
+    #expect(blocks[0].text == "First")
+    #expect(blocks[1].text == "Second")
+    #expect(blocks[2].text == "a\n\n  b")
+    #expect(blocks[2].code)
+}
+
+@Test func conversationSearchHighlightPreservesTextAndLinks() throws {
+    let original = try AttributedString(markdown: "[Résumé](https://example.com) RÉSUMÉ")
+    let highlighted = ConversationMarkdown.highlighted(original, query: "résumé")
+    #expect(String(highlighted.characters) == String(original.characters))
+    #expect(highlighted.runs.filter { $0.backgroundColor != nil }.count == 2)
+    #expect(highlighted.runs.first?.link == URL(string: "https://example.com"))
+    #expect(ConversationMarkdown.highlighted(original, query: "") == original)
+}
+
+@MainActor
+@Test func conversationSearchKeepsNewMatchesVisibleAfterScanningOlderPages() async {
+    let model = ConversationModel()
+    model.begin(query: "body")
+    model.apply(page([tool("new", call: "two")]), older: false)
+    await model.fetch(older: true) { before, after, query in
+        #expect(before == "older" && after == nil && query == "body")
+        return page([tool("old", call: "one")], before: nil, after: "oldEnd")
+    }
+    await model.fetch { before, after, query in
+        #expect(before == nil && after == "latest" && query == "body")
+        return page([tool("result", call: "two", result: true)], before: "unused", after: "newEnd")
+    }
+    #expect(model.before == nil)
+    #expect(model.rows.map(\.id) == ["message:old", "message:new", "message:result"])
+    #expect(model.rows.allSatisfy { $0.message != nil })
 }

@@ -1,10 +1,12 @@
 import CollieCore
 import SwiftUI
+import UIKit
 
 @MainActor
 @Observable
 final class ConversationModel {
     private(set) var messages: [HistoryMessage] = []
+    private(set) var rows: [ConversationRow] = []
     private(set) var session: String?
     private(set) var available: Bool?
     private(set) var unavailableReason: String?
@@ -41,6 +43,7 @@ final class ConversationModel {
         if self.query != query {
             self.query = query
             messages = []
+            rows = []
             error = nil
             available = nil
             unavailableReason = nil
@@ -72,6 +75,7 @@ final class ConversationModel {
         let replacing = page.reset || session != page.session || available != true
         if replacing {
             messages = []
+            rows = []
             before = nil
             after = nil
             omitted = false
@@ -87,6 +91,7 @@ final class ConversationModel {
             let added = page.messages.compactMap { known.insert($0.id).inserted ? updates[$0.id] : nil }
             if older && !replacing { messages.insert(contentsOf: added, at: 0) }
             else { messages.append(contentsOf: added) }
+            rows = ConversationRow.build(messages, previous: rows, searching: !query.isEmpty)
         }
         if older || replacing || after == nil { before = page.before }
         if !older || replacing { after = page.after }
@@ -97,32 +102,20 @@ final class ConversationModel {
 
 struct ConversationView: View {
     @Bindable var model: ConversationModel
+    @Binding var searching: Bool
     let load: ConversationModel.Load
     let terminal: () -> Void
     @State private var search = ""
     @State private var submitted = ""
     @State private var visibleID: String?
     @State private var atBottom = true
-    @State private var matchIndex = 0
+    @State private var selectedMatch: String?
+    @FocusState private var searchFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search conversation", text: $search)
-                    .submitLabel(.search)
-                    .onSubmit { submitted = ConversationModel.boundedQuery(search); matchIndex = 0 }
-                if !submitted.isEmpty {
-                    Button("Clear", systemImage: "xmark.circle.fill") { search = ""; submitted = "" }
-                        .labelStyle(.iconOnly)
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .glassEffect(.regular.interactive(), in: .capsule)
-            .padding(.horizontal)
-            .padding(.vertical, 6)
+            if searching { searchBar }
             if let error = model.error {
                 Text(error).font(.footnote).foregroundStyle(.orange).padding(.horizontal)
             }
@@ -132,11 +125,15 @@ struct ConversationView: View {
                 } description: {
                     Text(model.unavailableReason ?? "This session has no readable Codex or Claude Code transcript yet. Older daemons need an update for Chat.")
                 } actions: {
-                    Button("Open Terminal", action: terminal)
+                    Button("Open Terminal", action: terminal).buttonStyle(.glass)
                 }
             } else {
                 history
             }
+        }
+        .onChange(of: searching) { _, value in
+            searchFocused = value
+            if !value { search = ""; submitted = ""; selectedMatch = nil }
         }
         .onDisappear { model.stop() }
         .task(id: "\(submitted):\(scenePhase == .active)") {
@@ -147,34 +144,66 @@ struct ConversationView: View {
                 if !submitted.isEmpty {
                     if model.before != nil && model.error == nil {
                         await model.fetch(older: true, load: load)
-                    } else { return }
+                    } else { await model.fetch(load: load) }
                 } else {
                     await model.fetch(load: load)
                 }
-                try? await Task.sleep(for: .milliseconds(model.more || !submitted.isEmpty ? 150 : 1000))
+                try? await Task.sleep(for: .milliseconds(model.more || !submitted.isEmpty && model.before != nil ? 150 : 1000))
             }
         }
+    }
+
+    private var searchBar: some View {
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
+                HStack {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search conversation", text: $search)
+                        .focused($searchFocused)
+                        .submitLabel(.search)
+                        .onSubmit {
+                            submitted = ConversationModel.boundedQuery(search)
+                            selectedMatch = nil
+                            searchFocused = false
+                        }
+                }
+                .padding(12)
+                .glassEffect(.regular.interactive(), in: .capsule)
+                Button("Close search", systemImage: "xmark") { searching = false }
+                    .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.large)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
     }
 
     private var history: some View {
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
-                if !submitted.isEmpty && !model.messages.isEmpty {
+                if !submitted.isEmpty {
                     HStack {
                         Text("\(model.messages.count) matches\(model.before != nil ? ", searching…" : "")")
+                            .foregroundStyle(.secondary)
                         Spacer()
-                        Button("Previous match", systemImage: "chevron.up") { navigate(-1, proxy: proxy) }
-                        Button("Next match", systemImage: "chevron.down") { navigate(1, proxy: proxy) }
+                        if !model.messages.isEmpty {
+                            GlassEffectContainer(spacing: 8) {
+                                HStack(spacing: 8) {
+                                    Button("Previous match", systemImage: "chevron.up") { navigate(-1, proxy: proxy) }
+                                    Button("Next match", systemImage: "chevron.down") { navigate(1, proxy: proxy) }
+                                }
+                                .labelStyle(.iconOnly).buttonStyle(.glass)
+                            }
+                        }
                     }
                     .font(.caption)
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.glass)
                     .padding(.horizontal)
+                    .padding(.bottom, 6)
                 }
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 16) {
+                    LazyVStack(alignment: .leading, spacing: 20) {
                         if model.before != nil && submitted.isEmpty {
-                            Button(model.loading ? "Loading…" : "Load older messages") { Task { await model.fetch(older: true, load: load) } }
+                            Button("Load older messages") { Task { await model.fetch(older: true, load: load) } }
+                                .font(.footnote).buttonStyle(.glass)
                                 .disabled(model.loading)
                                 .frame(maxWidth: .infinity)
                         }
@@ -182,19 +211,20 @@ struct ConversationView: View {
                             Text("Some transcript records could not be displayed.")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
-                        if model.loading && model.messages.isEmpty { ProgressView().frame(maxWidth: .infinity) }
-                        if model.available == true && model.messages.isEmpty && !model.loading {
-                            Text(model.before != nil ? "Load older messages to continue." : submitted.isEmpty ? "No messages yet." : "No matches.")
+                        if model.loading && model.available == nil { ProgressView().frame(maxWidth: .infinity) }
+                        if model.available == true && model.messages.isEmpty {
+                            Text(model.before != nil ? (submitted.isEmpty ? "Load older messages to continue." : "Searching history…") : submitted.isEmpty ? "No messages yet." : "No matches.")
                                 .foregroundStyle(.secondary)
                         }
-                        ForEach(model.messages, id: \.id) { message in
-                            ConversationMessage(message: message).id(message.id)
+                        ForEach(model.rows) { row in
+                            ConversationRowView(row: row, query: submitted).id(row.id)
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }
                     .scrollTargetLayout()
                     .padding()
                 }
+                .scrollDismissesKeyboard(.interactively)
                 .scrollPosition(id: $visibleID, anchor: .top)
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .onScrollGeometryChange(for: Bool.self) { geo in
@@ -202,14 +232,18 @@ struct ConversationView: View {
                 } action: { _, bottom in atBottom = bottom }
                 .onChange(of: model.session) { _, _ in
                     visibleID = nil
+                    selectedMatch = nil
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
                 .onChange(of: model.messages.last?.id) { _, _ in
                     if atBottom && submitted.isEmpty { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
-                if !atBottom && submitted.isEmpty {
-                    Button("Latest messages", systemImage: "arrow.down") { proxy.scrollTo("bottom", anchor: .bottom) }
-                        .font(.footnote).buttonStyle(.glass).padding(6)
+                .overlay(alignment: .bottomTrailing) {
+                    if !atBottom && submitted.isEmpty {
+                        Button("Latest messages", systemImage: "arrow.down") { proxy.scrollTo("bottom", anchor: .bottom) }
+                            .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.large)
+                            .padding(12)
+                    }
                 }
             }
         }
@@ -217,38 +251,125 @@ struct ConversationView: View {
 
     private func navigate(_ direction: Int, proxy: ScrollViewProxy) {
         guard !model.messages.isEmpty else { return }
-        matchIndex = (matchIndex + direction + model.messages.count) % model.messages.count
-        proxy.scrollTo(model.messages[matchIndex].id, anchor: .top)
+        let current = model.messages.firstIndex { $0.id == selectedMatch } ?? (direction < 0 ? model.messages.count : -1)
+        let index = (current + direction + model.messages.count) % model.messages.count
+        selectedMatch = model.messages[index].id
+        proxy.scrollTo("message:\(model.messages[index].id)", anchor: .top)
+    }
+}
+
+struct ConversationRowView: View {
+    let row: ConversationRow
+    let query: String
+
+    var body: some View {
+        Group {
+            if let message = row.message {
+                ConversationMessage(message: message, query: query)
+            } else {
+                ConversationActivity(tools: row.tools)
+            }
+        }
+    }
+}
+
+private struct ConversationActivity: View {
+    let tools: [ConversationTool]
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                expanded.toggle()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "wrench.and.screwdriver")
+                    Text("Activity · \(tools.count) \(tools.count == 1 ? "call" : "calls")")
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2)
+                }
+                .font(.footnote)
+            }
+            .buttonStyle(.glass)
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            if expanded {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(tools) { tool in
+                        DisclosureGroup {
+                            ForEach(tool.records, id: \.id) { record in
+                                ConversationToolRecord(message: record, query: "")
+                            }
+                        } label: {
+                            Text(verbatim: tool.name).font(.callout.weight(.medium))
+                        }
+                    }
+                }
+                .padding(.leading, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 private struct ConversationMessage: View {
     let message: HistoryMessage
+    let query: String
+
+    var body: some View {
+        HStack(alignment: .top) {
+            if message.role == "user" { Spacer(minLength: 28) }
+            VStack(alignment: .leading, spacing: 6) {
+                if message.role == "user" {
+                    Text("You").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                }
+                if message.tool != nil {
+                    Text(verbatim: message.tool ?? "Tool").font(.callout.weight(.semibold))
+                    ConversationToolRecord(message: message, query: query)
+                } else {
+                    ConversationMarkdown(text: message.text, query: query)
+                    ConversationTruncation(truncated: message.truncated)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(message.role == "user" ? 12 : 0)
+            .background {
+                if message.role == "user" {
+                    RoundedRectangle(cornerRadius: 18).fill(.tint.opacity(0.1))
+                }
+            }
+        }
+        .contextMenu {
+            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+        }
+    }
+}
+
+private struct ConversationToolRecord: View {
+    let message: HistoryMessage
+    let query: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(message.role == "user" ? "You" : message.role == "tool" ? "Tool result" : "Assistant")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            if let tool = message.tool {
-                DisclosureGroup {
-                    Text(verbatim: message.text).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                    if let id = message.callId { Text(verbatim: id).font(.caption2).foregroundStyle(.secondary) }
-                    truncation
-                } label: {
-                    Text(verbatim: tool).font(.callout.weight(.medium))
-                }
-            } else {
-                ConversationMarkdown(text: message.text)
-                truncation
+            HStack {
+                Text(message.role == "tool" ? "Result" : "Input").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+                    .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
             }
+            ScrollView(.horizontal) {
+                Text(ConversationMarkdown.highlighted(AttributedString(message.text), query: query))
+                    .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            }
+            ConversationTruncation(truncated: message.truncated)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(message.role == "user" ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.vertical, 6)
     }
+}
 
-    @ViewBuilder private var truncation: some View {
-        if message.truncated {
+private struct ConversationTruncation: View {
+    let truncated: Bool
+
+    var body: some View {
+        if truncated {
             Text("Long content shortened for display. Search includes the full recorded text within the read limit.")
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -257,10 +378,26 @@ private struct ConversationMessage: View {
 
 struct ConversationMarkdown: View {
     let text: String
+    var query: String = ""
 
     static func allowsLink(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else { return false }
         return url.host?.isEmpty == false
+    }
+
+    static func highlighted(_ text: AttributedString, query: String) -> AttributedString {
+        guard !query.isEmpty else { return text }
+        var result = text
+        let plain = String(text.characters)
+        var start = plain.startIndex
+        while start < plain.endIndex,
+              let match = plain.range(of: query, options: .caseInsensitive, range: start..<plain.endIndex) {
+            guard let lower = AttributedString.Index(match.lowerBound, within: result),
+                  let upper = AttributedString.Index(match.upperBound, within: result) else { break }
+            result[lower..<upper].backgroundColor = .yellow.opacity(0.3)
+            start = match.upperBound
+        }
+        return result
     }
 
     static func blocks(_ text: String) -> [(code: Bool, text: String)] {
@@ -271,6 +408,8 @@ struct ConversationMarkdown: View {
             if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
                 if !lines.isEmpty { result.append((code, lines.joined(separator: "\n"))); lines = [] }
                 code.toggle()
+            } else if !code && line.trimmingCharacters(in: .whitespaces).isEmpty {
+                if !lines.isEmpty { result.append((false, lines.joined(separator: "\n"))); lines = [] }
             } else { lines.append(line) }
         }
         if !lines.isEmpty { result.append((code, lines.joined(separator: "\n"))) }
@@ -285,7 +424,7 @@ struct ConversationMarkdown: View {
         let bullet = trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ")
         let body = heading ? String(trimmed.dropFirst(hashes + 1)) : quote ? String(trimmed.dropFirst(2)) : bullet ? "• " + trimmed.dropFirst(2) : line
         let rendered = (try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(body)
-        return Text(rendered)
+        return Text(Self.highlighted(rendered, query: query))
             .font(heading ? (hashes <= 2 ? .headline : .subheadline.weight(.semibold)) : .body)
             .foregroundStyle(quote ? .secondary : .primary)
             .padding(.leading, quote ? 10 : 0)
@@ -298,10 +437,20 @@ struct ConversationMarkdown: View {
             ForEach(blocks.indices, id: \.self) { index in
                 let block = blocks[index]
                 if block.code {
-                    ScrollView(.horizontal) {
-                        Text(verbatim: block.text).font(.system(.callout, design: .monospaced)).textSelection(.enabled).padding(8)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Code").font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = block.text }
+                                .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
+                        }
+                        ScrollView(.horizontal) {
+                            Text(Self.highlighted(AttributedString(block.text), query: query))
+                                .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                        }
                     }
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                    .padding(10)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
                 } else {
                     let lines = block.text.components(separatedBy: "\n")
                     VStack(alignment: .leading, spacing: 4) {
