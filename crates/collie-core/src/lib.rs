@@ -23,8 +23,8 @@ use protocol::{
     NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
     PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
     ReadSource, Request, Response, Signature, SlashCommand, TaskFoldersParams, TaskNewParams,
-    TerminalGrantParams, TerminalId, TerminalKey, TerminalRead, TerminalRunParams,
-    TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
+    TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId, TerminalKey, TerminalRead,
+    TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -536,6 +536,19 @@ pub struct TaskStarted {
     pub terminal_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct WorktreeListing {
+    pub source: String,
+    pub worktrees: Vec<WorktreeChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct WorktreeChoice {
+    pub path: String,
+    pub branch: Option<String>,
+    pub open: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum PushEnvironment {
     Sandbox,
@@ -569,6 +582,51 @@ pub struct ColdStartReport {
     pub auth_url_present: bool,
     pub status_polls: u32,
     pub build: BuildInfo,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn task_new_inner(
+    core: &CollieCore,
+    machine_id: String,
+    cwd: String,
+    agent: String,
+    prompt: String,
+    label: Option<String>,
+    new_folder: Option<String>,
+    worktree: Option<TaskWorktree>,
+) -> Result<TaskStarted, CoreError> {
+    let label = label
+        .map(|l| l.trim().to_owned())
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            Label::new(l).map_err(|_| {
+                invalid(
+                    "label",
+                    "label must be 1 to 64 characters without control characters",
+                )
+            })
+        })
+        .transpose()?;
+    let request = Request::TaskNew(TaskNewParams {
+        op_id: new_op_id(),
+        cwd: Cwd::new(cwd).map_err(|_| invalid("cwd", "folder must be an absolute path of at most 1024 bytes"))?,
+        agent: AgentKind::new(agent).map_err(|_| invalid("agent", "unknown agent kind"))?,
+        prompt: prompt_text(prompt)?,
+        label,
+        new_folder: new_folder.map(|n| FolderName::new(n)
+            .map_err(|_| invalid("new_folder", "folder name must be one plain name of at most 255 bytes, without / or \\, a leading dot, or control or invisible characters"))).transpose()?,
+        worktree,
+    });
+    match core.mutate(&machine_id, request, TASK_NEW_TIMEOUT).await? {
+        Response::TaskStarted {
+            workspace_id,
+            terminal_id,
+        } => Ok(TaskStarted {
+            workspace_id: workspace_id.into(),
+            terminal_id: terminal_id.into(),
+        }),
+        other => Err(unexpected(&other).into()),
+    }
 }
 
 #[uniffi::export]
@@ -1460,50 +1518,79 @@ impl CollieCore {
         label: Option<String>,
         new_folder: Option<String>,
     ) -> Result<TaskStarted, CoreError> {
-        let label = label
-            .map(|l| l.trim().to_owned())
-            .filter(|l| !l.is_empty())
-            .map(|l| {
-                Label::new(l).map_err(|_| {
-                    invalid(
-                        "label",
-                        "label must be 1 to 64 characters without control characters",
-                    )
-                })
-            })
-            .transpose()?;
-        let request = Request::TaskNew(TaskNewParams {
-            op_id: new_op_id(),
-            cwd: Cwd::new(cwd).map_err(|_| {
-                invalid(
-                    "cwd",
-                    "folder must be an absolute path of at most 1024 bytes",
-                )
-            })?,
-            agent: AgentKind::new(agent).map_err(|_| invalid("agent", "unknown agent kind"))?,
-            prompt: prompt_text(prompt)?,
-            label,
-            new_folder: new_folder
-                .map(|n| {
-                    FolderName::new(n).map_err(|_| {
-                        invalid(
-                            "new_folder",
-                            "folder name must be one plain name of at most 255 bytes, without / or \\, a leading dot, or control or invisible characters",
-                        )
-                    })
-                })
-                .transpose()?,
+        task_new_inner(
+            self, machine_id, cwd, agent, prompt, label, new_folder, None,
+        )
+        .await
+    }
+
+    pub async fn task_worktrees(
+        &self,
+        machine_id: String,
+        cwd: String,
+    ) -> Result<WorktreeListing, CoreError> {
+        let request = Request::TaskWorktrees(TaskWorktreesParams {
+            cwd: Cwd::new(cwd).map_err(|_| invalid("cwd", "invalid source path"))?,
         });
-        match self.mutate(&machine_id, request, TASK_NEW_TIMEOUT).await? {
-            Response::TaskStarted {
-                workspace_id,
-                terminal_id,
-            } => Ok(TaskStarted {
-                workspace_id: workspace_id.into(),
-                terminal_id: terminal_id.into(),
+        match self.call(&machine_id, request, CALL_TIMEOUT).await? {
+            Response::TaskWorktrees { source, worktrees } => Ok(WorktreeListing {
+                source: source.into(),
+                worktrees: worktrees
+                    .into_iter()
+                    .map(|w| WorktreeChoice {
+                        path: w.path.into(),
+                        branch: w.branch,
+                        open: w.open,
+                    })
+                    .collect(),
             }),
             other => Err(unexpected(&other).into()),
         }
+    }
+
+    pub async fn task_worktree_create(
+        &self,
+        machine_id: String,
+        cwd: String,
+        branch: String,
+        agent: String,
+        prompt: String,
+        label: Option<String>,
+    ) -> Result<TaskStarted, CoreError> {
+        task_new_inner(
+            self,
+            machine_id,
+            cwd,
+            agent,
+            prompt,
+            label,
+            None,
+            Some(TaskWorktree::Create { branch }),
+        )
+        .await
+    }
+
+    pub async fn task_worktree_open(
+        &self,
+        machine_id: String,
+        cwd: String,
+        path: String,
+        agent: String,
+        prompt: String,
+        label: Option<String>,
+    ) -> Result<TaskStarted, CoreError> {
+        let path = Cwd::new(path).map_err(|_| invalid("path", "invalid checkout path"))?;
+        task_new_inner(
+            self,
+            machine_id,
+            cwd,
+            agent,
+            prompt,
+            label,
+            None,
+            Some(TaskWorktree::Open { path }),
+        )
+        .await
     }
 
     /// Fails with `ConfirmRequired` unless `confirm` is true.

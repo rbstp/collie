@@ -30,6 +30,10 @@ final class FakeCore: AgentCore {
         var folderPaths: [String] = []
         var taskNews: [String] = []
         var taskPrompts: [String] = []
+        var worktreeListing = WorktreeListing(source: "/Users/me/app", worktrees: [
+            WorktreeChoice(path: "/Users/me/app-feature", branch: "feature", open: true)
+        ])
+        var worktreeCalls: [String] = []
         var started: TaskStarted?
         var uploads: [String] = []
         var cancelledUploads: [String] = []
@@ -204,6 +208,26 @@ final class FakeCore: AgentCore {
     func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?) async throws -> TaskStarted {
         try await call {
             $0.taskNews.append("\(cwd) \(newFolder ?? "-")")
+            $0.taskPrompts.append(prompt)
+        }
+        guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
+        return started
+    }
+    func taskWorktrees(machineId: String, cwd: String) async throws -> WorktreeListing {
+        try await call { $0.worktreeCalls.append("list \(cwd)") }
+        return state.withLock { $0.worktreeListing }
+    }
+    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
+        try await call {
+            $0.worktreeCalls.append("create \(cwd) \(branch) \(agent)")
+            $0.taskPrompts.append(prompt)
+        }
+        guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
+        return started
+    }
+    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
+        try await call {
+            $0.worktreeCalls.append("open \(cwd) \(path) \(agent)")
             $0.taskPrompts.append(prompt)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
@@ -961,6 +985,38 @@ private func prefsFile() throws -> URL {
 
     DevicePrefs.forgetTaskBase(machineId: "m1", in: file)
     #expect(DevicePrefs.load(from: file).taskBases.isEmpty)
+}
+
+@MainActor
+@Test func newTaskCreatesAndOpensSelectedWorktrees() async {
+    let core = FakeCore()
+    core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let create = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
+    await create.loadOptions()
+    create.location = .worktree
+    create.prompt = "build it"
+    create.branch = "feature"
+    #expect(!create.canStart)
+    await create.loadWorktrees()
+    #expect(create.canStart)
+    #expect(create.createPath == "/Users/me/app/.worktree/feature")
+    #expect(await create.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
+
+    let open = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
+    await open.loadOptions()
+    open.location = .worktree
+    open.worktreeAction = .open
+    open.prompt = "continue"
+    await open.loadWorktrees()
+    #expect(open.checkoutPath == "/Users/me/app-feature")
+    #expect(open.canStart)
+    #expect(await open.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
+    #expect(core.snapshot.worktreeCalls == [
+        "list /Users/me/app", "create /Users/me/app feature codex",
+        "list /Users/me/app", "open /Users/me/app /Users/me/app-feature codex"
+    ])
+    #expect(core.snapshot.taskPrompts == ["build it", "continue"])
 }
 
 @MainActor

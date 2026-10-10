@@ -12,8 +12,8 @@ use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, Cwd, ErrorCode, FolderName, Key, OpId,
     OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskFoldersParams,
-    TaskNewParams, TaskOptions, TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams,
-    WorkspaceId, limits,
+    TaskNewParams, TaskOptions, TaskWorktree, TaskWorktreeInfo, TaskWorktreesParams, TerminalId,
+    TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use tokio::sync::{mpsc, watch};
@@ -1014,12 +1014,54 @@ impl Driver {
             .map_err(|_| (ErrorCode::Internal, "folder listing failed".to_owned()))?
     }
 
+    pub async fn task_worktrees(&self, p: TaskWorktreesParams, auth: &Authorized) -> Reply {
+        authorized(auth)?;
+        let requested = resolve_cwd(p.cwd.as_str(), &self.roots).map_err(invalid)?;
+        let list = herdr::worktree_list(&self.herdr, requested.as_str())
+            .await
+            .map_err(herdr_fail)?;
+        let source =
+            resolve_cwd(&list.source.source_checkout_path, &self.roots).map_err(invalid)?;
+        if !Path::new(requested.as_str()).starts_with(source.as_str()) {
+            return fail(
+                ErrorCode::InvalidParams,
+                "herdr returned another source checkout",
+            );
+        }
+        let worktrees = list
+            .worktrees
+            .into_iter()
+            .filter_map(|w| {
+                if w.is_bare || !w.is_linked_worktree {
+                    return None;
+                }
+                let path = resolve_cwd(&w.path, &self.roots).ok()?;
+                Some(TaskWorktreeInfo {
+                    path,
+                    branch: w.branch,
+                    open: w.open_workspace_id.is_some(),
+                })
+            })
+            .collect();
+        Ok(Response::TaskWorktrees { source, worktrees })
+    }
+
     /// Also returns the canonical cwd once it is resolved or created, for the audit line.
     pub async fn task_new(&self, p: TaskNewParams, auth: &Authorized) -> (Reply, Option<Cwd>) {
+        if p.worktree.is_some() && p.new_folder.is_some() {
+            return (
+                fail(ErrorCode::InvalidParams, "choose a folder or worktree"),
+                None,
+            );
+        }
         let created = p.new_folder.is_some();
         match self.task_cwd(&p, auth).await {
             Ok(cwd) => {
-                let mut reply = self.start_task(p, &cwd, auth).await;
+                let mut reply = if p.worktree.is_some() {
+                    self.start_worktree_task(p, &cwd, auth).await
+                } else {
+                    self.start_task(p, &cwd, auth).await
+                };
                 if created {
                     reply = reply.map_err(|(code, message)| {
                         let left = format!("folder {} was created and left in place", cwd.as_str());
@@ -1059,6 +1101,183 @@ impl Driver {
         .await
         .map_err(herdr_fail)?
         .root_pane;
+        self.finish_task(&p, &pane, "created and left open", true, auth)
+            .await
+    }
+
+    async fn start_worktree_task(
+        &self,
+        p: TaskNewParams,
+        source: &Cwd,
+        auth: &Authorized,
+    ) -> Reply {
+        let Some(worktree) = &p.worktree else {
+            unreachable!()
+        };
+        let path = match worktree {
+            TaskWorktree::Create { branch } => {
+                if branch.is_empty()
+                    || branch.len() > 255
+                    || !branch
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
+                    || branch.contains("..")
+                    || branch.starts_with('-')
+                    || branch.ends_with('/')
+                {
+                    return fail(ErrorCode::InvalidParams, "invalid branch name");
+                }
+                None
+            }
+            TaskWorktree::Open { path } => {
+                Some(resolve_cwd(path.as_str(), &self.roots).map_err(invalid)?)
+            }
+        };
+        authorized(auth)?;
+        let listed = herdr::worktree_list(&self.herdr, source.as_str())
+            .await
+            .map_err(herdr_fail)?;
+        let checkout =
+            resolve_cwd(&listed.source.source_checkout_path, &self.roots).map_err(invalid)?;
+        if !Path::new(source.as_str()).starts_with(checkout.as_str()) {
+            return fail(
+                ErrorCode::InvalidParams,
+                "herdr returned another source checkout",
+            );
+        }
+        let path = match (worktree, path) {
+            (TaskWorktree::Create { branch }, None) => {
+                let name = branch.replace('/', "-");
+                FolderName::new(&name).map_err(|_| invalid("invalid checkout folder name"))?;
+                let parent = worktree_parent(&checkout, &self.roots, auth)?;
+                let target = Path::new(parent.as_str()).join(name);
+                if target.symlink_metadata().is_ok() {
+                    return fail(ErrorCode::InvalidParams, "checkout path already exists");
+                }
+                Cwd::new(target.to_str().unwrap_or(""))
+                    .map_err(|_| invalid("invalid checkout path"))?
+            }
+            (TaskWorktree::Open { .. }, Some(path)) => path,
+            _ => unreachable!(),
+        };
+        let expected_branch = if matches!(worktree, TaskWorktree::Open { .. }) {
+            let Some(choice) = listed
+                .worktrees
+                .iter()
+                .find(|w| w.path == path.as_str() && w.is_linked_worktree && !w.is_bare)
+            else {
+                return fail(
+                    ErrorCode::InvalidParams,
+                    "checkout is not in the selected repository",
+                );
+            };
+            Some(choice.branch.clone())
+        } else {
+            None
+        };
+        authorized(auth)?;
+        let result = match worktree {
+            TaskWorktree::Create { branch } => {
+                herdr::worktree_create(
+                    &self.herdr,
+                    source.as_str(),
+                    branch,
+                    path.as_str(),
+                    p.label.as_ref().map(|l| l.as_str()),
+                )
+                .await
+            }
+            TaskWorktree::Open { .. } => {
+                herdr::worktree_open(
+                    &self.herdr,
+                    source.as_str(),
+                    path.as_str(),
+                    p.label.as_ref().map(|l| l.as_str()),
+                )
+                .await
+            }
+        }
+        .map_err(|e| {
+            let failure = herdr_fail(e);
+            if matches!(worktree, TaskWorktree::Create { .. })
+                && Path::new(path.as_str()).symlink_metadata().is_ok()
+            {
+                (
+                    failure.0,
+                    format!(
+                        "checkout path {} now exists; herdr returned: {}",
+                        path.as_str(),
+                        failure.1
+                    ),
+                )
+            } else if let TaskWorktree::Create { branch } = worktree {
+                (
+                    failure.0,
+                    format!(
+                        "worktree.create for branch {branch} at {} failed; the branch may remain: {}",
+                        path.as_str(),
+                        failure.1
+                    ),
+                )
+            } else {
+                failure
+            }
+        })?;
+        let left = |(code, message): Fail| {
+            (
+                code,
+                format!(
+                    "checkout {} (branch {}) and workspace {} were left in place: {message}",
+                    result.worktree.path,
+                    result.worktree.branch.as_deref().unwrap_or("detached"),
+                    result.workspace.workspace_id,
+                ),
+            )
+        };
+        let actual = resolve_cwd(&result.worktree.path, &self.roots)
+            .map_err(invalid)
+            .map_err(left)?;
+        let pane_cwd = result
+            .root_pane
+            .cwd
+            .as_deref()
+            .and_then(|cwd| resolve_cwd(cwd, &self.roots).ok());
+        if actual.as_str() != path.as_str()
+            || pane_cwd.as_ref() != Some(&actual)
+            || result.root_pane.workspace_id != result.workspace.workspace_id
+            || matches!(worktree, TaskWorktree::Create { branch }
+                if result.worktree.branch.as_deref() != Some(branch))
+            || expected_branch
+                .as_ref()
+                .is_some_and(|branch| result.worktree.branch.as_deref() != branch.as_deref())
+        {
+            return Err(left(invalid("herdr returned a different checkout or pane")));
+        }
+        let pane = &result.root_pane;
+        if result.already_open {
+            let current = herdr::pane_get(&self.herdr, &pane.pane_id)
+                .await
+                .map_err(herdr_fail)
+                .map_err(left)?;
+            if current.terminal_id != pane.terminal_id || current.agent.is_some() {
+                return Err(left(invalid("the worktree root pane is occupied")));
+            }
+        } else if pane.agent.is_some() {
+            return Err(left(invalid("the worktree root pane is occupied")));
+        }
+        self.finish_task(&p, pane, "left open", !result.already_open, auth)
+            .await
+            .map_err(left)
+    }
+
+    async fn finish_task(
+        &self,
+        p: &TaskNewParams,
+        pane: &PaneInfo,
+        left_state: &str,
+        retry_busy: bool,
+        auth: &Authorized,
+    ) -> Reply {
         let (Ok(workspace_id), Ok(terminal_id)) = (
             WorkspaceId::new(pane.workspace_id.clone()),
             TerminalId::new(pane.terminal_id.clone()),
@@ -1069,19 +1288,19 @@ impl Driver {
             (
                 code,
                 format!(
-                    "workspace {} was created and left open: {message}",
+                    "workspace {} was {left_state}: {message}",
                     workspace_id.as_str()
                 ),
             )
         };
         let name = self
-            .start_agent(&pane, &p.agent, auth)
+            .start_agent(pane, &p.agent, retry_busy, auth)
             .await
             .map_err(left_open)?;
         let current = herdr::agent_get(&self.herdr, &name)
             .await
             .map_err(|e| left_open(herdr_fail(e)))?;
-        self.started_check(&current, &pane, &name, &p.agent)
+        self.started_check(&current, pane, &name, &p.agent)
             .await
             .map_err(left_open)?;
         // herdr may not rule another kind's startup prompt `blocked`, and the prompt's Enter
@@ -1113,6 +1332,7 @@ impl Driver {
         &self,
         pane: &PaneInfo,
         kind: &AgentKind,
+        retry_busy: bool,
         auth: &Authorized,
     ) -> Result<String, Fail> {
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
@@ -1125,7 +1345,8 @@ impl Driver {
                 // runs there is the shell's startup (rc files often run helpers in the
                 // foreground), as nothing else has used the pane yet.
                 Err(herdr::Error::Herdr { code, .. })
-                    if code == "agent_pane_busy"
+                    if retry_busy
+                        && code == "agent_pane_busy"
                         && tokio::time::Instant::now() < deadline
                         && self.still_new(pane).await =>
                 {
@@ -1206,7 +1427,7 @@ impl Driver {
     async fn still_new(&self, pane: &PaneInfo) -> bool {
         herdr::pane_get(&self.herdr, &pane.pane_id)
             .await
-            .is_ok_and(|now| now.terminal_id == pane.terminal_id)
+            .is_ok_and(|now| now.terminal_id == pane.terminal_id && now.agent.is_none())
     }
 
     pub async fn workspace_close(&self, p: WorkspaceCloseParams, auth: &Authorized) -> Reply {
@@ -1333,6 +1554,28 @@ fn open_under_root(cwd: &str, roots: &[PathBuf]) -> Result<(OwnedFd, Cwd), Fail>
     };
     let dir = open_beneath(root, path)?;
     Ok((dir, resolved))
+}
+
+fn worktree_parent(checkout: &Cwd, roots: &[PathBuf], auth: &Authorized) -> Result<Cwd, Fail> {
+    let (dir, checkout) = open_under_root(checkout.as_str(), roots)?;
+    authorized(auth)?;
+    match rustix::fs::mkdirat(&dir, ".worktree", Mode::from_raw_mode(0o755)) {
+        Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+        Err(e) => return Err(io_fail(e)),
+    }
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let child = rustix::fs::openat(&dir, ".worktree", flags, Mode::empty()).map_err(io_fail)?;
+    let path = Path::new(checkout.as_str()).join(".worktree");
+    let path = path
+        .to_str()
+        .ok_or_else(|| invalid("invalid checkout path"))?;
+    let resolved = resolve_cwd(path, roots).map_err(invalid)?;
+    let made = rustix::fs::fstat(&child).map_err(io_fail)?;
+    let now = rustix::fs::stat(resolved.as_str()).map_err(io_fail)?;
+    if (made.st_dev, made.st_ino) != (now.st_dev, now.st_ino) || resolved.as_str() != path {
+        return Err(invalid("worktree directory changed"));
+    }
+    Ok(resolved)
 }
 
 /// Opens the canonical `path` one component at a time from `root` without following a

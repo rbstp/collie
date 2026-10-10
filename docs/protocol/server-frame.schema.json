@@ -922,6 +922,29 @@
         },
         {
           "properties": {
+            "source": {
+              "$ref": "#/$defs/Cwd"
+            },
+            "type": {
+              "const": "task_worktrees",
+              "type": "string"
+            },
+            "worktrees": {
+              "items": {
+                "$ref": "#/$defs/TaskWorktreeInfo"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "source",
+            "worktrees"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "terminal_id": {
               "$ref": "#/$defs/TerminalId"
             },
@@ -1161,6 +1184,27 @@
         "default_agent",
         "recent_cwds",
         "roots"
+      ],
+      "type": "object"
+    },
+    "TaskWorktreeInfo": {
+      "properties": {
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "open": {
+          "type": "boolean"
+        },
+        "path": {
+          "$ref": "#/$defs/Cwd"
+        }
+      },
+      "required": [
+        "path",
+        "open"
       ],
       "type": "object"
     },

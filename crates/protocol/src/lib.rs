@@ -12,7 +12,7 @@ pub use messages::*;
 pub use output::*;
 pub use schema::{client_frame_schema, server_frame_schema};
 
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 pub mod limits {
     pub const MAX_FRAME_BYTES: usize = 64 * 1024;

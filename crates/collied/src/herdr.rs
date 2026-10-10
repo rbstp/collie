@@ -265,6 +265,53 @@ enum WorkspaceCreatedResult {
     WorkspaceCreated(WorkspaceCreated),
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub branch: Option<String>,
+    pub open_workspace_id: Option<String>,
+    pub is_bare: bool,
+    pub is_linked_worktree: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorktreeList {
+    pub source: WorktreeSource,
+    pub worktrees: Vec<WorktreeInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorktreeSource {
+    pub source_checkout_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorktreeWorkspace {
+    pub workspace: WorkspaceInfo,
+    pub root_pane: PaneInfo,
+    pub worktree: WorktreeInfo,
+    #[serde(default)]
+    pub already_open: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WorktreeListResult {
+    WorktreeList(WorktreeList),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WorktreeCreateResult {
+    WorktreeCreated(WorktreeWorkspace),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WorktreeOpenResult {
+    WorktreeOpened(WorktreeWorkspace),
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum PaneInfoResult {
@@ -515,6 +562,43 @@ pub async fn workspace_create(
     )
     .await?;
     Ok(created)
+}
+
+pub async fn worktree_list(socket: &Path, cwd: &str) -> Result<WorktreeList, Error> {
+    let WorktreeListResult::WorktreeList(list) =
+        call(socket, "worktree.list", json!({ "cwd": cwd })).await?;
+    Ok(list)
+}
+
+pub async fn worktree_create(
+    socket: &Path,
+    cwd: &str,
+    branch: &str,
+    path: &str,
+    label: Option<&str>,
+) -> Result<WorktreeWorkspace, Error> {
+    let WorktreeCreateResult::WorktreeCreated(created) = call(
+        socket,
+        "worktree.create",
+        json!({ "cwd": cwd, "branch": branch, "path": path, "label": label, "focus": false }),
+    )
+    .await?;
+    Ok(created)
+}
+
+pub async fn worktree_open(
+    socket: &Path,
+    cwd: &str,
+    path: &str,
+    label: Option<&str>,
+) -> Result<WorktreeWorkspace, Error> {
+    let WorktreeOpenResult::WorktreeOpened(opened) = call(
+        socket,
+        "worktree.open",
+        json!({ "cwd": cwd, "path": path, "label": label, "focus": false }),
+    )
+    .await?;
+    Ok(opened)
 }
 
 pub async fn workspace_close(socket: &Path, workspace_id: &str) -> Result<(), Error> {

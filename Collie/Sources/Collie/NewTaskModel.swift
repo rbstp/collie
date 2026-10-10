@@ -5,6 +5,8 @@ import Observation
 @MainActor
 @Observable
 final class NewTaskModel {
+    enum Location: String, CaseIterable { case folder = "Folder", worktree = "Git worktree" }
+    enum WorktreeAction: String, CaseIterable { case create = "Create", open = "Open" }
     enum Phase: Equatable {
         case editing
         case starting
@@ -20,6 +22,10 @@ final class NewTaskModel {
             cancelUpload(on: oldValue)
             attachments = []
             attachmentError = nil
+            worktrees = nil
+            worktreesError = nil
+            source = ""
+            checkoutPath = ""
         }
     }
     private(set) var options: TaskOptions?
@@ -28,6 +34,18 @@ final class NewTaskModel {
     private(set) var folders: TaskFolders?
     private(set) var foldersError: String?
     var cwd = ""
+    var location = Location.folder
+    var worktreeAction = WorktreeAction.create
+    var source = ""
+    var branch = ""
+    var checkoutPath = ""
+    private(set) var worktrees: WorktreeListing?
+    private(set) var worktreesError: String?
+    private var listedSource = ""
+    var createPath: String? {
+        guard let worktrees, !trimmed(branch).isEmpty else { return nil }
+        return worktrees.source + "/.worktree/" + trimmed(branch).replacingOccurrences(of: "/", with: "-")
+    }
     var newFolder = false
     var newFolderRoot: String?
     var folderName = ""
@@ -81,6 +99,13 @@ final class NewTaskModel {
     var canStart: Bool {
         guard phase == .editing, machineId != nil, !agent.isEmpty, upload == nil, !dictation.isActive,
             !trimmed(prompt).isEmpty || !attachments.isEmpty else { return false }
+        if location == .worktree {
+            guard worktrees != nil, listedSource == trimmed(source) else { return false }
+            if worktreeAction == .create {
+                return createPath != nil
+            }
+            return worktrees?.worktrees.contains { $0.path == checkoutPath } == true
+        }
         return newFolder ? newFolderParent != nil && newFolderNameIsValid : folder != nil
     }
 
@@ -176,6 +201,7 @@ final class NewTaskModel {
             guard machineId == self.machineId else { return }
             options = loaded
             if !loaded.agents.contains(agent) { agent = loaded.defaultAgent }
+            if source.isEmpty { source = loaded.recentCwds.first ?? base ?? loaded.roots.first ?? "" }
         } catch {
             guard machineId == self.machineId else { return }
             optionsError = AgentModel.message(for: error)
@@ -192,25 +218,60 @@ final class NewTaskModel {
         }
     }
 
+    func loadWorktrees() async {
+        guard let machineId else { return }
+        let requested = trimmed(source)
+        worktrees = nil
+        worktreesError = nil
+        do {
+            let listed = try await core.taskWorktrees(machineId: machineId, cwd: requested)
+            guard machineId == self.machineId, requested == trimmed(source) else { return }
+            listedSource = requested
+            worktrees = listed
+            if worktreeAction == .open && !listed.worktrees.contains(where: { $0.path == checkoutPath }) {
+                checkoutPath = listed.worktrees.first?.path ?? ""
+            }
+        } catch {
+            guard machineId == self.machineId else { return }
+            worktreesError = AgentModel.message(for: error)
+        }
+    }
+
     /// Starts the task, then waits for its agent to show in the flock so the agent screen
     /// can watch it. A started task is never offered again from this sheet. Returns nil once
     /// cancelled, even if the task started.
     func start() async -> AgentRoute? {
-        guard canStart, !cancelled, let machineId, let cwd = newFolder ? newFolderParent : folder else { return nil }
+        guard canStart, !cancelled, let machineId else { return nil }
         let text = (attachments.map(\.path) + [trimmed(prompt)].filter { !$0.isEmpty }).joined(separator: " ")
         phase = .starting
         error = nil
         let started: TaskStarted
         do {
-            started = try await core.taskNew(
-                machineId: machineId, cwd: cwd, agent: agent, prompt: text,
-                label: trimmed(label).nilIfEmpty, newFolder: newFolder ? trimmed(folderName) : nil
-            )
+            if location == .worktree {
+                if worktreeAction == .create {
+                    started = try await core.taskWorktreeCreate(
+                        machineId: machineId, cwd: trimmed(source), branch: trimmed(branch),
+                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
+                    )
+                } else {
+                    started = try await core.taskWorktreeOpen(
+                        machineId: machineId, cwd: trimmed(source), path: checkoutPath,
+                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
+                    )
+                }
+            } else {
+                guard let cwd = newFolder ? newFolderParent : folder else { phase = .editing; return nil }
+                started = try await core.taskNew(
+                    machineId: machineId, cwd: cwd, agent: agent, prompt: text,
+                    label: trimmed(label).nilIfEmpty, newFolder: newFolder ? trimmed(folderName) : nil
+                )
+            }
         } catch {
             self.error = AgentModel.message(for: error)
             // A folder made before the agent failed to start stays; start in it next time.
             let name = trimmed(folderName)
-            if newFolder, let listed = try? await core.taskFolders(machineId: machineId, path: cwd),
+            if location == .folder, newFolder, let cwd = newFolderParent,
+                let listed = try? await core.taskFolders(machineId: machineId, path: cwd),
                 listed.folders.contains(name)
             {
                 newFolder = false

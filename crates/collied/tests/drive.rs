@@ -8,7 +8,8 @@ use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentTypeTextParams, Cwd, DraftText, ErrorCode, FolderName, Key, Label,
     NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request, Response,
-    SlashCommand, TaskNewParams, TerminalId, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
+    SlashCommand, TaskNewParams, TaskWorktree, TaskWorktreesParams, TerminalId, TerminalRunParams,
+    WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -103,12 +104,14 @@ const SLASH_STA: &str = include_str!("fixtures/claude-2.1.293/slash-sta.ansi.txt
 const SLASH_STAT: &str = include_str!("fixtures/claude-2.1.293/slash-stat.ansi.txt");
 const SLASH_STATU: &str = include_str!("fixtures/claude-2.1.293/slash-statu.ansi.txt");
 const SLASH_STATSTATU: &str = include_str!("fixtures/claude-2.1.293/slash-statstatu.ansi.txt");
-const MUTATING: [&str; 10] = [
+const MUTATING: [&str; 12] = [
     "agent.prompt",
     "agent.send_keys",
     "agent.focus",
     "agent.start",
     "workspace.create",
+    "worktree.create",
+    "worktree.open",
     "workspace.close",
     "pane.close",
     "pane.send_text",
@@ -131,6 +134,9 @@ struct Herdr {
     slow: Option<Duration>,
     columns: Option<u16>,
     zoomed: bool,
+    worktree_path: Option<String>,
+    worktree_open: bool,
+    pane_occupied: bool,
 }
 
 struct Mock {
@@ -310,7 +316,8 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
             let pane = match p["pane_id"].as_str().unwrap() {
                 "w9:p1" => json!({"pane_id": "w9:p1", "workspace_id": "w9", "tab_id": "w9:t1",
                     "terminal_id": h.new_pane_terminal.as_deref().unwrap_or("term_new"),
-                    "focused": false, "agent_status": "unknown", "revision": 0}),
+                    "focused": false, "agent": if h.pane_occupied { Some("claude") } else { None },
+                    "agent_status": "unknown", "revision": 0}),
                 id => h.snapshot["panes"]
                     .as_array()
                     .unwrap()
@@ -329,6 +336,34 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
             "root_pane": {"pane_id": "w9:p1", "terminal_id": "term_new", "workspace_id": "w9",
                 "tab_id": "w9:t1", "focused": false, "cwd": p["cwd"], "agent_status": "unknown", "revision": 0},
         }),
+        "worktree.list" => json!({"type": "worktree_list",
+            "source": {"repo_key": "repo", "repo_name": "repo", "repo_root": p["cwd"],
+                "source_checkout_path": p["cwd"]},
+            "worktrees": h.worktree_path.iter().map(|path| json!({
+                "path": path, "branch": "feature", "label": "feature", "is_bare": false,
+                "is_detached": false, "is_prunable": false, "is_linked_worktree": true,
+                "open_workspace_id": if h.worktree_open { Some("w9") } else { None }
+            })).collect::<Vec<_>>()
+        }),
+        "worktree.create" | "worktree.open" => {
+            if method == "worktree.create" {
+                std::fs::create_dir_all(p["path"].as_str().unwrap()).unwrap();
+            }
+            json!({"type": if method == "worktree.create" { "worktree_created" } else { "worktree_opened" },
+                "workspace": {"workspace_id": "w9", "number": 3, "label": "feature", "focused": false,
+                    "pane_count": 1, "tab_count": 1, "active_tab_id": "w9:t1", "agent_status": "unknown"},
+                "tab": {"tab_id": "w9:t1", "workspace_id": "w9", "number": 1, "label": "1", "focused": false,
+                    "pane_count": 1, "agent_status": "unknown"},
+                "root_pane": {"pane_id": "w9:p1", "terminal_id": "term_new", "workspace_id": "w9",
+                    "tab_id": "w9:t1", "focused": false, "cwd": p["path"],
+                    "agent": if h.pane_occupied { Some("claude") } else { None },
+                    "agent_status": "unknown", "revision": 0},
+                "worktree": {"path": p["path"], "branch": p["branch"].as_str().unwrap_or("feature"), "label": "feature",
+                    "is_bare": false, "is_detached": false, "is_prunable": false,
+                    "is_linked_worktree": true},
+                "already_open": h.worktree_open
+            })
+        }
         "agent.start" => {
             h.started = p["name"].as_str().map(str::to_owned);
             json!({"type": "agent_started", "argv": [p["kind"]], "agent": started_agent("unknown", false, true)})
@@ -406,6 +441,7 @@ fn task(cwd: &Path, agent: &str) -> TaskNewParams {
         prompt: PromptText::new("write the tests").unwrap(),
         label: Some(Label::new("tests").unwrap()),
         new_folder: None,
+        worktree: None,
     }
 }
 
@@ -1700,6 +1736,150 @@ async fn task_new_starts_waits_and_prompts() {
         herdr.params("agent.prompt"),
         vec![json!({"target": name, "text": "write the tests"})]
     );
+}
+
+#[tokio::test]
+async fn worktree_create_uses_returned_pane_and_keeps_checkout_on_start_failure() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let source = base.join("root/a");
+    let path = source.join(".worktree/feature");
+    let drive = herdr.driver(&["claude"], &base.join("root"));
+    let mut p = task(&source, "claude");
+    p.worktree = Some(TaskWorktree::Create {
+        branch: "feature".into(),
+    });
+    herdr.with(|h| {
+        h.gets.extend([
+            started_agent("idle", true, false),
+            started_agent("idle", true, false),
+        ])
+    });
+    let (reply, _) = drive.task_new(p.clone(), &yes()).await;
+    assert_eq!(
+        reply,
+        Ok(Response::TaskStarted {
+            workspace_id: WorkspaceId::new("w9").unwrap(),
+            terminal_id: tid("term_new"),
+        })
+    );
+    assert_eq!(
+        herdr.params("worktree.create")[0]["cwd"],
+        source.to_str().unwrap()
+    );
+    assert_eq!(
+        herdr.params("worktree.create")[0]["path"],
+        path.to_str().unwrap()
+    );
+    assert_eq!(herdr.params("agent.start")[0]["pane_id"], "w9:p1");
+    assert!(path.exists());
+
+    let failed = source.join(".worktree/failed");
+    p.worktree = Some(TaskWorktree::Create {
+        branch: "failed".into(),
+    });
+    herdr.fail_next("agent.start", &["agent_not_ready"]);
+    let error = drive.task_new(p, &yes()).await.0.unwrap_err();
+    assert!(error.1.contains(failed.to_str().unwrap()));
+    assert!(error.1.contains("workspace w9"));
+    assert!(failed.exists());
+    assert!(!herdr.methods().contains(&"workspace.close".to_owned()));
+}
+
+#[tokio::test]
+async fn worktree_open_reuses_only_an_empty_root_pane() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let source = base.join("root/a");
+    let path = base.join("root/existing");
+    std::fs::create_dir(&path).unwrap();
+    herdr.with(|h| {
+        h.worktree_path = Some(path.to_str().unwrap().into());
+        h.worktree_open = true;
+        h.pane_occupied = true;
+    });
+    let drive = herdr.driver(&["claude"], &base.join("root"));
+    let listing = drive
+        .task_worktrees(
+            TaskWorktreesParams {
+                cwd: Cwd::new(source.to_str().unwrap()).unwrap(),
+            },
+            &yes(),
+        )
+        .await
+        .unwrap();
+    let Response::TaskWorktrees { worktrees, .. } = listing else {
+        panic!("wrong listing")
+    };
+    assert_eq!(worktrees.len(), 1);
+    assert!(worktrees[0].open);
+    let mut p = task(&source, "claude");
+    p.worktree = Some(TaskWorktree::Open {
+        path: Cwd::new(path.to_str().unwrap()).unwrap(),
+    });
+    let error = drive.task_new(p.clone(), &yes()).await.0.unwrap_err();
+    assert!(error.1.contains("occupied"));
+    assert!(herdr.params("agent.start").is_empty());
+    herdr.with(|h| {
+        h.pane_occupied = false;
+        h.gets.extend([
+            started_agent("idle", true, false),
+            started_agent("idle", true, false),
+        ]);
+    });
+    assert!(drive.task_new(p, &yes()).await.0.is_ok());
+    assert_eq!(herdr.params("worktree.open").len(), 2);
+    assert_eq!(herdr.params("agent.start")[0]["pane_id"], "w9:p1");
+}
+
+#[tokio::test]
+async fn worktree_rejects_destinations_outside_task_roots() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base.join("root"));
+    let source = base.join("root/a");
+    let mut p = task(&source, "claude");
+    let mut bad_source = task(&base.join("outside"), "claude");
+    bad_source.worktree = Some(TaskWorktree::Create {
+        branch: "feature".into(),
+    });
+    assert_eq!(
+        drive.task_new(bad_source, &yes()).await.0.unwrap_err().0,
+        ErrorCode::InvalidParams
+    );
+    std::os::unix::fs::symlink(base.join("outside"), source.join(".worktree")).unwrap();
+    p.worktree = Some(TaskWorktree::Create {
+        branch: "feature".into(),
+    });
+    assert_eq!(
+        drive.task_new(p.clone(), &yes()).await.0.unwrap_err().0,
+        ErrorCode::InvalidParams
+    );
+    assert!(herdr.params("worktree.create").is_empty());
+    p.worktree = Some(TaskWorktree::Create {
+        branch: "../bad".into(),
+    });
+    assert_eq!(
+        drive.task_new(p, &yes()).await.0.unwrap_err().0,
+        ErrorCode::InvalidParams
+    );
+    assert!(herdr.params("worktree.create").is_empty());
+    let outside = base.join("outside/existing");
+    std::fs::create_dir(&outside).unwrap();
+    herdr.with(|h| h.worktree_path = Some(outside.to_str().unwrap().into()));
+    let listing = drive
+        .task_worktrees(
+            TaskWorktreesParams {
+                cwd: Cwd::new(source.to_str().unwrap()).unwrap(),
+            },
+            &yes(),
+        )
+        .await
+        .unwrap();
+    let Response::TaskWorktrees { worktrees, .. } = listing else {
+        panic!("wrong listing")
+    };
+    assert!(worktrees.is_empty());
 }
 
 #[tokio::test]
