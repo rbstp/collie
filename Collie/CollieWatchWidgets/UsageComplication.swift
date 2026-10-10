@@ -26,7 +26,8 @@ struct UsageProvider: TimelineProvider {
             usage: WatchUsage(
                 fiveHourUsed: 42, fiveHourResetsAtMs: now.addingTimeInterval(10_800).unixMs,
                 sevenDayUsed: 73, sevenDayResetsAtMs: now.addingTimeInterval(4 * 24 * 3600).unixMs,
-                codexUsed: 90, codexResetsAtMs: month.end.unixMs
+                codexUsed: 90, codexResetsAtMs: month.end.unixMs,
+                claudeRecordedMs: now.unixMs, codexRecordedMs: now.unixMs
             )
         )
     }
@@ -54,6 +55,7 @@ private struct UsageWidgetView: View {
                 UsageRings(usage: entry.usage, now: entry.date)
             }
         }
+        .widgetURL(WatchUsage.detailsURL)
         .containerBackground(for: .widget) {
             if family == .accessoryRectangular {
                 Color.black
@@ -87,7 +89,7 @@ private struct UsageRings: View {
                             .progressViewStyle(.circular)
                             .tint(WatchUsage.usedColor(window.used))
                         } else {
-                            Circle().stroke(.secondary.opacity(0.25), lineWidth: strokeWidth)
+                            Circle().stroke(.secondary.opacity(0.25), style: StrokeStyle(lineWidth: strokeWidth, dash: [strokeWidth, strokeWidth]))
                                 .padding(strokeWidth / 2)
                         }
                     }
@@ -101,6 +103,9 @@ private struct UsageRings: View {
                     UsageLogo(name: index < 2 ? "Claude" : "Codex")
                         .frame(width: strokeWidth * 0.8, height: strokeWidth * 0.8)
                         .offset(y: -(diameter - strokeWidth) / 2)
+                }
+                if windows.allSatisfy({ $0 == nil }) {
+                    Text("--").font(.system(size: size * 0.2)).foregroundStyle(.secondary)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)

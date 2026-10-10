@@ -71,6 +71,9 @@ final class WatchDelegate: NSObject, WKApplicationDelegate, UNUserNotificationCe
 @Observable
 final class WatchModel: NSObject, WCSessionDelegate {
     private(set) var state: WatchState?
+    private(set) var usage = WatchUsage.load()
+    private(set) var lastSyncedAt = UserDefaults.standard.object(forKey: "lastSyncedAt") as? Date
+    var showingUsage = false
     private(set) var sending: String?
     /// Decided from this watch: no buttons again while the phone still lists it.
     private(set) var answered: Set<String> = []
@@ -101,6 +104,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
     }
 
     func open(nodeId: String, approvalId: String) {
+        showingUsage = false
         opened = WatchApprovalKey(nodeId: nodeId, approvalId: approvalId)
         Task { await refresh() }
     }
@@ -198,16 +202,21 @@ final class WatchModel: NSObject, WCSessionDelegate {
         guard let data = WCSession.default.receivedApplicationContext[WatchMessage.state] as? Data,
             let next = try? JSONDecoder().decode(WatchState.self, from: data)
         else { return }
-        apply(next)
+        apply(next, fresh: fresh)
         if fresh && next.live {
             silent = []
             refreshFailed = false
         }
     }
 
-    private func apply(_ next: WatchState) {
-        let usageChanged = next.usage != state?.usage
+    private func apply(_ next: WatchState, fresh: Bool = true) {
+        let usageChanged = next.usage != usage
         state = next
+        usage = next.usage
+        if fresh {
+            lastSyncedAt = .now
+            UserDefaults.standard.set(lastSyncedAt, forKey: "lastSyncedAt")
+        }
         answered.formIntersection(next.approvals.map(\.id))
         if usageChanged {
             if let usage = next.usage { usage.save() } else { WatchUsage.clear() }
@@ -325,6 +334,15 @@ private struct WatchHome: View {
         content.navigationDestination(item: Binding(get: { model.opened }, set: { model.opened = $0 })) { key in
             OpenedApproval(model: model, key: key)
         }
+        .navigationDestination(isPresented: Binding(get: { model.showingUsage }, set: { model.showingUsage = $0 })) {
+            WatchUsageDetail(model: model)
+        }
+        .onOpenURL { url in
+            guard url == WatchUsage.detailsURL else { return }
+            model.opened = nil
+            model.showingUsage = true
+            Task { await model.refreshIfStale() }
+        }
     }
 
     @ViewBuilder
@@ -336,6 +354,9 @@ private struct WatchHome: View {
                 }
                 if let notice = model.notice {
                     Text(verbatim: "\(notice.title): \(notice.body)").font(.footnote)
+                }
+                Button { model.showingUsage = true } label: {
+                    Label("Plan usage", systemImage: "chart.bar.fill")
                 }
                 Section("Approvals") {
                     let pending = state.approvals.filter { !model.answered.contains($0.id) }

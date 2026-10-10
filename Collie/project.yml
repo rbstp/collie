@@ -130,10 +130,21 @@ targets:
     platform: watchOS
     sources:
       - path: CollieWatch
+      - path: Resources/UsageAssets.xcassets
+      - path: CollieWatchWidgets/UsageLogo.swift
       - path: Sources/Shared/WatchState.swift
       - path: Sources/Shared/PushHint.swift
     dependencies:
       - target: CollieWatchWidgets
+    info:
+      path: CollieWatch/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.rbstp.collie.watch.usage
+            CFBundleURLSchemes:
+              - collie-watch
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.rbstp.collie.watchkitapp

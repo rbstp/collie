@@ -8,9 +8,9 @@ struct UsageBars: View {
     var body: some View {
         let windows = usage?.windows(now: now) ?? [nil, nil, nil]
         VStack(spacing: 5) {
-            UsageBarRow(logo: "Claude", period: "5h", label: "Claude 5-hour", color: Self.claude, window: windows[0])
-            UsageBarRow(logo: "Claude", period: "7d", label: "Claude weekly", color: Self.claude, window: windows[1])
-            UsageBarRow(logo: "Codex", period: "1mo", label: "Codex monthly", color: .white, window: windows[2])
+            UsageBarRow(logo: "Claude", period: "5h", label: "Claude 5-hour", color: Self.claude, window: windows[0], now: now)
+            UsageBarRow(logo: "Claude", period: "7d", label: "Claude weekly", color: Self.claude, window: windows[1], now: now)
+            UsageBarRow(logo: "Codex", period: "1mo", label: "Codex monthly", color: .white, window: windows[2], now: now)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -24,6 +24,7 @@ private struct UsageBarRow: View {
     let label: String
     let color: Color
     let window: WatchUsage.Window?
+    let now: Date
 
     var body: some View {
         HStack(spacing: 5) {
@@ -61,7 +62,7 @@ private struct UsageBarRow: View {
                     }
                     .accessibilityHidden(true)
                 } else {
-                    Text("No data")
+                    Text("Unavailable")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                     Capsule().fill(color.opacity(0.2)).frame(height: 4)
@@ -72,7 +73,12 @@ private struct UsageBarRow: View {
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .frame(width: 32, alignment: .trailing)
-                .accessibilityLabel(window.map { "\($0.used) percent used" } ?? "Usage unavailable")
+                .overlay(alignment: .topTrailing) {
+                    if let window, window.isStale(now: now) {
+                        Circle().fill(.orange).frame(width: 3, height: 3).offset(x: 3, y: -1)
+                    }
+                }
+                .accessibilityLabel(window.map { "\($0.used) percent used" + ($0.isStale(now: now) ? ", usage may be outdated" : "") } ?? "Usage unavailable")
         }
         .lineLimit(1)
         .minimumScaleFactor(0.8)
