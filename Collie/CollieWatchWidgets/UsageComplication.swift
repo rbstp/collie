@@ -91,23 +91,13 @@ private struct UsageRings: View {
                         }
                     }
                     .frame(width: diameter, height: diameter)
+                    Image(index < 2 ? "Claude" : "Codex")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: size * 0.12, height: size * 0.12)
+                        .background(.black, in: Circle())
+                        .offset(y: -diameter * 0.43)
                 }
-                Text("5h")
-                    .font(.system(size: size * 0.14, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 1)
-                    .background(.black, in: Capsule())
-                    .offset(y: -size * 0.42)
-                Text("W")
-                    .font(.system(size: size * 0.14, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 1)
-                    .background(.black, in: Capsule())
-                    .offset(y: size * 0.31)
-                Image("Codex")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: size * 0.2, height: size * 0.2)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
