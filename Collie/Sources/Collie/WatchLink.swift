@@ -38,7 +38,9 @@ extension WatchUsage {
         self.init(
             fiveHourUsed: plan.fiveHour.map { min($0.usedPercent, 100) }, fiveHourResetsAtMs: plan.fiveHour?.resetsAtMs,
             sevenDayUsed: plan.sevenDay.map { min($0.usedPercent, 100) }, sevenDayResetsAtMs: plan.sevenDay?.resetsAtMs,
-            codexUsed: codex, codexResetsAtMs: plan.codex?.resetsAtMs
+            codexUsed: codex, codexResetsAtMs: plan.codex?.resetsAtMs,
+            claudeRecordedMs: plan.fiveHour != nil || plan.sevenDay != nil ? plan.recordedMs : nil,
+            codexRecordedMs: plan.codex?.recordedMs
         )
     }
 }

@@ -71,6 +71,8 @@ struct WatchAgent: Codable, Equatable, Identifiable, Sendable {
 
 struct WatchUsage: Codable, Equatable, Sendable {
     static let widgetKind = "CollieUsage"
+    static let detailsURL = URL(string: "collie-watch://usage")!
+    static let staleAfter: TimeInterval = 30 * 60
 
     let fiveHourUsed: UInt8?
     let fiveHourResetsAtMs: UInt64?
@@ -79,41 +81,75 @@ struct WatchUsage: Codable, Equatable, Sendable {
     var sevenDayResetsAtMs: UInt64? = nil
     var codexUsed: UInt8? = nil
     var codexResetsAtMs: UInt64? = nil
+    var claudeRecordedMs: UInt64? = nil
+    var codexRecordedMs: UInt64? = nil
 
     struct Window {
         let used: UInt8
         let interval: ClosedRange<Date>
+        var recordedMs: UInt64? = nil
+
+        var recordedAt: Date? {
+            recordedMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) }
+        }
+
+        func isStale(now: Date) -> Bool {
+            guard let recordedAt else { return true }
+            return now.timeIntervalSince(recordedAt) >= WatchUsage.staleAfter
+        }
+
+        var remainingUsage: Double { 1 - Double(min(used, 100)) / 100 }
     }
 
     func windows(now: Date) -> [Window?] {
         [
-            window(used: fiveHourUsed, reset: fiveHourResetsAtMs, length: 5 * 3600, now: now),
-            window(used: sevenDayUsed, reset: sevenDayResetsAtMs, length: 7 * 24 * 3600, now: now),
-            window(used: codexUsed, reset: codexResetsAtMs, length: nil, now: now),
+            window(used: fiveHourUsed, reset: fiveHourResetsAtMs, length: 5 * 3600, recordedMs: claudeRecordedMs, now: now),
+            window(used: sevenDayUsed, reset: sevenDayResetsAtMs, length: 7 * 24 * 3600, recordedMs: claudeRecordedMs, now: now),
+            window(used: codexUsed, reset: codexResetsAtMs, length: nil, recordedMs: codexRecordedMs, now: now),
         ]
     }
 
-    private func window(used: UInt8?, reset: UInt64?, length: TimeInterval?, now: Date) -> Window? {
+    private func window(used: UInt8?, reset: UInt64?, length: TimeInterval?, recordedMs: UInt64?, now: Date) -> Window? {
         guard let used, let reset, reset > now.unixMs else { return nil }
         let end = Date(timeIntervalSince1970: TimeInterval(reset) / 1000)
         let start: Date
         if let length {
             start = end.addingTimeInterval(-length)
         } else {
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-            guard let previousMonth = calendar.date(byAdding: .month, value: -1, to: end) else { return nil }
-            start = previousMonth
+            guard let interval = Self.monthlyInterval(endingAt: end) else { return nil }
+            start = interval.lowerBound
         }
-        return Window(used: used, interval: start...end)
+        return Window(used: min(used, 100), interval: start...end, recordedMs: recordedMs)
+    }
+
+    static func monthlyInterval(endingAt end: Date) -> ClosedRange<Date>? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar.date(byAdding: .month, value: -1, to: end).map { $0...end }
     }
 
     func timelineDates(now: Date) -> [Date] {
-        [now] + Set(windows(now: now).compactMap { $0?.interval.upperBound }).sorted()
+        let windows = windows(now: now).compactMap { $0 }
+        let staleDates = windows.compactMap { window -> Date? in
+            guard let staleAt = window.recordedAt?.addingTimeInterval(Self.staleAfter), staleAt > now, staleAt < window.interval.upperBound else { return nil }
+            return staleAt
+        }
+        return [now] + Set(windows.map { $0.interval.upperBound } + staleDates).sorted()
     }
 
     static func usedColor(_ used: UInt8) -> Color {
-        used <= 60 ? .green : used <= 85 ? .yellow : .red
+        let stops: [(Double, Color)] = [
+            (0, Color(red: 0.15, green: 1, blue: 0.3)),
+            (60, Color(red: 1, green: 0.85, blue: 0)),
+            (80, Color(red: 1, green: 0.45, blue: 0)),
+            (90, Color(red: 1, green: 0.15, blue: 0.1)),
+            (100, Color(red: 0.65, green: 0.02, blue: 0.08)),
+        ]
+        let percent = Double(min(used, 100))
+        for (lower, upper) in zip(stops, stops.dropFirst()) where percent <= upper.0 {
+            return lower.1.mix(with: upper.1, by: (percent - lower.0) / (upper.0 - lower.0))
+        }
+        return stops[stops.count - 1].1
     }
 
     static var file: URL? { AppGroup.container?.appending(path: "watch-usage.json") }

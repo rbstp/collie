@@ -1,6 +1,7 @@
 import CollieCore
 import Foundation
 import Synchronization
+import SwiftUI
 import Testing
 
 @testable import Collie
@@ -110,7 +111,7 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     let newer = PlanUsage(fiveHour: UsageWindow(usedPercent: 73, resetsAtMs: nowMs + 60_000), sevenDay: nil, recordedMs: nowMs - 1_000)
     let state = WatchState(items: [], entries: [entry(mac, [], usage: older), entry(linux, [], usage: newer)], allowed: true, live: false, now: now)
     let usage = try #require(state.usage)
-    #expect(usage == WatchUsage(fiveHourUsed: 73, fiveHourResetsAtMs: nowMs + 60_000))
+    #expect(usage == WatchUsage(fiveHourUsed: 73, fiveHourResetsAtMs: nowMs + 60_000, claudeRecordedMs: newer.recordedMs))
     #expect(usage.windows(now: now)[0]?.used == 73)
     #expect(usage.windows(now: now.addingTimeInterval(60))[0]?.used == nil)
     #expect(WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nil).windows(now: now)[0]?.used == nil)
@@ -133,7 +134,24 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(usage.windows(now: now.addingTimeInterval(86_400)).allSatisfy { $0 == nil })
     #expect(usage.timelineDates(now: now.addingTimeInterval(86_400)) == [now.addingTimeInterval(86_400)])
     #expect(WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nowMs + 60_000).timelineDates(now: now) == [now])
-    #expect([0, 60, 61, 85, 86, 100].map(WatchUsage.usedColor) == [.green, .green, .yellow, .yellow, .red, .red])
+}
+
+@Test func watchUsageColorsBlendFromBrightGreenToDeepRed() {
+    let environment = EnvironmentValues()
+    let colors = [0, 60, 80, 90, 98, 100].map { WatchUsage.usedColor(UInt8($0)).resolve(in: environment) }
+    #expect(colors[0].green > 0.95 && colors[0].red < 0.2)
+    #expect(colors[1].red > 0.95 && colors[1].green > 0.8 && colors[1].blue < 0.05)
+    #expect(colors[2].red > 0.95 && colors[2].green > 0.4 && colors[2].green < 0.5)
+    #expect(colors[3].red > 0.95 && colors[3].green < 0.2)
+    #expect(colors[4].red < colors[3].red && colors[4].red > 0.6 && colors[4].green < colors[3].green)
+    #expect(WatchUsage.usedColor(255).resolve(in: environment) == colors[5])
+    for percent in 1...100 {
+        let previous = WatchUsage.usedColor(UInt8(percent - 1)).resolve(in: environment)
+        let current = WatchUsage.usedColor(UInt8(percent)).resolve(in: environment)
+        #expect(abs(current.red - previous.red) < 0.1)
+        #expect(abs(current.green - previous.green) < 0.1)
+        #expect(abs(current.blue - previous.blue) < 0.1)
+    }
 }
 
 @Test func watchCodexRingUsesCalendarMonths() throws {
@@ -197,7 +215,7 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     )
     let codex = PlanUsage(
         fiveHour: nil, sevenDay: nil, recordedMs: nowMs + 1_000,
-        codex: CodexUsage(used: 90, limit: 100, resetsAtMs: reset, recordedMs: nowMs)
+        codex: CodexUsage(used: 90, limit: 100, resetsAtMs: reset, recordedMs: nowMs - 500)
     )
     let state = WatchState(items: [], entries: [entry(mac, [], usage: claude), entry(linux, [], usage: codex)], allowed: false, live: true, now: now)
     let usage = try #require(state.usage)
@@ -207,6 +225,8 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
         machines: [mac, linux], allowed: false, now: now
     )
     #expect(refreshed.usage == usage)
+    #expect(usage.claudeRecordedMs == claude.recordedMs)
+    #expect(usage.codexRecordedMs == codex.codex?.recordedMs)
     let cleared = WatchState.refreshed(state, listed: [MachineApprovals(machineId: mac.id, approvals: [])], machines: [mac], allowed: false, now: now)
     #expect(cleared.usage == nil)
 }
@@ -317,7 +337,7 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
         MachineApprovals(machineId: "m2", approvals: [], planUsage: plan(40, nowMs - 1000)),
     ]
     let state = WatchState.refreshed(shown, listed: listed, machines: [mac, linux], allowed: true, now: now)
-    #expect(state.usage == WatchUsage(fiveHourUsed: 57, fiveHourResetsAtMs: resets))
+    #expect(state.usage == WatchUsage(fiveHourUsed: 57, fiveHourResetsAtMs: resets, claudeRecordedMs: nowMs))
     let silent = WatchState.refreshed(shown, listed: [MachineApprovals(machineId: "m1", approvals: nil)], machines: [mac], allowed: true, now: now)
     #expect(silent.usage == shown.usage)
 }
@@ -442,4 +462,36 @@ private func prefsFile() throws -> URL {
     try FileManager.default.removeItem(at: file)
     DevicePrefs.turnOffWatchDecisions(in: file)
     #expect(!FileManager.default.fileExists(atPath: file.path))
+}
+
+@Test func watchPaceMarkersCompareRemainingAllowanceWithRemainingTime() {
+    let interval = now...now.addingTimeInterval(3600)
+    for used in [UInt8(0), 25, 50, 75, 98, 100, 255] {
+        let window = WatchUsage.Window(used: used, interval: interval)
+        #expect(abs(window.remainingUsage - Double(100 - min(used, 100)) / 100) < 0.000001)
+    }
+}
+
+@Test func watchUsageBecomesStaleWithoutAnotherPhoneUpdate() throws {
+    let usage = WatchUsage(
+        fiveHourUsed: 0, fiveHourResetsAtMs: nowMs + 7_200_000,
+        sevenDayUsed: 98, sevenDayResetsAtMs: nowMs + 86_400_000,
+        codexUsed: 38, codexResetsAtMs: nowMs + 86_400_000,
+        claudeRecordedMs: nowMs, codexRecordedMs: nowMs - 600_000
+    )
+    let windows = usage.windows(now: now)
+    #expect(windows.map { $0?.isStale(now: now) } == [false, false, false])
+    #expect(windows.map { $0?.isStale(now: now.addingTimeInterval(1200)) } == [false, false, true])
+    #expect(windows.map { $0?.isStale(now: now.addingTimeInterval(1800)) } == [true, true, true])
+    #expect(usage.timelineDates(now: now) == [0, 1200, 1800, 7200, 86400].map { now.addingTimeInterval($0) })
+    #expect(usage.timelineDates(now: now.addingTimeInterval(1800)) == [1800, 7200, 86400].map { now.addingTimeInterval($0) })
+    #expect(windows[0]?.used == 0)
+    #expect(usage.windows(now: now.addingTimeInterval(7200))[0] == nil)
+    let legacy = WatchUsage(fiveHourUsed: 42, fiveHourResetsAtMs: nowMs + 60_000)
+    #expect(try #require(legacy.windows(now: now)[0]).isStale(now: now))
+    #expect(legacy.timelineDates(now: now) == [now, now.addingTimeInterval(60)])
+    let skewed = WatchUsage(fiveHourUsed: 42, fiveHourResetsAtMs: nowMs + 60_000, claudeRecordedMs: nowMs + 30_000)
+    #expect(try #require(skewed.windows(now: now)[0]).isStale(now: now) == false)
+    #expect(skewed.timelineDates(now: now) == [now, now.addingTimeInterval(60)])
+    #expect(try JSONDecoder().decode(WatchUsage.self, from: JSONEncoder().encode(usage)) == usage)
 }

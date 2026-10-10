@@ -5,11 +5,10 @@ import WidgetKit
 struct UsageComplication: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: WatchUsage.widgetKind, provider: UsageProvider()) { entry in
-            UsageRings(usage: entry.usage, now: entry.date)
-                .containerBackground(for: .widget) { AccessoryWidgetBackground() }
+            UsageWidgetView(entry: entry)
         }
         .configurationDisplayName("Plan usage")
-        .supportedFamilies([.accessoryCircular])
+        .supportedFamilies([.accessoryCircular, .accessoryRectangular])
     }
 }
 
@@ -27,7 +26,8 @@ struct UsageProvider: TimelineProvider {
             usage: WatchUsage(
                 fiveHourUsed: 42, fiveHourResetsAtMs: now.addingTimeInterval(10_800).unixMs,
                 sevenDayUsed: 73, sevenDayResetsAtMs: now.addingTimeInterval(4 * 24 * 3600).unixMs,
-                codexUsed: 90, codexResetsAtMs: month.end.unixMs
+                codexUsed: 90, codexResetsAtMs: month.end.unixMs,
+                claudeRecordedMs: now.unixMs, codexRecordedMs: now.unixMs
             )
         )
     }
@@ -43,6 +43,29 @@ struct UsageProvider: TimelineProvider {
     }
 }
 
+private struct UsageWidgetView: View {
+    let entry: UsageEntry
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        Group {
+            if family == .accessoryRectangular {
+                UsageBars(usage: entry.usage, now: entry.date)
+            } else {
+                UsageRings(usage: entry.usage, now: entry.date)
+            }
+        }
+        .widgetURL(WatchUsage.detailsURL)
+        .containerBackground(for: .widget) {
+            if family == .accessoryRectangular {
+                Color.black
+            } else {
+                AccessoryWidgetBackground()
+            }
+        }
+    }
+}
+
 private struct UsageRings: View {
     let usage: WatchUsage?
     let now: Date
@@ -55,6 +78,7 @@ private struct UsageRings: View {
             ZStack {
                 ForEach(0..<3) { index in
                     let diameter = size * (1 - Double(index) * 0.28)
+                    let strokeWidth = diameter * 0.1
                     Group {
                         if let window = windows[index] {
                             ProgressView(timerInterval: window.interval, countsDown: true) {
@@ -65,11 +89,20 @@ private struct UsageRings: View {
                             .progressViewStyle(.circular)
                             .tint(WatchUsage.usedColor(window.used))
                         } else {
-                            Circle().stroke(.secondary.opacity(0.25), lineWidth: diameter * 0.1)
-                                .padding(diameter * 0.05)
+                            Circle().stroke(.secondary.opacity(0.25), style: StrokeStyle(lineWidth: strokeWidth, dash: [strokeWidth, strokeWidth]))
+                                .padding(strokeWidth / 2)
                         }
                     }
                     .frame(width: diameter, height: diameter)
+                    if let window = windows[index] {
+                        Capsule().fill(.white)
+                            .frame(width: strokeWidth * 0.2, height: strokeWidth)
+                            .offset(y: -(diameter - strokeWidth) / 2)
+                            .rotationEffect(.degrees(window.remainingUsage * 360))
+                    }
+                }
+                if windows.allSatisfy({ $0 == nil }) {
+                    Text("--").font(.system(size: size * 0.2)).foregroundStyle(.secondary)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)

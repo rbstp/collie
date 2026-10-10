@@ -287,3 +287,11 @@ extension AgentSummary {
 
     var activityMs: UInt64 { lastActivityMs ?? statusSinceMs }
 }
+
+extension CodexUsage {
+    func elapsed(now: Date) -> Double {
+        let end = Date(timeIntervalSince1970: TimeInterval(resetsAtMs) / 1000)
+        guard let interval = WatchUsage.monthlyInterval(endingAt: end) else { return 0 }
+        return min(1, max(0, now.timeIntervalSince(interval.lowerBound) / end.timeIntervalSince(interval.lowerBound)))
+    }
+}
