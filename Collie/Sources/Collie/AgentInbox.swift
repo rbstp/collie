@@ -78,7 +78,7 @@ struct AgentInbox<Menu: View>: View {
             }
         }
         if items.isEmpty && (entries.contains { $0.flock?.details != nil } || !query.isEmpty || filter != .all) {
-            Text(query.isEmpty && filter == .inactive ? "No agents inactive for 24 hours"
+            Text(query.isEmpty && filter == .inactive ? "No inactive agents"
                  : query.isEmpty && filter == .all ? "No agents running" : "No matching agents")
                 .foregroundStyle(.secondary)
         }
@@ -156,8 +156,9 @@ enum InboxSection: CaseIterable {
     static func of(_ agent: AgentSummary, now: Date) -> InboxSection {
         switch agent.status {
         case .working, .blocked: return .working
-        case .done, .idle, .unknown:
-            let age = now.timeIntervalSince1970 - TimeInterval(agent.activityMs) / 1000
+        case .idle, .unknown: return .inactive
+        case .done:
+            let age = now.timeIntervalSince1970 - TimeInterval(agent.inboxActivityMs) / 1000
             return age < inactiveAfter ? .done : .inactive
         }
     }
@@ -166,8 +167,8 @@ enum InboxSection: CaseIterable {
     static func grouped(_ items: [InboxItem], now: Date) -> [InboxSection: [InboxItem]] {
         Dictionary(grouping: items) { of($0.agent, now: now) }.mapValues { rows in
             rows.sorted {
-                ($0.agent.status == .blocked ? 0 : 1, UInt64.max - $0.agent.activityMs, $0.route.terminalId)
-                    < ($1.agent.status == .blocked ? 0 : 1, UInt64.max - $1.agent.activityMs, $1.route.terminalId)
+                ($0.agent.status == .blocked ? 0 : 1, UInt64.max - $0.agent.inboxActivityMs, $0.route.terminalId)
+                    < ($1.agent.status == .blocked ? 0 : 1, UInt64.max - $1.agent.inboxActivityMs, $1.route.terminalId)
             }
         }
     }
@@ -229,14 +230,20 @@ private struct InboxRow: View {
                         .foregroundStyle(.tint)
                         .accessibilityLabel("Unseen completion")
                 }
-                Text(Elapsed.compact(sinceMs: item.agent.activityMs, now: now))
+                Text(Elapsed.compact(sinceMs: item.agent.inboxActivityMs, now: now))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("active \(Elapsed.spoken(sinceMs: item.agent.activityMs, now: now)) ago")
+                    .accessibilityLabel("\(Elapsed.spoken(sinceMs: item.agent.inboxActivityMs, now: now)) ago")
                 if let left = agent.contextLeft {
                     ContextRing(left: left)
                 }
             }
         }
+    }
+}
+
+private extension AgentSummary {
+    var inboxActivityMs: UInt64 {
+        status == .working || status == .blocked || statusSinceMs == 0 ? activityMs : statusSinceMs
     }
 }

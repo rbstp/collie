@@ -35,7 +35,7 @@ private func entry(
     let blocked = agent("blocked", .blocked, activity: 10, name: "Build")
     let finished = agent("done", .done, activity: nowMs - 20, since: nowMs - 30, title: "Review")
     let inactive = agent("old", .idle, activity: nowMs - 25 * 3_600_000, kind: "codex")
-    let olderDone = agent("older-done", .done, activity: nowMs - 26 * 3_600_000)
+    let olderDone = agent("older-done", .done, activity: nowMs - 20, since: nowMs - 26 * 3_600_000)
     let items = InboxItem.items(in: [entry("m1", [blocked]), entry("m2", [finished, inactive, olderDone], link: .offline)])
     let seen = SeenAgents()
     #expect(items.first { $0.route.terminalId == "done" }?.stale == true)
@@ -97,14 +97,14 @@ private func entry(
     #expect(InboxSection.of(agent("a", .blocked, activity: nil), now: now) == .working)
     #expect(InboxSection.of(agent("a", .done, activity: nil, since: nowMs - hour), now: now) == .done)
     #expect(InboxSection.of(agent("a", .done, activity: nil, since: nowMs - 25 * hour), now: now) == .inactive)
-    #expect(InboxSection.of(agent("a", .done, activity: nowMs - 25 * hour), now: now) == .inactive)
-    #expect(InboxSection.of(agent("a", .done, activity: nowMs - 24 * hour), now: now) == .inactive)
+    #expect(InboxSection.of(agent("a", .done, activity: nowMs - 25 * hour, since: nowMs - hour), now: now) == .done)
+    #expect(InboxSection.of(agent("a", .done, activity: nowMs - hour, since: nowMs - 24 * hour), now: now) == .inactive)
     #expect(InboxSection.of(agent("a", .blocked, activity: nowMs - 25 * hour), now: now) == .working)
-    #expect(InboxSection.of(agent("a", .idle, activity: nowMs - 23 * hour), now: now) == .done)
-    #expect(InboxSection.of(agent("a", .unknown, activity: nowMs - hour), now: now) == .done)
+    #expect(InboxSection.of(agent("a", .idle, activity: nowMs - hour, since: nowMs - 15 * hour), now: now) == .inactive)
+    #expect(InboxSection.of(agent("a", .unknown, activity: nowMs - hour), now: now) == .inactive)
     #expect(InboxSection.of(agent("a", .idle, activity: nowMs - 25 * hour), now: now) == .inactive)
     #expect(InboxSection.of(agent("a", .unknown, activity: nil), now: now) == .inactive)
-    #expect(InboxSection.of(agent("a", .idle, activity: nil, since: nowMs - hour), now: now) == .done)
+    #expect(InboxSection.of(agent("a", .idle, activity: nil, since: nowMs - hour), now: now) == .inactive)
 }
 
 @Test func inboxPutsBlockedFirstThenTheMostRecentAcrossMachines() {
