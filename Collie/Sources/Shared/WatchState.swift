@@ -98,7 +98,13 @@ struct WatchUsage: Codable, Equatable, Sendable {
             return now.timeIntervalSince(recordedAt) >= WatchUsage.staleAfter
         }
 
-        var remainingUsage: Double { 1 - Double(min(used, 100)) / 100 }
+        var usedFraction: Double { Double(min(used, 100)) / 100 }
+
+        func elapsed(now: Date) -> Double {
+            let length = interval.upperBound.timeIntervalSince(interval.lowerBound)
+            guard length > 0 else { return 0 }
+            return min(1, max(0, now.timeIntervalSince(interval.lowerBound) / length))
+        }
     }
 
     func windows(now: Date) -> [Window?] {
@@ -130,11 +136,15 @@ struct WatchUsage: Codable, Equatable, Sendable {
 
     func timelineDates(now: Date) -> [Date] {
         let windows = windows(now: now).compactMap { $0 }
+        guard let lastReset = windows.map({ $0.interval.upperBound }).max() else { return [now] }
+        let end = min(lastReset, now.addingTimeInterval(24 * 3600))
+        let markerDates = stride(from: 300.0, to: end.timeIntervalSince(now), by: 300).map { now.addingTimeInterval($0) }
         let staleDates = windows.compactMap { window -> Date? in
             guard let staleAt = window.recordedAt?.addingTimeInterval(Self.staleAfter), staleAt > now, staleAt < window.interval.upperBound else { return nil }
             return staleAt
         }
-        return [now] + Set(windows.map { $0.interval.upperBound } + staleDates).sorted()
+        let changes = (windows.map { $0.interval.upperBound } + staleDates).filter { $0 <= end }
+        return [now] + Set(markerDates + changes + [end]).sorted()
     }
 
     static func usedColor(_ used: UInt8) -> Color {
