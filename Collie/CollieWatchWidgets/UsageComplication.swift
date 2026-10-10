@@ -76,6 +76,7 @@ private struct UsageRings: View {
             ZStack {
                 ForEach(0..<3) { index in
                     let diameter = size * (1 - Double(index) * 0.28)
+                    let strokeWidth = diameter * 0.1
                     Group {
                         if let window = windows[index] {
                             ProgressView(timerInterval: window.interval, countsDown: true) {
@@ -86,17 +87,17 @@ private struct UsageRings: View {
                             .progressViewStyle(.circular)
                             .tint(WatchUsage.usedColor(window.used))
                         } else {
-                            Circle().stroke(.secondary.opacity(0.25), lineWidth: diameter * 0.1)
-                                .padding(diameter * 0.05)
+                            Circle().stroke(.secondary.opacity(0.25), lineWidth: strokeWidth)
+                                .padding(strokeWidth / 2)
                         }
                     }
                     .frame(width: diameter, height: diameter)
                     Image(index < 2 ? "Claude" : "Codex")
                         .resizable()
                         .scaledToFit()
-                        .frame(width: size * 0.12, height: size * 0.12)
+                        .frame(width: strokeWidth * 0.8, height: strokeWidth * 0.8)
                         .background(.black, in: Circle())
-                        .offset(y: -diameter * 0.43)
+                        .offset(y: -(diameter - strokeWidth) / 2)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
