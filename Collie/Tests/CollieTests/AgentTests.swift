@@ -11,6 +11,7 @@ final class FakeCore: AgentCore {
     struct State {
         var gitCalls: [String] = []
         var gitPatch = "@@ -1 +1 @@\n-old\n+new\n"
+        var gitDiffDelay: Duration = .zero
         var prompts: [String] = []
         var expectedDrafts: [String?] = []
         var kind: String?
@@ -162,6 +163,7 @@ final class FakeCore: AgentCore {
     }
     func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff {
         state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)") }
+        try await Task.sleep(for: snapshot.gitDiffDelay)
         return GitDiff(patch: snapshot.gitPatch, truncated: false)
     }
     func agentDraft(machineId: String, terminalId: String) async throws -> String? {
