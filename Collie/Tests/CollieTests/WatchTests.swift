@@ -464,26 +464,11 @@ private func prefsFile() throws -> URL {
     #expect(!FileManager.default.fileExists(atPath: file.path))
 }
 
-@Test func watchPaceMarkersCompareRemainingAllowanceWithRemainingTime() throws {
+@Test func watchPaceMarkersCompareRemainingAllowanceWithRemainingTime() {
     let interval = now...now.addingTimeInterval(3600)
     for used in [UInt8(0), 25, 50, 75, 98, 100, 255] {
         let window = WatchUsage.Window(used: used, interval: interval)
         #expect(abs(window.remainingUsage - Double(100 - min(used, 100)) / 100) < 0.000001)
-    }
-    for used in [UInt8(0), 1, 2, 3, 97, 98, 99, 100, 255] {
-        #expect(WatchUsage.Window(used: used, interval: interval).ringMarkerAngle == nil)
-    }
-    for used in UInt8(4)...96 {
-        let angle = try #require(WatchUsage.Window(used: used, interval: interval).ringMarkerAngle)
-        #expect(abs(angle - Double(100 - used) * 3.6) < 0.000001)
-        let radians = angle * .pi / 180
-        let x = 0.45 * sin(radians)
-        let y = -0.45 * cos(radians)
-        let halfWidth = abs(cos(radians)) * 0.01 + abs(sin(radians)) * 0.05
-        let halfHeight = abs(sin(radians)) * 0.01 + abs(cos(radians)) * 0.05
-        let marker = CGRect(x: x - halfWidth, y: y - halfHeight, width: halfWidth * 2, height: halfHeight * 2)
-        let logo = CGRect(x: -0.04, y: -0.49, width: 0.08, height: 0.08)
-        #expect(!marker.intersects(logo.insetBy(dx: -0.01, dy: -0.01)))
     }
 }
 

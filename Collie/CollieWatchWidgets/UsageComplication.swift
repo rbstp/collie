@@ -94,15 +94,12 @@ private struct UsageRings: View {
                         }
                     }
                     .frame(width: diameter, height: diameter)
-                    if let angle = windows[index]?.ringMarkerAngle {
+                    if let window = windows[index] {
                         Capsule().fill(.white)
                             .frame(width: strokeWidth * 0.2, height: strokeWidth)
                             .offset(y: -(diameter - strokeWidth) / 2)
-                            .rotationEffect(.degrees(angle))
+                            .rotationEffect(.degrees(window.remainingUsage * 360))
                     }
-                    UsageLogo(name: index < 2 ? "Claude" : "Codex")
-                        .frame(width: strokeWidth * 0.8, height: strokeWidth * 0.8)
-                        .offset(y: -(diameter - strokeWidth) / 2)
                 }
                 if windows.allSatisfy({ $0 == nil }) {
                     Text("--").font(.system(size: size * 0.2)).foregroundStyle(.secondary)

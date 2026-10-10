@@ -99,11 +99,6 @@ struct WatchUsage: Codable, Equatable, Sendable {
         }
 
         var remainingUsage: Double { 1 - Double(min(used, 100)) / 100 }
-
-        var ringMarkerAngle: Double? {
-            guard (4...96).contains(used) else { return nil }
-            return remainingUsage * 360
-        }
     }
 
     func windows(now: Date) -> [Window?] {
