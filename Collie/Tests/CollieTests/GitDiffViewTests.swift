@@ -19,6 +19,9 @@ final class GitDiffViewTests: XCTestCase {
             let core = FakeCore()
             core.state.withLock {
                 $0.gitPatch = "diff --git a/file.swift b/file.swift\nindex 123..456 100644\n--- a/file.swift\n+++ b/file.swift\n@@ -43,4 +43,4 @@ struct UsageSection\n struct UsageSection: View {\n-    let title: String\n+    let period: String\n     var body: some View {\n         Text(\"A long line with 🐑 and enough text to wrap across the entire width of the phone screen\")\n"
+                if name == "light" {
+                    $0.gitPatch = $0.gitPatch.replacingOccurrences(of: " struct UsageSection: View {", with: String(repeating: " context\n", count: 20) + " struct UsageSection: View {")
+                }
             }
             let model = AgentModel(core: core, route: AgentRoute(machineId: "test", terminalId: "test"), prefsFile: nil)
             let review = GitReview()
@@ -57,22 +60,43 @@ final class GitDiffViewTests: XCTestCase {
             host.view.layoutIfNeeded()
             XCTAssertEqual(review.comments.count, 1)
             XCTAssertEqual(review.comments.first?.selection, "period")
-            XCTAssertEqual(review.comments.first?.anchor?.row, 3)
+            XCTAssertEqual(review.comments.first?.anchor?.row, name == "light" ? 23 : 3)
             let views = descendants(host.view).compactMap { $0 as? UITextView }.filter { $0.layoutManager is GitDiffLayoutManager }
             XCTAssertEqual(views.count, 2)
             let before = try XCTUnwrap(views.first { $0.text.contains("period") })
             let after = try XCTUnwrap(views.first { $0.text.contains("var body") })
             XCTAssertGreaterThan(after.convert(after.bounds, to: host.view).minY - before.convert(before.bounds, to: host.view).maxY, 40)
+            if name == "light" {
+                for inset in [CGFloat(240), 320] {
+                    host.additionalSafeAreaInsets.bottom = inset
+                    try await Task.sleep(for: .milliseconds(400))
+                    host.view.layoutIfNeeded()
+                    let field = try XCTUnwrap(descendants(host.view).compactMap { $0 as? UITextView }.first { $0.isEditable && $0.isFirstResponder })
+                    var ancestor = field.superview
+                    while ancestor != nil, !(ancestor is UIScrollView) { ancestor = ancestor?.superview }
+                    let viewport = try XCTUnwrap(ancestor as? UIScrollView)
+                    let visible = viewport.bounds.inset(by: viewport.adjustedContentInset)
+                    let frame = field.convert(field.bounds, to: viewport)
+                    XCTAssertGreaterThanOrEqual(frame.minY, visible.minY - 1)
+                    XCTAssertLessThanOrEqual(frame.maxY, visible.maxY + 1)
+                    snapshot(window, name: "keyboard-\(Int(inset))")
+                }
+                host.additionalSafeAreaInsets.bottom = 0
+            }
             host.view.endEditing(true)
             try await Task.sleep(for: .milliseconds(300))
-            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-            }
-            let attachment = XCTAttachment(image: image)
-            attachment.name = "git-diff-\(name)"
-            attachment.lifetime = .keepAlways
-            add(attachment)
+            snapshot(window, name: name)
         }
+    }
+
+    private func snapshot(_ window: UIWindow, name: String) {
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "git-diff-\(name)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func descendants(_ view: UIView) -> [UIView] {

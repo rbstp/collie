@@ -210,43 +210,48 @@ struct GitDiffView: View {
     var body: some View {
         ScrollViewReader { scroll in
             GeometryReader { geometry in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if let error { Text(error).foregroundStyle(.red).padding() }
-                        if let diff, !collapsed {
-                            let rows = GitDiffRow.parse(diff.patch)
-                            let anchors = Set(comments.compactMap { $0.anchor?.patch == diff.patch ? $0.anchor?.row : nil })
-                            let blocks = GitDiffBlock.split(rows, after: anchors)
-                            let digits = String(rows.reduce(1) { max($0, $1.oldLine ?? 0, $1.newLine ?? 0) }).count
-                            if rows.isEmpty {
-                                Text("No text diff. The file may be empty, renamed, or have changed since the list was loaded.")
-                                    .foregroundStyle(.secondary).padding()
-                            }
-                            ForEach(blocks) { block in
-                                code(block, patch: diff.patch, width: geometry.size.width, digits: digits)
-                                ForEach(comments.filter { $0.anchor == GitDiffAnchor(patch: diff.patch, row: block.lastRow) }) { comment in
+                VStack(spacing: 0) {
+                    header
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            if let error { Text(error).foregroundStyle(.red).padding() }
+                            if let diff, !collapsed {
+                                let rows = GitDiffRow.parse(diff.patch)
+                                let anchors = Set(comments.compactMap { $0.anchor?.patch == diff.patch ? $0.anchor?.row : nil })
+                                let blocks = GitDiffBlock.split(rows, after: anchors)
+                                let digits = String(rows.reduce(1) { max($0, $1.oldLine ?? 0, $1.newLine ?? 0) }).count
+                                if rows.isEmpty {
+                                    Text("No text diff. The file may be empty, renamed, or have changed since the list was loaded.")
+                                        .foregroundStyle(.secondary).padding()
+                                }
+                                ForEach(blocks) { block in
+                                    code(block, patch: diff.patch, width: geometry.size.width, digits: digits)
+                                    ForEach(comments.filter { $0.anchor == GitDiffAnchor(patch: diff.patch, row: block.lastRow) }) { comment in
+                                        editor(comment)
+                                    }
+                                }
+                                if diff.truncated {
+                                    Text("Diff preview is incomplete. Review the rest on the machine.")
+                                        .font(.footnote).foregroundStyle(.orange).padding()
+                                }
+                                ForEach(comments.filter { comment in comment.anchor?.patch != diff.patch || !rows.contains(where: { $0.id == comment.anchor?.row }) }) { comment in
                                     editor(comment)
                                 }
                             }
-                            if diff.truncated {
-                                Text("Diff preview is incomplete. Review the rest on the machine.")
-                                    .font(.footnote).foregroundStyle(.orange).padding()
+                            if diff == nil, !collapsed {
+                                ForEach(comments) { comment in editor(comment) }
                             }
-                            ForEach(comments.filter { comment in comment.anchor?.patch != diff.patch || !rows.contains(where: { $0.id == comment.anchor?.row }) }) { comment in
-                                editor(comment)
-                            }
+                            if loading { ProgressView("Loading diff…").padding() }
                         }
-                        if diff == nil, !collapsed {
-                            ForEach(comments) { comment in editor(comment) }
-                        }
-                        if loading { ProgressView("Loading diff…").padding() }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onChange(of: editing) { _, id in
+                        if let id { withAnimation { scroll.scrollTo(id, anchor: .bottom) } }
+                    }
+                    GitReviewBar(agent: agent, review: review, sent: sent)
                 }
-                .safeAreaInset(edge: .top) { header }
-                .safeAreaInset(edge: .bottom) { GitReviewBar(agent: agent, review: review, sent: sent) }
-                .onChange(of: editing) { _, id in
-                    if let id { withAnimation { scroll.scrollTo(id, anchor: .bottom) } }
+                .onChange(of: geometry.size.height) {
+                    if let editing { withAnimation { scroll.scrollTo(editing, anchor: .bottom) } }
                 }
             }
             .navigationTitle("Diff")
