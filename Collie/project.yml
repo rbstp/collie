@@ -132,6 +132,7 @@ targets:
       - path: CollieWatch
       - path: Resources/UsageAssets.xcassets
       - path: CollieWatchWidgets/UsageLogo.swift
+      - path: CollieWatchWidgets/UsagePaceBar.swift
       - path: Sources/Shared/WatchState.swift
       - path: Sources/Shared/PushHint.swift
     dependencies:

@@ -83,6 +83,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
     /// The Macs the last refresh did not reach; empty with `refreshFailed` when no reply came.
     private var silent: Set<String> = []
     private var refreshedAt: Date?
+    private var widgetReloadedAt: Date?
     private var again = false
     /// The approval an alert opened, shown once the state has it.
     var opened: WatchApprovalKey?
@@ -117,6 +118,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
     /// Mac, for up to 15 s on a locked phone while one is down, so any answer that carries the
     /// state holds for a minute.
     func refreshIfStale(timeout: Duration = .seconds(25)) async {
+        reloadUsageWidget()
         if let refreshedAt, Date.now.timeIntervalSince(refreshedAt) < 60 { return }
         await refresh(timeout: timeout)
     }
@@ -218,10 +220,14 @@ final class WatchModel: NSObject, WCSessionDelegate {
             UserDefaults.standard.set(lastSyncedAt, forKey: "lastSyncedAt")
         }
         answered.formIntersection(next.approvals.map(\.id))
-        if usageChanged {
-            if let usage = next.usage { usage.save() } else { WatchUsage.clear() }
-            WidgetCenter.shared.reloadTimelines(ofKind: WatchUsage.widgetKind)
-        }
+        reloadUsageWidget(force: usageChanged)
+    }
+
+    private func reloadUsageWidget(force: Bool = false) {
+        if !force, let widgetReloadedAt, Date.now.timeIntervalSince(widgetReloadedAt) < 60 { return }
+        guard WatchUsage.updateCache(usage) else { return }
+        WidgetCenter.shared.reloadTimelines(ofKind: WatchUsage.widgetKind)
+        widgetReloadedAt = .now
     }
 
     /// True once the phone answered that this approval need not be offered again.

@@ -33,13 +33,14 @@ struct UsageProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (UsageEntry) -> Void) {
-        completion(placeholder(in: context))
+        completion(context.isPreview ? placeholder(in: context) : UsageEntry(date: .now, usage: WatchUsage.load()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
+        let now = Date.now
         let usage = WatchUsage.load()
-        let entries = (usage?.timelineDates(now: .now) ?? [.now]).map { UsageEntry(date: $0, usage: usage) }
-        completion(Timeline(entries: entries, policy: entries.count > 1 ? .atEnd : .never))
+        let entries = (usage?.timelineDates(now: now) ?? [now]).map { UsageEntry(date: $0, usage: usage) }
+        completion(Timeline(entries: entries, policy: entries.count > 1 ? .atEnd : .after(now.addingTimeInterval(15 * 60))))
     }
 }
 
@@ -81,24 +82,27 @@ private struct UsageRings: View {
                     let strokeWidth = diameter * 0.1
                     Group {
                         if let window = windows[index] {
-                            ProgressView(timerInterval: window.interval, countsDown: true) {
-                                EmptyView()
-                            } currentValueLabel: {
-                                EmptyView()
+                            ZStack {
+                                Circle().stroke(WatchUsage.usedColor(window.used).opacity(0.2), lineWidth: strokeWidth)
+                                if window.used > 0 {
+                                    Circle().trim(from: 0, to: window.usedFraction)
+                                        .stroke(WatchUsage.usedColor(window.used).gradient, style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round))
+                                        .rotationEffect(.degrees(-90))
+                                }
                             }
-                            .progressViewStyle(.circular)
-                            .tint(WatchUsage.usedColor(window.used))
+                            .padding(strokeWidth / 2)
                         } else {
                             Circle().stroke(.secondary.opacity(0.25), style: StrokeStyle(lineWidth: strokeWidth, dash: [strokeWidth, strokeWidth]))
                                 .padding(strokeWidth / 2)
                         }
                     }
+                    .widgetAccentable()
                     .frame(width: diameter, height: diameter)
                     if let window = windows[index] {
                         Capsule().fill(.white)
                             .frame(width: strokeWidth * 0.2, height: strokeWidth)
                             .offset(y: -(diameter - strokeWidth) / 2)
-                            .rotationEffect(.degrees(window.remainingUsage * 360))
+                            .rotationEffect(.degrees(window.elapsed(now: now) * 360))
                     }
                 }
                 if windows.allSatisfy({ $0 == nil }) {
@@ -107,10 +111,9 @@ private struct UsageRings: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
-        .widgetAccentable()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(labels.enumerated().map { index, label in
-            windows[index].map { "\(label), \($0.used) percent used" } ?? "\(label), unavailable"
+            windows[index].map { "\(label), \($0.used) percent used, \(Int(($0.elapsed(now: now) * 100).rounded())) percent of the window elapsed" } ?? "\(label), unavailable"
         }.joined(separator: ". "))
     }
 }

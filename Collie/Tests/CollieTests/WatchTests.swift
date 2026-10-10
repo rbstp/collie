@@ -129,7 +129,7 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(try #require(windows[0]).interval.upperBound.timeIntervalSince(now) == 9_000)
     #expect(try #require(windows[0]).interval.upperBound.timeIntervalSince(windows[0]!.interval.lowerBound) == 18_000)
     #expect(try #require(windows[1]).interval.upperBound.timeIntervalSince(windows[1]!.interval.lowerBound) == 604_800)
-    #expect(usage.timelineDates(now: now) == [0, 9_000, 86_400].map { now.addingTimeInterval($0) })
+    #expect(usage.timelineDates(now: now).last == now.addingTimeInterval(3600))
     #expect(usage.windows(now: now.addingTimeInterval(9_000)).map { $0?.used } == [nil, 73, 90])
     #expect(usage.windows(now: now.addingTimeInterval(86_400)).allSatisfy { $0 == nil })
     #expect(usage.timelineDates(now: now.addingTimeInterval(86_400)) == [now.addingTimeInterval(86_400)])
@@ -464,12 +464,21 @@ private func prefsFile() throws -> URL {
     #expect(!FileManager.default.fileExists(atPath: file.path))
 }
 
-@Test func watchPaceMarkersCompareRemainingAllowanceWithRemainingTime() {
+@Test func watchPaceMarkersCompareUsedAllowanceWithElapsedTime() {
     let interval = now...now.addingTimeInterval(3600)
     for used in [UInt8(0), 25, 50, 75, 98, 100, 255] {
         let window = WatchUsage.Window(used: used, interval: interval)
-        #expect(abs(window.remainingUsage - Double(100 - min(used, 100)) / 100) < 0.000001)
+        #expect(window.usedFraction == Double(min(used, 100)) / 100)
+        #expect(window.elapsed(now: now.addingTimeInterval(-1)) == 0)
+        #expect(window.elapsed(now: now) == 0)
+        #expect(window.elapsed(now: now.addingTimeInterval(1800)) == 0.5)
+        #expect(window.elapsed(now: now.addingTimeInterval(3600)) == 1)
+        #expect(window.elapsed(now: now.addingTimeInterval(3601)) == 1)
     }
+    let weekly = WatchUsage.Window(used: 98, interval: now.addingTimeInterval(-4.5 * 86400)...now.addingTimeInterval(2.5 * 86400))
+    #expect(weekly.usedFraction == 0.98)
+    #expect(abs(weekly.elapsed(now: now) - 4.5 / 7) < 0.000001)
+    #expect(WatchUsage.Window(used: 50, interval: now...now).elapsed(now: now) == 0)
 }
 
 @Test func watchUsageBecomesStaleWithoutAnotherPhoneUpdate() throws {
@@ -483,8 +492,10 @@ private func prefsFile() throws -> URL {
     #expect(windows.map { $0?.isStale(now: now) } == [false, false, false])
     #expect(windows.map { $0?.isStale(now: now.addingTimeInterval(1200)) } == [false, false, true])
     #expect(windows.map { $0?.isStale(now: now.addingTimeInterval(1800)) } == [true, true, true])
-    #expect(usage.timelineDates(now: now) == [0, 1200, 1800, 7200, 86400].map { now.addingTimeInterval($0) })
-    #expect(usage.timelineDates(now: now.addingTimeInterval(1800)) == [1800, 7200, 86400].map { now.addingTimeInterval($0) })
+    #expect([0, 1200, 1800, 3600].allSatisfy { usage.timelineDates(now: now).contains(now.addingTimeInterval($0)) })
+    let later = usage.timelineDates(now: now.addingTimeInterval(1800))
+    #expect([1800, 5400].allSatisfy { later.contains(now.addingTimeInterval($0)) })
+    #expect(!later.contains(now.addingTimeInterval(1200)))
     #expect(windows[0]?.used == 0)
     #expect(usage.windows(now: now.addingTimeInterval(7200))[0] == nil)
     let legacy = WatchUsage(fiveHourUsed: 42, fiveHourResetsAtMs: nowMs + 60_000)
@@ -494,4 +505,63 @@ private func prefsFile() throws -> URL {
     #expect(try #require(skewed.windows(now: now)[0]).isStale(now: now) == false)
     #expect(skewed.timelineDates(now: now) == [now, now.addingTimeInterval(60)])
     #expect(try JSONDecoder().decode(WatchUsage.self, from: JSONEncoder().encode(usage)) == usage)
+}
+
+@Test func watchPaceTimelineAdvancesWithoutFreshUsageAndStaysBounded() {
+    let usage = WatchUsage(
+        fiveHourUsed: 0, fiveHourResetsAtMs: nowMs + 3_650_000,
+        sevenDayUsed: 98, sevenDayResetsAtMs: nowMs + 7 * 86_400_000,
+        codexUsed: 42, codexResetsAtMs: nowMs + 28 * 86_400_000,
+        claudeRecordedMs: nowMs - 1_000, codexRecordedMs: nowMs
+    )
+    let dates = usage.timelineDates(now: now)
+    #expect(dates.first == now)
+    #expect(dates.last == now.addingTimeInterval(3600))
+    #expect(dates.count <= 18)
+    #expect(dates == Array(Set(dates)).sorted())
+    #expect(!dates.contains(now.addingTimeInterval(3650)))
+    #expect(dates.contains(now.addingTimeInterval(1799)))
+    #expect(zip(dates, dates.dropFirst()).allSatisfy { $1.timeIntervalSince($0) <= 300 })
+    let nextHour = usage.timelineDates(now: now.addingTimeInterval(3600))
+    #expect(nextHour.first == now.addingTimeInterval(3600))
+    #expect(nextHour.last == now.addingTimeInterval(7200))
+    #expect(nextHour.contains(now.addingTimeInterval(3650)))
+    #expect(usage.windows(now: now.addingTimeInterval(3650))[0] == nil)
+    for hour in 0..<24 {
+        let start = now.addingTimeInterval(Double(hour) * 3600)
+        let batch = usage.timelineDates(now: start)
+        #expect(batch.first == start)
+        #expect(batch.last == start.addingTimeInterval(3600))
+        #expect(batch.count <= 18)
+        #expect(batch == Array(Set(batch)).sorted())
+        #expect(zip(batch, batch.dropFirst()).allSatisfy { $1.timeIntervalSince($0) <= 300 })
+    }
+}
+
+@Test func watchUsageCacheRecoversWithUnchangedReadings() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appending(path: "watch-usage.json")
+    let usage = WatchUsage(fiveHourUsed: 0, fiveHourResetsAtMs: nowMs + 3_600_000, sevenDayUsed: 98,
+                           sevenDayResetsAtMs: nowMs + 3 * 86_400_000, claudeRecordedMs: nowMs)
+    #expect(WatchUsage.load(from: file) == nil)
+    #expect(WatchUsage.updateCache(usage, at: file))
+    #expect(WatchUsage.load(from: file) == usage)
+    try FileManager.default.removeItem(at: file)
+    #expect(WatchUsage.updateCache(usage, at: file))
+    #expect(WatchUsage.load(from: file) == usage)
+    try Data("invalid".utf8).write(to: file)
+    #expect(WatchUsage.load(from: file) == nil)
+    #expect(WatchUsage.updateCache(usage, at: file))
+    #expect(WatchUsage.load(from: file) == usage)
+    #expect(WatchUsage.updateCache(nil, at: file))
+    #expect(WatchUsage.load(from: file) == nil)
+    #expect(WatchUsage.updateCache(nil, at: file))
+    try FileManager.default.removeItem(at: directory)
+    #expect(!WatchUsage.updateCache(usage, at: file))
+    #expect(!WatchUsage.updateCache(usage, at: nil))
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    #expect(WatchUsage.updateCache(usage, at: file))
+    #expect(WatchUsage.load(from: file) == usage)
 }
