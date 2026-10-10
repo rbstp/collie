@@ -10,7 +10,7 @@ struct UsageBars: View {
         VStack(spacing: 8) {
             UsageBarRow(logo: "Claude", period: "5h", label: "Claude 5-hour", window: windows[0], now: now)
             UsageBarRow(logo: "Claude", period: "7d", label: "Claude weekly", window: windows[1], now: now)
-            UsageBarRow(logo: "Codex", period: "1mo", label: "Codex monthly", window: windows[2], now: now)
+            UsageBarRow(logo: "Codex", period: "1m", label: "Codex monthly", window: windows[2], now: now)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
