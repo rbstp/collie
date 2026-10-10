@@ -36,7 +36,13 @@ final class NewTaskModel {
     var cwd = ""
     var location = Location.folder
     var worktreeAction = WorktreeAction.create
-    var source = ""
+    var source = "" {
+        didSet {
+            guard oldValue != source else { return }
+            worktrees = nil
+            worktreesError = nil
+        }
+    }
     var branch = ""
     private let generatedBranch = "task-\(UUID().uuidString.lowercased())"
     var createBranch: String { trimmed(branch).nilIfEmpty ?? generatedBranch }

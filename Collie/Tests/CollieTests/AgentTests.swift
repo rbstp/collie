@@ -1003,9 +1003,15 @@ private func prefsFile() throws -> URL {
     #expect(branch.hasPrefix("task-"))
     #expect(model.createPath == "/Users/me/app/.worktree/\(branch)")
     #expect(model.canStart)
+    model.source = "/Users/me/other"
+    #expect(model.worktrees == nil)
+    #expect(!model.canStart)
+    model.source = "/Users/me/app"
+    await model.loadWorktrees()
+    #expect(model.canStart)
     #expect(await model.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
     #expect(model.createBranch == branch)
-    #expect(core.snapshot.worktreeCalls == ["list /Users/me/app", "create /Users/me/app \(branch) codex"])
+    #expect(core.snapshot.worktreeCalls == ["list /Users/me/app", "list /Users/me/app", "create /Users/me/app \(branch) codex"])
 }
 
 @MainActor

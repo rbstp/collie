@@ -125,7 +125,9 @@ struct NewTaskSheet: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .font(.body.monospaced())
-                        Button("List worktrees") { Task { await model.loadWorktrees() } }
+                        if model.worktrees == nil, model.worktreesError == nil, !model.source.isEmpty {
+                            ProgressView("Checking repository…")
+                        }
                         if let listed = model.worktrees {
                             Text("Repository: \(listed.source)").font(.footnote.monospaced())
                             if model.worktreeAction == .create {
@@ -289,6 +291,14 @@ struct NewTaskSheet: View {
                 }
             }
             .task(id: model.machineId) { await model.loadOptions() }
+            .task(id: model.location == .worktree ? "\(model.worktreeAction.rawValue):\(model.source)" : nil) {
+                guard model.location == .worktree, !model.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                await model.loadWorktrees()
+            }
             .photosPicker(
                 isPresented: $pickingPhoto, selection: $photos, maxSelectionCount: max(model.attachmentSlots, 1),
                 matching: .images
