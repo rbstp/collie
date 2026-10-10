@@ -607,6 +607,12 @@ final class AgentModel {
         promptError = nil
     }
 
+    func insert(_ shortcut: PromptShortcut) {
+        guard !isTerminal, !answering, !sendingPrompt, !dictation.isActive else { return }
+        loadedMacDraft = nil
+        draft = shortcut.appending(to: draft)
+    }
+
     func paste(_ text: String?) {
         guard let text, !dictation.isActive else { return }
         loadedMacDraft = nil

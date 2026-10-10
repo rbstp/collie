@@ -44,6 +44,7 @@ struct SettingsView: View {
                     }
                 }
                 Section("Prompt") {
+                    NavigationLink("Saved prompts") { PromptShortcutsView() }
                     Toggle("Keep keyboard open after sending", isOn: $keepKeyboard)
                 }
                 Section("Terminal") {

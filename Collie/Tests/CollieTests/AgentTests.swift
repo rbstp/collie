@@ -2171,3 +2171,35 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     await model.sendPrompt()
     #expect(core.snapshot.expectedDrafts == ["/s"])
 }
+
+@MainActor
+@Test func savedPromptsStayLocalUntilSendAndPreserveTheDraft() async throws {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let shortcut = PromptShortcut(name: "Review", text: "/review\nCheck the changes.")
+    PromptShortcuts(items: [shortcut]).save(to: file)
+    let restored = try #require(PromptShortcuts.load(from: file).items.first)
+
+    model.insert(restored)
+    await model.flushMirror()
+    #expect(model.draft == shortcut.text)
+    #expect(core.snapshot.slashes.isEmpty)
+    #expect(core.snapshot.prompts.isEmpty)
+    #expect(core.snapshot.keys.isEmpty)
+
+    model.draft = "Keep this draft"
+    await model.attach(name: "notes.txt") { _ in Data([1]) }?.value
+    let attachments = model.attachments.map(\.path)
+    model.insert(restored)
+    await model.flushMirror()
+    #expect(model.draft == "Keep this draft\n\n/review\nCheck the changes.")
+    #expect(model.attachments.map(\.path) == attachments)
+    #expect(core.snapshot.prompts.isEmpty)
+    #expect(core.snapshot.slashes.isEmpty)
+
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts.count == 1)
+    #expect(core.snapshot.prompts.first?.contains("Keep this draft\n\n/review\nCheck the changes.") == true)
+}
