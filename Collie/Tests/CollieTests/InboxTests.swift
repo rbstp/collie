@@ -33,19 +33,21 @@ private func entry(
 
 @Test func inboxSearchAndFiltersIncludeCachedMachines() {
     let blocked = agent("blocked", .blocked, activity: 10, name: "Build")
-    let finished = agent("done", .done, activity: 20, since: 5, title: "Review")
-    let archived = agent("old", .idle, activity: nowMs - 25 * 3_600_000, kind: "codex")
-    let items = InboxItem.items(in: [entry("m1", [blocked]), entry("m2", [finished, archived], link: .offline)])
+    let finished = agent("done", .done, activity: nowMs - 20, since: nowMs - 30, title: "Review")
+    let inactive = agent("old", .idle, activity: nowMs - 25 * 3_600_000, kind: "codex")
+    let olderDone = agent("older-done", .done, activity: nowMs - 26 * 3_600_000)
+    let items = InboxItem.items(in: [entry("m1", [blocked]), entry("m2", [finished, inactive, olderDone], link: .offline)])
     let seen = SeenAgents()
     #expect(items.first { $0.route.terminalId == "done" }?.stale == true)
     #expect(items.filter { $0.matches("review") }.map(\.route.terminalId) == ["done"])
     #expect(items.filter { $0.matches("build") }.map(\.route.terminalId) == ["blocked"])
-    #expect(items.filter { $0.matches("collie") }.count == 3)
-    #expect(items.filter { $0.matches("mac m2") }.count == 2)
+    #expect(items.filter { $0.matches("collie") }.count == 4)
+    #expect(items.filter { $0.matches("mac m2") }.count == 3)
     #expect(items.filter { $0.matches("CODEX") }.map(\.route.terminalId) == ["old"])
-    #expect(items.filter { InboxFilter.needsAttention.includes($0, seen: seen, now: now) }.map(\.route.terminalId) == ["blocked", "done"])
+    #expect(Set(items.filter { InboxFilter.needsAttention.includes($0, seen: seen, now: now) }.map(\.route.terminalId))
+            == Set(["blocked", "done", "older-done"]))
     #expect(items.filter { InboxFilter.working.includes($0, seen: seen, now: now) }.map(\.route.terminalId) == ["blocked"])
-    #expect(items.filter { InboxFilter.archived.includes($0, seen: seen, now: now) }.map(\.route.terminalId) == ["old"])
+    #expect(items.filter { InboxFilter.inactive.includes($0, seen: seen, now: now) }.map(\.route.terminalId) == ["old", "older-done"])
 }
 
 @Test func seenCompletionSurvivesReloadAndNewCompletionNeedsAttention() throws {
@@ -93,26 +95,31 @@ private func entry(
     let hour: UInt64 = 3_600_000
     #expect(InboxSection.of(agent("a", .working, activity: nil), now: now) == .working)
     #expect(InboxSection.of(agent("a", .blocked, activity: nil), now: now) == .working)
-    #expect(InboxSection.of(agent("a", .done, activity: nil), now: now) == .done)
+    #expect(InboxSection.of(agent("a", .done, activity: nil, since: nowMs - hour), now: now) == .done)
+    #expect(InboxSection.of(agent("a", .done, activity: nil, since: nowMs - 25 * hour), now: now) == .inactive)
+    #expect(InboxSection.of(agent("a", .done, activity: nowMs - 25 * hour), now: now) == .inactive)
+    #expect(InboxSection.of(agent("a", .done, activity: nowMs - 24 * hour), now: now) == .inactive)
+    #expect(InboxSection.of(agent("a", .blocked, activity: nowMs - 25 * hour), now: now) == .working)
     #expect(InboxSection.of(agent("a", .idle, activity: nowMs - 23 * hour), now: now) == .done)
     #expect(InboxSection.of(agent("a", .unknown, activity: nowMs - hour), now: now) == .done)
-    #expect(InboxSection.of(agent("a", .idle, activity: nowMs - 25 * hour), now: now) == .archived)
-    #expect(InboxSection.of(agent("a", .unknown, activity: nil), now: now) == .archived)
+    #expect(InboxSection.of(agent("a", .idle, activity: nowMs - 25 * hour), now: now) == .inactive)
+    #expect(InboxSection.of(agent("a", .unknown, activity: nil), now: now) == .inactive)
     #expect(InboxSection.of(agent("a", .idle, activity: nil, since: nowMs - hour), now: now) == .done)
 }
 
 @Test func inboxPutsBlockedFirstThenTheMostRecentAcrossMachines() {
     let entries = [
         entry("m1", [agent("old", .working, activity: 10), agent("blocked", .blocked, activity: 1), agent("idle", .idle, activity: nil)]),
-        entry("m2", [agent("new", .working, activity: 30), agent("since", .done, activity: nil, since: 50), agent("done", .done, activity: 40)]),
+        entry("m2", [agent("new", .working, activity: 30), agent("since", .done, activity: nil, since: nowMs - 50),
+                     agent("done", .done, activity: nowMs - 40)]),
     ]
     let items = InboxItem.items(in: entries)
     #expect(items.first { $0.route.terminalId == "new" }?.machine == "Mac m2")
     #expect(items.first { $0.route.terminalId == "old" }?.workspace == "collie")
     let groups = InboxSection.grouped(items, now: now)
     #expect(groups[.working]?.map(\.route.terminalId) == ["blocked", "new", "old"])
-    #expect(groups[.done]?.map(\.route.terminalId) == ["since", "done"])
-    #expect(groups[.archived]?.map(\.route) == [AgentRoute(machineId: "m1", terminalId: "idle")])
+    #expect(groups[.done]?.map(\.route.terminalId) == ["done", "since"])
+    #expect(groups[.inactive]?.map(\.route) == [AgentRoute(machineId: "m1", terminalId: "idle")])
 }
 
 @MainActor

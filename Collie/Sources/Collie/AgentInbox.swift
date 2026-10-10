@@ -78,7 +78,7 @@ struct AgentInbox<Menu: View>: View {
             }
         }
         if items.isEmpty && (entries.contains { $0.flock?.details != nil } || !query.isEmpty || filter != .all) {
-            Text(query.isEmpty && filter == .archived ? "No idle agents older than 24 hours"
+            Text(query.isEmpty && filter == .inactive ? "No agents inactive for 24 hours"
                  : query.isEmpty && filter == .all ? "No agents running" : "No matching agents")
                 .foregroundStyle(.secondary)
         }
@@ -116,14 +116,14 @@ struct InboxItem: Identifiable, Equatable {
 }
 
 enum InboxFilter: CaseIterable {
-    case all, needsAttention, working, archived
+    case all, needsAttention, working, inactive
 
     var title: String {
         switch self {
         case .all: "All"
         case .needsAttention: "Needs attention"
         case .working: "Working"
-        case .archived: "Archived"
+        case .inactive: "Inactive"
         }
     }
 
@@ -133,7 +133,7 @@ enum InboxFilter: CaseIterable {
         case .needsAttention:
             item.agent.status == .blocked || (item.agent.status == .done && !seen.isSeen(item.agent, route: item.route))
         case .working: InboxSection.of(item.agent, now: now) == .working
-        case .archived: InboxSection.of(item.agent, now: now) == .archived
+        case .inactive: InboxSection.of(item.agent, now: now) == .inactive
         }
     }
 }
@@ -141,25 +141,24 @@ enum InboxFilter: CaseIterable {
 enum InboxSection: CaseIterable {
     case working
     case done
-    case archived
+    case inactive
 
-    static let archiveAfter: TimeInterval = 24 * 3600
+    static let inactiveAfter: TimeInterval = 24 * 3600
 
     var title: String {
         switch self {
         case .working: "Working"
         case .done: "Done"
-        case .archived: "Archived"
+        case .inactive: "Inactive"
         }
     }
 
     static func of(_ agent: AgentSummary, now: Date) -> InboxSection {
         switch agent.status {
         case .working, .blocked: return .working
-        case .done: return .done
-        case .idle, .unknown:
+        case .done, .idle, .unknown:
             let age = now.timeIntervalSince1970 - TimeInterval(agent.activityMs) / 1000
-            return age < archiveAfter ? .done : .archived
+            return age < inactiveAfter ? .done : .inactive
         }
     }
 
