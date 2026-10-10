@@ -42,7 +42,7 @@ final class AgentModel {
     private(set) var refreshing = false
     private var revision: UInt64 = 0
 
-    private(set) var gitFeedbackInsertions = 0
+    let gitReview = GitReview()
     var draft = ""
     /// What the phone last saw in the Mac's input box: nil when unknown. A send replaces exactly this text.
     private(set) var macDraft: String?
@@ -617,22 +617,33 @@ final class AgentModel {
                                  root: root, path: file.path, section: file.section)
     }
 
-    var canDraftGitFeedback: Bool {
+    var canSendGitFeedback: Bool {
         agent != nil && !isTerminal && !answering && !sendingPrompt && !dictation.isActive
+            && blocked == nil && agent?.status != .blocked && !codexQuestionQueued && !jumpBanner
     }
 
-    func draftGitFeedback(_ text: String) -> Bool {
-        guard canDraftGitFeedback else { return false }
-        let combined = draft.isEmpty ? text : draft + "\n\n" + text
-        guard combined.utf8.count <= 30 * 1024 else {
-            promptError = "This hunk and the current draft are too long. Shorten the draft or select a smaller hunk."
-            return false
-        }
+    func sendGitFeedback(_ text: String) async -> String? {
+        guard canSendGitFeedback else { return "The agent cannot accept review feedback right now." }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Write feedback before sending." }
+        guard text.utf8.count <= 32 * 1024 else { return "Feedback is too long. Shorten the comments or select less text." }
+        mirrorDelay?.cancel()
+        await mirroring?.value
+        guard canSendGitFeedback else { return "The agent cannot accept review feedback right now." }
+        sendingPrompt = true
         loadedMacDraft = nil
-        draft = combined
-        gitFeedbackInsertions += 1
-        saveDraft()
-        return true
+        defer { sendingPrompt = false; saveDraft() }
+        do {
+            try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: "")
+            if macDraft != nil { macDraft = "" }
+            mirrored = ""
+            menuMoved = false
+            return nil
+        } catch {
+            if case .DraftChanged = error as? CoreError {
+                return "The agent’s input box has unsent text. Send or clear it in the session before sending this feedback."
+            }
+            return Self.message(for: error)
+        }
     }
 
     func insert(_ shortcut: PromptShortcut) {
