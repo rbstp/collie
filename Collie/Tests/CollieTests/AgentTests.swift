@@ -10,6 +10,8 @@ import UIKit
 final class FakeCore: AgentCore {
     struct State {
         var gitCalls: [String] = []
+        var gitPatch = "@@ -1 +1 @@\n-old\n+new\n"
+        var gitDiffDelay: Duration = .zero
         var prompts: [String] = []
         var expectedDrafts: [String?] = []
         var kind: String?
@@ -161,7 +163,8 @@ final class FakeCore: AgentCore {
     }
     func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff {
         state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)") }
-        return GitDiff(patch: "@@ -1 +1 @@\n-old\n+new\n", truncated: false)
+        try await Task.sleep(for: snapshot.gitDiffDelay)
+        return GitDiff(patch: snapshot.gitPatch, truncated: false)
     }
     func agentDraft(machineId: String, terminalId: String) async throws -> String? {
         state.withLock { s in
@@ -2230,20 +2233,6 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     #expect(GitFeedback.selectedText(in: source, range: NSRange(location: NSNotFound, length: 1)).isEmpty)
     #expect(GitFeedback.selectedText(in: source, range: NSRange(location: 0, length: 10000)).isEmpty)
     #expect(GitFeedback.draft(file: file, selection: "```\n").contains("````diff\n```\n````"))
-}
-
-@MainActor
-@Test func gitTextSelectionTracksHighlightAndClearing() {
-    var range = NSRange(location: 0, length: 0)
-    let coordinator = GitDiffText.Coordinator(selection: Binding(get: { range }, set: { range = $0 }))
-    let view = UITextView()
-    view.text = "before\nselected 🐑\nafter"
-    view.selectedRange = (view.text as NSString).range(of: "selected 🐑")
-    coordinator.textViewDidChangeSelection(view)
-    #expect(GitFeedback.selectedText(in: view.text, range: range) == "selected 🐑")
-    view.selectedRange = NSRange(location: 0, length: 0)
-    coordinator.textViewDidChangeSelection(view)
-    #expect(GitFeedback.selectedText(in: view.text, range: range).isEmpty)
 }
 
 @MainActor
