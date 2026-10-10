@@ -76,7 +76,7 @@ Design details and limits are in [docs/architecture.md](docs/architecture.md).
 
 ### Apple Watch
 
-- Pending approvals with the command and a countdown, the agents as in the inbox, and a complication with the 5-hour plan usage, refreshed about every 15 minutes when watchOS allows it.
+- Pending approvals with the command and a countdown, the agents as in the inbox, and a three-ring usage complication, refreshed about every 15 minutes when watchOS allows it. Outer to inner: Claude 5-hour, Claude weekly, and Codex monthly (resetting on the first of the month). Ring length shows time remaining; color shows usage: green through 60%, yellow through 85%, then red. Missing or expired readings show a dim track.
 - Approvals are read-only unless Settings > Apple Watch > Decide from Apple Watch is on; the watch app can then approve, deny or answer a question menu. Decisions are made in the watch app, never from the alert itself.
 - The watch asks the iPhone for pending approvals when it opens, at most once a minute unless an approval alert opened it, and works while the iPhone is locked. The agents are as the iPhone app last saw them.
 

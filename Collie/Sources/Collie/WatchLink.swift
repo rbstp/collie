@@ -11,19 +11,35 @@ extension WatchState {
         let nowMs = now.unixMs
         let groups = InboxSection.grouped(InboxItem.items(in: entries), now: now)
         let rows = (groups[.working] ?? []).map { ($0, false) } + (groups[.done] ?? []).map { ($0, true) }
-        let usage = entries.compactMap { $0.flock?.planUsage }.filter { $0.fiveHour != nil }.max { $0.recordedMs < $1.recordedMs }
         self.init(
             approvals: items.filter { $0.approval.expiresAtMs > nowMs }.prefix(Self.maxApprovals).map(WatchApproval.init),
             agents: rows.prefix(Self.maxAgents).map { WatchAgent(item: $0.0, done: $0.1) },
-            usage: usage.map(WatchUsage.init),
+            usage: WatchUsage.latest(entries.compactMap { $0.flock?.planUsage }),
             decisionsAllowed: allowed, live: live
         )
     }
 }
 
 extension WatchUsage {
+    static func latest(_ plans: [PlanUsage]) -> WatchUsage? {
+        guard !plans.isEmpty else { return nil }
+        let claude = plans.filter { $0.fiveHour != nil || $0.sevenDay != nil }.max { $0.recordedMs < $1.recordedMs }
+        let codex = plans.compactMap(\.codex).max { $0.recordedMs < $1.recordedMs }
+        return WatchUsage(PlanUsage(
+            fiveHour: claude?.fiveHour, sevenDay: claude?.sevenDay, recordedMs: claude?.recordedMs ?? 0, codex: codex
+        ))
+    }
+
     init(_ plan: PlanUsage) {
-        self.init(fiveHourUsed: plan.fiveHour.map { min($0.usedPercent, 100) }, fiveHourResetsAtMs: plan.fiveHour?.resetsAtMs)
+        let codex = plan.codex.flatMap { usage -> UInt8? in
+            guard usage.limit > 0 else { return nil }
+            return UInt8(min(100, (Double(usage.used) / Double(usage.limit) * 100).rounded()))
+        }
+        self.init(
+            fiveHourUsed: plan.fiveHour.map { min($0.usedPercent, 100) }, fiveHourResetsAtMs: plan.fiveHour?.resetsAtMs,
+            sevenDayUsed: plan.sevenDay.map { min($0.usedPercent, 100) }, sevenDayResetsAtMs: plan.sevenDay?.resetsAtMs,
+            codexUsed: codex, codexResetsAtMs: plan.codex?.resetsAtMs
+        )
     }
 }
 
@@ -71,8 +87,10 @@ extension WatchState {
         let fresh = items.sorted { ($0.approval.createdAtMs, $0.id) < ($1.approval.createdAtMs, $1.id) }.map(WatchApproval.init)
         let kept = state.approvals.filter { silent.contains($0.nodeId) }
         state.approvals = Array((fresh + kept).filter { $0.expiresAtMs > nowMs }.prefix(Self.maxApprovals))
-        if let plan = listed.compactMap(\.planUsage).filter({ $0.fiveHour != nil }).max(by: { $0.recordedMs < $1.recordedMs }) {
-            state.usage = WatchUsage(plan)
+        if let usage = WatchUsage.latest(listed.compactMap(\.planUsage)) {
+            state.usage = usage
+        } else if !listed.isEmpty && listed.allSatisfy({ $0.approvals != nil }) {
+            state.usage = nil
         }
         state.decisionsAllowed = allowed
         state.live = false

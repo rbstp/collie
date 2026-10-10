@@ -75,29 +75,41 @@ struct WatchUsage: Codable, Equatable, Sendable {
     let fiveHourUsed: UInt8?
     let fiveHourResetsAtMs: UInt64?
 
-    /// Nil once the window's reset time has passed: its figure no longer holds.
-    func fiveHour(now: Date) -> UInt8? {
-        guard let fiveHourUsed, let reset = fiveHourResetsAtMs, reset > now.unixMs else { return nil }
-        return fiveHourUsed
+    var sevenDayUsed: UInt8? = nil
+    var sevenDayResetsAtMs: UInt64? = nil
+    var codexUsed: UInt8? = nil
+    var codexResetsAtMs: UInt64? = nil
+
+    struct Window {
+        let used: UInt8
+        let interval: ClosedRange<Date>
     }
 
-    static let fiveHourLength: TimeInterval = 5 * 3600
-
-    /// Nil, like the figure, once the reset time has passed.
-    func fiveHourSecondsLeft(now: Date) -> TimeInterval? {
-        guard fiveHour(now: now) != nil, let reset = fiveHourResetsAtMs else { return nil }
-        return Date(timeIntervalSince1970: TimeInterval(reset) / 1000).timeIntervalSince(now)
+    func windows(now: Date) -> [Window?] {
+        [
+            window(used: fiveHourUsed, reset: fiveHourResetsAtMs, length: 5 * 3600, now: now),
+            window(used: sevenDayUsed, reset: sevenDayResetsAtMs, length: 7 * 24 * 3600, now: now),
+            window(used: codexUsed, reset: codexResetsAtMs, length: nil, now: now),
+        ]
     }
 
-    /// The complication's ring runs down by itself: an entry now, at each ring color change and at the reset.
+    private func window(used: UInt8?, reset: UInt64?, length: TimeInterval?, now: Date) -> Window? {
+        guard let used, let reset, reset > now.unixMs else { return nil }
+        let end = Date(timeIntervalSince1970: TimeInterval(reset) / 1000)
+        let start: Date
+        if let length {
+            start = end.addingTimeInterval(-length)
+        } else {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            guard let previousMonth = calendar.date(byAdding: .month, value: -1, to: end) else { return nil }
+            start = previousMonth
+        }
+        return Window(used: used, interval: start...end)
+    }
+
     func timelineDates(now: Date) -> [Date] {
-        guard let left = fiveHourSecondsLeft(now: now) else { return [now] }
-        let reset = now.addingTimeInterval(left)
-        return [now] + [reset.addingTimeInterval(-7200), reset.addingTimeInterval(-3600), reset].filter { $0 > now }
-    }
-
-    static func ringColor(secondsLeft: TimeInterval) -> Color {
-        secondsLeft > 7200 ? .green : secondsLeft > 3600 ? .yellow : .red
+        [now] + Set(windows(now: now).compactMap { $0?.interval.upperBound }).sorted()
     }
 
     static func usedColor(_ used: UInt8) -> Color {

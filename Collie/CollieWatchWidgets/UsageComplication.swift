@@ -1,16 +1,14 @@
 import SwiftUI
 import WidgetKit
 
-/// The five-hour plan usage the watch app last received, inside a ring of the time left until it resets.
-/// Plan usage rather than context: one figure per subscription, where context would need one agent picked arbitrarily.
 @main
 struct UsageComplication: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: WatchUsage.widgetKind, provider: UsageProvider()) { entry in
-            UsageRing(usage: entry.usage, now: entry.date)
+            UsageRings(usage: entry.usage, now: entry.date)
                 .containerBackground(for: .widget) { AccessoryWidgetBackground() }
         }
-        .configurationDisplayName("Claude usage")
+        .configurationDisplayName("Plan usage")
         .supportedFamilies([.accessoryCircular])
     }
 }
@@ -20,12 +18,18 @@ struct UsageEntry: TimelineEntry {
     let usage: WatchUsage?
 }
 
-/// The watch app reloads the timeline when the figure changes; the ring runs down to the reset by itself, and
-/// the entries change its color.
 struct UsageProvider: TimelineProvider {
     func placeholder(in context: Context) -> UsageEntry {
-        let reset = UInt64((Date.now.timeIntervalSince1970 + 10_800) * 1000)
-        return UsageEntry(date: .now, usage: WatchUsage(fiveHourUsed: 42, fiveHourResetsAtMs: reset))
+        let now = Date.now
+        let month = Calendar(identifier: .gregorian).dateInterval(of: .month, for: now)!
+        return UsageEntry(
+            date: now,
+            usage: WatchUsage(
+                fiveHourUsed: 42, fiveHourResetsAtMs: now.addingTimeInterval(10_800).unixMs,
+                sevenDayUsed: 73, sevenDayResetsAtMs: now.addingTimeInterval(4 * 24 * 3600).unixMs,
+                codexUsed: 90, codexResetsAtMs: month.end.unixMs
+            )
+        )
     }
 
     func getSnapshot(in context: Context, completion: @escaping (UsageEntry) -> Void) {
@@ -39,22 +43,41 @@ struct UsageProvider: TimelineProvider {
     }
 }
 
-private struct UsageRing: View {
+private struct UsageRings: View {
     let usage: WatchUsage?
     let now: Date
+    private let labels = ["Claude 5-hour", "Claude weekly", "Codex monthly"]
 
     var body: some View {
-        let used = usage?.fiveHour(now: now)
-        let left = usage?.fiveHourSecondsLeft(now: now)
-        let reset = now.addingTimeInterval(left ?? 0)
-        ProgressView(timerInterval: reset.addingTimeInterval(-WatchUsage.fiveHourLength)...reset, countsDown: true) {
-            Text("5h")
-        } currentValueLabel: {
-            Text(used.map { "\($0)" } ?? "--")
-                .foregroundStyle(used.map(WatchUsage.usedColor) ?? .primary)
+        let windows = usage?.windows(now: now) ?? [nil, nil, nil]
+        GeometryReader { geometry in
+            let size = min(geometry.size.width, geometry.size.height)
+            ZStack {
+                ForEach(0..<3) { index in
+                    let diameter = size * (1 - Double(index) * 0.28)
+                    Group {
+                        if let window = windows[index] {
+                            ProgressView(timerInterval: window.interval, countsDown: true) {
+                                EmptyView()
+                            } currentValueLabel: {
+                                EmptyView()
+                            }
+                            .progressViewStyle(.circular)
+                            .tint(WatchUsage.usedColor(window.used))
+                        } else {
+                            Circle().stroke(.secondary.opacity(0.25), lineWidth: diameter * 0.1)
+                                .padding(diameter * 0.05)
+                        }
+                    }
+                    .frame(width: diameter, height: diameter)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
-        .progressViewStyle(.circular)
-        .tint(left.map(WatchUsage.ringColor))
         .widgetAccentable()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(labels.enumerated().map { index, label in
+            windows[index].map { "\(label), \($0.used) percent used" } ?? "\(label), unavailable"
+        }.joined(separator: ". "))
     }
 }
