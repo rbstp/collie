@@ -7,6 +7,7 @@ final class ConversationModel {
     private(set) var messages: [HistoryMessage] = []
     private(set) var session: String?
     private(set) var available: Bool?
+    private(set) var unavailableReason: String?
     private(set) var before: String?
     private(set) var after: String?
     private(set) var loading = false
@@ -42,6 +43,7 @@ final class ConversationModel {
             messages = []
             error = nil
             available = nil
+            unavailableReason = nil
             before = nil
             after = nil
             session = nil
@@ -75,6 +77,7 @@ final class ConversationModel {
             omitted = false
         }
         available = page.available
+        unavailableReason = page.unavailableReason
         session = page.session
         guard page.available else { return }
         if !page.messages.isEmpty {
@@ -127,7 +130,7 @@ struct ConversationView: View {
                 ContentUnavailableView {
                     Label("History unavailable", systemImage: "text.bubble")
                 } description: {
-                    Text("This session has no readable Codex or Claude Code transcript yet. Older daemons need an update for Chat.")
+                    Text(model.unavailableReason ?? "This session has no readable Codex or Claude Code transcript yet. Older daemons need an update for Chat.")
                 } actions: {
                     Button("Open Terminal", action: terminal)
                 }

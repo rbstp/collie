@@ -9,7 +9,7 @@ private func message(_ id: String, _ text: String = "hello") -> HistoryMessage {
 }
 
 private func page(_ messages: [HistoryMessage], session: String = "s1", reset: Bool = false, before: String? = "older", after: String = "latest") -> HistoryPage {
-    HistoryPage(session: session, available: true, reset: reset, messages: messages, before: before, after: after, more: false, omitted: false)
+    HistoryPage(session: session, available: true, unavailableReason: nil, reset: reset, messages: messages, before: before, after: after, more: false, omitted: false)
 }
 
 @MainActor
@@ -43,12 +43,14 @@ private func page(_ messages: [HistoryMessage], session: String = "s1", reset: B
     #expect(model.available == nil)
     model.apply(page([], before: nil), older: false)
     #expect(model.available == true)
-    model.apply(HistoryPage(session: nil, available: false, reset: false, messages: [], before: nil, after: nil, more: false, omitted: false), older: false)
+    model.apply(HistoryPage(session: nil, available: false, unavailableReason: "Session ID missing", reset: false, messages: [], before: nil, after: nil, more: false, omitted: false), older: false)
     #expect(model.available == false)
+    #expect(model.unavailableReason == "Session ID missing")
     #expect(model.messages.isEmpty)
     #expect(model.after == nil)
     model.apply(page([message("recovered")]), older: false)
     #expect(model.available == true)
+    #expect(model.unavailableReason == nil)
 }
 
 @MainActor

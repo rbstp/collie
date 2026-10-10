@@ -847,6 +847,12 @@
             "string",
             "null"
           ]
+        },
+        "unavailable_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

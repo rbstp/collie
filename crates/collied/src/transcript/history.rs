@@ -21,6 +21,11 @@ impl Transcripts {
         self.read_history(agent, params).unwrap_or(HistoryPage {
             session: None,
             available: false,
+            unavailable_reason: Some(if session_id(agent).is_none() {
+                "The agent has not reported its session ID to herdr. Chat cannot safely identify this conversation. Check the agent’s herdr SessionStart integration, then resume the session."
+            } else {
+                "The transcript for this session is not readable yet. Terminal remains available."
+            }.into()),
             reset: false,
             messages: vec![],
             before: None,
@@ -146,6 +151,7 @@ impl Transcripts {
         Some(HistoryPage {
             session: Some(session.clone()),
             available: true,
+            unavailable_reason: None,
             reset,
             messages,
             before: (low > 0)
@@ -641,6 +647,27 @@ mod tests {
         assert_eq!(found[0].id, "u0:0");
         assert!(found[0].truncated);
         assert!(found[0].text.contains("NEEDLE"));
+    }
+
+    #[test]
+    fn missing_session_identity_never_guesses_and_recovers_when_reported() {
+        for (kind, fixture) in [
+            ("claude", row(1, "hello")),
+            (
+                "codex",
+                include_str!("../../tests/fixtures/transcripts/codex-history-legacy.jsonl").into(),
+            ),
+        ] {
+            let (_dir, reader, mut agent, _path) = setup(kind, &fixture);
+            let identity = agent.agent_session.take();
+            let page = reader.history(&agent, &params(None, None, None));
+            assert!(!page.available && page.messages.is_empty());
+            assert!(page.unavailable_reason.unwrap().contains("session ID"));
+            agent.agent_session = identity;
+            let page = reader.history(&agent, &params(None, None, None));
+            assert!(page.available && !page.messages.is_empty());
+            assert!(page.unavailable_reason.is_none());
+        }
     }
 
     #[test]

@@ -85,6 +85,7 @@ pub struct HistoryMessage {
 pub struct HistoryPage {
     pub session: Option<String>,
     pub available: bool,
+    pub unavailable_reason: Option<String>,
     pub reset: bool,
     pub messages: Vec<HistoryMessage>,
     pub before: Option<String>,
