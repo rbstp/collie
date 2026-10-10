@@ -33,7 +33,7 @@ struct UsageProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (UsageEntry) -> Void) {
-        completion(placeholder(in: context))
+        completion(context.isPreview ? placeholder(in: context) : UsageEntry(date: .now, usage: WatchUsage.load()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
