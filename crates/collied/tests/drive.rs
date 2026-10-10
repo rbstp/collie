@@ -3422,3 +3422,71 @@ async fn plan_feedback_is_typed_but_keys_are_refused() {
     assert_eq!(herdr.params("pane.send_text").len(), 2);
     assert_eq!(herdr.params("agent.send_keys").len(), 3);
 }
+
+#[tokio::test]
+async fn git_changes_use_live_agent_checkout_and_existing_authorization() {
+    let herdr = Mock::start();
+    let (_dir, base) = root();
+    let checkout = base.join("root/a");
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-b", "feature"])
+            .arg(&checkout)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    std::fs::write(checkout.join("test.txt"), "feedback\n").unwrap();
+    herdr.with(|h| {
+        let agent = h.snapshot["agents"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|a| a["terminal_id"] == CLAUDE)
+            .unwrap();
+        agent["cwd"] = json!(base.join("root/b"));
+        agent["foreground_cwd"] = json!(checkout);
+        agent["agent_status"] = json!("blocked");
+    });
+    let drive = herdr.driver(&["claude"], &base.join("root"));
+    let Response::GitChanges(list) = drive.git_changes(tid(CLAUDE), &yes()).await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        list.root.as_ref().unwrap().as_str(),
+        checkout.to_str().unwrap()
+    );
+    assert_eq!(list.branch.as_deref(), Some("feature"));
+    assert_eq!(list.files[0].path, "test.txt");
+    let params = protocol::AgentDiffParams {
+        terminal_id: tid(CLAUDE),
+        root: list.root.unwrap(),
+        path: "test.txt".into(),
+        section: protocol::GitSection::Untracked,
+    };
+    let Response::GitDiff(diff) = drive.git_diff(params.clone(), &yes()).await.unwrap() else {
+        panic!()
+    };
+    assert!(diff.patch.contains("+feedback"));
+    assert_eq!(
+        drive.git_changes(tid(CLAUDE), &no()).await.unwrap_err().0,
+        ErrorCode::NotPaired
+    );
+    assert_eq!(
+        drive.git_diff(params.clone(), &no()).await.unwrap_err().0,
+        ErrorCode::NotPaired
+    );
+    herdr.with(|h| {
+        let agent = h.snapshot["agents"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|a| a["terminal_id"] == CLAUDE)
+            .unwrap();
+        agent["foreground_cwd"] = json!(base.join("outside"));
+    });
+    assert!(drive.git_changes(tid(CLAUDE), &yes()).await.is_err());
+    assert!(drive.git_diff(params, &yes()).await.is_err());
+    assert!(herdr.mutations().is_empty());
+}

@@ -539,6 +539,30 @@ pub struct TaskStarted {
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GitChanges {
+    pub root: Option<String>,
+    pub branch: Option<String>,
+    pub files: Vec<GitFile>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GitFile {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub section: String,
+    pub status: String,
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GitDiff {
+    pub patch: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct WorktreeListing {
     pub source: String,
     pub worktrees: Vec<WorktreeChoice>,
@@ -1524,6 +1548,72 @@ impl CollieCore {
             self, machine_id, cwd, agent, prompt, label, new_folder, None,
         )
         .await
+    }
+
+    pub async fn agent_changes(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+    ) -> Result<GitChanges, CoreError> {
+        let request = Request::AgentChanges(AgentTarget {
+            terminal_id: TerminalId::new(terminal_id)
+                .map_err(|_| invalid("terminal_id", "invalid terminal"))?,
+        });
+        match self.call(&machine_id, request, CALL_TIMEOUT).await? {
+            Response::GitChanges(changes) => Ok(GitChanges {
+                root: changes.root.map(String::from),
+                branch: changes.branch,
+                truncated: changes.truncated,
+                files: changes
+                    .files
+                    .into_iter()
+                    .map(|f| GitFile {
+                        path: f.path,
+                        old_path: f.old_path,
+                        status: f.status,
+                        section: match f.section {
+                            protocol::GitSection::Staged => "staged",
+                            protocol::GitSection::Unstaged => "unstaged",
+                            protocol::GitSection::Untracked => "untracked",
+                        }
+                        .into(),
+                        additions: f.additions,
+                        deletions: f.deletions,
+                    })
+                    .collect(),
+            }),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
+    pub async fn agent_diff(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        root: String,
+        path: String,
+        section: String,
+    ) -> Result<GitDiff, CoreError> {
+        let section = match section.as_str() {
+            "staged" => protocol::GitSection::Staged,
+            "unstaged" => protocol::GitSection::Unstaged,
+            "untracked" => protocol::GitSection::Untracked,
+            _ => return Err(invalid("section", "invalid Git section")),
+        };
+        let request = Request::AgentDiff(protocol::AgentDiffParams {
+            terminal_id: TerminalId::new(terminal_id)
+                .map_err(|_| invalid("terminal_id", "invalid terminal"))?,
+            root: Cwd::new(root).map_err(|_| invalid("root", "invalid checkout"))?,
+            path,
+            section,
+        });
+        match self.call(&machine_id, request, CALL_TIMEOUT).await? {
+            Response::GitDiff(diff) => Ok(GitDiff {
+                patch: diff.patch,
+                truncated: diff.truncated,
+            }),
+            other => Err(unexpected(&other).into()),
+        }
     }
 
     pub async fn task_worktrees(

@@ -14,6 +14,7 @@ struct AgentScreen: View {
     let switchAgent: (AgentRoute) -> Void
     let opened: (AgentSummary) -> Void
     @State private var recordedOpen = false
+    @State private var showingChanges = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
@@ -114,6 +115,7 @@ struct AgentScreen: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu("More", systemImage: "ellipsis") {
                     if !model.isTerminal {
+                        Button("Git changes", systemImage: "arrow.triangle.branch") { showingChanges = true }
                         Button("Refresh", systemImage: "arrow.clockwise") {
                             Task { await model.refresh() }
                         }
@@ -140,6 +142,9 @@ struct AgentScreen: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showingChanges) {
+            GitChangesView(agent: model) { showingChanges = false }
         }
         .onChange(of: blocked, initial: true) { _, blocked in model.blocked = blocked }
         .onChange(of: model.agent, initial: true) { _, agent in
@@ -557,6 +562,10 @@ private struct PromptBar: View {
             isPresented: $pickingPhoto, selection: $photos, maxSelectionCount: max(model.attachmentSlots, 1),
             matching: .images
         )
+        .onChange(of: model.gitFeedbackInsertions) { _, _ in
+            typingCommand = false
+            editing = true
+        }
         .onChange(of: photos) { _, items in
             guard !items.isEmpty else { return }
             photos = []

@@ -7,6 +7,7 @@ import Testing
 
 final class FakeCore: AgentCore {
     struct State {
+        var gitCalls: [String] = []
         var prompts: [String] = []
         var expectedDrafts: [String?] = []
         var kind: String?
@@ -151,6 +152,14 @@ final class FakeCore: AgentCore {
         }
         if let error { throw error }
         return TerminalSnapshot(terminalId: terminalId, source: source, ansi: "read \(read)", truncated: false)
+    }
+    func agentChanges(machineId: String, terminalId: String) async throws -> GitChanges {
+        state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)") }
+        return GitChanges(root: "/worktree", branch: "feature", files: [], truncated: false)
+    }
+    func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff {
+        state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)") }
+        return GitDiff(patch: "@@ -1 +1 @@\n-old\n+new\n", truncated: false)
     }
     func agentDraft(machineId: String, terminalId: String) async throws -> String? {
         state.withLock { s in
@@ -2202,4 +2211,77 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     await model.sendPrompt()
     #expect(core.snapshot.prompts.count == 1)
     #expect(core.snapshot.prompts.first?.contains("Keep this draft\n\n/review\nCheck the changes.") == true)
+}
+
+@Test func gitPatchKeepsExactSelectedHunkAndRejectsIncompleteTail() {
+    let first = "@@ -1 +1 @@\n-old\r\n+new\r\n"
+    let last = "@@ -30 +30 @@\n-before\n+after\n"
+    let patch = GitPatch(GitDiff(patch: "--- a/a.swift\n+++ b/a.swift\n" + first + last, truncated: true))
+    #expect(patch.hunks.count == 2)
+    #expect(patch.hunks[0].text == first)
+    #expect(patch.hunks[0].complete)
+    #expect(!patch.hunks[1].complete)
+    let file = GitFile(path: "a.swift", oldPath: "old.swift", section: "staged", status: "R90", additions: 1, deletions: 1)
+    let feedback = patch.hunks[0].feedback(root: "/repo/worktree", file: file)
+    #expect(feedback.contains("File: a.swift"))
+    #expect(feedback.contains("Renamed from: old.swift"))
+    #expect(feedback.contains("Checkout: /repo/worktree"))
+    #expect(feedback.contains(first))
+    #expect(!feedback.contains(last))
+    #expect(GitPatch(GitDiff(patch: "Binary files differ\n", truncated: false)).hunks.isEmpty)
+    #expect(GitPatch(GitDiff(patch: "", truncated: false)).hunks.isEmpty)
+}
+
+@MainActor
+@Test func gitFeedbackPreservesDraftAttachmentsAndStaysLocalUntilExplicitSend() async throws {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.draft = "Keep my prompt"
+    await model.attach(name: "notes.txt") { _ in Data([1]) }?.value
+    let attachments = model.attachments.map(\.path)
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
+    let feedback = GitHunk(id: 0, text: "@@ -1 +1 @@\n-old\n+new\n", complete: true).feedback(root: "/worktree", file: file)
+    #expect(model.draftGitFeedback(feedback))
+    await model.flushMirror()
+    #expect(model.draft == "Keep my prompt\n\n" + feedback)
+    #expect(model.attachments.map(\.path) == attachments)
+    #expect(core.snapshot.prompts.isEmpty)
+    #expect(core.snapshot.slashes.isEmpty)
+    #expect(core.snapshot.keys.isEmpty)
+    #expect(core.snapshot.typed.isEmpty)
+    model.draft += "Please handle the empty case."
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts.count == 1)
+    #expect(core.snapshot.prompts[0].contains("Please handle the empty case."))
+    #expect(core.snapshot.prompts[0].contains(feedback))
+    #expect(core.snapshot.prompts[0].contains(attachments[0]))
+}
+
+@MainActor
+@Test func gitFeedbackDoesNotReplaceAnAnswerOrAnOversizedDraft() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.draft = String(repeating: "a", count: 30 * 1024)
+    #expect(!model.draftGitFeedback("context"))
+    #expect(model.draft.count == 30 * 1024)
+    #expect(model.gitFeedbackInsertions == 0)
+    model.draft = "My answer"
+    model.blocked = .keysAndText
+    #expect(!model.draftGitFeedback("context"))
+    #expect(model.draft == "My answer")
+    #expect(core.snapshot.prompts.isEmpty)
+    #expect(core.snapshot.typed.isEmpty)
+}
+
+@MainActor
+@Test func gitReadsStayOnTheAgentRouteAndSelectedCheckout() async throws {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    let changes = try await model.gitChanges()
+    let file = GitFile(path: "a.swift", oldPath: nil, section: "staged", status: "M", additions: 1, deletions: 1)
+    let root = try #require(changes.root)
+    _ = try await model.gitDiff(root: root, file: file)
+    let target = "\(model.route.machineId)|\(model.route.terminalId)"
+    #expect(core.snapshot.gitCalls == [target, target + "|/worktree|a.swift|staged"])
+    #expect(core.snapshot.prompts.isEmpty)
 }

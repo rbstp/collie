@@ -25,6 +25,30 @@
       ],
       "type": "object"
     },
+    "AgentDiffParams": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "root": {
+          "$ref": "#/$defs/Cwd"
+        },
+        "section": {
+          "$ref": "#/$defs/GitSection"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "root",
+        "path",
+        "section"
+      ],
+      "type": "object"
+    },
     "AgentKind": {
       "pattern": "^[a-z][a-z0-9_-]{0,31}$",
       "type": "string"
@@ -367,6 +391,14 @@
       "maxLength": 255,
       "minLength": 1,
       "pattern": "^[^.]",
+      "type": "string"
+    },
+    "GitSection": {
+      "enum": [
+        "staged",
+        "unstaged",
+        "untracked"
+      ],
       "type": "string"
     },
     "HelloParams": {
@@ -953,6 +985,38 @@
         },
         "params": {
           "$ref": "#/$defs/Empty"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.changes",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentTarget"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.diff",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentDiffParams"
         }
       },
       "required": [

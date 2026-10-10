@@ -42,6 +42,7 @@ final class AgentModel {
     private(set) var refreshing = false
     private var revision: UInt64 = 0
 
+    private(set) var gitFeedbackInsertions = 0
     var draft = ""
     /// What the phone last saw in the Mac's input box: nil when unknown. A send replaces exactly this text.
     private(set) var macDraft: String?
@@ -605,6 +606,33 @@ final class AgentModel {
         attachments = []
         queuedKeys.removeAll()
         promptError = nil
+    }
+
+    func gitChanges() async throws -> GitChanges {
+        try await core.agentChanges(machineId: route.machineId, terminalId: route.terminalId)
+    }
+
+    func gitDiff(root: String, file: GitFile) async throws -> GitDiff {
+        try await core.agentDiff(machineId: route.machineId, terminalId: route.terminalId,
+                                 root: root, path: file.path, section: file.section)
+    }
+
+    var canDraftGitFeedback: Bool {
+        agent != nil && !isTerminal && !answering && !sendingPrompt && !dictation.isActive
+    }
+
+    func draftGitFeedback(_ text: String) -> Bool {
+        guard canDraftGitFeedback else { return false }
+        let combined = draft.isEmpty ? text : draft + "\n\n" + text
+        guard combined.utf8.count <= 30 * 1024 else {
+            promptError = "This hunk and the current draft are too long. Shorten the draft or select a smaller hunk."
+            return false
+        }
+        loadedMacDraft = nil
+        draft = combined
+        gitFeedbackInsertions += 1
+        saveDraft()
+        return true
     }
 
     func insert(_ shortcut: PromptShortcut) {

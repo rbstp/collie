@@ -238,6 +238,39 @@ impl Driver {
         }
     }
 
+    async fn git_checkout(&self, terminal_id: &TerminalId, auth: &Authorized) -> Result<Cwd, Fail> {
+        authorized(auth)?;
+        let listed = self.find_agent(terminal_id).await?;
+        let current = herdr::agent_get(&self.herdr, &listed.pane_id)
+            .await
+            .map_err(herdr_fail)?;
+        match check_ready(&listed, &current) {
+            Ok(()) | Err((ErrorCode::AgentBlocked, _)) => {}
+            Err(e) => return Err(e),
+        }
+        let cwd = current
+            .foreground_cwd
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or(current.cwd.as_deref())
+            .ok_or_else(|| invalid("agent has no checkout"))?;
+        resolve_cwd(cwd, &self.roots).map_err(invalid)
+    }
+
+    pub async fn git_changes(&self, terminal_id: TerminalId, auth: &Authorized) -> Reply {
+        let cwd = self.git_checkout(&terminal_id, auth).await?;
+        let changes = crate::git::changes(&cwd, &self.roots).await?;
+        authorized(auth)?;
+        Ok(Response::GitChanges(changes))
+    }
+
+    pub async fn git_diff(&self, p: protocol::AgentDiffParams, auth: &Authorized) -> Reply {
+        let cwd = self.git_checkout(&p.terminal_id, auth).await?;
+        let diff = crate::git::diff(&cwd, &self.roots, &p).await?;
+        authorized(auth)?;
+        Ok(Response::GitDiff(diff))
+    }
+
     async fn ready_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
         let listed = self.find_agent(terminal_id).await?;
         let current = herdr::agent_get(&self.herdr, &listed.pane_id)
