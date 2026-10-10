@@ -178,18 +178,28 @@ final class AgentModel {
     }
 
     func accepts(_ key: AgentKey) -> Bool {
-        if key == .shiftLeft { return codexQuestionQueued }
-        if codexQuestionOpen && (key == .up || key == .down || key == .enter) { return true }
+        if key == .shiftLeft { return agent?.kind == "codex" }
+        if codexQuestionQueued { return false }
+        if codexQuestionOpen { return key == .up || key == .down || key == .enter }
         return acceptsKeys
     }
 
     var codexQuestionQueued: Bool {
-        agent?.kind == "codex" && ansi.contains("Queued follow-up inputs")
-            && ansi.contains("⇧←") && ansi.contains("to answer")
+        guard agent?.kind == "codex" else { return false }
+        let tail = ansi.components(separatedBy: .newlines).suffix(16)
+        return tail.contains { $0.contains("Queued follow-up inputs") }
+            && tail.contains { $0.contains("⇧←") && $0.contains("to answer") }
+            && !codexQuestionOpen
     }
 
     var codexQuestionOpen: Bool {
-        agent?.kind == "codex" && ansi.contains("submit") && ansi.contains("main prompt") && ansi.contains("›")
+        guard agent?.kind == "codex" else { return false }
+        let lines = ansi.components(separatedBy: .newlines)
+        let footer = lines.reversed()
+            .map { $0.replacingOccurrences(of: "\u{1B}\\[[0-9;]*[mC]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+        return footer?.contains("enter submit") == true && footer?.contains("main prompt") == true
+            && lines.suffix(25).contains { $0.contains("›") || $0.contains("Queued follow-up inputs") }
     }
 
     /// Typed text answers the blocking prompt instead of prompting the agent.
@@ -219,7 +229,8 @@ final class AgentModel {
     var canUnlock: Bool { isTerminal && terminalLocked && !terminalKeyMissing && !unlocking }
 
     var blockedHint: String? {
-        switch blocked {
+        if codexQuestionOpen { return nil }
+        return switch blocked {
         case nil, .terminal: nil
         case .optionsOnly: "Choose an option above."
         case .keys: "Choose an option above or use the arrow keys."
@@ -229,12 +240,12 @@ final class AgentModel {
 
     var canSendPrompt: Bool {
         if isTerminal { return !sendingPrompt && !unlocking && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        return !sendingPrompt && !dictation.isActive
+        return !sendingPrompt && !dictation.isActive && !codexQuestionQueued
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
     }
 
     func openCodexQuestion() async {
-        guard codexQuestionQueued else { return }
+        guard agent?.kind == "codex" else { return }
         promptError = nil
         do {
             try await core.sendKeys(machineId: route.machineId, terminalId: route.terminalId, keys: [.shiftLeft])

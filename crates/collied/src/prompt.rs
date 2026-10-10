@@ -95,11 +95,23 @@ pub fn codex_question_open(text: &str) -> bool {
         .rev()
         .find(|line| !line.trim().is_empty())
         .is_some_and(|line| line.contains("enter submit") && line.contains("main prompt"))
-        && lines
+        && (lines
             .iter()
             .rev()
             .take(20)
             .any(|line| line.trim_start().starts_with('›'))
+            || codex_text_only(text))
+}
+
+fn codex_text_only(text: &str) -> bool {
+    let tail: Vec<&str> = text.lines().rev().take(25).collect();
+    tail.iter()
+        .position(|line| line.contains("Queued follow-up inputs"))
+        .is_some_and(|heading| {
+            !tail[..heading]
+                .iter()
+                .any(|line| line.trim_start().starts_with('›'))
+        })
 }
 
 pub fn codex_question_identity(text: &str) -> Option<String> {
@@ -114,6 +126,24 @@ pub fn codex_question_identity(text: &str) -> Option<String> {
     while before.last().is_some_and(|line| line.trim().is_empty()) {
         before = &before[..before.len() - 1];
     }
+    if codex_text_only(text) {
+        while before.last().is_some_and(|line| !line.trim().is_empty()) {
+            before = &before[..before.len() - 1];
+        }
+        while before.last().is_some_and(|line| line.trim().is_empty()) {
+            before = &before[..before.len() - 1];
+        }
+        let start = before
+            .iter()
+            .rposition(|line| line.trim().is_empty())
+            .map_or(0, |i| i + 1);
+        let question = before[start..]
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        return (!question.is_empty()).then_some(question);
+    }
     while before.last().is_some_and(|line| !line.trim().is_empty()) {
         before = &before[..before.len() - 1];
     }
@@ -127,6 +157,31 @@ pub fn codex_question_identity(text: &str) -> Option<String> {
 pub fn codex_answer_visible(before: &str, text: &str, answer: &str) -> bool {
     if !codex_question_open(before) || !codex_question_open(text) {
         return false;
+    }
+    if codex_text_only(before) {
+        if codex_question_identity(before) != codex_question_identity(text) {
+            return false;
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        let Some(footer) = lines
+            .iter()
+            .rposition(|line| line.contains("enter submit") && line.contains("main prompt"))
+        else {
+            return false;
+        };
+        let mut field = &lines[..footer];
+        while field.last().is_some_and(|line| line.trim().is_empty()) {
+            field = &field[..field.len() - 1];
+        }
+        let start = field
+            .iter()
+            .rposition(|line| line.trim().is_empty())
+            .map_or(0, |i| i + 1);
+        let field = field[start..]
+            .iter()
+            .flat_map(|line| line.split_whitespace())
+            .collect::<String>();
+        return field == answer.split_whitespace().collect::<String>();
     }
     let other = before.lines().rev().take(20).find_map(|line| {
         let line = line.trim_start().trim_start_matches('›').trim_start();
@@ -1915,6 +1970,32 @@ mod tests {
             freeform,
             &answered,
             "It was in the background"
+        ));
+        let queued_freeform = "Queued follow-up inputs\n\n  1 of 2\n\n  Which missing agent do you see in All, and which section is it under?\n\n  Type your answer\n\n  enter submit   ⌃] skip   ⇧→ main prompt   ⇧← next question\n";
+        let queued_answered = queued_freeform.replace("Type your answer", "It is in Done");
+        let with_old_cursor = format!("› Prior prompt\n{queued_freeform}");
+        assert!(codex_question_open(queued_freeform));
+        assert_eq!(
+            codex_question_identity(&with_old_cursor),
+            codex_question_identity(queued_freeform)
+        );
+        assert_eq!(
+            codex_question_identity(queued_freeform),
+            Some("Which missing agent do you see in All, and which section is it under?".into())
+        );
+        assert_eq!(
+            codex_question_identity(queued_freeform),
+            codex_question_identity(&queued_answered)
+        );
+        assert!(codex_answer_visible(
+            queued_freeform,
+            &queued_answered,
+            "It is in Done"
+        ));
+        assert!(!codex_answer_visible(
+            queued_freeform,
+            queued_freeform,
+            "It is in Done"
         ));
     }
 

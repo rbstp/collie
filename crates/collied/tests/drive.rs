@@ -3268,6 +3268,33 @@ async fn codex_question_opens_and_a_typed_answer_submits_without_approving() {
 }
 
 #[tokio::test]
+async fn codex_text_only_question_accepts_a_typed_answer() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["codex"], &base);
+    let question = "Queued follow-up inputs\n\n  1 of 2\n\n  Which missing agent do you see in All?\n\n  Type your answer\n\n  enter submit   ⌃] skip   ⇧→ main prompt   ⇧← next question\n";
+    let answered = question.replace("Type your answer", "It is in Done");
+    herdr.with(|h| {
+        h.rule = Some("osc_title_blocked".into());
+        h.screens = [question.into(), answered].into();
+    });
+    assert_eq!(
+        drive
+            .type_text(typed(CODEX_BLOCKED, "It is in Done"), &yes())
+            .await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        [json!({"pane_id": "w7:p1", "text": "\u{1b}[200~It is in Done\u{1b}[201~"})]
+    );
+    assert_eq!(
+        herdr.params("agent.send_keys"),
+        [json!({"target": "w7:p1", "keys": ["enter"]})]
+    );
+}
+
+#[tokio::test]
 async fn codex_question_options_use_arrows_and_enter_without_approving() {
     let herdr = Mock::start();
     let (_d, base) = root();
