@@ -226,7 +226,7 @@ private struct CloseDialogs: ViewModifier {
         case .pane: "The agent and its shell on the machine are ended."
         case .workspace: "Every agent and shell in the workspace on the machine is ended."
         case .archive:
-            "A linked worktree checkout and its uncommitted changes are deleted, closing its workspace. For a regular folder, only this pane closes and the folder remains. gh poi can also remove other merged branches and their worktrees in the repository."
+            "Deletes this worktree, including uncommitted changes. Regular folders stay. gh poi may delete other merged worktrees."
         case nil: ""
         }
     }

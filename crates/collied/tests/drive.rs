@@ -139,6 +139,7 @@ struct Herdr {
     worktree_open: bool,
     worktree_workspace_id: Option<String>,
     pane_occupied: bool,
+    disconnect_after_remove: bool,
 }
 
 struct Mock {
@@ -178,6 +179,11 @@ impl Mock {
                         tokio::time::sleep(delay).await;
                     }
                     let body = answer(&mut state.lock().unwrap(), &req);
+                    if req["method"] == "worktree.remove"
+                        && state.lock().unwrap().disconnect_after_remove
+                    {
+                        return;
+                    }
                     let mut resp = json!({ "id": req["id"] });
                     match body {
                         Ok(result) => resp["result"] = result,
@@ -366,12 +372,30 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
                 "already_open": h.worktree_open
             })
         }
-        "worktree.remove" => json!({"type": "worktree_removed",
-            "workspace_id": p["workspace_id"], "force": p["force"],
-            "worktree": {"path": h.worktree_path.as_deref().unwrap_or("/missing"),
-                "branch": "feature", "open_workspace_id": null,
-                "is_bare": false, "is_linked_worktree": true}
-        }),
+        "worktree.remove" => {
+            let path = h.worktree_path.as_deref().unwrap_or("/missing").to_owned();
+            if h.disconnect_after_remove {
+                let repo = h.snapshot["workspaces"][1]["worktree"]["repo_root"]
+                    .as_str()
+                    .unwrap();
+                assert!(
+                    std::process::Command::new("git")
+                        .args(["-C", repo, "worktree", "remove", "--force", &path])
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+                h.snapshot["workspaces"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|workspace| workspace["workspace_id"] != p["workspace_id"]);
+            }
+            json!({"type": "worktree_removed",
+                "workspace_id": p["workspace_id"], "force": p["force"],
+                "worktree": {"path": path, "branch": "feature", "open_workspace_id": null,
+                    "is_bare": false, "is_linked_worktree": true}
+            })
+        }
         "agent.start" => {
             h.started = p["name"].as_str().map(str::to_owned);
             json!({"type": "agent_started", "argv": [p["kind"]], "agent": started_agent("unknown", false, true)})
@@ -2317,6 +2341,80 @@ async fn archive_force_removes_only_the_linked_worktree_workspace() {
         ErrorCode::InvalidParams
     );
     assert!(herdr.mutations().is_empty());
+}
+
+#[tokio::test]
+async fn archive_reports_removed_checkout_when_herdr_drops_its_response() {
+    let herdr = Mock::start();
+    let (_dir, base) = root();
+    let source = base.join("root/a");
+    let checkout = source.join(".worktree/feature");
+    let git = |args: &[&str]| {
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&source)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.name=Collie Test",
+        "-c",
+        "user.email=collie@example.invalid",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "initial",
+    ]);
+    git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "feature",
+        checkout.to_str().unwrap(),
+    ]);
+    herdr.with(|h| {
+        h.worktree_path = Some(checkout.to_str().unwrap().into());
+        h.worktree_open = true;
+        h.worktree_workspace_id = Some("w7".into());
+        h.disconnect_after_remove = true;
+        h.snapshot["workspaces"][1]["worktree"] = json!({
+            "repo_root": source, "checkout_path": checkout, "is_linked_worktree": true
+        });
+        h.snapshot["panes"][1]["cwd"] = json!(checkout);
+    });
+    let drive = herdr.driver(&["claude"], &base.join("root"));
+    let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let auth: Authorized = {
+        let checks = checks.clone();
+        std::sync::Arc::new(move || checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2)
+    };
+    let Response::TaskArchived { message } = drive
+        .task_archive(
+            TaskArchiveParams {
+                op_id: op('A'),
+                terminal_id: tid(SHELL),
+                confirm: true,
+            },
+            &auth,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected response");
+    };
+    assert!(message.contains("Removed worktree checkout"), "{message}");
+    assert!(message.contains("closed its workspace"), "{message}");
+    assert!(message.contains("gh poi was skipped"), "{message}");
+    assert!(!checkout.exists());
+    assert_eq!(herdr.params("worktree.remove").len(), 1);
 }
 
 #[tokio::test]

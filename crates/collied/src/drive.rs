@@ -1496,31 +1496,55 @@ impl Driver {
                 return Err(invalid("worktree is no longer linked to this workspace"));
             }
             authorized(auth)?;
-            let removed = herdr::worktree_remove(&self.herdr, &pane.workspace_id)
-                .await
-                .map_err(|error| {
-                    let (code, message) = herdr_fail(error);
-                    (
-                        code,
-                        format!("Worktree removal could not be verified ({message}); gh poi was skipped."),
+            let closed = match herdr::worktree_remove(&self.herdr, &pane.workspace_id).await {
+                Ok(removed) if removed.path == checkout.as_str() => {
+                    format!(
+                        "Removed worktree checkout {} and closed its workspace.",
+                        checkout.as_str()
                     )
-                })?;
-            if removed.path != checkout.as_str() {
-                return Ok(Response::TaskArchived {
-                    message: format!(
-                        "Herdr removed a checkout but reported a different path; branch cleanup was skipped. Expected {}, got {}.",
-                        checkout.as_str(),
-                        removed.path
-                    ),
-                });
-            }
-            (
-                Some(repo),
-                format!(
-                    "Removed worktree checkout {} and closed its workspace.",
-                    checkout.as_str()
-                ),
-            )
+                }
+                Ok(removed) => {
+                    return Ok(Response::TaskArchived {
+                        message: format!(
+                            "Herdr removed a checkout but reported a different path; branch cleanup was skipped. Expected {}, got {}.",
+                            checkout.as_str(),
+                            removed.path
+                        ),
+                    });
+                }
+                Err(error) => {
+                    if !checkout_removed(&repo, &checkout) {
+                        let (code, message) = herdr_fail(error);
+                        return Err((
+                            code,
+                            format!(
+                                "Worktree removal could not be verified ({message}); gh poi was skipped."
+                            ),
+                        ));
+                    }
+                    let workspace_closed =
+                        herdr::session_snapshot(&self.herdr)
+                            .await
+                            .is_ok_and(|snapshot| {
+                                !snapshot
+                                    .workspaces
+                                    .iter()
+                                    .any(|item| item.workspace_id == pane.workspace_id)
+                            });
+                    if workspace_closed {
+                        format!(
+                            "Removed worktree checkout {} and closed its workspace.",
+                            checkout.as_str()
+                        )
+                    } else {
+                        format!(
+                            "Removed worktree checkout {}; workspace closure could not be verified.",
+                            checkout.as_str()
+                        )
+                    }
+                }
+            };
+            (Some(repo), closed)
         } else {
             let repo = pane
                 .cwd
@@ -1567,6 +1591,23 @@ fn git_repository(cwd: &Cwd, roots: &[PathBuf]) -> Option<Cwd> {
     }
     let root = std::str::from_utf8(&output.stdout).ok()?.trim();
     resolve_cwd(root, roots).ok()
+}
+
+fn checkout_removed(repo: &Cwd, checkout: &Cwd) -> bool {
+    if !matches!(std::fs::symlink_metadata(checkout.as_str()), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return false;
+    }
+    let output = std::process::Command::new("git")
+        .args(["-C", repo.as_str(), "worktree", "list", "--porcelain"])
+        .output();
+    let Ok(output) = output else { return false };
+    output.status.success()
+        && std::str::from_utf8(&output.stdout).is_ok_and(|text| {
+            !text
+                .lines()
+                .any(|line| line.strip_prefix("worktree ") == Some(checkout.as_str()))
+        })
 }
 
 async fn run_poi(repo: &Cwd) -> Result<(), &'static str> {
