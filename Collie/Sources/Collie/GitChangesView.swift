@@ -25,6 +25,7 @@ struct GitComment: Identifiable {
     let root: String
     let file: GitFile
     let selection: String
+    var anchor: GitDiffAnchor?
     var text = ""
 
     var message: String { GitFeedback.draft(file: file, selection: selection) + text.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -40,9 +41,9 @@ final class GitReview {
     var ready: Bool { !comments.isEmpty && comments.allSatisfy { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } }
 
     @discardableResult
-    func add(root: String, file: GitFile, selection: String) -> UUID? {
+    func add(root: String, file: GitFile, selection: String, anchor: GitDiffAnchor? = nil) -> UUID? {
         guard !sending else { return nil }
-        let comment = GitComment(root: root, file: file, selection: selection)
+        let comment = GitComment(root: root, file: file, selection: selection, anchor: anchor)
         comments.append(comment)
         return comment.id
     }
@@ -193,14 +194,14 @@ private struct GitCounts: View {
     }
 }
 
-private struct GitDiffView: View {
+struct GitDiffView: View {
     let agent: AgentModel
     let root: String
     let file: GitFile
     let sent: () -> Void
     @Bindable var review: GitReview
     @FocusState private var editing: UUID?
-    @State private var selection = NSRange(location: 0, length: 0)
+    @State private var collapsed = false
     @State private var diff: GitDiff?
     @State private var error: String?
     @State private var loading = false
@@ -208,47 +209,45 @@ private struct GitDiffView: View {
 
     var body: some View {
         ScrollViewReader { scroll in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(verbatim: file.path).font(.headline).textSelection(.enabled)
-                    Text("\(file.section.capitalized) · \(file.statusLabel)").font(.subheadline).foregroundStyle(.secondary)
-                    if let error { Text(error).foregroundStyle(.red) }
-                    if let diff {
-                        if diff.patch.isEmpty {
-                            Text("No text diff. The file may have changed since the list was loaded.").foregroundStyle(.secondary)
-                        }
-                        code(diff.patch)
-                        if diff.truncated {
-                            Text("Diff preview is incomplete. Review the rest on the machine.")
-                                .font(.footnote).foregroundStyle(.orange)
-                        }
-                    }
-                    if loading { ProgressView("Loading diff…") }
-                    ForEach(review.comments) { comment in
-                        if comment.root == root && comment.file.path == file.path && comment.file.section == file.section {
-                            GitCommentEditor(comment: comment, text: review.text(for: comment.id), editing: $editing) {
-                                if editing == comment.id { editing = nil }
-                                review.remove(id: comment.id)
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let error { Text(error).foregroundStyle(.red).padding() }
+                        if let diff, !collapsed {
+                            let rows = GitDiffRow.parse(diff.patch)
+                            let anchors = Set(comments.compactMap { $0.anchor?.patch == diff.patch ? $0.anchor?.row : nil })
+                            let blocks = GitDiffBlock.split(rows, after: anchors)
+                            let digits = String(rows.reduce(1) { max($0, $1.oldLine ?? 0, $1.newLine ?? 0) }).count
+                            if rows.isEmpty {
+                                Text("No text diff. The file may be empty, renamed, or have changed since the list was loaded.")
+                                    .foregroundStyle(.secondary).padding()
                             }
-                                .id(comment.id)
-                                .disabled(review.sending)
+                            ForEach(blocks) { block in
+                                code(block, patch: diff.patch, width: geometry.size.width, digits: digits)
+                                ForEach(comments.filter { $0.anchor == GitDiffAnchor(patch: diff.patch, row: block.lastRow) }) { comment in
+                                    editor(comment)
+                                }
+                            }
+                            if diff.truncated {
+                                Text("Diff preview is incomplete. Review the rest on the machine.")
+                                    .font(.footnote).foregroundStyle(.orange).padding()
+                            }
+                            ForEach(comments.filter { comment in comment.anchor?.patch != diff.patch || !rows.contains(where: { $0.id == comment.anchor?.row }) }) { comment in
+                                editor(comment)
+                            }
                         }
+                        if diff == nil, !collapsed {
+                            ForEach(comments) { comment in editor(comment) }
+                        }
+                        if loading { ProgressView("Loading diff…").padding() }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-            }
-            .safeAreaInset(edge: .bottom) {
-                GitReviewBar(agent: agent, review: review, sent: sent, add: diff.map { diff in
-                    {
-                        let text = GitFeedback.selectedText(in: diff.patch, range: selection)
-                        editing = review.add(root: root, file: file, selection: text)
-                        selection = NSRange(location: 0, length: 0)
-                    }
-                })
-            }
-            .onChange(of: editing) { _, id in
-                if let id { withAnimation { scroll.scrollTo(id, anchor: .bottom) } }
+                .safeAreaInset(edge: .top) { header }
+                .safeAreaInset(edge: .bottom) { GitReviewBar(agent: agent, review: review, sent: sent) }
+                .onChange(of: editing) { _, id in
+                    if let id { withAnimation { scroll.scrollTo(id, anchor: .bottom) } }
+                }
             }
             .navigationTitle("Diff")
             .navigationBarTitleDisplayMode(.inline)
@@ -264,17 +263,64 @@ private struct GitDiffView: View {
         }
     }
 
-    @ViewBuilder private func code(_ text: String) -> some View {
-        if wraps { GitDiffText(text: text, wraps: true, selection: $selection) }
+    private var comments: [GitComment] {
+        review.comments.filter { $0.root == root && $0.file.path == file.path && $0.file.section == file.section }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Button {
+                collapsed.toggle()
+                if collapsed { editing = nil }
+            } label: {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    .frame(minWidth: 24, minHeight: 32)
+            }
+            .accessibilityLabel(collapsed ? "Expand diff" : "Collapse diff")
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: file.path).font(.subheadline.weight(.semibold)).textSelection(.enabled)
+                Text("\(file.section.capitalized) · \(file.statusLabel)").font(.caption).foregroundStyle(.secondary)
+                if let old = file.oldPath { Text("From \(old)").font(.caption).foregroundStyle(.secondary) }
+            }
+            Spacer(minLength: 0)
+            Button("File feedback", systemImage: "text.bubble") {
+                collapsed = false
+                editing = review.add(root: root, file: file, selection: "")
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.glass)
+            .disabled(review.sending)
+        }
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .padding(.horizontal, 8)
+        .padding(.bottom, 8)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+    }
+
+    private func editor(_ comment: GitComment) -> some View {
+        GitCommentEditor(comment: comment, text: review.text(for: comment.id), editing: $editing) {
+            if editing == comment.id { editing = nil }
+            review.remove(id: comment.id)
+        }
+        .padding(12)
+        .id(comment.id)
+        .disabled(review.sending)
+    }
+
+    @ViewBuilder private func code(_ block: GitDiffBlock, patch: String, width: CGFloat, digits: Int) -> some View {
+        let feedback: ((String, Int) -> Void)? = review.sending ? nil : { text, row in
+            editing = review.add(root: root, file: file, selection: text, anchor: GitDiffAnchor(patch: patch, row: row))
+        }
+        if wraps { GitDiffText(block: block, wraps: true, minimumWidth: width, digits: digits, feedback: feedback) }
         else {
-            ScrollView(.horizontal) { GitDiffText(text: text, wraps: false, selection: $selection) }
+            ScrollView(.horizontal) { GitDiffText(block: block, wraps: false, minimumWidth: width, digits: digits, feedback: feedback) }
         }
     }
 
     private func refresh() async {
         guard !loading else { return }
         loading = true
-        selection = NSRange(location: 0, length: 0)
         diff = nil
         error = nil
         defer { loading = false }
@@ -292,9 +338,10 @@ private struct GitCommentEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(verbatim: comment.file.path).font(.caption.weight(.semibold))
+                Text(verbatim: comment.file.path).font(.caption.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
                 Spacer()
-                Button("Remove feedback", systemImage: "trash", role: .destructive, action: remove).labelStyle(.iconOnly)
+                Button("Remove feedback", systemImage: "trash", role: .destructive, action: remove)
+                    .labelStyle(.iconOnly).buttonStyle(.glass)
             }
             if !comment.selection.isEmpty {
                 Text(verbatim: comment.selection).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
@@ -304,7 +351,7 @@ private struct GitCommentEditor: View {
             } else { field }
         }
         .padding(12)
-        .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 
     private var field: some View {
@@ -316,96 +363,30 @@ private struct GitReviewBar: View {
     let agent: AgentModel
     let review: GitReview
     let sent: () -> Void
-    var add: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 8) {
-            if let error = review.error { Text(error).font(.footnote).foregroundStyle(.red) }
+            if let error = review.error {
+                Text(error).font(.footnote).foregroundStyle(.red)
+                    .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 12))
+            }
             if !agent.canSendGitFeedback && !review.sending {
                 Text("Feedback stays here until the agent can accept a prompt.").font(.footnote).foregroundStyle(.secondary)
+                    .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 12))
             }
-            HStack {
-                if let add {
-                    Button("Add feedback", systemImage: "text.bubble", action: add)
-                        .buttonStyle(.bordered)
-                        .disabled(review.sending)
-                }
-                Button {
-                    Task { if await review.send(using: agent) { sent() } }
-                } label: {
-                    if review.sending { ProgressView() }
-                    else { Text("Send feedback (\(review.comments.count))") }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(review.sending || !review.ready || !agent.canSendGitFeedback)
+            Button {
+                Task { if await review.send(using: agent) { sent() } }
+            } label: {
+                if review.sending { ProgressView() }
+                else { Label("Send feedback (\(review.comments.count))", systemImage: "text.bubble") }
             }
+            .buttonStyle(.glassProminent)
+            .controlSize(.large)
+            .disabled(review.sending || !review.ready || !agent.canSendGitFeedback)
         }
-        .padding()
+        .padding(12)
         .frame(maxWidth: .infinity)
-        .background(.bar)
-    }
-}
-
-struct GitDiffText: UIViewRepresentable {
-    let text: String
-    let wraps: Bool
-    @Binding var selection: NSRange
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
-        view.isEditable = false
-        view.isSelectable = true
-        view.isScrollEnabled = false
-        view.backgroundColor = .clear
-        view.textContainerInset = .zero
-        view.textContainer.lineFragmentPadding = 0
-        view.textContainer.widthTracksTextView = false
-        view.delegate = context.coordinator
-        return view
-    }
-
-    func updateUIView(_ view: UITextView, context: Context) {
-        context.coordinator.selection = $selection
-        context.coordinator.updating = true
-        defer { context.coordinator.updating = false }
-        let font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .regular)
-        if view.text != text || view.font != font {
-            let styled = NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: UIColor.label])
-            let source = text as NSString
-            var offset = 0
-            while offset < source.length {
-                let range = source.lineRange(for: NSRange(location: offset, length: 0))
-                let line = source.substring(with: range)
-                if line.hasPrefix("+") { styled.addAttribute(.foregroundColor, value: UIColor.systemGreen, range: range) }
-                else if line.hasPrefix("-") { styled.addAttribute(.foregroundColor, value: UIColor.systemRed, range: range) }
-                else if line.hasPrefix("@@") { styled.addAttribute(.backgroundColor, value: UIColor.tintColor.withAlphaComponent(0.12), range: range) }
-                offset = NSMaxRange(range)
-            }
-            view.attributedText = styled
-        }
-        view.textContainer.lineBreakMode = wraps ? .byWordWrapping : .byClipping
-        if view.selectedRange != selection { view.selectedRange = selection }
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
-        let width = wraps ? (proposal.width ?? 300) : max(1, ceil(uiView.attributedText.size().width) + 1)
-        uiView.textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
-        return CGSize(width: width, height: ceil(uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height))
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
-
-    final class Coordinator: NSObject, UITextViewDelegate {
-        var selection: Binding<NSRange>
-        var updating = false
-
-        init(selection: Binding<NSRange>) { self.selection = selection }
-
-        func textViewDidChangeSelection(_ textView: UITextView) {
-            guard !updating, selection.wrappedValue != textView.selectedRange else { return }
-            selection.wrappedValue = textView.selectedRange
-        }
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 }
 
