@@ -232,3 +232,26 @@ private func tool(_ id: String, call: String? = nil, result: Bool = false) -> Hi
     #expect(model.rows.map(\.id) == ["message:old", "message:new", "message:result"])
     #expect(model.rows.allSatisfy { $0.message != nil })
 }
+
+@MainActor
+@Test func conversationOlderLoadingFeedbackLastsUntilTheRequestFinishes() async {
+    let model = ConversationModel()
+    model.apply(page([message("current")]), older: false)
+    var pending: CheckedContinuation<HistoryPage, Never>?
+    let task = Task {
+        await model.fetch(older: true) { _, _, _ in
+            await withCheckedContinuation { pending = $0 }
+        }
+    }
+    while pending == nil { await Task.yield() }
+    #expect(model.loadingOlder)
+    pending?.resume(returning: page([message("older")], before: nil))
+    await task.value
+    #expect(!model.loadingOlder)
+    #expect(model.messages.map(\.id) == ["older", "current"])
+    await model.fetch { _, _, _ in
+        #expect(model.loading)
+        #expect(!model.loadingOlder)
+        return page([], before: nil)
+    }
+}

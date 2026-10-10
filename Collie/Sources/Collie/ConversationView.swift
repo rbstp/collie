@@ -13,6 +13,7 @@ final class ConversationModel {
     private(set) var before: String?
     private(set) var after: String?
     private(set) var loading = false
+    private(set) var loadingOlder = false
     private(set) var omitted = false
     private(set) var error: String?
     private(set) var query = ""
@@ -24,6 +25,7 @@ final class ConversationModel {
     func stop() {
         generation += 1
         loading = false
+        loadingOlder = false
     }
 
     static func boundedQuery(_ value: String) -> String {
@@ -58,7 +60,13 @@ final class ConversationModel {
         guard !loading else { return }
         let ticket = generation
         loading = true
-        defer { if ticket == generation { loading = false } }
+        loadingOlder = older
+        defer {
+            if ticket == generation {
+                loading = false
+                loadingOlder = false
+            }
+        }
         do {
             let page = try await load(older ? before : nil, older ? nil : after, query.isEmpty ? nil : query)
             guard ticket == generation, !Task.isCancelled else { return }
@@ -202,7 +210,14 @@ struct ConversationView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 20) {
                         if model.before != nil && submitted.isEmpty {
-                            Button("Load older messages") { Task { await model.fetch(older: true, load: load) } }
+                            Button {
+                                Task { await model.fetch(older: true, load: load) }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    if model.loadingOlder { ProgressView().controlSize(.small) }
+                                    Text(model.loadingOlder ? "Loading older messages…" : "Load older messages")
+                                }
+                            }
                                 .font(.footnote).buttonStyle(.glass)
                                 .disabled(model.loading)
                                 .frame(maxWidth: .infinity)
