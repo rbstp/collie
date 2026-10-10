@@ -15,6 +15,7 @@ pub mod draft;
 pub mod drive;
 pub mod flock;
 pub mod gate;
+pub mod git;
 pub mod herdr;
 pub mod hooks;
 #[cfg(target_os = "macos")]

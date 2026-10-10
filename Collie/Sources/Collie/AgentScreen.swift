@@ -14,6 +14,7 @@ struct AgentScreen: View {
     let switchAgent: (AgentRoute) -> Void
     let opened: (AgentSummary) -> Void
     @State private var recordedOpen = false
+    @State private var showingChanges = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
@@ -114,6 +115,7 @@ struct AgentScreen: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu("More", systemImage: "ellipsis") {
                     if !model.isTerminal {
+                        Button("Git changes", systemImage: "arrow.triangle.branch") { showingChanges = true }
                         Button("Refresh", systemImage: "arrow.clockwise") {
                             Task { await model.refresh() }
                         }
@@ -140,6 +142,9 @@ struct AgentScreen: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showingChanges) {
+            GitChangesView(agent: model, sent: { showingChanges = false }, review: model.gitReview)
         }
         .onChange(of: blocked, initial: true) { _, blocked in model.blocked = blocked }
         .onChange(of: model.agent, initial: true) { _, agent in

@@ -9,6 +9,47 @@ use crate::output::OutputPatch;
 
 pub type RequestId = u32;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GitSection {
+    Staged,
+    Unstaged,
+    Untracked,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentDiffParams {
+    pub terminal_id: TerminalId,
+    pub root: Cwd,
+    pub path: String,
+    pub section: GitSection,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct GitChanges {
+    pub root: Option<Cwd>,
+    pub branch: Option<String>,
+    pub files: Vec<GitFile>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct GitFile {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub section: GitSection,
+    pub status: String,
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct GitDiff {
+    pub patch: String,
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct ClientFrame {
     pub id: RequestId,
@@ -36,6 +77,10 @@ pub enum Request {
     AgentWatch(AgentWatchParams),
     #[serde(rename = "task.options")]
     TaskOptions(Empty),
+    #[serde(rename = "agent.changes")]
+    AgentChanges(AgentTarget),
+    #[serde(rename = "agent.diff")]
+    AgentDiff(AgentDiffParams),
     #[serde(rename = "agent.draft")]
     AgentDraft(AgentTarget),
 
@@ -113,6 +158,8 @@ impl Request {
         "pane.read",
         "agent.watch",
         "task.options",
+        "agent.changes",
+        "agent.diff",
         "agent.draft",
         "agent.prompt",
         "agent.send_keys",
@@ -155,6 +202,8 @@ impl Request {
             Self::PaneRead(_) => "pane.read",
             Self::AgentWatch(_) => "agent.watch",
             Self::TaskOptions(_) => "task.options",
+            Self::AgentChanges(_) => "agent.changes",
+            Self::AgentDiff(_) => "agent.diff",
             Self::AgentDraft(_) => "agent.draft",
             Self::AgentPrompt(_) => "agent.prompt",
             Self::AgentSendKeys(_) => "agent.send_keys",
@@ -196,6 +245,8 @@ impl Request {
             | Self::PaneRead(_)
             | Self::AgentWatch(_)
             | Self::TaskOptions(_)
+            | Self::AgentChanges(_)
+            | Self::AgentDiff(_)
             | Self::AgentDraft(_)
             | Self::ApprovalList(_) => MethodClass::Read,
             Self::AgentPrompt(_)
@@ -756,6 +807,8 @@ pub enum Response {
     Flock(Flock),
     Terminal(TerminalRead),
     TaskOptions(TaskOptions),
+    GitChanges(GitChanges),
+    GitDiff(GitDiff),
     TaskWorktrees {
         source: Cwd,
         worktrees: Vec<TaskWorktreeInfo>,

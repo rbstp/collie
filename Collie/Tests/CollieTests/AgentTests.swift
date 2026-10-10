@@ -2,11 +2,14 @@ import CollieCore
 import Foundation
 import Synchronization
 import Testing
+import SwiftUI
+import UIKit
 
 @testable import Collie
 
 final class FakeCore: AgentCore {
     struct State {
+        var gitCalls: [String] = []
         var prompts: [String] = []
         var expectedDrafts: [String?] = []
         var kind: String?
@@ -151,6 +154,14 @@ final class FakeCore: AgentCore {
         }
         if let error { throw error }
         return TerminalSnapshot(terminalId: terminalId, source: source, ansi: "read \(read)", truncated: false)
+    }
+    func agentChanges(machineId: String, terminalId: String) async throws -> GitChanges {
+        state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)") }
+        return GitChanges(root: "/worktree", branch: "feature", files: [], truncated: false)
+    }
+    func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff {
+        state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)") }
+        return GitDiff(patch: "@@ -1 +1 @@\n-old\n+new\n", truncated: false)
     }
     func agentDraft(machineId: String, terminalId: String) async throws -> String? {
         state.withLock { s in
@@ -2202,4 +2213,178 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     await model.sendPrompt()
     #expect(core.snapshot.prompts.count == 1)
     #expect(core.snapshot.prompts.first?.contains("Keep this draft\n\n/review\nCheck the changes.") == true)
+}
+
+@Test func gitFeedbackContainsOnlySelectedTextOrTheFilename() {
+    let file = GitFile(path: "a.swift", oldPath: "old.swift", section: "staged", status: "R90", additions: 1, deletions: 1)
+    let source = "@@ -1 +1 @@\n-old\r\n+new 🐑 value\r\n@@ -30 +30 @@\n-before\n+after\n"
+    let selected = "new 🐑 value"
+    let range = (source as NSString).range(of: selected)
+    let feedback = GitFeedback.draft(file: file, selection: GitFeedback.selectedText(in: source, range: range))
+    #expect(feedback == "Feedback for a.swift: \n\n```diff\nnew 🐑 value\n```\n\n")
+    #expect(!feedback.contains("-old"))
+    #expect(!feedback.contains("+after"))
+    #expect(!feedback.contains("@@"))
+    #expect(GitFeedback.draft(file: file, selection: "") == "Feedback for a.swift: ")
+    #expect(GitFeedback.selectedText(in: source, range: NSRange(location: 0, length: 0)).isEmpty)
+    #expect(GitFeedback.selectedText(in: source, range: NSRange(location: NSNotFound, length: 1)).isEmpty)
+    #expect(GitFeedback.selectedText(in: source, range: NSRange(location: 0, length: 10000)).isEmpty)
+    #expect(GitFeedback.draft(file: file, selection: "```\n").contains("````diff\n```\n````"))
+}
+
+@MainActor
+@Test func gitTextSelectionTracksHighlightAndClearing() {
+    var range = NSRange(location: 0, length: 0)
+    let coordinator = GitDiffText.Coordinator(selection: Binding(get: { range }, set: { range = $0 }))
+    let view = UITextView()
+    view.text = "before\nselected 🐑\nafter"
+    view.selectedRange = (view.text as NSString).range(of: "selected 🐑")
+    coordinator.textViewDidChangeSelection(view)
+    #expect(GitFeedback.selectedText(in: view.text, range: range) == "selected 🐑")
+    view.selectedRange = NSRange(location: 0, length: 0)
+    coordinator.textViewDidChangeSelection(view)
+    #expect(GitFeedback.selectedText(in: view.text, range: range).isEmpty)
+}
+
+@MainActor
+@Test(arguments: [0, 1, 2])
+func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
+    let review = GitReview()
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
+    let ids = try (0..<3).map { index in
+        try #require(review.add(root: "/worktree", file: file, selection: "line \(index)"))
+    }
+    let bindings = ids.map { review.text(for: $0) }
+    for index in ids.indices { bindings[index].wrappedValue = "Feedback \(index)" }
+
+    review.remove(id: ids[removedIndex])
+    review.remove(id: ids[removedIndex])
+    #expect(bindings[removedIndex].wrappedValue.isEmpty)
+    bindings[removedIndex].wrappedValue = "Late update from the removed editor"
+    #expect(review.comments.map(\.id) == ids.filter { $0 != ids[removedIndex] })
+    for index in ids.indices where index != removedIndex {
+        #expect(bindings[index].wrappedValue == "Feedback \(index)")
+        bindings[index].wrappedValue = "Edited \(index)"
+        #expect(review.comments.first { $0.id == ids[index] }?.text == "Edited \(index)")
+    }
+
+    for id in ids { review.remove(id: id) }
+    #expect(review.comments.isEmpty)
+    #expect(!review.ready)
+    let next = try #require(review.add(root: "/worktree", file: file, selection: ""))
+    review.text(for: next).wrappedValue = "New feedback"
+    for binding in bindings {
+        #expect(binding.wrappedValue.isEmpty)
+        binding.wrappedValue = "Late update after removing the last editor"
+    }
+    #expect(review.comments.count == 1)
+    #expect(review.comments.first?.text == "New feedback")
+}
+
+@MainActor
+@Test func gitReviewCollectsFilesAndSendsOnceWithoutTouchingTheComposer() async throws {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.draft = "Keep my prompt"
+    await model.attach(name: "notes.txt") { _ in Data([1]) }?.value
+    let attachments = model.attachments.map(\.path)
+    let first = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
+    let second = GitFile(path: "other.swift", oldPath: nil, section: "staged", status: "A", additions: 1, deletions: 0)
+    let review = model.gitReview
+    review.add(root: "/worktree", file: first, selection: "new 🐑 value")
+    review.comments[0].text = "Handle the empty case."
+    review.add(root: "/worktree", file: second, selection: "")
+    #expect(!review.ready)
+    #expect(!(await review.send(using: model)))
+    review.comments[1].text = "Rename this file."
+    #expect(review.ready)
+    #expect(core.snapshot.prompts.isEmpty)
+    #expect(core.snapshot.keys.isEmpty)
+    #expect(core.snapshot.typed.isEmpty)
+    #expect(await review.send(using: model))
+    #expect(review.comments.isEmpty)
+    #expect(model.draft == "Keep my prompt")
+    #expect(model.attachments.map(\.path) == attachments)
+    #expect(core.snapshot.prompts == ["Feedback for file.swift: \n\n```diff\nnew 🐑 value\n```\n\nHandle the empty case.\n\nFeedback for other.swift: Rename this file."])
+    #expect(core.snapshot.expectedDrafts == [""])
+    #expect(core.snapshot.slashes.isEmpty)
+    #expect(core.snapshot.typed.isEmpty)
+    #expect(core.snapshot.keys.isEmpty)
+}
+
+@MainActor
+@Test func gitReviewFailuresKeepCommentsAndNeverReplaceRemoteDrafts() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.draft = "Keep this draft"
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
+    let review = model.gitReview
+    review.add(root: "/worktree", file: file, selection: "")
+    review.comments[0].text = "Please simplify."
+    core.set(error: .DraftChanged(current: "Remote draft"))
+    #expect(!(await review.send(using: model)))
+    #expect(review.comments.count == 1)
+    #expect(review.error?.contains("unsent text") == true)
+    #expect(!(await review.send(using: model)))
+    #expect(core.snapshot.expectedDrafts == ["", ""])
+    #expect(model.draft == "Keep this draft")
+    core.set(error: nil)
+    model.blocked = .keysAndText
+    let calls = core.snapshot.prompts.count
+    #expect(!(await review.send(using: model)))
+    #expect(core.snapshot.prompts.count == calls)
+    #expect(core.snapshot.typed.isEmpty)
+    #expect(review.comments.count == 1)
+    model.blocked = nil
+    review.comments[0].text = String(repeating: "x", count: 33 * 1024)
+    #expect(!(await review.send(using: model)))
+    #expect(review.error?.contains("too long") == true)
+    #expect(core.snapshot.prompts.count == calls)
+}
+
+@MainActor
+@Test func gitReviewRejectsChangedCheckoutAndDuplicateSends() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
+    let review = model.gitReview
+    review.add(root: "/old-checkout", file: file, selection: "")
+    review.comments[0].text = "Please simplify."
+    #expect(!(await review.send(using: model)))
+    #expect(core.snapshot.prompts.isEmpty)
+    #expect(review.error?.contains("checkout changed") == true)
+    review.comments = []
+    review.add(root: "/worktree", file: file, selection: "")
+    review.comments[0].text = "Please simplify."
+    let id = review.comments[0].id
+    let binding = review.text(for: id)
+    core.set(hold: true)
+    let sending = Task { await review.send(using: model) }
+    await core.waitHeld(1)
+    #expect(!(await review.send(using: model)))
+    #expect(review.add(root: "/worktree", file: file, selection: "") == nil)
+    review.remove(id: id)
+    binding.wrappedValue = "Late update while sending"
+    #expect(review.comments.count == 1)
+    #expect(binding.wrappedValue == "Please simplify.")
+    core.release()
+    #expect(await sending.value)
+    #expect(core.snapshot.prompts == ["Feedback for file.swift: Please simplify."])
+    #expect(review.comments.isEmpty)
+    #expect(binding.wrappedValue.isEmpty)
+    binding.wrappedValue = "Late update after sending"
+    #expect(review.comments.isEmpty)
+}
+
+@MainActor
+@Test func gitReadsStayOnTheAgentRouteAndSelectedCheckout() async throws {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    let changes = try await model.gitChanges()
+    let file = GitFile(path: "a.swift", oldPath: nil, section: "staged", status: "M", additions: 1, deletions: 1)
+    let root = try #require(changes.root)
+    _ = try await model.gitDiff(root: root, file: file)
+    let target = "\(model.route.machineId)|\(model.route.terminalId)"
+    #expect(core.snapshot.gitCalls == [target, target + "|/worktree|a.swift|staged"])
+    #expect(core.snapshot.prompts.isEmpty)
 }

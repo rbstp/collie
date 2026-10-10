@@ -42,6 +42,7 @@ final class AgentModel {
     private(set) var refreshing = false
     private var revision: UInt64 = 0
 
+    let gitReview = GitReview()
     var draft = ""
     /// What the phone last saw in the Mac's input box: nil when unknown. A send replaces exactly this text.
     private(set) var macDraft: String?
@@ -605,6 +606,44 @@ final class AgentModel {
         attachments = []
         queuedKeys.removeAll()
         promptError = nil
+    }
+
+    func gitChanges() async throws -> GitChanges {
+        try await core.agentChanges(machineId: route.machineId, terminalId: route.terminalId)
+    }
+
+    func gitDiff(root: String, file: GitFile) async throws -> GitDiff {
+        try await core.agentDiff(machineId: route.machineId, terminalId: route.terminalId,
+                                 root: root, path: file.path, section: file.section)
+    }
+
+    var canSendGitFeedback: Bool {
+        agent != nil && !isTerminal && !answering && !sendingPrompt && !dictation.isActive
+            && blocked == nil && agent?.status != .blocked && !codexQuestionQueued && !jumpBanner
+    }
+
+    func sendGitFeedback(_ text: String) async -> String? {
+        guard canSendGitFeedback else { return "The agent cannot accept review feedback right now." }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Write feedback before sending." }
+        guard text.utf8.count <= 32 * 1024 else { return "Feedback is too long. Shorten the comments or select less text." }
+        mirrorDelay?.cancel()
+        await mirroring?.value
+        guard canSendGitFeedback else { return "The agent cannot accept review feedback right now." }
+        sendingPrompt = true
+        loadedMacDraft = nil
+        defer { sendingPrompt = false; saveDraft() }
+        do {
+            try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: "")
+            if macDraft != nil { macDraft = "" }
+            mirrored = ""
+            menuMoved = false
+            return nil
+        } catch {
+            if case .DraftChanged = error as? CoreError {
+                return "The agent’s input box has unsent text. Send or clear it in the session before sending this feedback."
+            }
+            return Self.message(for: error)
+        }
     }
 
     func insert(_ shortcut: PromptShortcut) {
