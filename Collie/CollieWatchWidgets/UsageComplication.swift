@@ -92,11 +92,8 @@ private struct UsageRings: View {
                         }
                     }
                     .frame(width: diameter, height: diameter)
-                    Image(index < 2 ? "Claude" : "Codex")
-                        .resizable()
-                        .scaledToFit()
+                    UsageLogo(name: index < 2 ? "Claude" : "Codex")
                         .frame(width: strokeWidth * 0.8, height: strokeWidth * 0.8)
-                        .background(.black, in: Circle())
                         .offset(y: -(diameter - strokeWidth) / 2)
                 }
             }

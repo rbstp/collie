@@ -27,9 +27,7 @@ private struct UsageBarRow: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Image(logo)
-                .resizable()
-                .scaledToFit()
+            UsageLogo(name: logo)
                 .frame(width: 15, height: 15)
                 .accessibilityHidden(true)
             Text(period)
