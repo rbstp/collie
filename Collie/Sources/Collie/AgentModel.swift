@@ -184,15 +184,20 @@ final class AgentModel {
     }
 
     var codexQuestionQueued: Bool {
-        agent?.kind == "codex" && ansi.contains("Queued follow-up inputs")
-            && ansi.contains("⇧←") && ansi.contains("to answer")
+        guard agent?.kind == "codex", agent?.status == .blocked else { return false }
+        let tail = ansi.components(separatedBy: .newlines).suffix(16)
+        return tail.contains { $0.contains("Queued follow-up inputs") }
+            && tail.contains { $0.contains("⇧←") && $0.contains("to answer") }
+            && !codexQuestionOpen
     }
 
     var codexQuestionOpen: Bool {
-        guard agent?.kind == "codex" else { return false }
+        guard agent?.kind == "codex", agent?.status == .blocked else { return false }
         let lines = ansi.components(separatedBy: .newlines)
-        guard let footer = lines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return false }
-        return footer.contains("enter") && footer.contains("submit") && footer.contains("main prompt")
+        let footer = lines.reversed()
+            .map { $0.replacingOccurrences(of: "\u{1B}\\[[0-9;]*[mC]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+        return footer?.contains("enter submit") == true && footer?.contains("main prompt") == true
             && lines.suffix(25).contains { $0.contains("›") || $0.contains("Queued follow-up inputs") }
     }
 

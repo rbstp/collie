@@ -1613,7 +1613,7 @@ private func noticeShown(
         $0.status = .blocked
         $0.output = TerminalSnapshot(
             terminalId: "term_1", source: .recent,
-            ansi: "Queued follow-up inputs\n\n1 of 2\n\nWhich missing agent do you see in All?\n\nType your answer\n\nenter\u{1B}[0m submit   ⌃] skip   ⇧→ main prompt   ⇧← next question", truncated: false
+            ansi: "Queued follow-up inputs\n\n1 of 2\n\nWhich missing agent do you see in All?\n\nType your answer\n\nenter\u{1B}[0m submit   ⌃] skip   ⇧→ main prompt   ⇧← next question\n\u{1B}[0m", truncated: false
         )
     }
     let model = agentModel(core)
@@ -1626,6 +1626,23 @@ private func noticeShown(
     await model.sendPrompt()
     #expect(core.snapshot.typed == ["It is in Done"])
     #expect(core.snapshot.prompts.isEmpty)
+    core.state.withLock { $0.status = .working }
+    model.poll()
+    #expect(!model.codexQuestionOpen && !model.answering)
+    await attach(model, core, "a.png")
+    #expect(model.canSendPrompt)
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["/Users/me/Library/Caches/dev.rbstp.collied/attachments/a.png/a.png"])
+    core.state.withLock {
+        $0.status = .blocked
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent,
+            ansi: "Queued follow-up inputs\nType your answer\nenter submit   ⇧→ main prompt\nWould you like to run the following command?\nPress enter to confirm or esc to cancel", truncated: false
+        )
+        $0.outputRevision += 1
+    }
+    model.poll()
+    #expect(!model.codexQuestionOpen && !model.answering)
 }
 
 @MainActor
