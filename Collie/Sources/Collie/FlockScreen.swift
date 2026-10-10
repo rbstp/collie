@@ -15,6 +15,7 @@ struct FlockScreen: View {
     @State private var newTask = false
     @State private var previews = PreviewModel()
     @State private var layout = DevicePrefs.load(from: DevicePrefs.file).agentsLayout
+    @State private var seen = SeenAgents.load(from: SeenAgents.file)
     @State private var showsUsage = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -40,7 +41,8 @@ struct FlockScreen: View {
                         .transition(page(from: .leading))
                     case .inbox:
                         AgentInbox(
-                            entries: model.entries, notice: model.closeNotice, reconnect: reconnect, follows: follows, menu: menu
+                            entries: model.entries, notice: model.closeNotice, reconnect: reconnect, follows: follows,
+                            seen: seen, markUnseen: markUnseen, menu: menu
                         )
                         .transition(page(from: .leading))
                     case .list:
@@ -165,6 +167,10 @@ struct FlockScreen: View {
                         switchAgent: { next in
                             // Replaces the top route, so Back still returns to this list.
                             if path.last == route { path[path.count - 1] = next }
+                        },
+                        opened: { agent in
+                            seen.markOpened(agent, route: route, nowMs: Date().unixMs)
+                            seen.save(to: SeenAgents.file)
                         }
                     )
                     // A replaced route must get its own model, not keep the previous agent's.
@@ -187,7 +193,14 @@ struct FlockScreen: View {
                 while !Task.isCancelled {
                     let snapshot = tick % 20 == 0
                     await model.refresh(core: core, snapshot: snapshot)
-                    if snapshot { AgentDrafts.prune(model.entries, file: AgentDrafts.file) }
+                    if snapshot {
+                        AgentDrafts.prune(model.entries, file: AgentDrafts.file)
+                        if core != nil {
+                            let previous = seen.markers.count
+                            seen.prune(model.entries)
+                            if seen.markers.count != previous { seen.save(to: SeenAgents.file) }
+                        }
+                    }
                     follows?.sync()
                     tick += 1
                     let next = ContinuousClock.now + .seconds(3)
@@ -226,6 +239,11 @@ struct FlockScreen: View {
 
     private func reconnect(_ entry: MachineFlockEntry) {
         try? core?.reconnect(machineId: entry.id)
+    }
+
+    private func markUnseen(_ agent: AgentSummary, route: AgentRoute) {
+        seen.markUnseen(agent, route: route)
+        seen.save(to: SeenAgents.file)
     }
 
     @ViewBuilder

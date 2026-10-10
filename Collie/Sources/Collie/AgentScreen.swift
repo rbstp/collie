@@ -12,12 +12,15 @@ struct AgentScreen: View {
     let showsMachine: Bool
     let neighbor: ((Int) -> AgentRoute?)?
     let switchAgent: (AgentRoute) -> Void
+    let opened: (AgentSummary) -> Void
+    @State private var recordedOpen = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
     init(
         core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel?, follows: FollowModel?,
-        machineLabel: String?, showsMachine: Bool, neighbor: ((Int) -> AgentRoute?)?, switchAgent: @escaping (AgentRoute) -> Void
+        machineLabel: String?, showsMachine: Bool, neighbor: ((Int) -> AgentRoute?)?,
+        switchAgent: @escaping (AgentRoute) -> Void, opened: @escaping (AgentSummary) -> Void
     ) {
         _model = State(initialValue: AgentModel(core: core, route: route, draftsFile: AgentDrafts.file, machineLabel: machineLabel))
         self.approvals = approvals
@@ -26,6 +29,7 @@ struct AgentScreen: View {
         self.showsMachine = showsMachine
         self.neighbor = neighbor
         self.switchAgent = switchAgent
+        self.opened = opened
     }
 
     private var blocked: BlockedInput? {
@@ -138,6 +142,11 @@ struct AgentScreen: View {
             }
         }
         .onChange(of: blocked, initial: true) { _, blocked in model.blocked = blocked }
+        .onChange(of: model.agent, initial: true) { _, agent in
+            guard !recordedOpen, let agent else { return }
+            recordedOpen = true
+            opened(agent)
+        }
         .closeConfirmation($model.close) { await model.performClose() }
         .alert("Archive result", isPresented: Binding(
             get: { model.archiveMessage != nil },
