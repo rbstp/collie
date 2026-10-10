@@ -988,6 +988,27 @@ private func prefsFile() throws -> URL {
 }
 
 @MainActor
+@Test func newTaskGeneratesAWorktreeBranchWhenBlank() async {
+    let core = FakeCore()
+    core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
+    await model.loadOptions()
+    model.location = .worktree
+    model.prompt = "build it"
+    #expect(!model.canStart)
+    await model.loadWorktrees()
+    let branch = model.createBranch
+    #expect(model.branch.isEmpty)
+    #expect(branch.hasPrefix("task-"))
+    #expect(model.createPath == "/Users/me/app/.worktree/\(branch)")
+    #expect(model.canStart)
+    #expect(await model.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
+    #expect(model.createBranch == branch)
+    #expect(core.snapshot.worktreeCalls == ["list /Users/me/app", "create /Users/me/app \(branch) codex"])
+}
+
+@MainActor
 @Test func newTaskCreatesAndOpensSelectedWorktrees() async {
     let core = FakeCore()
     core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }

@@ -38,13 +38,15 @@ final class NewTaskModel {
     var worktreeAction = WorktreeAction.create
     var source = ""
     var branch = ""
+    private let generatedBranch = "task-\(UUID().uuidString.lowercased())"
+    var createBranch: String { trimmed(branch).nilIfEmpty ?? generatedBranch }
     var checkoutPath = ""
     private(set) var worktrees: WorktreeListing?
     private(set) var worktreesError: String?
     private var listedSource = ""
     var createPath: String? {
-        guard let worktrees, !trimmed(branch).isEmpty else { return nil }
-        return worktrees.source + "/.worktree/" + trimmed(branch).replacingOccurrences(of: "/", with: "-")
+        guard let worktrees else { return nil }
+        return worktrees.source + "/.worktree/" + createBranch.replacingOccurrences(of: "/", with: "-")
     }
     var newFolder = false
     var newFolderRoot: String?
@@ -250,7 +252,7 @@ final class NewTaskModel {
             if location == .worktree {
                 if worktreeAction == .create {
                     started = try await core.taskWorktreeCreate(
-                        machineId: machineId, cwd: trimmed(source), branch: trimmed(branch),
+                        machineId: machineId, cwd: trimmed(source), branch: createBranch,
                         agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
                     )
                 } else {

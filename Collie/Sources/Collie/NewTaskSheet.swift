@@ -129,11 +129,11 @@ struct NewTaskSheet: View {
                         if let listed = model.worktrees {
                             Text("Repository: \(listed.source)").font(.footnote.monospaced())
                             if model.worktreeAction == .create {
-                                TextField("New branch", text: $model.branch)
+                                TextField("Branch name (optional)", text: $model.branch)
                                     .textInputAutocapitalization(.never)
                                     .autocorrectionDisabled()
                                 if let path = model.createPath {
-                                    Text("Create \(model.branch.trimmingCharacters(in: .whitespacesAndNewlines)) at \(path)")
+                                    Text("Create \(model.createBranch) at \(path)")
                                         .font(.footnote)
                                 }
                             } else {
