@@ -15,7 +15,7 @@ struct AgentScreen: View {
     let opened: (AgentSummary) -> Void
     @State private var recordedOpen = false
     @State private var showingChanges = false
-    @State private var showingChat = true
+    @State private var showingChat = DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat
     @State private var searchingChat = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
