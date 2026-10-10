@@ -219,6 +219,7 @@ final class TerminalScreen {
             var indent = 0
             var hang = 0
             var hangRun = 0
+            var codexInput = false
             var blanks = 0
             var padded = false
             runs.removeAll(keepingCapacity: true)
@@ -232,6 +233,7 @@ final class TerminalScreen {
                 switch (hang, scalars[i]) {
                 case (0, " "), (0, "\t"): break
                 case (0, let first):
+                    codexInput = width == 0 && first == "›"
                     indent = width
                     hang = first.properties.isAlphabetic || first.properties.numericType != nil ? 3 : 1
                 case (1, let next): hang = next == " " ? 2 : 3
@@ -302,7 +304,7 @@ final class TerminalScreen {
             } else if !clip && contentWidth > columns {
                 let broken = Self.appendBrokenAtWords(
                     scalars, rowStart..<contentEnd, keepingPadding: collapse ? keep : nil, indent: indent < columns / 2 ? indent : 0,
-                    filling: fill != nil && uniform, columns: columns, into: &out
+                    filling: fill != nil && uniform, paintIndent: codexInput, columns: columns, into: &out
                 )
                 (height, end) = (height + broken.breaks, broken.column)
             } else {
@@ -351,11 +353,16 @@ final class TerminalScreen {
     /// no SGR sequence before the next row's first character, gets an EL so a shaded line stays
     /// shaded to the edge. Returns the number of breaks and the column the last row ends at.
     private static func appendBrokenAtWords(
-        _ scalars: [Unicode.Scalar], _ range: Range<Int>, keepingPadding: Int?, indent: Int, filling: Bool, columns: Int,
+        _ scalars: [Unicode.Scalar], _ range: Range<Int>, keepingPadding: Int?, indent: Int, filling: Bool, paintIndent: Bool,
+        columns: Int,
         into out: inout [Unicode.Scalar]
     ) -> (breaks: Int, column: Int) {
         var newRow = Array("\u{1B}E".unicodeScalars)
-        if indent > 0 { newRow += "\u{1B}[\(indent)C".unicodeScalars }
+        if indent > 0 {
+            newRow += paintIndent && filling
+                ? Array(String(repeating: " ", count: indent).unicodeScalars)
+                : Array("\u{1B}[\(indent)C".unicodeScalars)
+        }
         var breaks = 0
         var column = 0
         var placed = false
