@@ -9,6 +9,7 @@ struct DevicePrefs: StateFile, Equatable {
     var dictationLanguage = DictationLanguage.english
     var agentsLayout = AgentsLayout.grid
     var historyLines: UInt16 = 200
+    var defaultSessionView = SessionView.chat
     var watchDecisions = false
     var doneAlerts = true
     /// Per machine id: the canonical folder collied returned when it was saved.
@@ -54,6 +55,7 @@ extension DevicePrefs {
         dictationLanguage = (try? container.decodeIfPresent(DictationLanguage.self, forKey: .dictationLanguage)) ?? defaults.dictationLanguage
         agentsLayout = (try? container.decodeIfPresent(AgentsLayout.self, forKey: .agentsLayout)) ?? defaults.agentsLayout
         historyLines = try container.decodeIfPresent(UInt16.self, forKey: .historyLines) ?? defaults.historyLines
+        defaultSessionView = (try? container.decodeIfPresent(SessionView.self, forKey: .defaultSessionView)) ?? defaults.defaultSessionView
         watchDecisions = try container.decodeIfPresent(Bool.self, forKey: .watchDecisions) ?? defaults.watchDecisions
         doneAlerts = try container.decodeIfPresent(Bool.self, forKey: .doneAlerts) ?? defaults.doneAlerts
         taskBases = try container.decodeIfPresent([String: String].self, forKey: .taskBases) ?? defaults.taskBases
@@ -70,6 +72,18 @@ extension DevicePrefs {
     static func forgetTaskBase(machineId: String, in file: URL?) {
         guard load(from: file).taskBases[machineId] != nil else { return }
         update(in: file) { $0.taskBases[machineId] = nil }
+    }
+}
+
+enum SessionView: String, Codable, CaseIterable {
+    case chat
+    case terminal
+
+    var label: String {
+        switch self {
+        case .chat: "Chat"
+        case .terminal: "Terminal"
+        }
     }
 }
 

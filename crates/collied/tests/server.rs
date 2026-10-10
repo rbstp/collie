@@ -73,8 +73,17 @@ fn server_end_to_end() {
         .iter()
         .any(|(k, v)| std::env::var(k).as_deref() != Ok(*v))
     {
+        let tools = tempfile::tempdir().unwrap();
+        let codex = tools.path().join("codex");
+        std::fs::write(&codex, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = std::env::join_paths(std::iter::once(tools.path().to_path_buf()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .unwrap();
         let out = Command::new(std::env::current_exe().unwrap())
             .args(["server_end_to_end", "--exact", "--nocapture"])
+            .env("PATH", path)
             .envs(KNOBS)
             .output()
             .unwrap();
@@ -93,10 +102,7 @@ fn server_end_to_end() {
 
     let auth_key = format!("test-authkey-colliedit{}", std::process::id());
     let control = TestControl::start(&auth_key);
-    let root = TempDir(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("collied-it-{}", std::process::id())),
-    );
+    let root = TempDir(std::env::temp_dir().join(format!("collied-it-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&root.0);
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -147,7 +153,7 @@ async fn scenario(
     let herdr_socket = root.join("herdr.sock");
     let herdr = MockHerdr::start(&herdr_socket);
     let data_dir = root.join("data");
-    let handle = server::start(
+    let handle = server::start_with(
         mac.clone(),
         ServerConfig {
             data_dir: data_dir.clone(),
@@ -161,6 +167,11 @@ async fn scenario(
             terminal_grant_ttl: collied::terminal::GRANT_TTL,
         },
         herdr_socket.clone(),
+        &collied::config::TasksConfig {
+            roots: Some(vec![root.clone()]),
+            ..Default::default()
+        },
+        None,
     )
     .await
     .unwrap();
@@ -474,6 +485,19 @@ async fn scenario(
     assert_eq!(result(recv(&mut ws).await), Response::Ok);
     let stored = std::fs::read_to_string(data_dir.join("push.json")).unwrap();
     assert!(!stored.contains(ACTIVITY_TOKEN), "{stored}");
+
+    send(
+        &mut ws,
+        json!({"id": 52, "method": "agent.history", "params": {
+            "terminal_id": "term_65ce7ae4fd5731", "query": "history-private-query"
+        }}),
+    )
+    .await;
+    let Response::History(history) = result(recv(&mut ws).await) else {
+        panic!("no history response");
+    };
+    assert!(!history.available);
+    assert!(history.messages.is_empty());
 
     println!("drive refusals go through the op cache and the task runner");
     let blocked = json!({"id": 53, "method": "agent.prompt", "params": {
@@ -845,6 +869,7 @@ async fn scenario(
     let audit_path = data_dir.join("audit.log");
     assert_eq!(mode(&audit_path), 0o600);
     let audit = std::fs::read_to_string(&audit_path).unwrap();
+    assert!(!audit.contains("history-private-query"));
     for needle in [
         "rejected: not paired",
         "rejected: not the owner",

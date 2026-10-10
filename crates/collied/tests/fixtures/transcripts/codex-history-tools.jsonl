@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"Reading the approval tests first."}]}}
+{"type":"response_item","payload":{"type":"function_call","id":"tool_1","name":"exec_command","call_id":"call_1","arguments":"{\"cmd\":\"cargo test\"}"}}
+{"type":"event_msg","payload":{"type":"item_completed","thread_id":"01a10f07-b5ed-79a3-989d-fa10b96c5cab","item":{"type":"CommandExecution","id":"tool_1","command":"cargo test","status":"completed","aggregated_output":"Tests passed"}}}
+{"type":"response_item","payload":{"type":"function_call_output","id":"result_1","call_id":"call_1","output":"Tests passed"}}

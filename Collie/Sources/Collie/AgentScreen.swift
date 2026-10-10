@@ -15,6 +15,8 @@ struct AgentScreen: View {
     let opened: (AgentSummary) -> Void
     @State private var recordedOpen = false
     @State private var showingChanges = false
+    @State private var showingChat = DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat
+    @State private var searchingChat = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
@@ -59,37 +61,50 @@ struct AgentScreen: View {
                     Text(notice).font(.footnote).padding(.horizontal).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            AgentTerminal(
-                ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
-                perform: perform, resized: { model.fontSize = $0 },
-                // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
-                neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
-                switchAgent: switchAgent
-            ) { await model.refresh() }
-                .overlay {
-                    if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
-                        ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
-                    }
+            if !model.isTerminal {
+                Picker("Session view", selection: $showingChat) {
+                    Text("Chat").tag(true)
+                    Text("Terminal").tag(false)
                 }
-                .overlay(alignment: .bottom) {
-                    if model.jumpBanner {
-                        Button("Jump to bottom", systemImage: "arrow.down") {
-                            Task { await model.jumpToBottom() }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.bottom, 6)
+            }
+            if showingChat && !model.isTerminal {
+                ConversationView(model: model.conversation, searching: $searchingChat, load: model.history) { showingChat = false }
+            } else {
+                AgentTerminal(
+                    ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
+                    perform: perform, resized: { model.fontSize = $0 },
+                    // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
+                    neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
+                    switchAgent: switchAgent
+                ) { await model.refresh() }
+                    .overlay {
+                        if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
+                            ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.bottom, 8)
                     }
-                    if !model.noticeOptions.isEmpty {
-                        ViewThatFits(in: .horizontal) {
-                            HStack { noticeButtons }
-                            VStack { noticeButtons }
+                    .overlay(alignment: .bottom) {
+                        if model.jumpBanner {
+                            Button("Jump to bottom", systemImage: "arrow.down") {
+                                Task { await model.jumpToBottom() }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .padding(.bottom, 8)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .padding([.horizontal, .bottom], 8)
-                        .accessibilityElement(children: .contain)
-                        .accessibilityLabel("Claude Code notice")
+                        if !model.noticeOptions.isEmpty {
+                            ViewThatFits(in: .horizontal) {
+                                HStack { noticeButtons }
+                                VStack { noticeButtons }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .padding([.horizontal, .bottom], 8)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel("Claude Code notice")
+                        }
                     }
-                }
+            }
             if let notice = model.notice ?? model.blockedHint {
                 Label(notice, systemImage: "exclamationmark.triangle")
                     .font(.footnote)
@@ -98,7 +113,11 @@ struct AgentScreen: View {
                     .padding(.horizontal)
                     .padding(.top, 6)
             }
-            KeyStrip(model: model)
+            if showingChat && !model.isTerminal && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown) {
+                Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
+                    .font(.footnote).buttonStyle(.glass).padding(.top, 6)
+            }
+            if !showingChat || model.isTerminal { KeyStrip(model: model) }
             PromptBar(model: model)
         }
         .navigationTitle(model.agent?.displayTitle ?? model.terminal?.displayTitle ?? "Agent")
@@ -106,11 +125,14 @@ struct AgentScreen: View {
         .toolbar(.hidden, for: .tabBar)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Toggle(isOn: $model.wrapLines) {
-                    // SF Symbols has no wrap-text glyph; WrapLines is a drawn template image.
-                    Label("Wrap lines", image: "WrapLines")
+                if showingChat && !model.isTerminal {
+                    Button("Search conversation", systemImage: "magnifyingglass") { searchingChat.toggle() }
+                } else {
+                    Toggle(isOn: $model.wrapLines) {
+                        Label("Wrap lines", image: "WrapLines")
+                    }
+                    .toggleStyle(.button)
                 }
-                .toggleStyle(.button)
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu("More", systemImage: "ellipsis") {

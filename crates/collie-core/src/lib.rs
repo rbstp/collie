@@ -557,6 +557,29 @@ pub struct GitFile {
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct HistoryMessage {
+    pub id: String,
+    pub role: String,
+    pub text: String,
+    pub tool: Option<String>,
+    pub call_id: Option<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct HistoryPage {
+    pub session: Option<String>,
+    pub available: bool,
+    pub unavailable_reason: Option<String>,
+    pub reset: bool,
+    pub messages: Vec<HistoryMessage>,
+    pub before: Option<String>,
+    pub after: Option<String>,
+    pub more: bool,
+    pub omitted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct GitDiff {
     pub patch: String,
     pub truncated: bool,
@@ -1548,6 +1571,54 @@ impl CollieCore {
             self, machine_id, cwd, agent, prompt, label, new_folder, None,
         )
         .await
+    }
+
+    pub async fn agent_history(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        before: Option<String>,
+        after: Option<String>,
+        query: Option<String>,
+    ) -> Result<HistoryPage, CoreError> {
+        let params = protocol::HistoryParams {
+            terminal_id: TerminalId::new(terminal_id)
+                .map_err(|_| invalid("terminal_id", "invalid terminal"))?,
+            before,
+            after,
+            query,
+        };
+        if !params.is_valid() {
+            return Err(invalid("history", "invalid history request"));
+        }
+        match self
+            .call(&machine_id, Request::AgentHistory(params), CALL_TIMEOUT)
+            .await?
+        {
+            Response::History(p) => Ok(HistoryPage {
+                session: p.session,
+                available: p.available,
+                unavailable_reason: p.unavailable_reason,
+                reset: p.reset,
+                before: p.before,
+                after: p.after,
+                more: p.more,
+                omitted: p.omitted,
+                messages: p
+                    .messages
+                    .into_iter()
+                    .map(|m| HistoryMessage {
+                        id: m.id,
+                        role: m.role,
+                        text: m.text,
+                        tool: m.tool,
+                        call_id: m.call_id,
+                        truncated: m.truncated,
+                    })
+                    .collect(),
+            }),
+            other => Err(unexpected(&other).into()),
+        }
     }
 
     pub async fn agent_changes(

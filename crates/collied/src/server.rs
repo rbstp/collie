@@ -1033,6 +1033,30 @@ impl Session<'_> {
         }
     }
 
+    async fn history(&self, p: protocol::HistoryParams, auth: &drive::Authorized) -> drive::Reply {
+        if !auth() {
+            return err(ErrorCode::NotPaired, "pairing revoked");
+        }
+        let agent = self.state.drive.find_agent(&p.terminal_id).await?;
+        let reader = lock(&self.state.transcripts).history_reader();
+        let terminal = p.terminal_id.clone();
+        let identity = (
+            agent.agent.clone(),
+            agent.agent_session.as_ref().map(|s| s.value.clone()),
+        );
+        let page = tokio::task::spawn_blocking(move || reader.history(&agent, &p))
+            .await
+            .map_err(|_| (ErrorCode::Internal, "history unavailable".into()))?;
+        if !auth() {
+            return err(ErrorCode::NotPaired, "pairing revoked");
+        }
+        let current = self.state.drive.find_agent(&terminal).await?;
+        if identity != (current.agent, current.agent_session.map(|s| s.value)) {
+            return err(ErrorCode::AgentNotReady, "session changed; retry history");
+        }
+        Ok(Response::History(page))
+    }
+
     async fn frame(
         &mut self,
         bytes: &[u8],
@@ -1148,6 +1172,7 @@ impl Session<'_> {
             Request::AgentChanges(p) => (drive.git_changes(p.terminal_id, &auth).await, None),
             Request::AgentDiff(p) => (drive.git_diff(p, &auth).await, None),
             Request::AgentRead(p) => (drive.read(p, true).await, None),
+            Request::AgentHistory(p) => (self.history(p, &auth).await, None),
             Request::PaneRead(p) => (drive.read(p, false).await, None),
             Request::AgentWatch(p) => (self.watch(p).await, None),
             Request::TaskOptions(_) => (drive.task_options().await, None),
@@ -1830,6 +1855,7 @@ fn audit_target(request: &Request) -> Option<String> {
     let target = match request {
         Request::AttachmentBegin(p) => return Some(attachments::sanitize(p.name.as_str())),
         Request::AgentRead(p) | Request::PaneRead(p) => p.terminal_id.as_str(),
+        Request::AgentHistory(p) => p.terminal_id.as_str(),
         Request::AgentWatch(p) => p.terminal_id.as_ref().map_or("none", |t| t.as_str()),
         Request::AgentPrompt(p) => p.terminal_id.as_str(),
         Request::AgentDraft(p) | Request::AgentChanges(p) => p.terminal_id.as_str(),
@@ -2208,6 +2234,17 @@ mod tests {
         let second = &lines()[1];
         assert_eq!(second["target"], "term_1");
         assert_eq!(second["result"], "internal: operation failed");
+    }
+
+    #[test]
+    fn history_audits_only_the_terminal() {
+        let request = Request::AgentHistory(protocol::HistoryParams {
+            terminal_id: protocol::TerminalId::new("t1").unwrap(),
+            before: Some("private-cursor".into()),
+            after: None,
+            query: Some("private-query".into()),
+        });
+        assert_eq!(audit_target(&request).as_deref(), Some("t1"));
     }
 
     #[test]

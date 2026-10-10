@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var removeError: String?
     @State private var report: ColdStartReport?
     @State private var keepKeyboard = DevicePrefs.load(from: DevicePrefs.file).keepKeyboard
+    @State private var defaultSessionView = DevicePrefs.load(from: DevicePrefs.file).defaultSessionView
     @State private var historyLines = DevicePrefs.load(from: DevicePrefs.file).historyLines
     @State private var watchDecisions = DevicePrefs.load(from: DevicePrefs.file).watchDecisions
     @State private var doneAlerts = DevicePrefs.load(from: DevicePrefs.file).doneAlerts
@@ -47,8 +48,13 @@ struct SettingsView: View {
                     NavigationLink("Saved prompts") { PromptShortcutsView() }
                     Toggle("Keep keyboard open after sending", isOn: $keepKeyboard)
                 }
+                Section("Sessions") {
+                    Picker("Default view", selection: $defaultSessionView) {
+                        ForEach(SessionView.allCases, id: \.self) { Text($0.label) }
+                    }
+                }
                 Section("Terminal") {
-                    Picker("History", selection: $historyLines) {
+                    Picker("Scrollback", selection: $historyLines) {
                         ForEach(DevicePrefs.historyChoices, id: \.self) { Text("\($0) lines") }
                     }
                     NavigationLink("Gestures") { GesturesView() }
@@ -82,6 +88,9 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .onChange(of: keepKeyboard) { _, keep in
                 DevicePrefs.update(in: DevicePrefs.file) { $0.keepKeyboard = keep }
+            }
+            .onChange(of: defaultSessionView) { _, view in
+                DevicePrefs.update(in: DevicePrefs.file) { $0.defaultSessionView = view }
             }
             .onChange(of: historyLines) { _, lines in
                 DevicePrefs.update(in: DevicePrefs.file) { $0.historyLines = lines }
