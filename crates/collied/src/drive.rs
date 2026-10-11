@@ -1115,6 +1115,12 @@ impl Driver {
         if !self.agents.contains(&p.agent) {
             return fail(ErrorCode::InvalidParams, "agent kind is not allowed");
         }
+        if p.agent.as_str() == "copilot" && p.startup.is_some_and(|s| s.automatic_mode) {
+            return fail(
+                ErrorCode::InvalidParams,
+                "configure Copilot automatic mode in Copilot's own settings",
+            );
+        }
         if p.startup
             .is_some_and(|s| s.automatic_mode || s.approve_folder)
             && !["claude", "codex", "copilot"].contains(&p.agent.as_str())

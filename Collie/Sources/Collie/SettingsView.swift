@@ -130,14 +130,16 @@ struct SettingsView: View {
             List {
                 ForEach(["claude", "codex", "copilot"], id: \.self) { kind in
                     Section {
-                        Toggle("Automatic mode", isOn: binding(kind, \.automaticMode))
+                        if kind != "copilot" {
+                            Toggle("Automatic mode", isOn: binding(kind, \.automaticMode))
+                        }
                         Toggle("Approve task folder automatically", isOn: binding(kind, \.approveFolder))
                     } header: {
                         Text(kind == "claude" ? "Claude Code" : kind == "codex" ? "Codex" : "Copilot")
                     } footer: {
                         Text(kind == "claude" ? "Claude's auto permission mode keeps its risk checks."
                              : kind == "codex" ? "Codex reviews approvals automatically inside its workspace sandbox."
-                             : "Copilot starts in autopilot with tools, paths and URLs allowed.")
+                             : "Copilot uses its own saved mode and permission settings.")
                     }
                 }
                 Section {

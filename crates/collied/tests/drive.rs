@@ -1946,14 +1946,14 @@ async fn codex_tasks_keep_session_hooks_in_their_own_pane() {
 }
 
 #[tokio::test]
-async fn copilot_tasks_start_in_autopilot_without_permission_confirmation() {
+async fn copilot_tasks_preserve_the_native_mode_without_added_arguments() {
     for worktree in [false, true] {
         let herdr = Mock::start();
         let (_d, base) = root();
         let drive = herdr.driver(&["copilot"], &base.join("root"));
         let mut p = task(&base.join("root/a"), "copilot");
         p.startup = Some(protocol::TaskStartup {
-            automatic_mode: true,
+            automatic_mode: false,
             approve_folder: false,
         });
         if worktree {
@@ -1973,7 +1973,7 @@ async fn copilot_tasks_start_in_autopilot_without_permission_confirmation() {
         assert_eq!(starts.len(), 1);
         assert_eq!(starts[0]["kind"], "copilot");
         assert_eq!(starts[0]["pane_id"], "w9:p1");
-        assert_eq!(starts[0]["args"], json!(["--autopilot", "--allow-all"]));
+        assert_eq!(starts[0]["args"], Value::Null);
         assert_eq!(herdr.params("agent.prompt").len(), 1);
     }
 }
@@ -2003,6 +2003,11 @@ async fn automatic_modes_are_per_agent_and_optional_for_folder_and_worktree_task
                     h.text.clear();
                 });
                 let (reply, _) = drive.task_new(p, &yes()).await;
+                if kind == "copilot" && automatic_mode {
+                    assert_eq!(code(reply), ErrorCode::InvalidParams);
+                    assert!(herdr.mutations().is_empty());
+                    continue;
+                }
                 assert!(
                     reply.is_ok(),
                     "{kind} {automatic_mode} {worktree}: {reply:?}"
@@ -2012,7 +2017,6 @@ async fn automatic_modes_are_per_agent_and_optional_for_folder_and_worktree_task
                     ("claude", true) => json!(["--permission-mode", "auto"]),
                     ("codex", true) => json!(["--no-daemon", "--approve-for-me"]),
                     ("codex", false) => json!(["--no-daemon"]),
-                    ("copilot", true) => json!(["--autopilot", "--allow-all"]),
                     _ => Value::Null,
                 };
                 assert_eq!(args, expected);
@@ -2032,7 +2036,7 @@ async fn folder_approval_is_scoped_to_the_canonical_task_folder_for_every_agent_
             let drive = herdr.driver(&[kind], &base.join("root"));
             let mut p = task(&base.join("root/a"), kind);
             p.startup = Some(protocol::TaskStartup {
-                automatic_mode: true,
+                automatic_mode: kind != "copilot",
                 approve_folder: true,
             });
             let cwd = match location {
@@ -2100,7 +2104,7 @@ async fn folder_approval_refuses_disabled_wrong_folder_and_unrelated_prompts() {
             let drive = herdr.driver(&[kind], &base.join("root"));
             let mut p = task(&cwd, kind);
             p.startup = Some(protocol::TaskStartup {
-                automatic_mode: true,
+                automatic_mode: kind != "copilot",
                 approve_folder: failure != "disabled",
             });
             set_startup_trust(&herdr, kind, &cwd);
@@ -2203,7 +2207,7 @@ async fn folder_trust_is_confirmed_only_once_even_if_it_returns_after_readiness(
     let drive = herdr.driver(&["copilot"], &base.join("root"));
     let mut p = task(&cwd, "copilot");
     p.startup = Some(protocol::TaskStartup {
-        automatic_mode: true,
+        automatic_mode: false,
         approve_folder: true,
     });
     set_startup_trust(&herdr, "copilot", &cwd);

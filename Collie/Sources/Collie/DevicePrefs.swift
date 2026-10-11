@@ -22,7 +22,11 @@ struct DevicePrefs: StateFile, Equatable {
         guard ["claude", "codex", "copilot"].contains(agent) else {
             return AgentStartupPrefs(automaticMode: false, approveFolder: false)
         }
-        return agentStartup[agent] ?? AgentStartupPrefs()
+        var prefs = agentStartup[agent] ?? AgentStartupPrefs()
+        if agent == "copilot" {
+            prefs.automaticMode = false
+        }
+        return prefs
     }
 
     static let historyChoices: [UInt16] = [200, 500, 1000]

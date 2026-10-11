@@ -1259,7 +1259,7 @@ func newTaskReadsCurrentAgentStartupPreferencesForEveryLocation(_ kind: String) 
         }
         #expect(await model.start() != nil)
         let startup = try #require(core.snapshot.taskStartups.last ?? nil)
-        #expect(startup.automaticMode == (location != "new"))
+        #expect(startup.automaticMode == (kind != "copilot" && location != "new"))
         #expect(startup.approveFolder == (location != "open"))
     }
 }

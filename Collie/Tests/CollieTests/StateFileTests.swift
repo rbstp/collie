@@ -54,7 +54,7 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
     let legacy = try JSONDecoder().decode(DevicePrefs.self, from: Data(#"{"wrapLines":false}"#.utf8))
     for prefs in [DevicePrefs(), legacy, DevicePrefs.load(from: nil)] {
         for kind in ["claude", "codex", "copilot"] {
-            #expect(prefs.startup(for: kind) == AgentStartupPrefs(automaticMode: true, approveFolder: true))
+            #expect(prefs.startup(for: kind) == AgentStartupPrefs(automaticMode: kind != "copilot", approveFolder: true))
         }
         #expect(prefs.startup(for: "pi") == AgentStartupPrefs(automaticMode: false, approveFolder: false))
     }
@@ -67,7 +67,7 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
     DevicePrefs.update(in: file) {
         $0.agentStartup["claude"] = AgentStartupPrefs(automaticMode: false, approveFolder: true)
         $0.agentStartup["codex"] = AgentStartupPrefs(automaticMode: true, approveFolder: false)
-        $0.agentStartup["copilot"] = AgentStartupPrefs(automaticMode: false, approveFolder: false)
+        $0.agentStartup["copilot"] = AgentStartupPrefs(automaticMode: true, approveFolder: false)
     }
     DevicePrefs.update(in: file) { $0.historyLines = 500 }
     let prefs = DevicePrefs.load(from: file)
@@ -76,6 +76,14 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
     #expect(prefs.startup(for: "copilot") == AgentStartupPrefs(automaticMode: false, approveFolder: false))
     #expect(prefs.keepKeyboard && prefs.historyLines == 500)
     #expect(prefs.taskBases == ["m1": "/Users/me/git"])
+}
+
+@Test(arguments: [true, false])
+func copilotIgnoresSavedAutomaticModeAndPreservesFolderApproval(_ approveFolder: Bool) throws {
+    var prefs = DevicePrefs()
+    prefs.agentStartup["copilot"] = AgentStartupPrefs(automaticMode: true, approveFolder: approveFolder)
+    let restored = try JSONDecoder().decode(DevicePrefs.self, from: JSONEncoder().encode(prefs))
+    #expect(restored.startup(for: "copilot") == AgentStartupPrefs(automaticMode: false, approveFolder: approveFolder))
 }
 
 @Test(arguments: [#"{"wrapLines":false}"#, #"{"wrapLines":false,"accent":"future"}"#])

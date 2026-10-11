@@ -571,8 +571,6 @@ pub async fn agent_start(
         } else {
             json!(["--no-daemon"])
         };
-    } else if kind == "copilot" && startup.automatic_mode {
-        params["args"] = json!(["--autopilot", "--allow-all"]);
     } else if kind == "claude" && startup.automatic_mode {
         params["args"] = json!(["--permission-mode", "auto"]);
     }
