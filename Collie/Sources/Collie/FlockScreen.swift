@@ -164,7 +164,7 @@ struct FlockScreen: View {
             }
         case .inbox:
             AgentInbox(
-                entries: model.entries, notice: model.closeNotice, reconnect: reconnect, follows: follows,
+                entries: model.entries, notice: model.closeNotice, follows: follows,
                 seen: seen, markUnseen: markUnseen, menu: menu
             )
         case .list:
@@ -180,9 +180,6 @@ struct FlockScreen: View {
                     }
                     ForEach(model.entries) { entry in
                         Section {
-                            if let error = entry.error {
-                                MachineConnectionDetails(message: error)
-                            }
                             if entry.flock?.details != nil && entry.agents.isEmpty {
                                 Text("No agents running").foregroundStyle(.secondary)
                             }
@@ -308,17 +305,22 @@ struct MachineHeader: View {
     }
 }
 
-struct MachineConnectionDetails: View {
-    let message: String
+extension View {
+    func darkGlass(in shape: some Shape, interactive: Bool = false) -> some View {
+        modifier(DarkGlass(shape: shape, interactive: interactive))
+    }
+}
 
-    var body: some View {
-        DisclosureGroup("Connection details") {
-            Text(message)
-                .foregroundStyle(.orange)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+private struct DarkGlass<S: Shape>: ViewModifier {
+    let shape: S
+    let interactive: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        content
+            .background(.black.opacity(colorScheme == .dark ? 0.69 : 0.07), in: shape)
+            .padding(2)
+            .glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
     }
 }
 
@@ -427,7 +429,6 @@ private struct KindLabelStyle: LabelStyle {
 struct StatusPill: View {
     let state: AgentState
     var title: String? = nil
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Label {
@@ -447,9 +448,7 @@ struct StatusPill: View {
             .foregroundStyle(state.color)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(.black.opacity(colorScheme == .dark ? 0.69 : 0.07), in: .capsule)
-            .padding(2)
-            .glassEffect(.regular, in: .capsule)
+            .darkGlass(in: .capsule)
             .fixedSize()
     }
 }
