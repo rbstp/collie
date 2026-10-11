@@ -248,15 +248,17 @@ pub async fn resolve_agents(data: &Path, socket: &Path, agents: &mut [AgentInfo]
 }
 
 pub fn installed(settings: &Value) -> bool {
-    settings["hooks"]["SessionStart"]
+    settings["hooks"]["sessionStart"]
         .as_array()
         .into_iter()
         .flatten()
-        .any(|h| {
-            h["bash"]
-                .as_str()
-                .is_some_and(|s| s.ends_with(" copilot-hook"))
-        })
+        .any(|h| h["type"] == "command" && h.get("_vsCodeCompat").is_none() && recorder(h))
+}
+
+fn recorder(hook: &Value) -> bool {
+    hook["bash"]
+        .as_str()
+        .is_some_and(|s| s.ends_with(" copilot-hook"))
 }
 
 fn settings(settings: &mut Value, executable: &str) -> Option<()> {
@@ -267,15 +269,14 @@ fn settings(settings: &mut Value, executable: &str) -> Option<()> {
         .entry("hooks")
         .or_insert_with(|| json!({}))
         .as_object_mut()?;
+    if let Some(compatibility) = hooks.get_mut("SessionStart") {
+        compatibility.as_array_mut()?.retain(|h| !recorder(h));
+    }
     let starts = hooks
-        .entry("SessionStart")
+        .entry("sessionStart")
         .or_insert_with(|| json!([]))
         .as_array_mut()?;
-    starts.retain(|h| {
-        !h["bash"]
-            .as_str()
-            .is_some_and(|s| s.ends_with(" copilot-hook"))
-    });
+    starts.retain(|h| !recorder(h));
     starts.push(json!({"type":"command","bash":command,"timeoutSec":10}));
     Some(())
 }
@@ -460,6 +461,25 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<Input>(malformed).is_err());
         }
+    }
+
+    #[test]
+    fn native_hook_input_is_not_vscode_compatibility_input() {
+        let native = input();
+        assert!(native.valid());
+        assert_eq!(native.session_id, OLD);
+        assert_eq!(native.timestamp, 1791633600000);
+        let compatibility =
+            include_str!("../tests/fixtures/copilot-session-start-compatibility.json");
+        assert!(serde_json::from_str::<Input>(compatibility).is_err());
+        assert!(!installed(&json!({
+            "hooks":{"SessionStart":[{"type":"command","bash":"'collied' copilot-hook"}]}
+        })));
+        assert!(!installed(&json!({
+            "hooks":{"sessionStart":[{
+                "type":"command","bash":"'collied' copilot-hook","_vsCodeCompat":"SessionStart"
+            }]}
+        })));
     }
 
     #[test]
@@ -725,7 +745,11 @@ mod tests {
         let path = root.join("settings.json");
         let original = json!({
             "theme":"dark", "hooks":{
-                "SessionStart":[{"type":"command","bash":"herdr-hook","timeoutSec":10}],
+                "SessionStart":[
+                    {"type":"command","bash":"herdr-hook","timeoutSec":10},
+                    {"type":"command","bash":"'/old/collied' copilot-hook","timeoutSec":10}
+                ],
+                "sessionStart":[{"type":"command","bash":"native-hook","timeoutSec":5}],
                 "Stop":[{"type":"command","bash":"custom-hook"}]
             }
         });
@@ -742,12 +766,32 @@ mod tests {
             original["hooks"]["SessionStart"][0]
         );
         assert_eq!(
-            settings["hooks"]["SessionStart"][1]["bash"],
+            settings["hooks"]["SessionStart"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            settings["hooks"]["sessionStart"][0],
+            original["hooks"]["sessionStart"][0]
+        );
+        assert_eq!(
+            settings["hooks"]["sessionStart"][1]["bash"],
             "'/fictional/Mac'\\''s tools/collied' copilot-hook"
         );
         install_at(&root, executable).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), first);
         assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn installer_adds_only_the_native_recorder_when_hooks_are_absent() {
+        let mut value = json!({});
+        settings(&mut value, "/fictional/collied").unwrap();
+        assert!(installed(&value));
+        assert!(value["hooks"].get("SessionStart").is_none());
+        assert_eq!(value["hooks"]["sessionStart"].as_array().unwrap().len(), 1);
+        let first = value.clone();
+        settings(&mut value, "/fictional/collied").unwrap();
+        assert_eq!(value, first);
     }
 
     #[test]
@@ -777,6 +821,7 @@ mod tests {
             b"{".to_vec(),
             b"{\"hooks\":[]}".to_vec(),
             b"{\"hooks\":{\"SessionStart\":{}}}".to_vec(),
+            b"{\"hooks\":{\"sessionStart\":{}}}".to_vec(),
             vec![b' '; LIMIT as usize + 1],
         ] {
             std::fs::write(&path, &bytes).unwrap();

@@ -124,7 +124,7 @@ fn check_copilot_hook() -> (Status, String) {
             .flatten()
     });
     if settings.as_ref().is_some_and(crate::copilot::installed) {
-        (Status::Ok, "SessionStart hook installed".into())
+        (Status::Ok, "native sessionStart hook installed".into())
     } else {
         (
             Status::Warn,

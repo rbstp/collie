@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "SessionStart",
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "timestamp": "2026-10-10T12:00:00.000Z",
+  "cwd": "/fictional/counter",
+  "source": "startup",
+  "initial_prompt": "Fix the café counter test."
+}
