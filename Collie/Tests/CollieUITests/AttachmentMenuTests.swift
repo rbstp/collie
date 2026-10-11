@@ -52,9 +52,10 @@ final class AttachmentMenuTests: XCTestCase {
             if choice == "Saved prompts" {
                 XCTAssertTrue(app.navigationBars["Saved prompts"].waitForExistence(timeout: 5), app.debugDescription)
             } else if choice == "Files" {
-                XCTAssertTrue(app.navigationBars["FullDocumentManagerViewControllerNavigationBar"].waitForExistence(timeout: 5), app.debugDescription)
+                // System pickers need time to initialize their services on fresh CI simulators.
+                XCTAssertTrue(app.navigationBars["FullDocumentManagerViewControllerNavigationBar"].waitForExistence(timeout: 30), app.debugDescription)
             } else {
-                XCTAssertTrue(app.navigationBars["Photos"].waitForExistence(timeout: 5), app.debugDescription)
+                XCTAssertTrue(app.navigationBars["Photos"].waitForExistence(timeout: 30), app.debugDescription)
             }
         }
     }
