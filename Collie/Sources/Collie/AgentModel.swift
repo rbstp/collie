@@ -953,7 +953,7 @@ extension AgentKey {
 
     var symbol: String {
         switch self {
-        case .esc: "esc"
+        case .esc: "E"
         case .enter: "⏎"
         case .up: "↑"
         case .down: "↓"

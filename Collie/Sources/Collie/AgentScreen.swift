@@ -529,8 +529,11 @@ private struct PromptBar: View {
                             Image(systemName: "paperclip")
                                 .foregroundStyle(Color.accentColor)
                                 .font(.system(size: 20))
-                                .frame(width: 32, height: 36)
+                                .frame(width: 28, height: 28)
                         }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .controlSize(.small)
                         .tint(.primary)
                         .menuOrder(.fixed)
                         .disabled(model.upload != nil || model.sendingPrompt)
@@ -595,7 +598,7 @@ private struct PromptBar: View {
                         } label: {
                             Image(systemName: "keyboard.chevron.compact.down")
                                 .font(.system(size: 20))
-                                .frame(width: 20, height: 20)
+                                .frame(width: 28, height: 28)
                         }
                         .buttonStyle(.glass)
                         .buttonBorderShape(.circle)
@@ -610,9 +613,9 @@ private struct PromptBar: View {
                         Task { await model.sendPrompt() }
                     } label: {
                         if model.sendingPrompt {
-                            ProgressView().frame(width: 20, height: 20)
+                            ProgressView().frame(width: 28, height: 28)
                         } else {
-                            Image(systemName: "paperplane.fill").frame(width: 20, height: 20)
+                            Image(systemName: "paperplane.fill").frame(width: 28, height: 28)
                         }
                     }
                     .buttonStyle(.glassProminent)
@@ -746,7 +749,7 @@ struct DictationButton: View {
         } label: {
             Image(systemName: dictation.isActive ? "mic.fill" : "mic")
                 .font(.system(size: 20))
-                .frame(width: 20, height: 20)
+                .frame(width: 28, height: 28)
         } primaryAction: {
             if dictation.isActive {
                 dictation.stop()

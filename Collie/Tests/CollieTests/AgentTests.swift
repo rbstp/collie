@@ -698,7 +698,7 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
 
 @Test func keyStripIsTheAllowlistInOrder() {
     #expect(AgentKey.strip == [.esc, .left, .up, .down, .right, .tab, .shiftTab, .enter, .ctrlEnter])
-    #expect(AgentKey.strip.map(\.symbol) == ["esc", "←", "↑", "↓", "→", "⇥", "⇧⇥", "⏎", "⌃⏎"])
+    #expect(AgentKey.strip.map(\.symbol) == ["E", "←", "↑", "↓", "→", "⇥", "⇧⇥", "⏎", "⌃⏎"])
     let names = AgentKey.strip.map(\.accessibilityName)
     #expect(Set(names).count == names.count)
     #expect(names.allSatisfy { !$0.isEmpty })
