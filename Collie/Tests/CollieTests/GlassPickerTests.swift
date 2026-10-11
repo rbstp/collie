@@ -34,12 +34,10 @@ final class GlassPickerTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(compact.bounds.width, 150)
             XCTAssertEqual(compact.selectedSegmentIndex, 0)
             let attributes = try XCTUnwrap(compact.titleTextAttributes(for: .selected))
-            let color = try XCTUnwrap(attributes[.foregroundColor] as? UIColor)
-            let toolbarColor = try XCTUnwrap(toolbar.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
-            XCTAssertEqual(toolbarColor, color)
-            let expected = UIColor(AppAccent.gold.color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
-            for (actual, wanted) in zip(color.cgColor.components ?? [], expected.cgColor.components ?? []) {
-                XCTAssertEqual(actual, wanted, accuracy: 0.002)
+            for control in controls {
+                XCTAssertNil(control.selectedSegmentTintColor)
+                XCTAssertNil(control.titleTextAttributes(for: .normal)?[.foregroundColor])
+                XCTAssertNil(control.titleTextAttributes(for: .selected)?[.foregroundColor])
             }
             XCTAssertEqual((attributes[.font] as? UIFont)?.pointSize, 15)
             compact.selectedSegmentIndex = 1
@@ -55,13 +53,19 @@ final class GlassPickerTests: XCTestCase {
             attachment.name = style == .dark ? "glass-picker-dark" : "glass-picker-light"
             attachment.lifetime = .keepAlways
             add(attachment)
-            state.accent = .red
-            state.selected = false
-            try await Task.sleep(for: .milliseconds(250))
-            host.view.layoutIfNeeded()
-            XCTAssertEqual(compact.selectedSegmentIndex, 0)
-            let updated = try XCTUnwrap(compact.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
-            XCTAssertNotEqual(updated, color)
+            for accent in AppAccent.allCases {
+                state.accent = accent
+                toolbar.selectedSegmentIndex = 1 - toolbar.selectedSegmentIndex
+                toolbar.sendActions(for: .valueChanged)
+                try await Task.sleep(for: .milliseconds(250))
+                host.view.layoutIfNeeded()
+                XCTAssertEqual(compact.selectedSegmentIndex, toolbar.selectedSegmentIndex)
+                for control in controls {
+                    XCTAssertNil(control.selectedSegmentTintColor)
+                    XCTAssertNil(control.titleTextAttributes(for: .normal)?[.foregroundColor])
+                    XCTAssertNil(control.titleTextAttributes(for: .selected)?[.foregroundColor])
+                }
+            }
         }
     }
 
