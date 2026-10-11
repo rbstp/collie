@@ -181,9 +181,7 @@ struct FlockScreen: View {
                     ForEach(model.entries) { entry in
                         Section {
                             if let error = entry.error {
-                                Label(error, systemImage: "exclamationmark.triangle")
-                                    .font(.footnote)
-                                    .foregroundStyle(.orange)
+                                MachineConnectionDetails(message: error)
                             }
                             if entry.flock?.details != nil && entry.agents.isEmpty {
                                 Text("No agents running").foregroundStyle(.secondary)
@@ -303,10 +301,24 @@ struct MachineHeader: View {
                     ProgressView().controlSize(.mini)
                     Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
                 } else {
-                    Text(link.label).foregroundStyle(link == .connected ? .green : .secondary)
+                    StatusPill(state: link == .connected ? .done : .idle, title: link.label)
                 }
             }
         }
+    }
+}
+
+struct MachineConnectionDetails: View {
+    let message: String
+
+    var body: some View {
+        DisclosureGroup("Connection details") {
+            Text(message)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
     }
 }
 
@@ -414,11 +426,12 @@ private struct KindLabelStyle: LabelStyle {
 
 struct StatusPill: View {
     let state: AgentState
+    var title: String? = nil
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Label {
-            Text(state.label.capitalized)
+            Text(title ?? state.label.capitalized)
         } icon: {
             if state == .working {
                 StatusIcon(state: state)
@@ -512,7 +525,7 @@ struct ContextRing: View {
 extension AgentState {
     var label: String { AgentActivityStatus(self).label }
 
-    var color: Color { AgentActivityStatus(self).color }
+    var color: Color { self == .working ? .accentColor : AgentActivityStatus(self).color }
 }
 
 extension LinkPhase {

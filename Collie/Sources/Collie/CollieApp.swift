@@ -41,6 +41,7 @@ struct RootView: View {
         content
             .tint(app.accent.color)
             .accentColor(app.accent.color)
+            .environment(\.appAccent, app.accent.color)
     }
 
     @ViewBuilder

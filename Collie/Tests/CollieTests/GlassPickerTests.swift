@@ -34,13 +34,7 @@ final class GlassPickerTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(compact.bounds.width, 150)
             XCTAssertEqual(compact.selectedSegmentIndex, 0)
             let attributes = try XCTUnwrap(compact.titleTextAttributes(for: .selected))
-            let color = try XCTUnwrap(attributes[.foregroundColor] as? UIColor)
-            let toolbarColor = try XCTUnwrap(toolbar.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
-            XCTAssertEqual(toolbarColor, color)
-            let expected = UIColor(AppAccent.gold.color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
-            for (actual, wanted) in zip(color.cgColor.components ?? [], expected.cgColor.components ?? []) {
-                XCTAssertEqual(actual, wanted, accuracy: 0.002)
-            }
+            try assertAppearance(controls, accent: state.accent, style: style)
             XCTAssertEqual((attributes[.font] as? UIFont)?.pointSize, 15)
             compact.selectedSegmentIndex = 1
             compact.sendActions(for: .valueChanged)
@@ -55,19 +49,30 @@ final class GlassPickerTests: XCTestCase {
             attachment.name = style == .dark ? "glass-picker-dark" : "glass-picker-light"
             attachment.lifetime = .keepAlways
             add(attachment)
-            state.accent = .red
-            state.selected = false
-            try await Task.sleep(for: .milliseconds(250))
-            host.view.layoutIfNeeded()
-            XCTAssertEqual(compact.selectedSegmentIndex, 0)
-            let updated = try XCTUnwrap(compact.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
-            XCTAssertNotEqual(updated, color)
+            for accent in AppAccent.allCases {
+                state.accent = accent
+                toolbar.selectedSegmentIndex = 1 - toolbar.selectedSegmentIndex
+                toolbar.sendActions(for: .valueChanged)
+                try await Task.sleep(for: .milliseconds(250))
+                host.view.layoutIfNeeded()
+                XCTAssertEqual(compact.selectedSegmentIndex, toolbar.selectedSegmentIndex)
+                try assertAppearance(controls, accent: accent, style: style)
+                for presented in [true, false] {
+                    state.wrapped.toggle()
+                    state.sheet = presented
+                    try await Task.sleep(for: .milliseconds(500))
+                    host.view.layoutIfNeeded()
+                    try assertAppearance(controls, accent: accent, style: style)
+                }
+            }
         }
     }
 
     @Observable
     final class PickerState {
         var selected = false
+        var wrapped = true
+        var sheet = false
         var accent = AppAccent.gold
     }
 
@@ -93,12 +98,31 @@ final class GlassPickerTests: XCTestCase {
                     }
                     .sharedBackgroundVisibility(.hidden)
                     ToolbarItem(placement: .primaryAction) {
-                        Button("New task", systemImage: "plus") {}
+                        Toggle(isOn: $state.wrapped) { Label("Wrap lines", systemImage: "text.word.spacing") }
+                            .toggleStyle(.button)
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("New task", systemImage: "plus") { state.sheet = true }
                     }
                 }
             }
+            .sheet(isPresented: $state.sheet) { Text("New task") }
             .tint(state.accent.color)
             .accentColor(state.accent.color)
+            .environment(\.appAccent, state.accent.color)
+        }
+    }
+
+    private func assertAppearance(_ controls: [UISegmentedControl], accent: AppAccent, style: UIUserInterfaceStyle) throws {
+        let expected = UIColor(accent.color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
+        for control in controls {
+            XCTAssertNil(control.selectedSegmentTintColor)
+            XCTAssertNil(control.titleTextAttributes(for: .normal)?[.foregroundColor])
+            let actual = try XCTUnwrap(control.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
+            XCTAssertEqual(actual.cgColor.numberOfComponents, expected.cgColor.numberOfComponents)
+            for (component, wanted) in zip(actual.cgColor.components ?? [], expected.cgColor.components ?? []) {
+                XCTAssertEqual(component, wanted, accuracy: 0.002, "\(accent) in \(control.accessibilityLabel ?? "picker")")
+            }
         }
     }
 

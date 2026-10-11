@@ -28,10 +28,9 @@ private struct UsageGauge: View {
 
     var body: some View {
         VStack(spacing: 2) {
-            UsageDial(logo: logo, window: window, showsPercentage: false)
+            UsageDial(logo: logo, window: window, now: now, showsPercentage: false)
                 .controlSize(.extraLarge)
                 .frame(width: diameter, height: diameter)
-                .widgetAccentable()
             HStack(spacing: 2) {
                 if let window {
                     if window.isStale(now: now) {
@@ -53,7 +52,7 @@ private struct UsageGauge: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue(window.map {
-            "\($0.used) percent used. Resets \($0.interval.upperBound.formatted(date: .abbreviated, time: .shortened))"
+            "\($0.used) percent used. \(Int(($0.elapsed(now: now) * 100).rounded())) percent of the window elapsed. Resets \($0.interval.upperBound.formatted(date: .abbreviated, time: .shortened))"
                 + ($0.isStale(now: now) ? ". Usage may be outdated" : "")
         } ?? "Usage unavailable")
     }

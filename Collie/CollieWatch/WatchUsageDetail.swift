@@ -19,7 +19,7 @@ struct WatchUsageDetail: View {
                         }
                     } label: {
                         HStack(spacing: 10) {
-                            UsageDial(logo: logo, window: window, showsPercentage: false)
+                            UsageDial(logo: logo, window: window, now: context.date, showsPercentage: false)
                                 .frame(width: 54, height: 54)
                                 .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 3) {
@@ -39,7 +39,7 @@ struct WatchUsageDetail: View {
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(logo) \(period)")
                         .accessibilityValue(window.map {
-                            "\($0.used) percent used. Resets \($0.interval.upperBound.formatted(date: .abbreviated, time: .shortened))"
+                            "\($0.used) percent used. \(Int(($0.elapsed(now: context.date) * 100).rounded())) percent of the window elapsed. Resets \($0.interval.upperBound.formatted(date: .abbreviated, time: .shortened))"
                         } ?? "Usage unavailable")
                     }
                 }
@@ -72,7 +72,7 @@ private struct UsageWindowDetail: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                UsageDial(logo: logo, period: shortPeriod, window: window)
+                UsageDial(logo: logo, period: shortPeriod, window: window, now: now)
                     .scaleEffect(1.6)
                     .frame(width: 88, height: 88)
                     .accessibilityLabel(window.map { "\($0.used) percent used" } ?? "Usage unavailable")

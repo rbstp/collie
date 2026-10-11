@@ -1,6 +1,10 @@
 import SwiftUI
 import UIKit
 
+extension EnvironmentValues {
+    @Entry var appAccent: Color = .accentColor
+}
+
 struct GlassPicker<Selection: Hashable>: View {
     let title: String
     @Binding var selection: Selection
@@ -9,7 +13,6 @@ struct GlassPicker<Selection: Hashable>: View {
 
     var body: some View {
         NativeSegmentedPicker(title: title, selection: $selection, options: options, expands: expands)
-            .foregroundStyle(Color.accentColor)
             .glassEffect(expands ? .regular : .identity)
     }
 }
@@ -24,9 +27,6 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UISegmentedControl {
         let control = UISegmentedControl()
-        control.selectedSegmentTintColor = UIColor { traits in
-            traits.userInterfaceStyle == .dark ? .black : UIColor(white: 0.9, alpha: 1)
-        }
         control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
         return control
     }
@@ -38,8 +38,10 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
             for index in options.indices { control.insertSegment(withTitle: "", at: index, animated: false) }
         }
         let font = UIFont.systemFont(ofSize: fontSize, weight: .semibold)
-        let accent = UIColor(Color(Color.accentColor.resolve(in: context.environment)))
-        control.setTitleTextAttributes([.font: font, .foregroundColor: UIColor.label], for: .normal)
+        // Keep the selected label's app accent explicit: native defaults lose it, and UIKit tint can change during actions.
+        // Leave the selection background system-controlled.
+        let accent = UIColor(Color(context.environment.appAccent.resolve(in: context.environment)))
+        control.setTitleTextAttributes([.font: font], for: .normal)
         control.setTitleTextAttributes([.font: font, .foregroundColor: accent], for: .selected)
         for index in options.indices {
             let label = String(localized: String.LocalizationValue(options[index].0), locale: context.environment.locale)

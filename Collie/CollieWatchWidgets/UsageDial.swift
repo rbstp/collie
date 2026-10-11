@@ -1,9 +1,11 @@
 import SwiftUI
+import WidgetKit
 
 struct UsageDial: View {
     let logo: String
     var period: String? = nil
     let window: WatchUsage.Window?
+    let now: Date
     var showsPercentage = true
 
     var body: some View {
@@ -36,5 +38,30 @@ struct UsageDial: View {
             .init(color: remainder, location: end),
             .init(color: remainder, location: 1),
         ]))
+        .widgetAccentable()
+        .overlay {
+            if let window {
+                GeometryReader { geometry in
+                    let diameter = min(geometry.size.width, geometry.size.height)
+                    Capsule().fill(.white)
+                        .frame(width: 2, height: diameter * 0.16)
+                        .offset(y: -diameter * 0.45)
+                        .rotationEffect(.degrees(-135 + window.elapsed(now: now) * 270))
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .mask {
+                            Rectangle().overlay {
+                                Circle()
+                                    .frame(width: diameter * 0.2, height: diameter * 0.2)
+                                    .offset(y: -diameter * 0.45)
+                                    .rotationEffect(.degrees(-135 + window.usedFraction * 270))
+                                    .blendMode(.destinationOut)
+                            }
+                            .compositingGroup()
+                        }
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
     }
 }
