@@ -309,7 +309,7 @@ private struct AgentHeader: View {
     let machineLabel: String?
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             if let machineLabel {
                 Text(verbatim: machineLabel).font(.caption.weight(.semibold)).lineLimit(1)
             }
@@ -321,12 +321,12 @@ private struct AgentHeader: View {
                         .foregroundStyle(.secondary)
                 }
                 if let kind = agent.kind {
-                    AgentKindLabel(kind: kind).font(.caption).foregroundStyle(.secondary)
+                    AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
                 }
                 if let left = agent.contextLeft {
                     HStack(spacing: 4) {
                         ContextRing(left: left)
-                        Text("\(left)% context").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Text("\(left)%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Context \(left)% left")
