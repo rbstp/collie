@@ -15,6 +15,7 @@ use crate::usage::Usage;
 
 /// Only the end is read: transcripts reach tens of MB, and what is shown sits near the end.
 const TAIL_BYTES: u64 = 1 << 20;
+const HEADER_BYTES: u64 = 65536;
 pub const MAX_TEXT_CHARS: usize = 160;
 const CLAUDE_WINDOW: u64 = 200_000;
 const CLAUDE_LONG_WINDOW: u64 = 1_000_000;
@@ -29,10 +30,22 @@ pub struct Derived {
     pub last_activity_ms: Option<u64>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Kind {
     Claude,
     Codex,
+    Copilot,
+}
+
+impl Kind {
+    fn of(agent: &AgentInfo) -> Option<Self> {
+        match agent.agent.as_deref()? {
+            "claude" => Some(Self::Claude),
+            "codex" => Some(Self::Codex),
+            "copilot" => Some(Self::Copilot),
+            _ => None,
+        }
+    }
 }
 
 struct Cached {
@@ -47,8 +60,9 @@ struct Cached {
 pub struct Transcripts {
     claude_projects: Option<PathBuf>,
     codex_sessions: Option<PathBuf>,
-    cache: HashMap<String, Cached>,
-    missed: HashSet<String>,
+    copilot_sessions: Option<PathBuf>,
+    cache: HashMap<(Kind, String), Cached>,
+    missed: HashSet<(Kind, String)>,
     usage: Usage,
 }
 
@@ -57,10 +71,16 @@ impl Transcripts {
         Self {
             claude_projects,
             codex_sessions,
+            copilot_sessions: None,
             cache: HashMap::new(),
             missed: HashSet::new(),
             usage: Usage::default(),
         }
+    }
+
+    pub fn with_copilot(mut self, path: PathBuf) -> Self {
+        self.copilot_sessions = Some(path);
+        self
     }
 
     pub fn with_usage(mut self, path: PathBuf) -> Self {
@@ -83,65 +103,92 @@ impl Transcripts {
             Some(dir) => Some(PathBuf::from(dir)),
             None => crate::config::home_dir().ok().map(|h| h.join(".codex")),
         };
-        Self::new(
+        let copilot = std::env::var_os("COPILOT_HOME")
+            .map(PathBuf::from)
+            .or_else(|| crate::config::home_dir().ok().map(|h| h.join(".copilot")));
+        let mut transcripts = Self::new(
             crate::hooks::claude_dir().ok().map(|d| d.join("projects")),
             codex.map(|d| d.join("sessions")),
-        )
+        );
+        transcripts.copilot_sessions = copilot.map(|d| d.join("session-state"));
+        transcripts
     }
 
     pub fn retain(&mut self, agents: &[AgentInfo]) {
-        let live = |id: &String| agents.iter().any(|a| session_id(a) == Some(id.as_str()));
-        self.cache.retain(|id, _| live(id));
+        let live = |(kind, id): &(Kind, String)| {
+            agents
+                .iter()
+                .any(|a| Kind::of(a) == Some(*kind) && session_id(a) == Some(id.as_str()))
+        };
+        self.cache.retain(|key, _| live(key));
         self.missed.retain(live);
     }
 
     /// Cached by size and mtime, so an unchanged transcript costs one open and fstat. A
     /// transcript not found is looked for again only when `relocate`.
     pub fn derive(&mut self, a: &AgentInfo, relocate: bool) -> Option<Derived> {
-        let kind = match a.agent.as_deref()? {
-            "claude" => Kind::Claude,
-            "codex" => Kind::Codex,
-            _ => return None,
-        };
+        let kind = Kind::of(a)?;
         let id = session_id(a)?;
-        let path = match self.cache.get(id) {
+        let key = (kind, id.to_owned());
+        let path = match self.cache.get(&key) {
             Some(c) => c.path.clone(),
-            None if !relocate && self.missed.contains(id) => return None,
+            None if !relocate && self.missed.contains(&key) => return None,
             None => match self.locate(kind, id, a) {
                 Some(path) => path,
                 None => {
-                    self.missed.insert(id.to_owned());
+                    self.missed.insert(key);
                     return None;
                 }
             },
         };
-        let Some((file, len, modified)) = open(&path) else {
-            self.cache.remove(id);
-            self.missed.insert(id.to_owned());
+        if kind == Kind::Copilot
+            && !std::fs::symlink_metadata(path.parent()?).is_ok_and(|m| m.is_dir())
+        {
+            self.cache.remove(&key);
+            self.missed.insert(key);
+            return None;
+        }
+        let Some((mut file, len, modified)) = open(&path) else {
+            self.cache.remove(&key);
+            self.missed.insert(key);
             return None;
         };
-        self.missed.remove(id);
+        self.missed.remove(&key);
         let window = match kind {
             Kind::Claude => {
                 self.usage.refresh();
                 self.usage.window(id)
             }
-            Kind::Codex => None,
+            Kind::Codex | Kind::Copilot => None,
         };
         if let Some(c) = self
             .cache
-            .get(id)
+            .get(&key)
             .filter(|c| c.len == len && c.modified == modified && c.window == window)
         {
             return Some(c.derived.clone());
+        }
+        if kind == Kind::Copilot {
+            let mut header = vec![0; len.min(HEADER_BYTES) as usize];
+            file.read_exact(&mut header).ok()?;
+            if !copilot_header(&header, id) {
+                self.cache.remove(&key);
+                return None;
+            }
         }
         let text = tail(file, len).ok()?;
         let mut derived = match kind {
             Kind::Claude => claude(&text, window),
             Kind::Codex => codex(&text),
+            Kind::Copilot => copilot(&text),
         };
         // A line longer than the tail (a large tool result) can hide the older values.
-        if let Some(prev) = self.cache.get(id).map(|c| &c.derived) {
+        if let Some(prev) = self
+            .cache
+            .get(&key)
+            .filter(|c| c.len <= len)
+            .map(|c| &c.derived)
+        {
             derived.context_left = derived.context_left.or(prev.context_left);
             derived.last_line = derived.last_line.or_else(|| prev.last_line.clone());
             derived.last_prompt = derived.last_prompt.or_else(|| prev.last_prompt.clone());
@@ -151,7 +198,7 @@ impl Transcripts {
             .ok()
             .map(|d| d.as_millis() as u64);
         self.cache.insert(
-            id.to_owned(),
+            key,
             Cached {
                 path,
                 len,
@@ -201,6 +248,14 @@ impl Transcripts {
                             && is_file(p)
                     })
             }
+            Kind::Copilot => {
+                let root = self.copilot_sessions.as_ref()?;
+                let dir = root.join(id);
+                std::fs::symlink_metadata(&dir)
+                    .is_ok_and(|m| m.is_dir())
+                    .then(|| dir.join("events.jsonl"))
+                    .filter(|p| is_file(p))
+            }
         }
     }
 }
@@ -213,9 +268,25 @@ fn session_id(a: &AgentInfo) -> Option<&str> {
 
 pub(crate) fn is_session_id(id: &str) -> bool {
     id.len() == 36
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b'-')
+        && id.bytes().enumerate().all(|(i, b)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                b == b'-'
+            } else {
+                b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+            }
+        })
+}
+
+fn copilot_header(header: &[u8], id: &str) -> bool {
+    if header.is_empty() {
+        return true;
+    }
+    let Some(end) = header.iter().position(|b| *b == b'\n') else {
+        return false;
+    };
+    serde_json::from_slice::<Value>(&header[..end]).is_ok_and(|v| {
+        v["type"] == "session.start" && v["data"]["version"] == 1 && v["data"]["sessionId"] == id
+    })
 }
 
 /// Claude Code's project directory name for a working directory.
@@ -438,6 +509,31 @@ fn codex(text: &str) -> Derived {
     d
 }
 
+fn copilot(text: &str) -> Derived {
+    let mut d = Derived::default();
+    let complete = text.rsplit_once('\n').map_or("", |(s, _)| s);
+    for v in complete
+        .lines()
+        .rev()
+        .filter(|l| l.contains("assistant.message") || l.contains("user.message"))
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+    {
+        match v["type"].as_str() {
+            Some("assistant.message") if d.last_line.is_none() => {
+                d.last_line = v["data"]["content"].as_str().and_then(first_line);
+            }
+            Some("user.message") if d.last_prompt.is_none() => {
+                d.last_prompt = v["data"]["content"].as_str().and_then(first_line);
+            }
+            _ => {}
+        }
+        if d.last_line.is_some() && d.last_prompt.is_some() {
+            break;
+        }
+    }
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
@@ -447,8 +543,10 @@ mod tests {
 
     const CLAUDE: &str = include_str!("../tests/fixtures/transcripts/claude.jsonl");
     const CODEX: &str = include_str!("../tests/fixtures/transcripts/codex.jsonl");
+    const COPILOT: &str = include_str!("../tests/fixtures/transcripts/copilot.jsonl");
     const CLAUDE_ID: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     const CODEX_ID: &str = "01a10f07-b5ed-79a3-989d-fa10b96c5cab";
+    const COPILOT_ID: &str = "11111111-2222-4333-8444-555555555555";
 
     fn agent(kind: &str, id: &str, cwd: &str) -> AgentInfo {
         AgentInfo {
@@ -480,6 +578,7 @@ mod tests {
             Some(dir.join("claude/projects")),
             Some(dir.join("codex/sessions")),
         )
+        .with_copilot(dir.join("copilot/session-state"))
     }
 
     #[test]
@@ -582,6 +681,113 @@ mod tests {
     }
 
     #[test]
+    fn copilot_fixture_uses_only_complete_conversation_events() {
+        let d = copilot(COPILOT);
+        assert_eq!(d.context_left, None);
+        assert_eq!(d.last_line.as_deref(), Some("**Fixed** the café counter."));
+        assert_eq!(d.last_prompt.as_deref(), Some("Fix the café counter test."));
+        let partial = COPILOT.to_owned()
+            + r#"{"type":"assistant.message","data":{"content":"Partial reply"}}"#;
+        assert_eq!(copilot(&partial), d);
+        assert_eq!(
+            copilot(&(partial + "\n")).last_line.as_deref(),
+            Some("Partial reply")
+        );
+    }
+
+    #[test]
+    fn copilot_discovery_cache_and_identity_are_agent_specific() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = roots(dir.path());
+        let a = agent("copilot", COPILOT_ID, "/fictional/moved");
+        let path = dir
+            .path()
+            .join(format!("copilot/session-state/{COPILOT_ID}/events.jsonl"));
+        assert_eq!(t.derive(&a, false), None);
+        write(&path, COPILOT);
+        assert_eq!(t.derive(&a, false), None);
+        let d = t.derive(&a, true).unwrap();
+        assert!(d.last_activity_ms.is_some());
+        assert_eq!(t.derive(&a, false), Some(d));
+
+        let c = agent("claude", COPILOT_ID, "/fictional/moved");
+        write(
+            &dir.path().join(format!(
+                "claude/projects/-fictional-moved/{COPILOT_ID}.jsonl"
+            )),
+            CLAUDE,
+        );
+        assert_eq!(t.derive(&c, false).unwrap().context_left, Some(94));
+        assert_eq!(t.derive(&a, false).unwrap().context_left, None);
+        assert_eq!(t.cache.len(), 2);
+        t.retain(std::slice::from_ref(&a));
+        assert_eq!(t.cache.len(), 1);
+
+        let updated = COPILOT.to_owned()
+            + "{\"type\":\"assistant.message\",\"data\":{\"content\":\"Updated.\"}}\n";
+        write(&path, &updated);
+        assert_eq!(
+            t.derive(&a, false).unwrap().last_line.as_deref(),
+            Some("Updated.")
+        );
+        let big = updated
+            + &format!(
+                "{{\"type\":\"tool.execution_complete\",\"data\":{{\"result\":{{\"content\":\"{}\"}}}}}}\n",
+                "é".repeat(TAIL_BYTES as usize)
+            );
+        write(&path, &big);
+        assert_eq!(
+            t.derive(&a, false).unwrap().last_line.as_deref(),
+            Some("Updated.")
+        );
+        write(&path, "");
+        let cleared = t.derive(&a, false).unwrap();
+        assert_eq!(cleared.last_line, None);
+        assert_eq!(cleared.last_prompt, None);
+        write(&path, &COPILOT.replace(COPILOT_ID, CLAUDE_ID));
+        assert_eq!(t.derive(&a, false), None);
+        assert!(t.cache.is_empty());
+        write(&path, COPILOT);
+        assert!(t.derive(&a, false).is_some());
+    }
+
+    #[test]
+    fn copilot_refuses_symlinked_files_directories_and_fifos() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = roots(dir.path());
+        let a = agent("copilot", COPILOT_ID, "/");
+        let path = dir
+            .path()
+            .join(format!("copilot/session-state/{COPILOT_ID}/events.jsonl"));
+        let target = dir.path().join("fictional.jsonl");
+        write(&target, COPILOT);
+        write(&path, COPILOT);
+        assert!(t.derive(&a, true).is_some());
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert_eq!(t.derive(&a, true), None);
+        assert!(open(&path).is_none());
+        std::fs::remove_file(&path).unwrap();
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(t.derive(&a, true), None);
+        assert!(open(&path).is_none());
+        std::fs::remove_file(&path).unwrap();
+        write(&path, COPILOT);
+        assert!(t.derive(&a, true).is_some());
+        let moved = dir.path().join("other-session");
+        std::fs::rename(path.parent().unwrap(), &moved).unwrap();
+        write(&moved.join("events.jsonl"), COPILOT);
+        std::os::unix::fs::symlink(&moved, path.parent().unwrap()).unwrap();
+        assert_eq!(t.derive(&a, true), None);
+    }
+
+    #[test]
     fn text_is_cleaned_and_capped() {
         assert_eq!(
             first_line("\n \x1b[2J\u{202e}hi\tthere \n"),
@@ -606,6 +812,8 @@ mod tests {
             "3F1B2C4D-5E6F-4A7B-8C9D-0E1F2A3B4C5D",
             "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d0",
             "3f1b2c4d/5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "------------------------------------",
+            "3f1b2c4d55e6f-4a7b-8c9d-0e1f2a3b4c5d",
         ] {
             assert_eq!(session_id(&agent("claude", bad, "/")), None, "{bad}");
         }
@@ -690,7 +898,7 @@ mod tests {
 
         t.retain(&[c]);
         assert_eq!(t.cache.len(), 1);
-        assert!(t.cache.contains_key(CODEX_ID));
+        assert!(t.cache.contains_key(&(Kind::Codex, CODEX_ID.into())));
         assert!(t.missed.is_empty());
     }
 

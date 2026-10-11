@@ -8,6 +8,14 @@ import UIKit
 @testable import Collie
 
 final class FakeCore: AgentCore {
+    struct HistoryRequest: Equatable {
+        let machine: String
+        let terminal: String
+        let before: String?
+        let after: String?
+        let query: String?
+    }
+
     struct State {
         var gitCalls: [String] = []
         var gitPatch = "@@ -1 +1 @@\n-old\n+new\n"
@@ -66,6 +74,8 @@ final class FakeCore: AgentCore {
         var machines: [Machine] = []
         var cachedFlock: MachineFlock?
         var flocks = 0
+        var historyPage: HistoryPage?
+        var historyRequests: [HistoryRequest] = []
     }
 
     let state = Mutex(State())
@@ -160,6 +170,13 @@ final class FakeCore: AgentCore {
     func agentChanges(machineId: String, terminalId: String) async throws -> GitChanges {
         state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)") }
         return GitChanges(root: "/worktree", branch: "feature", files: [], truncated: false)
+    }
+    func agentHistory(machineId: String, terminalId: String, before: String?, after: String?, query: String?) async throws -> HistoryPage {
+        try await call {
+            $0.historyRequests.append(HistoryRequest(machine: machineId, terminal: terminalId, before: before, after: after, query: query))
+        }
+        guard let page = snapshot.historyPage else { throw CoreError.NotImplemented }
+        return page
     }
     func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff {
         state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)") }

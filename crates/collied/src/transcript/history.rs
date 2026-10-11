@@ -5,7 +5,7 @@ use std::os::unix::fs::MetadataExt;
 use protocol::{HistoryMessage, HistoryPage, HistoryParams};
 use serde_json::Value;
 
-use super::{Kind, Transcripts, open, session_id};
+use super::{HEADER_BYTES, Kind, Transcripts, copilot_header, open, session_id};
 use crate::herdr::AgentInfo;
 
 const SCAN_BYTES: u64 = 2 * 1024 * 1024;
@@ -14,7 +14,10 @@ const RECORD_TEXT_BYTES: usize = 6000;
 
 impl Transcripts {
     pub fn history_reader(&self) -> Self {
-        Self::new(self.claude_projects.clone(), self.codex_sessions.clone())
+        Self {
+            copilot_sessions: self.copilot_sessions.clone(),
+            ..Self::new(self.claude_projects.clone(), self.codex_sessions.clone())
+        }
     }
 
     pub fn history(&self, agent: &AgentInfo, params: &HistoryParams) -> HistoryPage {
@@ -36,19 +39,18 @@ impl Transcripts {
     }
 
     fn read_history(&self, agent: &AgentInfo, p: &HistoryParams) -> Option<HistoryPage> {
-        let kind = match agent.agent.as_deref()? {
-            "claude" => Kind::Claude,
-            "codex" => Kind::Codex,
-            _ => return None,
-        };
+        let kind = Kind::of(agent)?;
         let id = session_id(agent)?;
         let path = self.locate(kind, id, agent)?;
         let (mut file, len, _) = open(&path)?;
         let meta = file.metadata().ok()?;
-        let mut header = vec![0; len.min(65536) as usize];
+        let mut header = vec![0; len.min(HEADER_BYTES) as usize];
         file.read_exact(&mut header).ok()?;
         let first = header.split(|b| *b == b'\n').next().unwrap_or_default();
         if matches!(kind, Kind::Codex) && header_string(first, "id").is_some_and(|s| s != id) {
+            return None;
+        }
+        if kind == Kind::Copilot && !copilot_header(&header, id) {
             return None;
         }
         let modern = header_string(first, "cli_version")
@@ -238,8 +240,9 @@ fn normalize(
         Kind::Codex => v["payload"]["item"]["id"]
             .as_str()
             .or(v["payload"]["id"].as_str()),
+        Kind::Copilot => v["id"].as_str(),
     }
-    .filter(|s| s.len() <= 128)
+    .filter(|s| !s.is_empty() && s.len() <= 128)
     .map(str::to_owned)
     .unwrap_or_else(|| offset.to_string());
     let mut add = |role: &str, body: String, tool: Option<&str>, call_id: Option<&str>| {
@@ -329,6 +332,39 @@ fn normalize(
                 }
             }
         }
+        Kind::Copilot => {
+            let d = &v["data"];
+            match v["type"].as_str() {
+                Some("user.message") => {
+                    if let Some(content) = d["content"].as_str() {
+                        add("user", content.into(), None, None);
+                    }
+                }
+                Some("assistant.message") => {
+                    if let Some(content) = d["content"].as_str() {
+                        add("assistant", content.into(), None, None);
+                    }
+                }
+                Some("tool.execution_start") => {
+                    if let (Some(name), Some(call)) =
+                        (d["toolName"].as_str(), d["toolCallId"].as_str())
+                    {
+                        add("assistant", text(&d["arguments"]), Some(name), Some(call));
+                    }
+                }
+                Some("tool.execution_complete") => {
+                    let content = match d["success"].as_bool() {
+                        Some(true) => d["result"]["content"].as_str(),
+                        Some(false) => d["error"]["message"].as_str(),
+                        None => None,
+                    };
+                    if let (Some(content), Some(call)) = (content, d["toolCallId"].as_str()) {
+                        add("tool", content.into(), Some("Result"), Some(call));
+                    }
+                }
+                _ => {}
+            }
+        }
     }
     if !query.is_empty() {
         out.retain(|m| {
@@ -409,22 +445,33 @@ mod tests {
 
     const CLAUDE: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     const CODEX: &str = "01a10f07-b5ed-79a3-989d-fa10b96c5cab";
+    const COPILOT: &str = "11111111-2222-4333-8444-555555555555";
+    const COPILOT_LOG: &str = include_str!("../../tests/fixtures/transcripts/copilot.jsonl");
 
     fn setup(kind: &str, content: &str) -> (tempfile::TempDir, Transcripts, AgentInfo, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let id = if kind == "claude" { CLAUDE } else { CODEX };
-        let path = if kind == "claude" {
-            dir.path().join(format!("claude/-test/{id}.jsonl"))
-        } else {
-            dir.path()
-                .join(format!("codex/2026/10/06/rollout-test-{id}.jsonl"))
+        let (id, path) = match kind {
+            "claude" => (
+                CLAUDE,
+                dir.path().join(format!("claude/-test/{CLAUDE}.jsonl")),
+            ),
+            "copilot" => (
+                COPILOT,
+                dir.path().join(format!("copilot/{COPILOT}/events.jsonl")),
+            ),
+            _ => (
+                CODEX,
+                dir.path()
+                    .join(format!("codex/2026/10/06/rollout-test-{CODEX}.jsonl")),
+            ),
         };
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, content).unwrap();
         let t = Transcripts::new(
             Some(dir.path().join("claude")),
             Some(dir.path().join("codex")),
-        );
+        )
+        .with_copilot(dir.path().join("copilot"));
         let agent = AgentInfo {
             terminal_id: "t1".into(),
             workspace_id: "w1".into(),
@@ -482,6 +529,7 @@ mod tests {
                 include_str!("../../tests/fixtures/transcripts/codex.jsonl"),
                 3,
             ),
+            ("copilot", COPILOT_LOG, 7),
         ] {
             let (_dir, t, a, _) = setup(kind, fixture);
             let page = t.history(&a, &params(None, None, None));
@@ -497,6 +545,187 @@ mod tests {
                         || m.text.contains("Subagent report"))
             );
         }
+    }
+
+    fn copilot_row(n: usize, content: &str) -> String {
+        json!({"type":"assistant.message","id":format!("a{n}"),
+            "data":{"messageId":format!("m{n}"),"content":content}})
+        .to_string()
+            + "\n"
+    }
+
+    #[test]
+    fn copilot_tools_pair_without_request_mirrors_or_internal_data() {
+        let (_dir, t, a, _) = setup("copilot", COPILOT_LOG);
+        let p = t.history(&a, &params(None, None, None));
+        assert_eq!(p.messages.len(), 7);
+        assert_eq!(p.messages[0].text, "Fix the café counter test.");
+        assert_eq!(p.messages[2].tool.as_deref(), Some("view"));
+        assert_eq!(p.messages[2].call_id, p.messages[3].call_id);
+        assert_eq!(p.messages[3].text, "let count = 2;");
+        assert_eq!(p.messages[4].tool.as_deref(), Some("bash"));
+        assert_eq!(p.messages[4].call_id, p.messages[5].call_id);
+        assert_eq!(p.messages[5].role, "tool");
+        assert_eq!(p.messages[5].text, "The counter test failed.");
+        assert!(p.messages[6].text.contains("```rust"));
+        assert!(
+            !p.messages
+                .iter()
+                .any(|m| m.text.contains("must not appear"))
+        );
+        let search = t.history(&a, &params(None, None, Some("BASH")));
+        assert_eq!(search.messages.len(), 1);
+        assert_eq!(search.messages[0].id, "tool-start-2:0");
+    }
+
+    #[test]
+    fn copilot_pages_search_partial_updates_and_reconnect_have_no_gaps() {
+        let header = COPILOT_LOG.lines().next().unwrap().to_owned() + "\n";
+        let (_dir, t, a, path) = setup("copilot", &header);
+        let first = t.history(&a, &params(None, None, None));
+        for n in 0..135 {
+            append(&path, &copilot_row(n, &format!("Reply {n}")));
+        }
+        let mut p = t.history(&a, &params(None, None, None));
+        let mut backward = p.messages.clone();
+        while p.before.is_some() {
+            p = t.history(&a, &params(p.before, None, None));
+            backward.splice(0..0, p.messages.clone());
+        }
+        assert_eq!(backward.len(), 135);
+        let mut cursor = first.after;
+        let mut forward = vec![];
+        loop {
+            p = t.history(&a, &params(None, cursor, None));
+            cursor = p.after;
+            forward.extend(p.messages);
+            if !p.more {
+                break;
+            }
+        }
+        assert_eq!(backward, forward);
+        assert_eq!(
+            t.history(&a, &params(None, None, Some("REPLY 42")))
+                .messages[0]
+                .id,
+            "a42:0"
+        );
+        append(&path, "broken\n");
+        append(
+            &path,
+            "{\"type\":\"future.event\",\"data\":{\"content\":\"hidden\"}}\n",
+        );
+        let partial = copilot_row(135, "Résumé 👩🏽‍💻");
+        let split = partial.find('é').unwrap() + 1;
+        append(&path, &partial[..split - 1]);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&partial.as_bytes()[split - 1..split])
+            .unwrap();
+        p = t.history(&a, &params(None, cursor, None));
+        assert!(p.messages.is_empty() && p.omitted);
+        cursor = p.after;
+        let pending = t.history(&a, &params(None, cursor.clone(), None));
+        assert!(pending.messages.is_empty());
+        assert_eq!(pending.after, cursor);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&partial.as_bytes()[split..])
+            .unwrap();
+        p = t.history_reader().history(&a, &params(None, cursor, None));
+        assert_eq!(p.messages.len(), 1);
+        assert_eq!(p.messages[0].id, "a135:0");
+        assert_eq!(p.messages[0].text, "Résumé 👩🏽‍💻");
+    }
+
+    #[test]
+    fn copilot_header_identity_versions_and_file_changes_are_checked() {
+        let (_dir, t, mut a, path) = setup("copilot", "");
+        assert!(t.history(&a, &params(None, None, None)).available);
+        for bad in [
+            COPILOT_LOG.replace(COPILOT, CLAUDE),
+            COPILOT_LOG.replace("\"version\":1", "\"version\":2"),
+            "broken\n".into(),
+            COPILOT_LOG.lines().next().unwrap().into(),
+            copilot_row(0, "Missing header"),
+        ] {
+            std::fs::write(&path, bad).unwrap();
+            assert!(!t.history(&a, &params(None, None, None)).available);
+        }
+        std::fs::write(&path, COPILOT_LOG).unwrap();
+        let initial = t.history(&a, &params(None, None, None));
+        let moved = path.with_extension("old");
+        std::fs::rename(&path, &moved).unwrap();
+        std::fs::write(&path, COPILOT_LOG).unwrap();
+        let replaced = t.history(&a, &params(None, initial.after, None));
+        assert!(replaced.reset);
+        assert_ne!(initial.session, replaced.session);
+        std::fs::write(&path, "").unwrap();
+        assert!(
+            t.history(&a, &params(None, replaced.after.clone(), None))
+                .reset
+        );
+        let new_id = "22222222-3333-4444-8555-666666666666";
+        let new_path = path
+            .parent()
+            .unwrap()
+            .with_file_name(new_id)
+            .join("events.jsonl");
+        std::fs::create_dir_all(new_path.parent().unwrap()).unwrap();
+        std::fs::write(&new_path, COPILOT_LOG.replace(COPILOT, new_id)).unwrap();
+        a.agent_session = Some(AgentSession {
+            value: new_id.into(),
+        });
+        let next = t.history(&a, &params(None, replaced.after, None));
+        assert!(next.available && next.reset);
+        assert_ne!(next.session, initial.session);
+        std::fs::remove_file(&new_path).unwrap();
+        std::os::unix::fs::symlink(&moved, &new_path).unwrap();
+        assert!(!t.history(&a, &params(None, None, None)).available);
+    }
+
+    #[test]
+    fn copilot_oversized_records_and_unicode_search_remain_bounded() {
+        let header = COPILOT_LOG.lines().next().unwrap().to_owned() + "\n";
+        let (_dir, t, a, path) = setup("copilot", &header);
+        let first = t.history(&a, &params(None, None, None));
+        append(
+            &path,
+            &copilot_row(0, &format!("{}İNEEDLE", "é".repeat(9000))),
+        );
+        append(&path, &copilot_row(1, &"x".repeat(SCAN_BYTES as usize * 3)));
+        append(&path, &copilot_row(2, "after"));
+        let mut p = t.history(&a, &params(None, None, Some("i\u{307}needle")));
+        let mut found = p.messages.clone();
+        let mut omitted = p.omitted;
+        for _ in 0..10 {
+            if p.before.is_none() {
+                break;
+            }
+            p = t.history(&a, &params(p.before, None, Some("i\u{307}needle")));
+            omitted |= p.omitted;
+            found.extend(p.messages.clone());
+        }
+        assert!(p.before.is_none() && omitted);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].truncated && found[0].text.contains("İNEEDLE"));
+        let mut cursor = first.after;
+        let mut ids = vec![];
+        for _ in 0..10 {
+            p = t.history(&a, &params(None, cursor, None));
+            cursor = p.after.clone();
+            ids.extend(p.messages.iter().map(|m| m.id.clone()));
+            assert!(serde_json::to_vec(&p).unwrap().len() < protocol::limits::MAX_FRAME_BYTES);
+            if !p.more {
+                break;
+            }
+        }
+        assert!(!p.more);
+        assert_eq!(ids, ["a0:0", "a2:0"]);
     }
 
     #[test]
@@ -657,6 +886,7 @@ mod tests {
                 "codex",
                 include_str!("../../tests/fixtures/transcripts/codex-history-legacy.jsonl").into(),
             ),
+            ("copilot", COPILOT_LOG.into()),
         ] {
             let (_dir, reader, mut agent, _path) = setup(kind, &fixture);
             let identity = agent.agent_session.take();

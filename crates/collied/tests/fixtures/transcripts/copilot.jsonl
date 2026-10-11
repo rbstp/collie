@@ -1,0 +1,15 @@
+{"type":"session.start","data":{"sessionId":"11111111-2222-4333-8444-555555555555","version":1,"producer":"copilot-agent","copilotVersion":"1.0.95-3","startTime":"2026-10-10T12:00:00Z"},"id":"start","timestamp":"2026-10-10T12:00:00Z","parentId":null}
+{"type":"user.message","data":{"content":"Fix the café counter test.","transformedContent":"Internal instructions that must not appear.","messageId":"prompt","agentMode":"interactive","delivery":"idle"},"id":"user-1","timestamp":"2026-10-10T12:00:01Z","parentId":"start"}
+{"type":"assistant.message","data":{"messageId":"reply-1","content":"I will check the counter.","reasoningText":"Private reasoning that must not appear.","encryptedContent":"opaque","toolRequests":[{"toolCallId":"read-1","name":"view","arguments":{"path":"counter.rs"},"type":"function"}]},"id":"assistant-1","timestamp":"2026-10-10T12:00:02Z","parentId":"user-1"}
+{"type":"tool.execution_start","data":{"toolCallId":"read-1","toolName":"view","arguments":{"path":"counter.rs"}},"id":"tool-start-1","timestamp":"2026-10-10T12:00:03Z","parentId":"assistant-1"}
+{"type":"tool.execution_complete","data":{"toolCallId":"read-1","success":true,"result":{"content":"let count = 2;","detailedContent":"Duplicate details that must not appear."}},"id":"tool-end-1","timestamp":"2026-10-10T12:00:04Z","parentId":"tool-start-1"}
+{"type":"tool.execution_start","data":{"toolCallId":"test-1","toolName":"bash","arguments":{"command":"cargo test counter","description":"Run the counter test"}},"id":"tool-start-2","timestamp":"2026-10-10T12:00:05Z","parentId":"tool-end-1"}
+{"type":"tool.execution_complete","data":{"toolCallId":"test-1","success":false,"error":{"message":"The counter test failed.","code":"EXECUTION_FAILED"}},"id":"tool-end-2","timestamp":"2026-10-10T12:00:06Z","parentId":"tool-start-2"}
+{"type":"assistant.message","data":{"messageId":"reply-2","content":"**Fixed** the café counter.\n\n```rust\nassert_eq!(count, 2);\n```","phase":"final_answer"},"id":"assistant-2","timestamp":"2026-10-10T12:00:07Z","parentId":"tool-end-2"}
+{"type":"model.response","data":{"content":"Duplicate model response that must not appear."},"id":"model-1"}
+{"type":"session.binary_asset","data":{"assetId":"image-1","type":"image","mimeType":"image/png","byteLength":4,"data":"AAAA","description":"Binary metadata that must not appear."},"id":"asset-1"}
+{"type":"assistant.message","data":{"content":"","reasoningText":"Reasoning-only event that must not appear."},"id":"reasoning-1"}
+{"type":"user.message","data":{"content":{"text":"Malformed content that must not appear."}},"id":"invalid-1"}
+{"type":"tool.execution_start","data":{"toolName":{"name":"invalid"},"arguments":"Malformed tool that must not appear."},"id":"invalid-2"}
+{"type":"tool.execution_complete","data":{"toolCallId":"invalid","success":"true","result":{"content":"Malformed result that must not appear."}},"id":"invalid-3"}
+{"type":"tool.execution_complete","data":{"toolCallId":"invalid","success":true,"result":{"content":{"text":"Malformed result that must not appear."}}},"id":"invalid-4"}

@@ -14,6 +14,51 @@ private func page(_ messages: [HistoryMessage], session: String = "s1", reset: B
 }
 
 @MainActor
+@Test func copilotConversationLoadsThroughTheAgentAndRetainsReconnectCursor() async {
+    let core = FakeCore()
+    let session = "copilot:11111111-2222-4333-8444-555555555555:1:2"
+    core.state.withLock {
+        $0.kind = "copilot"
+        $0.historyPage = page([
+            HistoryMessage(id: "u1:0", role: "user", text: "Fix the café counter.", tool: nil, callId: nil, truncated: false),
+            HistoryMessage(id: "t1:0", role: "assistant", text: "{\"path\":\"counter.rs\"}", tool: "view", callId: "read-1", truncated: false),
+            HistoryMessage(id: "t2:0", role: "tool", text: "let count = 2;", tool: "Result", callId: "read-1", truncated: false),
+            message("a1:0", "**Fixed** the café counter.")
+        ], session: session)
+    }
+    let model = AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "t1"), prefsFile: nil)
+    model.poll()
+    #expect(model.agent?.kind == "copilot")
+    #expect(!model.isTerminal)
+    await model.conversation.fetch(load: model.history)
+    #expect(model.conversation.available == true)
+    #expect(model.conversation.rows.count == 3)
+    #expect(core.snapshot.historyRequests == [.init(machine: "m1", terminal: "t1", before: nil, after: nil, query: nil)])
+    model.conversation.stop()
+    model.conversation.begin(query: "")
+    core.state.withLock { $0.historyPage = page([message("a2:0", "Verified.")], session: session, after: "next") }
+    await model.conversation.fetch(load: model.history)
+    #expect(core.snapshot.historyRequests.last?.after == "latest")
+    #expect(model.conversation.messages.map(\.id) == ["u1:0", "t1:0", "t2:0", "a1:0", "a2:0"])
+    model.conversation.begin(query: "Verified")
+    await model.conversation.fetch(load: model.history)
+    #expect(core.snapshot.historyRequests.last?.query == "Verified")
+    #expect(core.snapshot.historyRequests.last?.after == nil)
+}
+
+@MainActor
+@Test func copilotConversationKeepsTerminalFallbackForOlderDaemons() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "copilot" }
+    let model = AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "t1"), prefsFile: nil)
+    model.poll()
+    await model.conversation.fetch(load: model.history)
+    #expect(model.conversation.available == false)
+    #expect(model.agent?.kind == "copilot")
+    #expect(model.conversation.messages.isEmpty)
+}
+
+@MainActor
 @Test func conversationMergesWithoutDuplicateMessagesAndKeepsBothCursors() {
     let model = ConversationModel()
     model.apply(page([message("2"), message("3")]), older: false)
