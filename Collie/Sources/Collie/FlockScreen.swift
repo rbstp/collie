@@ -51,14 +51,12 @@ struct FlockScreen: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .primaryAction) {
-                    Menu {
+                    Menu("Layout", systemImage: layout.icon) {
                         Picker("Layout", selection: $layout) {
                             ForEach(AgentsLayout.allCases, id: \.self) { Label($0.label, systemImage: $0.icon) }
                         }
-                    } label: {
-                        Label("Layout", systemImage: layout.icon).foregroundStyle(.blue)
+                        .tint(.primary)
                     }
-                    .tint(.primary)
                     .disabled(showsUsage)
                 }
                 ToolbarItem(placement: .primaryAction) {
