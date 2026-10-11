@@ -115,7 +115,7 @@ struct NewTaskSheet: View {
                                     Button {
                                         model.checkoutPath = checkout.path
                                     } label: {
-                                        HStack {
+                                        HStack(spacing: 8) {
                                             VStack(alignment: .leading) {
                                                 Text(checkout.branch ?? "Detached")
                                                 Text(checkout.path).font(.footnote.monospaced())
@@ -127,6 +127,19 @@ struct NewTaskSheet: View {
                                     }
                                     .foregroundStyle(.primary)
                                 }
+                            }
+                            if editingPrompt {
+                                Button {
+                                    editingPrompt = false
+                                } label: {
+                                    Image(systemName: "keyboard.chevron.compact.down")
+                                        .font(.system(size: 20))
+                                        .frame(width: 28, height: 28)
+                                }
+                                .buttonStyle(.glass)
+                                .buttonBorderShape(.circle)
+                                .controlSize(.small)
+                                .accessibilityLabel("Hide keyboard")
                             }
                         }
                         if let error = model.worktreesError { Text(error).foregroundStyle(.red) }

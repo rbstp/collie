@@ -54,6 +54,7 @@ On Linux, collied is a systemd user unit, its node is `tag:collie-linux` and the
 - Automatic folder approval recognizes only each CLI's known native trust dialog with the exact canonical task folder and expected choices. It selects Claude's Yes even when No is initially selected, Codex's Trust and continue, and Copilot's session-only Yes, never its remember-folder choice. It holds the input lock, re-reads the agent identity, state sequence, path and menu before navigation and again before Enter, verifies the selected option, and checks authorization and the startup deadline before every write. Only one trust confirmation is sent per task. Other startup dialogs, unknown prompts, changed paths or lost navigation fail without confirmation. The task audit includes requested startup flags. Native Claude/Codex trust may persist for that folder; disabling the setting does not revoke trust already saved by a CLI. Preferences affect new tasks, not existing sessions.
 
 - Folder browser and completion selections fill the full child path from the daemon's canonical listing, for both task folders and worktree sources. Manually entered relative names still resolve against the saved base folder.
+- The New Task prompt has the same focused-field keyboard-collapse control as the agent prompt. It clears keyboard focus without changing the prompt or attachments.
 
 ## Tailscale (libtailscale, pinned commit, never tagged upstream)
 
