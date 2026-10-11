@@ -1,5 +1,6 @@
 import CollieCore
 import SwiftUI
+import UIKit
 
 struct FlockScreen: View {
     let core: (any FlockCore)?
@@ -182,6 +183,8 @@ struct FlockScreen: View {
                         Section {
                             if let error = entry.error {
                                 MachineConnectionDetails(message: error)
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
                             }
                             if entry.flock?.details != nil && entry.agents.isEmpty {
                                 Text("No agents running").foregroundStyle(.secondary)
@@ -310,15 +313,50 @@ struct MachineHeader: View {
 
 struct MachineConnectionDetails: View {
     let message: String
+    @State private var copied = false
 
     var body: some View {
-        DisclosureGroup("Connection details") {
+        HStack(alignment: .top, spacing: 8) {
             Text(message)
+                .font(.footnote)
                 .foregroundStyle(.orange)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.clipboard") {
+                UIPasteboard.general.string = message
+                copied = true
+            }
+            .labelStyle(.iconOnly)
+            .font(.footnote.weight(.semibold))
+            .buttonStyle(.plain)
+            .padding(8)
+            .darkGlass(in: .circle, interactive: true)
         }
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .task(id: copied) {
+            guard copied else { return }
+            try? await Task.sleep(for: .seconds(2))
+            copied = false
+        }
+    }
+}
+
+extension View {
+    func darkGlass(in shape: some Shape, interactive: Bool = false) -> some View {
+        modifier(DarkGlass(shape: shape, interactive: interactive))
+    }
+}
+
+private struct DarkGlass<S: Shape>: ViewModifier {
+    let shape: S
+    let interactive: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        content
+            .background(.black.opacity(colorScheme == .dark ? 0.69 : 0.07), in: shape)
+            .padding(2)
+            .glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
     }
 }
 
@@ -427,7 +465,6 @@ private struct KindLabelStyle: LabelStyle {
 struct StatusPill: View {
     let state: AgentState
     var title: String? = nil
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Label {
@@ -447,9 +484,7 @@ struct StatusPill: View {
             .foregroundStyle(state.color)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(.black.opacity(colorScheme == .dark ? 0.69 : 0.07), in: .capsule)
-            .padding(2)
-            .glassEffect(.regular, in: .capsule)
+            .darkGlass(in: .capsule)
             .fixedSize()
     }
 }
