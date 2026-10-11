@@ -16,17 +16,20 @@ struct FlockScreen: View {
     @State private var previews = PreviewModel()
     @State private var layout = DevicePrefs.load(from: DevicePrefs.file).agentsLayout
     @State private var seen = SeenAgents.load(from: SeenAgents.file)
+    @State private var gridOrder = GridOrder.load(from: GridOrder.file)
     @State private var showsUsage = false
+    @State private var dragging: GridDrag?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationStack(path: $path) {
             TabView(selection: $showsUsage) {
-                agents.tag(false)
+                agents.background(GridPageLock(locked: dragging != nil)).tag(false)
                 List { UsageSections(entries: model.entries) }.tag(true)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            .springLoadingBehavior(.disabled)
             .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: showsUsage)
             .navigationTitle("Agents")
             .navigationBarTitleDisplayMode(.inline)
@@ -60,7 +63,7 @@ struct FlockScreen: View {
                         .disabled(core == nil || machines.isEmpty)
                 }
             }
-            .closeConfirmation($model.close) {
+            .closeConfirmation($model.close, archiving: model.archiving) {
                 if let core, await model.performClose(core: core) {
                     await model.refresh(core: core)
                 }
@@ -125,7 +128,11 @@ struct FlockScreen: View {
                     try? await Task.sleep(until: next)
                 }
             }
-            .onChange(of: model.entries, initial: true) { _, entries in previews.update(entries) }
+            .onChange(of: model.entries, initial: true) { _, entries in
+                previews.update(entries)
+                gridOrder.update(entries)
+            }
+            .onChange(of: gridOrder) { _, order in order.save(to: GridOrder.file) }
             .onChange(of: layout) { _, layout in
                 DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout }
             }
@@ -145,9 +152,9 @@ struct FlockScreen: View {
         switch layout {
         case .grid:
             AgentGrid(
-                entries: model.entries, previews: previews, notice: model.closeNotice,
+                entries: model.entries, previews: previews, order: $gridOrder, notice: model.closeNotice,
                 approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows,
-                closePane: { model.beginClose(.pane, route: $0) }, menu: menu
+                closePane: { model.beginClose(.pane, route: $0) }, menu: menu, dragging: $dragging
             )
             .task(id: core != nil && scenePhase == .active && !newTask && !showsUsage) {
                 guard let core, scenePhase == .active, !newTask, !showsUsage else { return }
@@ -400,19 +407,19 @@ private struct KindLabelStyle: LabelStyle {
 
 struct StatusPill: View {
     let state: AgentState
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        ZStack {
-            // The widest labels size every pill, so titles line up across rows.
-            Text("working").hidden()
-            Text("unknown").hidden()
-            Text(state.label)
-        }
-            .font(.caption.bold())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(state.color.opacity(0.18), in: Capsule())
+        Label(state.label.capitalized, systemImage: AgentActivityStatus(state).symbol)
+            .labelStyle(KindLabelStyle())
+            .font(.caption.weight(.semibold))
             .foregroundStyle(state.color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.black.opacity(colorScheme == .dark ? 0.69 : 0.07), in: .capsule)
+            .padding(2)
+            .glassEffect(.regular, in: .capsule)
+            .fixedSize()
     }
 }
 

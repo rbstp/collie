@@ -1583,14 +1583,51 @@ impl Driver {
                 .cwd
                 .as_deref()
                 .and_then(|cwd| resolve_cwd(cwd, &self.roots).ok());
+            let keep_workspace = workspace.worktree.as_ref().is_some_and(|parent| {
+                !parent.is_linked_worktree
+                    && snapshot.workspaces.iter().any(|item| {
+                        item.worktree.as_ref().is_some_and(|child| {
+                            child.is_linked_worktree && child.repo_root == parent.repo_root
+                        })
+                    })
+                    && snapshot
+                        .panes
+                        .iter()
+                        .filter(|item| item.workspace_id == pane.workspace_id)
+                        .count()
+                        == 1
+            });
+            if keep_workspace {
+                let cwd = repo.as_ref().ok_or_else(|| {
+                    invalid("Archive could not preserve the worktree group: pane folder is outside task roots or unavailable.")
+                })?;
+                authorized(auth)?;
+                herdr::tab_create(&self.herdr, &pane.workspace_id, cwd.as_str())
+                    .await
+                    .map_err(|error| {
+                        let (code, message) = herdr_fail(error);
+                        (code, format!("Archive could not create a shell to preserve the worktree group ({message}); pane closure and gh poi were skipped."))
+                    })?;
+            }
             authorized(auth)?;
             herdr::pane_close(&self.herdr, &pane.pane_id)
                 .await
-                .map_err(herdr_fail)?;
-            (
-                repo,
-                "Closed pane. Its folder was left in place.".to_owned(),
-            )
+                .map_err(|error| {
+                    let (code, message) = herdr_fail(error);
+                    (
+                        code,
+                        format!(
+                            "Archive could not close the pane ({message}); gh poi was skipped."
+                        ),
+                    )
+                })?;
+            let mut message = "Closed pane. Its folder was left in place.".to_owned();
+            if keep_workspace {
+                message.push_str(
+                    " Kept a shell in its workspace to preserve linked worktree sessions.",
+                );
+            }
+            (repo, message)
         };
         let cleanup = if let Some(repo) = repo.and_then(|repo| git_repository(&repo, &self.roots)) {
             if !auth() {

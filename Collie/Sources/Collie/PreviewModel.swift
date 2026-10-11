@@ -61,12 +61,17 @@ final class PreviewModel {
     }
 
     func toggleStar(_ route: AgentRoute) async {
-        guard let core else { return }
-        let star = !starred.contains(route)
+        await setStar(route, starred: !starred.contains(route))
+    }
+
+    @discardableResult
+    func setStar(_ route: AgentRoute, starred star: Bool) async -> Bool {
+        guard starred.contains(route) != star else { return true }
+        guard let core, connected.contains(route.machineId) else { return false }
         do {
             try await core.star(machineId: route.machineId, terminalId: route.terminalId, starred: star)
         } catch {
-            return
+            return false
         }
         if star {
             starred.insert(route)
@@ -76,6 +81,7 @@ final class PreviewModel {
             starred.remove(route)
         }
         await tick()?.value
+        return true
     }
 
     @discardableResult

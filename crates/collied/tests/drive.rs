@@ -104,12 +104,13 @@ const SLASH_STA: &str = include_str!("fixtures/claude-2.1.293/slash-sta.ansi.txt
 const SLASH_STAT: &str = include_str!("fixtures/claude-2.1.293/slash-stat.ansi.txt");
 const SLASH_STATU: &str = include_str!("fixtures/claude-2.1.293/slash-statu.ansi.txt");
 const SLASH_STATSTATU: &str = include_str!("fixtures/claude-2.1.293/slash-statstatu.ansi.txt");
-const MUTATING: [&str; 13] = [
+const MUTATING: [&str; 14] = [
     "agent.prompt",
     "agent.send_keys",
     "agent.focus",
     "agent.start",
     "workspace.create",
+    "tab.create",
     "worktree.create",
     "worktree.open",
     "worktree.remove",
@@ -316,8 +317,45 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
         "agent.prompt" => {
             json!({"type": "agent_prompted", "agent": agent_by_pane(h, p["target"].as_str().unwrap()).unwrap_or(json!({}))})
         }
+        "pane.close" => {
+            let pane = h.snapshot["panes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|pane| pane["pane_id"] == p["pane_id"])
+                .cloned()
+                .unwrap();
+            let parent = h.snapshot["workspaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|workspace| workspace["workspace_id"] == pane["workspace_id"])
+                .unwrap();
+            let group = parent["worktree"]["is_linked_worktree"] == false
+                && h.snapshot["workspaces"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|workspace| {
+                        workspace["worktree"]["is_linked_worktree"] == true
+                            && workspace["worktree"]["repo_root"] == parent["worktree"]["repo_root"]
+                    });
+            if group {
+                let panes = h.snapshot["panes"].as_array_mut().unwrap();
+                if panes
+                    .iter()
+                    .filter(|item| item["workspace_id"] == pane["workspace_id"])
+                    .count()
+                    == 1
+                {
+                    return Err("confirmation_required".into());
+                }
+                panes.retain(|item| item["pane_id"] != pane["pane_id"]);
+            }
+            json!({"type": "ok"})
+        }
         "agent.send_keys" | "pane.send_text" | "pane.send_input" | "pane.send_keys"
-        | "workspace.close" | "pane.close" => {
+        | "workspace.close" => {
             json!({"type": "ok"})
         }
         "pane.get" => {
@@ -335,6 +373,13 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
                     .ok_or_else(|| "pane_not_found".to_owned())?,
             };
             json!({"type": "pane_info", "pane": pane})
+        }
+        "tab.create" => {
+            h.snapshot["panes"].as_array_mut().unwrap().push(json!({
+                "pane_id": "w7:p3", "terminal_id": "term_shell", "workspace_id": p["workspace_id"],
+                "tab_id": "w7:t2", "cwd": p["cwd"]
+            }));
+            json!({"type": "tab_created"})
         }
         "workspace.create" => json!({"type": "workspace_created",
             "workspace": {"workspace_id": "w9", "number": 3, "label": p["label"], "focused": false,
@@ -2266,10 +2311,10 @@ async fn archive_closes_regular_pane_without_removing_its_folder() {
     let (_dir, base) = root();
     let folder = base.join("root/a");
     herdr.with(|h| h.snapshot["panes"][1]["cwd"] = json!(folder));
-    let drive = herdr.driver(&["claude"], &base.join("root"));
+    let drive = herdr.driver(&["codex"], &base.join("root"));
     let p = |confirm| TaskArchiveParams {
         op_id: op('A'),
-        terminal_id: tid(SHELL),
+        terminal_id: tid(CODEX_BLOCKED),
         confirm,
     };
     assert_eq!(
@@ -2289,7 +2334,7 @@ async fn archive_closes_regular_pane_without_removing_its_folder() {
     assert!(folder.exists());
     assert_eq!(
         herdr.params("pane.close"),
-        vec![json!({"pane_id": "w7:p2"})]
+        vec![json!({"pane_id": "w7:p1"})]
     );
     assert!(herdr.params("worktree.remove").is_empty());
 }
@@ -2310,10 +2355,10 @@ async fn archive_force_removes_only_the_linked_worktree_workspace() {
         });
         h.snapshot["panes"][1]["cwd"] = json!(checkout);
     });
-    let drive = herdr.driver(&["claude"], &base.join("root"));
+    let drive = herdr.driver(&["codex"], &base.join("root"));
     let p = TaskArchiveParams {
         op_id: op('A'),
-        terminal_id: tid(SHELL),
+        terminal_id: tid(CODEX_BLOCKED),
         confirm: true,
     };
     herdr.fail_next("worktree.remove", &["worktree_not_found"]);
@@ -2339,6 +2384,149 @@ async fn archive_force_removes_only_the_linked_worktree_workspace() {
     assert_eq!(
         code(drive.task_archive(p, &yes()).await),
         ErrorCode::InvalidParams
+    );
+    assert!(herdr.mutations().is_empty());
+}
+
+fn archive_worktree_group(herdr: &Mock, folder: &Path, last_pane: bool) {
+    herdr.with(|h| {
+        h.snapshot["workspaces"][1]["worktree"] = json!({
+            "repo_root": folder, "checkout_path": folder, "is_linked_worktree": false
+        });
+        h.snapshot["workspaces"][0]["worktree"] = json!({
+            "repo_root": folder, "checkout_path": folder.join(".worktree/feature"), "is_linked_worktree": true
+        });
+        h.snapshot["panes"][1]["cwd"] = json!(folder);
+        if last_pane {
+            h.snapshot["panes"].as_array_mut().unwrap().retain(|pane| pane["terminal_id"] != SHELL);
+        }
+    });
+}
+
+#[tokio::test]
+async fn archive_codex_preserves_linked_sessions_when_closing_the_last_parent_pane() {
+    for last_pane in [false, true] {
+        let herdr = Mock::start();
+        let (_dir, base) = root();
+        let folder = base.join("root/a");
+        archive_worktree_group(&herdr, &folder, last_pane);
+        let before = herdr.with(|h| h.snapshot["workspaces"].clone());
+        let drive = herdr.driver(&["codex"], &base.join("root"));
+        let p = |confirm| TaskArchiveParams {
+            op_id: op('A'),
+            terminal_id: tid(CODEX_BLOCKED),
+            confirm,
+        };
+        assert_eq!(
+            code(drive.task_archive(p(false), &yes()).await),
+            ErrorCode::ConfirmRequired
+        );
+        assert_eq!(
+            code(drive.task_archive(p(true), &no()).await),
+            ErrorCode::NotPaired
+        );
+        assert!(herdr.mutations().is_empty());
+        let Response::TaskArchived { message } = drive.task_archive(p(true), &yes()).await.unwrap()
+        else {
+            panic!("unexpected response");
+        };
+        assert!(message.contains("Closed pane"), "{message}");
+        assert_eq!(message.contains("Kept a shell"), last_pane, "{message}");
+        assert_eq!(
+            herdr.params("tab.create"),
+            if last_pane {
+                vec![json!({"workspace_id": "w7", "cwd": folder, "focus": false})]
+            } else {
+                vec![]
+            }
+        );
+        assert_eq!(
+            herdr.params("pane.close"),
+            vec![json!({"pane_id": "w7:p1"})]
+        );
+        assert!(herdr.params("workspace.close").is_empty());
+        assert!(herdr.params("worktree.remove").is_empty());
+        herdr.with(|h| {
+            assert_eq!(h.snapshot["workspaces"], before);
+            assert!(
+                h.snapshot["panes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|pane| pane["terminal_id"] != CODEX_BLOCKED)
+            );
+            assert!(
+                h.snapshot["panes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|pane| pane["terminal_id"] == CLAUDE)
+            );
+        });
+        assert!(folder.exists());
+    }
+}
+
+#[tokio::test]
+async fn archive_codex_reports_failed_group_preservation_without_closing_other_sessions() {
+    for method in ["tab.create", "pane.close"] {
+        let herdr = Mock::start();
+        let (_dir, base) = root();
+        archive_worktree_group(&herdr, &base.join("root/a"), true);
+        herdr.fail_next(method, &["unavailable"]);
+        let drive = herdr.driver(&["codex"], &base.join("root"));
+        let p = TaskArchiveParams {
+            op_id: op('A'),
+            terminal_id: tid(CODEX_BLOCKED),
+            confirm: true,
+        };
+        let (_, message) = drive.task_archive(p.clone(), &yes()).await.unwrap_err();
+        assert!(
+            message.contains(if method == "tab.create" {
+                "could not create a shell"
+            } else {
+                "could not close the pane"
+            }),
+            "{message}"
+        );
+        assert!(
+            message.contains("gh poi were skipped") || message.contains("gh poi was skipped"),
+            "{message}"
+        );
+        assert_eq!(
+            herdr.params("pane.close").len(),
+            usize::from(method == "pane.close")
+        );
+        assert!(herdr.params("workspace.close").is_empty());
+        assert!(herdr.params("worktree.remove").is_empty());
+        drive.task_archive(p, &yes()).await.unwrap();
+        assert_eq!(
+            herdr.params("tab.create").len(),
+            if method == "tab.create" { 2 } else { 1 }
+        );
+    }
+}
+
+#[tokio::test]
+async fn archive_codex_refuses_to_create_a_group_shell_outside_task_roots() {
+    let herdr = Mock::start();
+    let (_dir, base) = root();
+    archive_worktree_group(&herdr, &base.join("outside"), true);
+    let drive = herdr.driver(&["codex"], &base.join("root"));
+    let (_, message) = drive
+        .task_archive(
+            TaskArchiveParams {
+                op_id: op('A'),
+                terminal_id: tid(CODEX_BLOCKED),
+                confirm: true,
+            },
+            &yes(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        message.contains("outside task roots or unavailable"),
+        "{message}"
     );
     assert!(herdr.mutations().is_empty());
 }

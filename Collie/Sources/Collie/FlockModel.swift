@@ -50,15 +50,20 @@ final class FlockModel {
     var close = CloseConfirmation()
     private(set) var closing: AgentRoute?
     private(set) var closeNotice: String?
+    private(set) var archiving = false
 
     func beginClose(_ target: CloseTarget, route: AgentRoute) {
+        guard !archiving else { return }
         closing = route
         close.begin(target)
     }
 
     /// Only reachable after the confirmation, as on the agent screen.
     func performClose(core: any AgentCore) async -> Bool {
-        guard let route = closing, let target = close.confirm() else { return false }
+        guard !archiving, let route = closing, let target = close.confirm() else { return false }
+        archiving = target == .archive
+        defer { archiving = false }
+        closeNotice = nil
         do {
             closeNotice = try await core.closeConfirmed(target, route: route)
             return true
