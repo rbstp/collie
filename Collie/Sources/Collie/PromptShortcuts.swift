@@ -48,7 +48,7 @@ struct PromptShortcutsView: View {
                         shortcuts.items.removeAll { $0.id == shortcut.id }
                         shortcuts.save(to: PromptShortcuts.file)
                     }
-                    Button("Edit") { editing = shortcut }.tint(.blue)
+                    Button("Edit") { editing = shortcut }.tint(Color.accentColor)
                 }
             }
         }

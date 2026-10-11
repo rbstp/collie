@@ -183,10 +183,13 @@ struct NewTaskSheet: View {
                                         .disabled(model.attachmentSlots <= 0)
                                 } label: {
                                     Image(systemName: "paperclip")
-                                        .foregroundStyle(.blue)
+                                        .foregroundStyle(Color.accentColor)
                                         .font(.system(size: 20))
-                                        .frame(width: 32, height: 36)
+                                        .frame(width: 28, height: 28)
                                 }
+                                .buttonStyle(.glass)
+                                .buttonBorderShape(.circle)
+                                .controlSize(.small)
                                 .tint(.primary)
                                 .menuOrder(.fixed)
                                 .disabled(model.upload != nil || model.phase != .editing)

@@ -3,7 +3,7 @@ import SwiftUI
 import WatchConnectivity
 
 struct SettingsView: View {
-    let app: AppModel
+    @Bindable var app: AppModel
     @State private var removeError: String?
     @State private var report: ColdStartReport?
     @State private var keepKeyboard = DevicePrefs.load(from: DevicePrefs.file).keepKeyboard
@@ -16,6 +16,20 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("Appearance") {
+                    Picker("Accent color", selection: $app.accent) {
+                        ForEach(AppAccent.allCases, id: \.self) { accent in
+                            Label(accent.label, systemImage: "circle.fill")
+                                .tint(accent.color)
+                        }
+                    } currentValueLabel: {
+                        Image(systemName: "circle.fill")
+                            .foregroundStyle(app.accent.color)
+                            .accessibilityLabel(app.accent.label)
+                    }
+                    .tint(app.accent.color)
+                    .id(app.accent)
+                }
                 Section("Tailnet") {
                     LabeledContent("State", value: app.node.map { $0.backendState.label } ?? "unknown")
                     LabeledContent("Device", value: app.node?.selfDnsName ?? "-")

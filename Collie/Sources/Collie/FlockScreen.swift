@@ -210,9 +210,11 @@ struct FlockScreen: View {
                                         Button("Close pane", systemImage: "xmark.square", role: .destructive) {
                                             model.beginClose(.pane, route: route)
                                         }
+                                        .tint(.red)
                                         Button("Archive", systemImage: "archivebox", role: .destructive) {
                                             model.beginClose(.archive, route: route)
                                         }
+                                        .tint(.red)
                                     }
                                 }
                                 .opacity(entry.linkDown ? 0.5 : 1)
@@ -253,12 +255,15 @@ struct FlockScreen: View {
         Button("Close pane", systemImage: "xmark.square", role: .destructive) {
             model.beginClose(.pane, route: route)
         }
+        .tint(.red)
         Button("Close workspace", systemImage: "xmark.rectangle.portrait", role: .destructive) {
             model.beginClose(.workspace(id: agent.workspaceId), route: route)
         }
+        .tint(.red)
         Button("Archive", systemImage: "archivebox", role: .destructive) {
             model.beginClose(.archive, route: route)
         }
+        .tint(.red)
     }
 }
 

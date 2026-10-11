@@ -17,7 +17,7 @@ struct AgentInbox<Menu: View>: View {
         VStack(spacing: 0) {
             ScrollView(.horizontal) {
                 GlassPicker(title: "Filter", selection: $filter,
-                            options: InboxFilter.allCases.map { (LocalizedStringKey($0.title), $0) })
+                            options: InboxFilter.allCases.map { ($0.title, $0) })
                     .padding(.horizontal)
                     .padding(.vertical, 8)
             }

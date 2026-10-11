@@ -38,6 +38,13 @@ struct RootView: View {
     @State private var agentsReselected = 0
 
     var body: some View {
+        content
+            .tint(app.accent.color)
+            .accentColor(app.accent.color)
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if let error = app.startupError {
             ContentUnavailableView("collie could not start", systemImage: "exclamationmark.triangle", description: Text(error))
         } else if app.showsMain {
@@ -62,7 +69,6 @@ struct RootView: View {
                 Tab("Machines", systemImage: "desktopcomputer", value: AppTab.machines) { MachinesView(app: app) }
                 Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView(app: app) }
             }
-            .tint(.blue)
             .task { await app.enableNotifications() }
             .task {
                 while !Task.isCancelled {

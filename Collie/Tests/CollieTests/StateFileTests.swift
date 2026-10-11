@@ -20,7 +20,7 @@ private func object(_ data: Data) throws -> NSDictionary {
 
 @Test func prefsFileLoadsAndSavesTheSameJSON() throws {
     let json = #"""
-        {"wrapLines":false,"keepKeyboard":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"taskBases":{"m1":"/Users/me/git"}}
+        {"wrapLines":false,"keepKeyboard":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"accent":"blue","taskBases":{"m1":"/Users/me/git"}}
         """#
     let file = try write(json, as: "prefs.json")
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
@@ -48,6 +48,26 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
 @Test func prefsFromBeforeDoneAlertsKeepThemOn() throws {
     #expect(try JSONDecoder().decode(DevicePrefs.self, from: Data(#"{"wrapLines":false,"watchDecisions":true}"#.utf8)).doneAlerts)
     #expect(DevicePrefs.load(from: nil).doneAlerts)
+}
+
+@Test(arguments: [#"{"wrapLines":false}"#, #"{"wrapLines":false,"accent":"future"}"#])
+func prefsWithoutAKnownAccentKeepBlueAndOtherPreferences(_ json: String) throws {
+    let prefs = try JSONDecoder().decode(DevicePrefs.self, from: Data(json.utf8))
+    #expect(prefs.accent == .blue)
+    #expect(!prefs.wrapLines)
+}
+
+@Test(arguments: AppAccent.allCases)
+func accentPreferenceSurvivesOtherPreferenceUpdates(_ accent: AppAccent) throws {
+    let file = try write(#"{"keepKeyboard":true,"taskBases":{"m1":"/Users/me/git"}}"#, as: "prefs.json")
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    DevicePrefs.update(in: file) { $0.accent = accent }
+    DevicePrefs.update(in: file) { $0.historyLines = 500 }
+    let prefs = DevicePrefs.load(from: file)
+    #expect(prefs.accent == accent)
+    #expect(prefs.keepKeyboard)
+    #expect(prefs.historyLines == 500)
+    #expect(prefs.taskBases == ["m1": "/Users/me/git"])
 }
 
 @Test func draftsFileLoadsAndSavesTheSameJSON() throws {

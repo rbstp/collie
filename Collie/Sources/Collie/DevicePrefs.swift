@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Display choices kept on this device only, in the state dir rather than UserDefaults.
 struct DevicePrefs: StateFile, Equatable {
@@ -12,6 +13,7 @@ struct DevicePrefs: StateFile, Equatable {
     var defaultSessionView = SessionView.chat
     var watchDecisions = false
     var doneAlerts = true
+    var accent = AppAccent.blue
     /// Per machine id: the canonical folder collied returned when it was saved.
     var taskBases: [String: String] = [:]
 
@@ -58,6 +60,7 @@ extension DevicePrefs {
         defaultSessionView = (try? container.decodeIfPresent(SessionView.self, forKey: .defaultSessionView)) ?? defaults.defaultSessionView
         watchDecisions = try container.decodeIfPresent(Bool.self, forKey: .watchDecisions) ?? defaults.watchDecisions
         doneAlerts = try container.decodeIfPresent(Bool.self, forKey: .doneAlerts) ?? defaults.doneAlerts
+        accent = (try? container.decodeIfPresent(AppAccent.self, forKey: .accent)) ?? defaults.accent
         taskBases = try container.decodeIfPresent([String: String].self, forKey: .taskBases) ?? defaults.taskBases
     }
 
@@ -72,6 +75,35 @@ extension DevicePrefs {
     static func forgetTaskBase(machineId: String, in file: URL?) {
         guard load(from: file).taskBases[machineId] != nil else { return }
         update(in: file) { $0.taskBases[machineId] = nil }
+    }
+}
+
+enum AppAccent: String, Codable, CaseIterable {
+    case blue, orange, green, red, gold
+
+    var label: String {
+        switch self {
+        case .blue: "Blue"
+        case .orange: "Orange"
+        case .green: "Green"
+        case .red: "Red"
+        case .gold: "Dark Gold"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .blue: .blue
+        case .orange: .orange
+        case .green: .green
+        case .red: .red
+        case .gold:
+            Color(uiColor: UIColor { traits in
+                traits.userInterfaceStyle == .dark
+                    ? UIColor(red: 0.78, green: 0.62, blue: 0.25, alpha: 1)
+                    : UIColor(red: 0.50, green: 0.36, blue: 0.08, alpha: 1)
+            })
+        }
     }
 }
 

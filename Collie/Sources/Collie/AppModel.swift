@@ -29,6 +29,9 @@ final class AppModel {
     let follows: FollowModel
     let watch = WatchLink()
     var tab = AppTab.agents
+    var accent = DevicePrefs.load(from: DevicePrefs.file).accent {
+        didSet { DevicePrefs.update(in: DevicePrefs.file) { $0.accent = accent } }
+    }
     var openingAgent: AgentRoute?
     @ObservationIgnored var viewingAgent: AgentRoute?
     private var backgroundedAt: Date?

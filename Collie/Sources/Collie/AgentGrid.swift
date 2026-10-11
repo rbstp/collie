@@ -179,6 +179,7 @@ extension AgentGrid {
         .opacity(entry.linkDown ? 0.5 : 1)
         .contextMenu {
             Button("Close pane", systemImage: "xmark.square", role: .destructive) { closePane(route) }
+                .tint(.red)
         }
     }
 }

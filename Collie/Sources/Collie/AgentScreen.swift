@@ -18,7 +18,6 @@ struct AgentScreen: View {
     @State private var showingChanges = false
     @State private var showingChat = DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat
     @State private var searchingChat = false
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
@@ -68,6 +67,8 @@ struct AgentScreen: View {
             if !model.isTerminal {
                 GlassPicker(title: "Session view", selection: $showingChat,
                             options: [("Chat", true), ("Terminal", false)], expands: true)
+                .controlSize(.small)
+                .frame(maxWidth: 240)
                 .padding(.horizontal)
                 .padding(.bottom, 6)
             }
@@ -137,18 +138,8 @@ struct AgentScreen: View {
                 if showingChat && !model.isTerminal {
                     Button("Search conversation", systemImage: "magnifyingglass") { searchingChat.toggle() }
                 } else {
-                    Button { model.wrapLines.toggle() } label: {
-                        Label("Wrap lines", image: "WrapLines")
-                            .foregroundStyle(model.wrapLines ? Color.blue : Color.primary)
-                            .frame(width: 38, height: 38)
-                            .background {
-                                if model.wrapLines {
-                                    Circle().fill(.black.opacity(colorScheme == .dark ? 0.69 : 0.07))
-                                }
-                            }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityValue(model.wrapLines ? "On" : "Off")
+                    Toggle(isOn: $model.wrapLines) { Label("Wrap lines", image: "WrapLines") }
+                        .toggleStyle(.button)
                 }
             }
             ToolbarItem(placement: .primaryAction) {
@@ -474,11 +465,11 @@ private struct KeyStrip: View {
                         .font(.callout.monospaced())
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
-                        .frame(maxWidth: .infinity, minHeight: 34)
-                        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 8))
-                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                        .frame(maxWidth: .infinity, minHeight: 22)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.roundedRectangle(radius: 8))
+                .controlSize(.small)
                 .accessibilityLabel(key.accessibilityName)
                 .disabled(!model.accepts(key) || model.commandShown && (key == .enter || key == .ctrlEnter))
             }
@@ -538,10 +529,13 @@ private struct PromptBar: View {
                                 .disabled(model.attachmentSlots <= 0)
                         } label: {
                             Image(systemName: "paperclip")
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(Color.accentColor)
                                 .font(.system(size: 20))
-                                .frame(width: 32, height: 36)
+                                .frame(width: 28, height: 28)
                         }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .controlSize(.small)
                         .tint(.primary)
                         .menuOrder(.fixed)
                         .disabled(model.upload != nil || model.sendingPrompt)
@@ -606,8 +600,11 @@ private struct PromptBar: View {
                         } label: {
                             Image(systemName: "keyboard.chevron.compact.down")
                                 .font(.system(size: 20))
-                                .frame(width: 32, height: 36)
+                                .frame(width: 28, height: 28)
                         }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .controlSize(.small)
                         .accessibilityLabel("Hide keyboard")
                     }
                     Button {
@@ -618,11 +615,14 @@ private struct PromptBar: View {
                         Task { await model.sendPrompt() }
                     } label: {
                         if model.sendingPrompt {
-                            ProgressView().frame(width: 32, height: 32)
+                            ProgressView().frame(width: 28, height: 28)
                         } else {
-                            Image(systemName: "paperplane.circle.fill").font(.system(size: 32))
+                            Image(systemName: "paperplane.fill").frame(width: 28, height: 28)
                         }
                     }
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.small)
                     .disabled(!model.canSendPrompt)
                     .accessibilityLabel(model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
                 }
@@ -751,7 +751,7 @@ struct DictationButton: View {
         } label: {
             Image(systemName: dictation.isActive ? "mic.fill" : "mic")
                 .font(.system(size: 20))
-                .frame(width: 32, height: 36)
+                .frame(width: 28, height: 28)
         } primaryAction: {
             if dictation.isActive {
                 dictation.stop()
@@ -759,6 +759,9 @@ struct DictationButton: View {
                 starting()
             }
         }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .controlSize(.small)
         .disabled(disabled)
         .accessibilityLabel(dictation.isActive ? "Stop dictation" : "Dictate in \(dictation.language.label)")
     }
@@ -825,10 +828,10 @@ struct DictationWaveform: View {
                                                width: 3, height: height), cornerSize: CGSize(width: 1.5, height: 1.5))
             }
             if reduceTransparency || contrast == .increased {
-                context.fill(path, with: .color(.blue))
+                context.fill(path, with: .color(.accentColor))
             } else {
                 context.fill(path, with: .linearGradient(
-                    Gradient(colors: [.blue.opacity(0.65), .blue, .blue.opacity(0.75)]),
+                    Gradient(colors: [Color.accentColor.opacity(0.65), .accentColor, .accentColor.opacity(0.75)]),
                     startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)
                 ))
             }
@@ -879,17 +882,13 @@ struct AttachmentThumbnail: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(file.name)
         .overlay(alignment: .topTrailing) {
-            Button(action: remove) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 28, height: 28)
-                    .glassEffect(.regular.interactive(), in: .circle)
-                    .padding(4)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(file.kind == .image ? "Remove image" : "Remove file")
+            Button(file.kind == .image ? "Remove image" : "Remove file", systemImage: "xmark", action: remove)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.mini)
+                .tint(.primary)
+                .padding(4)
         }
     }
 }
