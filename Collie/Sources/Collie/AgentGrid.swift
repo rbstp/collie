@@ -16,6 +16,7 @@ struct AgentGrid<Menu: View>: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var dragging: GridDrag?
+    @State private var gridWidth: CGFloat = 0
     @State private var moving = false
     @State private var moveError: String?
 
@@ -48,7 +49,9 @@ struct AgentGrid<Menu: View>: View {
                                     columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
                                     alignment: .leading, spacing: 16
                                 ) {
-                                    ForEach(agents.rest, id: \.terminalId) { card($0, in: entry, starred: false, now: context.date) }
+                                    let columns = typeSize.isAccessibilitySize ? 1 : max(1, Int((gridWidth + 12) / (150 + 12)))
+                                    let axes: Axis.Set = columns == 1 ? .vertical : agents.rest.count <= columns ? .horizontal : [.horizontal, .vertical]
+                                    ForEach(agents.rest, id: \.terminalId) { card($0, in: entry, starred: false, now: context.date, axes: axes) }
                                 }
                             }
                             if dragging?.route.machineId == entry.id, dragging?.starred == true, agents.rest.isEmpty {
@@ -86,13 +89,14 @@ struct AgentGrid<Menu: View>: View {
                         }
                     }
                 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
                 .padding(.horizontal)
                 .padding(.bottom)
             }
         }
     }
 
-    private func card(_ agent: AgentSummary, in entry: MachineFlockEntry, starred: Bool, now: Date) -> some View {
+    private func card(_ agent: AgentSummary, in entry: MachineFlockEntry, starred: Bool, now: Date, axes: Axis.Set = .vertical) -> some View {
         let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
         return NavigationLink(value: route) {
             AgentCard(
@@ -108,7 +112,7 @@ struct AgentGrid<Menu: View>: View {
             menu(agent, route)
         }
         .modifier(GridDragSource(route: route, starred: starred, dragging: $dragging))
-        .modifier(GridDropTarget(dragging: $dragging, machineId: entry.id, destination: route, fourWay: !starred) { source, after in
+        .modifier(GridDropTarget(dragging: $dragging, machineId: entry.id, destination: route, axes: axes) { source, after in
             move(source, in: entry, starred: starred, destination: route, after: after)
         })
         .onAppear { previews.appeared(route) }

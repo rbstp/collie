@@ -713,12 +713,20 @@ func gridCardsMoveBothWaysWithinTheirGroup(starred: Bool) throws {
         (CGPoint(x: 10, y: 120), .leading), (CGPoint(x: 150, y: 120), .trailing)
     ]
     for (point, edge) in points {
-        #expect(GridDropEdge.nearest(to: point, size: size, fourWay: true) == edge)
+        #expect(GridDropEdge.nearest(to: point, size: size, axes: [.horizontal, .vertical]) == edge)
     }
-    #expect(GridDropEdge.nearest(to: CGPoint(x: 2, y: 30), size: size, fourWay: false) == .top)
-    #expect(GridDropEdge.nearest(to: CGPoint(x: 2, y: 200), size: size, fourWay: false) == .bottom)
-    #expect(GridDropEdge.nearest(to: CGPoint(x: 2, y: 120), size: size, fourWay: true, rightToLeft: true) == .trailing)
-    #expect(GridDropEdge.nearest(to: CGPoint(x: 158, y: 120), size: size, fourWay: true, rightToLeft: true) == .leading)
+    #expect(GridDropEdge.nearest(to: CGPoint(x: 2, y: 30), size: size, axes: .vertical) == .top)
+    #expect(GridDropEdge.nearest(to: CGPoint(x: 2, y: 200), size: size, axes: .vertical) == .bottom)
+    #expect(GridDropEdge.nearest(to: CGPoint(x: 2, y: 120), size: size, axes: [.horizontal, .vertical], rightToLeft: true) == .trailing)
+    #expect(GridDropEdge.nearest(to: CGPoint(x: 158, y: 120), size: size, axes: [.horizontal, .vertical], rightToLeft: true) == .leading)
     #expect(!GridDropEdge.top.after && !GridDropEdge.leading.after)
     #expect(GridDropEdge.bottom.after && GridDropEdge.trailing.after)
+}
+
+@Test func aSingleGridRowOnlyOffersHorizontalInsertion() {
+    let size = CGSize(width: 160, height: 240)
+    for y in [CGFloat(1), 120, 239] {
+        #expect(GridDropEdge.nearest(to: CGPoint(x: 20, y: y), size: size, axes: .horizontal) == .leading)
+        #expect(GridDropEdge.nearest(to: CGPoint(x: 140, y: y), size: size, axes: .horizontal) == .trailing)
+    }
 }

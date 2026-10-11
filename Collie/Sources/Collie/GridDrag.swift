@@ -79,9 +79,9 @@ enum GridDropEdge {
         }
     }
 
-    static func nearest(to point: CGPoint, size: CGSize, fourWay: Bool, rightToLeft: Bool = false) -> Self {
+    static func nearest(to point: CGPoint, size: CGSize, axes: Axis.Set, rightToLeft: Bool = false) -> Self {
         let vertical: Self = point.y < size.height / 2 ? .top : .bottom
-        guard fourWay, min(point.x, size.width - point.x) < min(point.y, size.height - point.y) else { return vertical }
+        guard axes.contains(.horizontal), !axes.contains(.vertical) || min(point.x, size.width - point.x) < min(point.y, size.height - point.y) else { return vertical }
         return (point.x < size.width / 2) != rightToLeft ? .leading : .trailing
     }
 }
@@ -90,7 +90,7 @@ struct GridDropTarget: ViewModifier {
     @Binding var dragging: GridDrag?
     let machineId: String
     var destination: AgentRoute?
-    var fourWay = false
+    var axes: Axis.Set = .vertical
     let move: (AgentRoute, Bool) -> Bool
     @State private var edge: GridDropEdge?
     @State private var size: CGSize = .zero
@@ -101,15 +101,19 @@ struct GridDropTarget: ViewModifier {
             .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
             .onDrop(of: [GridDrag.type], delegate: Target(
                 dragging: $dragging, edge: $edge, machineId: machineId, destination: destination,
-                size: size, fourWay: fourWay, rightToLeft: direction == .rightToLeft, move: move
+                size: size, axes: axes, rightToLeft: direction == .rightToLeft, move: move
             ))
             .onChange(of: dragging?.id) { _, _ in edge = nil }
             .overlay {
                 if dragging != nil, let edge {
-                    Capsule().fill(.tint)
-                        .frame(width: edge.vertical ? 3 : nil, height: edge.vertical ? nil : 3)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: edge.alignment)
-                        .allowsHitTesting(false)
+                    if destination == nil {
+                        RoundedRectangle(cornerRadius: 12).fill(.primary.opacity(0.08)).allowsHitTesting(false)
+                    } else {
+                        Capsule().fill(.tint)
+                            .frame(width: edge.vertical ? 3 : nil, height: edge.vertical ? nil : 3)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: edge.alignment)
+                            .allowsHitTesting(false)
+                    }
                 }
             }
     }
@@ -120,7 +124,7 @@ struct GridDropTarget: ViewModifier {
         let machineId: String
         let destination: AgentRoute?
         let size: CGSize
-        let fourWay: Bool
+        let axes: Axis.Set
         let rightToLeft: Bool
         let move: (AgentRoute, Bool) -> Bool
 
@@ -131,7 +135,7 @@ struct GridDropTarget: ViewModifier {
 
         func dropUpdated(info: DropInfo) -> DropProposal? {
             guard validateDrop(info: info) else { return DropProposal(operation: .forbidden) }
-            edge = GridDropEdge.nearest(to: info.location, size: size, fourWay: fourWay, rightToLeft: rightToLeft)
+            edge = GridDropEdge.nearest(to: info.location, size: size, axes: axes, rightToLeft: rightToLeft)
             return DropProposal(operation: .move)
         }
 
@@ -139,7 +143,7 @@ struct GridDropTarget: ViewModifier {
 
         func performDrop(info: DropInfo) -> Bool {
             guard validateDrop(info: info), let source = dragging?.route else { return false }
-            let placement = GridDropEdge.nearest(to: info.location, size: size, fourWay: fourWay, rightToLeft: rightToLeft)
+            let placement = GridDropEdge.nearest(to: info.location, size: size, axes: axes, rightToLeft: rightToLeft)
             let moved = move(source, placement.after)
             edge = nil
             dragging = nil
