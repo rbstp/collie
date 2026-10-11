@@ -87,6 +87,58 @@ pub fn soft_wraps_for(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32
     }
 }
 
+pub fn without_copilot_scrollbar(ansi: &str, cols: usize) -> String {
+    let mut plain = String::new();
+    ansi.split('\n')
+        .map(|row| {
+            plain_text(row, &mut plain);
+            let text = plain.trim_end();
+            let Some(body) = text.strip_suffix('┃') else {
+                return row.to_owned();
+            };
+            let at = row.rfind('┃').unwrap();
+            if text.width() != cols || !body.ends_with(' ') {
+                return row.to_owned();
+            }
+            if body.chars().any(|c| ('\u{2500}'..='\u{257f}').contains(&c))
+                && !isolated_scrollbar(row, at)
+            {
+                return row.to_owned();
+            }
+            format!("{}{}", &row[..at], &row[at + '┃'.len_utf8()..])
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn copilot_scrollbar_columns(ansi: &str) -> Option<usize> {
+    let mut counts = std::collections::BTreeMap::<usize, usize>::new();
+    let mut plain = String::new();
+    for row in ansi.split('\n') {
+        plain_text(row, &mut plain);
+        let text = plain.trim_end();
+        let Some(body) = text.strip_suffix('┃') else {
+            continue;
+        };
+        if body.ends_with(' ')
+            && !body.chars().any(|c| ('\u{2500}'..='\u{257f}').contains(&c))
+            && row.rfind('┃').is_some_and(|at| isolated_scrollbar(row, at))
+        {
+            *counts.entry(text.width()).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .rev()
+        .find_map(|(width, count)| (count > 1).then_some(width))
+}
+
+fn isolated_scrollbar(row: &str, at: usize) -> bool {
+    row[..at].rsplit_once("\u{1b}[").is_some_and(|(head, sgr)| {
+        head.ends_with("\u{1b}[0m") && sgr.starts_with("38;") && sgr.ends_with('m')
+    }) && row[at + '┃'.len_utf8()..].starts_with("\u{1b}[0m")
+}
+
 fn tui_wraps(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let markers: &[char] = if kind == "codex" {
         &['•', '›']
@@ -396,6 +448,58 @@ mod tests {
         assert_eq!(
             soft_wraps_for("copilot", &lines.join("\r\n"), 40),
             (vec![1, 4], vec![])
+        );
+    }
+
+    #[test]
+    fn copilot_scrollbar_is_removed_from_all_rows_without_changing_sgr() {
+        let screen = include_str!("../tests/fixtures/copilot-1.0.93-1/output-long.ansi.txt");
+        let cleaned = without_copilot_scrollbar(screen, 212);
+        assert!(cleaned.matches('┃').count() < screen.matches('┃').count());
+        let mut plain = String::new();
+        for row in cleaned.lines() {
+            plain_text(row, &mut plain);
+            assert!(!(plain.trim_end().ends_with('┃') && plain.trim_end().width() == 212));
+        }
+        let sgr = |text: &str| {
+            text.split('\u{1b}')
+                .skip(1)
+                .map(|part| part.split_once('m').unwrap().0.to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(sgr(&cleaned), sgr(screen));
+        assert!(cleaned.contains("Without using any tools"));
+        assert!(cleaned.contains("18:31"));
+    }
+
+    #[test]
+    fn copilot_scrollbar_cleanup_keeps_borders_and_bars_inside_content() {
+        for row in ["│ a │", "┃ a ┃", "word┃", "a ┃ b", "a┃"] {
+            assert_eq!(without_copilot_scrollbar(row, 5), row);
+        }
+        assert_eq!(without_copilot_scrollbar("wide界 ┃", 8), "wide界 ");
+        assert_eq!(
+            without_copilot_scrollbar("\u{1b}[48;2;20;27;34mabc \u{1b}[0m┃\u{1b}[0m\r", 5),
+            "\u{1b}[48;2;20;27;34mabc \u{1b}[0m\u{1b}[0m\r"
+        );
+        assert_eq!(without_copilot_scrollbar("abc ┃", 0), "abc ┃");
+        let bar = "\u{1b}[0m\u{1b}[38;2;145;152;161m┃\u{1b}[0m";
+        assert_eq!(
+            without_copilot_scrollbar(&format!("│ a │ {bar}"), 7),
+            "│ a │ \u{1b}[0m\u{1b}[38;2;145;152;161m\u{1b}[0m"
+        );
+    }
+
+    #[test]
+    fn only_repeated_isolated_scrollbars_supply_a_missing_pane_width() {
+        let screen = include_str!("../tests/fixtures/copilot-1.0.93-1/output-long.ansi.txt");
+        assert_eq!(copilot_scrollbar_columns(screen), Some(212));
+        assert_eq!(copilot_scrollbar_columns("abc ┃\nxyz ┃"), None);
+        let bar = "\u{1b}[0m\u{1b}[38;2;145;152;161m┃\u{1b}[0m";
+        assert_eq!(copilot_scrollbar_columns(&format!("abc {bar}")), None);
+        assert_eq!(
+            copilot_scrollbar_columns(&format!("┃ a {bar}\n┃ b {bar}")),
+            None
         );
     }
 

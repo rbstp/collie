@@ -372,6 +372,15 @@ impl Driver {
             (read.wraps, read.splits) = reflow::soft_wraps_for(kind, &read.ansi, cols.into());
             read.copilot_scrollbar = kind == "copilot";
         }
+        if kind == "copilot"
+            && let Some(width) = cols
+                .as_ref()
+                .ok()
+                .and_then(|cols| cols.map(usize::from))
+                .or_else(|| reflow::copilot_scrollbar_columns(&read.ansi))
+        {
+            read.ansi = reflow::without_copilot_scrollbar(&read.ansi, width);
+        }
         cols.is_ok()
     }
 
