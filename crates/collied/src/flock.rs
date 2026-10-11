@@ -211,7 +211,7 @@ pub fn map_agents(
     agents
         .iter()
         .filter_map(|a| {
-            let derived = transcripts.as_deref_mut().and_then(|t| t.derive(a, false));
+            let derived = transcripts.as_deref_mut().and_then(|t| t.derive(a, true));
             map_agent(a, tracker, now_ms, derived)
         })
         .collect()
@@ -442,13 +442,22 @@ mod tests {
     fn agents_carry_what_their_transcript_derives() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("projects/-Users-me-src-collie");
+        let mut transcripts = Transcripts::new(Some(dir.path().join("projects")), None);
+        let missing = map_flock(
+            &fixture(),
+            &mut StatusTracker::default(),
+            0,
+            machine(),
+            0,
+            Some(&mut transcripts),
+        );
+        assert!(missing.agents[0].last_line.is_none());
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(
             project.join("00000000-0000-4000-8000-000000000000.jsonl"),
             include_str!("../tests/fixtures/transcripts/claude.jsonl"),
         )
         .unwrap();
-        let mut transcripts = Transcripts::new(Some(dir.path().join("projects")), None);
         let flock = map_flock(
             &fixture(),
             &mut StatusTracker::default(),

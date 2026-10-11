@@ -315,7 +315,7 @@ struct Rig {
     push: Arc<Push>,
     approvals: Arc<Approvals>,
     live: Mutex<(Live, StatusTracker)>,
-    events: broadcast::Receiver<Event>,
+    events: Option<broadcast::Receiver<Event>>,
     audit: PathBuf,
     audit_log: Arc<Audit>,
     _dir: tempfile::TempDir,
@@ -373,7 +373,7 @@ impl Rig {
             push,
             approvals,
             live: Mutex::new((Live::default(), StatusTracker::default())),
-            events,
+            events: Some(events),
             audit,
             audit_log,
             _dir: dir,
@@ -441,7 +441,7 @@ impl Rig {
     }
 
     async fn event(&mut self) -> Event {
-        tokio::time::timeout(Duration::from_secs(2), self.events.recv())
+        tokio::time::timeout(Duration::from_secs(2), self.events.as_mut().unwrap().recv())
             .await
             .expect("no event")
             .unwrap()
@@ -450,7 +450,7 @@ impl Rig {
     fn no_event(&mut self) {
         assert!(
             matches!(
-                self.events.try_recv(),
+                self.events.as_mut().unwrap().try_recv(),
                 Err(broadcast::error::TryRecvError::Empty)
             ),
             "unexpected event"
@@ -1314,6 +1314,94 @@ fn alerting(sent: &[(String, Alert)]) -> Vec<(String, Alert)> {
 /// The widget's side: `enc` from the content-state opened with the device key, AAD = approvalId.
 fn open_offered(state: &Value) -> Value {
     open_context(&json!({"enc": state["enc"], "approval_id": state["approvalId"]}))
+}
+
+#[tokio::test]
+async fn notifications_and_live_activities_continue_without_app_events() {
+    let mut rig = Rig::start(TTL).await;
+    drop(rig.events.take());
+    rig.push
+        .register(OTHER, other_token(), ApnsEnvironment::Sandbox, key(), false)
+        .unwrap();
+    rig.follow();
+    rig.tick().await;
+    let approval = rig.approvals.pending().pop().unwrap();
+    let sent = rig.alerts(2).await;
+    assert_eq!(sent.len(), 2);
+    let (_, live) = sent
+        .iter()
+        .find(|(to, _)| to == activity_token().as_str())
+        .unwrap();
+    assert_eq!(live.delivery, Delivery::LiveActivity { urgent: true });
+    let state = &live.payload["aps"]["content-state"];
+    assert_eq!(state["status"], "blocked");
+    assert_eq!(state["approvalId"], approval.approval_id.as_str());
+    assert_eq!(open_offered(state)["v"], 1);
+    let (_, alert) = sent
+        .iter()
+        .find(|(to, _)| to == other_token().as_str())
+        .unwrap();
+    assert_eq!(alert.delivery, Delivery::Alert);
+    assert_eq!(alert.payload["approval_id"], approval.approval_id.as_str());
+    assert_eq!(open_context(&alert.payload)["v"], 1);
+    rig.tick().await;
+    assert_eq!(rig.sent().await.len(), 2);
+
+    assert!(matches!(
+        resolved(
+            rig.decide(&approval, Decision::Approve, &approval.nonce)
+                .await
+        ),
+        ApprovalOutcome::Applied { .. }
+    ));
+    rig.tick().await;
+    assert!(rig.approvals.pending().is_empty());
+    let sent = rig.sent().await;
+    assert!(
+        clears(&sent)
+            .iter()
+            .any(|(_, alert)| { alert.payload["approval_id"] == approval.approval_id.as_str() })
+    );
+    let (_, live) = sent
+        .iter()
+        .rev()
+        .find(|(to, _)| to == activity_token().as_str())
+        .unwrap();
+    let state = &live.payload["aps"]["content-state"];
+    assert_eq!(state["status"], "working");
+    assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
+
+    let mut turns = collied::turns::Turns::default();
+    let agents = collied::herdr::agent_list(&rig.herdr.socket).await.unwrap();
+    assert!(turns.observe(&agents, 0).is_empty());
+    rig.herdr.set_status("done");
+    let agents = collied::herdr::agent_list(&rig.herdr.socket).await.unwrap();
+    let done = turns.observe(&agents, collied::turns::MIN_TURN_MS);
+    assert_eq!(done.len(), 1);
+    rig.push.notify_done(collied::push::done_alert(
+        &TerminalId::new(done[0].terminal_id.clone()).unwrap(),
+        "api-fixer",
+        "api",
+        "nMAC",
+    ));
+    tokio::time::sleep(collied::activity::MIN_GAP).await;
+    rig.tick().await;
+    let sent = rig.sent().await;
+    let done: Vec<_> = sent
+        .iter()
+        .filter(|(_, alert)| alert.payload["aps"]["alert"]["body"] == "Done in api")
+        .collect();
+    assert_eq!(done.len(), 2);
+    assert!(
+        done.iter()
+            .all(|(_, alert)| alert.delivery == Delivery::Alert)
+    );
+    let (_, live) = sent
+        .iter()
+        .rev()
+        .find(|(to, _)| to == activity_token().as_str())
+        .unwrap();
+    assert_eq!(live.payload["aps"]["content-state"]["status"], "done");
 }
 
 #[tokio::test]
