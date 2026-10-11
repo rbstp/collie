@@ -290,6 +290,57 @@ private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB
     }
 }
 
+@Test func copilotsSentPromptWrapsWithAContinuousDarkBackground() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let snapshot = try capture("copilot-1.0.93-1/output-long", rows: 4...6)
+        .replacingOccurrences(of: "┃", with: "")
+    for columns in [30, 40, 50] {
+        let frame = screen.render(ansiSnapshot: snapshot, wrapColumns: columns)
+        #expect(frame.rows > 3)
+        for row in 1..<(frame.rows - 1) {
+            #expect(painted(frame, row: row, TerminalRGB(20, 27, 34)) == 1..<columns, "\(columns), \(row)")
+        }
+        let selection = TerminalSelection(
+            TerminalCell(row: 1, column: 0), TerminalCell(row: frame.rows - 2, column: columns - 1)
+        )
+        let text = selection.text(in: frame)
+        #expect(text.contains("Without using any tools, list the numbers 1 to 45, one per line, then a one-line summary."))
+        #expect(text.contains("18:31"))
+    }
+}
+
+@Test func copilotsMultilinePromptKeepsUnicodeAndExplicitParagraphs() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let border = "\u{1B}[38;2;20;27;34m"
+    let shade = "\u{1B}[48;2;20;27;34m"
+    let prompt = "❯ Explain how 界面 handles 🐕 and a long sentence without losing any words."
+    let paragraph = "   Keep this paragraph separate and preserve its original purple text."
+    let snapshot = [
+        " \(border)" + String(repeating: "▄", count: 100) + "\u{1B}[0m",
+        " \(shade)\u{1B}[38;2;203;182;248m" + prompt + "\u{1B}[0m\(shade)   \u{1B}[0m ",
+        " \(shade)" + String(repeating: " ", count: 100) + "\u{1B}[0m ",
+        " \(shade)\u{1B}[38;2;203;182;248m" + paragraph + "\u{1B}[0m\(shade)   \u{1B}[0m ",
+        " \(border)" + String(repeating: "▀", count: 100) + "\u{1B}[0m",
+        " ● Reply outside the prompt",
+    ].joined(separator: "\r\n")
+    for columns in [20, 30, 50] {
+        let frame = screen.render(ansiSnapshot: snapshot, wrapColumns: columns)
+        let bottom = try #require(frame.runs.first { $0.text.contains("▀") }?.row)
+        for row in 1..<bottom {
+            #expect(painted(frame, row: row, TerminalRGB(20, 27, 34)) == 1..<columns, "\(columns), \(row)")
+        }
+        #expect(!frame.runs.contains { $0.row > bottom && $0.style.background != nil })
+        #expect(frame.runs.filter { $0.text.contains("Explain") }.allSatisfy { $0.style.foreground == TerminalRGB(203, 182, 248) })
+        let selection = TerminalSelection(
+            TerminalCell(row: 1, column: 0), TerminalCell(row: bottom - 1, column: columns - 1)
+        )
+        let text = selection.text(in: frame)
+        #expect(text.contains(prompt))
+        #expect(text.contains("\n\n " + paragraph))
+        #expect(!frame.wrapsUnknown)
+    }
+}
+
 @Test func rightAlignedTextKeepsNoPaddingOnItsOwnRow() throws {
     let screen = try #require(TerminalScreen(background: bg, foreground: fg))
     let frame = screen.render(ansiSnapshot: try capture("copilot-1.0.94-1/narrow-output", rows: 52...52), wrapColumns: 40)

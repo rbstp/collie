@@ -3091,7 +3091,7 @@ async fn codex_and_copilot_reads_and_watches_mark_only_prose_wraps() {
 
     let copilot = "term_0102030405060708";
     let prose =
-        " ● The quick brown fox jumps over the  ┃\r\n   lazy dog keeps running.              ┃";
+        " ● The quick brown fox jumps over the  ┃\r\n   lazy dog keeps running.             ┃";
     herdr.with(|h| {
         let mut agent = h.snapshot["agents"][1].clone();
         agent["terminal_id"] = json!(copilot);
@@ -3108,13 +3108,53 @@ async fn codex_and_copilot_reads_and_watches_mark_only_prose_wraps() {
         (read.wraps.as_slice(), read.splits.as_slice()),
         (&[1][..], &[][..])
     );
-    assert!(read.ansi.contains("the  ┃\r\n   lazy"));
+    assert!(!read.ansi.contains('┃'));
     assert!(read.reflowed().unwrap().contains("the lazy dog"));
     let mut watcher = drive.watch(tid(copilot), 200, false).await.unwrap();
     let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
         panic!("no Copilot watch");
     };
     assert_eq!((first.wraps, first.splits), (vec![1], vec![]));
+    assert!(!first.ansi.contains('┃'));
+    drop(watcher);
+
+    herdr.with(|h| {
+        h.text = include_str!("fixtures/copilot-1.0.93-1/output-long.ansi.txt").into();
+        h.columns = Some(212);
+    });
+    let Ok(Response::Terminal(read)) = drive.read(recent(copilot), true).await else {
+        panic!("no Copilot structured read");
+    };
+    assert_eq!(read.ansi.matches('┃').count(), 1);
+    let mut watcher = drive.watch(tid(copilot), 200, false).await.unwrap();
+    let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+        panic!("no Copilot structured watch");
+    };
+    assert_eq!(first.ansi, read.ansi);
+    drop(watcher);
+    for zoomed in [false, true] {
+        herdr.with(|h| {
+            h.columns = if zoomed { Some(212) } else { None };
+            h.zoomed = zoomed;
+        });
+        let Ok(Response::Terminal(unwrapped)) = drive.read(recent(copilot), true).await else {
+            panic!("no Copilot read without layout width");
+        };
+        assert_eq!(unwrapped.ansi, read.ansi);
+        assert!(unwrapped.wraps.is_empty() && unwrapped.splits.is_empty());
+        let mut watcher = drive.watch(tid(copilot), 200, false).await.unwrap();
+        let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+            panic!("no Copilot watch without layout width");
+        };
+        assert_eq!(first.ansi, unwrapped.ansi);
+    }
+    let Ok(Response::Terminal(other)) = drive.read(recent(CODEX_BLOCKED), true).await else {
+        panic!("no other agent read");
+    };
+    assert_eq!(
+        other.ansi,
+        include_str!("fixtures/copilot-1.0.93-1/output-long.ansi.txt")
+    );
 }
 
 #[tokio::test]

@@ -200,6 +200,7 @@ final class TerminalScreen {
         var heights: [Int] = []
         var runs: [Int] = []
         var rowStart = 0
+        var shadedBox = false
         while rowStart <= scalars.count {
             let newline = scalars[rowStart...].firstIndex(of: "\n") ?? scalars.count
             var rowEnd = newline
@@ -222,10 +223,19 @@ final class TerminalScreen {
             var codexInput = false
             var blanks = 0
             var padded = false
+            var upperBorder = false
+            var lowerBorder = false
+            var background: [Unicode.Scalar]?
+            var uniformBackground = true
             runs.removeAll(keepingCapacity: true)
             var i = rowStart
             while i < rowEnd {
                 if let end = Self.sgrEnd(scalars, at: i, before: rowEnd) {
+                    let sgr = Array(scalars[i..<end])
+                    if sgr.starts(with: "\u{1B}[48;".unicodeScalars) {
+                        uniformBackground = uniformBackground && (background == nil || background == sgr)
+                        background = background ?? sgr
+                    }
                     trailingSGR.append(i..<end)
                     i = end
                     continue
@@ -269,6 +279,8 @@ final class TerminalScreen {
                     (fill, uniform) = (nil, true)
                     if (0x2500...0x259F).contains(scalars[i].value) {
                         sawBox = true
+                        upperBorder = upperBorder || scalars[i] == "▄"
+                        lowerBorder = lowerBorder || scalars[i] == "▀"
                     } else {
                         boxOnly = false
                     }
@@ -276,6 +288,7 @@ final class TerminalScreen {
                 i += 1
             }
             let clip = boxOnly && sawBox
+            let shade = shadedBox && uniformBackground && columns > 1 ? background : nil
             let collapse = !clip && contentWidth > columns && (sawBox && padded || runs.contains { $0 >= columns })
             // The most cells every space run may keep for the row to fit, at least one.
             var keep = 1
@@ -304,7 +317,7 @@ final class TerminalScreen {
             } else if !clip && contentWidth > columns {
                 let broken = Self.appendBrokenAtWords(
                     scalars, rowStart..<contentEnd, keepingPadding: collapse ? keep : nil, indent: indent < columns / 2 ? indent : 0,
-                    filling: fill != nil && uniform, paintIndent: codexInput, columns: columns, into: &out
+                    filling: fill != nil && uniform, paintIndent: codexInput, shade: shade, columns: columns, into: &out
                 )
                 (height, end) = (height + broken.breaks, broken.column)
             } else {
@@ -312,6 +325,11 @@ final class TerminalScreen {
             }
             if clip { out.append(contentsOf: "\u{1B}[?7h".unicodeScalars) }
             heights.append(height)
+            if let shade, end < columns {
+                if end == 0 { out.append(contentsOf: "\u{1B}[49m\u{1B}[1C".unicodeScalars) }
+                out.append(contentsOf: shade)
+                out.append(contentsOf: "\u{1B}[K".unicodeScalars)
+            }
             // EL erases in the background current at the trimmed blanks, but from the cursor column
             // on, so not when the row's last character is in the last column.
             for (n, range) in trailingSGR.enumerated() {
@@ -320,6 +338,8 @@ final class TerminalScreen {
             }
             if fill == trailingSGR.count && uniform && end < columns { out.append(contentsOf: "\u{1B}[K".unicodeScalars) }
             out.append(contentsOf: scalars[rowEnd..<min(newline + 1, scalars.count)])
+            if clip && upperBorder && !lowerBorder { shadedBox = true }
+            if clip && lowerBorder { shadedBox = false }
             rowStart = newline + 1
         }
         var first = heights.count
@@ -354,11 +374,15 @@ final class TerminalScreen {
     /// shaded to the edge. Returns the number of breaks and the column the last row ends at.
     private static func appendBrokenAtWords(
         _ scalars: [Unicode.Scalar], _ range: Range<Int>, keepingPadding: Int?, indent: Int, filling: Bool, paintIndent: Bool,
-        columns: Int,
+        shade: [Unicode.Scalar]?, columns: Int,
         into out: inout [Unicode.Scalar]
     ) -> (breaks: Int, column: Int) {
         var newRow = Array("\u{1B}E".unicodeScalars)
-        if indent > 0 {
+        let continuationIndent = shade == nil ? indent : max(indent, 1)
+        if let shade {
+            newRow += Array("\u{1B}[49m\u{1B}[1C".unicodeScalars) + shade + Array("\u{1B}[K".unicodeScalars)
+            if indent > 1 { newRow += Array("\u{1B}[\(indent - 1)C".unicodeScalars) }
+        } else if indent > 0 {
             newRow += paintIndent && filling
                 ? Array(String(repeating: " ", count: indent).unicodeScalars)
                 : Array("\u{1B}[\(indent)C".unicodeScalars)
@@ -385,15 +409,19 @@ final class TerminalScreen {
             if blank && started && breaks > 0 && !placed { continue }
             started = started || !blank
             let advance = scalar == "\t" ? min(8 - column % 8, max(columns - 1 - column, 0)) : cellWidth(scalar, column: column)
-            while (placed || column > indent) && column + advance > columns {
+            while (placed || column > continuationIndent) && column + advance > columns {
                 if let at = breakAt {
-                    let fill = filling && breakColumn < columns && out[at...].first != "\u{1B}"
-                    let row = (fill ? Array("\u{1B}[K".unicodeScalars) : []) + newRow
+                    let fill = breakColumn < columns && (shade != nil || filling && out[at...].first != "\u{1B}")
+                    let row = (fill ? (shade ?? []) + Array("\u{1B}[K".unicodeScalars) : []) + newRow
                     out.insert(contentsOf: row, at: at)
-                    column = width(of: out, in: (at + row.count)..<out.count, from: indent)
+                    column = width(of: out, in: (at + row.count)..<out.count, from: continuationIndent)
                 } else {
+                    if let shade, column < columns {
+                        out.append(contentsOf: shade)
+                        out.append(contentsOf: "\u{1B}[K".unicodeScalars)
+                    }
                     out.append(contentsOf: newRow)
-                    column = indent
+                    column = continuationIndent
                 }
                 breaks += 1
                 breakAt = nil
