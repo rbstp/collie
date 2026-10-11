@@ -1076,6 +1076,92 @@ private func prefsFile() throws -> URL {
 }
 
 @MainActor
+@Test(arguments: ["/Users/me/git/collie", "collie"])
+func switchingToWorktreeUsesTheSelectedFolder(cwd: String) async throws {
+    let core = FakeCore()
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    _ = try await DevicePrefs.setTaskBase("/Users/me/git", machineId: "m1", core: core, in: file)
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+    await model.loadOptions()
+    model.location = .worktree
+    model.source = "/Users/me/app"
+    await model.loadWorktrees()
+    #expect(model.source == "/Users/me/app")
+    #expect(model.worktrees != nil)
+
+    model.location = .folder
+    model.cwd = cwd
+    model.location = .worktree
+    #expect(model.source == "/Users/me/git/collie")
+    #expect(model.worktrees == nil)
+    await model.loadWorktrees()
+    #expect(core.snapshot.worktreeCalls == ["list /Users/me/app", "list /Users/me/git/collie"])
+
+    model.location = .folder
+    #expect(model.cwd == cwd)
+    model.cwd = "Cobalt"
+    model.location = .worktree
+    #expect(model.source == "/Users/me/git/Cobalt")
+    #expect(model.worktrees == nil)
+}
+
+@MainActor
+@Test(arguments: [false, true])
+func switchingToWorktreeWithoutAnExistingFolderStartsEmpty(newFolder: Bool) async {
+    let core = FakeCore()
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
+    await model.loadOptions()
+    model.cwd = newFolder ? "/Users/me/previous" : ""
+    model.newFolder = newFolder
+    model.location = .worktree
+    #expect(model.source.isEmpty)
+    #expect(model.sourceFolder == nil)
+    await model.loadWorktrees()
+    #expect(core.snapshot.worktreeCalls.isEmpty)
+}
+
+@MainActor
+@Test(arguments: [NewTaskModel.WorktreeAction.create, .open])
+func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.WorktreeAction) async throws {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new")
+        $0.worktreeListing = WorktreeListing(source: "/Users/me/git/collie", worktrees: [
+            WorktreeChoice(path: "/Users/me/git/collie-feature", branch: "feature", open: false)
+        ])
+    }
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    _ = try await DevicePrefs.setTaskBase("/Users/me/git", machineId: "m1", core: core, in: file)
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+    await model.loadOptions()
+    model.location = .worktree
+    model.worktreeAction = action
+    model.prompt = "build it"
+    model.branch = "feature"
+    #expect(model.source.isEmpty)
+    #expect(model.folders?.path == "/Users/me/git")
+    #expect(model.sourceCompletions.isEmpty)
+    #expect(!model.canStart)
+    model.source = "co"
+    #expect(model.sourceCompletions == ["collie", "Cobalt"])
+    model.source = "collie"
+    #expect(model.sourceCompletions.isEmpty)
+    #expect(model.sourceFolder == "/Users/me/git/collie")
+    await model.loadWorktrees()
+    #expect(model.canStart)
+    #expect(await model.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
+    let start = action == .create
+        ? "create /Users/me/git/collie feature codex"
+        : "open /Users/me/git/collie /Users/me/git/collie-feature codex"
+    #expect(core.snapshot.worktreeCalls == ["list /Users/me/git/collie", start])
+}
+
+@MainActor
 @Test func newTaskGeneratesAWorktreeBranchWhenBlank() async {
     let core = FakeCore()
     core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
@@ -1083,6 +1169,7 @@ private func prefsFile() throws -> URL {
     let model = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
     await model.loadOptions()
     model.location = .worktree
+    model.source = "/Users/me/app"
     model.prompt = "build it"
     #expect(!model.canStart)
     await model.loadWorktrees()
@@ -1110,6 +1197,7 @@ private func prefsFile() throws -> URL {
     let create = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
     await create.loadOptions()
     create.location = .worktree
+    create.source = "/Users/me/app"
     create.prompt = "build it"
     create.branch = "feature"
     #expect(!create.canStart)
@@ -1121,6 +1209,7 @@ private func prefsFile() throws -> URL {
     let open = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
     await open.loadOptions()
     open.location = .worktree
+    open.source = "/Users/me/app"
     open.worktreeAction = .open
     open.prompt = "continue"
     await open.loadWorktrees()

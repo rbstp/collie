@@ -68,39 +68,7 @@ struct NewTaskSheet: View {
                                 .autocorrectionDisabled()
                                 .font(.body.monospaced())
                         } else {
-                            TextField(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project", text: $model.cwd)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .font(.body.monospaced())
-                            ForEach(model.completions, id: \.self) { name in
-                                Button {
-                                    model.cwd = name
-                                } label: {
-                                    Label(name, systemImage: "folder").font(.footnote.monospaced())
-                                }
-                                .foregroundStyle(.primary)
-                            }
-                            if let folders = model.folders {
-                                NavigationLink {
-                                    FolderBrowser(folders: folders, selected: $model.cwd)
-                                } label: {
-                                    Text("Browse \(folders.path)").lineLimit(1).truncationMode(.head)
-                                }
-                            }
-                            ForEach(model.options?.recentCwds ?? [], id: \.self) { cwd in
-                                Button {
-                                    model.cwd = cwd
-                                } label: {
-                                    HStack {
-                                        Text(cwd).font(.footnote.monospaced()).lineLimit(1).truncationMode(.head)
-                                        Spacer()
-                                        if model.cwd == cwd {
-                                            Image(systemName: "checkmark").foregroundStyle(.primary)
-                                        }
-                                    }
-                                }
-                                .foregroundStyle(.primary)
-                            }
+                            folderPicker($model.cwd, completions: model.completions)
                         }
                     } header: {
                         Text("Folder")
@@ -126,13 +94,12 @@ struct NewTaskSheet: View {
                             }
                         }
                         .tint(.primary)
-                        TextField("Source repository path", text: $model.source)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .font(.body.monospaced())
-                        if model.worktrees == nil, model.worktreesError == nil, !model.source.isEmpty {
+                        folderPicker($model.source, completions: model.sourceCompletions)
+                        if model.worktrees == nil, model.worktreesError == nil, model.sourceFolder != nil {
                             ProgressView("Checking repository…")
                         }
+                        if let error = model.optionsError { Text(error).foregroundStyle(.red) }
+                        if let error = model.foldersError { Text(error).foregroundStyle(.red) }
                         if let listed = model.worktrees {
                             Text("Repository: \(listed.source)").font(.footnote.monospaced())
                             if model.worktreeAction == .create {
@@ -307,8 +274,8 @@ struct NewTaskSheet: View {
                 }
             }
             .task(id: model.machineId) { await model.loadOptions() }
-            .task(id: model.location == .worktree ? "\(model.worktreeAction.rawValue):\(model.source)" : nil) {
-                guard model.location == .worktree, !model.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            .task(id: model.location == .worktree ? "\(model.machineId ?? ""):\(model.worktreeAction.rawValue):\(model.base ?? ""):\(model.source)" : nil) {
+                guard model.location == .worktree, model.sourceFolder != nil else {
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(250))
@@ -364,6 +331,43 @@ struct NewTaskSheet: View {
                 dictationExpanded = false
                 cancel()
             }
+        }
+    }
+
+    @ViewBuilder
+    private func folderPicker(_ path: Binding<String>, completions: [String]) -> some View {
+        TextField(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project", text: path)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .font(.body.monospaced())
+        ForEach(completions, id: \.self) { name in
+            Button {
+                path.wrappedValue = name
+            } label: {
+                Label(name, systemImage: "folder").font(.footnote.monospaced())
+            }
+            .foregroundStyle(.primary)
+        }
+        if let folders = model.folders {
+            NavigationLink {
+                FolderBrowser(folders: folders, selected: path)
+            } label: {
+                Text("Browse \(folders.path)").lineLimit(1).truncationMode(.head)
+            }
+        }
+        ForEach(model.options?.recentCwds ?? [], id: \.self) { cwd in
+            Button {
+                path.wrappedValue = cwd
+            } label: {
+                HStack {
+                    Text(cwd).font(.footnote.monospaced()).lineLimit(1).truncationMode(.head)
+                    Spacer()
+                    if path.wrappedValue == cwd {
+                        Image(systemName: "checkmark").foregroundStyle(.primary)
+                    }
+                }
+            }
+            .foregroundStyle(.primary)
         }
     }
 }
