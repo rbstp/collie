@@ -198,58 +198,60 @@ struct NewTaskSheet: View {
                         }
                         .scrollIndicators(.hidden)
                     }
-                    PromptInputLayout(expanded: expandedPrompt, showsStatus: model.dictation.isActive) {
-                        ZStack {
-                            Menu {
-                                Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
-                                    .disabled(model.attachmentSlots <= 0)
-                                Button("Files", systemImage: "folder") { pickingFile = true }
-                                    .disabled(model.attachmentSlots <= 0)
-                                Divider()
-                                Button("Saved prompts", systemImage: "text.badge.plus") { pickingPrompt = true }
-                                    .disabled(model.dictation.isActive)
-                            } label: {
-                                Image(systemName: "paperclip")
-                                    .font(.system(size: 20))
-                                    .frame(width: 32, height: 36)
-                            }
-                            .disabled(model.upload != nil || model.phase != .editing)
-                            .accessibilityLabel("Attachments and saved prompts")
-                        }
-                        HStack(alignment: .bottom, spacing: 8) {
-                            TextField("What should the agent do?", text: $model.prompt, axis: .vertical)
-                                .lineLimit(expandedPrompt ? 1...5 : 1...1)
-                                .focused($editingPrompt)
-                                .disabled(model.dictation.isActive)
-                            if expandedPrompt && !model.prompt.isEmpty {
-                                Button {
-                                    model.prompt = ""
+                    GlassEffectContainer(spacing: 4) {
+                        PromptInputLayout(expanded: expandedPrompt, showsStatus: model.dictation.isActive) {
+                            ZStack {
+                                Menu {
+                                    Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
+                                        .disabled(model.attachmentSlots <= 0)
+                                    Button("Files", systemImage: "folder") { pickingFile = true }
+                                        .disabled(model.attachmentSlots <= 0)
+                                    Divider()
+                                    Button("Saved prompts", systemImage: "text.badge.plus") { pickingPrompt = true }
+                                        .disabled(model.dictation.isActive)
                                 } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 36, height: 36)
-                                        .contentShape(Rectangle())
+                                    Image(systemName: "paperclip")
+                                        .font(.system(size: 20))
+                                        .frame(width: 32, height: 36)
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(model.dictation.isActive || model.phase != .editing)
-                                .accessibilityLabel("Clear text")
+                                .disabled(model.upload != nil || model.phase != .editing)
+                                .accessibilityLabel("Attachments and saved prompts")
                             }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
-                        ZStack {
-                            if model.dictation.isActive {
-                                DictationBar(dictation: model.dictation)
-                                    .frame(maxWidth: .infinity)
+                            HStack(alignment: .bottom, spacing: 8) {
+                                TextField("What should the agent do?", text: $model.prompt, axis: .vertical)
+                                    .lineLimit(expandedPrompt ? 1...5 : 1...1)
+                                    .focused($editingPrompt)
+                                    .disabled(model.dictation.isActive)
+                                if expandedPrompt && !model.prompt.isEmpty {
+                                    Button {
+                                        model.prompt = ""
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 36, height: 36)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(model.dictation.isActive || model.phase != .editing)
+                                    .accessibilityLabel("Clear text")
+                                }
                             }
-                        }
-                        HStack {
-                            if !model.dictation.isActive {
-                                DictationButton(dictation: model.dictation, disabled: model.phase != .editing) {
-                                    editingPrompt = false
-                                    dictationExpanded = model.startDictation() != nil
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+                            ZStack {
+                                if model.dictation.isActive {
+                                    DictationBar(dictation: model.dictation)
+                                        .frame(maxWidth: .infinity)
+                                }
+                            }
+                            HStack {
+                                if !model.dictation.isActive {
+                                    DictationButton(dictation: model.dictation, disabled: model.phase != .editing) {
+                                        editingPrompt = false
+                                        dictationExpanded = model.startDictation() != nil
+                                    }
                                 }
                             }
                         }

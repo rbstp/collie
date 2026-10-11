@@ -36,10 +36,13 @@ struct PromptShortcutsView: View {
                     }
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(shortcut.name).foregroundStyle(.primary)
-                        Text(shortcut.text).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        Text(shortcut.name).font(.headline).foregroundStyle(.primary)
+                        Text(shortcut.text).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .swipeActions {
                     Button("Delete", role: .destructive) {
                         shortcuts.items.removeAll { $0.id == shortcut.id }

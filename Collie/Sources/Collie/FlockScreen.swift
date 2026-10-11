@@ -22,101 +22,12 @@ struct FlockScreen: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            ZStack {
-                if showsUsage {
-                    List { UsageSections(entries: model.entries) }
-                        .transition(page(from: .trailing))
-                } else {
-                    switch layout {
-                    case .grid:
-                        AgentGrid(
-                            entries: model.entries, previews: previews, notice: model.closeNotice,
-                            approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows,
-                            closePane: { model.beginClose(.pane, route: $0) }, menu: menu
-                        )
-                        .task(id: core != nil && scenePhase == .active && !newTask) {
-                            guard let core, scenePhase == .active, !newTask else { return }
-                            await previews.run(core: core)
-                        }
-                        .transition(page(from: .leading))
-                    case .inbox:
-                        AgentInbox(
-                            entries: model.entries, notice: model.closeNotice, reconnect: reconnect, follows: follows,
-                            seen: seen, markUnseen: markUnseen, menu: menu
-                        )
-                        .transition(page(from: .leading))
-                    case .list:
-                        TimelineView(.periodic(from: .now, by: 60)) { context in
-                            List {
-                                if let notice = model.closeNotice {
-                                    Label(notice, systemImage: "exclamationmark.triangle")
-                                        .font(.footnote)
-                                        .foregroundStyle(.orange)
-                                }
-                                if model.entries.isEmpty {
-                                    NoMachines()
-                                }
-                                ForEach(model.entries) { entry in
-                                    Section {
-                                        if let error = entry.error {
-                                            Label(error, systemImage: "exclamationmark.triangle")
-                                                .font(.footnote)
-                                                .foregroundStyle(.orange)
-                                        }
-                                        if entry.flock?.details != nil && entry.agents.isEmpty {
-                                            Text("No agents running").foregroundStyle(.secondary)
-                                        }
-                                        ForEach(entry.agents, id: \.terminalId) { agent in
-                                            let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
-                                            NavigationLink(value: route) {
-                                                AgentRow(
-                                                    agent: agent, workspace: entry.workspaceLabel(for: agent),
-                                                    followed: follows?.isFollowing(route) == true, now: context.date
-                                                )
-                                            }
-                                            .contextMenu { menu(agent, route) }
-                                        }
-                                        .opacity(entry.linkDown ? 0.5 : 1)
-                                        if !entry.terminals.isEmpty {
-                                            Text("Terminals").font(.caption).foregroundStyle(.secondary)
-                                            ForEach(entry.terminals, id: \.terminalId) { terminal in
-                                                let route = AgentRoute(machineId: entry.id, terminalId: terminal.terminalId)
-                                                NavigationLink(value: route) {
-                                                    TerminalRow(terminal: terminal)
-                                                }
-                                                .contextMenu {
-                                                    Button("Close pane", systemImage: "xmark.square", role: .destructive) {
-                                                        model.beginClose(.pane, route: route)
-                                                    }
-                                                    Button("Archive", systemImage: "archivebox", role: .destructive) {
-                                                        model.beginClose(.archive, route: route)
-                                                    }
-                                                }
-                                            }
-                                            .opacity(entry.linkDown ? 0.5 : 1)
-                                        }
-                                    } header: {
-                                        Button {
-                                            reconnect(entry)
-                                        } label: {
-                                            MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                            }
-                        }
-                        .transition(page(from: .leading))
-                    }
-                }
+            TabView(selection: $showsUsage) {
+                agents.tag(false)
+                List { UsageSections(entries: model.entries) }.tag(true)
             }
-            .animation(.smooth(duration: 0.3), value: showsUsage)
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 30).onEnded { drag in
-                    guard !tailnetStarting, let usage = ViewSwitch.target(after: drag.translation) else { return }
-                    showsUsage = usage
-                }
-            )
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: showsUsage)
             .navigationTitle("Agents")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(removing: .title)
@@ -229,8 +140,86 @@ struct FlockScreen: View {
         .followNotice(follows)
     }
 
-    private func page(from edge: Edge) -> AnyTransition {
-        reduceMotion ? .opacity : .move(edge: edge)
+    @ViewBuilder
+    private var agents: some View {
+        switch layout {
+        case .grid:
+            AgentGrid(
+                entries: model.entries, previews: previews, notice: model.closeNotice,
+                approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows,
+                closePane: { model.beginClose(.pane, route: $0) }, menu: menu
+            )
+            .task(id: core != nil && scenePhase == .active && !newTask && !showsUsage) {
+                guard let core, scenePhase == .active, !newTask, !showsUsage else { return }
+                await previews.run(core: core)
+            }
+        case .inbox:
+            AgentInbox(
+                entries: model.entries, notice: model.closeNotice, reconnect: reconnect, follows: follows,
+                seen: seen, markUnseen: markUnseen, menu: menu
+            )
+        case .list:
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                List {
+                    if let notice = model.closeNotice {
+                        Label(notice, systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                    if model.entries.isEmpty {
+                        NoMachines()
+                    }
+                    ForEach(model.entries) { entry in
+                        Section {
+                            if let error = entry.error {
+                                Label(error, systemImage: "exclamationmark.triangle")
+                                    .font(.footnote)
+                                    .foregroundStyle(.orange)
+                            }
+                            if entry.flock?.details != nil && entry.agents.isEmpty {
+                                Text("No agents running").foregroundStyle(.secondary)
+                            }
+                            ForEach(entry.agents, id: \.terminalId) { agent in
+                                let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
+                                NavigationLink(value: route) {
+                                    AgentRow(
+                                        agent: agent, workspace: entry.workspaceLabel(for: agent),
+                                        followed: follows?.isFollowing(route) == true, now: context.date
+                                    )
+                                }
+                                .contextMenu { menu(agent, route) }
+                            }
+                            .opacity(entry.linkDown ? 0.5 : 1)
+                            if !entry.terminals.isEmpty {
+                                Text("Terminals").font(.caption).foregroundStyle(.secondary)
+                                ForEach(entry.terminals, id: \.terminalId) { terminal in
+                                    let route = AgentRoute(machineId: entry.id, terminalId: terminal.terminalId)
+                                    NavigationLink(value: route) {
+                                        TerminalRow(terminal: terminal)
+                                    }
+                                    .contextMenu {
+                                        Button("Close pane", systemImage: "xmark.square", role: .destructive) {
+                                            model.beginClose(.pane, route: route)
+                                        }
+                                        Button("Archive", systemImage: "archivebox", role: .destructive) {
+                                            model.beginClose(.archive, route: route)
+                                        }
+                                    }
+                                }
+                                .opacity(entry.linkDown ? 0.5 : 1)
+                            }
+                        } header: {
+                            Button {
+                                reconnect(entry)
+                            } label: {
+                                MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private func approvalsCount(_ entry: MachineFlockEntry) -> Int {
@@ -266,52 +255,9 @@ struct FlockScreen: View {
 
 struct ViewSwitch: View {
     @Binding var showsUsage: Bool
-    @Namespace private var pill
-    @Environment(\.colorScheme) private var colorScheme
-
-    /// Whether a drag shows Usage (a swipe left) or Agents (a swipe right), or nil when it is not a horizontal swipe.
-    nonisolated static func target(after translation: CGSize) -> Bool? {
-        guard abs(translation.width) > 60, abs(translation.width) > 2 * abs(translation.height) else { return nil }
-        return translation.width < 0
-    }
 
     var body: some View {
-        HStack(spacing: 0) {
-            segment("Agents", value: false)
-            segment("Usage", value: true)
-        }
-        .padding(3)
-        .glassEffect(.regular.interactive(), in: .capsule)
-        .animation(.smooth(duration: 0.3), value: showsUsage)
-        .accessibilityRepresentation {
-            Picker("View", selection: $showsUsage) {
-                Text("Agents").tag(false)
-                Text("Usage").tag(true)
-            }
-            .pickerStyle(.segmented)
-        }
-    }
-
-    private func segment(_ title: LocalizedStringKey, value: Bool) -> some View {
-        Button {
-            showsUsage = value
-        } label: {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(showsUsage == value ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                .padding(.horizontal, 14)
-                .frame(minHeight: 38)
-                .background {
-                    if showsUsage == value {
-                        // Darkens the glass as much as the tab bar's selection does.
-                        Capsule()
-                            .fill(.black.opacity(colorScheme == .dark ? 0.69 : 0.07))
-                            .matchedGeometryEffect(id: "pill", in: pill)
-                    }
-                }
-                .contentShape(.capsule)
-        }
-        .buttonStyle(.plain)
+        GlassPicker(title: "View", selection: $showsUsage, options: [("Agents", false), ("Usage", true)])
     }
 }
 

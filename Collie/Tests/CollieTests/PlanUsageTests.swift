@@ -80,13 +80,6 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(PlanUsage.spoken(seconds: 30) == "1 minute")
 }
 
-@Test func aHorizontalSwipeMovesBetweenAgentsAndUsage() {
-    #expect(ViewSwitch.target(after: CGSize(width: -120, height: 10)) == true)
-    #expect(ViewSwitch.target(after: CGSize(width: 120, height: -10)) == false)
-    #expect(ViewSwitch.target(after: CGSize(width: -40, height: 0)) == nil)
-    #expect(ViewSwitch.target(after: CGSize(width: -120, height: 90)) == nil)
-}
-
 @Test func codexPaceUsesTheElapsedCalendarMonth() throws {
     for (start, reset) in [
         ("2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z"),

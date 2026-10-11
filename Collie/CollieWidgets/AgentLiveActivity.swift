@@ -14,8 +14,6 @@ struct AgentLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AgentActivityAttributes.self) { context in
             LockScreenView(context: context)
-                .activityBackgroundTint(.black.opacity(0.85))
-                .activitySystemActionForegroundColor(.white)
                 .widgetURL(link(context))
         } dynamicIsland: { context in
             let state = context.state
@@ -95,7 +93,6 @@ private struct LockScreenView: View {
             Approval(context: context)
         }
         .padding(16)
-        .environment(\.colorScheme, .dark)
     }
 }
 

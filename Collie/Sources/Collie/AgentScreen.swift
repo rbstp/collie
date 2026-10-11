@@ -62,11 +62,8 @@ struct AgentScreen: View {
                 }
             }
             if !model.isTerminal {
-                Picker("Session view", selection: $showingChat) {
-                    Text("Chat").tag(true)
-                    Text("Terminal").tag(false)
-                }
-                .pickerStyle(.segmented)
+                GlassPicker(title: "Session view", selection: $showingChat,
+                            options: [("Chat", true), ("Terminal", false)], expands: true)
                 .padding(.horizontal)
                 .padding(.bottom, 6)
             }
@@ -86,22 +83,26 @@ struct AgentScreen: View {
                         }
                     }
                     .overlay(alignment: .bottom) {
-                        if model.jumpBanner {
-                            Button("Jump to bottom", systemImage: "arrow.down") {
-                                Task { await model.jumpToBottom() }
+                        GlassEffectContainer(spacing: 8) {
+                            VStack(spacing: 8) {
+                                if model.jumpBanner {
+                                    Button("Jump to bottom", systemImage: "arrow.down") {
+                                        Task { await model.jumpToBottom() }
+                                    }
+                                    .buttonStyle(.glassProminent)
+                                    .padding(.bottom, 8)
+                                }
+                                if !model.noticeOptions.isEmpty {
+                                    ViewThatFits(in: .horizontal) {
+                                        HStack { noticeButtons }
+                                        VStack { noticeButtons }
+                                    }
+                                    .buttonStyle(.glassProminent)
+                                    .padding([.horizontal, .bottom], 8)
+                                    .accessibilityElement(children: .contain)
+                                    .accessibilityLabel("Claude Code notice")
+                                }
                             }
-                            .buttonStyle(.borderedProminent)
-                            .padding(.bottom, 8)
-                        }
-                        if !model.noticeOptions.isEmpty {
-                            ViewThatFits(in: .horizontal) {
-                                HStack { noticeButtons }
-                                VStack { noticeButtons }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .padding([.horizontal, .bottom], 8)
-                            .accessibilityElement(children: .contain)
-                            .accessibilityLabel("Claude Code notice")
                         }
                     }
             }
@@ -117,8 +118,12 @@ struct AgentScreen: View {
                 Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
                     .font(.footnote).buttonStyle(.glass).padding(.top, 6)
             }
-            if !showingChat || model.isTerminal { KeyStrip(model: model) }
-            PromptBar(model: model)
+            GlassEffectContainer(spacing: 4) {
+                VStack(spacing: 0) {
+                    if !showingChat || model.isTerminal { KeyStrip(model: model) }
+                    PromptBar(model: model)
+                }
+            }
         }
         .navigationTitle(model.agent?.displayTitle ?? model.terminal?.displayTitle ?? "Agent")
         .navigationBarTitleDisplayMode(.inline)
@@ -395,7 +400,7 @@ private struct PaneCard: View {
                         Label("Unlock with Face ID", systemImage: "faceid")
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .controlSize(.small)
                 .disabled(model.unlocking)
             }
@@ -420,7 +425,7 @@ private struct KeyStrip: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity, minHeight: 34)
-                        .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 8))
+                        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 8))
                         .contentShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
@@ -459,6 +464,17 @@ private struct PromptBar: View {
             if let problem = model.dictation.problem {
                 DictationProblemRow(problem: problem)
             }
+            if !model.attachments.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(model.attachments) { file in
+                            AttachmentThumbnail(file: file) { model.remove(file) }
+                        }
+                    }
+                }
+                .disabled(model.sendingPrompt)
+                .scrollIndicators(.hidden)
+            }
             PromptInputLayout(expanded: expanded, showsStatus: model.dictation.isActive) {
                 ZStack {
                     if !model.answering && !model.isTerminal {
@@ -480,17 +496,6 @@ private struct PromptBar: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    if !model.attachments.isEmpty {
-                        ScrollView(.horizontal) {
-                            HStack(spacing: 8) {
-                                ForEach(model.attachments) { file in
-                                    AttachmentThumbnail(file: file) { model.remove(file) }
-                                }
-                            }
-                        }
-                        .disabled(model.sendingPrompt)
-                        .scrollIndicators(.hidden)
-                    }
                     HStack(alignment: .bottom, spacing: 8) {
                         if model.isTerminal {
                             CommandField(text: $model.draft, editing: $typingCommand) {
@@ -527,7 +532,7 @@ private struct PromptBar: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
                 ZStack {
                     if model.dictation.isActive {
                         DictationBar(dictation: model.dictation)
@@ -720,21 +725,15 @@ struct DictationBar: View {
                     Text("Downloading…").font(.caption).lineLimit(1)
                 }
             case .listening:
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        Text("Dictating…").font(.caption.weight(.semibold)).fixedSize()
-                        LevelMeter(level: dictation.level)
-                    }
-                    Text("Dictating…").font(.caption.weight(.semibold)).lineLimit(1)
-                }
+                DictationWaveform(levels: dictation.levels)
             case .idle, .preparing(nil), .finishing:
                 ProgressView().controlSize(.mini)
                 Text(dictation.phase == .finishing ? "Finishing…" : "Starting…").font(.caption)
             }
-            Spacer(minLength: 0)
+            if dictation.phase != .listening { Spacer(minLength: 0) }
             Button(dictation.language.code) { dictation.select(dictation.language.other) }
                 .font(.caption.monospaced().weight(.semibold))
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
                 .controlSize(.mini)
                 .disabled(dictation.phase == .finishing)
                 .accessibilityLabel("Dictation language, \(dictation.language.label)")
@@ -749,23 +748,40 @@ struct DictationBar: View {
         .padding(.leading, 12)
         .padding(.trailing, 6)
         .padding(.vertical, 4)
-        .background(.fill.tertiary, in: Capsule())
+        .glassEffect(.regular.interactive(), in: .capsule)
     }
 }
 
-private struct LevelMeter: View {
-    let level: Float
+struct DictationWaveform: View {
+    let levels: [Float]
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(0..<8, id: \.self) { index in
-                Capsule()
-                    .fill(Float(index) < level * 8 ? Color.red : Color.secondary.opacity(0.3))
-                    .frame(width: 3, height: 12)
+        Canvas { context, size in
+            let count = max(1, Int(size.width / 6))
+            let visible = Array(levels.suffix(count))
+            let leading = count - visible.count
+            let inset = (size.width - CGFloat(count - 1) * 6 - 3) / 2
+            var path = Path()
+            for index in 0..<count {
+                let level = index < leading ? 0 : visible[index - leading]
+                let height = max(3, CGFloat(level) * size.height)
+                path.addRoundedRect(in: CGRect(x: inset + CGFloat(index) * 6, y: (size.height - height) / 2,
+                                               width: 3, height: height), cornerSize: CGSize(width: 1.5, height: 1.5))
+            }
+            if reduceTransparency || contrast == .increased {
+                context.fill(path, with: .color(.blue))
+            } else {
+                context.fill(path, with: .linearGradient(
+                    Gradient(colors: [.blue.opacity(0.65), .blue, .blue.opacity(0.75)]),
+                    startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)
+                ))
             }
         }
-        .animation(.linear(duration: 0.1), value: level)
-        .accessibilityHidden(true)
+        .frame(maxWidth: .infinity)
+        .frame(height: 24)
+        .accessibilityLabel("Dictating")
     }
 }
 
@@ -812,9 +828,9 @@ struct AttachmentThumbnail: View {
             Button(action: remove) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 20, height: 20)
-                    .background(.black.opacity(0.6), in: Circle())
+                    .foregroundStyle(.primary)
+                    .frame(width: 28, height: 28)
+                    .glassEffect(.regular.interactive(), in: .circle)
                     .padding(4)
                     .contentShape(Rectangle())
             }
@@ -844,6 +860,6 @@ struct UploadChip: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.fill.tertiary, in: Capsule())
+        .glassEffect(.regular.interactive(), in: .capsule)
     }
 }

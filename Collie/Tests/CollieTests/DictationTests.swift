@@ -105,8 +105,8 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     #expect(engine.started == [.english])
 
     await engine.send(.level(0.5))
-    await until { model.dictation.level == 0.5 }
-    #expect(model.dictation.level == 0.5)
+    await until { model.dictation.levels == [0.5] }
+    #expect(model.dictation.levels == [0.5])
     await engine.send(.volatile("the bil"))
     await until { model.draft == "fix the bil" }
     #expect(model.draft == "fix the bil")
@@ -128,8 +128,39 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     await until { !model.dictation.isActive }
     #expect(engine.finished == 1)
     #expect(model.draft == "fix the build. and the tests")
-    #expect(model.dictation.level == 0)
+    #expect(model.dictation.levels.isEmpty)
     #expect(model.canSendPrompt)
+}
+
+@MainActor
+@Test func dictationWaveformKeepsSpeechAndSilenceInOrderAndDropsOldSamples() async {
+    let engine = FakeDictationEngine()
+    let model = await dictating(engine)
+    let samples: [Float] = [0, 0, 0.2, 0.6, 0.9, 0.9, 0.3, 0]
+    for sample in samples { await engine.send(.level(sample)) }
+    #expect(model.dictation.levels == samples)
+
+    for _ in 0..<120 { await engine.send(.level(0.4)) }
+    #expect(model.dictation.levels == Array(repeating: Float(0.4), count: 120))
+    await engine.send(.volatile("heard words"))
+    #expect(model.draft == "fix heard words")
+    model.dictation.stop()
+    #expect(model.dictation.levels.isEmpty)
+    await until { !model.dictation.isActive }
+}
+
+@MainActor
+@Test func dictationWaveformClearsWhenSwitchingLanguageOrCancelling() async {
+    let engine = FakeDictationEngine()
+    let model = await dictating(engine)
+    await engine.send(.level(0.7))
+    model.dictation.select(.french)
+    await until { engine.started.count == 2 && model.dictation.phase == .listening }
+    #expect(model.dictation.levels.isEmpty)
+    await engine.send(.level(0.2))
+    #expect(model.dictation.levels == [0.2])
+    model.dictation.cancel()
+    #expect(model.dictation.levels.isEmpty)
 }
 
 @MainActor

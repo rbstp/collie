@@ -79,7 +79,7 @@ final class DictationModel {
     }
 
     private(set) var phase = Phase.idle
-    private(set) var level: Float = 0
+    private(set) var levels: [Float] = []
     var problem: DictationProblem?
     private(set) var language: DictationLanguage
 
@@ -158,7 +158,10 @@ final class DictationModel {
     private func apply(_ event: DictationEvent) {
         switch event {
         case .level(let value):
-            if phase == .listening { level = value }
+            if phase == .listening {
+                levels.append(value.isFinite ? min(max(value, 0), 1) : 0)
+                if levels.count > 120 { levels.removeFirst(levels.count - 120) }
+            }
         case .volatile(let text):
             volatile = text
             write?(output)
@@ -178,7 +181,7 @@ final class DictationModel {
             cancel()
         case .listening:
             phase = .finishing
-            level = 0
+            levels.removeAll()
             if let session { Task { await session.finish() } }
         }
     }
@@ -208,7 +211,7 @@ final class DictationModel {
 
     private func end() {
         phase = .idle
-        level = 0
+        levels.removeAll()
         session?.cancel()
         session = nil
         write = nil

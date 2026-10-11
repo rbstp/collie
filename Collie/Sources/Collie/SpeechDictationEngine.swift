@@ -170,7 +170,7 @@ private final class LiveDictation {
         var sum: Float = 0
         for index in 0..<count { sum += samples[index] * samples[index] }
         let decibels = 20 * log10(max((sum / Float(count)).squareRoot(), 1e-6))
-        return min(max((decibels + 50) / 50, 0), 1)
+        return min(max((decibels + 65) / 40, 0), 1)
     }
 }
 

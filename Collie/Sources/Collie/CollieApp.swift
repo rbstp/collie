@@ -62,6 +62,7 @@ struct RootView: View {
                 Tab("Machines", systemImage: "desktopcomputer", value: AppTab.machines) { MachinesView(app: app) }
                 Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView(app: app) }
             }
+            .tint(.blue)
             .task { await app.enableNotifications() }
             .task {
                 while !Task.isCancelled {

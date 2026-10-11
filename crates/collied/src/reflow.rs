@@ -88,7 +88,11 @@ pub fn soft_wraps_for(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32
 }
 
 fn tui_wraps(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
-    let marker = if kind == "codex" { '•' } else { '●' };
+    let markers: &[char] = if kind == "codex" {
+        &['•', '›']
+    } else {
+        &['●']
+    };
     let (mut wraps, mut splits) = (Vec::new(), Vec::new());
     let (mut plain, mut tail) = (String::new(), String::new());
     let mut prose = false;
@@ -114,7 +118,7 @@ fn tui_wraps(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
         }
         let marker_indent = if kind == "codex" { 0 } else { 1 };
         if let Some(body) = (ind == marker_indent)
-            .then(|| s.strip_prefix(marker).and_then(|s| s.strip_prefix(' ')))
+            .then(|| s.strip_prefix(markers).and_then(|s| s.strip_prefix(' ')))
             .flatten()
         {
             base = ind + 2;
@@ -299,6 +303,44 @@ mod tests {
     }
 
     #[test]
+    fn codex_prompt_wraps_join_without_changing_other_agents() {
+        let captured = include_str!("../tests/fixtures/codex-0.160.1/working.ansi.txt");
+        assert_eq!(soft_wraps_for("codex", captured, 212), (vec![31], vec![]));
+        let rows = [
+            "\u{1b}[48;2;51;51;60m› Please check the long prompt near its\u{1b}[0m",
+            "\u{1b}[48;2;51;51;60m  end without adding a new line.\u{1b}[0m",
+        ];
+        let ansi = rows.join("\r\n");
+        assert_eq!(soft_wraps_for("codex", &ansi, 40), (vec![1], vec![]));
+        for kind in ["claude", "copilot"] {
+            assert_eq!(soft_wraps_for(kind, &ansi, 40), (vec![], vec![]));
+        }
+        assert_eq!(soft_wraps_for("codex", &ansi, 80), (vec![], vec![]));
+    }
+
+    #[test]
+    fn codex_prompt_explicit_newlines_and_code_stay_separate() {
+        for ansi in [
+            include_str!("../tests/fixtures/codex-0.160.1/draft-multiline.ansi.txt"),
+            include_str!("../tests/fixtures/codex-0.160.1/draft-blank-line.ansi.txt"),
+            include_str!("../tests/fixtures/codex-0.160.1/after-output.ansi.txt"),
+        ] {
+            assert_eq!(soft_wraps_for("codex", ansi, 212), (vec![], vec![]));
+        }
+        let rows = [
+            "› Please check this example:",
+            "  const longName = value",
+            "    return longName",
+            "",
+            "  Keep this paragraph separate.",
+        ];
+        assert_eq!(
+            soft_wraps_for("codex", &rows.join("\r\n"), 40),
+            (vec![], vec![])
+        );
+    }
+
+    #[test]
     fn codex_code_after_a_blank_and_nested_markers_keep_their_rows() {
         let rows = [
             "• Example:",
@@ -334,7 +376,6 @@ mod tests {
     #[test]
     fn codex_ui_code_and_diffs_keep_their_rows() {
         for screen in [
-            include_str!("../tests/fixtures/codex-0.160.1/working.ansi.txt"),
             include_str!("../tests/fixtures/codex-0.160.1/idle.ansi.txt"),
             include_str!("../tests/fixtures/codex-0.160.1/patch.ansi.txt"),
         ] {

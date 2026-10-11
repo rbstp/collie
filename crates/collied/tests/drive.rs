@@ -2855,6 +2855,23 @@ async fn codex_and_copilot_reads_and_watches_mark_only_prose_wraps() {
     assert_eq!((first.wraps, first.splits), (vec![1], vec![]));
     drop(watcher);
 
+    let prompt = "\u{1b}[48;2;51;51;60m› Please check the long prompt near its\u{1b}[0m\r\n\u{1b}[48;2;51;51;60m  end without adding a new line.\u{1b}[0m";
+    herdr.with(|h| {
+        h.text = prompt.into();
+        h.columns = Some(40);
+    });
+    let Ok(Response::Terminal(read)) = drive.read(recent(CODEX_BLOCKED), true).await else {
+        panic!("no Codex prompt read");
+    };
+    assert_eq!(read.ansi, prompt);
+    assert!(!read.reflowed().unwrap().contains('\n'));
+    let mut watcher = drive.watch(tid(CODEX_BLOCKED), 200, false).await.unwrap();
+    let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+        panic!("no Codex prompt watch");
+    };
+    assert_eq!((first.wraps, first.splits), (vec![1], vec![]));
+    drop(watcher);
+
     let copilot = "term_0102030405060708";
     let prose =
         " ● The quick brown fox jumps over the  ┃\r\n   lazy dog keeps running.              ┃";

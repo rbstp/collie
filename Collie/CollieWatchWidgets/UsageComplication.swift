@@ -51,7 +51,7 @@ private struct UsageWidgetView: View {
     var body: some View {
         Group {
             if family == .accessoryRectangular {
-                UsageBars(usage: entry.usage, now: entry.date)
+                UsageGauges(usage: entry.usage, now: entry.date)
             } else {
                 UsageRings(usage: entry.usage, now: entry.date)
             }
