@@ -138,13 +138,8 @@ struct AgentScreen: View {
                 if showingChat && !model.isTerminal {
                     Button("Search conversation", systemImage: "magnifyingglass") { searchingChat.toggle() }
                 } else {
-                    Button { model.wrapLines.toggle() } label: {
-                        Label("Wrap lines", image: "WrapLines")
-                            .foregroundStyle(model.wrapLines ? Color.accentColor : Color.primary)
-                            .padding(8)
-                            .background(model.wrapLines ? Color.accentColor.opacity(0.2) : .clear, in: Circle())
-                    }
-                    .accessibilityAddTraits(model.wrapLines ? .isSelected : [])
+                    Toggle(isOn: $model.wrapLines) { Label("Wrap lines", image: "WrapLines") }
+                        .toggleStyle(.button)
                 }
             }
             ToolbarItem(placement: .primaryAction) {
