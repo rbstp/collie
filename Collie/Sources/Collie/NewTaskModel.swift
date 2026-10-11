@@ -122,7 +122,7 @@ final class NewTaskModel {
     }
 
     var canStart: Bool {
-        guard phase == .editing, machineId != nil, !agent.isEmpty, upload == nil, !dictation.isActive,
+        guard !cancelled, phase == .editing, machineId != nil, !agent.isEmpty, upload == nil, !dictation.isActive,
             !trimmed(prompt).isEmpty || !attachments.isEmpty else { return false }
         if location == .worktree {
             guard let sourceFolder, worktrees != nil, listedSource == sourceFolder else { return false }

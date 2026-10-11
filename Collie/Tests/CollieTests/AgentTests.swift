@@ -1401,6 +1401,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     let start = Task { await cancelled.start() }
     await core.waitHeld(1)
     cancelled.cancel()
+    #expect(!cancelled.canStart)
     core.release()
     #expect(await start.value == nil)
     #expect(await cancelled.start() == nil)
