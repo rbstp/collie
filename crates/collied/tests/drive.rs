@@ -3235,6 +3235,105 @@ fn keys(terminal: &str) -> AgentSendKeysParams {
 }
 
 #[tokio::test]
+async fn copilot_approval_allows_every_terminal_button() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["copilot"], &base);
+    let buttons = [
+        Key::Esc,
+        Key::Left,
+        Key::Up,
+        Key::Down,
+        Key::Right,
+        Key::Tab,
+        Key::ShiftTab,
+        Key::Enter,
+        Key::CtrlEnter,
+    ];
+
+    for (rule, screen) in [
+        (
+            Some("permission_prompt"),
+            include_str!("fixtures/copilot/shell.detection.txt"),
+        ),
+        (
+            Some("path_trust_prompt"),
+            include_str!("fixtures/copilot/trust.detection.txt"),
+        ),
+        (None, "Allow this operation?"),
+    ] {
+        block(&herdr, screen);
+        herdr.with(|h| {
+            h.snapshot["agents"][0]["agent"] = json!("copilot");
+            h.rule = rule.map(str::to_owned);
+        });
+        for key in buttons {
+            let mut p = keys(CLAUDE);
+            p.keys = vec![key];
+            assert_eq!(
+                drive.send_keys(p, &yes()).await,
+                (
+                    Ok(Response::Ok),
+                    Some(format!("{CLAUDE} blocked keys={}", key.herdr_name()))
+                )
+            );
+        }
+    }
+    let sent = herdr.params("agent.send_keys");
+    assert_eq!(sent.len(), buttons.len() * 3);
+    for (p, key) in sent.iter().zip(buttons.iter().cycle()) {
+        assert_eq!(p, &json!({"target": "w6:p1", "keys": [key.herdr_name()]}));
+    }
+    assert_eq!(
+        code(drive.prompt(prompt(CLAUDE), &yes()).await),
+        ErrorCode::AgentBlocked
+    );
+    assert_eq!(
+        code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
+        ErrorCode::AgentBlocked
+    );
+    assert_eq!(
+        herdr.mutations(),
+        vec!["agent.send_keys"; buttons.len() * 3]
+    );
+}
+
+#[tokio::test]
+async fn copilot_approval_keys_keep_authorization_and_agent_checks() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["copilot"], &base);
+    block(&herdr, "Allow this operation?");
+    herdr.with(|h| h.snapshot["agents"][0]["agent"] = json!("copilot"));
+
+    assert_eq!(
+        code(drive.send_keys(keys(CLAUDE), &no()).await.0),
+        ErrorCode::NotPaired
+    );
+    for field in ["terminal_id", "agent", "agent_session"] {
+        let mut changed = herdr.with(|h| h.snapshot["agents"][0].clone());
+        changed[field] = if field == "agent_session" {
+            json!({"source": "herdr:copilot", "agent": "copilot", "kind": "id", "value": "another-session"})
+        } else {
+            json!("another-agent")
+        };
+        herdr.with(|h| h.gets.push_back(changed));
+        assert_eq!(
+            code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
+            ErrorCode::AgentNotReady,
+            "{field}"
+        );
+    }
+    assert!(herdr.mutations().is_empty());
+
+    herdr.fail_next("agent.send_keys", &["agent_not_running"]);
+    assert_eq!(
+        code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
+        ErrorCode::AgentNotReady
+    );
+}
+
+#[tokio::test]
 async fn keys_reach_a_blocked_agent_only_on_a_question() {
     let herdr = Mock::start();
     let (_d, base) = root();

@@ -174,7 +174,9 @@ final class AgentModel {
     /// A slash command shows in Claude Code's input box, so Enter would run its highlighted command.
     var commandShown: Bool { mode == .agent && blocked == nil && agent?.status != .blocked && macDraft?.hasPrefix("/") == true }
 
-    var acceptsKeys: Bool { isTerminal ? !unlocking : blocked != .optionsOnly && blocked != .terminal && !jumpBanner }
+    var acceptsKeys: Bool {
+        isTerminal ? !unlocking : (agent?.kind == "copilot" || blocked != .optionsOnly && blocked != .terminal) && !jumpBanner
+    }
 
     var keyStrip: [AgentKey] {
         isTerminal ? AgentKey.terminalStrip : agent?.kind == "codex" ? AgentKey.codexStrip : AgentKey.strip
