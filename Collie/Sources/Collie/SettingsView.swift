@@ -24,6 +24,7 @@ struct SettingsView: View {
                         }
                     }
                     .tint(app.accent.color)
+                    .id(app.accent)
                 }
                 Section("Tailnet") {
                     LabeledContent("State", value: app.node.map { $0.backendState.label } ?? "unknown")
