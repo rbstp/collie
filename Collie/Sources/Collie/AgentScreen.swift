@@ -17,6 +17,7 @@ struct AgentScreen: View {
     @State private var showingChanges = false
     @State private var showingChat = DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat
     @State private var searchingChat = false
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
@@ -133,10 +134,18 @@ struct AgentScreen: View {
                 if showingChat && !model.isTerminal {
                     Button("Search conversation", systemImage: "magnifyingglass") { searchingChat.toggle() }
                 } else {
-                    Toggle(isOn: $model.wrapLines) {
+                    Button { model.wrapLines.toggle() } label: {
                         Label("Wrap lines", image: "WrapLines")
+                            .foregroundStyle(model.wrapLines ? Color.blue : Color.primary)
+                            .frame(width: 38, height: 38)
+                            .background {
+                                if model.wrapLines {
+                                    Circle().fill(.black.opacity(colorScheme == .dark ? 0.69 : 0.07))
+                                }
+                            }
                     }
-                    .toggleStyle(.button)
+                    .buttonStyle(.plain)
+                    .accessibilityValue(model.wrapLines ? "On" : "Off")
                 }
             }
             ToolbarItem(placement: .primaryAction) {
@@ -158,16 +167,22 @@ struct AgentScreen: View {
                     Button("Close pane", systemImage: "xmark.square", role: .destructive) {
                         model.close.begin(.pane)
                     }
+                    .tint(.red)
+                    .disabled(model.archiving)
                     Button("Close workspace", systemImage: "xmark.rectangle.portrait", role: .destructive) {
                         if let workspaceId = model.agent?.workspaceId ?? model.terminal?.workspaceId {
                             model.close.begin(.workspace(id: workspaceId))
                         }
                     }
-                    .disabled(model.agent == nil && model.terminal == nil)
+                    .tint(.red)
+                    .disabled(model.archiving || (model.agent == nil && model.terminal == nil))
                     Button("Archive", systemImage: "archivebox", role: .destructive) {
                         model.close.begin(.archive)
                     }
+                    .tint(.red)
+                    .disabled(model.archiving)
                 }
+                .tint(.primary)
             }
         }
         .sheet(isPresented: $showingChanges) {
@@ -179,7 +194,7 @@ struct AgentScreen: View {
             recordedOpen = true
             opened(agent)
         }
-        .closeConfirmation($model.close) { await model.performClose() }
+        .closeConfirmation($model.close, archiving: model.archiving) { await model.performClose() }
         .alert("Archive result", isPresented: Binding(
             get: { model.archiveMessage != nil },
             set: { if !$0 { model.finishArchive() } }
@@ -215,18 +230,34 @@ struct AgentScreen: View {
 
 extension View {
     /// Asks to confirm `close` once it begins; `perform` only runs from that confirmation.
-    func closeConfirmation(_ close: Binding<CloseConfirmation>, perform: @escaping @MainActor () async -> Void) -> some View {
-        modifier(CloseDialogs(close: close, perform: perform))
+    func closeConfirmation(_ close: Binding<CloseConfirmation>, archiving: Bool = false, perform: @escaping @MainActor () async -> Void) -> some View {
+        modifier(CloseDialogs(close: close, archiving: archiving, perform: perform))
     }
 }
 
 private struct CloseDialogs: ViewModifier {
     @Binding var close: CloseConfirmation
+    let archiving: Bool
     let perform: @MainActor () async -> Void
     @State private var asking = false
 
     func body(content: Content) -> some View {
         content
+            .safeAreaInset(edge: .top) {
+                if archiving {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Archiving task and cleaning up branches…")
+                            .font(.footnote)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                    .allowsHitTesting(false)
+                }
+            }
             .onChange(of: close.step) { _, step in
                 if case .asking = step { asking = true }
             }

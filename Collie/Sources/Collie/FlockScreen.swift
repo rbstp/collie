@@ -60,7 +60,7 @@ struct FlockScreen: View {
                         .disabled(core == nil || machines.isEmpty)
                 }
             }
-            .closeConfirmation($model.close) {
+            .closeConfirmation($model.close, archiving: model.archiving) {
                 if let core, await model.performClose(core: core) {
                     await model.refresh(core: core)
                 }
@@ -400,19 +400,19 @@ private struct KindLabelStyle: LabelStyle {
 
 struct StatusPill: View {
     let state: AgentState
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        ZStack {
-            // The widest labels size every pill, so titles line up across rows.
-            Text("working").hidden()
-            Text("unknown").hidden()
-            Text(state.label)
-        }
-            .font(.caption.bold())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(state.color.opacity(0.18), in: Capsule())
+        Label(state.label.capitalized, systemImage: AgentActivityStatus(state).symbol)
+            .labelStyle(KindLabelStyle())
+            .font(.caption.weight(.semibold))
             .foregroundStyle(state.color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.black.opacity(colorScheme == .dark ? 0.69 : 0.07), in: .capsule)
+            .padding(2)
+            .glassEffect(.regular, in: .capsule)
+            .fixedSize()
     }
 }
 

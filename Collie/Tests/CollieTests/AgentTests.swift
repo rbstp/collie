@@ -800,6 +800,53 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
 }
 
 @MainActor
+@Test(arguments: [false, true])
+func archiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
+    let core = FakeCore()
+    core.set(hold: true, error: fails ? .AgentBlocked : nil)
+    let model = agentModel(core)
+    model.close.begin(.archive)
+    #expect(!model.archiving)
+    model.close.advance()
+    let request = Task { await model.performClose() }
+    await core.waitHeld(1)
+    #expect(model.archiving)
+    #expect(model.archiveMessage == nil)
+    #expect(!model.closed)
+    await model.performClose()
+    #expect(core.snapshot.closes.count == 1)
+    core.release()
+    await request.value
+    #expect(!model.archiving)
+    #expect((model.archiveMessage != nil) == !fails)
+    #expect((model.notice != nil) == fails)
+    #expect(!model.closed)
+}
+
+@MainActor
+@Test(arguments: [false, true])
+func listArchiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
+    let core = FakeCore()
+    core.set(hold: true, error: fails ? .AgentBlocked : nil)
+    let model = FlockModel()
+    let route = AgentRoute(machineId: "m1", terminalId: "term_2")
+    model.beginClose(.archive, route: route)
+    #expect(!model.archiving)
+    model.close.advance()
+    let request = Task { await model.performClose(core: core) }
+    await core.waitHeld(1)
+    #expect(model.archiving)
+    model.beginClose(.pane, route: AgentRoute(machineId: "m2", terminalId: "term_3"))
+    #expect(model.closing == route)
+    #expect(await model.performClose(core: core) == false)
+    #expect(core.snapshot.closes.count == 1)
+    core.release()
+    #expect(await request.value == !fails)
+    #expect(!model.archiving)
+    #expect(model.closeNotice != nil)
+}
+
+@MainActor
 @Test func listCloseGoesThroughTheConfirmation() async {
     let core = FakeCore()
     let model = FlockModel()

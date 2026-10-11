@@ -78,6 +78,7 @@ final class AgentModel {
     var close = CloseConfirmation()
     private(set) var closed = false
     private(set) var archiveMessage: String?
+    private(set) var archiving = false
 
     let dictation: DictationModel
 
@@ -833,7 +834,9 @@ final class AgentModel {
 
     /// Only reachable after the confirmation; the core is called with `confirm: true`.
     func performClose() async {
-        guard let target = close.confirm() else { return }
+        guard !archiving, let target = close.confirm() else { return }
+        archiving = target == .archive
+        defer { archiving = false }
         do {
             if let message = try await core.closeConfirmed(target, route: route) {
                 archiveMessage = message
