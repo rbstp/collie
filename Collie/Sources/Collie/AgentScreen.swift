@@ -309,43 +309,56 @@ private struct AgentHeader: View {
     let machineLabel: String?
 
     var body: some View {
-        HStack(spacing: 6) {
-            if let machineLabel {
-                Text(verbatim: machineLabel).font(.caption.weight(.semibold)).lineLimit(1)
-            }
-            if let agent = model.agent {
-                StatusPill(state: agent.status)
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
-                        .font(.caption.monospacedDigit())
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Text(verbatim: machineLabel ?? "")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let agent = model.agent {
+                    HStack(spacing: 6) {
+                        StatusPill(state: agent.status)
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .fixedSize()
+                    HStack(spacing: 6) {
+                        if let kind = agent.kind {
+                            AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let left = agent.contextLeft {
+                            HStack(spacing: 4) {
+                                ContextRing(left: left)
+                                Text("\(left)%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Context \(left)% left")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                } else if model.isTerminal {
+                    AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.secondary)
+                    Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                if let kind = agent.kind {
-                    AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
-                }
-                if let left = agent.contextLeft {
-                    HStack(spacing: 4) {
-                        ContextRing(left: left)
-                        Text("\(left)%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Context \(left)% left")
-                }
-            } else if model.isTerminal {
-                AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.secondary)
-                Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            Spacer()
             if model.link == .connecting {
-                ProgressView().controlSize(.mini)
-                Text("reconnecting").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("reconnecting").font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             } else if let link = model.link, link != .connected {
                 Text(model.linkError ?? link.label)
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .padding(.horizontal)
