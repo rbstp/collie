@@ -181,9 +181,7 @@ struct FlockScreen: View {
                     ForEach(model.entries) { entry in
                         Section {
                             if let error = entry.error {
-                                Label(error, systemImage: "exclamationmark.triangle")
-                                    .font(.footnote)
-                                    .foregroundStyle(.orange)
+                                MachineConnectionDetails(message: error)
                             }
                             if entry.flock?.details != nil && entry.agents.isEmpty {
                                 Text("No agents running").foregroundStyle(.secondary)
@@ -316,6 +314,20 @@ struct MachineHeader: View {
                 }
             }
         }
+    }
+}
+
+struct MachineConnectionDetails: View {
+    let message: String
+
+    var body: some View {
+        DisclosureGroup("Connection details") {
+            Text(message)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
     }
 }
 
@@ -521,7 +533,7 @@ struct ContextRing: View {
 extension AgentState {
     var label: String { AgentActivityStatus(self).label }
 
-    var color: Color { AgentActivityStatus(self).color }
+    var color: Color { self == .working ? .accentColor : AgentActivityStatus(self).color }
 }
 
 extension LinkPhase {
