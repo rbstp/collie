@@ -1,6 +1,7 @@
 import AVFoundation
 import CollieCore
 import SwiftUI
+import UIKit
 
 struct MachinesView: View {
     let app: AppModel
@@ -32,20 +33,13 @@ struct MachinesList: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(app.machines, id: \.id) { machine in
-                NavigationLink {
-                    MachineSettingsView(app: app, machine: machine)
-                } label: {
-                    TimelineView(.periodic(from: .now, by: 2)) { _ in
-                        let link = app.core?.cachedFlock(machineId: machine.id)?.link
-                        let reachable = link.map { [.connected, .connecting].contains($0) } ?? true
-                        VStack(alignment: .leading, spacing: 2) {
-                            MachineName(machine: machine)
-                                .foregroundStyle(reachable ? .primary : .secondary)
-                                .tint(reachable ? nil : .secondary)
-                            Text(machine.host).font(.caption).foregroundStyle(.secondary)
-                        }
+                TimelineView(.periodic(from: .now, by: 2)) { _ in
+                    MachineRow(machine: machine, flock: app.core?.cachedFlock(machineId: machine.id)) {
+                        MachineSettingsView(app: app, machine: machine)
                     }
                 }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             }
             .onDelete { offsets in
                 let removed = offsets.map { app.machines[$0] }
@@ -67,6 +61,65 @@ struct MachinesList: View {
                 Text(removeError).foregroundStyle(.red)
             }
         }
+    }
+}
+
+struct MachineRow<Destination: View>: View {
+    let machine: Machine
+    let flock: MachineFlock?
+    @ViewBuilder let destination: () -> Destination
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            NavigationLink(destination: destination) {
+                HStack {
+                    let reachable = flock.map { [.connected, .connecting].contains($0.link) } ?? true
+                    VStack(alignment: .leading, spacing: 2) {
+                        MachineName(machine: machine)
+                            .foregroundStyle(reachable ? .primary : .secondary)
+                            .tint(reachable ? nil : .secondary)
+                        Text(machine.host).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if let link = flock?.link {
+                        StatusPill(state: link == .connected ? .done : .idle, title: link.label)
+                    }
+                }
+                .padding(12)
+                .glassEffect(.regular, in: .rect(cornerRadius: 16))
+            }
+            .buttonStyle(.plain)
+            if flock?.link != .connecting, let error = flock?.lastError {
+                MachineConnectionDetails(message: error)
+            }
+        }
+    }
+}
+
+private struct MachineConnectionDetails: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(message)
+                .font(.body)
+                .foregroundStyle(.orange)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+            Button {
+                UIPasteboard.general.string = message
+            } label: {
+                Label("Copy connection error", systemImage: "doc.on.clipboard")
+                    .labelStyle(.iconOnly)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tint)
+                    .frame(minWidth: 40, minHeight: 40)
+                    .darkGlass(in: .circle, interactive: true)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 }
 

@@ -22,7 +22,10 @@ struct AgentDemo: View {
             let data = FileManager.default.contents(atPath: arguments[flag + 1])
         else { return nil }
         let json = try? JSONSerialization.jsonObject(with: data)
-        core = DemoAgentCore(snapshot: json.flatMap(Self.firstText) ?? String(decoding: data, as: UTF8.self))
+        core = DemoAgentCore(
+            snapshot: json.flatMap(Self.firstText) ?? String(decoding: data, as: UTF8.self),
+            connectionError: ProcessInfo.processInfo.environment["COLLIE_DEMO_CONNECTION_ERROR"]
+        )
         _follows = State(initialValue: FollowModel(core: core, approvals: nil, file: nil))
         followed = arguments.firstIndex(of: "--follow-demo").flatMap { $0 + 1 < arguments.count ? arguments[$0 + 1] : nil }
     }
@@ -33,7 +36,18 @@ struct AgentDemo: View {
                 FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: nil, follows: follows, opening: $opening)
             }
             Tab("Approvals", systemImage: "checkmark.shield") { Color.clear }
-            Tab("Machines", systemImage: "desktopcomputer") { Color.clear }
+            Tab("Machines", systemImage: "desktopcomputer") {
+                NavigationStack {
+                    List {
+                        MachineRow(machine: DemoAgentCore.machine, flock: core.cachedFlock(machineId: DemoAgentCore.machine.id)) {
+                            Text("Machine settings")
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    }
+                    .navigationTitle("Machines")
+                }
+            }
             Tab("Settings", systemImage: "gearshape") { Color.clear }
         }
         .task {
@@ -77,12 +91,14 @@ final class DemoAgentCore: ActivityCore {
     static let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO", kind: .mac, key: "")
 
     let snapshot: String
+    private let connectionError: String?
     private let agents: [AgentSummary]
     private let usage: PlanUsage
     private let stars = Mutex<[String]>([])
 
-    init(snapshot: String) {
+    init(snapshot: String, connectionError: String? = nil) {
         self.snapshot = snapshot
+        self.connectionError = connectionError
         let now = Date.now.unixMs
         usage = PlanUsage(
             fiveHour: UsageWindow(usedPercent: 38, resetsAtMs: now + 7_980_000),
@@ -241,7 +257,7 @@ final class DemoAgentCore: ActivityCore {
 
     private var demoFlock: MachineFlock {
         MachineFlock(
-            machine: Self.machine, link: .connected, lastError: nil,
+            machine: Self.machine, link: connectionError == nil ? .connected : .waiting, lastError: connectionError,
             details: MachineDetails(name: "MacBook Pro", nodeId: "nDEMO", herdrSession: "default"),
             workspaces: [
                 WorkspaceSummary(workspaceId: "ws_collie", label: "collie", number: 1, status: .blocked, cwd: "/Users/demo/collie"),

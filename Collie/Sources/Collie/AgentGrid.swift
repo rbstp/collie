@@ -76,9 +76,6 @@ struct AgentGrid<Menu: View>: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 .buttonStyle(.plain)
-                                if let error = entry.error {
-                                    MachineConnectionDetails(message: error)
-                                }
                                 if entry.flock?.details != nil && entry.agents.isEmpty {
                                     Text("No agents running").foregroundStyle(.secondary)
                                 }

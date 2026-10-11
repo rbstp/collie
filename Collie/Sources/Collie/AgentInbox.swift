@@ -4,7 +4,6 @@ import SwiftUI
 struct AgentInbox<Menu: View>: View {
     let entries: [MachineFlockEntry]
     let notice: String?
-    let reconnect: (MachineFlockEntry) -> Void
     let follows: FollowModel?
     let seen: SeenAgents
     let markUnseen: (AgentSummary, AgentRoute) -> Void
@@ -33,16 +32,6 @@ struct AgentInbox<Menu: View>: View {
                         NoMachines()
                     }
                     inbox(items.filter { filter.includes($0, seen: seen, now: context.date) && $0.matches(query) }, now: context.date)
-                    ForEach(entries.filter { $0.error != nil }) { entry in
-                        Button {
-                            reconnect(entry)
-                        } label: {
-                            Label("\(entry.machine.label): \(entry.error ?? "")", systemImage: "exclamationmark.triangle")
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                        }
-                        .buttonStyle(.plain)
-                    }
                 }
             }
         }

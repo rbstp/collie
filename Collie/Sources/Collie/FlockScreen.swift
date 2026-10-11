@@ -1,6 +1,5 @@
 import CollieCore
 import SwiftUI
-import UIKit
 
 struct FlockScreen: View {
     let core: (any FlockCore)?
@@ -165,7 +164,7 @@ struct FlockScreen: View {
             }
         case .inbox:
             AgentInbox(
-                entries: model.entries, notice: model.closeNotice, reconnect: reconnect, follows: follows,
+                entries: model.entries, notice: model.closeNotice, follows: follows,
                 seen: seen, markUnseen: markUnseen, menu: menu
             )
         case .list:
@@ -181,11 +180,6 @@ struct FlockScreen: View {
                     }
                     ForEach(model.entries) { entry in
                         Section {
-                            if let error = entry.error {
-                                MachineConnectionDetails(message: error)
-                                    .listRowBackground(Color.clear)
-                                    .listRowSeparator(.hidden)
-                            }
                             if entry.flock?.details != nil && entry.agents.isEmpty {
                                 Text("No agents running").foregroundStyle(.secondary)
                             }
@@ -307,36 +301,6 @@ struct MachineHeader: View {
                     StatusPill(state: link == .connected ? .done : .idle, title: link.label)
                 }
             }
-        }
-    }
-}
-
-struct MachineConnectionDetails: View {
-    let message: String
-    @State private var copied = false
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text(message)
-                .font(.footnote)
-                .foregroundStyle(.orange)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.clipboard") {
-                UIPasteboard.general.string = message
-                copied = true
-            }
-            .labelStyle(.iconOnly)
-            .font(.footnote.weight(.semibold))
-            .buttonStyle(.plain)
-            .padding(8)
-            .darkGlass(in: .circle, interactive: true)
-        }
-        .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
-        .task(id: copied) {
-            guard copied else { return }
-            try? await Task.sleep(for: .seconds(2))
-            copied = false
         }
     }
 }
