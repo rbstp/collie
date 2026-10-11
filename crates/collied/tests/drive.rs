@@ -1893,6 +1893,35 @@ async fn codex_tasks_keep_session_hooks_in_their_own_pane() {
 }
 
 #[tokio::test]
+async fn copilot_tasks_start_in_autopilot_without_permission_confirmation() {
+    for worktree in [false, true] {
+        let herdr = Mock::start();
+        let (_d, base) = root();
+        let drive = herdr.driver(&["copilot"], &base.join("root"));
+        let mut p = task(&base.join("root/a"), "copilot");
+        if worktree {
+            p.worktree = Some(TaskWorktree::Create {
+                branch: "feature".into(),
+            });
+        }
+        let mut agent = started_agent("idle", true, false);
+        agent["agent"] = json!("copilot");
+        herdr.with(|h| {
+            h.text = "❯ Ask Copilot anything\n  autopilot".into();
+            h.gets.extend([agent.clone(), agent]);
+        });
+        let (reply, _) = drive.task_new(p, &yes()).await;
+        assert!(reply.is_ok(), "{reply:?}");
+        let starts = herdr.params("agent.start");
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0]["kind"], "copilot");
+        assert_eq!(starts[0]["pane_id"], "w9:p1");
+        assert_eq!(starts[0]["args"], json!(["--autopilot", "--allow-all"]));
+        assert_eq!(herdr.params("agent.prompt").len(), 1);
+    }
+}
+
+#[tokio::test]
 async fn worktree_open_reuses_only_an_empty_root_pane() {
     let herdr = Mock::start();
     let (_d, base) = root();

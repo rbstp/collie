@@ -566,6 +566,8 @@ pub async fn agent_start(
     let mut params = json!({ "name": name, "kind": kind, "pane_id": pane_id });
     if kind == "codex" {
         params["args"] = json!(["--no-daemon"]);
+    } else if kind == "copilot" {
+        params["args"] = json!(["--autopilot", "--allow-all"]);
     }
     let AgentStartedResult::AgentStarted { agent } = call(socket, "agent.start", params).await?;
     Ok(agent)
