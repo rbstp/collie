@@ -55,7 +55,7 @@ final class AttachmentMenuButton: UIButton {
         super.init(frame: .zero)
         var configuration = UIButton.Configuration.glass()
         configuration.image = UIImage(systemName: "paperclip")
-        configuration.preferredSymbolConfigurationForImage = .init(pointSize: 20)
+        configuration.preferredSymbolConfigurationForImage = .init(pointSize: 16)
         configuration.cornerStyle = .capsule
         configuration.buttonSize = .small
         self.configuration = configuration
@@ -72,6 +72,7 @@ final class AttachmentMenuButton: UIButton {
         self.filesEnabled = filesEnabled
         guard !isHeld else { return }
         configuration?.baseForegroundColor = accent
+        configuration?.image = UIImage(systemName: "paperclip")?.withTintColor(accent, renderingMode: .alwaysOriginal)
         accessibilityLabel = String(localized: "Attachments and saved prompts", locale: locale)
         let actions = AttachmentChoice.allCases.map { choice in
             UIAction(
