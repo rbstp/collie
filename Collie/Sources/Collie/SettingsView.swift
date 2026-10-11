@@ -22,6 +22,10 @@ struct SettingsView: View {
                             Label(accent.label, systemImage: "circle.fill")
                                 .tint(accent.color)
                         }
+                    } currentValueLabel: {
+                        Image(systemName: "circle.fill")
+                            .foregroundStyle(app.accent.color)
+                            .accessibilityLabel(app.accent.label)
                     }
                     .tint(app.accent.color)
                     .id(app.accent)
