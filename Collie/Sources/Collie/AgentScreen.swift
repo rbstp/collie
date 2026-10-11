@@ -754,6 +754,8 @@ struct DictationBar: View {
 
 struct DictationWaveform: View {
     let levels: [Float]
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         Canvas { context, size in
@@ -768,7 +770,14 @@ struct DictationWaveform: View {
                 path.addRoundedRect(in: CGRect(x: inset + CGFloat(index) * 6, y: (size.height - height) / 2,
                                                width: 3, height: height), cornerSize: CGSize(width: 1.5, height: 1.5))
             }
-            context.fill(path, with: .foreground)
+            if reduceTransparency || contrast == .increased {
+                context.fill(path, with: .color(.blue))
+            } else {
+                context.fill(path, with: .linearGradient(
+                    Gradient(colors: [.blue.opacity(0.65), .blue, .blue.opacity(0.75)]),
+                    startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)
+                ))
+            }
         }
         .frame(maxWidth: .infinity)
         .frame(height: 24)
