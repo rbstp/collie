@@ -1806,6 +1806,7 @@ async fn task_new_starts_waits_and_prompts() {
     let name = start["name"].as_str().unwrap();
     assert!(name.len() == 15 && name.starts_with("collie-"), "{name}");
     assert_eq!(start["kind"], "claude");
+    assert!(start.get("args").is_none());
     assert_eq!(start["pane_id"], "w9:p1");
     assert_eq!(herdr.params("agent.get")[0], json!({"target": name}));
     assert_eq!(herdr.params("agent.get")[2], json!({"target": name}));
@@ -1861,6 +1862,34 @@ async fn worktree_create_uses_returned_pane_and_keeps_checkout_on_start_failure(
     assert!(error.1.contains("workspace w9"));
     assert!(failed.exists());
     assert!(!herdr.methods().contains(&"workspace.close".to_owned()));
+}
+
+#[tokio::test]
+async fn codex_tasks_keep_session_hooks_in_their_own_pane() {
+    for worktree in [false, true] {
+        let herdr = Mock::start();
+        let (_d, base) = root();
+        let drive = herdr.driver(&["codex"], &base.join("root"));
+        let mut p = task(&base.join("root/a"), "codex");
+        if worktree {
+            p.worktree = Some(TaskWorktree::Create {
+                branch: "feature".into(),
+            });
+        }
+        let mut agent = started_agent("idle", true, false);
+        agent["agent"] = json!("codex");
+        herdr.with(|h| {
+            h.text = "› Ask Codex to do anything\n  100% context left".into();
+            h.gets.extend([agent.clone(), agent]);
+        });
+        let (reply, _) = drive.task_new(p, &yes()).await;
+        assert!(reply.is_ok(), "{reply:?}");
+        let starts = herdr.params("agent.start");
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0]["pane_id"], "w9:p1");
+        assert_eq!(starts[0]["args"], json!(["--no-daemon"]));
+        assert_eq!(herdr.params("agent.prompt").len(), 1);
+    }
 }
 
 #[tokio::test]

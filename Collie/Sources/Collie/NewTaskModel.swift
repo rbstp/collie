@@ -34,7 +34,12 @@ final class NewTaskModel {
     private(set) var folders: TaskFolders?
     private(set) var foldersError: String?
     var cwd = ""
-    var location = Location.folder
+    var location = Location.folder {
+        didSet {
+            guard oldValue != location, location == .worktree, !newFolder, let folder else { return }
+            source = folder
+        }
+    }
     var worktreeAction = WorktreeAction.create
     var source = "" {
         didSet {
@@ -82,8 +87,11 @@ final class NewTaskModel {
     }
 
     /// collied resolves this and checks it against its roots.
-    var folder: String? {
-        let typed = trimmed(cwd)
+    var folder: String? { resolvedFolder(cwd) }
+    var sourceFolder: String? { resolvedFolder(source) }
+
+    private func resolvedFolder(_ path: String) -> String? {
+        let typed = trimmed(path)
         if typed.hasPrefix("/") { return typed }
         guard !typed.isEmpty, let base else { return nil }
         return base + "/" + typed
@@ -96,8 +104,11 @@ final class NewTaskModel {
         return !name.isEmpty && !name.contains("/") && !name.hasPrefix(".")
     }
 
-    var completions: [String] {
-        let typed = trimmed(cwd)
+    var completions: [String] { folderCompletions(cwd) }
+    var sourceCompletions: [String] { folderCompletions(source) }
+
+    private func folderCompletions(_ path: String) -> [String] {
+        let typed = trimmed(path)
         guard !typed.isEmpty, !typed.contains("/") else { return [] }
         return Array(
             (folders?.folders ?? []).filter { $0 != typed && $0.lowercased().hasPrefix(typed.lowercased()) }.prefix(5)
@@ -108,7 +119,7 @@ final class NewTaskModel {
         guard phase == .editing, machineId != nil, !agent.isEmpty, upload == nil, !dictation.isActive,
             !trimmed(prompt).isEmpty || !attachments.isEmpty else { return false }
         if location == .worktree {
-            guard worktrees != nil, listedSource == trimmed(source) else { return false }
+            guard let sourceFolder, worktrees != nil, listedSource == sourceFolder else { return false }
             if worktreeAction == .create {
                 return createPath != nil
             }
@@ -209,7 +220,6 @@ final class NewTaskModel {
             guard machineId == self.machineId else { return }
             options = loaded
             if !loaded.agents.contains(agent) { agent = loaded.defaultAgent }
-            if source.isEmpty { source = loaded.recentCwds.first ?? base ?? loaded.roots.first ?? "" }
         } catch {
             guard machineId == self.machineId else { return }
             optionsError = AgentModel.message(for: error)
@@ -227,20 +237,19 @@ final class NewTaskModel {
     }
 
     func loadWorktrees() async {
-        guard let machineId else { return }
-        let requested = trimmed(source)
+        guard let machineId, let requested = sourceFolder else { return }
         worktrees = nil
         worktreesError = nil
         do {
             let listed = try await core.taskWorktrees(machineId: machineId, cwd: requested)
-            guard machineId == self.machineId, requested == trimmed(source) else { return }
+            guard machineId == self.machineId, requested == sourceFolder else { return }
             listedSource = requested
             worktrees = listed
             if worktreeAction == .open && !listed.worktrees.contains(where: { $0.path == checkoutPath }) {
                 checkoutPath = listed.worktrees.first?.path ?? ""
             }
         } catch {
-            guard machineId == self.machineId else { return }
+            guard machineId == self.machineId, requested == sourceFolder else { return }
             worktreesError = AgentModel.message(for: error)
         }
     }
@@ -256,14 +265,15 @@ final class NewTaskModel {
         let started: TaskStarted
         do {
             if location == .worktree {
+                guard let sourceFolder else { phase = .editing; return nil }
                 if worktreeAction == .create {
                     started = try await core.taskWorktreeCreate(
-                        machineId: machineId, cwd: trimmed(source), branch: createBranch,
+                        machineId: machineId, cwd: sourceFolder, branch: createBranch,
                         agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
                     )
                 } else {
                     started = try await core.taskWorktreeOpen(
-                        machineId: machineId, cwd: trimmed(source), path: checkoutPath,
+                        machineId: machineId, cwd: sourceFolder, path: checkoutPath,
                         agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
                     )
                 }
