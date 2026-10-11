@@ -24,7 +24,7 @@ Issue #207 uses the iOS 26 and watchOS 26 glass APIs directly. The minimum versi
 | Watch complications / Smart Stack | Rectangular widget redesigned with three native `Gauge` controls using `.accessoryCircular`. Provider sits inside and a compact reset countdown sits below. Window labels are omitted to maximize gauge space. Percentages are shown in the app after tapping. Native markers indicate usage; the circular complication retains elapsed-time ticks. Preserve stale and missing-data states. Gauges use `widgetAccentable`; no extra glass layer. |
 | Live Activity / Dynamic Island | System-hosted surface. Remove forced black background, white system actions and dark appearance from the Lock Screen activity. Status pills remain content and approval buttons keep the native widget button style. |
 
-Adjacent custom glass controls share `GlassEffectContainer`. Controls inside a glass composer or dictation capsule do not add another glass surface. Agents/Usage uses native interactive page scrolling instead of a gesture that switches only after release. Page transitions triggered by the selector respect Reduce Motion.
+Adjacent custom glass controls share `GlassEffectContainer`. Controls inside a glass composer or dictation capsule do not add another glass surface. The dictation waveform fills the available capsule width with recent microphone levels, including repeated levels and silence; history clears when dictation stops or switches language. Agents/Usage uses native interactive page scrolling instead of a gesture that switches only after release. Page transitions triggered by the selector respect Reduce Motion.
 
 Reference: [Apple's Liquid Glass guidance](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views).
 
@@ -32,11 +32,12 @@ Reference: [Apple's Liquid Glass guidance](https://developer.apple.com/documenta
 
 Prioritize dark mode while retaining native appearance and accessibility behavior. Glass uses the system material and respects the user's glass setting.
 
-- `just ios-test`: passed, including 272 app tests and 62 Ghostty tests.
+- `just ios-test`: passed, including 274 app tests and 62 Ghostty tests.
 - `just lint`: passed.
 - Signed iPhone build, embedded watch app and widgets: built successfully and passed signature verification.
 - Reviewed the final diff for approval guards, disabled states, composer behavior and widget missing/stale states. Fixed clipped terminal key labels during visual review. Physical watch feedback exposed a widget-only collapse in the geometry-scaled gauges; the updated implementation removes that transform and shares the plain native gauge with usage detail.
 - Simulator fixtures covered light, dark, Increase Contrast, accessibility text sizes and actual Reduce Transparency. Verified native paging at a partial offset with both pages visible and after settling on Usage. Approval actions stack at accessibility sizes. Existing agent header/key clipping at extreme text sizes remains outside this change.
+- Dictation fixtures cover dark/light appearance, a narrow bar and accessibility text with Increase Contrast. Session tests verify speech and silence history, its size bound, and clearing on stop, cancellation and language changes. Live microphone validation on the phone is pending.
 - Native watch simulator previews and rectangular fixtures cover reset countdowns and missing data. Standalone previews did not reproduce the physical widget layout failure. Physical feedback confirmed the collapse was resolved. The later simplified widget and compact usage list await physical acceptance.
 
 These screenshots use deterministic fixtures rendered with production views. The watch simulator image uses a temporary host app with the production gauge view, rather than a configured watch face.
@@ -52,5 +53,7 @@ These screenshots use deterministic fixtures rendered with production views. The
 ![Watch usage detail with native gauges](images/watch-detail.jpg)
 
 ![Blue selectors and switches, progressive paging and readable prompts](images/controls-dark.jpg)
+
+![Full-width dictation waveform in the glass capsule](images/dictation-waveform.jpg)
 
 Earlier builds were installed on the physical iPhone. The latest build is prepared but installation is paused at the user's request. User acceptance is pending. Remaining manual checks: the iOS 27 glass setting extremes, Live Activity clear/tinted Lock Screen styles, actual watch face accenting, and physical watch readability. Simulator fixtures do not validate those system-hosted presentations.

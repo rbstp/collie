@@ -725,18 +725,12 @@ struct DictationBar: View {
                     Text("Downloading…").font(.caption).lineLimit(1)
                 }
             case .listening:
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        Text("Dictating…").font(.caption.weight(.semibold)).fixedSize()
-                        LevelMeter(level: dictation.level)
-                    }
-                    Text("Dictating…").font(.caption.weight(.semibold)).lineLimit(1)
-                }
+                DictationWaveform(levels: dictation.levels)
             case .idle, .preparing(nil), .finishing:
                 ProgressView().controlSize(.mini)
                 Text(dictation.phase == .finishing ? "Finishing…" : "Starting…").font(.caption)
             }
-            Spacer(minLength: 0)
+            if dictation.phase != .listening { Spacer(minLength: 0) }
             Button(dictation.language.code) { dictation.select(dictation.language.other) }
                 .font(.caption.monospaced().weight(.semibold))
                 .buttonStyle(.plain)
@@ -758,19 +752,27 @@ struct DictationBar: View {
     }
 }
 
-private struct LevelMeter: View {
-    let level: Float
+struct DictationWaveform: View {
+    let levels: [Float]
 
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(0..<8, id: \.self) { index in
-                Capsule()
-                    .fill(Float(index) < level * 8 ? Color.red : Color.secondary.opacity(0.3))
-                    .frame(width: 3, height: 12)
+        Canvas { context, size in
+            let count = max(1, Int(size.width / 6))
+            let visible = Array(levels.suffix(count))
+            let leading = count - visible.count
+            let inset = (size.width - CGFloat(count - 1) * 6 - 3) / 2
+            var path = Path()
+            for index in 0..<count {
+                let level = index < leading ? 0 : visible[index - leading]
+                let height = max(3, CGFloat(level) * size.height)
+                path.addRoundedRect(in: CGRect(x: inset + CGFloat(index) * 6, y: (size.height - height) / 2,
+                                               width: 3, height: height), cornerSize: CGSize(width: 1.5, height: 1.5))
             }
+            context.fill(path, with: .foreground)
         }
-        .animation(.linear(duration: 0.1), value: level)
-        .accessibilityHidden(true)
+        .frame(maxWidth: .infinity)
+        .frame(height: 24)
+        .accessibilityLabel("Dictating")
     }
 }
 
