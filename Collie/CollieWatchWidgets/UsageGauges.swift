@@ -8,7 +8,7 @@ struct UsageGauges: View {
     var body: some View {
         let windows = usage?.windows(now: now) ?? [nil, nil, nil]
         GeometryReader { geometry in
-            let diameter = max(0, min((geometry.size.width - 12) / 3, geometry.size.height - 25))
+            let diameter = max(0, min((geometry.size.width - 12) / 3, geometry.size.height - 27))
             HStack(spacing: 6) {
                 UsageGauge(logo: "Claude", period: "5h", label: "Claude 5-hour", window: windows[0], now: now, diameter: diameter)
                 UsageGauge(logo: "Claude", period: "7d", label: "Claude weekly", window: windows[1], now: now, diameter: diameter)
@@ -29,24 +29,9 @@ private struct UsageGauge: View {
 
     var body: some View {
         VStack(spacing: 3) {
-            Gauge(value: window?.usedFraction ?? 0) {
-                Text(period).font(.system(size: 10, weight: .semibold, design: .rounded))
-            } currentValueLabel: {
-                VStack(spacing: 0) {
-                    UsageLogo(name: logo).frame(width: 13, height: 13)
-                    Text(window.map { "\($0.used)%" } ?? "--")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                }
-            }
-            .gaugeStyle(.accessoryCircular)
-            .fixedSize()
-            .visualEffect { content, geometry in
-                content.scaleEffect(min(1, diameter / geometry.size.width))
-            }
-            .frame(width: diameter, height: diameter)
-            .tint(window.map { WatchUsage.usedColor($0.used) } ?? .secondary.opacity(0.3))
-            .widgetAccentable()
+            UsageDial(logo: logo, period: period, window: window, showsPercentage: false)
+                .frame(width: diameter, height: diameter)
+                .widgetAccentable()
             VStack(spacing: 0) {
                 if let window {
                     HStack(spacing: 2) {
@@ -60,9 +45,9 @@ private struct UsageGauge: View {
                     Text("No data")
                 }
             }
-            .font(.system(size: 9, design: .rounded))
+            .font(.system(size: 10, design: .rounded))
             .foregroundStyle(.secondary)
-            .frame(height: 22)
+            .frame(height: 24)
         }
         .frame(width: diameter)
         .lineLimit(1)

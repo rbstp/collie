@@ -16,18 +16,10 @@ struct AgentInbox<Menu: View>: View {
         let items = InboxItem.items(in: entries)
         VStack(spacing: 0) {
             ScrollView(.horizontal) {
-                GlassEffectContainer(spacing: 8) {
-                    HStack(spacing: 8) {
-                        ForEach(InboxFilter.allCases, id: \.self) { option in
-                            Button(option.title) { filter = option }
-                                .buttonStyle(.glass)
-                                .tint(filter == option ? .accentColor : .secondary)
-                                .accessibilityAddTraits(filter == option ? .isSelected : [])
-                        }
-                    }
+                GlassPicker(title: "Filter", selection: $filter,
+                            options: InboxFilter.allCases.map { (LocalizedStringKey($0.title), $0) })
                     .padding(.horizontal)
                     .padding(.vertical, 8)
-                }
             }
             .scrollIndicators(.hidden)
             TimelineView(.periodic(from: .now, by: 60)) { context in

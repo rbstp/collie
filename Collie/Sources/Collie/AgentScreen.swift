@@ -62,11 +62,8 @@ struct AgentScreen: View {
                 }
             }
             if !model.isTerminal {
-                Picker("Session view", selection: $showingChat) {
-                    Text("Chat").tag(true)
-                    Text("Terminal").tag(false)
-                }
-                .pickerStyle(.segmented)
+                GlassPicker(title: "Session view", selection: $showingChat,
+                            options: [("Chat", true), ("Terminal", false)], expands: true)
                 .padding(.horizontal)
                 .padding(.bottom, 6)
             }
