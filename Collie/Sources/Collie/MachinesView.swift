@@ -38,6 +38,7 @@ struct MachinesList: View {
                         MachineSettingsView(app: app, machine: machine)
                     }
                 }
+                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
@@ -61,6 +62,8 @@ struct MachinesList: View {
                 Text(removeError).foregroundStyle(.red)
             }
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -70,34 +73,49 @@ struct MachineRow<Destination: View>: View {
     @ViewBuilder let destination: () -> Destination
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             NavigationLink(destination: destination) {
-                HStack {
+                VStack(alignment: .leading, spacing: 6) {
                     let reachable = flock.map { [.connected, .connecting].contains($0.link) } ?? true
-                    VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
                         MachineName(machine: machine)
+                            .font(.headline)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                             .foregroundStyle(reachable ? .primary : .secondary)
                             .tint(reachable ? nil : .secondary)
-                        Text(machine.host).font(.caption).foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                        if let link = flock?.link {
+                            StatusPill(state: link == .connected ? .done : .idle, title: link.label)
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
-                    Spacer()
-                    if let link = flock?.link {
-                        StatusPill(state: link == .connected ? .done : .idle, title: link.label)
-                    }
+                    Text(machine.host)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                .padding(12)
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
+            .navigationLinkIndicatorVisibility(.hidden)
             if flock?.link != .connecting, let error = flock?.lastError {
+                Divider()
                 MachineConnectionDetails(message: error)
             }
         }
+        .padding(16)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
     }
 }
 
 private struct MachineConnectionDetails: View {
     let message: String
+    @State private var copiedAt: Date?
+    @Environment(\.appAccent) private var accent
 
     var body: some View {
         HStack(spacing: 8) {
@@ -108,18 +126,25 @@ private struct MachineConnectionDetails: View {
                 .frame(maxWidth: .infinity)
             Button {
                 UIPasteboard.general.string = message
+                copiedAt = .now
             } label: {
-                Label("Copy connection error", systemImage: "doc.on.clipboard")
+                Label(copiedAt == nil ? "Copy connection error" : "Copied",
+                      systemImage: copiedAt == nil ? "doc.on.clipboard" : AgentActivityStatus(.done).symbol)
                     .labelStyle(.iconOnly)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tint)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(copiedAt == nil ? accent : AgentState.done.color)
                     .frame(minWidth: 40, minHeight: 40)
                     .darkGlass(in: .circle, interactive: true)
             }
             .buttonStyle(.plain)
         }
-        .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .onChange(of: message) { _, _ in copiedAt = nil }
+        .task(id: copiedAt) {
+            guard copiedAt != nil else { return }
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            copiedAt = nil
+        }
     }
 }
 
