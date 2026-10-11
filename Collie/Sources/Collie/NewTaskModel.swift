@@ -2,6 +2,12 @@ import CollieCore
 import Foundation
 import Observation
 
+extension TaskFolders {
+    func folderPath(_ name: String) -> String {
+        URL(filePath: path).appending(path: name).path
+    }
+}
+
 @MainActor
 @Observable
 final class NewTaskModel {
@@ -116,7 +122,7 @@ final class NewTaskModel {
     }
 
     var canStart: Bool {
-        guard phase == .editing, machineId != nil, !agent.isEmpty, upload == nil, !dictation.isActive,
+        guard !cancelled, phase == .editing, machineId != nil, !agent.isEmpty, upload == nil, !dictation.isActive,
             !trimmed(prompt).isEmpty || !attachments.isEmpty else { return false }
         if location == .worktree {
             guard let sourceFolder, worktrees != nil, listedSource == sourceFolder else { return false }

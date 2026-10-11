@@ -24,9 +24,16 @@ struct NewTaskSheet: View {
         core: any AgentCore, machines: [Machine], preferredMachineId: String?,
         onStarted: @escaping (AgentRoute) -> Void
     ) {
+        self.init(
+            model: NewTaskModel(core: core, machines: machines, preferredMachineId: preferredMachineId),
+            machines: machines, onStarted: onStarted
+        )
+    }
+
+    init(model: NewTaskModel, machines: [Machine], onStarted: @escaping (AgentRoute) -> Void) {
         self.machines = machines
         self.onStarted = onStarted
-        _model = State(initialValue: NewTaskModel(core: core, machines: machines, preferredMachineId: preferredMachineId))
+        _model = State(initialValue: model)
     }
 
     private func cancel() {
@@ -214,12 +221,25 @@ struct NewTaskSheet: View {
                                         .frame(maxWidth: .infinity)
                                 }
                             }
-                            HStack {
+                            HStack(spacing: 8) {
                                 if !model.dictation.isActive {
                                     DictationButton(dictation: model.dictation, disabled: model.phase != .editing) {
                                         editingPrompt = false
                                         dictationExpanded = model.startDictation() != nil
                                     }
+                                }
+                                if editingPrompt {
+                                    Button {
+                                        editingPrompt = false
+                                    } label: {
+                                        Image(systemName: "keyboard.chevron.compact.down")
+                                            .font(.system(size: 20))
+                                            .frame(width: 28, height: 28)
+                                    }
+                                    .buttonStyle(.glass)
+                                    .buttonBorderShape(.circle)
+                                    .controlSize(.small)
+                                    .accessibilityLabel("Hide keyboard")
                                 }
                             }
                         }
@@ -256,6 +276,7 @@ struct NewTaskSheet: View {
                     }
                 }
             }
+            .safeAreaPadding(.bottom, editingPrompt ? 48 : 0)
             .navigationTitle("New task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -320,10 +341,10 @@ struct NewTaskSheet: View {
             .onChange(of: model.dictation.isActive) { _, active in
                 if !active && model.prompt.isEmpty { dictationExpanded = false }
             }
-            .onDisappear {
-                dictationExpanded = false
-                cancel()
-            }
+        }
+        .onDisappear {
+            dictationExpanded = false
+            cancel()
         }
     }
 
@@ -333,15 +354,15 @@ struct NewTaskSheet: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .font(.body.monospaced())
-        ForEach(completions, id: \.self) { name in
-            Button {
-                path.wrappedValue = name
-            } label: {
-                Label(name, systemImage: "folder").font(.footnote.monospaced())
-            }
-            .foregroundStyle(.primary)
-        }
         if let folders = model.folders {
+            ForEach(completions, id: \.self) { name in
+                Button {
+                    path.wrappedValue = folders.folderPath(name)
+                } label: {
+                    Label(name, systemImage: "folder").font(.footnote.monospaced())
+                }
+                .foregroundStyle(.primary)
+            }
             NavigationLink {
                 FolderBrowser(folders: folders, selected: path)
             } label: {
@@ -375,7 +396,7 @@ private struct FolderBrowser: View {
             Section {
                 ForEach(folders.folders, id: \.self) { name in
                     Button {
-                        selected = name
+                        selected = folders.folderPath(name)
                         dismiss()
                     } label: {
                         Label(name, systemImage: "folder").font(.body.monospaced())
