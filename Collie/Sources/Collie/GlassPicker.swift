@@ -20,6 +20,7 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
     let options: [(String, Selection)]
     var expands = false
     @ScaledMetric(relativeTo: .subheadline) private var fontSize = 15
+    @Environment(\.controlSize) private var controlSize
 
     func makeUIView(context: Context) -> UISegmentedControl {
         let control = UISegmentedControl()
@@ -52,7 +53,7 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISegmentedControl, context: Context) -> CGSize? {
         CGSize(width: expands ? proposal.width ?? uiView.intrinsicContentSize.width : uiView.intrinsicContentSize.width,
-               height: max(44, fontSize + 24))
+               height: controlSize == .small ? max(34, fontSize + 16) : max(44, fontSize + 24))
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }

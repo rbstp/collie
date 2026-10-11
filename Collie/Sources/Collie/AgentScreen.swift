@@ -67,6 +67,8 @@ struct AgentScreen: View {
             if !model.isTerminal {
                 GlassPicker(title: "Session view", selection: $showingChat,
                             options: [("Chat", true), ("Terminal", false)], expands: true)
+                .controlSize(.small)
+                .frame(maxWidth: 240)
                 .padding(.horizontal)
                 .padding(.bottom, 6)
             }
@@ -139,6 +141,8 @@ struct AgentScreen: View {
                     Button { model.wrapLines.toggle() } label: {
                         Label("Wrap lines", image: "WrapLines")
                             .foregroundStyle(model.wrapLines ? Color.accentColor : Color.primary)
+                            .padding(8)
+                            .background(model.wrapLines ? Color.accentColor.opacity(0.2) : .clear, in: Circle())
                     }
                     .accessibilityAddTraits(model.wrapLines ? .isSelected : [])
                 }

@@ -29,6 +29,8 @@ final class GlassPickerTests: XCTestCase {
             let toolbar = try XCTUnwrap(controls.first { $0.accessibilityLabel == "Toolbar view" })
             XCTAssertLessThan(compact.bounds.width, expanded.bounds.width)
             XCTAssertGreaterThanOrEqual(compact.bounds.height, 44)
+            XCTAssertLessThan(expanded.bounds.height, compact.bounds.height)
+            XCTAssertLessThanOrEqual(expanded.bounds.width, 240)
             XCTAssertGreaterThanOrEqual(compact.bounds.width, 150)
             XCTAssertEqual(compact.selectedSegmentIndex, 0)
             let attributes = try XCTUnwrap(compact.titleTextAttributes(for: .selected))
@@ -77,6 +79,8 @@ final class GlassPickerTests: XCTestCase {
                 VStack(spacing: 24) {
                     GlassPicker(title: "View", selection: $state.selected, options: [("Agents", false), ("Usage", true)])
                     GlassPicker(title: "Session view", selection: $state.selected, options: [("Chat", false), ("Terminal", true)], expands: true)
+                        .controlSize(.small)
+                        .frame(maxWidth: 240)
                 }
                 .padding()
                 .navigationTitle("Agents")
