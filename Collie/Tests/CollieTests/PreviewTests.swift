@@ -705,3 +705,20 @@ func gridCardsMoveBothWaysWithinTheirGroup(starred: Bool) throws {
     run.cancel()
     await run.value
 }
+
+@Test func gridInsertionEdgesMatchCardLayoutAndReadingDirection() {
+    let size = CGSize(width: 160, height: 240)
+    let points: [(CGPoint, GridDropEdge)] = [
+        (CGPoint(x: 80, y: 10), .top), (CGPoint(x: 80, y: 230), .bottom),
+        (CGPoint(x: 10, y: 120), .leading), (CGPoint(x: 150, y: 120), .trailing)
+    ]
+    for (point, edge) in points {
+        #expect(GridDropEdge.nearest(to: point, size: size, fourWay: true) == edge)
+    }
+    #expect(GridDropEdge.nearest(to: CGPoint(x: 2, y: 30), size: size, fourWay: false) == .top)
+    #expect(GridDropEdge.nearest(to: CGPoint(x: 2, y: 200), size: size, fourWay: false) == .bottom)
+    #expect(GridDropEdge.nearest(to: CGPoint(x: 2, y: 120), size: size, fourWay: true, rightToLeft: true) == .trailing)
+    #expect(GridDropEdge.nearest(to: CGPoint(x: 158, y: 120), size: size, fourWay: true, rightToLeft: true) == .leading)
+    #expect(!GridDropEdge.top.after && !GridDropEdge.leading.after)
+    #expect(GridDropEdge.bottom.after && GridDropEdge.trailing.after)
+}

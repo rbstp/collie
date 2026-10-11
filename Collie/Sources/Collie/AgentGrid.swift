@@ -1,7 +1,6 @@
 import CollieCore
 import GhosttyTerminal
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct AgentGrid<Menu: View>: View {
     let entries: [MachineFlockEntry]
@@ -16,6 +15,7 @@ struct AgentGrid<Menu: View>: View {
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dragging: GridDrag?
     @State private var moving = false
     @State private var moveError: String?
 
@@ -39,7 +39,9 @@ struct AgentGrid<Menu: View>: View {
                     ForEach(entries) { entry in
                         Section {
                             let agents = entry.gridAgents(starred: previews.starred, order: order)
-                            dropShelf(starred: true, in: entry)
+                            if dragging?.route.machineId == entry.id, dragging?.starred == false, agents.starred.isEmpty {
+                                dropShelf(starred: true, in: entry)
+                            }
                             ForEach(agents.starred, id: \.terminalId) { card($0, in: entry, starred: true, now: context.date) }
                             if !agents.rest.isEmpty {
                                 LazyVGrid(
@@ -49,7 +51,9 @@ struct AgentGrid<Menu: View>: View {
                                     ForEach(agents.rest, id: \.terminalId) { card($0, in: entry, starred: false, now: context.date) }
                                 }
                             }
-                            dropShelf(starred: false, in: entry)
+                            if dragging?.route.machineId == entry.id, dragging?.starred == true, agents.rest.isEmpty {
+                                dropShelf(starred: false, in: entry)
+                            }
                             if !entry.terminals.isEmpty {
                                 Text("Terminals").font(.caption).foregroundStyle(.secondary)
                                 LazyVGrid(
@@ -103,8 +107,8 @@ struct AgentGrid<Menu: View>: View {
                 .disabled(entry.flock?.link != .connected)
             menu(agent, route)
         }
-        .draggable(GridCardDrag(route: route))
-        .modifier(GridDropTarget { source, after in
+        .modifier(GridDragSource(route: route, starred: starred, dragging: $dragging))
+        .modifier(GridDropTarget(dragging: $dragging, machineId: entry.id, destination: route, fourWay: !starred) { source, after in
             move(source, in: entry, starred: starred, destination: route, after: after)
         })
         .onAppear { previews.appeared(route) }
@@ -118,7 +122,7 @@ struct AgentGrid<Menu: View>: View {
             .frame(maxWidth: .infinity, minHeight: 36)
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12))
             .contentShape(Rectangle())
-            .modifier(GridDropTarget { source, _ in
+            .modifier(GridDropTarget(dragging: $dragging, machineId: entry.id) { source, _ in
                 move(source, in: entry, starred: starred, after: !starred)
             })
     }
@@ -140,7 +144,6 @@ struct AgentGrid<Menu: View>: View {
         }
         return true
     }
-
 }
 
 extension AgentGrid {
@@ -259,34 +262,5 @@ private struct TerminalPreview: UIViewRepresentable {
         if !ansi.isEmpty {
             view.show(ansiSnapshot: ansi)
         }
-    }
-}
-
-private struct GridCardDrag: Codable, Transferable {
-    let route: AgentRoute
-
-    static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: .init(exportedAs: "dev.rbstp.collie.grid-card"))
-            .visibility(.ownProcess)
-    }
-}
-
-private struct GridDropTarget: ViewModifier {
-    let move: (AgentRoute, Bool) -> Bool
-    @State private var targeted = false
-    @State private var height: CGFloat = 0
-
-    func body(content: Content) -> some View {
-        content
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
-            .dropDestination(for: GridCardDrag.self) { items, location in
-                guard items.count == 1, let source = items.first?.route else { return false }
-                return move(source, location.y > height / 2)
-            } isTargeted: { targeted = $0 }
-            .overlay {
-                if targeted {
-                    RoundedRectangle(cornerRadius: 10).stroke(.tint, lineWidth: 2).allowsHitTesting(false)
-                }
-            }
     }
 }
