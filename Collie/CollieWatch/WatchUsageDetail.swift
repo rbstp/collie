@@ -19,14 +19,16 @@ struct WatchUsageDetail: View {
                         }
                     } label: {
                         HStack(spacing: 10) {
-                            UsageDial(logo: logo, period: shortPeriod, window: window)
+                            UsageDial(logo: logo, window: window, showsPercentage: false)
                                 .frame(width: 54, height: 54)
                                 .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(logo).font(.headline)
+                                Text("\(period) · \(window.map { "\($0.used)%" } ?? "--")")
+                                    .font(.headline)
                                 if let window {
-                                    Text(window.interval.upperBound, format: .dateTime.month(.abbreviated).day())
-                                    Text(window.interval.upperBound, format: .dateTime.hour().minute())
+                                    let remaining = Text(Duration.seconds(max(0, window.interval.upperBound.timeIntervalSince(context.date))),
+                                                         format: .units(allowed: [.days, .hours, .minutes], width: .narrow, maximumUnitCount: 2))
+                                    Text("\(remaining) left")
                                 } else {
                                     Text("No data")
                                 }

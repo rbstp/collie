@@ -2,17 +2,19 @@ import SwiftUI
 
 struct UsageDial: View {
     let logo: String
-    let period: String
+    var period: String? = nil
     let window: WatchUsage.Window?
     var showsPercentage = true
 
     var body: some View {
         Gauge(value: window?.usedFraction ?? 0) {
-            HStack(spacing: 2) {
-                if showsPercentage {
-                    UsageLogo(name: logo).frame(width: 11, height: 11)
+            if let period {
+                HStack(spacing: 2) {
+                    if showsPercentage {
+                        UsageLogo(name: logo).frame(width: 11, height: 11)
+                    }
+                    Text(period).font(.system(size: 10, weight: .semibold, design: .rounded))
                 }
-                Text(period).font(.system(size: 10, weight: .semibold, design: .rounded))
             }
         } currentValueLabel: {
             if showsPercentage {
