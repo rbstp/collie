@@ -71,9 +71,69 @@ final class GlassPickerTests: XCTestCase {
         }
     }
 
+    func testNativeToolbarAccentSurvivesActions() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for accent in AppAccent.allCases {
+            let state = PickerState()
+            state.accent = accent
+            let host = UIHostingController(rootView: PickerFixture(state: state))
+            host.overrideUserInterfaceStyle = .dark
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+            window.rootViewController = host
+            let previous = scene.keyWindow
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+                previous?.makeKeyAndVisible()
+            }
+            var initialColor: UIColor?
+            for stage in 0..<5 {
+                try await Task.sleep(for: .milliseconds(500))
+                host.view.layoutIfNeeded()
+                let toolbar = try XCTUnwrap(descendants(host.view).compactMap { $0 as? UISegmentedControl }.first { $0.accessibilityLabel == "Toolbar view" })
+                let color = try XCTUnwrap(toolbar.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
+                if let initialColor {
+                    XCTAssertEqual(color, initialColor, "\(accent) changed after action \(stage)")
+                } else {
+                    initialColor = color
+                }
+                if accent == .gold && (stage == 0 || stage == 4) {
+                    let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                    }
+                    let attachment = XCTAttachment(image: image)
+                    attachment.name = "toolbar-actions-\(stage)"
+                    attachment.lifetime = .keepAlways
+                    add(attachment)
+                }
+                switch stage {
+                case 0:
+                    toolbar.selectedSegmentIndex = 1
+                    toolbar.sendActions(for: .valueChanged)
+                    XCTAssertTrue(state.selected)
+                case 1:
+                    state.wrapped.toggle()
+                    state.sheet = true
+                case 2:
+                    state.sheet = false
+                    state.wrapped.toggle()
+                case 3:
+                    toolbar.selectedSegmentIndex = 0
+                    toolbar.sendActions(for: .valueChanged)
+                    XCTAssertFalse(state.selected)
+                default: break
+                }
+            }
+        }
+    }
+
     @Observable
     final class PickerState {
         var selected = false
+        var wrapped = true
+        var sheet = false
         var accent = AppAccent.gold
     }
 
@@ -100,13 +160,20 @@ final class GlassPickerTests: XCTestCase {
                     }
                     .sharedBackgroundVisibility(.hidden)
                     ToolbarItem(placement: .primaryAction) {
-                        Button("New task", systemImage: "plus") {}
+                        Toggle(isOn: $state.wrapped) { Label("Wrap lines", systemImage: "text.word.spacing") }
+                            .toggleStyle(.button)
+                            .modifier(NativeToolbarTint())
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("New task", systemImage: "plus") { state.sheet = true }
                             .modifier(NativeToolbarTint())
                     }
                 }
             }
+            .sheet(isPresented: $state.sheet) { Text("New task") }
             .tint(state.accent.color)
             .accentColor(state.accent.color)
+            .environment(\.appAccent, state.accent.color)
         }
     }
 

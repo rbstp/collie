@@ -1,14 +1,18 @@
 import SwiftUI
 import UIKit
 
+extension EnvironmentValues {
+    @Entry var appAccent: Color = .accentColor
+}
+
 struct NativeToolbarTint: ViewModifier {
     var darkening = 0.1
     @Environment(\.self) private var environment
 
     func body(content: Content) -> some View {
-        let accent = Color(Color.accentColor.resolve(in: environment))
+        let accent = Color(environment.appAccent.resolve(in: environment))
         let tint = environment.colorScheme == .dark ? accent.mix(with: .black, by: darkening) : accent
-        content.tint(tint).accentColor(tint)
+        content.tint(tint).accentColor(tint).environment(\.appAccent, tint)
     }
 }
 
@@ -17,10 +21,11 @@ struct GlassPicker<Selection: Hashable>: View {
     @Binding var selection: Selection
     let options: [(String, Selection)]
     var expands = false
+    @Environment(\.appAccent) private var accent
 
     var body: some View {
         NativeSegmentedPicker(title: title, selection: $selection, options: options, expands: expands)
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(accent)
             .glassEffect(expands ? .regular : .identity)
     }
 }
@@ -49,7 +54,7 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
             for index in options.indices { control.insertSegment(withTitle: "", at: index, animated: false) }
         }
         let font = UIFont.systemFont(ofSize: fontSize, weight: .semibold)
-        let accent = UIColor(Color(Color.accentColor.resolve(in: context.environment)))
+        let accent = UIColor(Color(context.environment.appAccent.resolve(in: context.environment)))
         control.setTitleTextAttributes([.font: font, .foregroundColor: UIColor.label], for: .normal)
         control.setTitleTextAttributes([.font: font, .foregroundColor: accent], for: .selected)
         for index in options.indices {
