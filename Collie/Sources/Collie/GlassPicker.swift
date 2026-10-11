@@ -38,6 +38,8 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
             for index in options.indices { control.insertSegment(withTitle: "", at: index, animated: false) }
         }
         let font = UIFont.systemFont(ofSize: fontSize, weight: .semibold)
+        // Keep the selected label's app accent explicit: native defaults lose it, and UIKit tint can change during actions.
+        // Leave the selection background system-controlled.
         let accent = UIColor(Color(context.environment.appAccent.resolve(in: context.environment)))
         control.setTitleTextAttributes([.font: font], for: .normal)
         control.setTitleTextAttributes([.font: font, .foregroundColor: accent], for: .selected)
