@@ -62,6 +62,10 @@ enum Command {
     },
     /// Claude Code PermissionRequest hook: reports the pending tool call to collied.
     Hook,
+    CopilotHook {
+        #[arg(long)]
+        install: bool,
+    },
     /// Claude Code status line tap: records the plan usage and context window from the
     /// status line input on stdin. Prints nothing.
     Statusline,
@@ -199,6 +203,13 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
         Command::Peers { command } => peers(command, &control_path, &data_dir).await?,
         Command::Status => status(&control_path).await?,
         Command::Hook => hooks::run(&control_path).await,
+        Command::CopilotHook { install: true } => {
+            collied::copilot::install(&std::env::current_exe()?)?;
+            println!(
+                "Copilot SessionStart hook installed. Resume existing sessions to record their identity."
+            );
+        }
+        Command::CopilotHook { install: false } => collied::copilot::hook(&data_dir).await,
         Command::Statusline => unreachable!("handled before the runtime starts"),
         Command::Stop => service::stop()?,
         Command::Start => service::start()?,

@@ -340,6 +340,26 @@ enum PaneInfoResult {
     PaneInfo { pane: PaneInfo },
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PaneProcessInfo {
+    pub pane_id: String,
+    pub foreground_process_group_id: Option<u32>,
+    #[serde(default)]
+    pub foreground_processes: Vec<PaneProcess>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PaneProcess {
+    pub pid: u32,
+    pub name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PaneProcessResult {
+    PaneProcessInfo { process_info: PaneProcessInfo },
+}
+
 #[derive(Deserialize)]
 struct LayoutRect {
     width: u16,
@@ -430,6 +450,12 @@ pub async fn pane_get(socket: &Path, pane_id: &str) -> Result<PaneInfo, Error> {
     let PaneInfoResult::PaneInfo { pane } =
         call(socket, "pane.get", json!({ "pane_id": pane_id })).await?;
     Ok(pane)
+}
+
+pub async fn pane_process_info(socket: &Path, pane_id: &str) -> Result<PaneProcessInfo, Error> {
+    let PaneProcessResult::PaneProcessInfo { process_info } =
+        call(socket, "pane.process_info", json!({ "pane_id": pane_id })).await?;
+    Ok(process_info)
 }
 
 /// The pane's width in columns. herdr answers with the focused tab's layout when it does not

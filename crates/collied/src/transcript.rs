@@ -103,14 +103,11 @@ impl Transcripts {
             Some(dir) => Some(PathBuf::from(dir)),
             None => crate::config::home_dir().ok().map(|h| h.join(".codex")),
         };
-        let copilot = std::env::var_os("COPILOT_HOME")
-            .map(PathBuf::from)
-            .or_else(|| crate::config::home_dir().ok().map(|h| h.join(".copilot")));
         let mut transcripts = Self::new(
             crate::hooks::claude_dir().ok().map(|d| d.join("projects")),
             codex.map(|d| d.join("sessions")),
         );
-        transcripts.copilot_sessions = copilot.map(|d| d.join("session-state"));
+        transcripts.copilot_sessions = crate::copilot::home().ok().map(|d| d.join("session-state"));
         transcripts
     }
 
@@ -208,6 +205,47 @@ impl Transcripts {
             },
         );
         Some(derived)
+    }
+
+    pub fn sent_prompts(&self, agent: &AgentInfo) -> Vec<String> {
+        self.copilot_prompts(agent).unwrap_or_default()
+    }
+
+    fn copilot_prompts(&self, agent: &AgentInfo) -> Option<Vec<String>> {
+        if Kind::of(agent)? != Kind::Copilot {
+            return None;
+        }
+        let id = session_id(agent)?;
+        let path = self.locate(Kind::Copilot, id, agent)?;
+        let (mut file, len, _) = open(&path)?;
+        let mut header = vec![0; len.min(HEADER_BYTES) as usize];
+        file.read_exact(&mut header).ok()?;
+        if !copilot_header(&header, id) {
+            return None;
+        }
+        let start = len.saturating_sub(TAIL_BYTES);
+        file.seek(SeekFrom::Start(start)).ok()?;
+        let mut bytes = vec![0; (len - start) as usize];
+        file.read_exact(&mut bytes).ok()?;
+        let begin = if start == 0 {
+            0
+        } else {
+            bytes.iter().position(|b| *b == b'\n')? + 1
+        };
+        Some(
+            bytes[begin..]
+                .split_inclusive(|b| *b == b'\n')
+                .filter(|line| line.last() == Some(&b'\n'))
+                .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+                .filter(|v| v["type"] == "user.message")
+                .filter_map(|v| {
+                    v["data"]["content"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                })
+                .collect(),
+        )
     }
 
     fn locate(&self, kind: Kind, id: &str, a: &AgentInfo) -> Option<PathBuf> {
@@ -515,7 +553,11 @@ fn copilot(text: &str) -> Derived {
     for v in complete
         .lines()
         .rev()
-        .filter(|l| l.contains("assistant.message") || l.contains("user.message"))
+        .filter(|l| {
+            l.contains("assistant.message")
+                || l.contains("user.message")
+                || l.contains("session.task_complete")
+        })
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
     {
         match v["type"].as_str() {
@@ -525,6 +567,9 @@ fn copilot(text: &str) -> Derived {
             Some("user.message") if d.last_prompt.is_none() => {
                 d.last_prompt = v["data"]["content"].as_str().and_then(first_line);
             }
+            Some("session.task_complete") if d.last_line.is_none() => {
+                d.last_line = copilot_final(&v).and_then(first_line);
+            }
             _ => {}
         }
         if d.last_line.is_some() && d.last_prompt.is_some() {
@@ -532,6 +577,16 @@ fn copilot(text: &str) -> Derived {
         }
     }
     d
+}
+
+fn copilot_final(v: &Value) -> Option<&str> {
+    if v["type"] != "session.task_complete"
+        || !v["agentId"].is_null()
+        || !matches!(v["data"].get("success"), None | Some(Value::Bool(true)))
+    {
+        return None;
+    }
+    v["data"]["summary"].as_str().filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]
@@ -693,6 +748,99 @@ mod tests {
             copilot(&(partial + "\n")).last_line.as_deref(),
             Some("Partial reply")
         );
+    }
+
+    #[test]
+    fn copilot_native_task_completion_supplies_the_latest_reply_without_tool_output() {
+        let fixture = include_str!("../tests/fixtures/transcripts/copilot-task-complete.jsonl");
+        let d = copilot(fixture);
+        assert_eq!(d.last_line.as_deref(), Some("The café counter is fixed."));
+        assert_eq!(d.last_prompt.as_deref(), Some("Fix the café counter."));
+        assert_eq!(d.context_left, None);
+        assert!(copilot(fixture.trim_end_matches('\n')).last_line.is_none());
+        for invalid in [
+            fixture.replace(
+                "\"success\":true,\"summary\"",
+                "\"success\":false,\"summary\"",
+            ),
+            fixture.replace(
+                "\"success\":true,\"summary\"",
+                "\"success\":\"true\",\"summary\"",
+            ),
+            fixture.replace(
+                "\"summary\":\"The café counter is fixed.\"",
+                "\"summary\":{}",
+            ),
+            fixture.replace(
+                "\"type\":\"session.task_complete\"",
+                "\"agentId\":\"worker-1\",\"type\":\"session.task_complete\"",
+            ),
+        ] {
+            assert!(copilot(&invalid).last_line.is_none());
+        }
+    }
+
+    #[test]
+    fn copilot_sent_prompts_preserve_original_unicode_whitespace_and_typed_newlines() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = roots(dir.path());
+        let a = agent("copilot", COPILOT_ID, "/fictional/moved");
+        let path = dir
+            .path()
+            .join(format!("copilot/session-state/{COPILOT_ID}/events.jsonl"));
+        let original = "  Résumé   counter\n\n1234567890\nnext\tline  ";
+        let row = serde_json::json!({
+            "type":"user.message", "data":{"content":original,"transformedContent":"not original"}
+        })
+        .to_string()
+            + "\n";
+        write(
+            &path,
+            &(COPILOT.to_owned()
+                + &row
+                + "{\"type\":\"user.message\",\"data\":{\"content\":\"partial\"}}"),
+        );
+        assert_eq!(t.sent_prompts(&a), ["Fix the café counter test.", original]);
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.extend_from_slice(
+            b"\n{\"type\":\"user.message\",\"data\":{\"content\":\"bad\xff\"}}\n",
+        );
+        std::fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            t.sent_prompts(&a),
+            ["Fix the café counter test.", original, "partial"]
+        );
+        write(&path, &COPILOT.replace(COPILOT_ID, CLAUDE_ID));
+        assert!(t.sent_prompts(&a).is_empty());
+        write(&path, &COPILOT.replace("\"version\":1", "\"version\":2"));
+        assert!(t.sent_prompts(&a).is_empty());
+        write(&path, COPILOT);
+        assert!(t.sent_prompts(&agent("claude", COPILOT_ID, "/")).is_empty());
+    }
+
+    #[test]
+    fn copilot_sent_prompts_skip_incomplete_tail_records_and_unsafe_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = roots(dir.path());
+        let a = agent("copilot", COPILOT_ID, "/");
+        let path = dir
+            .path()
+            .join(format!("copilot/session-state/{COPILOT_ID}/events.jsonl"));
+        let long = serde_json::json!({"type":"user.message", "data":{"content":"x".repeat(TAIL_BYTES as usize)}}).to_string() + "\n";
+        let latest = "{\"type\":\"user.message\",\"data\":{\"content\":\"latest\\nline\"}}\n";
+        write(&path, &(COPILOT.to_owned() + &long + latest));
+        assert_eq!(t.sent_prompts(&a), ["latest\nline"]);
+        std::fs::remove_file(&path).unwrap();
+        let target = dir.path().join("target.jsonl");
+        write(&target, COPILOT);
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(t.sent_prompts(&a).is_empty());
+        std::fs::remove_file(&path).unwrap();
+        write(&path, COPILOT);
+        let moved = dir.path().join("other");
+        std::fs::rename(path.parent().unwrap(), &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, path.parent().unwrap()).unwrap();
+        assert!(t.sent_prompts(&a).is_empty());
     }
 
     #[test]

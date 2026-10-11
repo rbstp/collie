@@ -5,7 +5,7 @@ use std::os::unix::fs::MetadataExt;
 use protocol::{HistoryMessage, HistoryPage, HistoryParams};
 use serde_json::Value;
 
-use super::{HEADER_BYTES, Kind, Transcripts, copilot_header, open, session_id};
+use super::{HEADER_BYTES, Kind, Transcripts, copilot_final, copilot_header, open, session_id};
 use crate::herdr::AgentInfo;
 
 const SCAN_BYTES: u64 = 2 * 1024 * 1024;
@@ -25,7 +25,11 @@ impl Transcripts {
             session: None,
             available: false,
             unavailable_reason: Some(if session_id(agent).is_none() {
-                "The agent has not reported its session ID to herdr. Chat cannot safely identify this conversation. Check the agent’s herdr SessionStart integration, then resume the session."
+                if agent.agent.as_deref() == Some("copilot") {
+                    "Copilot has not reported a verified session ID. On the machine, run collied copilot-hook --install, then resume the session. Terminal remains available."
+                } else {
+                    "The agent has not reported its session ID to herdr. Chat cannot safely identify this conversation. Check the agent’s herdr SessionStart integration, then resume the session."
+                }
             } else {
                 "The transcript for this session is not readable yet. Terminal remains available."
             }.into()),
@@ -345,6 +349,11 @@ fn normalize(
                         add("assistant", content.into(), None, None);
                     }
                 }
+                Some("session.task_complete") => {
+                    if let Some(summary) = copilot_final(v) {
+                        add("assistant", summary.into(), None, None);
+                    }
+                }
                 Some("tool.execution_start") => {
                     if let (Some(name), Some(call)) =
                         (d["toolName"].as_str(), d["toolCallId"].as_str())
@@ -514,6 +523,85 @@ mod tests {
             .unwrap()
             .write_all(content.as_bytes())
             .unwrap();
+    }
+
+    #[test]
+    fn copilot_task_completion_is_a_native_assistant_reply_not_a_generic_tool_result() {
+        let fixture = include_str!("../../tests/fixtures/transcripts/copilot-task-complete.jsonl");
+        let (_dir, t, a, path) = setup("copilot", fixture.trim_end_matches('\n'));
+        let initial = t.history(&a, &params(None, None, None));
+        assert_eq!(initial.messages.len(), 3);
+        assert!(
+            initial
+                .messages
+                .iter()
+                .all(|m| m.role != "assistant" || m.tool.is_some())
+        );
+        append(&path, "\n");
+        let update = t.history(&a, &params(None, initial.after, None));
+        assert_eq!(update.messages.len(), 1);
+        let final_reply = &update.messages[0];
+        assert_eq!(final_reply.role, "assistant");
+        assert_eq!(final_reply.text, "The café counter is fixed.");
+        assert_eq!(final_reply.id, "completed:0");
+        assert!(final_reply.tool.is_none());
+        assert!(final_reply.call_id.is_none());
+        let poll = t.history(&a, &params(None, update.after, None));
+        assert!(poll.messages.is_empty());
+        let searched = t.history(&a, &params(None, None, Some("CAFÉ")));
+        assert!(searched.messages.iter().any(|m| m.id == "completed:0"));
+        append(
+            &path,
+            "{\"type\":\"tool.execution_complete\",\"data\":{\"toolCallId\":\"ordinary\",\"success\":true,\"result\":{\"content\":\"Not a final assistant reply.\"}},\"id\":\"ordinary-result\"}\n",
+        );
+        let all = t.history(&a, &params(None, None, None));
+        assert_eq!(
+            all.messages
+                .iter()
+                .filter(|m| m.role == "assistant" && m.tool.is_none())
+                .count(),
+            1
+        );
+        assert_eq!(all.messages.last().unwrap().role, "tool");
+        for bad in [
+            fixture.replace(
+                "\"success\":true,\"summary\"",
+                "\"success\":false,\"summary\"",
+            ),
+            fixture.replace(
+                "\"success\":true,\"summary\"",
+                "\"success\":\"true\",\"summary\"",
+            ),
+            fixture.replace(
+                "\"summary\":\"The café counter is fixed.\"",
+                "\"summary\":null",
+            ),
+            fixture.replace(
+                "\"type\":\"session.task_complete\"",
+                "\"agentId\":\"worker-1\",\"type\":\"session.task_complete\"",
+            ),
+        ] {
+            std::fs::write(&path, bad).unwrap();
+            assert!(
+                t.history(&a, &params(None, None, None))
+                    .messages
+                    .iter()
+                    .all(|m| m.role != "assistant" || m.tool.is_some())
+            );
+        }
+        std::fs::write(
+            &path,
+            fixture.replace("\"success\":true,\"summary\"", "\"summary\""),
+        )
+        .unwrap();
+        assert_eq!(
+            t.history(&a, &params(None, None, None))
+                .messages
+                .last()
+                .unwrap()
+                .role,
+            "assistant"
+        );
     }
 
     #[test]

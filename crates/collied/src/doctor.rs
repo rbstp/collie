@@ -108,10 +108,30 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     }
     let (s, d) = check_hooks();
     r.line(s, "hooks", d);
+    let (s, d) = check_copilot_hook();
+    r.line(s, "copilot", d);
     let (s, d) = check_usage(&data_dir, crate::now_ms());
     r.line(s, "plan usage", d);
 
     Ok(!r.failed)
+}
+
+fn check_copilot_hook() -> (Status, String) {
+    let settings = crate::copilot::home().ok().and_then(|root| {
+        let (file, len, _) = crate::transcript::open(&root.join("settings.json"))?;
+        (len <= 65536)
+            .then(|| serde_json::from_reader(file).ok())
+            .flatten()
+    });
+    if settings.as_ref().is_some_and(crate::copilot::installed) {
+        (Status::Ok, "SessionStart hook installed".into())
+    } else {
+        (
+            Status::Warn,
+            "run collied copilot-hook --install, then resume existing Copilot sessions for Chat"
+                .into(),
+        )
+    }
 }
 
 fn check_hooks() -> (Status, String) {

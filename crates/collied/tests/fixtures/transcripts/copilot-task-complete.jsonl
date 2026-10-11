@@ -1,0 +1,6 @@
+{"type":"session.start","data":{"sessionId":"11111111-2222-4333-8444-555555555555","version":1,"copilotVersion":"1.0.96-2"},"id":"start","timestamp":"2026-10-10T12:00:00Z"}
+{"type":"user.message","data":{"content":"Fix the café counter."},"id":"user","timestamp":"2026-10-10T12:00:01Z"}
+{"type":"assistant.message","data":{"content":"","toolRequests":[{"toolCallId":"complete-1","name":"task_complete","arguments":{"summary":"The café counter is fixed."}}]},"id":"assistant","timestamp":"2026-10-10T12:00:02Z"}
+{"type":"tool.execution_start","data":{"toolCallId":"complete-1","toolName":"task_complete","arguments":{"summary":"The café counter is fixed."}},"id":"tool-start","timestamp":"2026-10-10T12:00:03Z"}
+{"type":"tool.execution_complete","data":{"toolCallId":"complete-1","success":true,"result":{"content":"The café counter is fixed.","detailedContent":"Completion metadata"}},"id":"tool-end","timestamp":"2026-10-10T12:00:04Z"}
+{"type":"session.task_complete","data":{"success":true,"summary":"The café counter is fixed."},"id":"completed","timestamp":"2026-10-10T12:00:05Z"}

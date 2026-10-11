@@ -1039,7 +1039,8 @@ impl Session<'_> {
         if !auth() {
             return err(ErrorCode::NotPaired, "pairing revoked");
         }
-        let agent = self.state.drive.find_agent(&p.terminal_id).await?;
+        let mut agent = self.state.drive.find_agent(&p.terminal_id).await?;
+        crate::copilot::resolve(&self.state.cfg.data_dir, &self.state.herdr, &mut agent).await;
         let reader = lock(&self.state.transcripts).history_reader();
         let terminal = p.terminal_id.clone();
         let identity = (
@@ -1052,7 +1053,8 @@ impl Session<'_> {
         if !auth() {
             return err(ErrorCode::NotPaired, "pairing revoked");
         }
-        let current = self.state.drive.find_agent(&terminal).await?;
+        let mut current = self.state.drive.find_agent(&terminal).await?;
+        crate::copilot::resolve(&self.state.cfg.data_dir, &self.state.herdr, &mut current).await;
         if identity != (current.agent, current.agent_session.map(|s| s.value)) {
             return err(ErrorCode::AgentNotReady, "session changed; retry history");
         }
@@ -1650,7 +1652,14 @@ impl Session<'_> {
     }
 
     async fn flock(&self) -> Reply {
-        let snap = herdr_result(herdr::session_snapshot(&self.state.herdr).await)?;
+        let mut snap = herdr_result(herdr::session_snapshot(&self.state.herdr).await)?;
+        crate::copilot::resolve_agents(
+            &self.state.cfg.data_dir,
+            &self.state.herdr,
+            &mut snap.agents,
+            true,
+        )
+        .await;
         let mut tracker = lock(&self.state.tracker);
         let mut flock = flock::map_flock(
             &snap,
@@ -2115,9 +2124,16 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         };
         delay = RECONCILE_EVERY;
         let phones = state.events.receiver_count() > 0;
+        let mut chat_agents = agents.clone();
+        crate::copilot::resolve_agents(&state.cfg.data_dir, &state.herdr, &mut chat_agents, phones)
+            .await;
         let next = {
             let mut transcripts = lock(&state.transcripts);
-            Baseline::new(&agents, &workspaces, phones.then_some(&mut *transcripts))
+            Baseline::new(
+                &chat_agents,
+                &workspaces,
+                phones.then_some(&mut *transcripts),
+            )
         };
         match &base {
             None if outage => {
@@ -2139,9 +2155,12 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                     let _ = state.events.send(event);
                 }
                 if !changed.is_empty() {
-                    transcripts.retain(&agents);
+                    transcripts.retain(&chat_agents);
                     let now = crate::now_ms();
-                    for a in agents.iter().filter(|a| changed.contains(&a.terminal_id)) {
+                    for a in chat_agents
+                        .iter()
+                        .filter(|a| changed.contains(&a.terminal_id))
+                    {
                         observe_agent(a, &mut tracker, &mut transcripts, &state.events, now);
                     }
                 }

@@ -59,6 +59,53 @@ private func page(_ messages: [HistoryMessage], session: String = "s1", reset: B
 }
 
 @MainActor
+@Test func copilotConversationKeepsNativeTaskCompletionVisibleOutsideActivity() {
+    let model = ConversationModel()
+    model.apply(page([
+        HistoryMessage(id: "user:0", role: "user", text: "Fix the café counter.", tool: nil, callId: nil, truncated: false),
+        HistoryMessage(id: "tool-start:0", role: "assistant", text: "{\"summary\":\"The café counter is fixed.\"}", tool: "task_complete", callId: "complete-1", truncated: false),
+        HistoryMessage(id: "tool-end:0", role: "tool", text: "The café counter is fixed.", tool: "Result", callId: "complete-1", truncated: false),
+        message("completed:0", "The café counter is fixed.")
+    ], session: "copilot:11111111-2222-4333-8444-555555555555:1:2"), older: false)
+    #expect(model.rows.count == 3)
+    #expect(model.rows[1].tools.count == 1)
+    #expect(model.rows[2].message?.text == "The café counter is fixed.")
+    #expect(model.rows[2].message?.tool == nil)
+}
+
+@MainActor
+@Test func copilotConversationRecoversRegistrationAndResetsAfterNewAndReconnect() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "copilot"
+        $0.historyPage = HistoryPage(session: nil, available: false, unavailableReason: "Copilot session ID is not verified", reset: false, messages: [], before: nil, after: nil, more: false, omitted: false)
+    }
+    let model = AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "t1"), prefsFile: nil)
+    model.poll()
+    await model.conversation.fetch(load: model.history)
+    #expect(model.conversation.available == false)
+    #expect(model.conversation.after == nil)
+    let initial = "copilot:11111111-2222-4333-8444-555555555555:1:2"
+    core.state.withLock { $0.historyPage = page([message("old", "Initial reply.")], session: initial) }
+    await model.conversation.fetch(load: model.history)
+    #expect(model.conversation.messages.map(\.id) == ["old"])
+    model.conversation.stop()
+    model.conversation.begin(query: "")
+    let next = "copilot:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:1:3"
+    core.state.withLock { $0.historyPage = page([message("new", "New reply.")], session: next, reset: true, before: nil, after: "newEnd") }
+    await model.conversation.fetch(load: model.history)
+    #expect(core.snapshot.historyRequests.last?.after == "latest")
+    #expect(model.conversation.messages.map(\.id) == ["new"])
+    #expect(model.conversation.session == next)
+    #expect(model.conversation.before == nil)
+    #expect(model.conversation.after == "newEnd")
+    core.state.withLock { $0.historyPage = page([message("live", "Live reply.")], session: next, after: "liveEnd") }
+    await model.conversation.fetch(load: model.history)
+    #expect(core.snapshot.historyRequests.last?.after == "newEnd")
+    #expect(model.conversation.messages.map(\.id) == ["new", "live"])
+}
+
+@MainActor
 @Test func conversationMergesWithoutDuplicateMessagesAndKeepsBothCursors() {
     let model = ConversationModel()
     model.apply(page([message("2"), message("3")]), older: false)

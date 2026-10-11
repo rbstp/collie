@@ -1,0 +1,7 @@
+{
+  "source": "startup",
+  "sessionId": "11111111-2222-4333-8444-555555555555",
+  "timestamp": 1791633600000,
+  "cwd": "/fictional/counter",
+  "initialPrompt": "Fix the café counter test."
+}
