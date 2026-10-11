@@ -34,11 +34,7 @@ final class GlassPickerTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(compact.bounds.width, 150)
             XCTAssertEqual(compact.selectedSegmentIndex, 0)
             let attributes = try XCTUnwrap(compact.titleTextAttributes(for: .selected))
-            for control in controls {
-                XCTAssertNil(control.selectedSegmentTintColor)
-                XCTAssertNil(control.titleTextAttributes(for: .normal)?[.foregroundColor])
-                XCTAssertNil(control.titleTextAttributes(for: .selected)?[.foregroundColor])
-            }
+            try assertAppearance(controls, accent: state.accent, style: style)
             XCTAssertEqual((attributes[.font] as? UIFont)?.pointSize, 15)
             compact.selectedSegmentIndex = 1
             compact.sendActions(for: .valueChanged)
@@ -60,10 +56,13 @@ final class GlassPickerTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(250))
                 host.view.layoutIfNeeded()
                 XCTAssertEqual(compact.selectedSegmentIndex, toolbar.selectedSegmentIndex)
-                for control in controls {
-                    XCTAssertNil(control.selectedSegmentTintColor)
-                    XCTAssertNil(control.titleTextAttributes(for: .normal)?[.foregroundColor])
-                    XCTAssertNil(control.titleTextAttributes(for: .selected)?[.foregroundColor])
+                try assertAppearance(controls, accent: accent, style: style)
+                for presented in [true, false] {
+                    state.wrapped.toggle()
+                    state.sheet = presented
+                    try await Task.sleep(for: .milliseconds(500))
+                    host.view.layoutIfNeeded()
+                    try assertAppearance(controls, accent: accent, style: style)
                 }
             }
         }
@@ -72,6 +71,8 @@ final class GlassPickerTests: XCTestCase {
     @Observable
     final class PickerState {
         var selected = false
+        var wrapped = true
+        var sheet = false
         var accent = AppAccent.gold
     }
 
@@ -97,12 +98,31 @@ final class GlassPickerTests: XCTestCase {
                     }
                     .sharedBackgroundVisibility(.hidden)
                     ToolbarItem(placement: .primaryAction) {
-                        Button("New task", systemImage: "plus") {}
+                        Toggle(isOn: $state.wrapped) { Label("Wrap lines", systemImage: "text.word.spacing") }
+                            .toggleStyle(.button)
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("New task", systemImage: "plus") { state.sheet = true }
                     }
                 }
             }
+            .sheet(isPresented: $state.sheet) { Text("New task") }
             .tint(state.accent.color)
             .accentColor(state.accent.color)
+            .environment(\.appAccent, state.accent.color)
+        }
+    }
+
+    private func assertAppearance(_ controls: [UISegmentedControl], accent: AppAccent, style: UIUserInterfaceStyle) throws {
+        let expected = UIColor(accent.color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
+        for control in controls {
+            XCTAssertNil(control.selectedSegmentTintColor)
+            XCTAssertNil(control.titleTextAttributes(for: .normal)?[.foregroundColor])
+            let actual = try XCTUnwrap(control.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
+            XCTAssertEqual(actual.cgColor.numberOfComponents, expected.cgColor.numberOfComponents)
+            for (component, wanted) in zip(actual.cgColor.components ?? [], expected.cgColor.components ?? []) {
+                XCTAssertEqual(component, wanted, accuracy: 0.002, "\(accent) in \(control.accessibilityLabel ?? "picker")")
+            }
         }
     }
 

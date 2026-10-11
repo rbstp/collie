@@ -1,6 +1,10 @@
 import SwiftUI
 import UIKit
 
+extension EnvironmentValues {
+    @Entry var appAccent: Color = .accentColor
+}
+
 struct GlassPicker<Selection: Hashable>: View {
     let title: String
     @Binding var selection: Selection
@@ -34,8 +38,9 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
             for index in options.indices { control.insertSegment(withTitle: "", at: index, animated: false) }
         }
         let font = UIFont.systemFont(ofSize: fontSize, weight: .semibold)
+        let accent = UIColor(Color(context.environment.appAccent.resolve(in: context.environment)))
         control.setTitleTextAttributes([.font: font], for: .normal)
-        control.setTitleTextAttributes([.font: font], for: .selected)
+        control.setTitleTextAttributes([.font: font, .foregroundColor: accent], for: .selected)
         for index in options.indices {
             let label = String(localized: String.LocalizationValue(options[index].0), locale: context.environment.locale)
             control.setTitle(label, forSegmentAt: index)
