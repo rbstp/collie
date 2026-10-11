@@ -986,6 +986,7 @@ mod tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            prompt_reflows: Vec::new(),
         }
     }
 
@@ -1436,6 +1437,7 @@ mod tests {
                 wraps: None,
                 splits: None,
                 copilot_scrollbar: None,
+                prompt_reflows: None,
             };
             write(
                 &mut ws,
@@ -1512,6 +1514,7 @@ mod tests {
                 wraps: None,
                 splits: None,
                 copilot_scrollbar: None,
+                prompt_reflows: None,
             };
             write(
                 &mut ws,

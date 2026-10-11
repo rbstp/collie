@@ -1,0 +1,27 @@
+{
+  "original": "/workspace/attachments/0123456789abcdef0123456789abcdef/example.png Please check the sent prompt background and wrapping carefully.\n\nKeep 界面, 🐕, and é readable; preserve paragraph spacing and every word.",
+  "source": [
+    " ● Reply before the prompt",
+    "│ a │ b │",
+    " \u001b[38;2;20;27;34m▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\u001b[0m ",
+    " \u001b[0m\u001b[48;2;20;27;34m \u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m❯ /workspace/attachments/0123456789abcdef012\u001b[0m\u001b[48;2;20;27;34m \u001b[0m\u001b[38;2;145;152;161m\u001b[48;2;20;27;34m12:34\u001b[0m\u001b[48;2;20;27;34m  \u001b[0m ",
+    " \u001b[0m\u001b[48;2;20;27;34m \u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m  3456789abcdef/example.png Please check the\u001b[0m\u001b[48;2;20;27;34m      \u001b[0m\u001b[48;2;20;27;34m  \u001b[0m ",
+    " \u001b[0m\u001b[48;2;20;27;34m \u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m   sent prompt background and wrapping caref\u001b[0m\u001b[48;2;20;27;34m      \u001b[0m\u001b[48;2;20;27;34m  \u001b[0m ",
+    " \u001b[0m\u001b[48;2;20;27;34m \u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m  ully.\u001b[0m\u001b[48;2;20;27;34m                                           \u001b[0m\u001b[48;2;20;27;34m  \u001b[0m ",
+    " \u001b[0m\u001b[48;2;20;27;34m \u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m  \u001b[0m\u001b[48;2;20;27;34m                                                \u001b[0m\u001b[48;2;20;27;34m  \u001b[0m ",
+    " \u001b[0m\u001b[48;2;20;27;34m \u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m  Keep 界面, 🐕, and é readable; preserve\u001b[0m\u001b[48;2;20;27;34m         \u001b[0m\u001b[48;2;20;27;34m  \u001b[0m ",
+    " \u001b[0m\u001b[48;2;20;27;34m \u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m  paragraph spacing and every word.\u001b[0m\u001b[48;2;20;27;34m               \u001b[0m\u001b[48;2;20;27;34m  \u001b[0m ",
+    " \u001b[38;2;20;27;34m▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\u001b[0m ",
+    " ● Reply outside"
+  ],
+  "reflowed": [
+    " ● Reply before the prompt",
+    "│ a │ b │",
+    " \u001b[38;2;20;27;34m▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\u001b[0m ",
+    " \u001b[0m\u001b[48;2;20;27;34m \u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m❯ /workspace/attachments/0123456789abcdef012\u001b[0m\u001b[48;2;20;27;34m\u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m3456789abcdef/example.png Please check the\u001b[0m\u001b[48;2;20;27;34m\u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m sent prompt background and wrapping caref\u001b[0m\u001b[48;2;20;27;34m\u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34mully.\u001b[0m\u001b[48;2;20;27;34m  \u001b[0m ",
+    " \u001b[0m\u001b[48;2;20;27;34m \u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m  \u001b[0m\u001b[48;2;20;27;34m  \u001b[0m ",
+    " \u001b[0m\u001b[48;2;20;27;34m \u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m  Keep 界面, 🐕, and é readable; preserve \u001b[0m\u001b[48;2;20;27;34m\u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34mparagraph spacing and every word. \u001b[0m\u001b[48;2;20;27;34m\u001b[0m\u001b[38;2;203;182;248m\u001b[48;2;20;27;34m\u001b[0m\u001b[48;2;20;27;34m\u001b[0m\u001b[38;2;145;152;161m\u001b[48;2;20;27;34m12:34\u001b[0m\u001b[48;2;20;27;34m  \u001b[0m ",
+    " \u001b[38;2;20;27;34m▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\u001b[0m ",
+    " ● Reply outside"
+  ]
+}

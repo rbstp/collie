@@ -3719,6 +3719,7 @@ mod tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            prompt_reflows: Vec::new(),
         };
         assert_eq!(TerminalSnapshot::from(read.clone()).reflowed, None);
         let read = TerminalRead {
@@ -3741,6 +3742,7 @@ mod tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            prompt_reflows: Vec::new(),
         };
         assert!(!TerminalSnapshot::from(read("  95\n❯ ")).jump_banner);
         let scrolled = "  96   \u{1b}[48;2;55;55;55m Jump to bottom: fn+↓ to scroll \u{1b}[0m\n❯ ";
@@ -3757,6 +3759,7 @@ mod tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            prompt_reflows: Vec::new(),
         };
         let survey = include_str!("../../collied/tests/fixtures/claude-2.1.293/survey.ansi.txt");
         let options: Vec<(u8, String)> = TerminalSnapshot::from(read(survey))
@@ -3949,6 +3952,7 @@ mod tailnet_tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            prompt_reflows: Vec::new(),
         }
     }
 

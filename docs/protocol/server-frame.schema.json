@@ -913,6 +913,15 @@
           "minimum": 0,
           "type": "integer"
         },
+        "prompt_reflows": {
+          "items": {
+            "$ref": "#/$defs/TerminalPromptReflow"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "skip": {
           "format": "uint32",
           "minimum": 0,
@@ -1482,6 +1491,29 @@
       "pattern": "^[A-Za-z0-9_:.-]{1,64}$",
       "type": "string"
     },
+    "TerminalPromptReflow": {
+      "properties": {
+        "ansi": {
+          "type": "string"
+        },
+        "end": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "ansi"
+      ],
+      "type": "object"
+    },
     "TerminalRead": {
       "properties": {
         "ansi": {
@@ -1489,6 +1521,12 @@
         },
         "copilot_scrollbar": {
           "type": "boolean"
+        },
+        "prompt_reflows": {
+          "items": {
+            "$ref": "#/$defs/TerminalPromptReflow"
+          },
+          "type": "array"
         },
         "source": {
           "$ref": "#/$defs/ReadSource"

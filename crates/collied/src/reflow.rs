@@ -2,6 +2,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::draft::separator;
 
+mod copilot;
+pub use copilot::prompts as copilot_prompts;
+
 enum Prev {
     /// A row here may start a paragraph.
     Start,
@@ -314,6 +317,204 @@ fn list_marker(s: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sent_box(rows: &[&str]) -> String {
+        let shade = "\u{1b}[48;2;20;27;34m";
+        let border = "\u{1b}[38;2;20;27;34m";
+        let mut out = vec![format!(" {border}{}\u{1b}[0m ", "▄".repeat(53))];
+        for (i, text) in rows.iter().enumerate() {
+            let marker = if i == 0 { "❯ " } else { "  " };
+            let timestamp = if i == 0 {
+                "\u{1b}[0m\u{1b}[38;2;145;152;161m\u{1b}[48;2;20;27;34m12:34"
+            } else {
+                ""
+            };
+            let padding = " ".repeat((if i == 0 { 43 } else { 48 }) - text.width());
+            out.push(format!(
+                " \u{1b}[0m{shade} \u{1b}[0m\u{1b}[38;2;203;182;248m{shade}{marker}{text}\u{1b}[0m{shade}{padding}{timestamp}\u{1b}[0m{shade}  \u{1b}[0m "
+            ));
+        }
+        out.push(format!(" {border}{}\u{1b}[0m ", "▀".repeat(53)));
+        out.join("\r\n")
+    }
+
+    #[test]
+    fn copilot_sent_prompt_reflows_native_hard_rows() {
+        let original = "/workspace/attachments/0123456789abcdef0123456789abcdef/example.png Please check the sent prompt background and wrapping carefully.";
+        let ansi = sent_box(&[
+            "/workspace/attachments/0123456789abcdef012",
+            "3456789abcdef/example.png Please check the",
+            " sent prompt background and wrapping caref",
+            "ully.",
+        ]);
+        let (wraps, splits) = soft_wraps_for("copilot", &ansi, 56);
+        let prompt_reflows = copilot_prompts(&ansi, &[original.to_owned()]);
+        let read = protocol::TerminalRead {
+            terminal_id: protocol::TerminalId::new("synthetic").unwrap(),
+            source: protocol::ReadSource::Recent,
+            ansi,
+            truncated: false,
+            wraps,
+            splits,
+            copilot_scrollbar: true,
+            prompt_reflows,
+        };
+        let reflowed = read.reflowed().unwrap_or_else(|| read.ansi.clone());
+        let mut plain = String::new();
+        plain_text(&reflowed, &mut plain);
+        assert!(plain.contains(original), "{plain:?}");
+        assert!(plain.find(original).unwrap() < plain.find("12:34").unwrap());
+    }
+
+    #[test]
+    fn copilot_sender_fixture_matches_the_phone_renderer_input() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/copilot-sent-prompt.json"))
+                .unwrap();
+        let rows = |key: &str| {
+            fixture[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row.as_str().unwrap())
+                .collect::<Vec<_>>()
+                .join("\r\n")
+        };
+        let ansi = rows("source");
+        let original = fixture["original"].as_str().unwrap().to_owned();
+        let prompt_reflows = copilot_prompts(&ansi, &[original]);
+        assert_eq!(prompt_reflows.len(), 1);
+        let read = protocol::TerminalRead {
+            terminal_id: protocol::TerminalId::new("synthetic").unwrap(),
+            source: protocol::ReadSource::Recent,
+            ansi: ansi.clone(),
+            truncated: false,
+            wraps: vec![],
+            splits: vec![],
+            copilot_scrollbar: true,
+            prompt_reflows,
+        };
+        assert_eq!(read.ansi, ansi);
+        assert_eq!(
+            read.reflowed().unwrap().replace('\r', ""),
+            rows("reflowed").replace('\r', "")
+        );
+    }
+
+    #[test]
+    fn copilot_sent_prompts_require_unambiguous_original_newlines() {
+        let first = "a".repeat(42);
+        let ansi = sent_box(&[&first, "last"]);
+        let wrapped = format!("{first}last");
+        let typed = format!("{first}\nlast");
+        assert_eq!(
+            copilot_prompts(&ansi, std::slice::from_ref(&wrapped)).len(),
+            1
+        );
+        assert!(copilot_prompts(&ansi, std::slice::from_ref(&typed)).is_empty());
+        assert!(copilot_prompts(&ansi, &[typed, wrapped.clone()]).is_empty());
+        assert_eq!(copilot_prompts(&ansi, &[wrapped.clone(), wrapped]).len(), 1);
+        for originals in [
+            vec![],
+            vec!["last".into()],
+            vec![first],
+            vec!["unrelated".into()],
+        ] {
+            assert!(copilot_prompts(&ansi, &originals).is_empty());
+        }
+    }
+
+    #[test]
+    fn copilot_sent_prompts_preserve_paragraphs_spaces_and_unicode() {
+        let ansi = sent_box(&[
+            "Explain 界面 and 🐕 with e\u{301} in this",
+            "paragraph.",
+            "",
+            "  Keep two leading spaces and 12:34",
+            "inside the prompt.",
+            "| a  | b |",
+            "A longtoken",
+            "界🐕e\u{301}ending.",
+        ]);
+        let original = "Explain 界面 and 🐕 with e\u{301} in this paragraph.\n\n  Keep two leading spaces and 12:34 inside the prompt.\n| a  | b |\nA longtoken界🐕e\u{301}ending.";
+        let prompts = copilot_prompts(&ansi, &[original.to_owned()]);
+        assert_eq!(prompts.len(), 1);
+        let mut plain = String::new();
+        plain_text(&prompts[0].ansi, &mut plain);
+        let plain = crate::draft::normalize(&plain);
+        assert!(plain.contains("❯ Explain 界面 and 🐕 with e\u{301} in this paragraph."));
+        assert!(plain.contains("\n\n      Keep two leading spaces and 12:34 inside the prompt."));
+        assert!(plain.contains("\n    | a  | b |\n    A longtoken界🐕e\u{301}ending. 12:34"));
+        assert_eq!(plain.matches("12:34").count(), 2);
+        assert!(prompts[0].ansi.contains("\u{1b}[38;2;203;182;248m"));
+    }
+
+    #[test]
+    fn copilot_sent_prompts_preserve_hidden_multiple_spaces() {
+        let ansi = sent_box(&["Keep every", "space.", "Finish", "now."]);
+        let prompts = copilot_prompts(&ansi, &["Keep every   space.\nFinish now.  ".into()]);
+        let mut plain = String::new();
+        plain_text(&prompts[0].ansi, &mut plain);
+        assert!(plain.contains("Keep every   space."));
+        assert!(plain.contains("Finish now.   12:34"));
+        let prompts = copilot_prompts(&ansi, &["Keep every   space.  \nFinish now.  ".into()]);
+        assert_eq!(prompts.len(), 1);
+        plain_text(&prompts[0].ansi, &mut plain);
+        assert!(plain.contains("space.     \n    Finish now."));
+    }
+
+    #[test]
+    fn copilot_sent_prompts_keep_distinct_marker_and_body_foregrounds() {
+        let ansi = sent_box(&["Keep this", "prompt readable."])
+            .replace("38;2;203;182;248", "38;2;164;117;249")
+            .replace(
+                "❯ Keep",
+                "❯ \u{1b}[0m\u{1b}[38;2;211;179;254m\u{1b}[48;2;20;27;34mKeep",
+            )
+            .replace(
+                "  prompt readable.",
+                "  \u{1b}[0m\u{1b}[38;2;211;179;254m\u{1b}[48;2;20;27;34mprompt readable.",
+            );
+        let prompts = copilot_prompts(&ansi, &["Keep this prompt readable.".into()]);
+        assert_eq!(prompts.len(), 1);
+        let reflowed = &prompts[0].ansi;
+        assert!(reflowed.contains("\u{1b}[38;2;164;117;249m"));
+        assert!(reflowed.contains("❯ \u{1b}[0m\u{1b}[38;2;211;179;254m\u{1b}[48;2;20;27;34mKeep"));
+        assert!(reflowed.contains("\u{1b}[38;2;211;179;254m\u{1b}[48;2;20;27;34mprompt readable."));
+        assert!(reflowed.contains("\u{1b}[38;2;145;152;161m\u{1b}[48;2;20;27;34m12:34"));
+    }
+
+    #[test]
+    fn copilot_sent_prompts_leave_incomplete_boxes_and_surrounding_output_alone() {
+        let boxed = sent_box(&["A long", "prompt."]);
+        let original = vec!["A long prompt.".to_owned()];
+        let rows: Vec<_> = boxed.split("\r\n").collect();
+        for cut in [rows[1..].join("\r\n"), rows[..rows.len() - 1].join("\r\n")] {
+            assert!(copilot_prompts(&cut, &original).is_empty());
+        }
+        assert!(copilot_prompts(&boxed.replace(SHADE_FOR_TEST, ""), &original).is_empty());
+        assert!(copilot_prompts(&boxed.replace("12:34", "25:99"), &original).is_empty());
+        let surrounding = format!(" ● Reply\n   1. Item\n│ a │ b │\n{boxed}\n + diff\n ● Next");
+        let prompts = copilot_prompts(&surrounding, &original);
+        assert_eq!((prompts[0].start, prompts[0].end), (4, 6));
+        assert!(!prompts[0].ansi.contains("Reply"));
+        assert!(!prompts[0].ansi.contains("diff"));
+    }
+
+    const SHADE_FOR_TEST: &str = "\u{1b}[48;2;20;27;34m";
+
+    #[test]
+    fn copilot_sent_prompts_rejoin_long_originals_without_a_width_guess() {
+        let rows = vec!["word word word word"; 900];
+        let ansi = sent_box(&rows);
+        let original = rows.join(" ");
+        let prompts = copilot_prompts(&ansi, std::slice::from_ref(&original));
+        assert_eq!(prompts.len(), 1);
+        let mut plain = String::new();
+        plain_text(&prompts[0].ansi, &mut plain);
+        assert!(plain.contains(&original));
+        assert_eq!(plain.matches("12:34").count(), 1);
+    }
 
     fn joins(rows: &[&str], cols: usize) -> (Vec<u32>, Vec<u32>) {
         soft_wraps(&rows.join("\r\n"), cols)

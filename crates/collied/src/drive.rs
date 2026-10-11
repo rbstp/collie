@@ -364,8 +364,8 @@ impl Driver {
         Ok(Response::Terminal(read))
     }
 
-    /// Leaves `read` unjoined when herdr does not give the pane's width; `false` when herdr
-    /// failed.
+    /// Prose needs the pane width; sent Copilot prompts need a verified original.
+    /// Returns `false` when herdr failed to supply the layout.
     async fn reflow(&self, pane_id: &str, kind: &str, read: &mut TerminalRead) -> bool {
         let cols = herdr::pane_columns(&self.herdr, pane_id).await;
         if let Ok(Some(cols)) = cols {
@@ -381,7 +381,63 @@ impl Driver {
         {
             read.ansi = reflow::without_copilot_scrollbar(&read.ansi, width);
         }
+        if kind == "copilot" {
+            self.reflow_copilot_prompts(pane_id, read).await;
+        }
         cols.is_ok()
+    }
+
+    async fn reflow_copilot_prompts(&self, pane_id: &str, read: &mut TerminalRead) {
+        if !read.ansi.contains('❯') || !read.ansi.contains("\u{1b}[48;2;20;27;34m") {
+            return;
+        }
+        let Ok(data) = crate::config::data_dir() else {
+            return;
+        };
+        self.reflow_copilot_prompts_from(
+            pane_id,
+            read,
+            &data,
+            crate::transcript::Transcripts::from_env(),
+        )
+        .await;
+    }
+
+    async fn reflow_copilot_prompts_from(
+        &self,
+        pane_id: &str,
+        read: &mut TerminalRead,
+        data: &Path,
+        transcripts: crate::transcript::Transcripts,
+    ) {
+        let Ok(mut agent) = herdr::agent_get(&self.herdr, pane_id).await else {
+            return;
+        };
+        if agent.pane_id != pane_id
+            || agent.terminal_id != read.terminal_id.as_str()
+            || agent.agent.as_deref() != Some("copilot")
+            || !crate::copilot::resolve(data, &self.herdr, &mut agent).await
+        {
+            return;
+        }
+        let identity = (agent.agent.clone(), agent.agent_session.clone());
+        let Ok(originals) =
+            tokio::task::spawn_blocking(move || transcripts.sent_prompts(&agent)).await
+        else {
+            return;
+        };
+        let Ok(mut current) = herdr::agent_get(&self.herdr, read.terminal_id.as_str()).await else {
+            return;
+        };
+        if current.pane_id != pane_id
+            || current.terminal_id != read.terminal_id.as_str()
+            || !crate::copilot::resolve(data, &self.herdr, &mut current).await
+            || identity != (current.agent, current.agent_session)
+        {
+            return;
+        }
+        read.prompt_reflows = reflow::copilot_prompts(&read.ansi, &originals);
+        read.copilot_scrollbar = true;
     }
 
     /// A reply longer than herdr's line limit is refused, so a pane dense with escapes is
@@ -462,6 +518,7 @@ impl Driver {
         let mut next = tokio::time::Instant::now();
         let mut changed = next;
         let mut last = None;
+        let mut last_reflow = None;
         let mut sent: Option<TerminalRead> = None;
         let mut lines = Some(u32::from(lines));
         loop {
@@ -495,15 +552,19 @@ impl Driver {
                         continue;
                     };
                     let mut h = DefaultHasher::new();
-                    (&read.text, read.truncated).hash(&mut h);
+                    (&read.text, read.truncated, &kind).hash(&mut h);
                     let hash = h.finish();
-                    if last == Some(hash) {
+                    let same = last == Some(hash);
+                    if same && !refresh_copilot_reflow(kind.as_deref(), last_reflow, now) {
                         continue;
                     }
                     last = Some(hash);
-                    changed = now;
-                    next = now + watch_period(low_data, Duration::ZERO);
+                    if !same {
+                        changed = now;
+                        next = now + watch_period(low_data, Duration::ZERO);
+                    }
                     let mut read = terminal_read(terminal_id.clone(), ReadSource::Recent, read);
+                    last_reflow = Some(now);
                     if let Some(kind @ ("claude" | "codex" | "copilot")) = kind.as_deref()
                         && !self.reflow(&pane_id, kind, &mut read).await
                     {
@@ -1761,6 +1822,14 @@ fn watch_period(low_data: bool, unchanged: Duration) -> Duration {
     }
 }
 
+fn refresh_copilot_reflow(
+    kind: Option<&str>,
+    last: Option<tokio::time::Instant>,
+    now: tokio::time::Instant,
+) -> bool {
+    kind == Some("copilot") && last.is_none_or(|last| now - last >= WATCH_IDLE)
+}
+
 fn source_name(source: ReadSource) -> &'static str {
     match source {
         ReadSource::Visible => "visible",
@@ -1783,6 +1852,7 @@ fn terminal_read(
         wraps: Vec::new(),
         splits: Vec::new(),
         copilot_scrollbar: false,
+        prompt_reflows: Vec::new(),
     }
 }
 
@@ -2163,6 +2233,188 @@ mod tests {
             (WATCH_EVERY, WATCH_IDLE),
             (Duration::from_millis(250), Duration::from_secs(1))
         );
+    }
+
+    #[test]
+    fn unchanged_copilot_output_rechecks_delayed_originals_at_most_once_a_second() {
+        let now = tokio::time::Instant::now();
+        for kind in [None, Some("claude"), Some("codex")] {
+            assert!(!refresh_copilot_reflow(kind, None, now));
+            assert!(!refresh_copilot_reflow(kind, Some(now - WATCH_QUIET), now));
+        }
+        assert!(refresh_copilot_reflow(Some("copilot"), None, now));
+        assert!(!refresh_copilot_reflow(
+            Some("copilot"),
+            Some(now - WATCH_EVERY),
+            now
+        ));
+        assert!(refresh_copilot_reflow(
+            Some("copilot"),
+            Some(now - WATCH_IDLE),
+            now
+        ));
+        assert_eq!(watch_period(false, WATCH_QUIET), WATCH_IDLE);
+    }
+
+    #[tokio::test]
+    async fn copilot_prompt_reflow_requires_stable_identity_and_recovers_a_late_flush() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        use serde_json::json;
+        use sha2::{Digest, Sha256};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixListener;
+
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/copilot-sent-prompt.json"))
+                .unwrap();
+        let ansi = fixture["source"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        let original = fixture["original"].as_str().unwrap();
+        let session = "11111111-1111-4111-8111-111111111111";
+        let pid = std::process::id();
+        let started = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "lstart="])
+            .env("LC_ALL", "C")
+            .env("TZ", "UTC")
+            .output()
+            .await
+            .unwrap();
+        assert!(started.status.success());
+        let started = String::from_utf8(started.stdout).unwrap().trim().to_owned();
+        for scenario in 0..4 {
+            let root = tempfile::tempdir().unwrap();
+            let socket = root.path().join("herdr.sock");
+            let records = root.path().join("copilot-sessions");
+            std::fs::create_dir(&records).unwrap();
+            std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut hash = Sha256::new();
+            hash.update(socket.as_os_str().as_bytes());
+            hash.update([0]);
+            hash.update(b"synthetic");
+            let name: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+            let record = records.join(format!("{name}.json"));
+            let identity = json!({
+                "socket": socket, "terminal": "synthetic", "session": session,
+                "pid": pid, "started": started, "timestamp": 1
+            });
+            if scenario > 0 {
+                std::fs::write(&record, serde_json::to_vec(&identity).unwrap()).unwrap();
+                std::fs::set_permissions(&record, std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            let transcripts = root.path().join("session-state");
+            let log = transcripts.join(session).join("events.jsonl");
+            std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+            let header = json!({
+                "type": "session.start",
+                "data": {"version": 1, "sessionId": session}
+            })
+            .to_string()
+                + "\n";
+            let event =
+                json!({"type": "user.message", "data": {"content": original}}).to_string() + "\n";
+            std::fs::write(
+                &log,
+                if scenario == 3 {
+                    header.clone()
+                } else {
+                    header.clone() + &event
+                },
+            )
+            .unwrap();
+            let listener = UnixListener::bind(&socket).unwrap();
+            let server = tokio::spawn(async move {
+                let mut gets = 0;
+                loop {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut stream = BufReader::new(stream);
+                    let mut line = String::new();
+                    stream.read_line(&mut line).await.unwrap();
+                    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                    let result = match request["method"].as_str().unwrap() {
+                        "agent.get" => {
+                            gets += 1;
+                            assert_eq!(
+                                request["params"]["target"],
+                                if gets % 2 == 1 {
+                                    "pane-test"
+                                } else {
+                                    "synthetic"
+                                }
+                            );
+                            if scenario == 2 && gets == 2 {
+                                let mut moved = identity.clone();
+                                moved["session"] = json!("22222222-2222-4222-8222-222222222222");
+                                std::fs::write(&record, serde_json::to_vec(&moved).unwrap())
+                                    .unwrap();
+                            }
+                            json!({"type": "agent_info", "agent": {
+                                "terminal_id": "synthetic", "pane_id": "pane-test",
+                                "workspace_id": "workspace-test", "agent": "copilot",
+                                "agent_status": "idle", "name": null, "title": null,
+                                "terminal_title_stripped": null, "cwd": null, "foreground_cwd": null,
+                                "agent_session": {"value": session}
+                            }})
+                        }
+                        "pane.process_info" => {
+                            assert_eq!(request["params"]["pane_id"], "pane-test");
+                            json!({"type": "pane_process_info", "process_info": {
+                                "pane_id": "pane-test", "foreground_process_group_id": pid,
+                                "foreground_processes": [{"pid": pid, "name": "copilot"}]
+                            }})
+                        }
+                        method => panic!("unexpected request: {method}"),
+                    };
+                    let response =
+                        json!({"id": request["id"], "result": result}).to_string() + "\n";
+                    stream
+                        .get_mut()
+                        .write_all(response.as_bytes())
+                        .await
+                        .unwrap();
+                }
+            });
+            let drive = Driver::new(socket, vec![], &[]).unwrap();
+            let mut read = TerminalRead {
+                terminal_id: TerminalId::new("synthetic").unwrap(),
+                source: ReadSource::Recent,
+                ansi: ansi.clone(),
+                truncated: false,
+                wraps: vec![],
+                splits: vec![],
+                copilot_scrollbar: false,
+                prompt_reflows: vec![],
+            };
+            let reader = || {
+                crate::transcript::Transcripts::new(None, None).with_copilot(transcripts.clone())
+            };
+            drive
+                .reflow_copilot_prompts_from("pane-test", &mut read, root.path(), reader())
+                .await;
+            assert_eq!(
+                read.prompt_reflows.len(),
+                usize::from(scenario == 1),
+                "scenario {scenario}"
+            );
+            assert_eq!(read.ansi, ansi);
+            if scenario == 3 {
+                std::fs::write(&log, header + &event).unwrap();
+                drive
+                    .reflow_copilot_prompts_from("pane-test", &mut read, root.path(), reader())
+                    .await;
+                assert_eq!(read.prompt_reflows.len(), 1);
+                assert!(read.reflowed().unwrap().contains("/workspace/attachments/"));
+            }
+            server.abort();
+            let stopped = server.await.unwrap_err();
+            assert!(stopped.is_cancelled(), "{stopped}");
+        }
     }
 
     fn is_sgr_only(s: &str) -> bool {

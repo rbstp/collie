@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::TerminalId;
-use crate::messages::{ReadSource, TerminalRead};
+use crate::messages::{ReadSource, TerminalPromptReflow, TerminalRead};
 
 /// The watched agent's new `recent` text: `head`, then lines `skip..skip + keep` of the
 /// text the watch sent last, then `tail`, then the last `trail` lines of that text, joined
@@ -29,6 +29,8 @@ pub struct OutputPatch {
     pub splits: Option<Vec<u32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copilot_scrollbar: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_reflows: Option<Vec<TerminalPromptReflow>>,
 }
 
 impl OutputPatch {
@@ -46,8 +48,13 @@ impl OutputPatch {
             .take_while(|(a, b)| a == b)
             .count();
         let tail = &rest[..rest.len() - trail];
-        let sent: usize = head.iter().chain(tail).map(|l| l.len() + 1).sum();
-        if keep == 0 || sent > next.ansi.len() / 2 {
+        let prompt_reflows =
+            (next.prompt_reflows != prev.prompt_reflows).then(|| next.prompt_reflows.clone());
+        let reflow_bytes =
+            |prompts: &[TerminalPromptReflow]| prompts.iter().map(|p| p.ansi.len()).sum::<usize>();
+        let sent: usize = head.iter().chain(tail).map(|l| l.len() + 1).sum::<usize>()
+            + prompt_reflows.as_deref().map_or(0, reflow_bytes);
+        if keep == 0 || sent > (next.ansi.len() + reflow_bytes(&next.prompt_reflows)) / 2 {
             return None;
         }
         Some(Self {
@@ -63,6 +70,7 @@ impl OutputPatch {
             splits: (next.splits != prev.splits).then(|| next.splits.clone()),
             copilot_scrollbar: (next.copilot_scrollbar != prev.copilot_scrollbar)
                 .then_some(next.copilot_scrollbar),
+            prompt_reflows,
         })
     }
 
@@ -95,6 +103,10 @@ impl OutputPatch {
             wraps: self.wraps.clone().unwrap_or_else(|| prev.wraps.clone()),
             splits: self.splits.clone().unwrap_or_else(|| prev.splits.clone()),
             copilot_scrollbar: self.copilot_scrollbar.unwrap_or(prev.copilot_scrollbar),
+            prompt_reflows: self
+                .prompt_reflows
+                .clone()
+                .unwrap_or_else(|| prev.prompt_reflows.clone()),
         })
     }
 }
@@ -149,6 +161,7 @@ mod tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            prompt_reflows: Vec::new(),
         }
     }
 
@@ -236,6 +249,50 @@ mod tests {
         );
         assert!(!serde_json::to_string(&patch).unwrap().contains("wraps"));
         assert_eq!(patch.apply(&next), Some(tick));
+    }
+
+    #[test]
+    fn verified_prompts_update_and_clear_without_changing_raw_rows() {
+        let prev = read(&history(0..100));
+        let next = TerminalRead {
+            copilot_scrollbar: true,
+            prompt_reflows: vec![TerminalPromptReflow {
+                start: 1,
+                end: 3,
+                ansi: "  ❯ A verified original prompt 12:34".into(),
+            }],
+            ..prev.clone()
+        };
+        let patch = OutputPatch::between(&prev, &next).unwrap();
+        assert_eq!(patch.apply(&prev), Some(next.clone()));
+        let tick = TerminalRead {
+            ansi: next.ansi.clone() + "tick",
+            ..next.clone()
+        };
+        let patch = OutputPatch::between(&next, &tick).unwrap();
+        assert!(patch.prompt_reflows.is_none());
+        assert_eq!(patch.apply(&next), Some(tick.clone()));
+        let cleared = TerminalRead {
+            prompt_reflows: vec![],
+            ..tick.clone()
+        };
+        let patch = OutputPatch::between(&tick, &cleared).unwrap();
+        assert_eq!(patch.prompt_reflows, Some(vec![]));
+        assert_eq!(patch.apply(&tick), Some(cleared));
+    }
+
+    #[test]
+    fn a_large_prompt_reflow_is_sent_as_a_full_snapshot() {
+        let prev = read(&history(0..10));
+        let next = TerminalRead {
+            prompt_reflows: vec![TerminalPromptReflow {
+                start: 1,
+                end: 3,
+                ansi: "word ".repeat(1000),
+            }],
+            ..prev.clone()
+        };
+        assert!(OutputPatch::between(&prev, &next).is_none());
     }
 
     #[test]
@@ -357,6 +414,7 @@ mod tests {
                 wraps: None,
                 splits: None,
                 copilot_scrollbar: None,
+                prompt_reflows: None,
             };
             let end = u64::from(skip) + u64::from(keep);
             let valid = end <= n && u64::from(trail) <= n - end;

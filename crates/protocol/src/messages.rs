@@ -1028,6 +1028,13 @@ pub struct Terminal {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalPromptReflow {
+    pub start: u32,
+    pub end: u32,
+    pub ansi: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalRead {
     pub terminal_id: TerminalId,
     pub source: ReadSource,
@@ -1041,13 +1048,15 @@ pub struct TerminalRead {
     pub splits: Vec<u32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub copilot_scrollbar: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompt_reflows: Vec<TerminalPromptReflow>,
 }
 
 impl TerminalRead {
-    /// `ansi` with the rows in `wraps` and `splits` joined onto the row above; `None` when
-    /// there are none.
+    /// `ansi` with prose continuations joined and verified sent prompts reflowed; `None`
+    /// when neither is present. Prompt row ranges are start-inclusive, end-exclusive.
     pub fn reflowed(&self) -> Option<String> {
-        if self.wraps.is_empty() && self.splits.is_empty() {
+        if self.wraps.is_empty() && self.splits.is_empty() && self.prompt_reflows.is_empty() {
             return None;
         }
         let rows: Vec<&str> = self.ansi.split('\n').collect();
@@ -1059,14 +1068,35 @@ impl TerminalRead {
                 }
             }
         }
+        let mut replacements = vec![None; rows.len()];
+        let mut end = 0;
+        if self.copilot_scrollbar {
+            for prompt in &self.prompt_reflows {
+                let (start, next) = (prompt.start as usize, prompt.end as usize);
+                if start >= end && start < next && next <= rows.len() {
+                    replacements[start] = Some(prompt);
+                    end = next;
+                }
+            }
+        }
         let mut out = String::with_capacity(self.ansi.len());
-        for (i, row) in rows.iter().enumerate() {
+        let mut i = 0;
+        while i < rows.len() {
+            if let Some(prompt) = replacements[i] {
+                if i > 0 {
+                    out.push('\n');
+                }
+                out.push_str(&prompt.ansi);
+                i = prompt.end as usize;
+                continue;
+            }
+            let row = rows[i];
             let row = if self.copilot_scrollbar
                 && (sep[i].is_some() || sep.get(i + 1).is_some_and(Option::is_some))
             {
                 Cow::Owned(trim_copilot_line_end(row))
             } else {
-                Cow::Borrowed(*row)
+                Cow::Borrowed(row)
             };
             match sep[i] {
                 Some(s) if i > 0 => {
@@ -1084,6 +1114,7 @@ impl TerminalRead {
                     out.push_str(&row);
                 }
             }
+            i += 1;
         }
         Some(out)
     }
@@ -2373,6 +2404,7 @@ mod tests {
             wraps: wraps.to_vec(),
             splits: splits.to_vec(),
             copilot_scrollbar: false,
+            prompt_reflows: Vec::new(),
         }
     }
 
@@ -2390,6 +2422,60 @@ mod tests {
                 .unwrap(),
             "a b c"
         );
+    }
+
+    #[test]
+    fn verified_prompt_ranges_preserve_raw_output_and_other_reflow() {
+        let ansi = "▄\r\n  ❯ first 12:34\r\n    second\r\n▀\r\n ● Hello\r\n   world\r\n│ a │ b │";
+        let mut read = read_with(ansi, &[5], &[]);
+        read.copilot_scrollbar = true;
+        read.prompt_reflows = vec![TerminalPromptReflow {
+            start: 1,
+            end: 3,
+            ansi: "  ❯ firstsecond 12:34".into(),
+        }];
+        assert_eq!(read.ansi, ansi);
+        assert_eq!(
+            read.reflowed().unwrap(),
+            "▄\r\n  ❯ firstsecond 12:34\n▀\r\n ● Hello world\n│ a │ b │"
+        );
+        let json = serde_json::to_string(&read).unwrap();
+        assert_eq!(serde_json::from_str::<TerminalRead>(&json).unwrap(), read);
+        read.copilot_scrollbar = false;
+        assert!(
+            read.reflowed()
+                .unwrap()
+                .contains("first 12:34\r\n    second")
+        );
+    }
+
+    #[test]
+    fn invalid_or_overlapping_prompt_ranges_never_drop_unrelated_rows() {
+        let mut read = read_with("first\nsecond\nthird\nfourth", &[], &[]);
+        read.copilot_scrollbar = true;
+        read.prompt_reflows = vec![
+            TerminalPromptReflow {
+                start: 9,
+                end: 10,
+                ansi: "invalid".into(),
+            },
+            TerminalPromptReflow {
+                start: 1,
+                end: 2,
+                ansi: "valid".into(),
+            },
+            TerminalPromptReflow {
+                start: 1,
+                end: 4,
+                ansi: "overlap".into(),
+            },
+            TerminalPromptReflow {
+                start: 2,
+                end: 2,
+                ansi: "empty".into(),
+            },
+        ];
+        assert_eq!(read.reflowed().unwrap(), "first\nvalid\nthird\nfourth");
     }
 
     #[test]

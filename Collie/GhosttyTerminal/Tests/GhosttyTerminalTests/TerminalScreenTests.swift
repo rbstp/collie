@@ -341,6 +341,46 @@ private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB
     }
 }
 
+@Test func copilotsNativeSentRowsReflowToThePhoneWidth() throws {
+    let url = URL(filePath: #filePath).deletingLastPathComponent()
+        .appending(path: "../../../../crates/collied/tests/fixtures/copilot-sent-prompt.json")
+    let fixture = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    let source = try #require(fixture["source"] as? [String]).joined(separator: "\r\n")
+    let reflowed = try #require(fixture["reflowed"] as? [String]).joined(separator: "\r\n")
+    let original = try #require(fixture["original"] as? String)
+    let paragraphs = original.components(separatedBy: "\n\n")
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let sourceFrame = screen.render(ansiSnapshot: source)
+    #expect(sourceFrame.rows == 12)
+    #expect(sourceFrame.wrapContinuations.isEmpty)
+    let sourceSelection = TerminalSelection(TerminalCell(row: 3, column: 0), TerminalCell(row: 9, column: 54))
+    #expect(!sourceSelection.text(in: sourceFrame).contains(paragraphs[0]))
+    for columns in [20, 30, 40, 50, 80] {
+        let frame = screen.render(ansiSnapshot: reflowed, wrapColumns: columns)
+        let top = try #require(frame.runs.first { $0.text.contains("▄") }?.row)
+        let bottom = try #require(frame.runs.first { $0.text.contains("▀") }?.row)
+        for row in (top + 1)..<bottom {
+            #expect(painted(frame, row: row, TerminalRGB(20, 27, 34)) == 1..<columns, "\(columns), \(row)")
+        }
+        let selection = TerminalSelection(
+            TerminalCell(row: top + 1, column: 0), TerminalCell(row: bottom - 1, column: columns - 1)
+        )
+        let copied = selection.text(in: frame)
+        #expect(copied.contains("❯ " + paragraphs[0]), "\(columns), \(copied)")
+        #expect(copied.contains("\n\n    " + paragraphs[1]), "\(columns), \(copied)")
+        #expect(copied.hasSuffix("every word. 12:34"))
+        #expect(copied.components(separatedBy: "12:34").count == 2)
+        #expect(!frame.wrapsUnknown)
+        let timestamp = try #require(frame.runs.first { $0.text.contains("12:34") })
+        #expect(timestamp.style.foreground == TerminalRGB(145, 152, 161))
+        #expect(frame.runs.filter { $0.text.contains("workspace") || $0.text.contains("Keep") }
+            .allSatisfy { $0.style.foreground == TerminalRGB(203, 182, 248) })
+        #expect(!frame.runs.contains { $0.row > bottom && $0.style.background != nil })
+        #expect(frame.runs.contains { $0.text.contains("│ a │ b │") })
+        #expect(frame.runs.contains { $0.text.contains("Reply outside") })
+    }
+}
+
 @Test func rightAlignedTextKeepsNoPaddingOnItsOwnRow() throws {
     let screen = try #require(TerminalScreen(background: bg, foreground: fg))
     let frame = screen.render(ansiSnapshot: try capture("copilot-1.0.94-1/narrow-output", rows: 52...52), wrapColumns: 40)
