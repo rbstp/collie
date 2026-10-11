@@ -519,27 +519,17 @@ private struct PromptBar: View {
             PromptInputLayout(expanded: expanded, showsStatus: model.dictation.isActive) {
                 ZStack {
                     if !model.answering && !model.isTerminal {
-                        Menu {
-                            Button("Saved prompts", systemImage: "text.badge.plus") { pickingPrompt = true }
-                                .disabled(model.dictation.isActive || model.sendingPrompt)
-                            Divider()
-                            Button("Files", systemImage: "folder") { pickingFile = true }
-                                .disabled(model.attachmentSlots <= 0)
-                            Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
-                                .disabled(model.attachmentSlots <= 0)
-                        } label: {
-                            Image(systemName: "paperclip")
-                                .foregroundStyle(Color.accentColor)
-                                .font(.system(size: 20))
-                                .frame(width: 28, height: 28)
+                        AttachmentMenu(
+                            savedPromptsEnabled: !model.dictation.isActive && !model.sendingPrompt,
+                            filesEnabled: model.attachmentSlots > 0
+                        ) { choice in
+                            switch choice {
+                            case .savedPrompts: pickingPrompt = true
+                            case .files: pickingFile = true
+                            case .photos: pickingPhoto = true
+                            }
                         }
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.circle)
-                        .controlSize(.small)
-                        .tint(.primary)
-                        .menuOrder(.fixed)
                         .disabled(model.upload != nil || model.sendingPrompt)
-                        .accessibilityLabel("Attachments and saved prompts")
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
@@ -904,7 +894,13 @@ struct UploadChip: View {
                 .font(.caption)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            ProgressView(value: upload.fraction ?? 0).frame(width: 72)
+            if upload.sent == 0 {
+                ProgressView()
+                Text(upload.total == 0 ? "Preparing…" : "Waiting for machine…")
+                    .font(.caption)
+            } else {
+                ProgressView(value: upload.fraction ?? 0).frame(width: 72)
+            }
             Button(action: cancel) {
                 Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
             }

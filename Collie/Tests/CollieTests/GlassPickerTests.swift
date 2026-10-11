@@ -45,6 +45,7 @@ final class GlassPickerTests: XCTestCase {
             let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
                 window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
             }
+            try assertSelectionBackground(controls, image: image, window: window, style: style)
             let attachment = XCTAttachment(image: image)
             attachment.name = style == .dark ? "glass-picker-dark" : "glass-picker-light"
             attachment.lifetime = .keepAlways
@@ -116,12 +117,45 @@ final class GlassPickerTests: XCTestCase {
     private func assertAppearance(_ controls: [UISegmentedControl], accent: AppAccent, style: UIUserInterfaceStyle) throws {
         let expected = UIColor(accent.color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
         for control in controls {
-            XCTAssertNil(control.selectedSegmentTintColor)
+            let background = try XCTUnwrap(control.selectedSegmentTintColor)
+            XCTAssertEqual(background.resolvedColor(with: UITraitCollection(userInterfaceStyle: style)), style == .dark ? .black : .white)
             XCTAssertNil(control.titleTextAttributes(for: .normal)?[.foregroundColor])
             let actual = try XCTUnwrap(control.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
             XCTAssertEqual(actual.cgColor.numberOfComponents, expected.cgColor.numberOfComponents)
             for (component, wanted) in zip(actual.cgColor.components ?? [], expected.cgColor.components ?? []) {
                 XCTAssertEqual(component, wanted, accuracy: 0.002, "\(accent) in \(control.accessibilityLabel ?? "picker")")
+            }
+        }
+    }
+
+    private func assertSelectionBackground(
+        _ controls: [UISegmentedControl], image: UIImage, window: UIWindow, style: UIUserInterfaceStyle
+    ) throws {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        for control in controls {
+            let segmentWidth = control.bounds.width / CGFloat(control.numberOfSegments)
+            let point = control.convert(
+                CGPoint(x: segmentWidth * CGFloat(control.selectedSegmentIndex) + 10, y: control.bounds.midY),
+                to: window
+            )
+            let sample = try XCTUnwrap(cgImage.cropping(to: CGRect(
+                x: point.x * image.scale, y: point.y * image.scale, width: 1, height: 1
+            )))
+            var pixel = [UInt8](repeating: 0, count: 4)
+            try pixel.withUnsafeMutableBytes { bytes in
+                let context = try XCTUnwrap(CGContext(
+                    data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            }
+            for component in pixel.prefix(3) {
+                let brightness = Double(component) / 255
+                if style == .dark {
+                    XCTAssertLessThan(brightness, 0.12, control.accessibilityLabel ?? "picker")
+                } else {
+                    XCTAssertGreaterThan(brightness, 0.8, control.accessibilityLabel ?? "picker")
+                }
             }
         }
     }

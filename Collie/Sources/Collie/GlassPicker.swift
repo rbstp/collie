@@ -39,7 +39,8 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
         }
         let font = UIFont.systemFont(ofSize: fontSize, weight: .semibold)
         // Keep the selected label's app accent explicit: native defaults lose it, and UIKit tint can change during actions.
-        // Leave the selection background system-controlled.
+        // Keep Chat/Terminal's selection dark like Agents/Usage, including inside glass.
+        control.selectedSegmentTintColor = UIColor { $0.userInterfaceStyle == .dark ? .black : .white }
         let accent = UIColor(Color(context.environment.appAccent.resolve(in: context.environment)))
         control.setTitleTextAttributes([.font: font], for: .normal)
         control.setTitleTextAttributes([.font: font, .foregroundColor: accent], for: .selected)
@@ -60,6 +61,7 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
+    @MainActor
     final class Coordinator: NSObject {
         var parent: NativeSegmentedPicker
 

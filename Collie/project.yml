@@ -202,6 +202,18 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_STYLE: Automatic
 
+  CollieUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/CollieUITests
+    dependencies:
+      - target: Collie
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+
 schemes:
   Collie:
     build:
@@ -214,5 +226,6 @@ schemes:
       config: Debug
       targets:
         - CollieTests
+        - CollieUITests
     archive:
       config: Release
