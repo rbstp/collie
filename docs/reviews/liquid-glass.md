@@ -33,7 +33,7 @@ Reference: [Apple's Liquid Glass guidance](https://developer.apple.com/documenta
 Prioritize dark mode while retaining native appearance and accessibility behavior. Glass uses the system material and respects the user's glass setting.
 
 - `just ios-test`: passed, including 274 app tests and 62 Ghostty tests.
-- `just lint`: passed.
+- `just lint`: passed. The later Codex prompt reflow change also passed all 334 `collied` tests, targeted Clippy and formatting checks; its regression fails before the fix and passes afterward.
 - Signed iPhone build, embedded watch app and widgets: built successfully and passed signature verification.
 - Reviewed the final diff for approval guards, disabled states, composer behavior and widget missing/stale states. Fixed clipped terminal key labels during visual review. Physical watch feedback exposed a widget-only collapse in the geometry-scaled gauges; the updated implementation removes that transform and shares the plain native gauge with usage detail.
 - Simulator fixtures covered light, dark, Increase Contrast, accessibility text sizes and actual Reduce Transparency. Verified native paging at a partial offset with both pages visible and after settling on Usage. Approval actions stack at accessibility sizes. Existing agent header/key clipping at extreme text sizes remains outside this change.
@@ -56,4 +56,4 @@ These screenshots use deterministic fixtures rendered with production views. The
 
 ![Full-width dictation waveform in the glass capsule](images/dictation-waveform.jpg)
 
-Earlier builds were installed on the physical iPhone. The latest build is prepared but installation is paused at the user's request. User acceptance is pending. Remaining manual checks: the iOS 27 glass setting extremes, Live Activity clear/tinted Lock Screen styles, actual watch face accenting, and physical watch readability. Simulator fixtures do not validate those system-hosted presentations.
+Earlier builds were installed on the physical iPhone. The latest build is prepared but installation is paused at the user's request. User acceptance is pending. A Codex-only prompt reflow fix also requires updating the Mac companion: it joins prompt continuations at the source terminal width while preserving short explicit newlines and structured rows. Remaining manual checks: the iOS 27 glass setting extremes, Live Activity clear/tinted Lock Screen styles, actual watch face accenting, and physical watch readability. Simulator fixtures do not validate those system-hosted presentations.
