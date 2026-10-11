@@ -51,6 +51,8 @@ final class FlockModel {
     private(set) var closing: AgentRoute?
     private(set) var closeNotice: String?
     private(set) var archiving = false
+    private(set) var archiveNotice: String?
+    private var archiveNoticeTask: Task<Void, Never>?
 
     func beginClose(_ target: CloseTarget, route: AgentRoute) {
         guard !archiving else { return }
@@ -64,8 +66,11 @@ final class FlockModel {
         archiving = target == .archive
         defer { archiving = false }
         closeNotice = nil
+        clearArchiveNotice()
         do {
-            closeNotice = try await core.closeConfirmed(target, route: route)
+            if let message = try await core.closeConfirmed(target, route: route) {
+                showArchiveNotice(message)
+            }
             return true
         } catch {
             let message = AgentModel.message(for: error)
@@ -73,6 +78,26 @@ final class FlockModel {
             closeNotice = label.map { "\($0): \(message)" } ?? message
             return false
         }
+    }
+
+    func showArchiveNotice(_ message: String) {
+        closeNotice = nil
+        clearArchiveNotice()
+        archiveNotice = ArchiveSummary.message(message)
+        archiveNoticeTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(10))
+            } catch {
+                return
+            }
+            self?.archiveNotice = nil
+        }
+    }
+
+    private func clearArchiveNotice() {
+        archiveNoticeTask?.cancel()
+        archiveNoticeTask = nil
+        archiveNotice = nil
     }
 
     /// Without `snapshot`, a machine is read from the core's cache, unless its last read failed;
@@ -298,5 +323,28 @@ extension CodexUsage {
         let end = Date(timeIntervalSince1970: TimeInterval(resetsAtMs) / 1000)
         guard let interval = WatchUsage.monthlyInterval(endingAt: end) else { return 0 }
         return min(1, max(0, now.timeIntervalSince(interval.lowerBound) / end.timeIntervalSince(interval.lowerBound)))
+    }
+}
+
+enum ArchiveSummary {
+    static func message(_ result: String) -> String {
+        var details: [String] = []
+        if result.contains("reported a different path") {
+            details.append("The removed worktree did not match the expected path. Branch cleanup was skipped.")
+        }
+        if result.contains("workspace closure could not be verified") {
+            details.append("The workspace may still be open.")
+        }
+        if result.contains("Authorization ended") {
+            details.append("Branch cleanup was skipped because the connection was no longer authorized.")
+        } else if result.contains("branch cleanup may be partial") {
+            details.append("Some branches could not be cleaned up.")
+        }
+        let knownResult = result.hasPrefix("Closed pane.") || result.hasPrefix("Removed worktree checkout ")
+            || result == "Archive complete"
+        if details.isEmpty && !knownResult {
+            details.append("Some cleanup steps could not be confirmed.")
+        }
+        return (["Archive complete"] + details).joined(separator: "\n")
     }
 }

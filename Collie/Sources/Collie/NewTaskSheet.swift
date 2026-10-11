@@ -43,6 +43,7 @@ struct NewTaskSheet: View {
                             Text(machine.label).tag(Optional(machine.id))
                         }
                     }
+                    .tint(.primary)
                 }
 
                 Picker("Location", selection: $model.location) {
@@ -50,6 +51,7 @@ struct NewTaskSheet: View {
                         Text(location.rawValue).tag(location)
                     }
                 }
+                .tint(.primary)
 
                 if model.location == .folder {
                     Section {
@@ -59,6 +61,7 @@ struct NewTaskSheet: View {
                                 Picker("In", selection: Binding(get: { model.newFolderParent }, set: { model.newFolderRoot = $0 })) {
                                     ForEach(roots, id: \.self) { Text($0).tag(Optional($0)) }
                                 }
+                                .tint(.primary)
                             }
                             TextField("Folder name", text: $model.folderName)
                                 .textInputAutocapitalization(.never)
@@ -92,7 +95,7 @@ struct NewTaskSheet: View {
                                         Text(cwd).font(.footnote.monospaced()).lineLimit(1).truncationMode(.head)
                                         Spacer()
                                         if model.cwd == cwd {
-                                            Image(systemName: "checkmark").foregroundStyle(.tint)
+                                            Image(systemName: "checkmark").foregroundStyle(.primary)
                                         }
                                     }
                                 }
@@ -122,6 +125,7 @@ struct NewTaskSheet: View {
                                 Text(action.rawValue).tag(action)
                             }
                         }
+                        .tint(.primary)
                         TextField("Source repository path", text: $model.source)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
@@ -167,6 +171,7 @@ struct NewTaskSheet: View {
                         Picker("Agent", selection: $model.agent) {
                             ForEach(agents, id: \.self) { AgentKindLabel(kind: $0).tag($0) }
                         }
+                        .tint(.primary)
                     } else if model.optionsError == nil {
                         ProgressView()
                     }
@@ -211,9 +216,11 @@ struct NewTaskSheet: View {
                                         .disabled(model.attachmentSlots <= 0)
                                 } label: {
                                     Image(systemName: "paperclip")
+                                        .foregroundStyle(.blue)
                                         .font(.system(size: 20))
                                         .frame(width: 32, height: 36)
                                 }
+                                .tint(.primary)
                                 .menuOrder(.fixed)
                                 .disabled(model.upload != nil || model.phase != .editing)
                                 .accessibilityLabel("Attachments and saved prompts")

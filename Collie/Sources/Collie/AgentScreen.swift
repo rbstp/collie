@@ -13,6 +13,7 @@ struct AgentScreen: View {
     let neighbor: ((Int) -> AgentRoute?)?
     let switchAgent: (AgentRoute) -> Void
     let opened: (AgentSummary) -> Void
+    let archived: (String) -> Void
     @State private var recordedOpen = false
     @State private var showingChanges = false
     @State private var showingChat = DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat
@@ -24,7 +25,8 @@ struct AgentScreen: View {
     init(
         core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel?, follows: FollowModel?,
         machineLabel: String?, showsMachine: Bool, neighbor: ((Int) -> AgentRoute?)?,
-        switchAgent: @escaping (AgentRoute) -> Void, opened: @escaping (AgentSummary) -> Void
+        switchAgent: @escaping (AgentRoute) -> Void, opened: @escaping (AgentSummary) -> Void,
+        archived: @escaping (String) -> Void
     ) {
         _model = State(initialValue: AgentModel(core: core, route: route, draftsFile: AgentDrafts.file, machineLabel: machineLabel))
         self.approvals = approvals
@@ -34,6 +36,7 @@ struct AgentScreen: View {
         self.neighbor = neighbor
         self.switchAgent = switchAgent
         self.opened = opened
+        self.archived = archived
     }
 
     private var blocked: BlockedInput? {
@@ -195,13 +198,10 @@ struct AgentScreen: View {
             opened(agent)
         }
         .closeConfirmation($model.close, archiving: model.archiving) { await model.performClose() }
-        .alert("Archive result", isPresented: Binding(
-            get: { model.archiveMessage != nil },
-            set: { if !$0 { model.finishArchive() } }
-        )) {
-            Button("Done") { model.finishArchive() }
-        } message: {
-            Text(model.archiveMessage ?? "")
+        .onChange(of: model.archiveMessage) { _, message in
+            guard let message else { return }
+            archived(message)
+            model.finishArchive()
         }
         .onChange(of: model.closed) { _, closed in
             if closed { dismiss() }
@@ -230,26 +230,32 @@ struct AgentScreen: View {
 
 extension View {
     /// Asks to confirm `close` once it begins; `perform` only runs from that confirmation.
-    func closeConfirmation(_ close: Binding<CloseConfirmation>, archiving: Bool = false, perform: @escaping @MainActor () async -> Void) -> some View {
-        modifier(CloseDialogs(close: close, archiving: archiving, perform: perform))
+    func closeConfirmation(_ close: Binding<CloseConfirmation>, archiving: Bool = false, archiveNotice: String? = nil, perform: @escaping @MainActor () async -> Void) -> some View {
+        modifier(CloseDialogs(close: close, archiving: archiving, archiveNotice: archiveNotice, perform: perform))
     }
 }
 
 private struct CloseDialogs: ViewModifier {
     @Binding var close: CloseConfirmation
     let archiving: Bool
+    let archiveNotice: String?
     let perform: @MainActor () async -> Void
     @State private var asking = false
 
     func body(content: Content) -> some View {
         content
             .safeAreaInset(edge: .top) {
-                if archiving {
+                if archiving || archiveNotice != nil {
                     HStack(spacing: 10) {
-                        ProgressView().controlSize(.small)
-                        Text("Archiving task and cleaning up branches…")
-                            .font(.footnote)
+                        if archiving {
+                            ProgressView().controlSize(.small)
+                            Text("Archiving task and cleaning up branches…")
+                        } else if let archiveNotice {
+                            Label(archiveNotice, systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        }
                     }
+                    .font(.footnote)
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .glassEffect(.regular, in: .rect(cornerRadius: 12))
@@ -298,7 +304,7 @@ private struct CloseDialogs: ViewModifier {
         case .pane: "The agent and its shell on the machine are ended."
         case .workspace: "Every agent and shell in the workspace on the machine is ended."
         case .archive:
-            "Deletes this worktree, including uncommitted changes. Regular folders stay. gh poi may delete other merged worktrees."
+            "Ends this task and deletes its worktree, including uncommitted changes. Branch cleanup may also remove other merged worktrees."
         case nil: ""
         }
     }
@@ -532,9 +538,11 @@ private struct PromptBar: View {
                                 .disabled(model.attachmentSlots <= 0)
                         } label: {
                             Image(systemName: "paperclip")
+                                .foregroundStyle(.blue)
                                 .font(.system(size: 20))
                                 .frame(width: 32, height: 36)
                         }
+                        .tint(.primary)
                         .menuOrder(.fixed)
                         .disabled(model.upload != nil || model.sendingPrompt)
                         .accessibilityLabel("Attachments and saved prompts")
@@ -739,6 +747,7 @@ struct DictationButton: View {
             ) {
                 ForEach(DictationLanguage.allCases, id: \.self) { Text($0.label).tag($0) }
             }
+            .tint(.primary)
         } label: {
             Image(systemName: dictation.isActive ? "mic.fill" : "mic")
                 .font(.system(size: 20))

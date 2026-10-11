@@ -63,6 +63,7 @@ struct AgentInbox<Menu: View>: View {
                         .contextMenu {
                             if seen.isSeen(item.agent, route: item.route) {
                                 Button("Mark unseen", systemImage: "circle.fill") { markUnseen(item.agent, item.route) }
+                                    .tint(.primary)
                                 Divider()
                             }
                             menu(item.agent, item.route)

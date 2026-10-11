@@ -55,6 +55,7 @@ struct FlockScreen: View {
                         Picker("Layout", selection: $layout) {
                             ForEach(AgentsLayout.allCases, id: \.self) { Label($0.label, systemImage: $0.icon) }
                         }
+                        .tint(.primary)
                     }
                     .disabled(showsUsage)
                 }
@@ -63,7 +64,7 @@ struct FlockScreen: View {
                         .disabled(core == nil || machines.isEmpty)
                 }
             }
-            .closeConfirmation($model.close, archiving: model.archiving) {
+            .closeConfirmation($model.close, archiving: model.archiving, archiveNotice: model.archiveNotice) {
                 if let core, await model.performClose(core: core) {
                     await model.refresh(core: core)
                 }
@@ -85,7 +86,8 @@ struct FlockScreen: View {
                         opened: { agent in
                             seen.markOpened(agent, route: route, nowMs: Date().unixMs)
                             seen.save(to: SeenAgents.file)
-                        }
+                        },
+                        archived: { model.showArchiveNotice($0) }
                     )
                     // A replaced route must get its own model, not keep the previous agent's.
                     .id(route)
@@ -245,7 +247,7 @@ struct FlockScreen: View {
     @ViewBuilder
     private func menu(_ agent: AgentSummary, _ route: AgentRoute) -> some View {
         if let follows {
-            FollowMenuItem(follows: follows, route: route)
+            FollowMenuItem(follows: follows, route: route).tint(.primary)
             Divider()
         }
         Button("Close pane", systemImage: "xmark.square", role: .destructive) {
@@ -410,7 +412,18 @@ struct StatusPill: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Label(state.label.capitalized, systemImage: AgentActivityStatus(state).symbol)
+        Label {
+            Text(state.label.capitalized)
+        } icon: {
+            if state == .working {
+                StatusIcon(state: state)
+                    .scaleEffect(0.7)
+                    .frame(width: 14, height: 14)
+                    .accessibilityHidden(true)
+            } else {
+                Image(systemName: AgentActivityStatus(state).symbol)
+            }
+        }
             .labelStyle(KindLabelStyle())
             .font(.caption.weight(.semibold))
             .foregroundStyle(state.color)

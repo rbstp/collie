@@ -52,11 +52,13 @@ struct SettingsView: View {
                     Picker("Default view", selection: $defaultSessionView) {
                         ForEach(SessionView.allCases, id: \.self) { Text($0.label) }
                     }
+                    .tint(.primary)
                 }
                 Section("Terminal") {
                     Picker("Scrollback", selection: $historyLines) {
                         ForEach(DevicePrefs.historyChoices, id: \.self) { Text("\($0) lines") }
                     }
+                    .tint(.primary)
                     NavigationLink("Gestures") { GesturesView() }
                 }
                 Section("Machines") {
@@ -120,9 +122,11 @@ private struct GesturesView: View {
                 Picker("Double-tap", selection: $gestures.doubleTap) {
                     ForEach(GestureAction.allCases, id: \.self) { Text($0.label) }
                 }
+                .tint(.primary)
                 Picker("Triple-tap", selection: $gestures.tripleTap) {
                     ForEach(GestureAction.allCases, id: \.self) { Text($0.label) }
                 }
+                .tint(.primary)
                 Toggle("Pinch to resize text", isOn: $gestures.pinchResizesText)
                 Toggle("Swipe sideways to switch agents", isOn: $gestures.swipeSwitchesAgents)
             } footer: {
