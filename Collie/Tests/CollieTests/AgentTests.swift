@@ -213,7 +213,7 @@ final class FakeCore: AgentCore {
     }
     func archiveTask(machineId: String, terminalId: String, confirm: Bool) async throws -> String {
         try await call { $0.closes.append("archive \(terminalId) confirm=\(confirm)") }
-        return "Checkout removed; gh poi completed."
+        return "Removed worktree checkout /src/task and closed its workspace. gh poi completed in /src/repo."
     }
     func taskOptions(machineId: String) async throws -> TaskOptions {
         try await call { _ in }
@@ -793,7 +793,7 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     archived.close.advance()
     await archived.performClose()
     #expect(core.snapshot.closes.last == "archive term_1 confirm=true")
-    #expect(archived.archiveMessage == "Checkout removed; gh poi completed.")
+    #expect(archived.archiveMessage == "Removed worktree checkout /src/task and closed its workspace. gh poi completed in /src/repo.")
     #expect(!archived.closed)
     archived.finishArchive()
     #expect(archived.closed)
@@ -843,7 +843,8 @@ func listArchiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
     core.release()
     #expect(await request.value == !fails)
     #expect(!model.archiving)
-    #expect(model.closeNotice != nil)
+    #expect((model.closeNotice != nil) == fails)
+    #expect((model.archiveNotice != nil) == !fails)
 }
 
 @MainActor
@@ -875,13 +876,16 @@ func listArchiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
     #expect(await model.performClose(core: core) == false)
     #expect(core.snapshot.closes.last == "workspace w7 confirm=true")
     #expect(model.closeNotice?.contains("approval") == true)
+    model.showArchiveNotice("Archive complete")
+    #expect(model.closeNotice == nil)
 
     core.set(error: nil)
     model.beginClose(.archive, route: route)
     model.close.advance()
     #expect(await model.performClose(core: core))
     #expect(core.snapshot.closes.last == "archive term_2 confirm=true")
-    #expect(model.closeNotice == "Checkout removed; gh poi completed.")
+    #expect(model.closeNotice == nil)
+    #expect(model.archiveNotice == "Archive complete")
 }
 
 @MainActor
@@ -2423,4 +2427,25 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     let target = "\(model.route.machineId)|\(model.route.terminalId)"
     #expect(core.snapshot.gitCalls == [target, target + "|/worktree|a.swift|staged"])
     #expect(core.snapshot.prompts.isEmpty)
+}
+
+@Test func archiveSummariesOnlyIncludeRelevantDetails() {
+    #expect(ArchiveSummary.message("Closed pane. Its folder was left in place. gh poi completed in /src/repo.") == "Archive complete")
+    #expect(ArchiveSummary.message("Closed pane. Its folder was left in place. No repository was available for gh poi; branch cleanup was skipped.") == "Archive complete")
+    #expect(ArchiveSummary.message("Closed pane. Its folder was left in place. gh poi did not complete (timeout); branch cleanup may be partial.") == "Archive complete\nSome branches could not be cleaned up.")
+    #expect(ArchiveSummary.message("Removed worktree checkout /src/task; workspace closure could not be verified. Authorization ended; gh poi was skipped.") == "Archive complete\nThe workspace may still be open.\nBranch cleanup was skipped because the connection was no longer authorized.")
+    #expect(ArchiveSummary.message("Herdr removed a checkout but reported a different path; branch cleanup was skipped. Expected /src/task, got /src/other.") == "Archive complete\nThe removed worktree did not match the expected path. Branch cleanup was skipped.")
+    #expect(ArchiveSummary.message("Unexpected response") == "Archive complete\nSome cleanup steps could not be confirmed.")
+}
+
+@MainActor
+@Test func archiveNoticeExpiresAndReplacementGetsItsOwnLifetime() async throws {
+    let model = FlockModel()
+    model.showArchiveNotice("Archive complete")
+    try await Task.sleep(for: .seconds(1))
+    model.showArchiveNotice("Closed pane. gh poi did not complete (timeout); branch cleanup may be partial.")
+    try await Task.sleep(for: .seconds(9.2))
+    #expect(model.archiveNotice == "Archive complete\nSome branches could not be cleaned up.")
+    try await Task.sleep(for: .seconds(1))
+    #expect(model.archiveNotice == nil)
 }

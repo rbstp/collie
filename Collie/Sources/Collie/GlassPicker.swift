@@ -15,7 +15,7 @@ struct GlassPicker<Selection: Hashable>: View {
                 Button { selection = value } label: {
                     Text(label)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(selection == value ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                        .foregroundStyle(.primary)
                         .padding(.horizontal, 14)
                         .frame(maxWidth: expands ? .infinity : nil, minHeight: 38)
                         .background {
@@ -31,7 +31,6 @@ struct GlassPicker<Selection: Hashable>: View {
             }
         }
         .padding(3)
-        .tint(.blue)
         .glassEffect(.regular.interactive(), in: .capsule)
         .animation(.smooth(duration: 0.3), value: selection)
         .accessibilityRepresentation {
