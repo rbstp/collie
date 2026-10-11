@@ -60,5 +60,4 @@ final class NewTaskSheetTests: XCTestCase {
     private func controllers(_ controller: UIViewController) -> [UIViewController] {
         [controller] + controller.children.flatMap(controllers)
     }
-
 }

@@ -276,6 +276,7 @@ struct NewTaskSheet: View {
                     }
                 }
             }
+            .safeAreaPadding(.bottom, editingPrompt ? 48 : 0)
             .navigationTitle("New task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

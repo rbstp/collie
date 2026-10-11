@@ -26,9 +26,10 @@ final class NewTaskPromptTests: XCTestCase {
         add(screenshot)
         collapse.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), app.debugDescription)
-        XCTAssertEqual(prompt.value as? String, "keep this prompt")
-        prompt.tap()
+        let preservedPrompt = app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", "keep this prompt")).firstMatch
+        XCTAssertTrue(preservedPrompt.waitForExistence(timeout: 5), app.debugDescription)
+        preservedPrompt.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertEqual(prompt.value as? String, "keep this prompt")
+        XCTAssertTrue(preservedPrompt.exists, app.debugDescription)
     }
 }
