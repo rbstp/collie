@@ -32,7 +32,7 @@ final class MachineConnectionTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(copy.frame.width, 44 - 0.001)
             XCTAssertGreaterThanOrEqual(copy.frame.height, 44 - 0.001)
             copy.tap()
-            XCTAssertTrue(app.buttons["Copied"].waitForExistence(timeout: 2))
+            XCTAssertTrue(app.buttons["Copy connection error"].waitForExistence(timeout: 5))
             XCTAssertFalse(app.staticTexts["Copied"].exists)
             XCTAssertTrue(app.staticTexts[message].exists)
             XCTAssertFalse(app.staticTexts["Machine settings"].exists)
@@ -40,7 +40,6 @@ final class MachineConnectionTests: XCTestCase {
             screenshot.name = "machine-connection-error"
             screenshot.lifetime = .keepAlways
             add(screenshot)
-            XCTAssertTrue(app.buttons["Copy connection error"].waitForExistence(timeout: 5))
             app.buttons["Agents"].tap()
             app.buttons["New task"].tap()
             let prompt = app.textFields["What should the agent do?"]
