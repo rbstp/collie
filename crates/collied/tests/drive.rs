@@ -141,6 +141,10 @@ struct Herdr {
     worktree_workspace_id: Option<String>,
     pane_occupied: bool,
     disconnect_after_remove: bool,
+    trust_agent: Option<Value>,
+    trust_cwd: Option<String>,
+    ignore_trust_navigation: bool,
+    trust_after_nav: Option<String>,
 }
 
 struct Mock {
@@ -285,7 +289,7 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
             "manifests": h.manifests.iter().map(|a| json!({"agent": a, "source": "builtin", "source_kind": "builtin", "local_override_shadowing_remote": false})).collect::<Vec<_>>(),
         }),
         "agent.get" => {
-            let agent = match h.gets.pop_front() {
+            let agent = match h.gets.pop_front().or_else(|| h.trust_agent.clone()) {
                 Some(mut a) => {
                     if a["name"] == "$started" {
                         a["name"] = json!(h.started);
@@ -351,6 +355,25 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
                     return Err("confirmation_required".into());
                 }
                 panes.retain(|item| item["pane_id"] != pane["pane_id"]);
+            }
+            json!({"type": "ok"})
+        }
+        "agent.send_keys" if h.trust_agent.is_some() => {
+            if p["keys"] == json!(["enter"]) {
+                let agent = h.trust_agent.as_mut().unwrap();
+                agent["agent_status"] = json!("idle");
+                agent["interactive_ready"] = json!(true);
+                agent["launch_pending"] = json!(false);
+                h.text.clear();
+            } else if !h.ignore_trust_navigation {
+                let kind = h.trust_agent.as_ref().unwrap()["agent"].as_str().unwrap();
+                let (menu, target) =
+                    collied::prompt::startup_trust(&h.text, kind, h.trust_cwd.as_deref().unwrap())
+                        .unwrap();
+                h.text = h
+                    .trust_after_nav
+                    .take()
+                    .unwrap_or_else(|| menu.region_at(target).replace("\n>", "\n❯"));
             }
             json!({"type": "ok"})
         }
@@ -519,7 +542,37 @@ fn task(cwd: &Path, agent: &str) -> TaskNewParams {
         label: Some(Label::new("tests").unwrap()),
         new_folder: None,
         worktree: None,
+        startup: None,
     }
+}
+
+fn trust_screen(kind: &str, cwd: &Path) -> String {
+    let (text, path) = match kind {
+        "claude" => (
+            include_str!("fixtures/claude-2.1.292/trust.detection.txt"),
+            "/tmp/trustlab",
+        ),
+        "codex" => (
+            include_str!("fixtures/codex/trust.detection.txt"),
+            "/Users/me/src/app",
+        ),
+        "copilot" => (
+            include_str!("fixtures/copilot/trust.detection.txt"),
+            "/Users/me/src/app",
+        ),
+        _ => unreachable!(),
+    };
+    text.replace(path, cwd.to_str().unwrap())
+}
+
+fn set_startup_trust(herdr: &Mock, kind: &str, cwd: &Path) {
+    herdr.with(|h| {
+        let mut agent = started_agent("blocked", false, true);
+        agent["agent"] = json!(kind);
+        h.trust_agent = Some(agent);
+        h.trust_cwd = Some(cwd.to_str().unwrap().into());
+        h.text = trust_screen(kind, cwd);
+    });
 }
 
 #[tokio::test]
@@ -1899,6 +1952,10 @@ async fn copilot_tasks_start_in_autopilot_without_permission_confirmation() {
         let (_d, base) = root();
         let drive = herdr.driver(&["copilot"], &base.join("root"));
         let mut p = task(&base.join("root/a"), "copilot");
+        p.startup = Some(protocol::TaskStartup {
+            automatic_mode: true,
+            approve_folder: false,
+        });
         if worktree {
             p.worktree = Some(TaskWorktree::Create {
                 branch: "feature".into(),
@@ -1919,6 +1976,274 @@ async fn copilot_tasks_start_in_autopilot_without_permission_confirmation() {
         assert_eq!(starts[0]["args"], json!(["--autopilot", "--allow-all"]));
         assert_eq!(herdr.params("agent.prompt").len(), 1);
     }
+}
+
+#[tokio::test]
+async fn automatic_modes_are_per_agent_and_optional_for_folder_and_worktree_tasks() {
+    for kind in ["claude", "codex", "copilot"] {
+        for automatic_mode in [false, true] {
+            for worktree in [false, true] {
+                let herdr = Mock::start();
+                let (_d, base) = root();
+                let drive = herdr.driver(&[kind], &base.join("root"));
+                let mut p = task(&base.join("root/a"), kind);
+                p.startup = Some(protocol::TaskStartup {
+                    automatic_mode,
+                    approve_folder: false,
+                });
+                if worktree {
+                    p.worktree = Some(TaskWorktree::Create {
+                        branch: "feature".into(),
+                    });
+                }
+                herdr.with(|h| {
+                    let mut agent = started_agent("idle", true, false);
+                    agent["agent"] = json!(kind);
+                    h.gets.extend([agent.clone(), agent]);
+                    h.text.clear();
+                });
+                let (reply, _) = drive.task_new(p, &yes()).await;
+                assert!(
+                    reply.is_ok(),
+                    "{kind} {automatic_mode} {worktree}: {reply:?}"
+                );
+                let args = herdr.params("agent.start")[0]["args"].clone();
+                let expected = match (kind, automatic_mode) {
+                    ("claude", true) => json!(["--permission-mode", "auto"]),
+                    ("codex", true) => json!(["--no-daemon", "--approve-for-me"]),
+                    ("codex", false) => json!(["--no-daemon"]),
+                    ("copilot", true) => json!(["--autopilot", "--allow-all"]),
+                    _ => Value::Null,
+                };
+                assert_eq!(args, expected);
+                assert_eq!(herdr.params("agent.prompt").len(), 1);
+                assert!(herdr.params("agent.send_keys").is_empty());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn folder_approval_is_scoped_to_the_canonical_task_folder_for_every_agent_and_location() {
+    for kind in ["claude", "codex", "copilot"] {
+        for location in ["folder", "new", "create", "open"] {
+            let herdr = Mock::start();
+            let (_d, base) = root();
+            let drive = herdr.driver(&[kind], &base.join("root"));
+            let mut p = task(&base.join("root/a"), kind);
+            p.startup = Some(protocol::TaskStartup {
+                automatic_mode: true,
+                approve_folder: true,
+            });
+            let cwd = match location {
+                "new" => {
+                    p.new_folder = Some(protocol::FolderName::new("fresh").unwrap());
+                    base.join("root/a/fresh")
+                }
+                "create" => {
+                    p.worktree = Some(TaskWorktree::Create {
+                        branch: "feature".into(),
+                    });
+                    base.join("root/a/.worktree/feature")
+                }
+                "open" => {
+                    let path = base.join("root/existing");
+                    std::fs::create_dir(&path).unwrap();
+                    herdr.with(|h| {
+                        h.worktree_path = Some(path.to_str().unwrap().into());
+                        h.worktree_open = true;
+                    });
+                    p.worktree = Some(TaskWorktree::Open {
+                        path: Cwd::new(path.to_str().unwrap()).unwrap(),
+                    });
+                    path
+                }
+                _ => {
+                    p.cwd = Cwd::new(base.join("root/b/../a").to_str().unwrap()).unwrap();
+                    base.join("root/a")
+                }
+            };
+            set_startup_trust(&herdr, kind, &cwd);
+            let (reply, actual) = drive.task_new(p, &yes()).await;
+            assert!(reply.is_ok(), "{kind} {location}: {reply:?}");
+            let audited = if location == "create" || location == "open" {
+                base.join("root/a")
+            } else {
+                cwd
+            };
+            assert_eq!(actual.unwrap().as_str(), audited.to_str().unwrap());
+            let keys: Vec<Value> = herdr
+                .params("agent.send_keys")
+                .iter()
+                .map(|p| p["keys"].clone())
+                .collect();
+            assert_eq!(
+                keys,
+                if kind == "claude" {
+                    vec![json!(["down"]), json!(["enter"])]
+                } else {
+                    vec![json!(["enter"])]
+                }
+            );
+            assert_eq!(herdr.params("agent.prompt").len(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn folder_approval_refuses_disabled_wrong_folder_and_unrelated_prompts() {
+    for kind in ["claude", "codex", "copilot"] {
+        for failure in ["disabled", "wrong_folder", "unknown_choice", "tool"] {
+            let herdr = Mock::start();
+            let (_d, base) = root();
+            let cwd = base.join("root/a");
+            let drive = herdr.driver(&[kind], &base.join("root"));
+            let mut p = task(&cwd, kind);
+            p.startup = Some(protocol::TaskStartup {
+                automatic_mode: true,
+                approve_folder: failure != "disabled",
+            });
+            set_startup_trust(&herdr, kind, &cwd);
+            herdr.with(|h| match failure {
+                "wrong_folder" => h.text = trust_screen(kind, &base.join("root/b")),
+                "unknown_choice" => {
+                    h.text = h
+                        .text
+                        .replace("Yes", "Always allow")
+                        .replace("Trust and continue", "Trust every folder")
+                }
+                "tool" => {
+                    h.text = format!("Run shell command in {}?\n❯ 1. Yes\n  2. No", cwd.display())
+                }
+                _ => {}
+            });
+            let (reply, _) = drive.task_new(p, &yes()).await;
+            assert!(reply.is_err(), "{kind} {failure}: {reply:?}");
+            assert!(herdr.params("agent.send_keys").is_empty());
+            assert!(herdr.params("agent.prompt").is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn folder_approval_checks_navigation_identity_sequence_and_authorization_before_enter() {
+    for failure in [
+        "lost_arrow",
+        "changed_prompt",
+        "kind",
+        "pane",
+        "terminal",
+        "name",
+        "sequence",
+        "revoked",
+        "key_error",
+    ] {
+        let herdr = Mock::start();
+        let (_d, base) = root();
+        let cwd = base.join("root/a");
+        let drive = herdr.driver(&["claude"], &base.join("root"));
+        let mut p = task(&cwd, "claude");
+        p.startup = Some(protocol::TaskStartup {
+            automatic_mode: true,
+            approve_folder: true,
+        });
+        set_startup_trust(&herdr, "claude", &cwd);
+        herdr.with(|h| {
+            h.ignore_trust_navigation = failure == "lost_arrow";
+            if failure == "changed_prompt" {
+                h.trust_after_nav = Some(trust_screen("claude", &base.join("root/b")));
+            }
+            if ["kind", "pane", "terminal", "name", "sequence"].contains(&failure) {
+                let original = h.trust_agent.clone().unwrap();
+                let mut changed = original.clone();
+                let (field, value) = match failure {
+                    "kind" => ("agent", json!("codex")),
+                    "pane" => ("pane_id", json!("w9:p2")),
+                    "terminal" => ("terminal_id", json!("term_replaced")),
+                    "name" => ("name", json!("someone-else")),
+                    _ => ("state_change_seq", json!(1)),
+                };
+                changed[field] = value;
+                h.gets.extend([original.clone(), original, changed]);
+            }
+        });
+        if failure == "key_error" {
+            herdr.fail_next("agent.send_keys", &["agent_not_ready"]);
+        }
+        let shared = herdr.state.clone();
+        let auth: Authorized = Arc::new(move || {
+            failure != "revoked"
+                || !shared
+                    .lock()
+                    .unwrap()
+                    .calls
+                    .iter()
+                    .any(|(method, _)| method == "agent.send_keys")
+        });
+        let (reply, _) = drive.task_new(p, &auth).await;
+        assert!(reply.is_err(), "{failure}: {reply:?}");
+        assert_eq!(
+            herdr
+                .params("agent.send_keys")
+                .iter()
+                .map(|p| p["keys"].clone())
+                .collect::<Vec<_>>(),
+            [json!(["down"])],
+            "{failure}"
+        );
+        assert!(herdr.params("agent.prompt").is_empty());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn folder_trust_is_confirmed_only_once_even_if_it_returns_after_readiness() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let cwd = base.join("root/a");
+    let drive = herdr.driver(&["copilot"], &base.join("root"));
+    let mut p = task(&cwd, "copilot");
+    p.startup = Some(protocol::TaskStartup {
+        automatic_mode: true,
+        approve_folder: true,
+    });
+    set_startup_trust(&herdr, "copilot", &cwd);
+    herdr.with(|h| {
+        let text = h.text.clone();
+        h.screens.extend([
+            text.clone(),
+            text.clone(),
+            "❯ Ask Copilot anything".into(),
+            text,
+        ]);
+    });
+    let (reply, _) = drive.task_new(p, &yes()).await;
+    assert_eq!(code(reply), ErrorCode::AgentNotReady);
+    assert_eq!(
+        herdr
+            .params("agent.send_keys")
+            .iter()
+            .map(|p| p["keys"].clone())
+            .collect::<Vec<_>>(),
+        [json!(["enter"])]
+    );
+    assert!(herdr.params("agent.prompt").is_empty());
+}
+
+#[tokio::test]
+async fn unsupported_automatic_modes_are_rejected_before_creating_a_workspace() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["pi"], &base.join("root"));
+    let mut p = task(&base.join("root/a"), "pi");
+    p.startup = Some(protocol::TaskStartup {
+        automatic_mode: true,
+        approve_folder: true,
+    });
+    assert_eq!(
+        code(drive.task_new(p, &yes()).await.0),
+        ErrorCode::InvalidParams
+    );
+    assert!(herdr.mutations().is_empty());
 }
 
 #[tokio::test]

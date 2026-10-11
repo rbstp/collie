@@ -1419,6 +1419,10 @@
             "$ref": "#/$defs/Cwd"
           },
           "type": "array"
+        },
+        "startup_options": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "required": [

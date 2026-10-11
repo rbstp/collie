@@ -722,6 +722,16 @@
         "prompt": {
           "$ref": "#/$defs/PromptText"
         },
+        "startup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskStartup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "worktree": {
           "anyOf": [
             {
@@ -738,6 +748,22 @@
         "cwd",
         "agent",
         "prompt"
+      ],
+      "type": "object"
+    },
+    "TaskStartup": {
+      "additionalProperties": false,
+      "properties": {
+        "approve_folder": {
+          "type": "boolean"
+        },
+        "automatic_mode": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "automatic_mode",
+        "approve_folder"
       ],
       "type": "object"
     },

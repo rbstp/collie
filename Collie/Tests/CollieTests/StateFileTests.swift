@@ -20,7 +20,7 @@ private func object(_ data: Data) throws -> NSDictionary {
 
 @Test func prefsFileLoadsAndSavesTheSameJSON() throws {
     let json = #"""
-        {"wrapLines":false,"keepKeyboard":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"accent":"blue","taskBases":{"m1":"/Users/me/git"}}
+        {"wrapLines":false,"keepKeyboard":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"accent":"blue","taskBases":{"m1":"/Users/me/git"},"agentStartup":{}}
         """#
     let file = try write(json, as: "prefs.json")
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
@@ -48,6 +48,34 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
 @Test func prefsFromBeforeDoneAlertsKeepThemOn() throws {
     #expect(try JSONDecoder().decode(DevicePrefs.self, from: Data(#"{"wrapLines":false,"watchDecisions":true}"#.utf8)).doneAlerts)
     #expect(DevicePrefs.load(from: nil).doneAlerts)
+}
+
+@Test func agentStartupDefaultsApplyToNewAndLegacyPreferences() throws {
+    let legacy = try JSONDecoder().decode(DevicePrefs.self, from: Data(#"{"wrapLines":false}"#.utf8))
+    for prefs in [DevicePrefs(), legacy, DevicePrefs.load(from: nil)] {
+        for kind in ["claude", "codex", "copilot"] {
+            #expect(prefs.startup(for: kind) == AgentStartupPrefs(automaticMode: true, approveFolder: true))
+        }
+        #expect(prefs.startup(for: "pi") == AgentStartupPrefs(automaticMode: false, approveFolder: false))
+    }
+    #expect(!legacy.wrapLines)
+}
+
+@Test func agentStartupPreferencesPersistIndependently() throws {
+    let file = try write(#"{"keepKeyboard":true,"taskBases":{"m1":"/Users/me/git"}}"#, as: "prefs.json")
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    DevicePrefs.update(in: file) {
+        $0.agentStartup["claude"] = AgentStartupPrefs(automaticMode: false, approveFolder: true)
+        $0.agentStartup["codex"] = AgentStartupPrefs(automaticMode: true, approveFolder: false)
+        $0.agentStartup["copilot"] = AgentStartupPrefs(automaticMode: false, approveFolder: false)
+    }
+    DevicePrefs.update(in: file) { $0.historyLines = 500 }
+    let prefs = DevicePrefs.load(from: file)
+    #expect(prefs.startup(for: "claude") == AgentStartupPrefs(automaticMode: false, approveFolder: true))
+    #expect(prefs.startup(for: "codex") == AgentStartupPrefs(automaticMode: true, approveFolder: false))
+    #expect(prefs.startup(for: "copilot") == AgentStartupPrefs(automaticMode: false, approveFolder: false))
+    #expect(prefs.keepKeyboard && prefs.historyLines == 500)
+    #expect(prefs.taskBases == ["m1": "/Users/me/git"])
 }
 
 @Test(arguments: [#"{"wrapLines":false}"#, #"{"wrapLines":false,"accent":"future"}"#])

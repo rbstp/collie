@@ -68,6 +68,9 @@ struct SettingsView: View {
                     }
                     .tint(.primary)
                 }
+                Section("Agents") {
+                    NavigationLink("Startup and approvals") { AgentStartupSettingsView() }
+                }
                 Section("Terminal") {
                     Picker("Scrollback", selection: $historyLines) {
                         ForEach(DevicePrefs.historyChoices, id: \.self) { Text("\($0) lines") }
@@ -117,6 +120,46 @@ struct SettingsView: View {
                 await app.refreshNode()
                 report = app.core?.coldStartReport()
             }
+        }
+    }
+
+    private struct AgentStartupSettingsView: View {
+        @State private var startup = DevicePrefs.load(from: DevicePrefs.file).agentStartup
+
+        var body: some View {
+            List {
+                ForEach(["claude", "codex", "copilot"], id: \.self) { kind in
+                    Section {
+                        Toggle("Automatic mode", isOn: binding(kind, \.automaticMode))
+                        Toggle("Approve task folder automatically", isOn: binding(kind, \.approveFolder))
+                    } header: {
+                        Text(kind == "claude" ? "Claude Code" : kind == "codex" ? "Codex" : "Copilot")
+                    } footer: {
+                        Text(kind == "claude" ? "Claude's auto permission mode keeps its risk checks."
+                             : kind == "codex" ? "Codex reviews approvals automatically inside its workspace sandbox."
+                             : "Copilot starts in autopilot with tools, paths and URLs allowed.")
+                    }
+                }
+                Section {
+                    Text("Applies to new tasks only. Folder approval accepts only the selected task folder, never other startup dialogs.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Agents")
+            .onChange(of: startup) { _, values in
+                DevicePrefs.update(in: DevicePrefs.file) { $0.agentStartup = values }
+            }
+        }
+
+        private func binding(_ kind: String, _ key: WritableKeyPath<AgentStartupPrefs, Bool>) -> Binding<Bool> {
+            Binding(
+                get: { (startup[kind] ?? AgentStartupPrefs())[keyPath: key] },
+                set: { on in
+                    var value = startup[kind] ?? AgentStartupPrefs()
+                    value[keyPath: key] = on
+                    startup[kind] = value
+                }
+            )
         }
     }
 

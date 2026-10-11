@@ -562,12 +562,19 @@ pub async fn agent_start(
     name: &str,
     kind: &str,
     pane_id: &str,
+    startup: &protocol::TaskStartup,
 ) -> Result<AgentInfo, Error> {
     let mut params = json!({ "name": name, "kind": kind, "pane_id": pane_id });
     if kind == "codex" {
-        params["args"] = json!(["--no-daemon"]);
-    } else if kind == "copilot" {
+        params["args"] = if startup.automatic_mode {
+            json!(["--no-daemon", "--approve-for-me"])
+        } else {
+            json!(["--no-daemon"])
+        };
+    } else if kind == "copilot" && startup.automatic_mode {
         params["args"] = json!(["--autopilot", "--allow-all"]);
+    } else if kind == "claude" && startup.automatic_mode {
+        params["args"] = json!(["--permission-mode", "auto"]);
     }
     let AgentStartedResult::AgentStarted { agent } = call(socket, "agent.start", params).await?;
     Ok(agent)

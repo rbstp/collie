@@ -1218,6 +1218,14 @@ impl Session<'_> {
             Request::TaskNew(p) => {
                 let (op_id, d) = (p.op_id.clone(), drive.clone());
                 let created = p.new_folder.is_some();
+                let startup = p.startup.map(|s| {
+                    format!(
+                        " agent={} automatic={} approve_folder={}",
+                        p.agent.as_str(),
+                        s.automatic_mode,
+                        s.approve_folder
+                    )
+                });
                 let worktree_target = p.worktree.as_ref().map(|w| match w {
                     protocol::TaskWorktree::Create { branch } => {
                         format!("create branch={branch:?}")
@@ -1229,13 +1237,14 @@ impl Session<'_> {
                 let op = self.audited(method, target.clone(), async move {
                     let (reply, cwd) = d.task_new(p, &auth).await;
                     let cwd = cwd.map(|c| {
-                        if let Some(worktree_target) = &worktree_target {
+                        let folder = if let Some(worktree_target) = &worktree_target {
                             format!("{} {worktree_target}", c.as_str())
                         } else if created {
                             format!("{} (created)", c.as_str())
                         } else {
                             c.as_str().to_owned()
-                        }
+                        };
+                        folder + startup.as_deref().unwrap_or("")
                     });
                     (reply, cwd)
                 });

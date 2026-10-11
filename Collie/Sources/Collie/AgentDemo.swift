@@ -192,13 +192,13 @@ final class DemoAgentCore: ActivityCore {
         throw CoreError.NotImplemented
     }
 
-    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?) async throws -> TaskStarted {
+    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?, startup: TaskStartupOptions?) async throws -> TaskStarted {
         throw CoreError.NotImplemented
     }
 
     func taskWorktrees(machineId: String, cwd: String) async throws -> WorktreeListing { throw CoreError.NotImplemented }
-    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted { throw CoreError.NotImplemented }
-    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted { throw CoreError.NotImplemented }
+    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?, startup: TaskStartupOptions?) async throws -> TaskStarted { throw CoreError.NotImplemented }
+    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?, startup: TaskStartupOptions?) async throws -> TaskStarted { throw CoreError.NotImplemented }
 
     func flock(machineId: String) async throws -> MachineFlock { demoFlock }
 

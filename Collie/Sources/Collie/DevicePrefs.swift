@@ -16,6 +16,14 @@ struct DevicePrefs: StateFile, Equatable {
     var accent = AppAccent.blue
     /// Per machine id: the canonical folder collied returned when it was saved.
     var taskBases: [String: String] = [:]
+    var agentStartup: [String: AgentStartupPrefs] = [:]
+
+    func startup(for agent: String) -> AgentStartupPrefs {
+        guard ["claude", "codex", "copilot"].contains(agent) else {
+            return AgentStartupPrefs(automaticMode: false, approveFolder: false)
+        }
+        return agentStartup[agent] ?? AgentStartupPrefs()
+    }
 
     static let historyChoices: [UInt16] = [200, 500, 1000]
 
@@ -62,6 +70,7 @@ extension DevicePrefs {
         doneAlerts = try container.decodeIfPresent(Bool.self, forKey: .doneAlerts) ?? defaults.doneAlerts
         accent = (try? container.decodeIfPresent(AppAccent.self, forKey: .accent)) ?? defaults.accent
         taskBases = try container.decodeIfPresent([String: String].self, forKey: .taskBases) ?? defaults.taskBases
+        agentStartup = try container.decodeIfPresent([String: AgentStartupPrefs].self, forKey: .agentStartup) ?? defaults.agentStartup
     }
 
     /// Kept only once collied has listed it, in the canonical form it returned.
@@ -76,6 +85,11 @@ extension DevicePrefs {
         guard load(from: file).taskBases[machineId] != nil else { return }
         update(in: file) { $0.taskBases[machineId] = nil }
     }
+}
+
+struct AgentStartupPrefs: Codable, Equatable {
+    var automaticMode = true
+    var approveFolder = true
 }
 
 enum AppAccent: String, Codable, CaseIterable {

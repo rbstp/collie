@@ -35,6 +35,7 @@ final class FakeCore: AgentCore {
         var folderPaths: [String] = []
         var taskNews: [String] = []
         var taskPrompts: [String] = []
+        var taskStartups: [TaskStartupOptions?] = []
         var worktreeListing = WorktreeListing(source: "/Users/me/app", worktrees: [
             WorktreeChoice(path: "/Users/me/app-feature", branch: "feature", open: true)
         ])
@@ -223,10 +224,11 @@ final class FakeCore: AgentCore {
         try await call { $0.folderPaths.append(path) }
         return state.withLock { $0.folders }
     }
-    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?) async throws -> TaskStarted {
+    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?, startup: TaskStartupOptions?) async throws -> TaskStarted {
         try await call {
             $0.taskNews.append("\(cwd) \(newFolder ?? "-")")
             $0.taskPrompts.append(prompt)
+            $0.taskStartups.append(startup)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
@@ -235,18 +237,20 @@ final class FakeCore: AgentCore {
         try await call { $0.worktreeCalls.append("list \(cwd)") }
         return state.withLock { $0.worktreeListing }
     }
-    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
+    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?, startup: TaskStartupOptions?) async throws -> TaskStarted {
         try await call {
             $0.worktreeCalls.append("create \(cwd) \(branch) \(agent)")
             $0.taskPrompts.append(prompt)
+            $0.taskStartups.append(startup)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
-    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
+    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?, startup: TaskStartupOptions?) async throws -> TaskStarted {
         try await call {
             $0.worktreeCalls.append("open \(cwd) \(path) \(agent)")
             $0.taskPrompts.append(prompt)
+            $0.taskStartups.append(startup)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
@@ -1221,6 +1225,43 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
         "list /Users/me/app", "open /Users/me/app /Users/me/app-feature codex"
     ])
     #expect(core.snapshot.taskPrompts == ["build it", "continue"])
+}
+
+@MainActor
+@Test(arguments: ["claude", "codex", "copilot"])
+func newTaskReadsCurrentAgentStartupPreferencesForEveryLocation(_ kind: String) async throws {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.options.agents = ["claude", "codex", "copilot"]
+        $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new")
+    }
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    for location in ["folder", "new", "create", "open"] {
+        let model = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+        await model.loadOptions()
+        model.cwd = "/Users/me/app"
+        model.agent = kind
+        model.prompt = "build it"
+        if location == "create" || location == "open" {
+            model.location = .worktree
+            model.source = "/Users/me/app"
+            model.branch = "feature"
+            model.worktreeAction = location == "create" ? .create : .open
+            await model.loadWorktrees()
+        } else if location == "new" {
+            model.newFolder = true
+            model.folderName = "fresh"
+        }
+        DevicePrefs.update(in: file) {
+            $0.agentStartup[kind] = AgentStartupPrefs(automaticMode: location != "new", approveFolder: location != "open")
+        }
+        #expect(await model.start() != nil)
+        let startup = try #require(core.snapshot.taskStartups.last ?? nil)
+        #expect(startup.automaticMode == (location != "new"))
+        #expect(startup.approveFolder == (location != "open"))
+    }
 }
 
 @MainActor

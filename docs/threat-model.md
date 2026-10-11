@@ -211,6 +211,14 @@ Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the t
 | Residual | herdr checks the foreground agent before queuing the text and the delayed Enter: if the agent exits in between, the shell receives the prompt. Closing it needs conditional input in herdr upstream. Text an agent reads from a repository can still steer the agent itself; that is outside collie. A dialog Claude Code draws between `agent.slash_draft`'s last read and its write receives the command token as a paste, the same gap as `agent.answer_notice` but narrower: the token always starts with `/`, is never a bare digit and carries no Enter. Dictation through the iOS keyboard's own mic, and the keyboard's paste, reach the prompt field like typing, so a dictated or pasted `/word` can show in the machine's input box; it is never submitted without a send. |
 | Phase | Built; herdr conditional input: upstream proposal. |
 
+### Automatic task startup
+
+The iOS app defaults automatic mode and task-folder approval on for Claude Code, Codex and Copilot, with independent per-device settings. A paired full-session `task.new` can request only those two booleans, not arbitrary launch arguments. Claude uses its native auto permission mode and risk checks; Codex uses automatic approval review within its workspace sandbox. Copilot's autopilot and allow-all flags intentionally permit tools, paths and URLs beyond `[tasks] roots`, subject to explicit deny rules and managed policies. These choices apply only to newly launched tasks.
+
+Automatic folder approval sends a single affirmative confirmation only for the selected canonical task folder in a known native trust dialog with the exact expected choices. Navigation and Enter are separate; collied re-reads the agent kind, name, terminal, pane, workspace, state sequence, path and menu before each write, verifies the cursor before Enter, holds the input lock, and re-checks authorization and one shared startup deadline. Unrelated dialogs, different folders, unknown choices, changed identity or sequence, and failed navigation are not confirmed. Requests without startup flags preserve manual folder approval. Startup flags are included with the resolved task audit target.
+
+This deliberately trusts the selected repository and its native CLI configuration or hooks without a separate approval nonce or LocalAuthentication, under the same paired-session authority as starting the task. Claude and Codex can remember folder trust; disabling the preference does not revoke existing CLI trust. Copilot's session-only Yes is used instead of remembering the folder. The remaining read-to-input race requires conditional input in herdr, as with ordinary approvals.
+
 ### Approval TOCTOU
 
 | | |

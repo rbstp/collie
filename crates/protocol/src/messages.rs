@@ -666,6 +666,15 @@ pub struct TaskNewParams {
     pub new_folder: Option<FolderName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<TaskWorktree>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup: Option<TaskStartup>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskStartup {
+    pub automatic_mode: bool,
+    pub approve_folder: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1152,6 +1161,8 @@ pub struct TaskOptions {
     pub default_agent: AgentKind,
     pub recent_cwds: Vec<Cwd>,
     pub roots: Vec<Cwd>,
+    #[serde(default)]
+    pub startup_options: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1651,7 +1662,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 16);
+        assert_eq!(crate::PROTOCOL_VERSION, 17);
     }
 
     #[test]
@@ -1679,6 +1690,7 @@ mod tests {
             panic!("not a task");
         };
         assert_eq!(plain.new_folder, None);
+        assert_eq!(plain.startup, None);
         let frame = task(r#","new_folder":"app""#).unwrap();
         let Request::TaskNew(p) = &frame.request else {
             panic!("not a task");
@@ -2055,6 +2067,54 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn task_startup_requires_explicit_flags_and_old_options_default_to_unsupported() {
+        let task = |startup: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"task.new","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","cwd":"/a","agent":"claude","prompt":"go","startup":{startup}}}}}"#
+            ))
+        };
+        for automatic_mode in [false, true] {
+            for approve_folder in [false, true] {
+                let frame = task(&format!(
+                    r#"{{"automatic_mode":{automatic_mode},"approve_folder":{approve_folder}}}"#
+                ))
+                .unwrap();
+                let Request::TaskNew(p) = &frame.request else {
+                    panic!("not a task")
+                };
+                assert_eq!(
+                    p.startup,
+                    Some(TaskStartup {
+                        automatic_mode,
+                        approve_folder
+                    })
+                );
+                assert_eq!(
+                    parse(&serde_json::to_string(&frame).unwrap()).unwrap(),
+                    frame
+                );
+            }
+        }
+        for bad in [
+            "{}",
+            r#"{"automatic_mode":true}"#,
+            r#"{"automatic_mode":true,"approve_folder":"yes"}"#,
+            r#"{"automatic_mode":true,"approve_folder":true,"allow_other_prompts":true}"#,
+        ] {
+            assert_eq!(
+                task(bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{bad}"
+            );
+        }
+        let old: TaskOptions = serde_json::from_str(
+            r#"{"agents":["claude"],"default_agent":"claude","recent_cwds":[],"roots":[]}"#,
+        )
+        .unwrap();
+        assert!(!old.startup_options);
     }
 
     #[test]

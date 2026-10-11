@@ -345,6 +345,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
                 "go".into(),
                 None,
                 None,
+                None,
             )
             .await
             .unwrap_err();
@@ -361,6 +362,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             "claude".into(),
             "Write the tests".into(),
             Some("app task".into()),
+            None,
             None,
         )
         .await
@@ -424,6 +426,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             "Set it up".into(),
             Some("fresh task".into()),
             Some("fresh".into()),
+            None,
         )
     };
     assert_eq!(new_task().await.unwrap().terminal_id, NEW_TERMINAL);
@@ -714,7 +717,7 @@ async fn live_scenario(
     let s = |p: &Path| p.to_str().unwrap().to_owned();
     for cwd in [s(&work.join("escape")), "/tmp".into()] {
         let err = core
-            .task_new(m.clone(), cwd, "pi".into(), "go".into(), None, None)
+            .task_new(m.clone(), cwd, "pi".into(), "go".into(), None, None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, CoreError::InvalidInput { .. }), "{err:?}");
@@ -752,6 +755,7 @@ async fn live_scenario(
             "pi".into(),
             "hello from collie".into(),
             Some("e2e task".into()),
+            None,
             None,
         )
         .await

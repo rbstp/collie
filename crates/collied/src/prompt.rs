@@ -323,6 +323,89 @@ pub fn shows_dialog(text: &str) -> bool {
         .any(|l| trust_wording(l) || option_line(l.trim_start().trim_start_matches('›')).is_some())
 }
 
+pub fn startup_trust(text: &str, kind: &str, cwd: &str) -> Option<(Menu, usize)> {
+    let normalized = text
+        .lines()
+        .map(|line| {
+            let line = line.trim_end();
+            let line = if line.trim_start().starts_with('│') {
+                line.trim_start()
+                    .strip_prefix('│')?
+                    .strip_suffix('│')?
+                    .trim_end()
+            } else {
+                line
+            };
+            let indent = line.len() - line.trim_start().len();
+            Some(match line[indent..].strip_prefix('›') {
+                Some(rest) => format!("{}❯{rest}", &line[..indent]),
+                None => line.to_owned(),
+            })
+        })
+        .collect::<Option<Vec<_>>>()?
+        .join("\n");
+    let menu = Menu::parse(&normalized)?;
+    if menu.heads != menu.options
+        || !menu.body.iter().any(|line| {
+            line.trim_matches(|c: char| matches!(c, '│' | '┃') || c.is_whitespace()) == cwd
+        })
+    {
+        return None;
+    }
+    let exact = |labels: &[&str]| {
+        menu.options.len() == labels.len()
+            && menu
+                .options
+                .iter()
+                .zip(labels)
+                .all(|(a, b)| a.eq_ignore_ascii_case(b))
+    };
+    let target = match kind {
+        "claude"
+            if menu
+                .body
+                .first()
+                .is_some_and(|line| line == "Accessing workspace:")
+                && (exact(&["Yes, I trust this folder", "No, exit"])
+                    || exact(&["No, exit", "Yes, I trust this folder"])) =>
+        {
+            menu.options
+                .iter()
+                .position(|line| line == "Yes, I trust this folder")?
+        }
+        "codex"
+            if menu
+                .body
+                .first()
+                .is_some_and(|line| line == "Folder access")
+                && menu.body.iter().any(|line| {
+                    line.starts_with("Trust this folder? Codex can read, edit, and run files here,")
+                })
+                && exact(&["Trust and continue", "Back to Agent Command Center"]) =>
+        {
+            0
+        }
+        "copilot"
+            if normalized
+                .lines()
+                .any(|line| line.trim() == "Confirm folder trust")
+                && menu
+                    .body
+                    .iter()
+                    .any(|line| line == "Do you trust the files in this folder?")
+                && exact(&[
+                    "Yes",
+                    "Yes, and remember this folder for future sessions",
+                    "No (Esc)",
+                ]) =>
+        {
+            0
+        }
+        _ => return None,
+    };
+    Some((menu, target))
+}
+
 fn grants(label: &str) -> bool {
     classify(label).is_some() || label.to_lowercase().starts_with("yes")
 }
@@ -1136,6 +1219,64 @@ pub mod fixtures {
 mod tests {
     use super::fixtures::*;
     use super::*;
+
+    #[test]
+    fn startup_trust_accepts_only_the_selected_folder_and_exact_known_choices() {
+        for (kind, text, cwd, target) in [
+            ("claude", TRUST, "/Users/me/src/new-project", 0),
+            (
+                "claude",
+                include_str!("../tests/fixtures/claude-2.1.292/trust.detection.txt"),
+                "/tmp/trustlab",
+                1,
+            ),
+            (
+                "codex",
+                include_str!("../tests/fixtures/codex/trust.detection.txt"),
+                "/Users/me/src/app",
+                0,
+            ),
+            (
+                "copilot",
+                include_str!("../tests/fixtures/copilot/trust.detection.txt"),
+                "/Users/me/src/app",
+                0,
+            ),
+        ] {
+            let (menu, choice) = startup_trust(text, kind, cwd).unwrap();
+            assert_eq!(choice, target);
+            assert!(
+                menu.options[choice].starts_with("Yes")
+                    || menu.options[choice] == "Trust and continue"
+            );
+            assert!(startup_trust(text, kind, "/somewhere/else").is_none());
+            assert!(startup_trust(text, "other", cwd).is_none());
+            assert!(
+                startup_trust(&text.replace(cwd, &format!("{cwd}/child")), kind, cwd).is_none()
+            );
+        }
+        assert!(startup_trust(BASH, "claude", "/Users/me/src/app").is_none());
+        let copilot = include_str!("../tests/fixtures/copilot/trust.detection.txt");
+        let boxed = copilot
+            .lines()
+            .map(|line| format!("│ {line:<100} │"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(startup_trust(&boxed, "copilot", "/Users/me/src/app").is_some());
+        let spaced = copilot.replace("/Users/me/src/app", "/Users/me/my  app");
+        assert!(startup_trust(&spaced, "copilot", "/Users/me/my  app").is_some());
+        assert!(startup_trust(&spaced, "copilot", "/Users/me/my app").is_none());
+        for text in [
+            copilot.replace("Confirm folder trust", "Tool permissions"),
+            copilot.replace("1. Yes", "1. Yes, run this command"),
+            copilot.replace(
+                "2. Yes, and remember this folder for future sessions",
+                "2. Yes, and allow every folder",
+            ),
+        ] {
+            assert!(startup_trust(&text, "copilot", "/Users/me/src/app").is_none());
+        }
+    }
     use Decision::*;
 
     #[test]

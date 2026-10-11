@@ -260,6 +260,8 @@ final class NewTaskModel {
     func start() async -> AgentRoute? {
         guard canStart, !cancelled, let machineId else { return nil }
         let text = (attachments.map(\.path) + [trimmed(prompt)].filter { !$0.isEmpty }).joined(separator: " ")
+        let prefs = DevicePrefs.load(from: prefsFile).startup(for: agent)
+        let startup = TaskStartupOptions(automaticMode: prefs.automaticMode, approveFolder: prefs.approveFolder)
         phase = .starting
         error = nil
         let started: TaskStarted
@@ -269,19 +271,19 @@ final class NewTaskModel {
                 if worktreeAction == .create {
                     started = try await core.taskWorktreeCreate(
                         machineId: machineId, cwd: sourceFolder, branch: createBranch,
-                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
+                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, startup: startup
                     )
                 } else {
                     started = try await core.taskWorktreeOpen(
                         machineId: machineId, cwd: sourceFolder, path: checkoutPath,
-                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
+                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, startup: startup
                     )
                 }
             } else {
                 guard let cwd = newFolder ? newFolderParent : folder else { phase = .editing; return nil }
                 started = try await core.taskNew(
                     machineId: machineId, cwd: cwd, agent: agent, prompt: text,
-                    label: trimmed(label).nilIfEmpty, newFolder: newFolder ? trimmed(folderName) : nil
+                    label: trimmed(label).nilIfEmpty, newFolder: newFolder ? trimmed(folderName) : nil, startup: startup
                 )
             }
         } catch {

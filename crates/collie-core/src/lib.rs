@@ -643,6 +643,7 @@ async fn task_new_inner(
     label: Option<String>,
     new_folder: Option<String>,
     worktree: Option<TaskWorktree>,
+    startup: Option<TaskStartupOptions>,
 ) -> Result<TaskStarted, CoreError> {
     let label = label
         .map(|l| l.trim().to_owned())
@@ -665,7 +666,23 @@ async fn task_new_inner(
         new_folder: new_folder.map(|n| FolderName::new(n)
             .map_err(|_| invalid("new_folder", "folder name must be one plain name of at most 255 bytes, without / or \\, a leading dot, or control or invisible characters"))).transpose()?,
         worktree,
+        startup: startup
+            .filter(|s| s.automatic_mode || s.approve_folder)
+            .map(|s| protocol::TaskStartup {
+                automatic_mode: s.automatic_mode,
+                approve_folder: s.approve_folder,
+            }),
     });
+    if matches!(&request, Request::TaskNew(p) if p.startup.is_some()) {
+        match core
+            .call(&machine_id, Request::TaskOptions(Empty {}), CALL_TIMEOUT)
+            .await?
+        {
+            Response::TaskOptions(options) if options.startup_options => {}
+            Response::TaskOptions(_) => return Err(CoreError::NotImplemented),
+            other => return Err(unexpected(&other).into()),
+        }
+    }
     match core.mutate(&machine_id, request, TASK_NEW_TIMEOUT).await? {
         Response::TaskStarted {
             workspace_id,
@@ -676,6 +693,12 @@ async fn task_new_inner(
         }),
         other => Err(unexpected(&other).into()),
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, uniffi::Record)]
+pub struct TaskStartupOptions {
+    pub automatic_mode: bool,
+    pub approve_folder: bool,
 }
 
 #[uniffi::export]
@@ -1558,6 +1581,7 @@ impl CollieCore {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn task_new(
         &self,
         machine_id: String,
@@ -1566,9 +1590,10 @@ impl CollieCore {
         prompt: String,
         label: Option<String>,
         new_folder: Option<String>,
+        startup: Option<TaskStartupOptions>,
     ) -> Result<TaskStarted, CoreError> {
         task_new_inner(
-            self, machine_id, cwd, agent, prompt, label, new_folder, None,
+            self, machine_id, cwd, agent, prompt, label, new_folder, None, startup,
         )
         .await
     }
@@ -1711,6 +1736,7 @@ impl CollieCore {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn task_worktree_create(
         &self,
         machine_id: String,
@@ -1719,6 +1745,7 @@ impl CollieCore {
         agent: String,
         prompt: String,
         label: Option<String>,
+        startup: Option<TaskStartupOptions>,
     ) -> Result<TaskStarted, CoreError> {
         task_new_inner(
             self,
@@ -1729,10 +1756,12 @@ impl CollieCore {
             label,
             None,
             Some(TaskWorktree::Create { branch }),
+            startup,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn task_worktree_open(
         &self,
         machine_id: String,
@@ -1741,6 +1770,7 @@ impl CollieCore {
         agent: String,
         prompt: String,
         label: Option<String>,
+        startup: Option<TaskStartupOptions>,
     ) -> Result<TaskStarted, CoreError> {
         let path = Cwd::new(path).map_err(|_| invalid("path", "invalid checkout path"))?;
         task_new_inner(
@@ -1752,6 +1782,7 @@ impl CollieCore {
             label,
             None,
             Some(TaskWorktree::Open { path }),
+            startup,
         )
         .await
     }
@@ -3666,6 +3697,7 @@ mod tests {
                 "go".into(),
                 label.map(Into::into),
                 None,
+                None,
             ))
             .map(|_| ())
         };
@@ -3679,6 +3711,7 @@ mod tests {
                         "go".into(),
                         None,
                         Some(bad.into()),
+                        None,
                     ))
                     .map(|_| ())
                 ),
@@ -3883,6 +3916,7 @@ mod tailnet_tests {
         prompt_ops: Vec<String>,
         executed: HashMap<String, Response>,
         task_ops: Vec<String>,
+        legacy_startup: bool,
         approvals: Vec<protocol::Approval>,
         lists: usize,
         decisions: Vec<(String, protocol::Decision)>,
@@ -4106,6 +4140,7 @@ mod tailnet_tests {
                                 default_agent: AgentKind::new("claude").unwrap(),
                                 recent_cwds: vec![Cwd::new("/src/collie").unwrap()],
                                 roots: vec![Cwd::new("/src").unwrap()],
+                                startup_options: !lock(&seen).legacy_startup,
                             }))
                         }
                         Request::TaskFolders(p) => {
@@ -4123,6 +4158,17 @@ mod tailnet_tests {
                             );
                             assert_eq!(p.label.unwrap().as_str(), "tests");
                             assert_eq!(p.new_folder.unwrap().as_str(), "new app");
+                            assert_eq!(
+                                p.startup,
+                                if lock(&seen).legacy_startup {
+                                    None
+                                } else {
+                                    Some(protocol::TaskStartup {
+                                        automatic_mode: true,
+                                        approve_folder: true,
+                                    })
+                                }
+                            );
                             lock(&seen).task_ops.push(p.op_id.as_str().into());
                             Ok(Response::TaskStarted {
                                 workspace_id: WorkspaceId::new("w2").unwrap(),
@@ -4557,6 +4603,10 @@ mod tailnet_tests {
                 "add tests".into(),
                 Some(" tests ".into()),
                 Some("new app".into()),
+                Some(TaskStartupOptions {
+                    automatic_mode: true,
+                    approve_folder: true,
+                }),
             ))
             .unwrap();
         assert_eq!(
@@ -4564,6 +4614,31 @@ mod tailnet_tests {
             ("w2", "term_2")
         );
         assert_eq!(lock(&seen).task_ops.len(), 1);
+        lock(&seen).legacy_startup = true;
+        let start_on_old_daemon = |automatic_mode, approve_folder| {
+            core.task_new(
+                id(),
+                "/src/collie".into(),
+                "claude".into(),
+                "add tests".into(),
+                Some("tests".into()),
+                Some("new app".into()),
+                Some(TaskStartupOptions {
+                    automatic_mode,
+                    approve_folder,
+                }),
+            )
+        };
+        for flags in [(true, false), (false, true), (true, true)] {
+            assert!(matches!(
+                rt.block_on(start_on_old_daemon(flags.0, flags.1)),
+                Err(CoreError::NotImplemented)
+            ));
+        }
+        assert_eq!(lock(&seen).task_ops.len(), 1);
+        rt.block_on(start_on_old_daemon(false, false)).unwrap();
+        assert_eq!(lock(&seen).task_ops.len(), 2);
+        lock(&seen).legacy_startup = false;
         let err = rt
             .block_on(core.close_pane(id(), "term_2".into(), false))
             .unwrap_err();

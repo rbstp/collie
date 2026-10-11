@@ -1039,6 +1039,7 @@ impl Driver {
             default_agent,
             recent_cwds,
             roots,
+            startup_options: true,
         }))
     }
 
@@ -1114,6 +1115,15 @@ impl Driver {
         if !self.agents.contains(&p.agent) {
             return fail(ErrorCode::InvalidParams, "agent kind is not allowed");
         }
+        if p.startup
+            .is_some_and(|s| s.automatic_mode || s.approve_folder)
+            && !["claude", "codex", "copilot"].contains(&p.agent.as_str())
+        {
+            return fail(
+                ErrorCode::InvalidParams,
+                "automatic startup is not supported for this agent kind",
+            );
+        }
         let roots = self.roots.clone();
         let requested = p.cwd.as_str().to_owned();
         let (new_folder, auth) = (p.new_folder.clone(), auth.clone());
@@ -1137,7 +1147,17 @@ impl Driver {
         .await
         .map_err(herdr_fail)?
         .root_pane;
-        self.finish_task(&p, &pane, "created and left open", true, auth)
+        if p.startup.is_some_and(|s| s.approve_folder) && pane.cwd.as_deref() != Some(cwd.as_str())
+        {
+            return fail(
+                ErrorCode::AgentNotReady,
+                format!(
+                    "workspace {} was created and left open: the new pane is in a different folder",
+                    pane.workspace_id
+                ),
+            );
+        }
+        self.finish_task(&p, &pane, cwd, "created and left open", true, auth)
             .await
     }
 
@@ -1301,7 +1321,7 @@ impl Driver {
         } else if pane.agent.is_some() {
             return Err(left(invalid("the worktree root pane is occupied")));
         }
-        self.finish_task(&p, pane, "left open", !result.already_open, auth)
+        self.finish_task(&p, pane, &actual, "left open", !result.already_open, auth)
             .await
             .map_err(left)
     }
@@ -1310,6 +1330,7 @@ impl Driver {
         &self,
         p: &TaskNewParams,
         pane: &PaneInfo,
+        cwd: &Cwd,
         left_state: &str,
         retry_busy: bool,
         auth: &Authorized,
@@ -1329,13 +1350,43 @@ impl Driver {
                 ),
             )
         };
+        let startup = p.startup.unwrap_or_default();
+        let deadline = tokio::time::Instant::now() + START_TIMEOUT;
+        let mut trust_answered = false;
         let name = self
-            .start_agent(pane, &p.agent, retry_busy, auth)
+            .start_agent(pane, &p.agent, &startup, retry_busy, deadline, auth)
             .await
             .map_err(left_open)?;
-        let current = herdr::agent_get(&self.herdr, &name)
+        self.wait_for_agent(
+            pane,
+            &name,
+            &p.agent,
+            cwd,
+            startup.approve_folder,
+            &mut trust_answered,
+            deadline,
+            auth,
+        )
+        .await
+        .map_err(left_open)?;
+        let current = if startup.approve_folder {
+            self.wait_for_agent(
+                pane,
+                &name,
+                &p.agent,
+                cwd,
+                true,
+                &mut trust_answered,
+                deadline,
+                auth,
+            )
             .await
-            .map_err(|e| left_open(herdr_fail(e)))?;
+            .map_err(left_open)?
+        } else {
+            herdr::agent_get(&self.herdr, &name)
+                .await
+                .map_err(|e| left_open(herdr_fail(e)))?
+        };
         self.started_check(&current, pane, &name, &p.agent)
             .await
             .map_err(left_open)?;
@@ -1368,14 +1419,17 @@ impl Driver {
         &self,
         pane: &PaneInfo,
         kind: &AgentKind,
+        startup: &protocol::TaskStartup,
         retry_busy: bool,
+        deadline: tokio::time::Instant,
         auth: &Authorized,
     ) -> Result<String, Fail> {
-        let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         let name = agent_name()?;
         let started = loop {
             authorized(auth)?;
-            match herdr::agent_start(&self.herdr, &name, kind.as_str(), &pane.pane_id).await {
+            match herdr::agent_start(&self.herdr, &name, kind.as_str(), &pane.pane_id, startup)
+                .await
+            {
                 Ok(a) => break a,
                 // Retried while the pane still holds the terminal created for this task: what
                 // runs there is the shell's startup (rc files often run helpers in the
@@ -1397,19 +1451,52 @@ impl Driver {
                 "the new pane no longer hosts the started agent",
             );
         }
+        Ok(name)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn wait_for_agent(
+        &self,
+        pane: &PaneInfo,
+        name: &str,
+        kind: &AgentKind,
+        cwd: &Cwd,
+        approve_folder: bool,
+        trust_answered: &mut bool,
+        deadline: tokio::time::Instant,
+        auth: &Authorized,
+    ) -> Result<AgentInfo, Fail> {
         while tokio::time::Instant::now() < deadline {
             tokio::time::sleep(START_POLL).await;
-            let a = match herdr::agent_get(&self.herdr, &name).await {
+            let a = match herdr::agent_get(&self.herdr, name).await {
                 Ok(a) => a,
                 Err(_) => match herdr::agent_get(&self.herdr, &pane.pane_id).await {
                     Ok(a) => a,
                     Err(_) => continue,
                 },
             };
-            self.started_check(&a, pane, &name, kind).await?;
+            started_identity(&a, pane, name, kind)?;
+            if approve_folder {
+                let text = herdr::detection_text(&self.herdr, &pane.pane_id)
+                    .await
+                    .map_err(herdr_fail)?;
+                if let Some((menu, target)) =
+                    prompt::startup_trust(&text, kind.as_str(), cwd.as_str())
+                {
+                    if !*trust_answered {
+                        self.accept_startup_trust(
+                            &a, pane, name, kind, cwd, &menu, target, deadline, auth,
+                        )
+                        .await?;
+                        *trust_answered = true;
+                    }
+                    continue;
+                }
+            }
+            self.started_check(&a, pane, name, kind).await?;
             match (flock::status(&a.agent_status), a.interactive_ready) {
-                (AgentStatus::Idle | AgentStatus::Done, true) => return Ok(name),
-                (AgentStatus::Unknown, true) if kind.as_str() == "codex" => return Ok(name),
+                (AgentStatus::Idle | AgentStatus::Done, true) => return Ok(a),
+                (AgentStatus::Unknown, true) if kind.as_str() == "codex" => return Ok(a),
                 (AgentStatus::Idle | AgentStatus::Done, false) if !a.launch_pending => {
                     return fail(
                         ErrorCode::AgentNotReady,
@@ -1425,9 +1512,61 @@ impl Driver {
         )
     }
 
-    /// The started agent must still be the one in the new pane, and is never answered on
-    /// the user's behalf: a startup question such as Claude Code's folder trust prompt
-    /// is left to its approval, and another kind's to the terminal.
+    #[allow(clippy::too_many_arguments)]
+    async fn accept_startup_trust(
+        &self,
+        agent: &AgentInfo,
+        pane: &PaneInfo,
+        name: &str,
+        kind: &AgentKind,
+        cwd: &Cwd,
+        menu: &Menu,
+        target: usize,
+        deadline: tokio::time::Instant,
+        auth: &Authorized,
+    ) -> Result<(), Fail> {
+        let _write = self.box_writes.lock().await;
+        let nav = menu.arrows(target);
+        for (cursor, keys) in [(menu.cursor, nav.as_slice()), (target, &["enter"][..])] {
+            if keys.is_empty() {
+                continue;
+            }
+            let current = herdr::agent_get(&self.herdr, name)
+                .await
+                .map_err(herdr_fail)?;
+            started_identity(&current, pane, name, kind)?;
+            if current.agent.as_deref() != Some(kind.as_str()) {
+                return fail(
+                    ErrorCode::AgentNotReady,
+                    "the new pane no longer hosts the started agent",
+                );
+            }
+            let text = herdr::detection_text(&self.herdr, &pane.pane_id)
+                .await
+                .map_err(herdr_fail)?;
+            let unchanged = prompt::startup_trust(&text, kind.as_str(), cwd.as_str()).is_some_and(
+                |(now, choice)| choice == target && now.region() == menu.region_at(cursor),
+            );
+            if current.state_change_seq != agent.state_change_seq || !unchanged {
+                return fail(
+                    ErrorCode::AgentBlocked,
+                    "the folder trust prompt changed; nothing was confirmed",
+                );
+            }
+            authorized(auth)?;
+            if tokio::time::Instant::now() >= deadline {
+                return fail(ErrorCode::AgentNotReady, "folder approval timed out");
+            }
+            herdr::agent_send_keys(&self.herdr, name, keys)
+                .await
+                .map_err(herdr_fail)?;
+            if keys != ["enter"] {
+                tokio::time::sleep(START_POLL).await;
+            }
+        }
+        Ok(())
+    }
+
     async fn started_check(
         &self,
         a: &AgentInfo,
@@ -1435,15 +1574,7 @@ impl Driver {
         name: &str,
         kind: &AgentKind,
     ) -> Result<(), Fail> {
-        if a.terminal_id != pane.terminal_id
-            || a.name.as_deref() != Some(name)
-            || a.agent.as_deref().is_some_and(|k| k != kind.as_str())
-        {
-            return fail(
-                ErrorCode::AgentNotReady,
-                "the new pane no longer hosts the started agent",
-            );
-        }
+        started_identity(a, pane, name, kind)?;
         if flock::status(&a.agent_status) != AgentStatus::Blocked {
             return Ok(());
         }
@@ -1733,6 +1864,26 @@ pub fn check_ready(listed: &AgentInfo, current: &AgentInfo) -> Result<(), Fail> 
     }
     if current.agent.is_none() || current.launch_pending {
         return fail(ErrorCode::AgentNotReady, "agent is not ready");
+    }
+    Ok(())
+}
+
+fn started_identity(
+    a: &AgentInfo,
+    pane: &PaneInfo,
+    name: &str,
+    kind: &AgentKind,
+) -> Result<(), Fail> {
+    if a.terminal_id != pane.terminal_id
+        || a.pane_id != pane.pane_id
+        || a.workspace_id != pane.workspace_id
+        || a.name.as_deref() != Some(name)
+        || a.agent.as_deref().is_some_and(|k| k != kind.as_str())
+    {
+        return fail(
+            ErrorCode::AgentNotReady,
+            "the new pane no longer hosts the started agent",
+        );
     }
     Ok(())
 }
