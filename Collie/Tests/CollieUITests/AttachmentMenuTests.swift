@@ -24,19 +24,20 @@ final class AttachmentMenuTests: XCTestCase {
     }
 
     private func checkChoice(_ choice: String, newTask: Bool) throws {
+        let app = try launchDemo()
+        defer { app.terminate() }
+        if newTask {
+            app.buttons["New task"].tap()
+        } else {
+            let agent = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
+            XCTAssertTrue(agent.waitForExistence(timeout: 5), app.debugDescription)
+            agent.tap()
+        }
         for keyboard in [false, true] {
-            let app = try launchDemo()
-            defer { app.terminate() }
-            if newTask {
-                app.buttons["New task"].tap()
-            } else {
-                let agent = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
-                XCTAssertTrue(agent.waitForExistence(timeout: 5), app.debugDescription)
-                agent.tap()
-            }
             if keyboard {
                 let field = app.textFields[newTask ? "What should the agent do?" : "Prompt the agent"]
                 field.tap()
+                XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
                 field.typeText("test")
             }
             let attachment = app.buttons["Attachments and saved prompts"]
@@ -49,14 +50,17 @@ final class AttachmentMenuTests: XCTestCase {
             let option = app.buttons[choice].firstMatch
             XCTAssertTrue(option.waitForExistence(timeout: 3), app.debugDescription)
             option.tap()
-            if choice == "Saved prompts" {
-                XCTAssertTrue(app.navigationBars["Saved prompts"].waitForExistence(timeout: 5), app.debugDescription)
-            } else if choice == "Files" {
-                // System pickers need time to initialize their services on fresh CI simulators.
-                XCTAssertTrue(app.navigationBars["FullDocumentManagerViewControllerNavigationBar"].waitForExistence(timeout: 30), app.debugDescription)
-            } else {
-                XCTAssertTrue(app.navigationBars["Photos"].waitForExistence(timeout: 30), app.debugDescription)
+            let picker = switch choice {
+            case "Saved prompts": app.navigationBars["Saved prompts"]
+            case "Files": app.navigationBars["FullDocumentManagerViewControllerNavigationBar"]
+            default: app.navigationBars["Photos"]
             }
+            // Cancel remote pickers before another presentation or terminating their host app.
+            XCTAssertTrue(picker.waitForExistence(timeout: choice == "Saved prompts" ? 5 : 30), app.debugDescription)
+            let cancel = picker.buttons["Cancel"]
+            XCTAssertTrue(cancel.waitForExistence(timeout: 5), app.debugDescription)
+            cancel.tap()
+            XCTAssertTrue(picker.waitForNonExistence(timeout: 5), app.debugDescription)
         }
     }
 }
