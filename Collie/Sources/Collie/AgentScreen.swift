@@ -479,18 +479,19 @@ private struct PromptBar: View {
                 ZStack {
                     if !model.answering && !model.isTerminal {
                         Menu {
-                            Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
-                                .disabled(model.attachmentSlots <= 0)
-                            Button("Files", systemImage: "folder") { pickingFile = true }
-                                .disabled(model.attachmentSlots <= 0)
-                            Divider()
                             Button("Saved prompts", systemImage: "text.badge.plus") { pickingPrompt = true }
                                 .disabled(model.dictation.isActive || model.sendingPrompt)
+                            Divider()
+                            Button("Files", systemImage: "folder") { pickingFile = true }
+                                .disabled(model.attachmentSlots <= 0)
+                            Button("Photo Library", systemImage: "photo.on.rectangle") { pickingPhoto = true }
+                                .disabled(model.attachmentSlots <= 0)
                         } label: {
                             Image(systemName: "paperclip")
                                 .font(.system(size: 20))
                                 .frame(width: 32, height: 36)
                         }
+                        .menuOrder(.fixed)
                         .disabled(model.upload != nil || model.sendingPrompt)
                         .accessibilityLabel("Attachments and saved prompts")
                     }

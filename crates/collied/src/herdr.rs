@@ -263,6 +263,12 @@ enum OkResult {
     Ok {},
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TabCreatedResult {
+    TabCreated {},
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkspaceCreated {
     pub workspace: WorkspaceInfo,
@@ -578,6 +584,16 @@ pub async fn workspace_create(
     )
     .await?;
     Ok(created)
+}
+
+pub async fn tab_create(socket: &Path, workspace_id: &str, cwd: &str) -> Result<(), Error> {
+    let TabCreatedResult::TabCreated {} = call(
+        socket,
+        "tab.create",
+        json!({ "workspace_id": workspace_id, "cwd": cwd, "focus": false }),
+    )
+    .await?;
+    Ok(())
 }
 
 pub async fn worktree_list(socket: &Path, cwd: &str) -> Result<WorktreeList, Error> {
