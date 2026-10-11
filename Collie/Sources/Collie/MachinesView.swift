@@ -38,7 +38,7 @@ struct MachinesList: View {
                         MachineSettingsView(app: app, machine: machine)
                     }
                 }
-                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
@@ -73,13 +73,13 @@ struct MachineRow<Destination: View>: View {
     @ViewBuilder let destination: () -> Destination
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 4) {
             NavigationLink(destination: destination) {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 2) {
                     let reachable = flock.map { [.connected, .connecting].contains($0.link) } ?? true
                     HStack(spacing: 8) {
                         MachineName(machine: machine)
-                            .font(.headline)
+                            .font(.body)
                             .lineLimit(1)
                             .minimumScaleFactor(0.85)
                             .foregroundStyle(reachable ? .primary : .secondary)
@@ -103,12 +103,11 @@ struct MachineRow<Destination: View>: View {
             .buttonStyle(.plain)
             .navigationLinkIndicatorVisibility(.hidden)
             if flock?.link != .connecting, let error = flock?.lastError {
-                Divider()
                 MachineConnectionDetails(message: error)
             }
         }
-        .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .padding(10)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 }
 
@@ -118,9 +117,9 @@ private struct MachineConnectionDetails: View {
     @Environment(\.appAccent) private var accent
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             Text(message)
-                .font(.body)
+                .font(.footnote)
                 .foregroundStyle(.orange)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
@@ -131,10 +130,12 @@ private struct MachineConnectionDetails: View {
                 Label(copiedAt == nil ? "Copy connection error" : "Copied",
                       systemImage: copiedAt == nil ? "doc.on.clipboard" : AgentActivityStatus(.done).symbol)
                     .labelStyle(.iconOnly)
-                    .font(.body.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(copiedAt == nil ? accent : AgentState.done.color)
-                    .frame(minWidth: 40, minHeight: 40)
+                    .frame(minWidth: 28, minHeight: 28)
                     .darkGlass(in: .circle, interactive: true)
+                    .padding(6)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }

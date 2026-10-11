@@ -42,7 +42,7 @@ struct AgentDemo: View {
                         MachineRow(machine: DemoAgentCore.machine, flock: core.cachedFlock(machineId: DemoAgentCore.machine.id)) {
                             Text("Machine settings")
                         }
-                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                     }
