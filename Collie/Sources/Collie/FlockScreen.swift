@@ -18,16 +18,18 @@ struct FlockScreen: View {
     @State private var seen = SeenAgents.load(from: SeenAgents.file)
     @State private var gridOrder = GridOrder.load(from: GridOrder.file)
     @State private var showsUsage = false
+    @State private var dragging: GridDrag?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationStack(path: $path) {
             TabView(selection: $showsUsage) {
-                agents.tag(false)
+                agents.background(GridPageLock(locked: dragging != nil)).tag(false)
                 List { UsageSections(entries: model.entries) }.tag(true)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            .springLoadingBehavior(.disabled)
             .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: showsUsage)
             .navigationTitle("Agents")
             .navigationBarTitleDisplayMode(.inline)
@@ -152,7 +154,7 @@ struct FlockScreen: View {
             AgentGrid(
                 entries: model.entries, previews: previews, order: $gridOrder, notice: model.closeNotice,
                 approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows,
-                closePane: { model.beginClose(.pane, route: $0) }, menu: menu
+                closePane: { model.beginClose(.pane, route: $0) }, menu: menu, dragging: $dragging
             )
             .task(id: core != nil && scenePhase == .active && !newTask && !showsUsage) {
                 guard let core, scenePhase == .active, !newTask, !showsUsage else { return }

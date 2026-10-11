@@ -15,7 +15,7 @@ struct AgentGrid<Menu: View>: View {
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var dragging: GridDrag?
+    @Binding var dragging: GridDrag?
     @State private var moving = false
     @State private var moveError: String?
 

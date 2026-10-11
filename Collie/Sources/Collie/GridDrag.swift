@@ -1,11 +1,15 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct GridDrag {
+struct GridDrag: Codable, Transferable {
     static let type = UTType(exportedAs: "dev.rbstp.collie.grid-card", conformingTo: .data)
-    let id = UUID()
+    private(set) var id = UUID()
     let route: AgentRoute
     let starred: Bool
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: type).visibility(.ownProcess)
+    }
 }
 
 struct GridDragSource: ViewModifier {
@@ -27,10 +31,12 @@ struct GridDragSource: ViewModifier {
             return provider
         }
         if #available(iOS 27, *) {
-            source
+            content.draggable(GridDrag(route: route, starred: starred))
                 .dragConfiguration(.init(allowMove: true))
                 .onDragSessionUpdated { session in
                     switch session.phase {
+                    case .active:
+                        if dragging?.route != route { dragging = GridDrag(route: route, starred: starred) }
                     case .ended, .dataTransferCompleted:
                         if dragging?.route == route { dragging = nil }
                     default:
@@ -138,6 +144,46 @@ struct GridDropTarget: ViewModifier {
             edge = nil
             dragging = nil
             return moved
+        }
+    }
+}
+
+struct GridPageLock: UIViewRepresentable {
+    let locked: Bool
+
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ view: Probe, context: Context) {
+        view.locked = locked
+        view.update()
+    }
+    static func dismantleUIView(_ view: Probe, coordinator: ()) { view.restore() }
+
+    final class Probe: UIView {
+        var locked = false
+        private weak var pager: UIScrollView?
+        private var wasEnabled = true
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            update()
+        }
+
+        func restore() { pager?.isScrollEnabled = wasEnabled }
+
+        func update() {
+            var ancestor = superview
+            while let view = ancestor {
+                if let scroll = view as? UIScrollView {
+                    if pager !== scroll {
+                        pager?.isScrollEnabled = wasEnabled
+                        pager = scroll
+                        wasEnabled = scroll.isScrollEnabled
+                    }
+                    scroll.isScrollEnabled = locked ? false : wasEnabled
+                    return
+                }
+                ancestor = view.superview
+            }
         }
     }
 }
