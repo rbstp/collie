@@ -47,6 +47,7 @@ struct FlockScreen: View {
                         }
                     } else {
                         ViewSwitch(showsUsage: $showsUsage).fixedSize()
+                            .modifier(NativeToolbarTint(darkening: 0.03))
                     }
                 }
                 .sharedBackgroundVisibility(.hidden)
@@ -57,10 +58,12 @@ struct FlockScreen: View {
                         }
                         .tint(.primary)
                     }
+                    .modifier(NativeToolbarTint())
                     .disabled(showsUsage)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("New task", systemImage: "plus") { newTask = true }
+                        .modifier(NativeToolbarTint())
                         .disabled(core == nil || machines.isEmpty)
                 }
             }

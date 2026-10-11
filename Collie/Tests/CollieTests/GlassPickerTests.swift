@@ -36,7 +36,13 @@ final class GlassPickerTests: XCTestCase {
             let attributes = try XCTUnwrap(compact.titleTextAttributes(for: .selected))
             let color = try XCTUnwrap(attributes[.foregroundColor] as? UIColor)
             let toolbarColor = try XCTUnwrap(toolbar.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
-            XCTAssertEqual(toolbarColor, color)
+            var environment = EnvironmentValues()
+            environment.colorScheme = style == .dark ? .dark : .light
+            let resolved = Color(AppAccent.gold.color.resolve(in: environment))
+            let toolbarExpected = UIColor(style == .dark ? resolved.mix(with: .black, by: 0.03) : resolved)
+            for (actual, wanted) in zip(toolbarColor.cgColor.components ?? [], toolbarExpected.cgColor.components ?? []) {
+                XCTAssertEqual(actual, wanted, accuracy: 0.002)
+            }
             let expected = UIColor(AppAccent.gold.color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
             for (actual, wanted) in zip(color.cgColor.components ?? [], expected.cgColor.components ?? []) {
                 XCTAssertEqual(actual, wanted, accuracy: 0.002)
@@ -90,10 +96,12 @@ final class GlassPickerTests: XCTestCase {
                     ToolbarItem(placement: .topBarLeading) {
                         GlassPicker(title: "Toolbar view", selection: $state.selected, options: [("Agents", false), ("Usage", true)])
                             .fixedSize()
+                            .modifier(NativeToolbarTint(darkening: 0.03))
                     }
                     .sharedBackgroundVisibility(.hidden)
                     ToolbarItem(placement: .primaryAction) {
                         Button("New task", systemImage: "plus") {}
+                            .modifier(NativeToolbarTint())
                     }
                 }
             }

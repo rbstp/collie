@@ -1,6 +1,17 @@
 import SwiftUI
 import UIKit
 
+struct NativeToolbarTint: ViewModifier {
+    var darkening = 0.1
+    @Environment(\.self) private var environment
+
+    func body(content: Content) -> some View {
+        let accent = Color(Color.accentColor.resolve(in: environment))
+        let tint = environment.colorScheme == .dark ? accent.mix(with: .black, by: darkening) : accent
+        content.tint(tint).accentColor(tint)
+    }
+}
+
 struct GlassPicker<Selection: Hashable>: View {
     let title: String
     @Binding var selection: Selection
