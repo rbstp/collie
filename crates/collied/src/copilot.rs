@@ -15,6 +15,20 @@ const LIMIT: u64 = 65536;
 const INPUT_BYTES: u64 = 1024 * 1024;
 const DEADLINE: Duration = Duration::from_secs(2);
 
+struct Lock(rustix::fd::OwnedFd);
+
+impl Lock {
+    fn new(path: &Path) -> Result<Self, peers::Error> {
+        peers::lock(path).map(Self)
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = rustix::fs::flock(&self.0, rustix::fs::FlockOperation::Unlock);
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Input {
@@ -178,7 +192,7 @@ async fn save(data: &Path, identity: &Identity) -> Option<()> {
     crate::ensure_private_dir(&dir).ok()?;
     let path = record_path(data, &identity.socket, &identity.terminal);
     let _lock = loop {
-        match peers::lock(&path.with_extension("lock")) {
+        match Lock::new(&path.with_extension("lock")) {
             Ok(lock) => break lock,
             Err(peers::Error::Locked(_)) => tokio::time::sleep(Duration::from_millis(20)).await,
             Err(_) => return None,
@@ -283,7 +297,7 @@ fn install_at(root: &Path, executable: &Path) -> anyhow::Result<()> {
         Err(e) => return Err(e.into()),
     }
     let path = root.join("settings.json");
-    let _lock = peers::lock(&root.join("collied-hooks.lock"))?;
+    let _lock = Lock::new(&root.join("collied-hooks.lock"))?;
     let mut settings = match std::fs::symlink_metadata(&path) {
         Ok(_) => {
             let (file, len, _) = transcript::open(&path)
@@ -734,6 +748,22 @@ mod tests {
         install_at(&root, executable).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), first);
         assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn copilot_lock_releases_while_an_inherited_descriptor_is_still_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("copilot.lock");
+        let held = Lock::new(&path).unwrap();
+        let inherited = rustix::io::dup(&held.0).unwrap();
+        assert!(matches!(Lock::new(&path), Err(peers::Error::Locked(_))));
+        drop(held);
+        let next = Lock::new(&path).unwrap();
+        assert!(matches!(Lock::new(&path), Err(peers::Error::Locked(_))));
+        drop(inherited);
+        assert!(matches!(Lock::new(&path), Err(peers::Error::Locked(_))));
+        drop(next);
+        assert!(Lock::new(&path).is_ok());
     }
 
     #[test]
