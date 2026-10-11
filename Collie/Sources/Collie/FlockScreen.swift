@@ -289,6 +289,7 @@ struct MachineHeader: View {
     let entry: MachineFlockEntry
     let approvalsCount: Int
     let showsLink: Bool
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack {
@@ -303,7 +304,15 @@ struct MachineHeader: View {
                     ProgressView().controlSize(.mini)
                     Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
                 } else {
-                    Text(link.label).foregroundStyle(link == .connected ? .green : .secondary)
+                    Text(link.label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(link == .connected ? .green : .secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(colorScheme == .dark ? 0.69 : 0.07), in: .capsule)
+                        .padding(2)
+                        .glassEffect(.regular.interactive(), in: .capsule)
+                        .fixedSize()
                 }
             }
         }
