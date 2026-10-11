@@ -54,16 +54,15 @@ struct RootView: View {
                         core: app.core, machines: app.machines, approvals: app.approvals, follows: app.follows,
                         opening: $app.openingAgent, tailnetStarting: !app.isRunning, reselected: agentsReselected
                     ) { app.viewingAgent = $0 }
-                    .tint(.blue)
                 }
                 Tab("Approvals", systemImage: "checkmark.shield", value: AppTab.approvals) {
-                    ApprovalsScreen(model: app.approvals).tint(.blue)
+                    ApprovalsScreen(model: app.approvals)
                 }
                 .badge(app.approvals.items.count)
-                Tab("Machines", systemImage: "desktopcomputer", value: AppTab.machines) { MachinesView(app: app).tint(.blue) }
-                Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView(app: app).tint(.blue) }
+                Tab("Machines", systemImage: "desktopcomputer", value: AppTab.machines) { MachinesView(app: app) }
+                Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView(app: app) }
             }
-            .tint(.primary)
+            .tint(.blue)
             .task { await app.enableNotifications() }
             .task {
                 while !Task.isCancelled {

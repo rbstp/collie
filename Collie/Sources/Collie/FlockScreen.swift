@@ -266,7 +266,7 @@ struct ViewSwitch: View {
     @Binding var showsUsage: Bool
 
     var body: some View {
-        GlassPicker(title: "View", selection: $showsUsage, options: [("Agents", false), ("Usage", true)])
+        GlassPicker(title: "View", selection: $showsUsage, options: [("Agents", false), ("Usage", true)], selectionColor: .blue)
     }
 }
 

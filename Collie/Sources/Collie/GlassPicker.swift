@@ -5,6 +5,7 @@ struct GlassPicker<Selection: Hashable>: View {
     @Binding var selection: Selection
     let options: [(LocalizedStringKey, Selection)]
     var expands = false
+    var selectionColor: Color = .primary
     @Namespace private var pill
     @Environment(\.colorScheme) private var colorScheme
 
@@ -15,7 +16,7 @@ struct GlassPicker<Selection: Hashable>: View {
                 Button { selection = value } label: {
                     Text(label)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(selection == value ? selectionColor : .primary)
                         .padding(.horizontal, 14)
                         .frame(maxWidth: expands ? .infinity : nil, minHeight: 38)
                         .background {
