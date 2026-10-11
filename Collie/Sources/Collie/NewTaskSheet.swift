@@ -343,15 +343,15 @@ struct NewTaskSheet: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .font(.body.monospaced())
-        ForEach(completions, id: \.self) { name in
-            Button {
-                path.wrappedValue = name
-            } label: {
-                Label(name, systemImage: "folder").font(.footnote.monospaced())
-            }
-            .foregroundStyle(.primary)
-        }
         if let folders = model.folders {
+            ForEach(completions, id: \.self) { name in
+                Button {
+                    path.wrappedValue = folders.folderPath(name)
+                } label: {
+                    Label(name, systemImage: "folder").font(.footnote.monospaced())
+                }
+                .foregroundStyle(.primary)
+            }
             NavigationLink {
                 FolderBrowser(folders: folders, selected: path)
             } label: {
@@ -385,7 +385,7 @@ private struct FolderBrowser: View {
             Section {
                 ForEach(folders.folders, id: \.self) { name in
                     Button {
-                        selected = name
+                        selected = folders.folderPath(name)
                         dismiss()
                     } label: {
                         Label(name, systemImage: "folder").font(.body.monospaced())

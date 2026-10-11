@@ -2,6 +2,12 @@ import CollieCore
 import Foundation
 import Observation
 
+extension TaskFolders {
+    func folderPath(_ name: String) -> String {
+        URL(filePath: path).appending(path: name).path
+    }
+}
+
 @MainActor
 @Observable
 final class NewTaskModel {
