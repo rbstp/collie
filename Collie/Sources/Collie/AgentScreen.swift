@@ -137,11 +137,9 @@ struct AgentScreen: View {
             ToolbarItem(placement: .primaryAction) {
                 if showingChat && !model.isTerminal {
                     Button("Search conversation", systemImage: "magnifyingglass") { searchingChat.toggle() }
-                        .modifier(NativeToolbarTint())
                 } else {
                     Toggle(isOn: $model.wrapLines) { Label("Wrap lines", image: "WrapLines") }
                         .toggleStyle(.button)
-                        .modifier(NativeToolbarTint())
                 }
             }
             ToolbarItem(placement: .primaryAction) {
