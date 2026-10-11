@@ -602,6 +602,38 @@ async fn scenario(
     .await;
     assert_eq!(result(recv(&mut ws).await), Response::Ok);
 
+    println!("disconnecting stops terminal reads; reconnecting starts with full output");
+    for graceful in [true, false] {
+        let mut gone = self::hello(&phone, &target).await;
+        assert_eq!(
+            result(
+                call(
+                    &mut gone,
+                    "agent.watch",
+                    json!({"terminal_id": "term_65ce7ae4fd5731"}),
+                )
+                .await
+            ),
+            Response::Ok
+        );
+        assert!(matches!(
+            recv(&mut gone).await,
+            ServerFrame::Event {
+                event: Event::AgentOutput(_),
+                ..
+            }
+        ));
+        if graceful {
+            gone.close(None).await.unwrap();
+            assert_closed(&mut gone).await;
+        }
+        drop(gone);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let before = reads();
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        assert_eq!(reads(), before, "disconnected session kept reading");
+    }
+
     // The change must land after the reconcile task has taken its first baseline.
     while !herdr.methods().iter().any(|m| m == "workspace.list") {
         tokio::time::sleep(Duration::from_millis(100)).await;

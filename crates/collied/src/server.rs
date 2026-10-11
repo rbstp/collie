@@ -977,6 +977,8 @@ impl Session<'_> {
                 Flow::Abort => return,
             }
         }
+        self.watch = None;
+        drop(events);
         tokio::select! {
             biased;
             _ = kill.changed() => {}
@@ -2064,6 +2066,26 @@ fn herdr_result<T>(res: Result<T, herdr::Error>) -> Result<T, (ErrorCode, String
     })
 }
 
+fn observe_agent(
+    agent: &herdr::AgentInfo,
+    tracker: &mut StatusTracker,
+    transcripts: &mut Transcripts,
+    events: &broadcast::Sender<Event>,
+    now_ms: u64,
+) {
+    let phones = events.receiver_count() > 0;
+    let derived = if phones {
+        transcripts.derive(agent, true)
+    } else {
+        None
+    };
+    if let Some(agent) = flock::map_agent(agent, tracker, now_ms, derived)
+        && phones
+    {
+        let _ = events.send(Event::AgentStatus { agent });
+    }
+}
+
 async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     let mut base: Option<Baseline> = None;
     let mut outage = false;
@@ -2120,10 +2142,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                     transcripts.retain(&agents);
                     let now = crate::now_ms();
                     for a in agents.iter().filter(|a| changed.contains(&a.terminal_id)) {
-                        let derived = transcripts.derive(a, true);
-                        if let Some(agent) = flock::map_agent(a, &mut tracker, now, derived) {
-                            let _ = state.events.send(Event::AgentStatus { agent });
-                        }
+                        observe_agent(a, &mut tracker, &mut transcripts, &state.events, now);
                     }
                 }
                 if shape {
@@ -2182,6 +2201,70 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
 mod tests {
     use super::*;
     use protocol::TerminalId;
+
+    #[test]
+    fn disconnected_status_changes_skip_transcripts_and_preserve_status_times() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/session.snapshot.json")).unwrap();
+        let snap: herdr::SessionSnapshot =
+            serde_json::from_value(fixture["result"]["snapshot"].clone()).unwrap();
+        let mut agent = snap.agents[0].clone();
+        let dir = tempfile::tempdir().unwrap();
+        let projects = dir.path().join("projects");
+        let project = projects.join("-Users-me-src-collie");
+        let mut transcripts = Transcripts::new(Some(projects), None);
+        let mut tracker = StatusTracker::default();
+        let events = broadcast::channel(16).0;
+
+        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 1000);
+        agent.agent_status = "idle".into();
+        agent.state_change_seq += 1;
+        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 2000);
+
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("00000000-0000-4000-8000-000000000000.jsonl"),
+            include_str!("../tests/fixtures/transcripts/claude.jsonl"),
+        )
+        .unwrap();
+        let derived = transcripts.derive(&agent, false).unwrap();
+        assert_eq!(
+            derived.last_line.as_deref(),
+            Some("**Fixed** the flaky test.")
+        );
+
+        let mut phone = events.subscribe();
+        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 3000);
+        let Event::AgentStatus { agent: shown } = phone.try_recv().unwrap() else {
+            panic!("expected agent status");
+        };
+        assert_eq!(shown.status, protocol::AgentStatus::Idle);
+        assert_eq!(shown.status_since_ms, 2000);
+        assert_eq!(shown.last_line, derived.last_line);
+        assert!(phone.try_recv().is_err());
+
+        let mut other_phone = events.subscribe();
+        drop(phone);
+        agent.agent_status = "working".into();
+        agent.state_change_seq += 1;
+        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 4000);
+        assert!(matches!(
+            other_phone.try_recv().unwrap(),
+            Event::AgentStatus { .. }
+        ));
+        drop(other_phone);
+        agent.agent_status = "done".into();
+        agent.state_change_seq += 1;
+        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 5000);
+        let mut phone = events.subscribe();
+        assert!(phone.try_recv().is_err());
+        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 6000);
+        let Event::AgentStatus { agent: shown } = phone.try_recv().unwrap() else {
+            panic!("expected agent status");
+        };
+        assert_eq!(shown.status, protocol::AgentStatus::Done);
+        assert_eq!(shown.status_since_ms, 5000);
+    }
 
     #[tokio::test]
     async fn detached_mutations_audit_themselves() {
