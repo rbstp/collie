@@ -20,7 +20,7 @@ struct SettingsView: View {
                     Picker("Accent color", selection: $app.accent) {
                         ForEach(AppAccent.allCases, id: \.self) { accent in
                             Label(accent.label, systemImage: "circle.fill")
-                                .foregroundStyle(accent.color)
+                                .tint(accent.color)
                         }
                     }
                 }
