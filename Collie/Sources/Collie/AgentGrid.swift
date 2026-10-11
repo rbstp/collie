@@ -1,10 +1,12 @@
 import CollieCore
 import GhosttyTerminal
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct AgentGrid<Menu: View>: View {
     let entries: [MachineFlockEntry]
     let previews: PreviewModel
+    @Binding var order: GridOrder
     let notice: String?
     let approvalsCount: (MachineFlockEntry) -> Int
     let reconnect: (MachineFlockEntry) -> Void
@@ -13,6 +15,9 @@ struct AgentGrid<Menu: View>: View {
     let closePane: (AgentRoute) -> Void
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var moving = false
+    @State private var moveError: String?
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -24,13 +29,17 @@ struct AgentGrid<Menu: View>: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)
                 }
+                if let moveError {
+                    Text(moveError).font(.footnote).foregroundStyle(.orange).padding(.horizontal)
+                }
                 if entries.isEmpty {
                     NoMachines()
                 }
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(entries) { entry in
                         Section {
-                            let agents = entry.gridAgents(starred: previews.starred)
+                            let agents = entry.gridAgents(starred: previews.starred, order: order)
+                            dropShelf(starred: true, in: entry)
                             ForEach(agents.starred, id: \.terminalId) { card($0, in: entry, starred: true, now: context.date) }
                             if !agents.rest.isEmpty {
                                 LazyVGrid(
@@ -40,6 +49,7 @@ struct AgentGrid<Menu: View>: View {
                                     ForEach(agents.rest, id: \.terminalId) { card($0, in: entry, starred: false, now: context.date) }
                                 }
                             }
+                            dropShelf(starred: false, in: entry)
                             if !entry.terminals.isEmpty {
                                 Text("Terminals").font(.caption).foregroundStyle(.secondary)
                                 LazyVGrid(
@@ -93,9 +103,44 @@ struct AgentGrid<Menu: View>: View {
                 .disabled(entry.flock?.link != .connected)
             menu(agent, route)
         }
+        .draggable(GridCardDrag(route: route))
+        .modifier(GridDropTarget { source, after in
+            move(source, in: entry, starred: starred, destination: route, after: after)
+        })
         .onAppear { previews.appeared(route) }
         .onDisappear { previews.disappeared(route) }
     }
+
+    private func dropShelf(starred: Bool, in entry: MachineFlockEntry) -> some View {
+        Label(starred ? "Drop here to star" : "Drop here to unstar", systemImage: starred ? "star" : "star.slash")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+            .modifier(GridDropTarget { source, _ in
+                move(source, in: entry, starred: starred, after: !starred)
+            })
+    }
+
+    private func move(_ source: AgentRoute, in entry: MachineFlockEntry, starred: Bool, destination: AgentRoute? = nil, after: Bool = false) -> Bool {
+        guard !moving, source.machineId == entry.id, source != destination,
+              entry.agents.contains(where: { $0.terminalId == source.terminalId }) else { return false }
+        moving = true
+        moveError = nil
+        Task {
+            defer { moving = false }
+            guard await previews.setStar(source, starred: starred) else {
+                moveError = "Could not move agent. Reconnect and try again."
+                return
+            }
+            withAnimation(reduceMotion ? nil : .default) {
+                _ = order.move(source, to: destination, in: entry, starred: previews.starred, after: after)
+            }
+        }
+        return true
+    }
+
 }
 
 extension AgentGrid {
@@ -131,9 +176,10 @@ extension AgentGrid {
 }
 
 extension MachineFlockEntry {
-    func gridAgents(starred: Set<AgentRoute>) -> (starred: [AgentSummary], rest: [AgentSummary]) {
+    func gridAgents(starred: Set<AgentRoute>, order: GridOrder = GridOrder()) -> (starred: [AgentSummary], rest: [AgentSummary]) {
         let isStarred = { (agent: AgentSummary) in starred.contains(AgentRoute(machineId: id, terminalId: agent.terminalId)) }
-        return (agents.filter(isStarred), agents.filter { !isStarred($0) })
+        let ordered = order.agents(in: self)
+        return (ordered.filter(isStarred), ordered.filter { !isStarred($0) })
     }
 }
 
@@ -213,5 +259,34 @@ private struct TerminalPreview: UIViewRepresentable {
         if !ansi.isEmpty {
             view.show(ansiSnapshot: ansi)
         }
+    }
+}
+
+private struct GridCardDrag: Codable, Transferable {
+    let route: AgentRoute
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .init(exportedAs: "dev.rbstp.collie.grid-card"))
+            .visibility(.ownProcess)
+    }
+}
+
+private struct GridDropTarget: ViewModifier {
+    let move: (AgentRoute, Bool) -> Bool
+    @State private var targeted = false
+    @State private var height: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+            .dropDestination(for: GridCardDrag.self) { items, location in
+                guard items.count == 1, let source = items.first?.route else { return false }
+                return move(source, location.y > height / 2)
+            } isTargeted: { targeted = $0 }
+            .overlay {
+                if targeted {
+                    RoundedRectangle(cornerRadius: 10).stroke(.tint, lineWidth: 2).allowsHitTesting(false)
+                }
+            }
     }
 }

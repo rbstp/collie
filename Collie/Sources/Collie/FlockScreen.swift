@@ -16,6 +16,7 @@ struct FlockScreen: View {
     @State private var previews = PreviewModel()
     @State private var layout = DevicePrefs.load(from: DevicePrefs.file).agentsLayout
     @State private var seen = SeenAgents.load(from: SeenAgents.file)
+    @State private var gridOrder = GridOrder.load(from: GridOrder.file)
     @State private var showsUsage = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -125,7 +126,11 @@ struct FlockScreen: View {
                     try? await Task.sleep(until: next)
                 }
             }
-            .onChange(of: model.entries, initial: true) { _, entries in previews.update(entries) }
+            .onChange(of: model.entries, initial: true) { _, entries in
+                previews.update(entries)
+                gridOrder.update(entries)
+            }
+            .onChange(of: gridOrder) { _, order in order.save(to: GridOrder.file) }
             .onChange(of: layout) { _, layout in
                 DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout }
             }
@@ -145,7 +150,7 @@ struct FlockScreen: View {
         switch layout {
         case .grid:
             AgentGrid(
-                entries: model.entries, previews: previews, notice: model.closeNotice,
+                entries: model.entries, previews: previews, order: $gridOrder, notice: model.closeNotice,
                 approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows,
                 closePane: { model.beginClose(.pane, route: $0) }, menu: menu
             )

@@ -585,3 +585,123 @@ private func capture(_ name: String) throws -> [String] {
     run.cancel()
     await run.value
 }
+
+@Test func gridOrderSurvivesStatusChangesAndNewAgents() {
+    let initial = entry("m1", loaded: true, [("t1", .working), ("t2", .idle), ("t3", .done)])
+    var order = GridOrder()
+    order.update([initial])
+    let changed = entry("m1", since: 100, loaded: true, [("t3", .blocked), ("t4", .working), ("t2", .working), ("t1", .done)])
+    order.update([changed])
+    #expect(order.agents(in: changed).map(\.terminalId) == ["t1", "t2", "t3", "t4"])
+    let grouped = changed.gridAgents(starred: [route("t1"), route("t3")], order: order)
+    #expect(grouped.starred.map(\.terminalId) == ["t1", "t3"])
+    #expect(grouped.rest.map(\.terminalId) == ["t2", "t4"])
+}
+
+@Test(arguments: [false, true])
+func gridCardsMoveBothWaysWithinTheirGroup(starred: Bool) throws {
+    let flock = entry("m1", loaded: true, [("t1", .idle), ("t2", .idle), ("t3", .idle), ("t4", .idle)])
+    let other = entry("m2", loaded: true, [("t1", .idle), ("t2", .idle)])
+    let stars: Set<AgentRoute> = starred ? [route("t1"), route("t3"), route("t4")] : [route("t2")]
+    var order = GridOrder()
+    order.update([flock, other])
+    let moved1 = order.move(route("t1"), to: route("t4"), in: flock, starred: stars, after: true)
+    #expect(moved1)
+    let moved = flock.gridAgents(starred: stars, order: order)
+    #expect((starred ? moved.starred : moved.rest).map(\.terminalId) == ["t3", "t4", "t1"])
+    #expect((starred ? moved.rest : moved.starred).map(\.terminalId) == ["t2"])
+    #expect(order.agents(in: other).map(\.terminalId) == ["t1", "t2"])
+
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appending(path: "grid-order.json")
+    order.save(to: file)
+    #expect(GridOrder.load(from: file) == order)
+    let moved2 = order.move(route("t1"), to: route("t3"), in: flock, starred: stars)
+    #expect(moved2)
+    let restored = flock.gridAgents(starred: stars, order: order)
+    #expect((starred ? restored.starred : restored.rest).map(\.terminalId) == ["t1", "t3", "t4"])
+}
+
+@Test func gridRejectsCrossGroupAndStaleDrops() {
+    let flock = entry("m1", loaded: true, [("t1", .idle), ("t2", .idle)])
+    var order = GridOrder()
+    order.update([flock])
+    let before = order
+    let moved3 = order.move(route("t1"), to: route("t2"), in: flock, starred: [route("t1")])
+    #expect(!moved3)
+    let moved4 = order.move(route("t1", on: "m2"), to: route("t2"), in: flock, starred: [])
+    #expect(!moved4)
+    let moved5 = order.move(route("removed"), to: route("t2"), in: flock, starred: [])
+    #expect(!moved5)
+    let moved6 = order.move(route("t1"), to: route("t1"), in: flock, starred: [])
+    #expect(!moved6)
+    #expect(order == before)
+}
+
+@Test func gridOrderRetainsOfflinePositionsAndPrunesLoadedMachines() {
+    let first = entry("m1", loaded: true, [("t1", .idle), ("t2", .idle)])
+    let second = entry("m2", loaded: true, [("t1", .idle)])
+    var order = GridOrder()
+    order.update([first, second])
+    let before = order
+    order.update([])
+    order.update([entry("m1", link: .unavailable, loaded: true, []), entry("m2", link: .connecting, [])])
+    order.update([entry("m1", [])])
+    #expect(order == before)
+    order.update([entry("m1", loaded: true, [("t2", .idle)])])
+    #expect(order.routes == [route("t2"), route("t1", on: "m2")])
+}
+
+@MainActor
+@Test func gridDropsChangeStarsAndPlaceCardsInEmptyGroups() async {
+    let core = FakeCore()
+    let model = PreviewModel()
+    let flock = entry("m1", loaded: true, [("t1", .idle), ("t2", .idle), ("t3", .idle)])
+    model.update([flock])
+    model.appeared(route("t1"))
+    let run = await running(model, core, screens: 1)
+    var order = GridOrder()
+    order.update([flock])
+
+    for (source, target, after) in [("t3", nil, false), ("t2", "t3", false), ("t1", "t3", true)] as [(String, String?, Bool)] {
+        let changed = await model.setStar(route(source), starred: true)
+        #expect(changed)
+        if changed {
+            let moved = order.move(route(source), to: target.map { route($0) }, in: flock, starred: model.starred, after: after)
+            #expect(moved)
+        }
+    }
+    let stars = flock.gridAgents(starred: model.starred, order: order)
+    #expect(stars.starred.map(\.terminalId) == ["t2", "t3", "t1"])
+    #expect(stars.rest.isEmpty)
+
+    for (source, target, after) in [("t2", nil, true), ("t3", "t2", false), ("t1", "t2", true)] as [(String, String?, Bool)] {
+        let changed = await model.setStar(route(source), starred: false)
+        #expect(changed)
+        if changed {
+            let moved = order.move(route(source), to: target.map { route($0) }, in: flock, starred: model.starred, after: after)
+            #expect(moved)
+        }
+    }
+    let unstarred = flock.gridAgents(starred: model.starred, order: order)
+    #expect(unstarred.starred.isEmpty)
+    #expect(unstarred.rest.map(\.terminalId) == ["t3", "t2", "t1"])
+    #expect(core.snapshot.stars == ["m1 t3 true", "m1 t2 true", "m1 t1 true", "m1 t2 false", "m1 t3 false", "m1 t1 false"])
+
+    let before = order
+    core.set(error: .MachineNotFound)
+    let changed = await model.setStar(route("t1"), starred: true)
+    if changed { _ = order.move(route("t1"), to: nil, in: flock, starred: model.starred) }
+    #expect(!changed)
+    #expect(model.starred.isEmpty)
+    #expect(order == before)
+    let calls = core.snapshot.stars.count
+    model.update([entry("m1", link: .unavailable, loaded: true, [("t1", .idle)])])
+    let offline = await model.setStar(route("t1"), starred: true)
+    #expect(!offline)
+    #expect(core.snapshot.stars.count == calls)
+    run.cancel()
+    await run.value
+}
