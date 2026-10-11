@@ -7,6 +7,10 @@ struct UsageDial: View {
     var showsPercentage = true
 
     var body: some View {
+        let color = window.map { WatchUsage.usedColor($0.used) } ?? .secondary
+        let fraction = window?.usedFraction ?? 0
+        let end = window == nil ? 0 : min(fraction + 0.02, 1)
+        let remainder = end < 1 ? color.opacity(0.2) : color
         Gauge(value: window?.usedFraction ?? 0) {
             if let period {
                 HStack(spacing: 2) {
@@ -26,6 +30,11 @@ struct UsageDial: View {
             }
         }
         .gaugeStyle(.accessoryCircular)
-        .tint(window.map { WatchUsage.usedColor($0.used) } ?? .secondary.opacity(0.3))
+        .tint(Gradient(stops: [
+            .init(color: color, location: 0),
+            .init(color: color, location: end),
+            .init(color: remainder, location: end),
+            .init(color: remainder, location: 1),
+        ]))
     }
 }

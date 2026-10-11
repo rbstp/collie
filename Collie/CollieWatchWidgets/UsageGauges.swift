@@ -43,8 +43,8 @@ private struct UsageGauge: View {
                     Text("No data")
                 }
             }
-            .font(.system(size: 10, design: .rounded))
-            .foregroundStyle(.secondary)
+            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .foregroundStyle(.primary)
             .frame(height: 14)
         }
         .frame(width: diameter)
