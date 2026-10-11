@@ -139,7 +139,7 @@ struct AgentScreen: View {
                 } else {
                     Button { model.wrapLines.toggle() } label: {
                         Label("Wrap lines", image: "WrapLines")
-                            .foregroundStyle(model.wrapLines ? Color.blue : Color.primary)
+                            .foregroundStyle(model.wrapLines ? Color.accentColor : Color.primary)
                             .frame(width: 38, height: 38)
                             .background {
                                 if model.wrapLines {
@@ -538,7 +538,7 @@ private struct PromptBar: View {
                                 .disabled(model.attachmentSlots <= 0)
                         } label: {
                             Image(systemName: "paperclip")
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(Color.accentColor)
                                 .font(.system(size: 20))
                                 .frame(width: 32, height: 36)
                         }
@@ -825,10 +825,10 @@ struct DictationWaveform: View {
                                                width: 3, height: height), cornerSize: CGSize(width: 1.5, height: 1.5))
             }
             if reduceTransparency || contrast == .increased {
-                context.fill(path, with: .color(.blue))
+                context.fill(path, with: .color(.accentColor))
             } else {
                 context.fill(path, with: .linearGradient(
-                    Gradient(colors: [.blue.opacity(0.65), .blue, .blue.opacity(0.75)]),
+                    Gradient(colors: [Color.accentColor.opacity(0.65), .accentColor, .accentColor.opacity(0.75)]),
                     startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)
                 ))
             }

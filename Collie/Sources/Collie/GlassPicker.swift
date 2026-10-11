@@ -31,7 +31,7 @@ struct GlassPicker<Selection: Hashable>: View {
             }
         }
         .padding(3)
-        .tint(.blue)
+        .tint(Color.accentColor)
         .glassEffect(.regular.interactive(), in: .capsule)
         .animation(.smooth(duration: 0.3), value: selection)
         .accessibilityRepresentation {

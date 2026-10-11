@@ -183,7 +183,7 @@ struct NewTaskSheet: View {
                                         .disabled(model.attachmentSlots <= 0)
                                 } label: {
                                     Image(systemName: "paperclip")
-                                        .foregroundStyle(.blue)
+                                        .foregroundStyle(Color.accentColor)
                                         .font(.system(size: 20))
                                         .frame(width: 32, height: 36)
                                 }
