@@ -23,15 +23,18 @@ final class GlassPickerTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(250))
             host.view.layoutIfNeeded()
             let controls = descendants(host.view).compactMap { $0 as? UISegmentedControl }
-            XCTAssertEqual(controls.count, 2)
-            let compact = try XCTUnwrap(controls.first)
-            let expanded = try XCTUnwrap(controls.last)
+            XCTAssertEqual(controls.count, 3)
+            let compact = try XCTUnwrap(controls.first { $0.accessibilityLabel == "View" })
+            let expanded = try XCTUnwrap(controls.first { $0.accessibilityLabel == "Session view" })
+            let toolbar = try XCTUnwrap(controls.first { $0.accessibilityLabel == "Toolbar view" })
             XCTAssertLessThan(compact.bounds.width, expanded.bounds.width)
             XCTAssertGreaterThanOrEqual(compact.bounds.height, 44)
             XCTAssertGreaterThanOrEqual(compact.bounds.width, 150)
             XCTAssertEqual(compact.selectedSegmentIndex, 0)
             let attributes = try XCTUnwrap(compact.titleTextAttributes(for: .selected))
             let color = try XCTUnwrap(attributes[.foregroundColor] as? UIColor)
+            let toolbarColor = try XCTUnwrap(toolbar.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
+            XCTAssertEqual(toolbarColor, color)
             let expected = UIColor(AppAccent.gold.color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
             for (actual, wanted) in zip(color.cgColor.components ?? [], expected.cgColor.components ?? []) {
                 XCTAssertEqual(actual, wanted, accuracy: 0.002)
@@ -70,11 +73,26 @@ final class GlassPickerTests: XCTestCase {
         @Bindable var state: PickerState
 
         var body: some View {
-            VStack(spacing: 24) {
-                GlassPicker(title: "View", selection: $state.selected, options: [("Agents", false), ("Usage", true)])
-                GlassPicker(title: "Session view", selection: $state.selected, options: [("Chat", false), ("Terminal", true)], expands: true)
+            NavigationStack {
+                VStack(spacing: 24) {
+                    GlassPicker(title: "View", selection: $state.selected, options: [("Agents", false), ("Usage", true)])
+                    GlassPicker(title: "Session view", selection: $state.selected, options: [("Chat", false), ("Terminal", true)], expands: true)
+                }
+                .padding()
+                .navigationTitle("Agents")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(removing: .title)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        GlassPicker(title: "Toolbar view", selection: $state.selected, options: [("Agents", false), ("Usage", true)])
+                            .fixedSize()
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("New task", systemImage: "plus") {}
+                    }
+                }
             }
-            .padding()
             .tint(state.accent.color)
             .accentColor(state.accent.color)
         }

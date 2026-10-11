@@ -1,7 +1,20 @@
 import SwiftUI
 import UIKit
 
-struct GlassPicker<Selection: Hashable>: UIViewRepresentable {
+struct GlassPicker<Selection: Hashable>: View {
+    let title: String
+    @Binding var selection: Selection
+    let options: [(String, Selection)]
+    var expands = false
+
+    var body: some View {
+        NativeSegmentedPicker(title: title, selection: $selection, options: options, expands: expands)
+            .foregroundStyle(Color.accentColor)
+            .glassEffect(expands ? .regular : .identity)
+    }
+}
+
+private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
     let title: String
     @Binding var selection: Selection
     let options: [(String, Selection)]
@@ -10,6 +23,9 @@ struct GlassPicker<Selection: Hashable>: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UISegmentedControl {
         let control = UISegmentedControl()
+        control.selectedSegmentTintColor = UIColor { traits in
+            traits.userInterfaceStyle == .dark ? .black : UIColor(white: 0.9, alpha: 1)
+        }
         control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
         return control
     }
@@ -42,9 +58,9 @@ struct GlassPicker<Selection: Hashable>: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     final class Coordinator: NSObject {
-        var parent: GlassPicker
+        var parent: NativeSegmentedPicker
 
-        init(parent: GlassPicker) { self.parent = parent }
+        init(parent: NativeSegmentedPicker) { self.parent = parent }
 
         @objc func changed(_ control: UISegmentedControl) {
             guard parent.options.indices.contains(control.selectedSegmentIndex) else { return }
