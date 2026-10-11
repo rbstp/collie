@@ -4,10 +4,10 @@ Issue #207 uses the iOS 26 and watchOS 26 glass APIs directly. The minimum versi
 
 | Screen or surface | Decision |
 | --- | --- |
-| Agents / Usage switcher | Shared blue glass selector, matching Chat/Terminal and inbox filters. Native paging reveals Usage progressively during a drag. Navigation and tab bars retain system glass. |
-| Agent inbox | Shared blue glass selector applied to filters. Agent rows, state badges and unread indicators stay content. Search uses the system control. |
+| Agents / Usage switcher | Native segmented picker, matching Chat/Terminal and inbox filters, with the system sliding glass selection. Native paging reveals Usage progressively during a drag. Navigation and tab bars retain system glass. |
+| Agent inbox | Native segmented picker for filters. Agent rows, state badges and unread indicators stay content. Search uses the system control. |
 | Agent grid | Left as content: terminal previews need a stable background. Context menus use system styling. |
-| Agent session | Shared blue glass Chat/Terminal selector. Glass applied to the composer, terminal keys, jump and notice actions, upload and dictation controls, attachment removal and unlock action. Attachment content sits outside the glass composer. The lock notice remains content. |
+| Agent session | Native segmented Chat/Terminal picker. Glass applied to the composer, terminal keys, jump and notice actions, upload and dictation controls, attachment removal and unlock action. Attachment content sits outside the glass composer. The lock notice remains content. |
 | Conversation | Already uses glass for search, copy and navigation actions. Messages and code remain content. |
 | Git changes / diff review | Already uses glass from #205. No changes in this audit. |
 | New task | Glass applied to the composer and shared attachment, upload and dictation controls. Folder choices and task settings remain form content. |
@@ -16,7 +16,7 @@ Issue #207 uses the iOS 26 and watchOS 26 glass APIs directly. The minimum versi
 | Plan usage | Left as content: usage bars, figures and reset times need stable backgrounds. |
 | Machines / machine settings / pairing | Already uses system navigation, forms, sheets and toolbar actions. Machine details remain content. |
 | QR scanner | Already uses system scanner UI and a native Cancel toolbar item. |
-| Settings / gestures | System navigation and switches, with a shared blue tint. Diagnostic values remain list content. |
+| Settings / gestures | System navigation and switches, with a selectable accent color. Diagnostic values remain list content. |
 | Onboarding | Glass applied to sign-in and auth-key actions. Instructions and input remain form content. |
 | Watch home / agents | Already uses system lists and navigation. Agent status remains content. |
 | Watch approval detail | Glass applied to Approve, Deny and question actions. Commands and status remain content. |
@@ -24,9 +24,11 @@ Issue #207 uses the iOS 26 and watchOS 26 glass APIs directly. The minimum versi
 | Watch complications / Smart Stack | Rectangular widget redesigned with three native `Gauge` controls using `.accessoryCircular`. Provider sits inside and a bold reset countdown sits below. A value-based tint dims the unused arc while retaining the native marker. Window labels are omitted to maximize gauge space. Percentages are shown in the app after tapping. Native markers indicate usage; the circular complication retains elapsed-time ticks. Preserve stale and missing-data states. Gauges use `widgetAccentable`; no extra glass layer. |
 | Live Activity / Dynamic Island | System-hosted surface. Remove forced black background, white system actions and dark appearance from the Lock Screen activity. Status pills remain content and approval buttons keep the native widget button style. |
 
-Adjacent custom glass controls share `GlassEffectContainer`. Controls inside a glass composer or dictation capsule do not add another glass surface. The blue dictation waveform uses a translucent gradient, becoming solid with Reduce Transparency or Increase Contrast. It fills the available capsule width with recent microphone levels, including repeated levels and silence, with a more sensitive microphone level scale; history clears when dictation stops or switches language. Agents/Usage uses native interactive page scrolling instead of a gesture that switches only after release. Page transitions triggered by the selector respect Reduce Motion.
+Standalone terminal keys, dictation, send, keyboard dismissal and attachment removal use native glass button styles. The wrap-lines control is a native button-style toggle. Approval disclosure uses a native button. Adjacent custom glass controls share `GlassEffectContainer`. Controls inside a glass composer or dictation capsule do not add another glass surface. The accent-colored dictation waveform uses a translucent gradient, becoming solid with Reduce Transparency or Increase Contrast. It fills the available capsule width with recent microphone levels, including repeated levels and silence, with a more sensitive microphone level scale; history clears when dictation stops or switches language. Agents/Usage uses native interactive page scrolling instead of a gesture that switches only after release. Page transitions triggered by the selector respect Reduce Motion.
 
 Reference: [Apple's Liquid Glass guidance](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views).
+
+The follow-up control audit found native `List`, `NavigationLink` and `Gauge` views throughout the watch app and widgets. Watch Approve uses `.glassProminent`; Deny and answer choices use `.glass`. No watch control replacement was needed.
 
 ## Validation
 

@@ -72,28 +72,31 @@ struct ApprovalCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: approval.agentLabel).font(.headline).lineLimit(1)
-                    Text(verbatim: [approval.workspaceLabel, showsMachine ? item.machine.label : nil].compactMap { $0 }.joined(separator: " · "))
-                        .font(.caption)
+            Button {
+                withAnimation { model.toggleExpanded(item) }
+            } label: {
+                HStack(alignment: .firstTextBaseline) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: approval.agentLabel).font(.headline).lineLimit(1)
+                        Text(verbatim: [approval.workspaceLabel, showsMachine ? item.machine.label : nil].compactMap { $0 }.joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text("\(Image(systemName: "timer")) \(Countdown.string(untilMs: approval.expiresAtMs, now: context.date))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                Spacer()
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text("\(Image(systemName: "timer")) \(Countdown.string(untilMs: approval.expiresAtMs, now: context.date))")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
-            .onTapGesture { withAnimation { model.toggleExpanded(item) } }
-            .accessibilityAddTraits(.isButton)
+            .buttonStyle(.plain)
             .accessibilityHint(expanded ? "Shows less of the prompt" : "Shows the whole prompt")
             if let tool = approval.toolName {
                 Text(verbatim: [tool, approval.toolSummary].compactMap { $0 }.joined(separator: ": "))
@@ -188,12 +191,14 @@ private struct FeedbackField: View {
                 Task { await model.sendFeedback(item) }
             } label: {
                 if model.steps[item.id] == .typing {
-                    ProgressView().frame(width: 28, height: 28)
+                    ProgressView().frame(width: 20, height: 20)
                 } else {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 28))
+                    Image(systemName: "arrow.up").frame(width: 20, height: 20)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.glassProminent)
+            .buttonBorderShape(.circle)
+            .controlSize(.small)
             .disabled(model.drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel("Send feedback")
         }
