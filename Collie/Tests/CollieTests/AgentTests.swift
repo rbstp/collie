@@ -1076,6 +1076,42 @@ private func prefsFile() throws -> URL {
 }
 
 @MainActor
+@Test(arguments: ["/", "/Volumes/work files", "/Volumes/work files/"])
+func listedFolderSelectionUsesTheFullPathAndStartsThere(_ parent: String) async throws {
+    let core = FakeCore()
+    let folders = TaskFolders(path: parent, folders: ["app folder"], truncated: false)
+    let fullPath = parent == "/" ? "/app folder" : "/Volumes/work files/app folder"
+    #expect(folders.folderPath("app folder") == fullPath)
+    core.state.withLock {
+        $0.folders = folders
+        $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new")
+        $0.worktreeListing = WorktreeListing(source: fullPath, worktrees: [])
+    }
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    DevicePrefs.update(in: file) { $0.taskBases["m1"] = "/Users/me/old-base" }
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+    await model.loadOptions()
+    model.prompt = "add tests"
+    model.cwd = try #require(model.folders).folderPath("app folder")
+    #expect(model.cwd == fullPath && model.folder == fullPath && model.canStart)
+    #expect(await model.start() != nil)
+    #expect(core.snapshot.taskNews == [fullPath + " -"])
+
+    let worktree = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+    await worktree.loadOptions()
+    worktree.location = .worktree
+    worktree.source = try #require(worktree.folders).folderPath("app folder")
+    worktree.branch = "feature"
+    worktree.prompt = "add tests"
+    await worktree.loadWorktrees()
+    #expect(worktree.source == fullPath && worktree.canStart)
+    #expect(await worktree.start() != nil)
+    #expect(core.snapshot.worktreeCalls == ["list " + fullPath, "create " + fullPath + " feature codex"])
+}
+
+@MainActor
 @Test(arguments: ["/Users/me/git/collie", "collie"])
 func switchingToWorktreeUsesTheSelectedFolder(cwd: String) async throws {
     let core = FakeCore()
