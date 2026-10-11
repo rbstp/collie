@@ -216,7 +216,7 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
 | `just ios-framework` | Builds the `CollieCore` xcframework and UniFFI bindings |
 | `just ios-ghostty` | Builds libghostty-vt from its pinned commit (skipped when already built) |
 | `just ios-project` | Builds libghostty-vt and generates the Xcode project with XcodeGen |
-| `just ios-test` | GhosttyTerminal package tests on macOS, then the iOS unit tests on the simulator |
+| `just ios-test` | GhosttyTerminal package tests on macOS, then the iOS unit and UI tests on the simulator |
 | `just ios-build-sim` | Simulator build |
 | `just ios-run-device` | Builds, installs and launches on a connected iPhone |
 | `just mac-project` | Generates the menu bar app's Xcode project (`Mac/project.yml`) |
@@ -229,6 +229,8 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
 | `just collied-install` | Release build of `collied`, installed to `~/.cargo/bin`. On macOS it is signed and restarts the launchd agent if installed; on Linux it is unsigned and restarts the systemd user unit if active |
 
 CI runs on macOS on every pull request and on pushes to `master`: lint, the Rust tests, the GhosttyTerminal package tests, and the iOS simulator build and tests. Merging a pull request that changes code into `master` uploads a build to the maintainer's TestFlight ([docs/release.md](docs/release.md)).
+
+Attachment UI tests reuse one app launch for the keyboard-hidden and keyboard-visible cases, cancelling each picker and waiting for dismissal before continuing. CI caches only the native build directories needed for the simulator framework, excluding Xcode test results and unrelated build products. It runs `just ios-test never` to skip verbose simulator failure diagnostics (such as sysdiagnose), which can stall for ten minutes; test failures, logs and screenshots remain available in Xcode's test results. Local `just ios-test` retains those diagnostics by default.
 
 ## Repository layout
 

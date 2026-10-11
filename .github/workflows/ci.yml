@@ -125,9 +125,10 @@ jobs:
             ~/.cargo/git/db
             ~/go/pkg/mod
             ~/Library/Caches/go-build
-            target
-          key: ios-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch') }}
-          restore-keys: ios-
+            target/release
+            target/aarch64-apple-ios-sim
+          key: ios-sim-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch') }}
+          restore-keys: ios-sim-
 
       - name: install just and xcodegen
         run: |
@@ -166,4 +167,4 @@ jobs:
         run: xcrun simctl list runtimes | grep -q watchOS || xcodebuild -downloadPlatform watchOS
 
       - name: test
-        run: just --no-deps ios-test
+        run: just --no-deps ios-test never
