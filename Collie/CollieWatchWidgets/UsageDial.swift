@@ -13,7 +13,7 @@ struct UsageDial: View {
         let fraction = window?.usedFraction ?? 0
         let end = window == nil ? 0 : min(fraction + 0.02, 1)
         let remainder = end < 1 ? color.opacity(0.2) : color
-        Gauge(value: window?.usedFraction ?? 0) {
+        Gauge(value: fraction) {
             if let period {
                 HStack(spacing: 2) {
                     if showsPercentage {
@@ -63,5 +63,16 @@ struct UsageDial: View {
                 .accessibilityHidden(true)
             }
         }
+    }
+}
+
+extension WatchUsage.Window {
+    func remaining(now: Date) -> Text {
+        Text(Duration.seconds(max(0, interval.upperBound.timeIntervalSince(now))),
+             format: .units(allowed: [.days, .hours, .minutes], width: .narrow, maximumUnitCount: 2))
+    }
+
+    func accessibilityValue(now: Date) -> String {
+        "\(used) percent used. \(Int((elapsed(now: now) * 100).rounded())) percent of the window elapsed. Resets \(interval.upperBound.formatted(date: .abbreviated, time: .shortened))"
     }
 }

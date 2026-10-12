@@ -17,7 +17,7 @@ final class MachineConnectionTests: XCTestCase {
             app.launchEnvironment["COLLIE_DEMO_CONNECTION_ERROR"] = message
             app.launch()
             defer { app.terminate() }
-            for layout in ["Grid", "List", "Inbox"] {
+            for layout in ["Inbox", "List", "Grid"] {
                 app.buttons["Layout"].tap()
                 app.buttons[layout].tap()
                 XCTAssertFalse(app.buttons["Copy connection error"].exists, app.debugDescription)

@@ -29,6 +29,8 @@ final class AttachmentMenuTests: XCTestCase {
         if newTask {
             app.buttons["New task"].tap()
         } else {
+            app.buttons["Layout"].tap()
+            app.buttons["Grid"].tap()
             let agent = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
             XCTAssertTrue(agent.waitForExistence(timeout: 5), app.debugDescription)
             agent.tap()

@@ -62,7 +62,7 @@ private struct CodexSubscriptionUsage: View {
             HStack {
                 Text("\(usage.used.formatted()) / \(usage.limit.formatted()) credits")
                 Spacer()
-                Text("resets \(Date(timeIntervalSince1970: TimeInterval(usage.resetsAtMs) / 1000).formatted(date: .abbreviated, time: .omitted))")
+                Text("resets \(Date(unixMs: usage.resetsAtMs).formatted(date: .abbreviated, time: .omitted))")
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)

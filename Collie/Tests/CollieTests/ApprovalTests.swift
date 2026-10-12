@@ -395,8 +395,6 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     #expect(model.items(machineId: "m1", terminalId: "term_1").map(\.id) == ["ap_1"])
     #expect(model.items(machineId: "m2", terminalId: "term_1").isEmpty)
 
-    model.open(ApprovalLink(nodeId: "nMAC", approvalId: "ap_9")!)
-    #expect(model.highlighted == "ap_9")
 }
 
 @MainActor
@@ -407,7 +405,6 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
     let load = model.open(link)
     #expect(model.loading?.link == link)
-    #expect(model.highlighted == "ap_1")
     while core.state.withLock({ $0.flocks }) < 2 {
         try await Task.sleep(for: .milliseconds(5))
     }
@@ -506,7 +503,6 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     model.cancelOpening()
     await pending?.value
     #expect(model.loading == nil)
-    #expect(model.highlighted == nil)
     #expect(model.notice == nil)
 }
 

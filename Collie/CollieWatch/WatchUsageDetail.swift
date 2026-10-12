@@ -26,9 +26,7 @@ struct WatchUsageDetail: View {
                                 Text("\(period) · \(window.map { "\($0.used)%" } ?? "--")")
                                     .font(.headline)
                                 if let window {
-                                    let remaining = Text(Duration.seconds(max(0, window.interval.upperBound.timeIntervalSince(context.date))),
-                                                         format: .units(allowed: [.days, .hours, .minutes], width: .narrow, maximumUnitCount: 2))
-                                    Text("\(remaining) left")
+                                    Text("\(window.remaining(now: context.date)) left")
                                 } else {
                                     Text("No data")
                                 }
@@ -38,9 +36,7 @@ struct WatchUsageDetail: View {
                         .padding(.vertical, 4)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(logo) \(period)")
-                        .accessibilityValue(window.map {
-                            "\($0.used) percent used. \(Int(($0.elapsed(now: context.date) * 100).rounded())) percent of the window elapsed. Resets \($0.interval.upperBound.formatted(date: .abbreviated, time: .shortened))"
-                        } ?? "Usage unavailable")
+                        .accessibilityValue(window?.accessibilityValue(now: context.date) ?? "Usage unavailable")
                     }
                 }
             }

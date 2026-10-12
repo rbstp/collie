@@ -1095,7 +1095,7 @@ func listArchiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
 @Test func newTaskUsesTheDefaultAgentAndNeedsAnAbsoluteFolder() async {
     let core = FakeCore()
     let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
-    let model = NewTaskModel(core: core, machines: [machine])
+    let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil)
     await model.loadOptions()
     #expect(model.agent == "codex")
     model.prompt = "add tests"
@@ -1113,11 +1113,11 @@ func listArchiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
     let core = FakeCore()
     let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
     let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "n2", kind: .linux, key: "")
-    #expect(NewTaskModel(core: core, machines: [mac, linux], preferredMachineId: "m2").machineId == "m2")
-    #expect(NewTaskModel(core: core, machines: [mac, linux], preferredMachineId: "gone").machineId == "m1")
-    #expect(NewTaskModel(core: core, machines: [mac, linux]).machineId == "m1")
+    #expect(NewTaskModel(core: core, machines: [mac, linux], preferredMachineId: "m2", prefsFile: nil).machineId == "m2")
+    #expect(NewTaskModel(core: core, machines: [mac, linux], preferredMachineId: "gone", prefsFile: nil).machineId == "m1")
+    #expect(NewTaskModel(core: core, machines: [mac, linux], prefsFile: nil).machineId == "m1")
 
-    let model = NewTaskModel(core: core, machines: [mac, linux])
+    let model = NewTaskModel(core: core, machines: [mac, linux], prefsFile: nil)
     core.set(hold: true)
     let first = Task { await model.loadOptions() }
     await core.waitHeld(1)
@@ -1500,13 +1500,13 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
     let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
 
-    let model = NewTaskModel(core: core, machines: [machine])
+    let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil)
     await model.loadOptions()
     model.cwd = "/Users/me/app"
     model.prompt = "add tests"
     #expect(await model.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
 
-    let cancelled = NewTaskModel(core: core, machines: [machine])
+    let cancelled = NewTaskModel(core: core, machines: [machine], prefsFile: nil)
     await cancelled.loadOptions()
     cancelled.cwd = "/Users/me/app"
     cancelled.prompt = "add tests"
@@ -2744,12 +2744,15 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
 
 @MainActor
 @Test func archiveNoticeExpiresAndReplacementGetsItsOwnLifetime() async throws {
-    let model = FlockModel()
+    let model = FlockModel(archiveNoticeLifetime: .seconds(2))
     model.showArchiveNotice("Archive complete")
     try await Task.sleep(for: .seconds(1))
     model.showArchiveNotice("Closed pane. gh poi did not complete (timeout); branch cleanup may be partial.")
-    try await Task.sleep(for: .seconds(9.2))
+    try await Task.sleep(for: .seconds(1.3))
     #expect(model.archiveNotice == "Archive complete\nSome branches could not be cleaned up.")
-    try await Task.sleep(for: .seconds(1))
+    let deadline = ContinuousClock.now + .seconds(5)
+    while model.archiveNotice != nil, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(20))
+    }
     #expect(model.archiveNotice == nil)
 }

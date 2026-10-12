@@ -5,7 +5,6 @@ import CryptoKit
 import Foundation
 import SwiftUI
 import Synchronization
-import UserNotifications
 
 /// `--terminal-demo <file>`: the Agents list over fake agents, each agent screen showing the
 /// first "text" string of a herdr JSON response (or the raw file), with no Mac. Debug builds only.
@@ -273,121 +272,6 @@ final class DemoAgentCore: ActivityCore {
 
     private func read(_ terminalId: String) -> TerminalSnapshot {
         TerminalSnapshot(terminalId: terminalId, source: .recent, ansi: snapshot, truncated: false)
-    }
-}
-
-struct ApprovalsDemo: View {
-    @State private var model = ApprovalsModel(core: DemoApprovalCore(), auth: DemoAuthenticator())
-
-    init?(arguments: [String]) {
-        guard arguments.contains("--approvals-demo") else { return nil }
-    }
-
-    var body: some View {
-        ApprovalsScreen(model: model)
-        .task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) }
-    }
-}
-
-struct DemoAuthenticator: Authenticator {
-    func authenticate(reason: String) async -> Bool { true }
-}
-
-final class DemoApprovalCore: ApprovalCore {
-    private let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO", kind: .mac, key: "")
-    private let pending: [PendingApproval]
-
-    init() {
-        let now = Date.now.unixMs
-        pending = [
-            PendingApproval(
-                approvalId: "ap_demo1", terminalId: "term_1", agentLabel: "fix the flaky test", workspaceLabel: "collie",
-                snippet: """
-                Bash command
-                  Run the approval tests
-                  cargo test -p collied --test approvals
-                Do you want to proceed?
-                > 1. Yes
-                  2. Yes, and don't ask again for cargo test commands
-                  3. No
-                Esc to cancel · Tab to amend
-                """,
-                toolName: "Bash", toolSummary: "cargo test -p collied --test approvals",
-                options: [.approve, .approveAlways, .deny],
-                choices: [
-                    ApprovalChoice(index: 0, label: "Yes", current: true),
-                    ApprovalChoice(index: 1, label: "Yes, and don't ask again for cargo test commands", current: false),
-                    ApprovalChoice(index: 2, label: "No", current: false),
-                ],
-                acceptsInput: false, hasTextField: false, supportsNote: true,
-                createdAtMs: now - 45_000, expiresAtMs: now + 555_000
-            ),
-            PendingApproval(
-                approvalId: "ap_demo2", terminalId: "term_2", agentLabel: "claude", workspaceLabel: "website",
-                snippet: "Do you trust the files in this folder?\n> 1. Yes, proceed\n  2. No, exit",
-                toolName: nil, toolSummary: nil,
-                options: [.approve, .deny],
-                choices: [
-                    ApprovalChoice(index: 0, label: "Yes, proceed", current: true),
-                    ApprovalChoice(index: 1, label: "No, exit", current: false),
-                ],
-                acceptsInput: false, hasTextField: false, supportsNote: false,
-                createdAtMs: now - 10_000, expiresAtMs: now + 190_000
-            ),
-            PendingApproval(
-                approvalId: "ap_demo3", terminalId: "term_3", agentLabel: "plan the migration", workspaceLabel: "collie",
-                snippet: """
-                ☐ Database
-                Which database should the migration target?
-                """,
-                toolName: nil, toolSummary: nil,
-                options: [],
-                choices: [
-                    ApprovalChoice(index: 0, label: "PostgreSQL 17", current: true, detail: "Shared server, the production default"),
-                    ApprovalChoice(index: 1, label: "SQLite", current: false, detail: "Single file, no server to run"),
-                    ApprovalChoice(index: 2, label: "Type something.", current: false),
-                    ApprovalChoice(index: 3, label: "Chat about this", current: false),
-                ],
-                acceptsInput: true, hasTextField: true, supportsNote: false,
-                createdAtMs: now - 60_000, expiresAtMs: now + 540_000
-            ),
-            PendingApproval(
-                approvalId: "ap_demo4", terminalId: "term_4", agentLabel: "add dark mode", workspaceLabel: "website",
-                snippet: """
-                Ready to code?
-                Would you like to proceed?
-                > 1. Yes, and use auto mode
-                  2. Yes, manually approve edits
-                  3. Tell Claude what to change
-                """,
-                toolName: nil, toolSummary: nil,
-                options: [],
-                choices: [
-                    ApprovalChoice(index: 0, label: "Yes, and use auto mode", current: true),
-                    ApprovalChoice(index: 1, label: "Yes, manually approve edits", current: false),
-                    ApprovalChoice(index: 2, label: "Tell Claude what to change", current: false),
-                ],
-                acceptsInput: false, hasTextField: true, supportsNote: false,
-                createdAtMs: now - 20_000, expiresAtMs: now + 580_000
-            ),
-        ]
-    }
-
-    func machines() -> [Machine] { [machine] }
-
-    func approvalFeed(machineId: String) -> ApprovalFeed? {
-        ApprovalFeed(link: .connected, pending: pending)
-    }
-
-    func flock(machineId: String) async throws -> MachineFlock { throw CoreError.MachineNotFound }
-
-    func decide(machineId: String, approvalId: String, decision: ApprovalDecision, note: String?) async throws -> DecisionOutcome {
-        try await Task.sleep(for: .milliseconds(500))
-        return .applied(decision: decision, by: "demo")
-    }
-
-    func typeText(machineId: String, terminalId: String, text: String) async throws {
-        try await Task.sleep(for: .milliseconds(500))
     }
 }
 #endif

@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::session::lock;
-use crate::store::write_atomic;
+use crate::store::write_hint;
 
 pub const FILE: &str = "reachability.json";
 
@@ -64,7 +64,7 @@ impl State {
             return Ok(());
         };
         let bytes = serde_json::to_vec(&self.seen).map_err(std::io::Error::other)?;
-        write_atomic(dir, FILE, &bytes)
+        write_hint(dir, FILE, &bytes)
     }
 }
 

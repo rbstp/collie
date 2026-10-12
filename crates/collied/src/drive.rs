@@ -492,11 +492,12 @@ impl Driver {
                     let patch = sent
                         .as_ref()
                         .and_then(|prev| OutputPatch::between(prev, &read));
-                    sent = Some(read.clone());
-                    match patch {
+                    let watched = match patch {
                         Some(patch) => Watched::Patch(patch),
-                        None => Watched::Output(read),
-                    }
+                        None => Watched::Output(read.clone()),
+                    };
+                    sent = Some(read);
+                    watched
                 }
             };
             let gone = matches!(msg, Watched::Gone);
@@ -1905,7 +1906,7 @@ impl OpCache {
         F: Future<Output = Reply> + Send + 'static,
     {
         let (mut rx, origin) = {
-            let mut peers = self.peers.lock().unwrap_or_else(|e| e.into_inner());
+            let mut peers = crate::lock(&self.peers);
             let ops = peers.entry(peer.to_owned()).or_default();
             let now = Instant::now();
             ops.retain(|e| e.outcome.borrow().is_none() || now.duration_since(e.at) < self.ttl);

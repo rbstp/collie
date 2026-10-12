@@ -53,6 +53,11 @@ final class FlockModel {
     private(set) var archiving = false
     private(set) var archiveNotice: String?
     private var archiveNoticeTask: Task<Void, Never>?
+    private let archiveNoticeLifetime: Duration
+
+    init(archiveNoticeLifetime: Duration = .seconds(10)) {
+        self.archiveNoticeLifetime = archiveNoticeLifetime
+    }
 
     func beginClose(_ target: CloseTarget, route: AgentRoute) {
         guard !archiving else { return }
@@ -84,9 +89,9 @@ final class FlockModel {
         closeNotice = nil
         clearArchiveNotice()
         archiveNotice = ArchiveSummary.message(message)
-        archiveNoticeTask = Task { [weak self] in
+        archiveNoticeTask = Task { [weak self, archiveNoticeLifetime] in
             do {
-                try await Task.sleep(for: .seconds(10))
+                try await Task.sleep(for: archiveNoticeLifetime)
             } catch {
                 return
             }
@@ -320,7 +325,7 @@ extension AgentSummary {
 
 extension CodexUsage {
     func elapsed(now: Date) -> Double {
-        let end = Date(timeIntervalSince1970: TimeInterval(resetsAtMs) / 1000)
+        let end = Date(unixMs: resetsAtMs)
         guard let interval = WatchUsage.monthlyInterval(endingAt: end) else { return 0 }
         return min(1, max(0, now.timeIntervalSince(interval.lowerBound) / end.timeIntervalSince(interval.lowerBound)))
     }

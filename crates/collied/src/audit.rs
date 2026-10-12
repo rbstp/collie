@@ -56,7 +56,7 @@ impl Audit {
             return;
         };
         line.push(b'\n');
-        let mut file = self.file.lock().unwrap_or_else(|e| e.into_inner());
+        let mut file = crate::lock(&self.file);
         if let Err(e) = file.write_all(&line) {
             tracing::error!(error = %e, "audit log write failed");
         }

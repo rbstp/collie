@@ -270,7 +270,7 @@ impl Approvals {
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        crate::lock(&self.inner)
     }
 
     /// Pending approvals with their nonces: for paired sessions only.

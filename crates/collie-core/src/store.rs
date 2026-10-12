@@ -86,6 +86,16 @@ impl MachineStore {
 /// Written to a fresh 0600 file, fsynced, then renamed over the old one, so a crash
 /// leaves either the previous content or the new one.
 pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    replace(dir, name, bytes, true)
+}
+
+/// As `write_atomic` without the fsyncs, for a hint file whose readers ignore an update a
+/// crash lost or left unreadable.
+pub fn write_hint(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    replace(dir, name, bytes, false)
+}
+
+fn replace(dir: &Path, name: &str, bytes: &[u8], durable: bool) -> std::io::Result<()> {
     let tmp = dir.join(format!(".{name}.tmp"));
     match fs::remove_file(&tmp) {
         Err(e) if e.kind() != ErrorKind::NotFound => return Err(e),
@@ -97,15 +107,24 @@ pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()>
         .mode(0o600)
         .open(&tmp)?;
     file.write_all(bytes)?;
-    file.sync_all()?;
+    if durable {
+        file.sync_all()?;
+    }
     drop(file);
     fs::rename(&tmp, dir.join(name))?;
-    File::open(dir)?.sync_all()
+    if durable {
+        File::open(dir)?.sync_all()?;
+    }
+    Ok(())
 }
 
 pub fn random_id() -> String {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("system RNG");
+    hex(&bytes)
+}
+
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

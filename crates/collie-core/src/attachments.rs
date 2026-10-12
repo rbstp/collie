@@ -9,6 +9,7 @@ use protocol::{
 use sha2::{Digest, Sha256};
 
 use crate::session::unexpected;
+use crate::store::hex;
 use crate::{CoreError, expect_ok, invalid, new_op_id};
 
 /// collied limits chunks per peer; a fast link backs off instead of failing.
@@ -41,10 +42,6 @@ pub(crate) fn check(name: &str, data: &[u8]) -> Result<AttachmentName, CoreError
         });
     }
     Ok(name)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// begin, sequential chunks (each awaited), commit. On any failure or on `cancel`, the
