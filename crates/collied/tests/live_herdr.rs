@@ -80,6 +80,10 @@ fn live_herdr_approval() {
         println!("skipped: herdr is not installed");
         return;
     }
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("collied=debug")
+        .with_test_writer()
+        .try_init();
     let mut session = HerdrSession::start("apv");
     let bin = session.root.join("bin/claude");
     std::fs::write(&bin, FAKE_CLAUDE).unwrap();
