@@ -285,13 +285,30 @@ impl Driver {
             .map_err(herdr_fail)?;
         match check_ready(&listed, &current) {
             Ok(()) => Ok(current),
-            Err((ErrorCode::AgentBlocked, _))
-                if current.agent.is_some() && !current.launch_pending =>
-            {
-                Ok(current)
-            }
+            Err((ErrorCode::AgentBlocked, _)) if current.agent.is_some() => Ok(current),
             Err(e) => Err(e),
         }
+    }
+
+    async fn input_safeguards(&self, a: &AgentInfo, submits: bool) -> Result<(), Fail> {
+        if a.agent.as_deref() != Some("claude")
+            || flock::status(&a.agent_status) == AgentStatus::Blocked
+        {
+            return Ok(());
+        }
+        let screen = herdr::detection_text(&self.herdr, &a.pane_id)
+            .await
+            .map_err(herdr_fail)?;
+        if protocol::jump_banner(&screen) {
+            return fail(ErrorCode::AgentNotReady, SCROLLED);
+        }
+        if submits
+            && let Some(InputBox::Draft(d)) = self.input_box(&a.pane_id).await?
+            && d.text.starts_with('/')
+        {
+            return fail(ErrorCode::AgentNotReady, COMMAND_SHOWN);
+        }
+        Ok(())
     }
 
     /// `pane.read` reads agent panes only: a shell is read through `terminal.watch`, under
@@ -597,28 +614,12 @@ impl Driver {
             Err(e) => return (Err(e), None),
         };
         let blocked = flock::status(&a.agent_status) == AgentStatus::Blocked;
-        if a.agent.as_deref() == Some("claude") && !blocked {
-            // A dialog scrolled out of view leaves the agent idle: keys would answer it unseen.
-            let scrolled = match herdr::detection_text(&self.herdr, &a.pane_id).await {
-                Ok(s) => protocol::jump_banner(&s),
-                Err(e) => return (Err(herdr_fail(e)), None),
-            };
-            if scrolled {
-                return (fail(ErrorCode::AgentNotReady, SCROLLED), None);
-            }
-            // Enter would run the command menu's highlighted entry.
-            if p.keys
-                .iter()
-                .any(|k| matches!(k, Key::Enter | Key::CtrlEnter))
-            {
-                match self.input_box(&a.pane_id).await {
-                    Ok(Some(InputBox::Draft(d))) if d.text.starts_with('/') => {
-                        return (fail(ErrorCode::AgentNotReady, COMMAND_SHOWN), None);
-                    }
-                    Ok(_) => {}
-                    Err(e) => return (Err(e), None),
-                }
-            }
+        let submits = p
+            .keys
+            .iter()
+            .any(|k| matches!(k, Key::Enter | Key::CtrlEnter));
+        if let Err(e) = self.input_safeguards(&a, submits).await {
+            return (Err(e), None);
         }
         let keys: Vec<&str> = p.keys.iter().map(|k| k.herdr_name()).collect();
         let target =
@@ -636,6 +637,7 @@ impl Driver {
     pub async fn type_text(&self, p: AgentTypeTextParams, auth: &Authorized) -> Reply {
         let _box = self.box_writes.lock().await;
         let a = self.writable_agent(&p.terminal_id).await?;
+        self.input_safeguards(&a, true).await?;
         authorized(auth)?;
         let paste = format!("\u{1b}[200~{}\u{1b}[201~", p.text.as_str());
         herdr::pane_send_input(&self.herdr, &a.pane_id, &paste, &["enter"])

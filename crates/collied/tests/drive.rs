@@ -3357,10 +3357,16 @@ async fn agent_approval_input_keeps_authorization_and_agent_checks() {
             h.snapshot["agents"][0]["launch_pending"] = json!(true);
         });
         assert_eq!(
-            code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
-            ErrorCode::AgentBlocked
+            drive.type_text(typed(CLAUDE, "yes"), &yes()).await,
+            Ok(Response::Ok)
         );
-        assert!(herdr.mutations().is_empty());
+        assert_eq!(herdr.params("pane.send_input").len(), 1);
+        herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("idle"));
+        assert_eq!(
+            code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
+            ErrorCode::AgentNotReady
+        );
+        herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("blocked"));
         herdr.with(|h| h.snapshot["agents"][0]["launch_pending"] = json!(false));
 
         herdr.fail_next("agent.send_keys", &["agent_not_running"]);
@@ -3457,6 +3463,33 @@ async fn blocked_keys_do_not_depend_on_prompt_parsing() {
 }
 
 #[tokio::test]
+async fn typed_answers_keep_idle_claude_scroll_and_slash_safeguards() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("idle"));
+
+    for screen in [SCROLLED, SCROLLED_DIALOG, NEW_MESSAGE, SLASH_STA] {
+        herdr.with(|h| h.text = screen.into());
+        assert_eq!(
+            code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
+            ErrorCode::AgentNotReady,
+            "{screen}"
+        );
+    }
+    assert!(herdr.mutations().is_empty());
+
+    for screen in [SCROLLED_DIALOG, SLASH_STA] {
+        block(&herdr, screen);
+        assert_eq!(
+            drive.type_text(typed(CLAUDE, "yes"), &yes()).await,
+            Ok(Response::Ok)
+        );
+    }
+    assert_eq!(herdr.params("pane.send_input").len(), 2);
+}
+
+#[tokio::test]
 async fn typed_text_is_pasted_and_submitted_without_prompt_parsing() {
     let herdr = Mock::start();
     let (_d, base) = root();
@@ -3500,7 +3533,10 @@ async fn typed_text_is_pasted_and_submitted_without_prompt_parsing() {
         Ok(Response::Ok)
     );
     assert_eq!(herdr.params("pane.send_input").len(), 8);
-    assert!(herdr.params("pane.read").is_empty());
+    let reads = herdr.params("pane.read");
+    assert_eq!(reads.len(), 2);
+    assert_eq!(reads[0]["source"], "detection");
+    assert_eq!(reads[1]["source"], "visible");
 }
 
 #[tokio::test]

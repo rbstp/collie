@@ -89,12 +89,24 @@ fn live_herdr_approval() {
         .enable_all()
         .build()
         .unwrap();
-    rt.block_on(approval_scenario(&session));
+    for input in [
+        ApprovalInput::Keys,
+        ApprovalInput::Text,
+        ApprovalInput::Decision,
+    ] {
+        rt.block_on(approval_scenario(&session, input));
+    }
     drop(rt);
     assert!(session.stop(), "dedicated herdr session did not stop");
 }
 
-async fn approval_scenario(session: &HerdrSession) {
+enum ApprovalInput {
+    Keys,
+    Text,
+    Decision,
+}
+
+async fn approval_scenario(session: &HerdrSession, input: ApprovalInput) {
     let socket = &session.socket;
     let work = std::fs::canonicalize(&session.work).unwrap();
     let created = herdr::workspace_create(socket, work.to_str().unwrap(), Some("collie-live"))
@@ -163,53 +175,71 @@ async fn approval_scenario(session: &HerdrSession) {
     )
     .unwrap();
     let terminal_id = TerminalId::new(terminal.clone()).unwrap();
-    let (keys, _) = drive
-        .send_keys(
-            AgentSendKeysParams {
-                op_id: OpId::new("K".repeat(22)).unwrap(),
-                terminal_id: terminal_id.clone(),
-                keys: vec![Key::Enter],
-            },
-            &yes,
-        )
-        .await;
-    assert_eq!(keys.unwrap_err().0, ErrorCode::AgentBlocked);
-    let typed = drive
-        .type_text(
-            AgentTypeTextParams {
-                op_id: OpId::new("Y".repeat(22)).unwrap(),
-                terminal_id,
-                text: PromptText::new("yes").unwrap(),
-            },
-            &yes,
-        )
-        .await;
-    assert_eq!(typed.unwrap_err().0, ErrorCode::AgentBlocked);
-    let reply = approvals
-        .decide(
-            "live",
-            "nLIVE",
-            ApprovalDecideParams {
-                approval_id: approval.approval_id.clone(),
-                decision: Decision::Approve,
-                choice: None,
-                nonce: approval.nonce.clone(),
-                note: None,
-            },
-            &yes,
-        )
-        .await;
-    assert_eq!(
-        reply,
-        Ok(Response::ApprovalResolved {
-            approval_id: approval.approval_id.clone(),
-            outcome: ApprovalOutcome::Applied {
-                decision: Decision::Approve,
-                by: "live".into()
-            },
-        })
-    );
-    let screen = herdr::detection_text(socket, &pane).await.unwrap();
+    match input {
+        ApprovalInput::Keys => {
+            let (reply, target) = drive
+                .send_keys(
+                    AgentSendKeysParams {
+                        op_id: OpId::new("K".repeat(22)).unwrap(),
+                        terminal_id: terminal_id.clone(),
+                        keys: vec![Key::Enter],
+                    },
+                    &yes,
+                )
+                .await;
+            assert_eq!(reply, Ok(Response::Ok), "target={target:?}");
+        }
+        ApprovalInput::Text => {
+            let reply = drive
+                .type_text(
+                    AgentTypeTextParams {
+                        op_id: OpId::new("Y".repeat(22)).unwrap(),
+                        terminal_id,
+                        text: PromptText::new("yes").unwrap(),
+                    },
+                    &yes,
+                )
+                .await;
+            assert_eq!(reply, Ok(Response::Ok));
+        }
+        ApprovalInput::Decision => {
+            let reply = approvals
+                .decide(
+                    "live",
+                    "nLIVE",
+                    ApprovalDecideParams {
+                        approval_id: approval.approval_id.clone(),
+                        decision: Decision::Approve,
+                        choice: None,
+                        nonce: approval.nonce.clone(),
+                        note: None,
+                    },
+                    &yes,
+                )
+                .await;
+            assert_eq!(
+                reply,
+                Ok(Response::ApprovalResolved {
+                    approval_id: approval.approval_id.clone(),
+                    outcome: ApprovalOutcome::Applied {
+                        decision: Decision::Approve,
+                        by: "live".into()
+                    },
+                })
+            );
+        }
+    }
+    let screen = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let screen = herdr::detection_text(socket, &pane).await.unwrap();
+            if screen.contains("Removed build/") {
+                return screen;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("the fake claude never received its answer");
     assert!(screen.contains("Removed build/"), "{screen}");
 
     // The reconcile skips the star snapshot while every star is in `agent.list`, so a

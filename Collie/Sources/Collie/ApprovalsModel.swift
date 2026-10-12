@@ -258,7 +258,7 @@ final class ApprovalsModel {
         poll()
     }
 
-    func sendFeedback(_ item: ApprovalItem) async {
+    func sendFeedback(_ item: ApprovalItem, send: ((String) async throws -> Void)? = nil) async {
         let text = drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
         guard let core, steps[item.id] == nil, item.approval.takesFeedback, !text.isEmpty else { return }
         poll()
@@ -270,7 +270,11 @@ final class ApprovalsModel {
         show(nil)
         defer { steps[item.id] = nil }
         do {
-            try await core.typeText(machineId: item.machine.id, terminalId: item.approval.terminalId, text: text)
+            if let send {
+                try await send(text)
+            } else {
+                try await core.typeText(machineId: item.machine.id, terminalId: item.approval.terminalId, text: text)
+            }
             drafts[item.id] = nil
             show("Sent your answer to \(item.approval.agentLabel).", about: item.id)
         } catch {

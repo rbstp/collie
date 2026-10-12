@@ -612,6 +612,39 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
 }
 
 @MainActor
+@Test func approvalCardAnswersShareTheSessionInputQueue() async throws {
+    let core = FakeApprovalCore()
+    core.state.withLock {
+        $0.pending["m1"] = [approval("ap_plan", options: [], choices: planChoices, hasTextField: true)]
+    }
+    let model = ApprovalsModel(core: core)
+    model.poll()
+    let item = try #require(model.items.first)
+    model.drafts[item.id] = "DuckDB"
+
+    let agentCore = FakeCore()
+    agentCore.state.withLock {
+        $0.kind = "claude"
+        $0.status = .blocked
+    }
+    let session = AgentModel(core: agentCore, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil)
+    session.poll()
+    agentCore.set(hold: true)
+    let drain = session.tap(.down)
+    await agentCore.waitHeld(1)
+    session.tap(.down)
+    let answer = Task { await model.sendFeedback(item, send: session.typeAnswer) }
+    while model.steps[item.id] == nil { await Task.yield() }
+    #expect(agentCore.snapshot.typed.isEmpty)
+    agentCore.release()
+    await answer.value
+    await drain?.value
+    #expect(agentCore.snapshot.input == [.keys([.down]), .keys([.down]), .text("DuckDB")])
+    #expect(core.state.withLock { $0.typed }.isEmpty)
+    #expect(model.drafts[item.id] == nil)
+}
+
+@MainActor
 @Test func planFeedbackIsTypedIntoItsTextField() async throws {
     let core = FakeApprovalCore()
     let auth = FakeAuthenticator()

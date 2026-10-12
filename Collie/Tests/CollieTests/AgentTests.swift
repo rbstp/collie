@@ -8,6 +8,11 @@ import UIKit
 @testable import Collie
 
 final class FakeCore: AgentCore {
+    enum Input: Equatable {
+        case keys([AgentKey])
+        case text(String)
+    }
+
     struct State {
         var gitCalls: [String] = []
         var gitPatch = "@@ -1 +1 @@\n-old\n+new\n"
@@ -19,6 +24,7 @@ final class FakeCore: AgentCore {
         var draftReads = 0
         var keys: [[AgentKey]] = []
         var typed: [String] = []
+        var input: [Input] = []
         var closes: [String] = []
         var stars: [String] = []
         var scrolls: [String] = []
@@ -179,10 +185,16 @@ final class FakeCore: AgentCore {
         }
     }
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {
-        try await call { $0.keys.append(keys) }
+        try await call {
+            $0.keys.append(keys)
+            $0.input.append(.keys(keys))
+        }
     }
     func typeText(machineId: String, terminalId: String, text: String) async throws {
-        try await call { $0.typed.append(text) }
+        try await call {
+            $0.typed.append(text)
+            $0.input.append(.text(text))
+        }
     }
     func focus(machineId: String, terminalId: String) async throws {}
     func scrollBottom(machineId: String, terminalId: String) async throws {
@@ -728,6 +740,107 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     core.release()
     await drain?.value
     #expect(core.snapshot.keys == [[.down], [.down, .enter]])
+}
+
+@MainActor
+@Test(arguments: [AgentKey.down, .shiftLeft])
+func answersStayBetweenEarlierAndLaterTerminalKeys(first: AgentKey) async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = first == .shiftLeft ? "codex" : "claude"
+        $0.status = .blocked
+    }
+    let model = agentModel(core)
+    model.poll()
+    core.set(hold: true)
+    let drain = model.tap(first)
+    await core.waitHeld(1)
+    model.tap(.down)
+    model.draft = "DuckDB"
+    let answer = Task { await model.sendPrompt() }
+    while !model.sendingPrompt { await Task.yield() }
+    model.tap(.right)
+    #expect(core.snapshot.input == [.keys([first])])
+    core.release()
+    await answer.value
+    await drain?.value
+    #expect(core.snapshot.input == [.keys([first]), .keys([.down]), .text("DuckDB"), .keys([.right])])
+    #expect(model.draft.isEmpty)
+}
+
+@MainActor
+@Test func failedNavigationDoesNotSubmitTheQueuedAnswer() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.status = .blocked
+    }
+    let model = agentModel(core)
+    model.poll()
+    core.set(hold: true, error: .AgentNotReady)
+    let drain = model.tap(.down)
+    await core.waitHeld(1)
+    model.draft = "DuckDB"
+    let answer = Task { await model.sendPrompt() }
+    while !model.sendingPrompt { await Task.yield() }
+    core.release()
+    await answer.value
+    await drain?.value
+    #expect(core.snapshot.typed.isEmpty)
+    #expect(model.draft == "DuckDB")
+    #expect(model.promptError != nil)
+    #expect(!model.sendingPrompt)
+}
+
+@MainActor
+@Test func failedAnswerCancelsLaterTerminalKeys() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.status = .blocked
+    }
+    let model = agentModel(core)
+    model.poll()
+    core.set(hold: true, error: .AgentNotReady)
+    model.draft = "DuckDB"
+    let answer = Task { await model.sendPrompt() }
+    await core.waitHeld(1)
+    model.tap(.enter)
+    core.release()
+    await answer.value
+    #expect(core.snapshot.keys.isEmpty)
+    #expect(model.draft == "DuckDB")
+    #expect(model.promptError != nil)
+}
+
+@MainActor
+@Test func queuedAnswerDoesNotReachAShellAfterAgentExit() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.status = .blocked
+    }
+    let model = agentModel(core)
+    model.poll()
+    core.set(hold: true)
+    let drain = model.tap(.down)
+    await core.waitHeld(1)
+    model.draft = "DuckDB"
+    let answer = Task { await model.sendPrompt() }
+    while !model.sendingPrompt { await Task.yield() }
+    core.state.withLock {
+        $0.kind = nil
+        $0.shell = shellPane
+    }
+    model.poll()
+    core.release()
+    await answer.value
+    await drain?.value
+    #expect(model.isTerminal)
+    #expect(core.snapshot.typed.isEmpty)
+    #expect(core.snapshot.terminalKeys.isEmpty)
+    #expect(core.snapshot.commands.isEmpty)
+    #expect(!model.sendingPrompt)
 }
 
 @MainActor

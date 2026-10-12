@@ -71,8 +71,12 @@ final class AgentModel {
     var blocked: BlockedInput?
     private(set) var notice: String?
     private(set) var keyTaps = 0
-    private var queuedKeys: [AgentKey] = []
-    private var sendingKeys = false
+    private enum Input {
+        case key(AgentKey)
+        case answer(String, CheckedContinuation<Void, any Error>)
+    }
+    private var queuedInput: [Input] = []
+    private var sendingInput = false
 
     var close = CloseConfirmation()
     private(set) var closed = false
@@ -237,17 +241,6 @@ final class AgentModel {
         if isTerminal { return !sendingPrompt && !unlocking && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         return !sendingPrompt && !dictation.isActive
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
-    }
-
-    func openCodexQuestion() async {
-        guard agent?.kind == "codex" else { return }
-        promptError = nil
-        do {
-            try await core.sendKeys(machineId: route.machineId, terminalId: route.terminalId, keys: [.shiftLeft])
-            await refresh()
-        } catch {
-            promptError = Self.message(for: error)
-        }
     }
 
     /// Runs while the screen is visible: watch, poll the core, unwatch on cancel. collied pushes at about
@@ -586,12 +579,18 @@ final class AgentModel {
         defer { sendingPrompt = false }
         saveDraft("", attachments)
         do {
-            try await core.typeText(machineId: route.machineId, terminalId: route.terminalId, text: typed)
+            try await typeAnswer(typed)
             if draft.hasPrefix(sent) {
                 draft = String(draft.dropFirst(sent.count).drop(while: \.isWhitespace))
             }
         } catch {
             promptError = Self.message(for: error)
+        }
+    }
+
+    func typeAnswer(_ text: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            enqueue(.answer(text, continuation))
         }
     }
 
@@ -601,7 +600,7 @@ final class AgentModel {
         draft = ""
         macDraft = nil
         attachments = []
-        queuedKeys.removeAll()
+        cancelInput(CoreError.AgentNotReady)
         promptError = nil
     }
 
@@ -741,33 +740,58 @@ final class AgentModel {
         upload?.total = total
     }
 
-    /// Keys go out in tap order: taps made while a send is in flight are batched into the next call.
     @discardableResult
     func tap(_ key: AgentKey) -> Task<Void, Never>? {
         guard accepts(key), !(commandShown && (key == .enter || key == .ctrlEnter)) else { return nil }
         keyTaps += 1
-        if key == .shiftLeft { return Task { await openCodexQuestion() } }
-        queuedKeys.append(key)
-        guard !sendingKeys else { return nil }
-        sendingKeys = true
-        return Task { await drainKeys() }
+        return enqueue(.key(key))
     }
 
-    private func drainKeys() async {
-        defer { sendingKeys = false }
-        while !queuedKeys.isEmpty {
+    @discardableResult
+    private func enqueue(_ input: Input) -> Task<Void, Never>? {
+        queuedInput.append(input)
+        guard !sendingInput else { return nil }
+        sendingInput = true
+        return Task { await drainInput() }
+    }
+
+    private func cancelInput(_ error: any Error) {
+        for case let .answer(_, continuation) in queuedInput {
+            continuation.resume(throwing: error)
+        }
+        queuedInput.removeAll()
+    }
+
+    private func drainInput() async {
+        defer { sendingInput = false }
+        while let input = queuedInput.first {
+            if case let .answer(text, continuation) = input {
+                queuedInput.removeFirst()
+                do {
+                    try await core.typeText(machineId: route.machineId, terminalId: route.terminalId, text: text)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                    cancelInput(error)
+                }
+                continue
+            }
             if isTerminal, !(await unlock()) {
-                queuedKeys.removeAll()
+                cancelInput(CoreError.TerminalLocked)
                 return
             }
             if !isTerminal {
                 await flushMirror()
-                if commandShown { queuedKeys.removeAll { $0 == .enter || $0 == .ctrlEnter } }
-                if queuedKeys.isEmpty { continue }
             }
+            guard case .key? = queuedInput.first else { continue }
             let command = commandShown
-            let batch = Array(queuedKeys.prefix(codexQuestionOpen ? 1 : 16))
-            queuedKeys.removeFirst(batch.count)
+            var batch: [AgentKey] = []
+            while batch.count < (codexQuestionOpen ? 1 : 16), case let .key(key)? = queuedInput.first {
+                batch.append(key)
+                queuedInput.removeFirst()
+            }
+            if command { batch.removeAll { $0 == .enter || $0 == .ctrlEnter } }
+            if batch.isEmpty { continue }
             do {
                 if isTerminal {
                     try await core.terminalSendKeys(machineId: route.machineId, terminalId: route.terminalId, keys: batch)
@@ -782,9 +806,10 @@ final class AgentModel {
                     try? await Task.sleep(for: .milliseconds(150))
                     if let text = try? await core.agentDraft(machineId: route.machineId, terminalId: route.terminalId) { adopt(text) }
                 }
+                if batch.contains(.shiftLeft) { await refresh() }
             } catch {
                 if case .TerminalLocked = error as? CoreError { terminalLocked = true }
-                queuedKeys.removeAll()
+                cancelInput(error)
                 notice = Self.message(for: error)
             }
         }

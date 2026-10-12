@@ -66,6 +66,7 @@ struct ApprovalCard: View {
     let item: ApprovalItem
     var showsMachine = false
     var questionInSession = false
+    var sendAnswer: ((String) async throws -> Void)? = nil
 
     private var approval: PendingApproval { item.approval }
     private var expanded: Bool { model.expanded.contains(item.id) }
@@ -143,7 +144,7 @@ struct ApprovalCard: View {
                     .disabled(model.steps[item.id] != nil)
             }
             if approval.takesFeedback {
-                FeedbackField(model: model, item: item)
+                FeedbackField(model: model, item: item, sendAnswer: sendAnswer)
             }
         }
         .padding(.vertical, 4)
@@ -179,15 +180,16 @@ private struct NoteField: View {
 private struct FeedbackField: View {
     let model: ApprovalsModel
     let item: ApprovalItem
+    let sendAnswer: ((String) async throws -> Void)?
 
     var body: some View {
         HStack(spacing: 8) {
             TextField("Answer this prompt", text: model.draft(item))
                 .textFieldStyle(.roundedBorder)
                 .submitLabel(.send)
-                .onSubmit { Task { await model.sendFeedback(item) } }
+                .onSubmit { Task { await model.sendFeedback(item, send: sendAnswer) } }
             Button {
-                Task { await model.sendFeedback(item) }
+                Task { await model.sendFeedback(item, send: sendAnswer) }
             } label: {
                 if model.steps[item.id] == .typing {
                     ProgressView().frame(width: 20, height: 20)
