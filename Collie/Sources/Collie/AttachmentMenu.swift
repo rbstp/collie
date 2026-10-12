@@ -21,9 +21,20 @@ enum AttachmentChoice: CaseIterable {
     }
 }
 
-struct AttachmentMenu: UIViewRepresentable {
+struct AttachmentMenu: View {
     var savedPromptsEnabled = true
     var filesEnabled = true
+    let select: (AttachmentChoice) -> Void
+
+    var body: some View {
+        AttachmentMenuControl(savedPromptsEnabled: savedPromptsEnabled, filesEnabled: filesEnabled, select: select)
+            .padding(-AttachmentMenuButton.outset)
+    }
+}
+
+private struct AttachmentMenuControl: UIViewRepresentable {
+    let savedPromptsEnabled: Bool
+    let filesEnabled: Bool
     let select: (AttachmentChoice) -> Void
 
     func makeUIView(context: Context) -> AttachmentMenuButton {
@@ -41,11 +52,16 @@ struct AttachmentMenu: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: AttachmentMenuButton, context: Context) -> CGSize? {
-        CGSize(width: 44, height: 44)
+        CGSize(width: AttachmentMenuButton.hitSize, height: AttachmentMenuButton.hitSize)
     }
 }
 
 final class AttachmentMenuButton: UIButton {
+    /// Matches the small circular glass buttons beside it. The hit target extends past the circle.
+    static let diameter: CGFloat = 38
+    static let hitSize: CGFloat = 44
+    static var outset: CGFloat { (hitSize - diameter) / 2 }
+
     var select: ((AttachmentChoice) -> Void)?
     private(set) var pendingChoice: AttachmentChoice?
     private var savedPromptsEnabled = true
@@ -58,6 +74,9 @@ final class AttachmentMenuButton: UIButton {
         configuration.preferredSymbolConfigurationForImage = .init(pointSize: 16)
         configuration.cornerStyle = .capsule
         configuration.buttonSize = .small
+        configuration.background.backgroundInsets = NSDirectionalEdgeInsets(
+            top: Self.outset, leading: Self.outset, bottom: Self.outset, trailing: Self.outset
+        )
         self.configuration = configuration
         showsMenuAsPrimaryAction = true
         preferredMenuElementOrder = .fixed

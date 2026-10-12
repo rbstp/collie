@@ -4,10 +4,20 @@ import XCTest
 
 @MainActor
 final class AttachmentMenuTests: XCTestCase {
-    func testSmallerIconUsesAppAccent() async throws {
+    func testCircleMatchesNeighborsAndIconUsesAppAccent() async throws {
         for style in [UIUserInterfaceStyle.light, .dark] {
-            let host = UIHostingController(rootView: AttachmentMenu { _ in }
-                .environment(\.appAccent, AppAccent.gold.color))
+            let neighbor = FrameBox()
+            let host = UIHostingController(rootView: HStack(alignment: .bottom, spacing: 8) {
+                AttachmentMenu { _ in }
+                Button {} label: {
+                    Image(systemName: "mic").font(.system(size: 20)).frame(width: 28, height: 28)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.small)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { neighbor.frame = $0 }
+            }
+            .environment(\.appAccent, AppAccent.gold.color))
             host.overrideUserInterfaceStyle = style
             try await hosting(host) { window in
                 try await Task.sleep(for: .milliseconds(250))
@@ -15,6 +25,18 @@ final class AttachmentMenuTests: XCTestCase {
                 let button = try XCTUnwrap(descendants(host.view).first { $0 is AttachmentMenuButton } as? AttachmentMenuButton)
                 XCTAssertGreaterThanOrEqual(button.bounds.width, 44)
                 XCTAssertGreaterThanOrEqual(button.bounds.height, 44)
+                let insets = try XCTUnwrap(button.configuration?.background.backgroundInsets)
+                let circle = button.convert(button.bounds.inset(by: UIEdgeInsets(
+                    top: insets.top, left: insets.leading, bottom: insets.bottom, right: insets.trailing
+                )), to: window)
+                XCTAssertFalse(neighbor.frame.isEmpty)
+                XCTAssertEqual(circle.width, neighbor.frame.width, accuracy: 0.5)
+                XCTAssertEqual(circle.height, neighbor.frame.height, accuracy: 0.5)
+                XCTAssertEqual(circle.midY, neighbor.frame.midY, accuracy: 0.5)
+                for point in [CGPoint(x: circle.minX - 2, y: circle.midY), CGPoint(x: circle.maxX + 2, y: circle.midY),
+                              CGPoint(x: circle.midX, y: circle.minY - 2), CGPoint(x: circle.midX, y: circle.maxY + 2)] {
+                    XCTAssertTrue(window.hitTest(point, with: nil)?.isDescendant(of: button) == true, "\(point)")
+                }
                 let imageView = try XCTUnwrap(button.imageView)
                 XCTAssertLessThanOrEqual(imageView.bounds.height, 26)
                 XCTAssertEqual(imageView.image?.renderingMode, .alwaysOriginal)
@@ -90,6 +112,10 @@ final class AttachmentMenuTests: XCTestCase {
         button.select = { _ in selected.append("current") }
         animator.complete()
         XCTAssertEqual(selected, ["current"])
+    }
+
+    private final class FrameBox {
+        var frame = CGRect.null
     }
 
     private final class MenuAnimator: NSObject, UIContextMenuInteractionAnimating {

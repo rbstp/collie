@@ -780,7 +780,12 @@ async fn scenario(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let asked = calls("session.snapshot");
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let ticked = calls("agent.list") + 2;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls("agent.list") < ticked {
+        assert!(Instant::now() < deadline, "no reconcile tick");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(calls("session.snapshot"), asked);
 
     println!("a herdr restore moves the star to its pane's new terminal id");
@@ -808,7 +813,12 @@ async fn scenario(
     }
     let reused = "term_aaaaaaaaaaaa03";
     set_extra(Some(reused));
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let ticked = calls("agent.list") + 2;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls("agent.list") < ticked {
+        assert!(Instant::now() < deadline, "no reconcile tick");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     assert!(saved().get(reused).is_none());
     set_extra(None);
     // The reconcile's flock.changed for the closed pane.

@@ -196,7 +196,12 @@ final class TerminalScreen {
     /// The oldest rows are dropped, all but their SGR sequences, until the rest fits in
     /// `maxRows - 1` rows, so the screen never scrolls and soft wraps stay tracked.
     static func preparedForWrapping(_ snapshot: String, columns: Int) -> String {
-        let scalars = Array(snapshot.unicodeScalars)
+        let scalars = [Unicode.Scalar](unsafeUninitializedCapacity: snapshot.utf8.count) { buffer, count in
+            for scalar in snapshot.unicodeScalars {
+                buffer[count] = scalar
+                count += 1
+            }
+        }
         var out: [Unicode.Scalar] = []
         out.reserveCapacity(scalars.count)
         var rowStarts: [Int] = []
@@ -234,10 +239,10 @@ final class TerminalScreen {
             var i = rowStart
             while i < rowEnd {
                 if let end = Self.sgrEnd(scalars, at: i, before: rowEnd) {
-                    let sgr = Array(scalars[i..<end])
+                    let sgr = scalars[i..<end]
                     if sgr.starts(with: "\u{1B}[48;".unicodeScalars) {
-                        uniformBackground = uniformBackground && (background == nil || background == sgr)
-                        background = background ?? sgr
+                        uniformBackground = uniformBackground && (background?.elementsEqual(sgr) ?? true)
+                        background = background ?? Array(sgr)
                     }
                     trailingSGR.append(i..<end)
                     i = end
@@ -278,7 +283,7 @@ final class TerminalScreen {
                 if scalars[i] != " " && scalars[i] != "\t" {
                     contentEnd = i + 1
                     contentWidth = width
-                    trailingSGR.removeAll()
+                    if !trailingSGR.isEmpty { trailingSGR.removeAll(keepingCapacity: true) }
                     (fill, uniform) = (nil, true)
                     if (0x2500...0x259F).contains(scalars[i].value) {
                         sawBox = true
@@ -351,7 +356,7 @@ final class TerminalScreen {
             first -= 1
             height += heights[first]
         }
-        guard first > 0 else { return String(decoding: out.map(\.value), as: UTF32.self) }
+        guard first > 0 else { return string(out) }
         let dropped = rowStarts[first]
         var kept: [Unicode.Scalar] = []
         var i = 0
@@ -364,7 +369,20 @@ final class TerminalScreen {
             }
         }
         kept.append(contentsOf: out[dropped...])
-        return String(decoding: kept.map(\.value), as: UTF32.self)
+        return string(kept)
+    }
+
+    private static func string(_ scalars: [Unicode.Scalar]) -> String {
+        String(unsafeUninitializedCapacity: scalars.count * 4) { buffer in
+            var count = 0
+            for scalar in scalars {
+                UTF8.encode(scalar) { byte in
+                    buffer[count] = byte
+                    count += 1
+                }
+            }
+            return count
+        }
     }
 
     /// Appends `range` of `scalars` in rows of `columns` cells, each broken after its last space
@@ -442,7 +460,7 @@ final class TerminalScreen {
         return (breaks, column)
     }
 
-    private static let horizontalLines: Set<UInt32> = [0x2500, 0x2501, 0x2504, 0x2505, 0x2508, 0x2509, 0x254C, 0x254D, 0x2550]
+    private static let horizontalLines: [UInt32] = [0x2500, 0x2501, 0x2504, 0x2505, 0x2508, 0x2509, 0x254C, 0x254D, 0x2550]
 
     private static func sgrEnd(_ scalars: [Unicode.Scalar], at i: Int, before end: Int) -> Int? {
         guard scalars[i] == "\u{1B}", i + 1 < end, scalars[i + 1] == "[" else { return nil }
@@ -468,6 +486,13 @@ final class TerminalScreen {
     static func cellWidth(_ scalar: Unicode.Scalar, column: Int) -> Int {
         if scalar == "\t" { return 8 - column % 8 }
         if scalar.value < 0x100 { return 1 }
+        if (0x2000..<0x2900).contains(scalar.value) { return Int(symbolWidths[Int(scalar.value) - 0x2000]) }
+        return uncachedWidth(scalar)
+    }
+
+    private static let symbolWidths = (0x2000..<0x2900).map { UInt8(uncachedWidth(Unicode.Scalar(UInt32($0))!)) }
+
+    private static func uncachedWidth(_ scalar: Unicode.Scalar) -> Int {
         switch scalar.properties.generalCategory {
         case .nonspacingMark, .enclosingMark, .format: return 0
         default: break
