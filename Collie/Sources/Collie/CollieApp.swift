@@ -69,16 +69,20 @@ struct RootView: View {
                 Tab("Agents", systemImage: "square.grid.2x2", value: AppTab.agents) {
                     FlockScreen(
                         core: app.core, machines: app.machines, approvals: app.approvals, follows: app.follows,
-                        opening: $app.openingAgent, tailnetStarting: !app.isRunning, reselected: agentsReselected
+                        opening: $app.openingAgent, tailnetStarting: !app.isRunning, reselected: agentsReselected,
+                        navigationChanged: app.cancelApprovalOpening
                     ) { route in
-                        if route != nil { app.cancelApprovalOpening() }
                         app.viewingAgent = route
                     }
                     .safeAreaInset(edge: .top) {
                         if let loading = app.approvals.loading {
-                            ProgressView("Opening \(loading.machine.label)")
-                                .font(.footnote)
-                                .padding(8)
+                            VStack(alignment: .leading, spacing: 2) {
+                                ProgressView("Opening \(loading.machine.label)").font(.footnote)
+                                if let phase = loading.phase {
+                                    Text(phase.label).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(8)
                         }
                     }
                 }

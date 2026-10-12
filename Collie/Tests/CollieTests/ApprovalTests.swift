@@ -471,6 +471,32 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
 }
 
 @MainActor
+@Test(arguments: [LinkPhase.unavailable, .offline])
+func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async throws {
+    let core = FakeApprovalCore()
+    core.state.withLock { $0.link["m1"] = phase }
+    let model = ApprovalsModel(core: core)
+    let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+    await model.open(link)?.value
+    #expect(model.loading == nil)
+    #expect(model.notice == "Couldn't reach this machine. Try again after it reconnects.")
+    #expect(model.session(for: link) == nil)
+    #expect(AppModel.route(for: link, terminalId: "term_1", machines: core.machines()) == AgentRoute(machineId: "m1", terminalId: "term_1"))
+}
+
+@MainActor
+@Test func connectingApprovalLookupHasABoundedRetryWindow() async throws {
+    let core = FakeApprovalCore()
+    core.state.withLock { $0.link["m1"] = .connecting }
+    let model = ApprovalsModel(core: core, openingTimeout: .milliseconds(30))
+    let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+    await model.open(link)?.value
+    #expect(model.loading == nil)
+    #expect(model.notice == "Couldn't load this approval. Try again after the machine connects.")
+    #expect(model.session(for: link) == nil)
+}
+
+@MainActor
 @Test func leavingAnApprovalLinkCancelsItsLoading() async throws {
     let core = FakeApprovalCore()
     core.state.withLock { $0.link["m1"] = .connecting }

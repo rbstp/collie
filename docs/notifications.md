@@ -28,7 +28,9 @@ This is a harmless navigation test. It has no approval ID, approval actions, or 
 
 Actual approval alerts carry a node ID and approval ID. Their notification thread identifies the terminal. Tapping an alert first resolves the pending approval to its machine and terminal. If the approval has already ended, a valid thread can still open the original session.
 
-Loading and missing-machine errors are shown in the app. Selecting another tab or session cancels a pending lookup so a delayed notification cannot replace the user's newer navigation.
+Loading shows the connection phase, and missing or unavailable machines produce a visible error. Connecting lookups have a 15-second retry window; an in-flight request still has its own RPC timeout. Connection failures are not reported as expired approvals, and a valid notification thread can still open the session to show its connection state.
+
+Selecting another tab or session, or pressing Back to return to the Agents list, cancels a pending lookup so a delayed notification cannot replace the user's newer navigation. The initial empty navigation path does not cancel cold-start notification loading.
 
 The iPhone has no separate Approvals tab. In-session approval controls, notification actions, Live Activities, and the Apple Watch approval list remain available. Structured approval actions still require their existing authentication and approval checks; manual terminal input is separate.
 

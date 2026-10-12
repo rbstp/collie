@@ -73,6 +73,7 @@ final class ApprovalsModel {
     private var noticeSubject: String?
     private var noticeTimer: Task<Void, Never>?
     private let noticeLifetime: Duration
+    private let openingTimeout: Duration
     private(set) var refreshing = false
     private(set) var loading: LoadingApproval?
     private var loadTask: Task<Void, Never>?
@@ -84,11 +85,13 @@ final class ApprovalsModel {
     init(
         core: (any ApprovalCore)?, auth: any Authenticator = DeviceOwnerAuthenticator(),
         noticeLifetime: Duration = .seconds(6),
+        openingTimeout: Duration = .seconds(15),
         dismissResolved: @escaping @Sendable (_ nodeId: String, _ pending: Set<String>) -> Void = ApprovalsModel.removeDelivered
     ) {
         self.core = core
         self.auth = auth
         self.noticeLifetime = noticeLifetime
+        self.openingTimeout = openingTimeout
         self.dismissResolved = dismissResolved
     }
 
@@ -228,6 +231,7 @@ final class ApprovalsModel {
     /// Until the approval shows up, or a snapshot fetched over an already connected link
     /// proves it is gone: on a cold launch the feed is empty only because nothing is connected yet.
     private func load(_ link: ApprovalLink, machine: Machine, core: any ApprovalCore) async {
+        let deadline = ContinuousClock.now + openingTimeout
         while !Task.isCancelled {
             guard core.machines().contains(where: { $0.id == machine.id && $0.nodeId == link.nodeId }) else {
                 show("This machine is no longer paired with this phone.")
@@ -242,7 +246,16 @@ final class ApprovalsModel {
                 show("This approval is no longer pending.")
                 break
             }
-            if let phase = flock?.link { loading?.phase = phase }
+            let phase = flock?.link ?? core.approvalFeed(machineId: machine.id)?.link
+            loading?.phase = phase
+            if phase == .unavailable || phase == .offline {
+                show("Couldn't reach this machine. Try again after it reconnects.")
+                break
+            }
+            if ContinuousClock.now >= deadline {
+                show("Couldn't load this approval. Try again after the machine connects.")
+                break
+            }
             try? await Task.sleep(for: .milliseconds(500))
         }
         if !Task.isCancelled { loading = nil }
