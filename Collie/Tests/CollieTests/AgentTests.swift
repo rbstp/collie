@@ -310,11 +310,6 @@ final class FakeCore: AgentCore {
 }
 
 @MainActor
-private func agentModel(_ core: FakeCore) -> AgentModel {
-    AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil)
-}
-
-@MainActor
 @Test func aScreenReplacedAfterItsSuccessorWatchedLeavesTheWatch() async {
     let core = FakeCore()
     let first = AgentModel(core: core, route: AgentRoute(machineId: "replaced", terminalId: "term_1"), prefsFile: nil)
@@ -1133,12 +1128,6 @@ func listArchiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
     #expect(model.options?.defaultAgent == "codex")
 }
 
-private func prefsFile() throws -> URL {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    return dir.appending(path: "prefs.json")
-}
-
 @MainActor
 @Test func aNameInTheBaseFolderCompletesAndStartsThere() async throws {
     let core = FakeCore()
@@ -1539,8 +1528,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 
 @MainActor
 @Test func wrapLinesIsOnByDefaultAndRememberedOnThisDevice() throws {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
     let route = AgentRoute(machineId: "m1", terminalId: "term_1")
@@ -1556,8 +1544,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 
 @MainActor
 @Test func keepKeyboardIsOffByDefaultAndSavedBesideWrapLines() throws {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
     let route = AgentRoute(machineId: "m1", terminalId: "term_1")
@@ -1578,8 +1565,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 
 @MainActor
 @Test func terminalHistoryIs200LinesByDefaultAndRememberedOnThisDevice() async throws {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
     let core = FakeCore()
@@ -1613,8 +1599,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 
 @MainActor
 @Test func gesturesAndTextSizeHaveDefaultsAndAreRememberedOnThisDevice() throws {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
     let route = AgentRoute(machineId: "m1", terminalId: "term_1")

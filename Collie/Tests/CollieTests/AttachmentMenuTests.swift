@@ -5,41 +5,32 @@ import XCTest
 @MainActor
 final class AttachmentMenuTests: XCTestCase {
     func testSmallerIconUsesAppAccent() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         for style in [UIUserInterfaceStyle.light, .dark] {
             let host = UIHostingController(rootView: AttachmentMenu { _ in }
                 .environment(\.appAccent, AppAccent.gold.color))
             host.overrideUserInterfaceStyle = style
-            let window = UIWindow(windowScene: scene)
-            window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
-            window.rootViewController = host
-            let previous = scene.keyWindow
-            window.makeKeyAndVisible()
-            defer {
-                window.isHidden = true
-                window.rootViewController = nil
-                previous?.makeKeyAndVisible()
-            }
-            try await Task.sleep(for: .milliseconds(250))
-            host.view.layoutIfNeeded()
-            let button = try XCTUnwrap(descendants(host.view).first { $0 is AttachmentMenuButton } as? AttachmentMenuButton)
-            XCTAssertGreaterThanOrEqual(button.bounds.width, 44)
-            XCTAssertGreaterThanOrEqual(button.bounds.height, 44)
-            let imageView = try XCTUnwrap(button.imageView)
-            XCTAssertLessThanOrEqual(imageView.bounds.height, 26)
-            XCTAssertEqual(imageView.image?.renderingMode, .alwaysOriginal)
-            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-            }
-            let attachment = XCTAttachment(image: image)
-            attachment.name = style == .dark ? "attachment-icon-dark" : "attachment-icon-light"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-            let actual = try XCTUnwrap(button.configuration?.baseForegroundColor).resolvedColor(with: button.traitCollection)
-            let expected = UIColor(AppAccent.gold.color).resolvedColor(with: button.traitCollection)
-            XCTAssertEqual(actual.cgColor.numberOfComponents, expected.cgColor.numberOfComponents)
-            for (component, wanted) in zip(actual.cgColor.components ?? [], expected.cgColor.components ?? []) {
-                XCTAssertEqual(component, wanted, accuracy: 0.002)
+            try await hosting(host) { window in
+                try await Task.sleep(for: .milliseconds(250))
+                host.view.layoutIfNeeded()
+                let button = try XCTUnwrap(descendants(host.view).first { $0 is AttachmentMenuButton } as? AttachmentMenuButton)
+                XCTAssertGreaterThanOrEqual(button.bounds.width, 44)
+                XCTAssertGreaterThanOrEqual(button.bounds.height, 44)
+                let imageView = try XCTUnwrap(button.imageView)
+                XCTAssertLessThanOrEqual(imageView.bounds.height, 26)
+                XCTAssertEqual(imageView.image?.renderingMode, .alwaysOriginal)
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = style == .dark ? "attachment-icon-dark" : "attachment-icon-light"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                let actual = try XCTUnwrap(button.configuration?.baseForegroundColor).resolvedColor(with: button.traitCollection)
+                let expected = UIColor(AppAccent.gold.color).resolvedColor(with: button.traitCollection)
+                XCTAssertEqual(actual.cgColor.numberOfComponents, expected.cgColor.numberOfComponents)
+                for (component, wanted) in zip(actual.cgColor.components ?? [], expected.cgColor.components ?? []) {
+                    XCTAssertEqual(component, wanted, accuracy: 0.002)
+                }
             }
         }
     }
@@ -99,10 +90,6 @@ final class AttachmentMenuTests: XCTestCase {
         button.select = { _ in selected.append("current") }
         animator.complete()
         XCTAssertEqual(selected, ["current"])
-    }
-
-    private func descendants(_ view: UIView) -> [UIView] {
-        [view] + view.subviews.flatMap(descendants)
     }
 
     private final class MenuAnimator: NSObject, UIContextMenuInteractionAnimating {

@@ -429,12 +429,6 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(!menuApproval.canDecide(.approve, allowed: true, answered: [], now: now))
 }
 
-private func prefsFile() throws -> URL {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    return dir.appending(path: "prefs.json")
-}
-
 @MainActor
 @Test func watchDecisionsNeedTheOwnerOnlyToTurnOn() async throws {
     let file = try prefsFile()

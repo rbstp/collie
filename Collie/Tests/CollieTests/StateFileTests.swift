@@ -5,8 +5,7 @@ import Testing
 @testable import Collie
 
 private func write(_ json: String, as name: String) throws -> URL {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     let file = dir.appending(path: name)
     try Data(json.utf8).write(to: file)
     return file

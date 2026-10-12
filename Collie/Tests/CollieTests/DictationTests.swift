@@ -201,8 +201,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
 
 @MainActor
 @Test func dictationLanguageIsEnglishByDefaultAndRememberedOnThisDevice() async throws {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
 
