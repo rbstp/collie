@@ -224,7 +224,7 @@ struct UsageLimit: Equatable {
 
     var left: UInt8 { 100 - used }
 
-    var spokenLabel: String { label == "5h" ? "5-hour" : "Weekly" }
+    var title: String { label == "5h" ? "5-hour usage limit" : "Weekly usage limit" }
 
     /// The share of the window that has passed, from its reset time and its length.
     var elapsed: Double { min(1, max(0, 1 - Double(seconds) / Double(length))) }
@@ -240,14 +240,18 @@ struct UsageLimit: Equatable {
         label == "5h" ? now.addingTimeInterval(TimeInterval(seconds)).formatted(style) : PlanUsage.countdown(seconds: seconds)
     }
 
+    func resetsLine(now: Date) -> String {
+        label == "5h" ? "resets at \(resets(now: now))" : "resets in \(resets(now: now))"
+    }
+
     func spokenLine(now: Date) -> String {
-        let resets = label == "5h" ? "resets at \(resets(now: now))" : "resets in \(PlanUsage.spoken(seconds: seconds))"
+        let resets = label == "5h" ? resetsLine(now: now) : "resets in \(PlanUsage.spoken(seconds: seconds))"
         let trend = switch pace {
         case .slower: "usage pace slower"
         case .onPace: "usage on pace"
         case .faster: "usage pace faster"
         }
-        return "\(spokenLabel) limit, \(used) percent used, \(Int((elapsed * 100).rounded())) percent of the window elapsed, \(trend), \(resets)"
+        return "\(title), \(used) percent used, \(Int((elapsed * 100).rounded())) percent of the window elapsed, \(trend), \(resets)"
     }
 }
 
