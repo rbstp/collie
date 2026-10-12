@@ -399,6 +399,7 @@ async fn open(
         DecideStage::Connect,
         conn::open(
             node,
+            &inner.node,
             &machine.host,
             machine.port,
             &machine.node_id,

@@ -46,6 +46,9 @@ const DIAL_BUDGET: Duration = Duration::from_secs(20);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 pub(crate) const FOREGROUND_RECONNECT: Duration = Duration::from_secs(10);
 const RESUME_GRACE: Duration = Duration::from_secs(10);
+/// After a resume, while the node's netmap catches up, a machine Tailscale reports offline
+/// is polled at the quickest rate.
+const RESUME_OFFLINE_POLL: Duration = Duration::from_secs(30);
 const GRACE_BACKOFF: [Duration; 3] = [
     Duration::from_millis(500),
     Duration::from_secs(1),
@@ -262,6 +265,7 @@ pub async fn blocking<T: Send + 'static>(
 #[allow(clippy::too_many_arguments)]
 pub async fn open(
     node: Arc<Node>,
+    slot: &NodeSlot,
     host: &str,
     port: u16,
     node_id: &str,
@@ -295,7 +299,7 @@ pub async fn open(
         .map_err(|e| ConnectError::Dial(e.to_string()))?
         .map_err(|e| ConnectError::Dial(e.to_string()))?;
     pin::verify_whois(&who.node, host, node_id)?;
-    let stream = dial(&node, SocketAddr::new(ip, port)).await?;
+    let stream = dial(&node, slot, SocketAddr::new(ip, port)).await?;
     drop(node);
     let stream = tls(stream, host, key, identity).await?;
     let mut session = Session::connect(stream, host, port).await?;
@@ -331,7 +335,12 @@ pub(crate) async fn tls(
     }
 }
 
-pub(crate) async fn dial(node: &Arc<Node>, addr: SocketAddr) -> Result<UnixStream, ConnectError> {
+/// No new attempt once `node` has left `slot`: a node restart waits for every holder.
+pub(crate) async fn dial(
+    node: &Arc<Node>,
+    slot: &NodeSlot,
+    addr: SocketAddr,
+) -> Result<UnixStream, ConnectError> {
     let deadline = Instant::now() + DIAL_BUDGET;
     let mut delay = Duration::from_millis(250);
     loop {
@@ -354,6 +363,9 @@ pub(crate) async fn dial(node: &Arc<Node>, addr: SocketAddr) -> Result<UnixStrea
             return Err(ConnectError::Dial(err.to_string()));
         }
         tokio::time::sleep(delay).await;
+        if !lock(slot).as_ref().is_some_and(|n| Arc::ptr_eq(n, node)) {
+            return Err(ConnectError::Dial(err.to_string()));
+        }
         delay *= 2;
     }
 }
@@ -598,7 +610,7 @@ async fn send_mutation(
 #[allow(clippy::too_many_arguments)]
 async fn supervise(
     machine: Machine,
-    node: NodeSlot,
+    slot: NodeSlot,
     identity: IdentitySlot,
     push: PushSlot,
     reach: Arc<Reachability>,
@@ -615,7 +627,7 @@ async fn supervise(
         if suspended.wait_for(|s| !s).await.is_err() {
             return;
         }
-        let running = lock(&node).clone();
+        let running = lock(&slot).clone();
         let Some(node) = running else {
             shared.set(LinkPhase::Offline, None);
             wait(&wake, OFFLINE_POLL).await;
@@ -630,6 +642,7 @@ async fn supervise(
         let opened = tokio::select! {
             opened = open(
                 node,
+                &slot,
                 &machine.host,
                 machine.port,
                 &machine.node_id,
@@ -699,8 +712,8 @@ async fn supervise(
 /// After a foreground resume the node needs a moment to rebuild its paths, and the old
 /// session ends (or is ended) as `Closed`. Failures within `RESUME_GRACE` retry quickly
 /// and stay `Connecting` without an error; auth failures still stop at once. A resume
-/// also restarts the normal backoff, and until [`crate::RESTART_AFTER`] a machine
-/// Tailscale reports offline is polled at the quickest rate, while the node recovers.
+/// also restarts the normal backoff, and for [`RESUME_OFFLINE_POLL`] a machine Tailscale
+/// reports offline is polled at the quickest rate.
 #[derive(Default)]
 struct Backoff {
     attempt: usize,
@@ -727,7 +740,7 @@ impl Backoff {
             link.set(LinkPhase::Unavailable, Some(err.to_string()));
             if link
                 .resumed
-                .is_some_and(|at| now.saturating_duration_since(at) < crate::RESTART_AFTER)
+                .is_some_and(|at| now.saturating_duration_since(at) < RESUME_OFFLINE_POLL)
             {
                 self.offline_attempt = 0;
             }
@@ -1049,7 +1062,7 @@ mod tests {
                     .failed(
                         &shared,
                         &ConnectError::PeerOffline,
-                        t0 + crate::RESTART_AFTER + Duration::from_secs(i),
+                        t0 + RESUME_OFFLINE_POLL + Duration::from_secs(i),
                     )
                     .unwrap()
                     .as_secs()
@@ -1088,7 +1101,7 @@ mod tests {
             );
         }
         assert_eq!(link(&shared).0, LinkPhase::Unavailable);
-        let t2 = t1 + crate::RESTART_AFTER;
+        let t2 = t1 + RESUME_OFFLINE_POLL;
         assert_eq!(
             backoff.failed(&shared, &ConnectError::PeerOffline, t2),
             Some(PEER_OFFLINE_POLL[1]),
