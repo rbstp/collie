@@ -573,17 +573,14 @@ impl Push {
                 regular.push(device);
             }
         }
-        self.routed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .extend(routed);
+        crate::lock(&self.routed).extend(routed);
         if !regular.is_empty() {
             self.enqueue(Job::Alert(regular, alert));
         }
     }
 
     pub fn take_routed(&self) -> Vec<Routed> {
-        std::mem::take(&mut *self.routed.lock().unwrap_or_else(|e| e.into_inner()))
+        std::mem::take(&mut *crate::lock(&self.routed))
     }
 
     fn enqueue(&self, job: Job) {
@@ -604,7 +601,7 @@ impl Push {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Devices> {
-        self.devices.lock().unwrap_or_else(|e| e.into_inner())
+        crate::lock(&self.devices)
     }
 
     fn update(&self, f: impl FnOnce(&mut Devices)) -> Result<(), peers::Error> {

@@ -203,6 +203,7 @@ struct GitDiffView: View {
     @FocusState private var editing: UUID?
     @State private var collapsed = false
     @State private var diff: GitDiff?
+    @State private var rows: [GitDiffRow] = []
     @State private var error: String?
     @State private var loading = false
     @AppStorage("gitWrapLines") private var wraps = true
@@ -216,7 +217,6 @@ struct GitDiffView: View {
                         VStack(alignment: .leading, spacing: 0) {
                             if let error { Text(error).foregroundStyle(.red).padding() }
                             if let diff, !collapsed {
-                                let rows = GitDiffRow.parse(diff.patch)
                                 let anchors = Set(comments.compactMap { $0.anchor?.patch == diff.patch ? $0.anchor?.row : nil })
                                 let blocks = GitDiffBlock.split(rows, after: anchors)
                                 let digits = String(rows.reduce(1) { max($0, $1.oldLine ?? 0, $1.newLine ?? 0) }).count
@@ -327,10 +327,14 @@ struct GitDiffView: View {
         guard !loading else { return }
         loading = true
         diff = nil
+        rows = []
         error = nil
         defer { loading = false }
-        do { diff = try await agent.gitDiff(root: root, file: file) }
-        catch { self.error = AgentModel.message(for: error) }
+        do {
+            let loaded = try await agent.gitDiff(root: root, file: file)
+            rows = GitDiffRow.parse(loaded.patch)
+            diff = loaded
+        } catch { self.error = AgentModel.message(for: error) }
     }
 }
 

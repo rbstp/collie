@@ -4,6 +4,10 @@ import Foundation
 
 extension Date {
     var unixMs: UInt64 { UInt64(max(0, timeIntervalSince1970 * 1000)) }
+
+    init(unixMs: UInt64) {
+        self.init(timeIntervalSince1970: TimeInterval(unixMs) / 1000)
+    }
 }
 
 enum AppGroup {

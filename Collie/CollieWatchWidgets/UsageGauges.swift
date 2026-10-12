@@ -36,8 +36,7 @@ private struct UsageGauge: View {
                     if window.isStale(now: now) {
                         Circle().fill(.orange).frame(width: 3, height: 3)
                     }
-                    Text(Duration.seconds(max(0, window.interval.upperBound.timeIntervalSince(now))),
-                         format: .units(allowed: [.days, .hours, .minutes], width: .narrow, maximumUnitCount: 2))
+                    window.remaining(now: now)
                 } else {
                     Text("No data")
                 }
@@ -52,8 +51,7 @@ private struct UsageGauge: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue(window.map {
-            "\($0.used) percent used. \(Int(($0.elapsed(now: now) * 100).rounded())) percent of the window elapsed. Resets \($0.interval.upperBound.formatted(date: .abbreviated, time: .shortened))"
-                + ($0.isStale(now: now) ? ". Usage may be outdated" : "")
+            $0.accessibilityValue(now: now) + ($0.isStale(now: now) ? ". Usage may be outdated" : "")
         } ?? "Usage unavailable")
     }
 }

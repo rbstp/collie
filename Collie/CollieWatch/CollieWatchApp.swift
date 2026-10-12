@@ -119,6 +119,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
     /// state holds for a minute.
     func refreshIfStale(timeout: Duration = .seconds(25)) async {
         reloadUsageWidget()
+        guard !refreshing else { return }
         if let refreshedAt, Date.now.timeIntervalSince(refreshedAt) < 60 { return }
         await refresh(timeout: timeout)
     }
@@ -329,10 +330,6 @@ extension WatchAgent.Status {
     }
 }
 
-private func date(ms: UInt64) -> Date {
-    Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
-}
-
 private struct WatchHome: View {
     let model: WatchModel
 
@@ -376,7 +373,7 @@ private struct WatchHome: View {
                             VStack(alignment: .leading) {
                                 Text(verbatim: approval.agent).font(.headline).lineLimit(1)
                                 Text(verbatim: approval.place).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                Text(timerInterval: Date.now...max(.now, date(ms: approval.expiresAtMs)), countsDown: true)
+                                Text(timerInterval: Date.now...max(.now, Date(unixMs: approval.expiresAtMs)), countsDown: true)
                                     .font(.caption.monospacedDigit())
                                     .foregroundStyle(.secondary)
                             }
@@ -432,7 +429,7 @@ private struct AgentSection: View {
                                 .lineLimit(1)
                             HStack {
                                 TimelineView(.everyMinute) { context in
-                                    Text(date(ms: agent.activityMs).formatted(.relative(presentation: .numeric, unitsStyle: .narrow)))
+                                    Text(Date(unixMs: agent.activityMs).formatted(.relative(presentation: .numeric, unitsStyle: .narrow)))
                                 }
                                 if let left = agent.contextLeft {
                                     Text("\(left)%")
@@ -454,7 +451,7 @@ private struct ApprovalDetail: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        let expiry = date(ms: approval.expiresAtMs)
+        let expiry = Date(unixMs: approval.expiresAtMs)
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 Text(verbatim: approval.agent).font(.headline)

@@ -10,8 +10,6 @@ struct CollieApp: App {
             #if DEBUG
             if let demo = AgentDemo(arguments: CommandLine.arguments) {
                 demo
-            } else if let demo = ApprovalsDemo(arguments: CommandLine.arguments) {
-                demo
             } else {
                 RootView(app: delegate.app)
                     .task { await delegate.app.launch() }
@@ -26,7 +24,7 @@ struct CollieApp: App {
         .onChange(of: scenePhase) { _, phase in
             #if DEBUG
             // The demos run without the app model; its foreground work would end their Live Activity.
-            if ["--terminal-demo", "--approvals-demo"].contains(where: CommandLine.arguments.contains) { return }
+            if CommandLine.arguments.contains("--terminal-demo") { return }
             #endif
             delegate.app.scenePhaseChanged(to: phase)
         }

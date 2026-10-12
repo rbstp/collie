@@ -113,15 +113,17 @@ struct GitDiffText: UIViewRepresentable {
         context.coordinator.feedback = feedback
         let font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: view.traitCollection).pointSize, weight: .regular)
         let layout = view.layoutManager as! GitDiffLayoutManager
+        let numberWidth = ceil(CGFloat(digits) * font.pointSize * 0.61) + 8
+        let lineBreakMode: NSLineBreakMode = wraps ? .byCharWrapping : .byClipping
+        guard layout.rows != block.rows || layout.font != font || layout.numberWidth != numberWidth
+            || view.textContainer.lineBreakMode != lineBreakMode else { return }
         layout.rows = block.rows
         layout.ranges = block.ranges
         layout.font = font
-        layout.numberWidth = ceil(CGFloat(digits) * font.pointSize * 0.61) + 8
+        layout.numberWidth = numberWidth
         view.textContainerInset = UIEdgeInsets(top: 0, left: layout.gutterWidth, bottom: 0, right: 12)
-        if view.text != block.text || view.font != font {
-            view.attributedText = NSAttributedString(string: block.text, attributes: [.font: font, .foregroundColor: UIColor.label])
-        }
-        view.textContainer.lineBreakMode = wraps ? .byCharWrapping : .byClipping
+        view.attributedText = NSAttributedString(string: block.text, attributes: [.font: font, .foregroundColor: UIColor.label])
+        view.textContainer.lineBreakMode = lineBreakMode
         layout.invalidateDisplay(forCharacterRange: NSRange(location: 0, length: view.textStorage.length))
     }
 

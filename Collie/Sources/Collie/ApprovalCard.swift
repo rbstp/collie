@@ -1,72 +1,10 @@
 import CollieCore
 import SwiftUI
 
-struct ApprovalsScreen: View {
-    let model: ApprovalsModel
-
-    var body: some View {
-        NavigationStack {
-            ScrollViewReader { proxy in
-                List {
-                    if let notice = model.notice {
-                        Text(notice).font(.footnote)
-                    }
-                    if let loading = model.loading {
-                        Section {
-                            HStack(spacing: 12) {
-                                ProgressView()
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Loading the approval")
-                                    Text(verbatim: [loading.machine.label, loading.phase?.label].compactMap { $0 }.joined(separator: " · "))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    } else if model.items.isEmpty {
-                        ContentUnavailableView(
-                            "No pending approvals",
-                            systemImage: "checkmark.shield",
-                            description: Text("When an agent is blocked on a question, it shows up here.")
-                        )
-                    }
-                    ForEach(model.items) { item in
-                        Section {
-                            ApprovalCard(model: model, item: item, showsMachine: true)
-                        }
-                        .id(item.id)
-                        .listRowBackground(item.id == model.highlighted ? Color.accentColor.opacity(0.12) : nil)
-                    }
-                }
-                .onChange(of: model.highlighted, initial: true) { _, id in
-                    if let id { withAnimation { proxy.scrollTo(id, anchor: .top) } }
-                }
-                .onChange(of: model.items.map(\.id)) { _, _ in
-                    if let id = model.highlighted, model.items.contains(where: { $0.id == id }) {
-                        proxy.scrollTo(id, anchor: .top)
-                    }
-                }
-            }
-            .navigationTitle("Approvals")
-            .navigationBarTitleDisplayMode(.inline)
-            .refreshable { await model.refresh() }
-            .toolbar {
-                Button("Refresh", systemImage: "arrow.clockwise") {
-                    Task { await model.refresh() }
-                }
-                .disabled(model.refreshing)
-            }
-            .task { await model.refresh() }
-        }
-    }
-}
-
 struct ApprovalCard: View {
     let model: ApprovalsModel
     let item: ApprovalItem
-    var showsMachine = false
-    var questionInSession = false
-    var sendAnswer: ((String) async throws -> Void)? = nil
+    let sendAnswer: (String) async throws -> Void
 
     private var approval: PendingApproval { item.approval }
     private var expanded: Bool { model.expanded.contains(item.id) }
@@ -83,7 +21,7 @@ struct ApprovalCard: View {
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(verbatim: approval.agentLabel).font(.headline).lineLimit(1)
-                        Text(verbatim: [approval.workspaceLabel, showsMachine ? item.machine.label : nil].compactMap { $0 }.joined(separator: " · "))
+                        Text(verbatim: approval.workspaceLabel)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -120,7 +58,7 @@ struct ApprovalCard: View {
                 NoteField(model: model, item: item)
             }
             if approval.answeredInTerminal {
-                Label(questionInSession ? "Use the terminal buttons or type an answer" : "Open this agent's session to answer", systemImage: "terminal")
+                Label("Use the terminal buttons or type an answer", systemImage: "terminal")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -180,7 +118,7 @@ private struct NoteField: View {
 private struct FeedbackField: View {
     let model: ApprovalsModel
     let item: ApprovalItem
-    let sendAnswer: ((String) async throws -> Void)?
+    let sendAnswer: (String) async throws -> Void
 
     var body: some View {
         HStack(spacing: 8) {

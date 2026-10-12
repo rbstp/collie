@@ -61,6 +61,7 @@ final class AgentModel {
     @ObservationIgnored private var mirroring: Task<Void, Never>?
     /// The last command this screen asked collied to paste; only that is replaced unseen.
     @ObservationIgnored private var mirrored = ""
+    @ObservationIgnored private var codexFooter: (ansi: String, open: Bool)?
     /// ↑ or ↓ moved Claude Code's highlight off what the box holds; ⇥ takes it.
     @ObservationIgnored private var menuMoved = false
     private(set) var promptError: String?
@@ -200,12 +201,15 @@ final class AgentModel {
 
     var codexQuestionOpen: Bool {
         guard agent?.kind == "codex" else { return false }
+        if let codexFooter, codexFooter.ansi == ansi { return codexFooter.open }
         let lines = ansi.components(separatedBy: .newlines)
-        let footer = lines.reversed()
+        let footer = lines.reversed().lazy
             .map { $0.replacingOccurrences(of: "\u{1B}\\[[0-9;]*[mC]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty }
-        return footer?.contains("enter submit") == true && footer?.contains("main prompt") == true
+        let open = footer?.contains("enter submit") == true && footer?.contains("main prompt") == true
             && lines.suffix(25).contains { $0.contains("›") || $0.contains("Queued follow-up inputs") }
+        codexFooter = (ansi, open)
+        return open
     }
 
     var answering: Bool { !isTerminal && (blocked != nil || agent?.status == .blocked || codexQuestionOpen) }

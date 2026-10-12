@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -430,7 +430,7 @@ pub struct FlockState {
     watched_output: Option<TerminalRead>,
     output_events: u64,
     last_seq: u64,
-    since_snapshot: Vec<(u64, Event)>,
+    since_snapshot: VecDeque<(u64, Event)>,
 }
 
 impl FlockState {
@@ -527,9 +527,9 @@ impl FlockState {
                     apply(flock, &event);
                 }
                 if self.since_snapshot.len() == MAX_REPLAY_EVENTS {
-                    self.since_snapshot.remove(0);
+                    self.since_snapshot.pop_front();
                 }
-                self.since_snapshot.push((seq, event));
+                self.since_snapshot.push_back((seq, event));
             }
         }
         EventOutcome::Applied

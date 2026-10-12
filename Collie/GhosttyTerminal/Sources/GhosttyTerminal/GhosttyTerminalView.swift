@@ -256,7 +256,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
             loupe = UITextLoupeSession.begin(at: point, fromSelectionWidgetView: nil, in: self)
         case .changed:
             guard let pressedWord, let cell = cell(at: point) else { return }
-            selection = pressedWord.extended(to: cell)
+            let extended = pressedWord.extended(to: cell)
+            if extended != selection { selection = extended }
             loupe?.move(to: point, withCaretRect: .null, trackingCaret: false)
         default:
             let selecting = pressedWord != nil
@@ -592,11 +593,23 @@ struct CellMetrics {
 }
 
 private final class TerminalCanvas: UIView {
-    var metrics = CellMetrics(size: 12)
+    var metrics = CellMetrics(size: 12) {
+        didSet {
+            lines = [:]
+            previousLines = [:]
+        }
+    }
     var selection: TerminalSelection?
     private var frameData: TerminalFrame?
-    /// By run index, built on first draw: most runs of a long history are never on screen.
-    private var lines: [Int: CTLine] = [:]
+    /// Built on first draw: most runs of a long history are never on screen.
+    private var lines: [LineKey: CTLine] = [:]
+    private var previousLines: [LineKey: CTLine] = [:]
+
+    private struct LineKey: Hashable {
+        let text: String
+        let bold: Bool
+        let italic: Bool
+    }
 
     override func tintColorDidChange() {
         super.tintColorDidChange()
@@ -605,12 +618,17 @@ private final class TerminalCanvas: UIView {
 
     func prepare(_ frame: TerminalFrame) {
         frameData = frame
+        previousLines = lines
         lines = [:]
     }
 
-    private func ctLine(_ index: Int, _ run: TerminalRun) -> CTLine? {
+    private func ctLine(_ run: TerminalRun) -> CTLine? {
         guard !run.text.isEmpty, !run.style.invisible else { return nil }
-        if let line = lines[index] { return line }
+        let key = LineKey(text: run.text, bold: run.style.bold, italic: run.style.italic)
+        if let line = lines[key] ?? previousLines[key] {
+            lines[key] = line
+            return line
+        }
         // Claude Code's ⏺ is in no bundled or system text font, so CoreText falls back to the color
         // emoji; ● is the same dot in Meslo and the same UTF-16 length, so `utf16Columns` still lines up.
         let attributed = NSAttributedString(
@@ -618,7 +636,7 @@ private final class TerminalCanvas: UIView {
             attributes: [NSAttributedString.Key(kCTFontAttributeName as String): metrics.font(run.style)]
         )
         let line = CTLineCreateWithAttributedString(attributed)
-        lines[index] = line
+        lines[key] = line
         return line
     }
 
@@ -663,7 +681,7 @@ private final class TerminalCanvas: UIView {
             let run = frameData.runs[index]
             let color = UIColor(run.style.foreground).withAlphaComponent(run.style.faint ? 0.5 : 1).cgColor
             let baseline = CGFloat(run.row) * m.height + m.ascent
-            if let line = ctLine(index, run) {
+            if let line = ctLine(run) {
                 ctx.saveGState()
                 // CoreText draws y-up; flip around this row's baseline.
                 ctx.translateBy(x: 0, y: baseline)

@@ -90,7 +90,7 @@ struct WatchUsage: Codable, Equatable, Sendable {
         var recordedMs: UInt64? = nil
 
         var recordedAt: Date? {
-            recordedMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) }
+            recordedMs.map(Date.init(unixMs:))
         }
 
         func isStale(now: Date) -> Bool {
@@ -117,7 +117,7 @@ struct WatchUsage: Codable, Equatable, Sendable {
 
     private func window(used: UInt8?, reset: UInt64?, length: TimeInterval?, recordedMs: UInt64?, now: Date) -> Window? {
         guard let used, let reset, reset > now.unixMs else { return nil }
-        let end = Date(timeIntervalSince1970: TimeInterval(reset) / 1000)
+        let end = Date(unixMs: reset)
         let start: Date
         if let length {
             start = end.addingTimeInterval(-length)

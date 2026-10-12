@@ -292,7 +292,7 @@ final class FollowModel {
         if list.remember(RegisteredActivity(machineId: activity.attributes.machineId, activityId: activity.id)) {
             list.save(to: file)
         }
-        let hex = token.map { String(format: "%02x", $0) }.joined()
+        let hex = token.hexString
         do {
             try core?.registerActivityToken(
                 machineId: activity.attributes.machineId, activityId: activity.id,

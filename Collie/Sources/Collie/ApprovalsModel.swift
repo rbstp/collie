@@ -74,13 +74,11 @@ final class ApprovalsModel {
     private var noticeTimer: Task<Void, Never>?
     private let noticeLifetime: Duration
     private let openingTimeout: Duration
-    private(set) var refreshing = false
     private(set) var loading: LoadingApproval?
     private var loadTask: Task<Void, Never>?
     /// Pending approval ids per connected machine at its last notification sweep.
     private var swept: [String: Set<String>] = [:]
     private let dismissResolved: @Sendable (_ nodeId: String, _ pending: Set<String>) -> Void
-    var highlighted: String?
 
     init(
         core: (any ApprovalCore)?, auth: any Authenticator = DeviceOwnerAuthenticator(),
@@ -170,19 +168,6 @@ final class ApprovalsModel {
         }
     }
 
-    /// Fetches a fresh snapshot from every Mac, which also opens connections that do not exist yet.
-    func refresh() async {
-        guard let core, !refreshing else { return }
-        refreshing = true
-        defer { refreshing = false }
-        await withTaskGroup(of: Void.self) { group in
-            for machine in core.machines() {
-                group.addTask { _ = try? await core.flock(machineId: machine.id) }
-            }
-        }
-        poll()
-    }
-
     func items(machineId: String, terminalId: String) -> [ApprovalItem] {
         items.filter { $0.machine.id == machineId && $0.approval.terminalId == terminalId }
     }
@@ -204,12 +189,10 @@ final class ApprovalsModel {
         loadTask?.cancel()
         loadTask = nil
         loading = nil
-        highlighted = nil
     }
 
     @discardableResult
     func open(_ link: ApprovalLink) -> Task<Void, Never>? {
-        highlighted = link.approvalId
         show(nil)
         loadTask?.cancel()
         loading = nil

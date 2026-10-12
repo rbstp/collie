@@ -259,7 +259,7 @@ final class AppModel {
         pushToken = token
         guard let core else { return }
         let environment = PushEnvironment.current
-        let hex = token.map { String(format: "%02x", $0) }.joined()
+        let hex = token.hexString
         let muteDone = !DevicePrefs.load(from: DevicePrefs.file).doneAlerts
         var failure: (any Error)?
         for machine in core.machines() {
@@ -502,6 +502,10 @@ func describe(_ error: any Error) -> String {
         return error.description
     }
     return error.localizedDescription
+}
+
+extension Data {
+    var hexString: String { map { String(format: "%02x", $0) }.joined() }
 }
 
 final class CoreLogRelay: CoreLog {
