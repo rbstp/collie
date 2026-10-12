@@ -340,10 +340,10 @@ private struct AgentHeader: View {
                     }
                 }
                 if !model.isTerminal {
+                    // No glass backing here: next to the status pill's glass it left keyboard animations unfinished after a picker closed.
                     GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
-                                expands: true, icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
+                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
                         .controlSize(.small)
-                        .frame(width: 96)
                 }
             }
             if model.link == .connecting {
