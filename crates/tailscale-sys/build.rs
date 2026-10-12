@@ -51,7 +51,7 @@ fn main() {
     series.sort();
     for patch in &series {
         run(Command::new("patch")
-            .args(["-p1", "--forward", "--quiet", "-d"])
+            .args(["-p1", "--forward", "--fuzz=0", "--quiet", "-d"])
             .arg(&src)
             .arg("-i")
             .arg(patch));
@@ -198,7 +198,7 @@ fn vendor_with_patches(go: &str, src: &Path, patch_root: &Path) {
             }
             let rel = path.strip_prefix(patch_root).unwrap().with_extension("");
             run(Command::new("patch")
-                .args(["--forward", "--quiet"])
+                .args(["--forward", "--fuzz=0", "--quiet"])
                 .arg(vendor.join(&rel))
                 .arg("-i")
                 .arg(&path));
