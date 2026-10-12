@@ -192,6 +192,18 @@ final class ApprovalsModel {
         return blocking.allSatisfy(\.hasTextField) ? .keysAndText : .keys
     }
 
+    func session(for link: ApprovalLink) -> AgentRoute? {
+        guard let item = items.first(where: { $0.id == link.approvalId && $0.machine.nodeId == link.nodeId }) else { return nil }
+        return AgentRoute(machineId: item.machine.id, terminalId: item.approval.terminalId)
+    }
+
+    func cancelOpening() {
+        loadTask?.cancel()
+        loadTask = nil
+        loading = nil
+        highlighted = nil
+    }
+
     @discardableResult
     func open(_ link: ApprovalLink) -> Task<Void, Never>? {
         highlighted = link.approvalId
@@ -199,9 +211,15 @@ final class ApprovalsModel {
         loadTask?.cancel()
         loading = nil
         poll()
-        guard let core, !items.contains(where: { $0.id == link.approvalId }),
-            let machine = core.machines().first(where: { $0.nodeId == link.nodeId })
-        else { return nil }
+        if session(for: link) != nil { return nil }
+        guard let core else {
+            show("Approvals are unavailable on this phone.")
+            return nil
+        }
+        guard let machine = core.machines().first(where: { $0.nodeId == link.nodeId }) else {
+            show("This machine is no longer paired with this phone.")
+            return nil
+        }
         loading = LoadingApproval(link: link, machine: machine)
         loadTask = Task { await load(link, machine: machine, core: core) }
         return loadTask
@@ -211,11 +229,15 @@ final class ApprovalsModel {
     /// proves it is gone: on a cold launch the feed is empty only because nothing is connected yet.
     private func load(_ link: ApprovalLink, machine: Machine, core: any ApprovalCore) async {
         while !Task.isCancelled {
+            guard core.machines().contains(where: { $0.id == machine.id && $0.nodeId == link.nodeId }) else {
+                show("This machine is no longer paired with this phone.")
+                break
+            }
             let wasConnected = core.approvalFeed(machineId: machine.id)?.link == .connected
             let flock = try? await core.flock(machineId: machine.id)
             guard !Task.isCancelled else { return }
             poll()
-            if items.contains(where: { $0.id == link.approvalId }) { break }
+            if session(for: link) != nil { break }
             if wasConnected, flock?.link == .connected {
                 show("This approval is no longer pending.")
                 break

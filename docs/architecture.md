@@ -216,7 +216,7 @@ The payload never carries the snippet, terminal text or the nonce in clear: it i
 | `unreachable` at `decide` | could not confirm the decision reached collied | yes |
 | `unreachable` earlier, `unknown_machine`, `unauthorized`, `failed` | "Couldn't reach collied, open to decide" | yes |
 
-- Tapping the alert itself opens the Approvals tab on that approval. In the app, every decision first passes LocalAuthentication (`deviceOwnerAuthentication`, a fresh `LAContext` each time, so one unlock never covers a later approval); nothing reaches collie-core otherwise.
+- Tapping the alert itself opens the matching agent session on the Agents tab. The iPhone has no separate Approvals tab; the Apple Watch approval list remains. A pending approval is resolved by node and approval id before navigation, with a validated notification thread used to open the agent after an approval has ended. Loading and missing-machine errors remain visible. Structured in-app approval actions pass LocalAuthentication (`deviceOwnerAuthentication`, a fresh `LAContext` each time); manual terminal input is separate.
 
 ## Attachments
 

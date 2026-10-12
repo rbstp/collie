@@ -276,23 +276,15 @@ final class DemoAgentCore: ActivityCore {
     }
 }
 
-/// `--approvals-demo`: the Approvals tab over fake approvals, with no Mac. Debug builds only.
 struct ApprovalsDemo: View {
     @State private var model = ApprovalsModel(core: DemoApprovalCore(), auth: DemoAuthenticator())
-    @State private var tab = AppTab.approvals
 
     init?(arguments: [String]) {
         guard arguments.contains("--approvals-demo") else { return nil }
     }
 
     var body: some View {
-        TabView(selection: $tab) {
-            Tab("Agents", systemImage: "square.grid.2x2", value: AppTab.agents) { Color.clear }
-            Tab("Approvals", systemImage: "checkmark.shield", value: AppTab.approvals) { ApprovalsScreen(model: model) }
-                .badge(model.items.count)
-            Tab("Machines", systemImage: "desktopcomputer", value: AppTab.machines) { Color.clear }
-            Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { Color.clear }
-        }
+        ApprovalsScreen(model: model)
         .task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) }
     }
 }

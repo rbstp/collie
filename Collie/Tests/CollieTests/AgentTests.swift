@@ -476,7 +476,7 @@ private func attach(_ model: AgentModel, _ core: FakeCore, _ names: String...) a
     await model.sendPrompt()
     #expect(model.draft == "continue")
     #expect(!model.sendingPrompt)
-    #expect(model.promptError?.contains("Approvals") == true)
+    #expect(model.promptError?.contains("approval") == true)
 
     core.set(error: .AgentNotReady)
     await model.sendPrompt()
@@ -1914,7 +1914,7 @@ private func noticeShown(
     core.set(error: .AgentBlocked)
     await model.sendPrompt()
     #expect(model.draft == "again")
-    #expect(model.promptError?.contains("Approvals") == true)
+    #expect(model.promptError?.contains("approval") == true)
 
     core.set(error: nil)
     model.blocked = nil

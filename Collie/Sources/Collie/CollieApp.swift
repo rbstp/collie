@@ -42,6 +42,14 @@ struct RootView: View {
             .tint(app.accent.color)
             .accentColor(app.accent.color)
             .environment(\.appAccent, app.accent.color)
+            .alert("Approval unavailable", isPresented: Binding(
+                get: { app.approvalOpenError != nil },
+                set: { if !$0 { app.approvalOpenError = nil } }
+            )) {
+                Button("OK") { app.approvalOpenError = nil }
+            } message: {
+                Text(app.approvalOpenError ?? "")
+            }
     }
 
     @ViewBuilder
@@ -53,6 +61,7 @@ struct RootView: View {
                 selection: Binding {
                     app.tab
                 } set: { tab in
+                    app.cancelApprovalOpening()
                     if tab == .agents, app.tab == .agents { agentsReselected += 1 }
                     app.tab = tab
                 }
@@ -61,12 +70,18 @@ struct RootView: View {
                     FlockScreen(
                         core: app.core, machines: app.machines, approvals: app.approvals, follows: app.follows,
                         opening: $app.openingAgent, tailnetStarting: !app.isRunning, reselected: agentsReselected
-                    ) { app.viewingAgent = $0 }
+                    ) { route in
+                        if route != nil { app.cancelApprovalOpening() }
+                        app.viewingAgent = route
+                    }
+                    .safeAreaInset(edge: .top) {
+                        if let loading = app.approvals.loading {
+                            ProgressView("Opening \(loading.machine.label)")
+                                .font(.footnote)
+                                .padding(8)
+                        }
+                    }
                 }
-                Tab("Approvals", systemImage: "checkmark.shield", value: AppTab.approvals) {
-                    ApprovalsScreen(model: app.approvals)
-                }
-                .badge(app.approvals.items.count)
                 Tab("Machines", systemImage: "desktopcomputer", value: AppTab.machines) { MachinesView(app: app) }
                 Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView(app: app) }
             }

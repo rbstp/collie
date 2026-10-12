@@ -892,7 +892,7 @@ final class AgentModel {
     static func message(for error: any Error) -> String {
         switch error as? CoreError {
         case .AgentBlocked:
-            return "The agent is waiting for an approval. Answer it above or in the Approvals tab."
+            return "The agent is waiting for an approval. Use the terminal buttons or type an answer."
         case .DraftChanged(let current):
             let shown = current.count > 80 ? String(current.prefix(80)) + "…" : current
             return "The agent's input box has unsent text: “\(shown)”. Send again to replace it."
