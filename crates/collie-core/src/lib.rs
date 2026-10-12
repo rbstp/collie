@@ -83,8 +83,9 @@ const KICK_TIMEOUT: Duration = Duration::from_secs(3);
 /// Longer than a healthy reconnect after a resume. A rebind is not done sooner: a dial in
 /// flight during one can stall for its whole attempt.
 const REBIND_AFTER: Duration = Duration::from_secs(3);
-/// A full dial past the resume grace: a rebound node has reached DERP again long before.
-const RESTART_AFTER: Duration = Duration::from_secs(30);
+/// Past every reconnect seen after a resume on a phone, including those the rebind helped
+/// (under 7 s), and the end of the resume grace.
+const RESTART_AFTER: Duration = Duration::from_secs(10);
 /// netmon's own debounce: at the edge of Wi-Fi the path can flap several times a second.
 const NETWORK_SETTLE: Duration = Duration::from_secs(1);
 /// Three dial attempts: a node rebound to the new interface reaches DERP again within a
@@ -912,7 +913,7 @@ impl CollieCore {
     }
 
     /// After a long background (or a suspend), when no machine is connected again
-    /// [`REBIND_AFTER`] later the node is rebound, and when dials still fail
+    /// [`REBIND_AFTER`] later the node is rebound, and when none has connected
     /// [`RESTART_AFTER`] after the resume it is restarted.
     pub fn resume(&self, background_secs: u64) {
         // Bumped before the send: a suspend checking it under the watch lock either sees
@@ -2460,7 +2461,7 @@ impl Inner {
             return;
         }
         let conns: Vec<_> = lock(&self.conns).values().cloned().collect();
-        let suspect = self.node_suspect(&conns, false).await;
+        let suspect = self.node_suspect(&conns, true).await;
         drop(conns);
         // Only the node this resume found: a newer one gets its own grace.
         if suspect.is_some() {
@@ -2572,6 +2573,7 @@ impl Inner {
         let terminal_key = lock(&self.terminal_key).clone();
         let (mut session, _, kind) = conn::open(
             node,
+            &self.node,
             &invite.host,
             invite.port,
             &invite.node_id,
@@ -4391,12 +4393,11 @@ mod tailnet_tests {
         let host = mac_self.dns_name.trim_end_matches('.').to_owned();
         let mac_ip = mac_self.tailscale_ips.clone().unwrap()[0];
         let session = rt.block_on(core.runtime.spawn({
-            let (node, host) = (phone_node.clone(), host.clone());
+            let (node, host, slot) = (phone_node.clone(), host.clone(), core.inner.node.clone());
             let identity = lock(&core.inner.identity).clone().unwrap();
             async move {
-                let stream = conn::dial(&node, std::net::SocketAddr::new(mac_ip, DEFAULT_PORT))
-                    .await
-                    .unwrap();
+                let addr = std::net::SocketAddr::new(mac_ip, DEFAULT_PORT);
+                let stream = conn::dial(&node, &slot, addr).await.unwrap();
                 let stream = conn::tls(stream, &host, mac_pin(), identity).await.unwrap();
                 let mut session = Session::connect(stream, &host, DEFAULT_PORT).await.unwrap();
                 session.hello().await.unwrap()
@@ -5322,6 +5323,111 @@ mod tailnet_tests {
                 .any(|l| l.starts_with("node restart (network change)")),
             "{logged:?}"
         );
+        drop(core);
+        drop(server_rt);
+        drop(control);
+    }
+
+    #[test]
+    fn resume_restart_end_to_end() {
+        // The node restart registers the node key again: see approvals_end_to_end.
+        const KEY: &str = "test-authkey-collie-resume-restart";
+        if ran_in_child(
+            "tailnet_tests::resume_restart_end_to_end",
+            &[("TS_AUTHKEY", KEY)],
+        ) {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let control = TestControl::start(KEY, root.path(), &[]);
+        let phone_dir = root.path().join("phone");
+        std::fs::create_dir(&phone_dir).unwrap();
+        std::fs::set_permissions(&phone_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let core = CollieCore::with_control_url(phone_dir, control.1.clone()).unwrap();
+        set_identity(&core);
+        struct Log(Arc<Mutex<Vec<String>>>);
+        impl CoreLog for Log {
+            fn log(&self, message: String) {
+                lock(&self.0).push(message);
+            }
+        }
+        let logged = Arc::new(Mutex::new(Vec::new()));
+        core.set_log(Box::new(Log(logged.clone())));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(core.node_start(Some(KEY.into()))).unwrap();
+        let mac = Node::new(&Config {
+            state_dir: root.path().join("mac"),
+            hostname: "it-mac".into(),
+            auth_key: Some(Zeroizing::new(KEY.into())),
+            control_url: Some(control.1.clone()),
+            advertise_tags: vec![pin::MAC_TAG.into()],
+            log_to_stderr: false,
+        })
+        .unwrap();
+        mac.start().unwrap();
+        let mac_self = wait_running(&mac, 1).self_node.unwrap();
+        let phone_node = lock(&core.inner.node).clone().unwrap();
+        let phone_id = wait_running(&phone_node, 1).self_node.unwrap().stable_id;
+        let server_rt = tokio::runtime::Runtime::new().unwrap();
+        let serving = server_rt.spawn(serve(
+            mac.clone(),
+            phone_id,
+            mac_self.stable_id.clone(),
+            Arc::default(),
+        ));
+        let invite = PairingInvite {
+            host: mac_self.dns_name.trim_end_matches('.').to_owned(),
+            port: DEFAULT_PORT,
+            node_id: mac_self.stable_id.clone(),
+            key: mac_pin(),
+            code: PairingCode::new(CODE).unwrap(),
+        };
+        let machine = rt
+            .block_on(core.pair(invite.to_uri(), "iPhone".into()))
+            .unwrap();
+        poll("connected", || {
+            let flock = rt.block_on(core.flock(machine.id.clone())).unwrap();
+            (flock.link == LinkPhase::Connected).then_some(())
+        });
+        serving.abort();
+        rt.block_on(core.suspend(core.begin_suspend()));
+
+        let mac_ip = mac_self.tailscale_ips.unwrap()[0];
+        let dialing = core.runtime.spawn({
+            let (node, slot) = (phone_node.clone(), core.inner.node.clone());
+            async move {
+                let t0 = Instant::now();
+                let addr = std::net::SocketAddr::new(mac_ip, DEFAULT_PORT + 1);
+                (conn::dial(&node, &slot, addr).await.is_err(), t0.elapsed())
+            }
+        });
+        std::thread::sleep(Duration::from_secs(1));
+        let taken = lock(&core.inner.node).take();
+        let (failed, took) = rt.block_on(dialing).unwrap();
+        *lock(&core.inner.node) = taken;
+        drop(phone_node);
+        assert!(failed);
+        assert!(
+            took < Duration::from_secs(8),
+            "a replaced node gets no new attempt: {took:?}"
+        );
+
+        let t0 = Instant::now();
+        core.resume(60);
+        let restart = poll("a node restart while dials fail", || {
+            lock(&logged)
+                .iter()
+                .find(|l| l.starts_with("node restart"))
+                .cloned()
+        });
+        assert!(
+            restart.starts_with("node restart (resume): done in "),
+            "{restart}"
+        );
+        assert!(t0.elapsed() >= RESTART_AFTER, "{:?}", t0.elapsed());
         drop(core);
         drop(server_rt);
         drop(control);
