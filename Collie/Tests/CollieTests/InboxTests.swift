@@ -123,10 +123,10 @@ private func entry(
 }
 
 @MainActor
-@Test func contextRingTonesFollowTheAmountLeft() {
-    #expect(ContextRing.tone(100) == ContextRing.tone(51))
-    #expect(ContextRing.tone(50) == ContextRing.tone(20))
-    #expect(ContextRing.tone(19) == ContextRing.tone(0))
-    #expect(ContextRing.tone(51) != ContextRing.tone(50))
-    #expect(ContextRing.tone(20) != ContextRing.tone(19))
+@Test func contextRingTonesUseTheWatchUsageScale() {
+    let environment = EnvironmentValues()
+    for left: UInt8 in [100, 72, 40, 20, 10, 5, 0] {
+        #expect(ContextRing.tone(left).resolve(in: environment) == WatchUsage.usedColor(100 - left).resolve(in: environment))
+    }
+    #expect(ContextRing.tone(255).resolve(in: environment) == ContextRing.tone(100).resolve(in: environment))
 }

@@ -48,9 +48,11 @@ struct AgentScreen: View {
         }
     }
 
+    private var title: String { model.agent?.displayTitle ?? model.terminal?.displayTitle ?? "Agent" }
+
     var body: some View {
         VStack(spacing: 0) {
-            AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil)
+            AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil, showingChat: $showingChat)
             if let notice = model.paneNotice {
                 PaneCard(model: model, notice: notice)
             }
@@ -63,14 +65,6 @@ struct AgentScreen: View {
                 if let notice = approvals.notice {
                     Text(notice).font(.footnote).padding(.horizontal).frame(maxWidth: .infinity, alignment: .leading)
                 }
-            }
-            if !model.isTerminal {
-                GlassPicker(title: "Session view", selection: $showingChat,
-                            options: [("Chat", true), ("Terminal", false)], expands: true)
-                .controlSize(.small)
-                .frame(maxWidth: 240)
-                .padding(.horizontal)
-                .padding(.bottom, 6)
             }
             if showingChat && !model.isTerminal {
                 ConversationView(model: model.conversation, searching: $searchingChat, load: model.history) { showingChat = false }
@@ -130,10 +124,12 @@ struct AgentScreen: View {
                 }
             }
         }
-        .navigationTitle(model.agent?.displayTitle ?? model.terminal?.displayTitle ?? "Agent")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
         .toolbar {
+            ToolbarItem(placement: .principal) { SessionTitle(title: title) }
+                .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .primaryAction) {
                 if showingChat && !model.isTerminal {
                     Button("Search conversation", systemImage: "magnifyingglass") { searchingChat.toggle() }
@@ -304,15 +300,18 @@ private struct CloseDialogs: ViewModifier {
 private struct AgentHeader: View {
     let model: AgentModel
     let machineLabel: String?
+    @Binding var showingChat: Bool
 
     var body: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 8) {
-                Text(verbatim: machineLabel ?? "")
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                if let machineLabel {
+                    Text(verbatim: machineLabel)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .layoutPriority(1)
+                }
                 if let agent = model.agent {
                     HStack(spacing: 6) {
                         StatusPill(state: agent.status)
@@ -323,25 +322,28 @@ private struct AgentHeader: View {
                         }
                     }
                     .fixedSize()
-                    HStack(spacing: 6) {
-                        if let kind = agent.kind {
-                            AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
-                        }
-                        if let left = agent.contextLeft {
-                            HStack(spacing: 4) {
-                                ContextRing(left: left)
-                                Text("\(left)%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                            }
-                            .accessibilityElement(children: .ignore)
-                            .accessibilityLabel("Context \(left)% left")
-                        }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if let kind = agent.kind {
+                        AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
                     }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                } else if model.isTerminal {
-                    AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.secondary)
-                    Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let left = agent.contextLeft {
+                        ContextRing(left: left)
+                    }
+                } else {
+                    Spacer(minLength: 0)
+                    if model.isTerminal {
+                        AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.secondary).fixedSize()
+                        Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize()
+                    }
+                }
+                if !model.isTerminal {
+                    GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
+                                expands: true, icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
+                        .controlSize(.small)
+                        .frame(width: 96)
                 }
             }
             if model.link == .connecting {
@@ -360,6 +362,33 @@ private struct AgentHeader: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
+    }
+}
+
+/// The inline title on up to two lines, cut after the last character that fits rather than ending in an ellipsis.
+struct SessionTitle: UIViewRepresentable {
+    let title: String
+
+    func makeUIView(context: Context) -> UILabel {
+        let label = UILabel()
+        label.numberOfLines = 2
+        label.lineBreakMode = .byWordWrapping
+        label.textAlignment = .center
+        label.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: .systemFont(ofSize: 15, weight: .bold), maximumPointSize: 19)
+        label.adjustsFontForContentSizeCategory = true
+        label.accessibilityTraits = .header
+        return label
+    }
+
+    func updateUIView(_ label: UILabel, context: Context) {
+        label.text = title
+        label.accessibilityLabel = title
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UILabel, context: Context) -> CGSize? {
+        let width = proposal.width ?? uiView.intrinsicContentSize.width
+        let size = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        return CGSize(width: min(size.width, width), height: size.height)
     }
 }
 
