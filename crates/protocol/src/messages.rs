@@ -1102,7 +1102,8 @@ pub struct TerminalRead {
 
 impl TerminalRead {
     /// `ansi` with the rows in `wraps` and `splits` joined onto the row above; `None` when
-    /// there are none.
+    /// there are none. For Copilot, a space joining shaded rows keeps their shade, and a sent
+    /// prompt's timestamp follows the joined prompt.
     pub fn reflowed(&self) -> Option<String> {
         if self.wraps.is_empty() && self.splits.is_empty() {
             return None;
@@ -1117,33 +1118,97 @@ impl TerminalRead {
             }
         }
         let mut out = String::with_capacity(self.ansi.len());
+        let mut clock = String::new();
         for (i, row) in rows.iter().enumerate() {
-            let row = if self.copilot_scrollbar
-                && (sep[i].is_some() || sep.get(i + 1).is_some_and(Option::is_some))
-            {
+            let joined = sep.get(i + 1).is_some_and(Option::is_some);
+            let mut row = if self.copilot_scrollbar && (sep[i].is_some() || joined) {
                 Cow::Owned(trim_copilot_line_end(row))
             } else {
                 Cow::Borrowed(*row)
             };
+            let mut moved = None;
+            if self.copilot_scrollbar
+                && sep[i].is_none()
+                && joined
+                && let Some((text, stamp)) = split_copilot_clock(&row)
+            {
+                moved = Some(stamp);
+                row = Cow::Owned(text);
+            }
             match sep[i] {
                 Some(s) if i > 0 => {
                     let line = out.rfind('\n').map_or(0, |n| n + 1);
-                    let kept = trim_line_end(&out[line..]);
+                    let mut kept = trim_line_end(&out[line..]);
+                    let bare = before_sgr(&kept).len();
+                    let at = if self.copilot_scrollbar && kept[bare..].contains("\u{1b}[48;") {
+                        bare
+                    } else {
+                        kept.len()
+                    };
+                    kept.insert_str(at, s);
                     out.truncate(line);
                     out.push_str(&kept);
-                    out.push_str(s);
                     out.push_str(&trim_row_start(&row));
                 }
                 _ => {
                     if i > 0 {
+                        out.push_str(&std::mem::take(&mut clock));
+                        if rows[i - 1].ends_with('\r') && !out.ends_with('\r') {
+                            out.push('\r');
+                        }
                         out.push('\n');
                     }
                     out.push_str(&row);
                 }
             }
+            if let Some(stamp) = moved {
+                clock = stamp;
+            }
         }
+        out.push_str(&clock);
         Some(out)
     }
+}
+
+/// A sent Copilot prompt's first row, `❯ ` and its text, without the padding and `HH:MM`
+/// timestamp styled apart at its end, and those moved to follow the joined prompt: the
+/// timestamp after one space in the padding's style.
+fn split_copilot_clock(row: &str) -> Option<(String, String)> {
+    let stamped = before_sgr(row);
+    let (rest, time) = stamped.split_at_checked(stamped.len().checked_sub(5)?)?;
+    let digits = time.as_bytes();
+    if digits[2] != b':' || ![0, 1, 3, 4].iter().all(|&i| digits[i].is_ascii_digit()) {
+        return None;
+    }
+    let padded = before_sgr(rest);
+    let trimmed = padded.trim_end_matches(' ');
+    let text = before_sgr(trimmed);
+    if padded.len() == rest.len() || trimmed.len() == padded.len() {
+        return None;
+    }
+    let mut chars = text.chars();
+    let first = loop {
+        match chars.next()? {
+            ' ' => {}
+            '\u{1b}' => {
+                chars.find(|&c| c == 'm');
+            }
+            c => break c,
+        }
+    };
+    let (padding, style, after) = (
+        &trimmed[text.len()..],
+        &rest[padded.len()..],
+        &row[stamped.len()..],
+    );
+    (first == '❯').then(|| (text.to_owned(), format!("{padding} {style}{time}{after}")))
+}
+
+fn before_sgr(mut s: &str) -> &str {
+    while let Some(start) = sgr_suffix(s) {
+        s = &s[..start];
+    }
+    s
 }
 
 /// The SGR escape `s` ends with, if any: collied sends no other escapes.
@@ -2472,6 +2537,46 @@ mod tests {
             Some(" ● The quick brown fox jumps over the lazy dog keeps running.")
         );
         assert_eq!(copilot.ansi, ansi);
+    }
+
+    #[test]
+    fn copilot_sent_prompt_timestamp_follows_the_joined_prompt_in_its_shade() {
+        let shade = "\u{1b}[48;2;20;27;34m";
+        let text = format!("\u{1b}[38;2;240;246;252m{shade}");
+        let clock = format!("\u{1b}[0m\u{1b}[38;2;145;152;161m{shade}10:19\u{1b}[0m{shade}");
+        let ansi = format!(
+            " \u{1b}[0m{shade} \u{1b}[0m{text}❯ Reply with \u{1b}[0m{shade}   {clock}  \u{1b}[0m\r\n \u{1b}[0m{shade}   \u{1b}[0m{text}just\u{1b}[0m{shade}        \u{1b}[0m\r\n \u{1b}[0m{shade}   \u{1b}[0m{text}OK.\u{1b}[0m{shade}         \u{1b}[0m\r\n ● Done"
+        );
+        let read = TerminalRead {
+            copilot_scrollbar: true,
+            ..read_with(&ansi, &[1, 2], &[])
+        };
+        assert_eq!(
+            read.reflowed().unwrap(),
+            format!(
+                " \u{1b}[0m{shade} \u{1b}[0m{text}❯ Reply with \u{1b}[0m{shade}\u{1b}[0m{text}just \u{1b}[0m{shade}\u{1b}[0m\u{1b}[0m{shade}\u{1b}[0m{text}OK.\u{1b}[0m{shade}\u{1b}[0m\u{1b}[0m{shade} {clock}\u{1b}[0m\r\n ● Done"
+            )
+        );
+        let unmoved = read_with(&ansi, &[1, 2], &[]).reflowed().unwrap();
+        assert!(unmoved.starts_with(&format!(
+            "{}\u{1b}[0m ",
+            &ansi[..ansi.find("  \u{1b}[0m\r").unwrap()]
+        )));
+        let prose = format!(" ● The meeting is at {clock}\r\n   noon.");
+        let read = TerminalRead {
+            copilot_scrollbar: true,
+            ..read_with(&prose, &[1], &[])
+        };
+        let joined = read.reflowed().unwrap();
+        assert!(joined.find("10:19").unwrap() < joined.find("noon.").unwrap());
+        for end in ["\u{a0}", "\u{3000}", "界", "🐕", "\u{1b}["] {
+            let row = format!(" ❯ hi \u{1b}[0m{clock}{end}\r\n   there");
+            let read = TerminalRead {
+                copilot_scrollbar: true,
+                ..read_with(&row, &[1], &[])
+            };
+            assert!(read.reflowed().unwrap().ends_with("there"));
+        }
     }
 
     #[test]

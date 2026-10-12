@@ -151,6 +151,8 @@ fn tui_wraps(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let mut base = 0;
     let mut prior_width = cols;
     let mut prev = Prev::Held;
+    let mut box_top = false;
+    let mut prompt: Option<SentPrompt> = None;
     for (i, row) in ansi.split('\n').enumerate() {
         plain_text(row, &mut plain);
         let trimmed = plain.trim_end();
@@ -163,6 +165,32 @@ fn tui_wraps(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
         let row_width = cols.saturating_sub(usize::from(scrollbar));
         let s = trimmed.trim_start_matches(' ');
         let ind = trimmed.len() - s.len();
+        if kind == "copilot" {
+            let below_top = std::mem::replace(
+                &mut box_top,
+                ind == 1 && !s.is_empty() && s.chars().all(|c| c == '▄'),
+            );
+            if let Some(sent) = prompt.as_mut().filter(|_| s.is_empty() || ind >= 4) {
+                let text = trimmed.get(4..).unwrap_or_default();
+                let at = u32::try_from(i).unwrap_or(u32::MAX);
+                if sent.after(&tail, text) {
+                    wraps.push(at);
+                }
+                sent.spaced = ends_in_space(row, false);
+                row_above(&mut tail, text, 4);
+                continue;
+            }
+            prompt = None;
+            if let Some((text, width)) = sent_prompt(s).filter(|_| below_top && ind == 2) {
+                row_above(&mut tail, text, 4);
+                prompt = Some(SentPrompt {
+                    width,
+                    spaced: ends_in_space(row, true),
+                    full: false,
+                });
+                continue;
+            }
+        }
         if s.is_empty() {
             prev = Prev::Start;
             prose = false;
@@ -260,6 +288,80 @@ fn tui_structure(text: &str) -> bool {
     text.contains("  ")
         || text.starts_with(['+', '$', '>', '|', '`'])
         || text.chars().any(|c| ('\u{2500}'..='\u{259f}').contains(&c))
+}
+
+/// The text of the first row of a sent Copilot prompt, `❯ ` then the text and an `HH:MM`
+/// timestamp, and the width Copilot wrapped that text at: the columns before a space and
+/// the timestamp.
+fn sent_prompt(s: &str) -> Option<(&str, usize)> {
+    let body = s.strip_prefix("❯ ")?;
+    let (text, time) = body.split_at_checked(body.len().checked_sub(5)?)?;
+    let time = time.as_bytes();
+    let clock = time[2] == b':' && [0, 1, 3, 4].iter().all(|&i| time[i].is_ascii_digit());
+    let text = text.strip_suffix(' ')?.trim_end();
+    (clock && !text.is_empty()).then(|| (text, s.width() - 8))
+}
+
+/// A sent Copilot prompt, which Copilot wraps like wrap-ansi with `trim: false`: a row
+/// broken after a word keeps that space at its end, and after a row the text fills, the
+/// space goes, unseen, to the start of the next row.
+struct SentPrompt {
+    width: usize,
+    /// The row above ends with one space in its text's style.
+    spaced: bool,
+    /// The last row checked filled the width.
+    full: bool,
+}
+
+impl SentPrompt {
+    /// Whether Copilot broke `tail` after a word before `next`; a typed newline could look
+    /// like any other break, such as a full row cut inside a long token, or a row after a
+    /// full row, which may start with an unseen space.
+    fn after(&mut self, tail: &str, next: &str) -> bool {
+        let used = tail.width();
+        let after_full = std::mem::replace(&mut self.full, used >= self.width);
+        let first = next.split(' ').next().unwrap_or_default().width();
+        self.spaced
+            && !after_full
+            && !tail.is_empty()
+            && !next.is_empty()
+            && !next.starts_with(' ')
+            && used < self.width
+            && used + 1 + first > self.width
+    }
+}
+
+/// Whether the text of a sent Copilot prompt's row ends with one space in its own style,
+/// before the padding; the `first` row ends with a separately styled timestamp.
+fn ends_in_space(row: &str, first: bool) -> bool {
+    let mut marked = String::new();
+    let mut chars = row.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => {
+                chars.by_ref().take_while(|&c| c != 'm').for_each(drop);
+                marked.push('\0');
+            }
+            '\r' => {}
+            c => marked.push(c),
+        }
+    }
+    fn visible(s: &str) -> &str {
+        s.trim_end_matches(|c: char| c.is_whitespace() || c == '\0')
+    }
+    let mut text = visible(&marked);
+    if let Some(bar) = text.strip_suffix('┃') {
+        text = visible(bar);
+    }
+    if first {
+        let clock = text.len().saturating_sub(5);
+        let Some(styled) = text.get(..clock).and_then(|t| t.strip_suffix('\0')) else {
+            return false;
+        };
+        text = visible(styled);
+    }
+    let rest = &marked[text.len()..];
+    rest.starts_with(' ') && !rest[1..].starts_with(' ')
 }
 
 fn row_above(tail: &mut String, text: &str, hang: usize) -> Prev {
@@ -448,6 +550,174 @@ mod tests {
         assert_eq!(
             soft_wraps_for("copilot", &lines.join("\r\n"), 40),
             (vec![1, 4], vec![])
+        );
+    }
+
+    const SENT_WIDE: &str = include_str!("../tests/fixtures/copilot-1.0.96-2/sent-wide.ansi.txt");
+    const SENT_NARROW: &str =
+        include_str!("../tests/fixtures/copilot-1.0.96-2/sent-narrow.ansi.txt");
+    const SENT_LINES: &str =
+        include_str!("../tests/fixtures/copilot-1.0.96-2/sent-narrow-lines.ansi.txt");
+
+    #[test]
+    fn captured_copilot_sent_prompts_join_where_copilot_wrapped_them() {
+        let cases = [
+            (SENT_WIDE, 94, vec![2, 8, 17], vec![]),
+            (SENT_NARROW, 50, vec![2, 3, 6, 11], vec![]),
+            (
+                SENT_LINES,
+                50,
+                vec![12, 13, 14, 17, 18, 23, 24, 25, 34],
+                vec![],
+            ),
+        ];
+        for (screen, cols, wraps, splits) in cases {
+            assert_eq!(
+                soft_wraps_for("copilot", screen, cols),
+                (wraps.clone(), splits.clone())
+            );
+            assert_eq!(soft_wraps_for("copilot", screen, 212), (wraps, splits));
+            for kind in ["claude", "codex"] {
+                assert_eq!(soft_wraps_for(kind, screen, cols), (vec![], vec![]));
+            }
+        }
+    }
+
+    #[test]
+    fn copilot_sent_prompt_reflow_keeps_one_timestamp_after_the_prompt() {
+        let ansi = without_copilot_scrollbar(SENT_WIDE, 94);
+        let (wraps, splits) = soft_wraps_for("copilot", SENT_WIDE, 94);
+        let read = protocol::TerminalRead {
+            terminal_id: protocol::TerminalId::new("t").unwrap(),
+            source: protocol::ReadSource::Recent,
+            ansi,
+            truncated: false,
+            wraps,
+            splits,
+            copilot_scrollbar: true,
+        };
+        let reflowed = read.reflowed().unwrap();
+        assert_eq!(
+            reflowed,
+            include_str!("../tests/fixtures/copilot-1.0.96-2/sent-wide.reflowed.ansi.txt")
+        );
+        let mut plain = String::new();
+        let lines: Vec<_> = reflowed
+            .split('\n')
+            .map(|row| {
+                plain_text(row, &mut plain);
+                plain.trim().to_owned()
+            })
+            .collect();
+        assert!(lines.contains(&"❯ Without using any tools, reply with just the word OK. This sentence is only padding so that the prompt runs across several rows of the terminal and wraps at 10:19".into()));
+        assert!(lines.contains(&"the pane width, which is what this capture checks.".into()));
+        assert!(lines.contains(&format!(
+            "❯ Without using any tools, reply with just OK. https://example.com/{} 10:20",
+            "abcdefghij".repeat(6)
+        )));
+        assert!(lines.contains(&"abcdefghij".repeat(8)));
+        assert!(lines.contains(
+            &"to wrap across rows at the pane width.  Indented line after a blank one.- a".into()
+        ));
+        assert!(lines.contains(&"list item that is long enough to wrap across rows at this pane width too.Short.let value = compute(alpha, beta);".into()));
+        for line in [
+            "Indented line after a blank one.",
+            "- a list item that is long enough to wrap across rows at this pane width too.",
+            "Short.",
+            "next line after a full one.",
+        ] {
+            assert!(lines.contains(&line.into()), "{line}");
+        }
+        for time in ["10:19", "10:20", "10:28", "10:29"] {
+            assert_eq!(reflowed.matches(time).count(), 1);
+        }
+    }
+
+    fn sent(rows: &[&str], width: usize) -> String {
+        let shade = "\u{1b}[48;2;20;27;34m";
+        let text = "\u{1b}[38;2;240;246;252m\u{1b}[48;2;20;27;34m";
+        let border = |block: &str| {
+            format!(
+                " \u{1b}[0m\u{1b}[38;2;20;27;34m{}\u{1b}[0m",
+                block.repeat(width + 11)
+            )
+        };
+        let mut out = vec![border("▄")];
+        for (i, row) in rows.iter().enumerate() {
+            let (lead, tail) = if i == 0 {
+                (
+                    " \u{1b}[0m",
+                    format!(
+                        " \u{1b}[0m\u{1b}[38;2;145;152;161m{shade}12:34\u{1b}[0m{shade}  \u{1b}[0m"
+                    ),
+                )
+            } else {
+                ("   \u{1b}[0m", format!("      \u{1b}[0m{shade}  \u{1b}[0m"))
+            };
+            let marker = if i == 0 { "❯ " } else { "" };
+            let pad = " ".repeat(width - row.width());
+            out.push(format!(
+                " \u{1b}[0m{shade}{lead}{text}{marker}{row}\u{1b}[0m{shade}{pad}{tail}"
+            ));
+        }
+        out.push(border("▀"));
+        out.join("\r\n")
+    }
+
+    #[test]
+    fn copilot_sent_prompts_join_only_breaks_copilot_certainly_made() {
+        let wrapped = sent(&["The quick brown fox ", "jumps over it."], 20);
+        assert_eq!(soft_wraps_for("copilot", &wrapped, 34), (vec![2], vec![]));
+        let wide = "文字".repeat(9);
+        for screen in [
+            sent(&[&wide, "文字"], 37),
+            sent(&["Paths:", "/usr/local/bin/tool1", "Another line."], 20),
+            sent(
+                &["Paths:", "/usr/local/bin/tool1", "aaaa bbbb cccc ", "ddddd"],
+                20,
+            ),
+            sent(
+                &[
+                    "A long path here:",
+                    "/usr/local/bin/tool1",
+                    "/usr/local/lib",
+                ],
+                20,
+            ),
+            sent(&["Two spaces end this  ", "jumps over it."], 21),
+            sent(&["The quick brown fox", "jumps over it."], 20),
+            sent(&["The quick brown fox ", " jumps over it."], 20),
+            sent(&["The quick brown fox ", "", "jumps over it."], 20),
+            wrapped.replacen('▄', "─", 1),
+            wrapped.replace("12:34", "12 34"),
+            wrapped.split_once("\r\n").unwrap().1.to_owned(),
+        ] {
+            assert_eq!(
+                soft_wraps_for("copilot", &screen, 34),
+                (vec![], vec![]),
+                "{screen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn copilot_sent_prompt_rows_ending_in_multibyte_characters_join_nothing() {
+        for pad in ["\u{a0}", "\u{3000}", "\u{85}", "界", "🐕"] {
+            let rows = format!(" ▄▄▄▄▄▄\r\n  ❯ hello 10:19{}\r\n ▀▀▀▀", pad.repeat(3));
+            assert_eq!(soft_wraps_for("copilot", &rows, 34), (vec![], vec![]));
+            let rows = format!(
+                " ▄▄▄▄▄▄\r\n  ❯ hello 10:19{}\r\n    world\r\n ▀▀▀▀",
+                pad.repeat(3)
+            );
+            assert_eq!(soft_wraps_for("copilot", &rows, 34), (vec![], vec![]));
+        }
+        assert_eq!(
+            soft_wraps_for(
+                "copilot",
+                " ▄▄\r\n  ❯ a\u{1b}[0m \u{1b}[38;5m10:19\u{1b}[\r\n    b",
+                34
+            ),
+            (vec![], vec![])
         );
     }
 

@@ -402,6 +402,36 @@ private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB
     }
 }
 
+@Test func copilotsJoinedSentPromptsWrapInsideTheirBoxes() throws {
+    let url = URL(filePath: #filePath).deletingLastPathComponent()
+        .appending(path: "../../../../crates/collied/tests/fixtures/copilot-1.0.96-2/sent-wide.reflowed.ansi.txt")
+    let snapshot = try String(contentsOf: url, encoding: .utf8)
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    for columns in [30, 40, 50] {
+        let frame = screen.render(ansiSnapshot: snapshot, wrapColumns: columns)
+        #expect(!frame.wrapsUnknown)
+        let tops = Set(frame.runs.filter { $0.text.contains("▄") }.map(\.row)).sorted()
+        let bottoms = Set(frame.runs.filter { $0.text.contains("▀") }.map(\.row)).sorted()
+        #expect(tops.count == 4 && bottoms.count == 4)
+        for (top, bottom) in zip(tops, bottoms) {
+            for row in (top + 1)..<bottom {
+                #expect(painted(frame, row: row, TerminalRGB(20, 27, 34)) == 1..<columns, "\(columns), \(row)")
+            }
+        }
+        #expect(frame.runs.filter { $0.text == "OK" }.allSatisfy { $0.style.background == nil })
+        let clocks = frame.runs.filter { $0.text.contains(":") && $0.text.count == 5 }
+        #expect(clocks.count == 4 && clocks.allSatisfy { $0.style.foreground == TerminalRGB(145, 152, 161) })
+        let text = TerminalSelection(TerminalCell(row: 0, column: 0), TerminalCell(row: frame.rows - 1, column: columns - 1))
+            .text(in: frame)
+        #expect(text.contains(
+            "  ❯ Without using any tools, reply with just the word OK. This sentence is only padding so that the prompt runs across several rows of the terminal and wraps at 10:19\n    the pane width, which is what this capture checks.\n"
+        ), "\(columns)")
+        #expect(text.contains("https://example.com/" + String(repeating: "abcdefghij", count: 6) + " 10:20\n    abcdefghij"), "\(columns)")
+        #expect(text.contains("\n\n      Indented line after a blank one.\n    - a list item"), "\(columns)")
+        #expect(text.contains("okxxx\n    next line after a full one.\n"), "\(columns)")
+    }
+}
+
 @Test func rightAlignedTextKeepsNoPaddingOnItsOwnRow() throws {
     let screen = try #require(TerminalScreen(background: bg, foreground: fg))
     let frame = screen.render(ansiSnapshot: try capture("copilot-1.0.94-1/narrow-output", rows: 52...52), wrapColumns: 40)
