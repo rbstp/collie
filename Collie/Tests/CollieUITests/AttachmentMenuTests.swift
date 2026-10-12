@@ -25,11 +25,7 @@ final class AttachmentMenuTests: XCTestCase {
         if newTask {
             app.buttons["New task"].tap()
         } else {
-            app.buttons["Layout"].tap()
-            app.buttons["Grid"].tap()
-            let agent = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
-            XCTAssertTrue(agent.appears(within: 5), app.debugDescription)
-            agent.tap()
+            app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
         }
         let placeholder = newTask ? "What should the agent do?" : "Prompt the agent"
         let field = app.textFields.matching(NSPredicate(format: "placeholderValue == %@ OR label == %@ OR value == %@", placeholder, placeholder, "test")).firstMatch
