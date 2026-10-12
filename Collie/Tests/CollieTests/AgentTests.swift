@@ -1603,6 +1603,8 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     #expect(model.fontSize == 11)
 
     model.fontSize = 14
+    #expect(DevicePrefs.load(from: file).fontSize == 11)
+    model.saveFontSize()
     var prefs = DevicePrefs.load(from: file)
     prefs.gestures.doubleTap = .none
     prefs.save(to: file)
@@ -1941,6 +1943,36 @@ private func noticeShown(
     await model.sendPrompt()
     #expect(core.snapshot.typed == ["DuckDB"])
     #expect(core.snapshot.prompts == ["other input"])
+}
+
+@MainActor
+@Test func codexQuestionCountsEachCRLFAsOneRow() {
+    let filler = Array(repeating: "  output", count: 10)
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "codex"
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent,
+            ansi: (["Queued follow-up inputs", "? 1 question", "⇧←\u{1B}[0m to answer"] + filler).joined(separator: "\r\n"),
+            truncated: false
+        )
+    }
+    let model = agentModel(core)
+    model.poll()
+    #expect(model.codexQuestionQueued)
+
+    let openCore = FakeCore()
+    openCore.state.withLock {
+        $0.kind = "codex"
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent,
+            ansi: (["› 1. SQLite"] + filler + filler + ["enter\u{1B}[0m submit   ⇧→ main prompt", "   "]).joined(separator: "\r\n"),
+            truncated: false
+        )
+    }
+    let open = agentModel(openCore)
+    open.poll()
+    #expect(open.codexQuestionOpen)
 }
 
 @MainActor

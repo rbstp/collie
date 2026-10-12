@@ -94,8 +94,10 @@ final class AgentModel {
         didSet { DevicePrefs.update(in: prefsFile) { $0.wrapLines = wrapLines } }
     }
 
-    var fontSize: Double {
-        didSet { DevicePrefs.update(in: prefsFile) { $0.fontSize = fontSize } }
+    var fontSize: Double
+
+    func saveFontSize() {
+        DevicePrefs.update(in: prefsFile) { $0.fontSize = fontSize }
     }
 
     private(set) var gestures: TerminalGestures
@@ -193,7 +195,7 @@ final class AgentModel {
 
     var codexQuestionQueued: Bool {
         guard agent?.kind == "codex" else { return false }
-        let tail = ansi.components(separatedBy: .newlines).suffix(16)
+        let tail = ansi.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).suffix(16)
         return tail.contains { $0.contains("Queued follow-up inputs") }
             && tail.contains { $0.contains("⇧←") && $0.contains("to answer") }
             && !codexQuestionOpen
@@ -202,7 +204,7 @@ final class AgentModel {
     var codexQuestionOpen: Bool {
         guard agent?.kind == "codex" else { return false }
         if let codexFooter, codexFooter.ansi == ansi { return codexFooter.open }
-        let lines = ansi.components(separatedBy: .newlines)
+        let lines = ansi.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
         let footer = lines.reversed().lazy
             .map { $0.replacingOccurrences(of: "\u{1B}\\[[0-9;]*[mC]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty }

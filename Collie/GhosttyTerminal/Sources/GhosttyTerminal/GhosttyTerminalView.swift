@@ -37,6 +37,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     public var onPinch: ((CGFloat) -> Void)? {
         didSet { gesturesChanged() }
     }
+    public var onPinchEnded: (() -> Void)?
     /// Also off unless rows wrap: without wrapping, a sideways pan scrolls the terminal.
     public var onSwipe: ((TerminalSwipe) -> Void)? {
         didSet { gesturesChanged() }
@@ -350,6 +351,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
         default:
             isScrollEnabled = true
             gesturesChanged()
+            onPinchEnded?()
         }
     }
 
