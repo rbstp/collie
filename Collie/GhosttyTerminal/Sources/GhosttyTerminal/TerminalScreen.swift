@@ -108,6 +108,7 @@ final class TerminalScreen {
         let wantedColumns: UInt16
         let wantedRows: UInt16
         var bytes: [UInt8]
+        var readColumns = Int.max
         if let wrapColumns {
             wantedColumns = UInt16(min(max(wrapColumns, 1), Int(Self.maxColumns)))
             // Rows past the content are dropped by readFrame. preparedForWrapping keeps the
@@ -118,6 +119,8 @@ final class TerminalScreen {
             bytes = Array(snapshot.utf8)
             let lines = bytes.reduce(1) { $1 == UInt8(ascii: "\n") ? $0 + 1 : $0 }
             wantedColumns = Self.maxColumns
+            // A scroll fills the new row with the current background, past any row's width.
+            readColumns = lines <= Int(Self.maxRows) ? Self.widestRow(bytes) ?? Int(Self.maxColumns) : Int(Self.maxColumns)
             wantedRows = UInt16(min(lines, Int(Self.maxRows)))
             // Autowrap off so rows wider than the terminal clip instead of shifting every later row.
             bytes.insert(contentsOf: Array("\u{1B}[?7l".utf8), at: 0)
@@ -137,7 +140,7 @@ final class TerminalScreen {
             write(bytes[...])
         }
         ghostty_render_state_update(renderState, terminal)
-        var frame = readFrame(throughRow: lastRow)
+        var frame = readFrame(throughRow: lastRow, columns: readColumns)
         frame.wrapContinuations = wrapContinuations?.filter { $0 < frame.rows } ?? []
         frame.wrapsUnknown = wrapContinuations == nil
         return frame
@@ -482,6 +485,45 @@ final class TerminalScreen {
         0x20000...0x2FFFD, 0x30000...0x3FFFD,
     ]
 
+    /// The most columns a row of `bytes` can reach, counted from each CR since a LF keeps the column: a
+    /// tab counts 8, an SGR sequence none, a character below U+1100 or in U+2500...U+259F (box drawing
+    /// and blocks) one, and any other two, the most Ghostty gives a character. Nil when another escape
+    /// sequence could move the cursor further, or a VT or FF could scroll like a LF the rows do not count.
+    static func widestRow(_ bytes: [UInt8]) -> Int? {
+        var widest = 0
+        var width = 0
+        var i = 0
+        while i < bytes.count {
+            switch bytes[i] {
+            case UInt8(ascii: "\r"):
+                width = 0
+            case 0x1B:
+                var end = i + 1
+                guard end < bytes.count, bytes[end] == UInt8(ascii: "[") else { return nil }
+                end += 1
+                while end < bytes.count, (0x30...0x3B).contains(bytes[end]) { end += 1 }
+                guard end < bytes.count, bytes[end] == UInt8(ascii: "m") else { return nil }
+                i = end
+            case UInt8(ascii: "\t"):
+                width += 8
+            case UInt8(ascii: "\n"), 0x80..<0xC0:
+                break
+            case 0x0B, 0x0C:
+                return nil
+            case 0xE2:
+                // U+2500...U+259F is E2 94 80 through E2 96 9F.
+                width += bytes[i + 1] == 0x94 || bytes[i + 1] == 0x95 || bytes[i + 1] == 0x96 && bytes[i + 2] < 0xA0 ? 1 : 2
+            case 0xE1, 0xE3...:
+                width += 2
+            default:
+                width += 1
+            }
+            widest = max(widest, width)
+            i += 1
+        }
+        return widest
+    }
+
     private func write(_ bytes: ArraySlice<UInt8>) {
         bytes.withUnsafeBufferPointer { ghostty_terminal_vt_write(terminal, $0.baseAddress, $0.count) }
     }
@@ -492,7 +534,7 @@ final class TerminalScreen {
         return Int(row)
     }
 
-    private func readFrame(throughRow lastRow: Int) -> TerminalFrame {
+    private func readFrame(throughRow lastRow: Int, columns readColumns: Int) -> TerminalFrame {
         var colors = GhosttyRenderStateColors()
         colors.size = MemoryLayout<GhosttyRenderStateColors>.size
         ghostty_render_state_get(renderState, GHOSTTY_RENDER_STATE_DATA_COLORS, &colors)
@@ -512,7 +554,7 @@ final class TerminalScreen {
             ghostty_render_state_row_get(rowIterator, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &cells)
             var current: TerminalRun?
             var column = 0
-            while ghostty_render_state_row_cells_next(rowCells) {
+            while column < readColumns && ghostty_render_state_row_cells_next(rowCells) {
                 defer { column += 1 }
                 var length: UInt32 = 0
                 ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN, &length)
@@ -549,7 +591,13 @@ final class TerminalScreen {
                     usedRows = row + 1
                 }
             }
-            if let run = current { runs.append(run) }
+            if var run = current {
+                // Unread cells are blank, which extend a run in their style to the edge.
+                if run.endColumn == column && run.style == TerminalStyle(foreground: defaultForeground) {
+                    run.endColumn = Int(columns)
+                }
+                runs.append(run)
+            }
             row += 1
         }
         ghostty_render_state_clean(renderState)

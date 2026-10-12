@@ -1,4 +1,5 @@
 import Foundation
+import GhosttyVt
 import Testing
 
 @testable import GhosttyTerminal
@@ -54,6 +55,66 @@ private func render(_ snapshot: String) throws -> TerminalFrame {
     #expect(frame.rows == 2)
     #expect(frame.columns == Int(TerminalScreen.maxColumns))
     #expect(frame.runs.last?.text == "next")
+}
+
+@Test func widestRowBoundsTheColumnsReached() {
+    #expect(TerminalScreen.widestRow(Array("a\u{4E2D}\u{2500}\tb\r\nxy".utf8)) == 13)
+    #expect(TerminalScreen.widestRow(Array("ab\ncd\r\ne".utf8)) == 4)
+    #expect(TerminalScreen.widestRow(Array("\u{1B}[1;38;2;1;2;3mab\u{1B}[0m".utf8)) == 2)
+    #expect(TerminalScreen.widestRow(Array("\u{1B}[3Cab".utf8)) == nil)
+    #expect(TerminalScreen.widestRow(Array("\u{1B}]2;x\u{07}ab".utf8)) == nil)
+    #expect(TerminalScreen.widestRow(Array("ab\u{0B}c".utf8)) == nil)
+    #expect((Array(0..<0x1100) + Array(0x2500...0x259F)).allSatisfy { ghostty_unicode_codepoint_width(UInt32($0)) <= 1 })
+}
+
+private struct SplitMix64: RandomNumberGenerator {
+    var state: UInt64
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+}
+
+@Test func rowsReadUpToTheirWidthMatchReadingEveryColumn() throws {
+    let fixtures = try ["copilot-1.0.93-1/output-long", "codex-0.160.1/working", "claude-2.1.293/heads-up"].map {
+        let url = URL(filePath: #filePath).deletingLastPathComponent()
+            .appending(path: "../../../../crates/collied/tests/fixtures/\($0).ansi.txt")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+    let samples = [
+        "a\tb\t\tc", "\t\t\t", "abc\t", "\u{1B}[4mx\ty\u{1B}[0m\t", "\u{4E2D}\u{6587}\u{5B57}", "a\u{1F600}b", "\u{2764}\u{FE0F}",
+        "#\u{FE0F}\u{20E3}", "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", "e\u{301}", "\u{D55C}\u{AD6D}\u{C5B4}", "a\u{4E2D}",
+        "\u{1B}[48;2;50;60;70mab   \u{1B}[0m", "\u{1B}[48;5;1m    ", "x\u{1B}[44m \u{1B}[0m", "\u{1B}[7m  ", "\u{1B}[4m",
+        String(repeating: "x", count: 600), String(repeating: "\u{4E2D}", count: 300), String(repeating: "\u{2500}", count: 520),
+        "\u{1B}[41m" + String(repeating: " ", count: 510), "ab", "\u{1B}[1mab", "ab\u{1B}[1m", "abcdef\rxy", "abc\ndef", "ab\u{8}c",
+        "\u{9B}20Cx", "", "\u{1B}[4m\u{2615}", "\u{1B}[4m\u{231A}\u{2B50}", "\u{1B}[4ma\u{4E2D}", "\u{1B}[4m\u{1F600}",
+        "\u{1B}[41m" + Array(repeating: "ab", count: 2000).joined(separator: "\r\n"),
+        "\u{1B}[41m" + Array(repeating: "ab", count: 2100).joined(separator: "\r\n"),
+        "\u{1B}[41mab\u{0B}c", "\u{1B}[41mab\u{0C}c",
+        "\u{1B}[41mab\u{85}c", "\u{1B}[41mab\u{84}c", "\u{1B}[41mab\u{8D}c",
+        "\u{1B}[41mab\u{85}c\r\nd\r\ne", "\u{1B}[41mab\u{84}c\r\nd\r\ne", "d\r\n\u{1B}[41mab\u{8D}c\r\ne",
+    ]
+    let fragments = [
+        "a", "word ", " ", "\t", "\u{4E2D}", "\u{1F600}", "\u{2764}\u{FE0F}", "\u{2500}", "\u{2580}", "\u{2615}", "\u{301}", "\r",
+        "\u{1B}[0m", "\u{1B}[1m", "\u{1B}[4m", "\u{1B}[7m", "\u{1B}[38;2;1;2;3m", "\u{1B}[48;5;4m", "\u{1B}[49m", String(repeating: "x", count: 120),
+    ]
+    var rng = SplitMix64(state: 233)
+    let random = (0..<200).map { _ in
+        (0..<Int.random(in: 1...6, using: &rng)).map { _ in
+            (0..<Int.random(in: 0...40, using: &rng)).map { _ in fragments.randomElement(using: &rng)! }.joined()
+        }.joined(separator: "\r\n")
+    }
+    let snapshots = fixtures + [fixtures.joined(separator: "\r\n"), samples.joined(separator: "\r\n")] + samples + random
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    for snapshot in snapshots + snapshots.reversed() {
+        // Any escape sequence but SGR makes every column of the grid read.
+        let everyColumn = try render("\u{1B}]2;\u{07}" + snapshot)
+        #expect(screen.render(ansiSnapshot: snapshot) == everyColumn, "\(snapshot.debugDescription)")
+    }
 }
 
 @Test func queriesAndControlSequencesAreHarmless() throws {
