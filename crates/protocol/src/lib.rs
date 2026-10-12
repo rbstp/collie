@@ -3,6 +3,7 @@ mod ids;
 mod invite;
 mod messages;
 mod output;
+#[cfg(feature = "schema")]
 mod schema;
 
 pub use banner::{NoticeOption, jump_banner, notice};
@@ -10,9 +11,14 @@ pub use ids::*;
 pub use invite::*;
 pub use messages::*;
 pub use output::*;
+#[cfg(feature = "schema")]
 pub use schema::{client_frame_schema, server_frame_schema};
 
 pub const PROTOCOL_VERSION: u32 = 16;
+
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
 
 pub mod limits {
     pub const MAX_FRAME_BYTES: usize = 64 * 1024;

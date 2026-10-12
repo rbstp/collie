@@ -52,7 +52,7 @@ enum DoneNotification {
             guard note.userInfo["approval_id"] == nil,
                 let nodeId = note.userInfo["node_id"] as? String,
                 let terminalId = note.userInfo["terminal_id"] as? String,
-                ProtocolId.valid(nodeId, extra: "-_"), ProtocolId.valid(terminalId, extra: "-_")
+                ProtocolId.valid(nodeId, extra: "-_"), ProtocolId.valid(terminalId, extra: "_:.-")
             else { return nil }
             return note.id
         }

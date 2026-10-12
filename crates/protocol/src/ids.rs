@@ -1,7 +1,5 @@
-use std::borrow::Cow;
 use std::fmt;
 
-use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 
 use crate::limits;
@@ -65,13 +63,14 @@ macro_rules! validated_string {
             }
         }
 
-        impl JsonSchema for $name {
-            fn schema_name() -> Cow<'static, str> {
+        #[cfg(feature = "schema")]
+        impl schemars::JsonSchema for $name {
+            fn schema_name() -> std::borrow::Cow<'static, str> {
                 stringify!($name).into()
             }
 
-            fn json_schema(_: &mut SchemaGenerator) -> Schema {
-                json_schema!({ "type": "string", $($schema)* })
+            fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                schemars::json_schema!({ "type": "string", $($schema)* })
             }
         }
     };

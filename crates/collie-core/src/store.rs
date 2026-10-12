@@ -121,11 +121,7 @@ fn replace(dir: &Path, name: &str, bytes: &[u8], durable: bool) -> std::io::Resu
 pub fn random_id() -> String {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("system RNG");
-    hex(&bytes)
-}
-
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    protocol::hex(&bytes)
 }
 
 #[cfg(test)]

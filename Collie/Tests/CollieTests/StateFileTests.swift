@@ -5,8 +5,7 @@ import Testing
 @testable import Collie
 
 private func write(_ json: String, as name: String) throws -> URL {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     let file = dir.appending(path: name)
     try Data(json.utf8).write(to: file)
     return file
@@ -43,6 +42,16 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
     let prefs = try JSONDecoder().decode(DevicePrefs.self, from: Data(json.utf8))
     #expect(prefs.defaultSessionView == .chat)
     #expect(!prefs.wrapLines)
+}
+
+@Test(arguments: [
+    #""wrapLines":"yes""#, #""fontSize":"big""#, #""historyLines":70000"#,
+    #""watchDecisions":"true""#, #""doneAlerts":0"#, #""taskBases":[]"#,
+])
+func prefsWithOneWrongTypedFieldKeepTheOthers(_ wrong: String) throws {
+    let file = try write(#"{"keepKeyboard":true,"accent":"red",\#(wrong)}"#, as: "prefs.json")
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    #expect(DevicePrefs.load(from: file) == DevicePrefs(keepKeyboard: true, accent: .red))
 }
 
 @Test func prefsFromBeforeDoneAlertsKeepThemOn() throws {

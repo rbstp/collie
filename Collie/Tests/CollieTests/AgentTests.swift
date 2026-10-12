@@ -86,9 +86,7 @@ final class FakeCore: AgentCore {
     }
 
     func waitHeld(_ count: Int) async {
-        while state.withLock({ $0.held.count }) < count {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await poll { state.withLock { $0.held.count } >= count }
     }
 
     func release() {
@@ -310,19 +308,12 @@ final class FakeCore: AgentCore {
 }
 
 @MainActor
-private func agentModel(_ core: FakeCore) -> AgentModel {
-    AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil)
-}
-
-@MainActor
 @Test func aScreenReplacedAfterItsSuccessorWatchedLeavesTheWatch() async {
     let core = FakeCore()
     let first = AgentModel(core: core, route: AgentRoute(machineId: "replaced", terminalId: "term_1"), prefsFile: nil)
     let second = AgentModel(core: core, route: AgentRoute(machineId: "replaced", terminalId: "term_2"), prefsFile: nil)
     func waitWatches(_ count: Int) async {
-        while core.snapshot.watches.count < count {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await poll { core.snapshot.watches.count >= count }
     }
     let firstRun = Task { await first.run() }
     await waitWatches(1)
@@ -521,9 +512,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     try? await Task.sleep(for: .milliseconds(300))
     #expect(core.snapshot.draftReads == 0)
     core.state.withLock { $0.kind = "claude" }
-    for _ in 0..<400 where model.macDraft == nil {
-        try? await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { model.macDraft != nil }
     run.cancel()
     await run.value
     #expect(core.snapshot.draftReads == 1)
@@ -758,7 +747,7 @@ func answersStayBetweenEarlierAndLaterTerminalKeys(first: AgentKey) async {
     model.tap(.down)
     model.draft = "DuckDB"
     let answer = Task { await model.sendPrompt() }
-    while !model.sendingPrompt { await Task.yield() }
+    await poll { model.sendingPrompt }
     model.tap(.right)
     #expect(core.snapshot.input == [.keys([first])])
     core.release()
@@ -782,7 +771,7 @@ func answersStayBetweenEarlierAndLaterTerminalKeys(first: AgentKey) async {
     await core.waitHeld(1)
     model.draft = "DuckDB"
     let answer = Task { await model.sendPrompt() }
-    while !model.sendingPrompt { await Task.yield() }
+    await poll { model.sendingPrompt }
     core.release()
     await answer.value
     await drain?.value
@@ -827,7 +816,7 @@ func answersStayBetweenEarlierAndLaterTerminalKeys(first: AgentKey) async {
     await core.waitHeld(1)
     model.draft = "DuckDB"
     let answer = Task { await model.sendPrompt() }
-    while !model.sendingPrompt { await Task.yield() }
+    await poll { model.sendingPrompt }
     core.state.withLock {
         $0.kind = nil
         $0.shell = shellPane
@@ -1131,12 +1120,6 @@ func listArchiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
     await first.value
     #expect(model.optionsError == nil)
     #expect(model.options?.defaultAgent == "codex")
-}
-
-private func prefsFile() throws -> URL {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    return dir.appending(path: "prefs.json")
 }
 
 @MainActor
@@ -1539,8 +1522,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 
 @MainActor
 @Test func wrapLinesIsOnByDefaultAndRememberedOnThisDevice() throws {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
     let route = AgentRoute(machineId: "m1", terminalId: "term_1")
@@ -1556,8 +1538,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 
 @MainActor
 @Test func keepKeyboardIsOffByDefaultAndSavedBesideWrapLines() throws {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
     let route = AgentRoute(machineId: "m1", terminalId: "term_1")
@@ -1578,17 +1559,14 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 
 @MainActor
 @Test func terminalHistoryIs200LinesByDefaultAndRememberedOnThisDevice() async throws {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
     let core = FakeCore()
     let model = AgentModel(core: core, route: AgentRoute(machineId: "history", terminalId: "term_1"), prefsFile: file)
     func runOnce(_ watches: Int) async {
         let run = Task { await model.run() }
-        while core.snapshot.watches.count < watches {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await poll { core.snapshot.watches.count >= watches }
         run.cancel()
         await run.value
     }
@@ -1603,9 +1581,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     prefs.save(to: file)
     await runOnce(3)
     await model.refresh()
-    while core.snapshot.watches.count < 4 {
-        try? await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { core.snapshot.watches.count >= 4 }
     #expect(core.snapshot.watches == ["term_1", nil, "term_1", nil])
     #expect(core.snapshot.depths == [200, 200, 200, 1000, 1000, 1000])
     #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, historyLines: 1000))
@@ -1613,8 +1589,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 
 @MainActor
 @Test func gesturesAndTextSizeHaveDefaultsAndAreRememberedOnThisDevice() throws {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
     let route = AgentRoute(machineId: "m1", terminalId: "term_1")
@@ -1628,6 +1603,8 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     #expect(model.fontSize == 11)
 
     model.fontSize = 14
+    #expect(DevicePrefs.load(from: file).fontSize == 11)
+    model.saveFontSize()
     var prefs = DevicePrefs.load(from: file)
     prefs.gestures.doubleTap = .none
     prefs.save(to: file)
@@ -1969,6 +1946,36 @@ private func noticeShown(
 }
 
 @MainActor
+@Test func codexQuestionCountsEachCRLFAsOneRow() {
+    let filler = Array(repeating: "  output", count: 10)
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "codex"
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent,
+            ansi: (["Queued follow-up inputs", "? 1 question", "⇧←\u{1B}[0m to answer"] + filler).joined(separator: "\r\n"),
+            truncated: false
+        )
+    }
+    let model = agentModel(core)
+    model.poll()
+    #expect(model.codexQuestionQueued)
+
+    let openCore = FakeCore()
+    openCore.state.withLock {
+        $0.kind = "codex"
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent,
+            ansi: (["› 1. SQLite"] + filler + filler + ["enter\u{1B}[0m submit   ⇧→ main prompt", "   "]).joined(separator: "\r\n"),
+            truncated: false
+        )
+    }
+    let open = agentModel(openCore)
+    open.poll()
+    #expect(open.codexQuestionOpen)
+}
+
+@MainActor
 @Test func codexShiftLeftIsAlwaysAvailable() async {
     let core = FakeCore()
     core.state.withLock {
@@ -2101,17 +2108,13 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
     model.poll()
     #expect(!model.terminalLocked)
     #expect(model.paneNotice == nil)
-    while core.snapshot.shellWatches.isEmpty {
-        try? await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { !core.snapshot.shellWatches.isEmpty }
     #expect(core.snapshot.shellWatches == ["term_1"])
 
     core.state.withLock { $0.kind = "claude" }
     model.poll()
     #expect(model.mode == .agent)
-    while core.snapshot.watches.isEmpty {
-        try? await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { !core.snapshot.watches.isEmpty }
     #expect(core.snapshot.watches == ["term_1"], "back to the agent's watch")
 }
 
@@ -2264,9 +2267,7 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
 
     core.state.withLock { $0.kind = "claude" }
     model.poll()
-    while core.snapshot.watches.isEmpty {
-        try? await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { !core.snapshot.watches.isEmpty }
     #expect(core.snapshot.watches == ["term_1"])
     #expect(core.snapshot.shellWatches.isEmpty)
 }
@@ -2331,9 +2332,7 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     let model = await slashReady(core)
     model.typed("/")
     model.typed("/s")
-    for _ in 0..<100 where core.snapshot.slashes.isEmpty {
-        try? await Task.sleep(for: .milliseconds(10))
-    }
+    await poll { !core.snapshot.slashes.isEmpty }
     #expect(core.snapshot.slashes == ["/s"], "debounced")
 
     core.set(hold: true)
@@ -2750,9 +2749,5 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     model.showArchiveNotice("Closed pane. gh poi did not complete (timeout); branch cleanup may be partial.")
     try await Task.sleep(for: .seconds(1.3))
     #expect(model.archiveNotice == "Archive complete\nSome branches could not be cleaned up.")
-    let deadline = ContinuousClock.now + .seconds(5)
-    while model.archiveNotice != nil, ContinuousClock.now < deadline {
-        try await Task.sleep(for: .milliseconds(20))
-    }
-    #expect(model.archiveNotice == nil)
+    await poll { model.archiveNotice == nil }
 }

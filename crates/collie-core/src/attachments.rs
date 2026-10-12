@@ -4,12 +4,11 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use protocol::{
     AttachmentAbortParams, AttachmentBeginParams, AttachmentChunkParams, AttachmentCommitParams,
-    AttachmentName, ChunkData, Request, Response, Sha256Hex, UploadId, limits,
+    AttachmentName, ChunkData, Request, Response, Sha256Hex, UploadId, hex, limits,
 };
 use sha2::{Digest, Sha256};
 
 use crate::session::unexpected;
-use crate::store::hex;
 use crate::{CoreError, expect_ok, invalid, new_op_id};
 
 /// collied limits chunks per peer; a fast link backs off instead of failing.

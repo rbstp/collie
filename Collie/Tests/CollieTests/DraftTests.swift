@@ -6,18 +6,13 @@ import UIKit
 @testable import Collie
 
 private func draftsFile() throws -> (file: URL, dir: URL) {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     return (dir.appending(path: "drafts.json"), dir)
 }
 
 @MainActor
 private func screen(_ core: FakeCore, _ file: URL, _ terminalId: String = "term_1", on machineId: String = "m1") -> AgentModel {
     AgentModel(core: core, route: AgentRoute(machineId: machineId, terminalId: terminalId), prefsFile: nil, draftsFile: file)
-}
-
-private func route(_ terminalId: String, on machineId: String = "m1") -> AgentRoute {
-    AgentRoute(machineId: machineId, terminalId: terminalId)
 }
 
 private let shell = TerminalSummary(terminalId: "term_1", workspaceId: "w1", workspaceLabel: nil, label: nil, cwd: nil, locked: true)

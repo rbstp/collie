@@ -89,8 +89,9 @@ import UserNotifications
         ("mixed", ["node_id": "nMAC", "terminal_id": "term_2", "approval_id": "ap_2"]),
         ("bad-terminal", ["node_id": "nMAC", "terminal_id": "../term"]),
         ("done-b", ["node_id": "nOTHER", "terminal_id": "term_3"]),
+        ("done-herdr", ["node_id": "nMAC", "terminal_id": "w6:p1.a-b"]),
     ]
-    #expect(DoneNotification.identifiers(delivered) == ["done-a", "done-b"])
+    #expect(DoneNotification.identifiers(delivered) == ["done-a", "done-b", "done-herdr"])
 }
 
 @Test func reachabilityParsing() {
@@ -231,9 +232,7 @@ final class FakeAuthenticator: Authenticator {
     }
 
     func waitHeld() async {
-        while state.withLock({ $0.held.isEmpty }) {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await poll { !state.withLock { $0.held.isEmpty } }
     }
 
     func release(result: Bool) {
@@ -405,9 +404,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
     let load = model.open(link)
     #expect(model.loading?.link == link)
-    while core.state.withLock({ $0.flocks }) < 2 {
-        try await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { core.state.withLock { $0.flocks } >= 2 }
     #expect(model.loading?.phase == .connecting)
     #expect(model.items.isEmpty)
 
@@ -513,7 +510,7 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     let model = ApprovalsModel(core: core)
     let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
     let pending = model.open(link)
-    while core.state.withLock({ $0.flocks }) == 0 { await Task.yield() }
+    await poll { core.state.withLock { $0.flocks } > 0 }
     core.state.withLock { $0.removed = ["m1"] }
     await pending?.value
     #expect(model.loading == nil)
@@ -531,9 +528,7 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     await model.decide(item, .approve)
     #expect(model.notice == "Approved: claude. The agent moved on.")
     #expect(model.items.isEmpty)
-    while model.notice != nil {
-        try await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { model.notice == nil }
 }
 
 @MainActor
@@ -719,7 +714,7 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     await agentCore.waitHeld(1)
     session.tap(.down)
     let answer = Task { await model.sendFeedback(item, send: session.typeAnswer) }
-    while model.steps[item.id] == nil { await Task.yield() }
+    await poll { model.steps[item.id] != nil }
     #expect(agentCore.snapshot.typed.isEmpty)
     agentCore.release()
     await answer.value

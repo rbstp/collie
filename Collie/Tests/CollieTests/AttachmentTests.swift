@@ -5,11 +5,6 @@ import UIKit
 
 @testable import Collie
 
-@MainActor
-private func agentModel(_ core: FakeCore) -> AgentModel {
-    AgentModel(core: core, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil)
-}
-
 private let path = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/0123456789abcdef/notes.txt"
 
 func png(width: CGFloat, height: CGFloat) -> Data {
@@ -67,7 +62,7 @@ func png(width: CGFloat, height: CGFloat) -> Data {
     #expect(model.upload?.name == "notes.txt")
     #expect(model.attach(name: "other.txt") { _ in Data([1]) } == nil)
     await core.waitHeld(1)
-    while model.upload?.sent != 50_000 { await Task.yield() }
+    await poll { model.upload?.sent == 50_000 }
     #expect(model.upload?.fraction == 0.5)
     core.release()
     await upload?.value
@@ -177,8 +172,7 @@ func png(width: CGFloat, height: CGFloat) -> Data {
 }
 
 @Test func filesOverTheLimitAreRefusedBeforeReading() throws {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "notes.txt")
     try Data(repeating: 1, count: 10).write(to: file)

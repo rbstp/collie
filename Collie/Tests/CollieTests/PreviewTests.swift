@@ -31,16 +31,10 @@ private func entry(
     return MachineFlockEntry(machine: machine, flock: flock)
 }
 
-private func route(_ terminalId: String, on machineId: String = "m1") -> AgentRoute {
-    AgentRoute(machineId: machineId, terminalId: terminalId)
-}
-
 @MainActor
 private func running(_ model: PreviewModel, _ core: FakeCore, screens: Int) async -> Task<Void, Never> {
     let run = Task { await model.run(core: core) }
-    while model.screens.count < screens {
-        await Task.yield()
-    }
+    await poll { model.screens.count >= screens }
     return run
 }
 
@@ -484,8 +478,7 @@ private func capture(_ name: String) throws -> [String] {
 
 @MainActor
 @Test func layoutIsGridByDefaultAndRememberedOnThisDevice() throws {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
 
@@ -530,7 +523,8 @@ private func capture(_ name: String) throws -> [String] {
     model.update([entry("m1", [("t1", .idle), ("t2", .idle)])])
     let run = Task { await model.run(core: core) }
     // Until `run` has the core, a toggle does nothing.
-    while core.snapshot.stars.isEmpty {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    while core.snapshot.stars.isEmpty, ContinuousClock.now < deadline {
         await Task.yield()
         await model.toggleStar(route("t1"))
     }
@@ -612,8 +606,7 @@ func gridCardsMoveBothWaysWithinTheirGroup(starred: Bool) throws {
     #expect((starred ? moved.rest : moved.starred).map(\.terminalId) == ["t2"])
     #expect(order.agents(in: other).map(\.terminalId) == ["t1", "t2"])
 
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "grid-order.json")
     order.save(to: file)

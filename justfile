@@ -7,7 +7,7 @@ setup:
     git submodule update --init --recursive
 
 schema:
-    cargo run -q -p protocol --bin protocol-schema docs/protocol
+    cargo run -q -p protocol --features schema --bin protocol-schema docs/protocol
 
 fmt:
     cargo fmt --all

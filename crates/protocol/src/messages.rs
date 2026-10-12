@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+#[cfg(feature = "schema")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -9,7 +10,8 @@ use crate::output::OutputPatch;
 
 pub type RequestId = u32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum GitSection {
     Staged,
@@ -17,7 +19,8 @@ pub enum GitSection {
     Untracked,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentDiffParams {
     pub terminal_id: TerminalId,
@@ -26,7 +29,8 @@ pub struct AgentDiffParams {
     pub section: GitSection,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct GitChanges {
     pub root: Option<Cwd>,
     pub branch: Option<String>,
@@ -34,7 +38,8 @@ pub struct GitChanges {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct GitFile {
     pub path: String,
     pub old_path: Option<String>,
@@ -44,13 +49,15 @@ pub struct GitFile {
     pub deletions: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct GitDiff {
     pub patch: String,
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct HistoryParams {
     pub terminal_id: TerminalId,
@@ -71,7 +78,8 @@ impl HistoryParams {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct HistoryMessage {
     pub id: String,
     pub role: String,
@@ -81,7 +89,8 @@ pub struct HistoryMessage {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct HistoryPage {
     pub session: Option<String>,
     pub available: bool,
@@ -94,14 +103,16 @@ pub struct HistoryPage {
     pub omitted: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct ClientFrame {
     pub id: RequestId,
     #[serde(flatten)]
     pub request: Request,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum Request {
     #[serde(rename = "hello")]
@@ -341,18 +352,21 @@ pub enum MethodClass {
     Terminal,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Empty {}
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct HelloParams {
     pub protocol_version: u32,
     pub app_version: Label,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PairCompleteParams {
     pub pairing_code: PairingCode,
@@ -362,20 +376,22 @@ pub struct PairCompleteParams {
     pub terminal_key: Option<TerminalKey>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ReadSource {
     Visible,
     Recent,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ReadParams {
     pub terminal_id: TerminalId,
     pub source: ReadSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = limits::MAX_READ_LINES))]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = limits::MAX_READ_LINES)))]
     pub lines: Option<u16>,
 }
 
@@ -387,12 +403,13 @@ impl ReadParams {
 }
 
 /// One watched agent per connection; `None` stops `agent.output` events.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentWatchParams {
     pub terminal_id: Option<TerminalId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = limits::MAX_READ_LINES))]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = limits::MAX_READ_LINES)))]
     pub lines: Option<u16>,
     /// The phone is in Low Data Mode: collied reads the screen once a second.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -411,14 +428,16 @@ fn watch_lines(lines: Option<u16>) -> u16 {
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentTarget {
     pub terminal_id: TerminalId,
 }
 
 /// A key Claude Code reads as an answer to a notice above its input box; never Enter or text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub enum NoticeDigit {
     #[serde(rename = "0")]
     Zero,
@@ -465,7 +484,8 @@ impl NoticeDigit {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentAnswerNoticeParams {
     pub terminal_id: TerminalId,
@@ -478,7 +498,8 @@ pub struct AgentAnswerNoticeParams {
 /// The phone's slash command token, mirrored into Claude Code's input box so its command
 /// menu shows; empty clears the box. The box is replaced only when it holds
 /// `expected_draft`, as for `agent.prompt`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentSlashDraftParams {
     pub terminal_id: TerminalId,
@@ -488,7 +509,8 @@ pub struct AgentSlashDraftParams {
 }
 
 /// Stars are the machine's, shared by every paired phone. Unstarring needs no live pane.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentStarParams {
     pub terminal_id: TerminalId,
@@ -496,7 +518,8 @@ pub struct AgentStarParams {
 }
 
 /// `signature` is over [`terminal_grant_message`] for the challenge this session was given.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TerminalGrantParams {
     pub terminal_id: TerminalId,
@@ -506,12 +529,13 @@ pub struct TerminalGrantParams {
 
 /// Shares the session's single watch with `agent.watch`; `agent.watch {terminal_id: null}`
 /// stops either.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TerminalWatchParams {
     pub terminal_id: TerminalId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = limits::MAX_READ_LINES))]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = limits::MAX_READ_LINES)))]
     pub lines: Option<u16>,
     /// As in `agent.watch`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -525,7 +549,8 @@ impl TerminalWatchParams {
 }
 
 /// One line typed into a shell pane, then Enter.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TerminalRunParams {
     pub op_id: OpId,
@@ -567,7 +592,8 @@ pub fn terminal_grant_message(
 
 /// For a Claude Code agent, collied replaces an unsent draft in the Mac's input box only
 /// when it equals `expected_draft`; any other draft fails with `draft_changed`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentPromptParams {
     pub op_id: OpId,
@@ -577,7 +603,8 @@ pub struct AgentPromptParams {
     pub expected_draft: Option<DraftText>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub enum Key {
     #[serde(rename = "enter")]
     Enter,
@@ -621,12 +648,13 @@ impl Key {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentSendKeysParams {
     pub op_id: OpId,
     pub terminal_id: TerminalId,
-    #[schemars(length(min = 1, max = limits::MAX_KEYS_PER_CALL))]
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = limits::MAX_KEYS_PER_CALL)))]
     pub keys: Vec<Key>,
 }
 
@@ -636,7 +664,8 @@ impl AgentSendKeysParams {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentTypeTextParams {
     pub op_id: OpId,
@@ -650,7 +679,8 @@ impl AgentTypeTextParams {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TaskNewParams {
     pub op_id: OpId,
@@ -666,20 +696,23 @@ pub struct TaskNewParams {
     pub worktree: Option<TaskWorktree>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskWorktree {
     Create { branch: String },
     Open { path: Cwd },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TaskWorktreesParams {
     pub cwd: Cwd,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TaskArchiveParams {
     pub op_id: OpId,
@@ -688,14 +721,16 @@ pub struct TaskArchiveParams {
     pub confirm: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TaskFoldersParams {
     pub path: Cwd,
 }
 
 /// `confirm` must be `true`; anything else yields `confirm_required`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceCloseParams {
     pub workspace_id: WorkspaceId,
@@ -703,7 +738,8 @@ pub struct WorkspaceCloseParams {
     pub confirm: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PaneCloseParams {
     pub terminal_id: TerminalId,
@@ -711,7 +747,8 @@ pub struct PaneCloseParams {
     pub confirm: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Decision {
     Approve,
@@ -725,7 +762,8 @@ pub enum Decision {
 /// characters without bidi or invisible format characters, goes with `approve` or `deny`
 /// on an approval with `supports_note`: collied types it into the option's amend field
 /// before Enter.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ApprovalDecideParams {
     pub approval_id: ApprovalId,
@@ -748,14 +786,16 @@ impl ApprovalDecideParams {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ApnsEnvironment {
     Sandbox,
     Production,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PushRegisterParams {
     pub apns_token: PushToken,
@@ -768,7 +808,8 @@ pub struct PushRegisterParams {
 
 /// A Live Activity's update token. collied pushes the followed terminal's status to it,
 /// in the APNs environment of the device's own `push.register`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PushActivityTokenParams {
     pub activity_id: ActivityId,
@@ -780,19 +821,21 @@ pub struct PushActivityTokenParams {
     pub shows_approvals: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PushActivityEndParams {
     pub activity_id: ActivityId,
 }
 
 /// `sha256` covers the whole file; collied checks it and the size before keeping it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AttachmentBeginParams {
     pub op_id: OpId,
     pub name: AttachmentName,
-    #[schemars(range(min = 1, max = limits::MAX_ATTACHMENT_BYTES))]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = limits::MAX_ATTACHMENT_BYTES)))]
     pub size: u64,
     pub sha256: Sha256Hex,
 }
@@ -804,7 +847,8 @@ impl AttachmentBeginParams {
 }
 
 /// Chunks arrive in order: `offset` is the number of bytes already received.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AttachmentChunkParams {
     pub upload_id: UploadId,
@@ -812,20 +856,23 @@ pub struct AttachmentChunkParams {
     pub data: ChunkData,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AttachmentCommitParams {
     pub op_id: OpId,
     pub upload_id: UploadId,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AttachmentAbortParams {
     pub upload_id: UploadId,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ServerFrame {
     Result {
@@ -844,7 +891,8 @@ pub enum ServerFrame {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     Hello(HelloResult),
@@ -908,7 +956,8 @@ pub enum Response {
     Ok,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct HelloResult {
     pub protocol_version: u32,
     pub collied_version: String,
@@ -918,14 +967,16 @@ pub struct HelloResult {
 }
 
 /// `node_id` is the Tailscale stable node ID; the phone pins it at pairing time.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct MachineInfo {
     pub name: String,
     pub node_id: String,
     pub herdr_session: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum AgentStatus {
     Idle,
@@ -936,7 +987,8 @@ pub enum AgentStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct Workspace {
     pub workspace_id: WorkspaceId,
     pub label: String,
@@ -945,7 +997,8 @@ pub struct Workspace {
     pub cwd: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct Agent {
     pub terminal_id: TerminalId,
     pub workspace_id: WorkspaceId,
@@ -959,7 +1012,7 @@ pub struct Agent {
     pub last_line: Option<String>,
     /// Percent of the context window left, from the same transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(max = 100))]
+    #[cfg_attr(feature = "schema", schemars(range(max = 100)))]
     pub context_left: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_prompt: Option<String>,
@@ -969,7 +1022,8 @@ pub struct Agent {
 }
 
 /// From Claude Code's status line input, as `collied statusline` last recorded it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct PlanUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub five_hour: Option<UsageWindow>,
@@ -980,7 +1034,8 @@ pub struct PlanUsage {
     pub codex: Option<CodexUsage>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct CodexUsage {
     pub used: u64,
     pub limit: u64,
@@ -988,14 +1043,16 @@ pub struct CodexUsage {
     pub recorded_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct UsageWindow {
-    #[schemars(range(max = 100))]
+    #[cfg_attr(feature = "schema", schemars(range(max = 100)))]
     pub used_percent: u8,
     pub resets_at_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct Flock {
     pub seq: u64,
     pub machine: MachineInfo,
@@ -1017,7 +1074,8 @@ pub struct Flock {
 
 /// A pane with no agent. `label` is the name given in herdr, never a title the pane's
 /// program sets.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct Terminal {
     pub terminal_id: TerminalId,
     pub workspace_id: WorkspaceId,
@@ -1025,7 +1083,8 @@ pub struct Terminal {
     pub cwd: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct TerminalRead {
     pub terminal_id: TerminalId,
     pub source: ReadSource,
@@ -1144,7 +1203,8 @@ fn trim_row_start(mut row: &str) -> String {
     out + row
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct TaskOptions {
     pub agents: Vec<AgentKind>,
     pub default_agent: AgentKind,
@@ -1152,20 +1212,23 @@ pub struct TaskOptions {
     pub roots: Vec<Cwd>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct TaskWorktreeInfo {
     pub path: Cwd,
     pub branch: Option<String>,
     pub open: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct PendingTool {
     pub name: String,
     pub summary: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct Approval {
     pub approval_id: ApprovalId,
     pub terminal_id: TerminalId,
@@ -1196,7 +1259,8 @@ pub struct Approval {
 }
 
 /// `index` is 0-based; `current` marks the option under the menu cursor.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct ApprovalChoice {
     pub index: u8,
     pub label: String,
@@ -1208,7 +1272,8 @@ pub struct ApprovalChoice {
     pub detail: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum ApprovalOutcome {
     /// Keys were sent and the agent then left `blocked`.
@@ -1239,7 +1304,8 @@ pub enum ApprovalOutcome {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "name")]
 pub enum Event {
     #[serde(rename = "agent.status")]
@@ -1263,7 +1329,8 @@ pub enum Event {
     Unrecognized,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     MalformedFrame,
@@ -1297,7 +1364,8 @@ pub enum ErrorCode {
     Unrecognized,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct ErrorBody {
     pub code: ErrorCode,
     pub message: String,

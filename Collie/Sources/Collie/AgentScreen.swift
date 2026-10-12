@@ -77,7 +77,7 @@ struct AgentScreen: View {
             } else {
                 AgentTerminal(
                     ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
-                    perform: perform, resized: { model.fontSize = $0 },
+                    perform: perform, resized: { model.fontSize = $0 }, resizeEnded: model.saveFontSize,
                     // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
                     neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
                     switchAgent: switchAgent
@@ -371,6 +371,7 @@ private struct AgentTerminal: UIViewRepresentable {
     let gestures: TerminalGestures
     let perform: @MainActor (GestureAction) -> Void
     let resized: @MainActor (Double) -> Void
+    let resizeEnded: @MainActor () -> Void
     let neighbor: ((Int) -> AgentRoute?)?
     let switchAgent: (AgentRoute) -> Void
     let refresh: @MainActor () async -> Void
@@ -397,10 +398,11 @@ private struct AgentTerminal: UIViewRepresentable {
         context.coordinator.refresh = refresh
         view.wraps = wraps
         view.fontSize = fontSize
-        let (gestures, perform, resized) = (gestures, perform, resized)
+        let (gestures, perform, resized, resizeEnded) = (gestures, perform, resized, resizeEnded)
         view.onDoubleTap = gestures.doubleTap == .none ? nil : { perform(gestures.doubleTap) }
         view.onTripleTap = gestures.tripleTap == .none ? nil : { perform(gestures.tripleTap) }
         view.onPinch = gestures.pinchResizesText ? { resized($0) } : nil
+        view.onPinchEnded = { resizeEnded() }
         if gestures.swipeSwitchesAgents, let neighbor {
             let switchAgent = switchAgent
             let offset = { (swipe: TerminalSwipe) in swipe == .left ? 1 : -1 }

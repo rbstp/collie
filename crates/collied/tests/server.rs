@@ -721,11 +721,14 @@ async fn scenario(
     assert!(saved().get(shell).is_some());
     let calls = |method: &str| herdr.methods().iter().filter(|m| *m == method).count();
     let asked = calls("session.snapshot");
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert!(
-        calls("session.snapshot") > asked,
-        "a starred shell pane skipped the snapshot"
-    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls("session.snapshot") <= asked {
+        assert!(
+            Instant::now() < deadline,
+            "a starred shell pane skipped the snapshot"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let closed = {
         let mut snap = herdr.snapshot.lock().unwrap();
         let panes = snap["panes"].as_array_mut().unwrap();

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+#[cfg(feature = "schema")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +12,8 @@ use crate::messages::{ReadSource, TerminalRead};
 /// with `\n`. The trailing lines start at or after `skip + keep`. `base` is [`text_hash`] of
 /// that previous text. A client that does not hold it re-issues `agent.watch`, whose
 /// first event is always a full `agent.output`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct OutputPatch {
     pub terminal_id: TerminalId,
     pub base: u64,

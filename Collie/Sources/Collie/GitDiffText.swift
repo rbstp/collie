@@ -22,27 +22,53 @@ struct GitDiffRow: Identifiable, Equatable {
         var rows: [Self] = []
         var old: Int?
         var new: Int?
+        var parents = 1
+        var left: [Int] = []
         for line in patch.components(separatedBy: "\n") {
-            let parts = line.split(separator: " ")
-            if parts.count >= 4, parts[0] == "@@", parts[3] == "@@",
-               parts[1].hasPrefix("-"), parts[2].hasPrefix("+"),
-               let oldStart = parts[1].dropFirst().split(separator: ",").first.flatMap({ Int($0) }),
-               let newStart = parts[2].dropFirst().split(separator: ",").first.flatMap({ Int($0) }) {
-                old = oldStart
-                new = newStart
+            if let hunk = hunk(line) {
+                old = hunk.old
+                new = hunk.new
+                parents = hunk.left.count - 1
+                left = hunk.left
                 rows.append(Self(id: rows.count, kind: .hunk, text: line))
-            } else if let oldLine = old, let newLine = new, let prefix = line.first,
-                      prefix == " " || prefix == "+" || prefix == "-" {
-                let kind: Kind = prefix == "+" ? .added : prefix == "-" ? .removed : .context
-                rows.append(Self(id: rows.count, kind: kind, text: String(line.dropFirst()),
-                                 oldLine: kind == .added ? nil : oldLine, newLine: kind == .removed ? nil : newLine))
+            } else if let oldLine = old, let newLine = new, let prefix = prefix(line, parents: parents, expecting: left) {
+                let kind: Kind = prefix.contains("-") ? .removed : prefix.contains("+") ? .added : .context
+                rows.append(Self(id: rows.count, kind: kind, text: String(line.dropFirst(parents)),
+                                 oldLine: kind == .added || parents > 1 ? nil : oldLine, newLine: kind == .removed ? nil : newLine))
                 if kind != .added { old = oldLine + 1 }
                 if kind != .removed { new = newLine + 1 }
+                for (column, mark) in prefix.enumerated() where kind == .removed ? mark == "-" : mark != "+" { left[column] -= 1 }
+                if kind != .removed { left[parents] -= 1 }
             } else if line.hasPrefix("\\ ") || line.hasPrefix("Binary ") || line.hasPrefix("New empty ") {
                 rows.append(Self(id: rows.count, kind: .notice, text: line))
             }
         }
         return rows
+    }
+
+    private static func hunk(_ line: String) -> (old: Int, new: Int, left: [Int])? {
+        let parts = line.split(separator: " ")
+        guard let marker = parts.first, marker.count >= 2, marker.allSatisfy({ $0 == "@" }) else { return nil }
+        let parents = marker.count - 1
+        guard parts.count >= parents + 3, parts[parents + 2] == marker else { return nil }
+        let ranges = parts[1...parents + 1].enumerated().compactMap { index, part in
+            range(part, sign: index < parents ? "-" : "+")
+        }
+        guard ranges.count == parents + 1 else { return nil }
+        return (ranges[0].start, ranges[parents].start, ranges.map(\.count))
+    }
+
+    private static func range(_ part: Substring, sign: Character) -> (start: Int, count: Int)? {
+        let numbers = part.dropFirst().split(separator: ",")
+        guard part.first == sign, let start = numbers.first.flatMap({ Int($0) }) else { return nil }
+        return (start, numbers.dropFirst().first.flatMap { Int($0) } ?? 1)
+    }
+
+    /// An empty line is a context line whose spaces were stripped, but only while the hunk expects more lines.
+    private static func prefix(_ line: String, parents: Int, expecting left: [Int]) -> Substring? {
+        if line.isEmpty { return left.allSatisfy { $0 > 0 } ? Substring(String(repeating: " ", count: parents)) : nil }
+        let prefix = line.prefix(parents)
+        return prefix.count == parents && prefix.allSatisfy({ " +-".contains($0) }) ? prefix : nil
     }
 }
 
