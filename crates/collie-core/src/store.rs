@@ -23,6 +23,11 @@ pub struct Machine {
     #[serde(default)]
     #[uniffi(default = "")]
     pub terminal_key: String,
+    /// The name from pairing while the user renamed the machine on this phone, `label`
+    /// then holding the new name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[uniffi(default = None)]
+    pub default_label: Option<String>,
 }
 
 #[derive(
@@ -140,6 +145,7 @@ mod tests {
             kind: MachineKind::Mac,
             key: String::new(),
             terminal_key: String::new(),
+            default_label: None,
         }
     }
 
@@ -196,6 +202,25 @@ mod tests {
                 .contains(r#""kind": "linux""#)
         );
         assert_eq!(store.load().unwrap(), vec![linux]);
+    }
+
+    #[test]
+    fn a_rename_round_trips_and_is_absent_until_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MachineStore::new(dir.path().to_owned());
+        store.save(&[machine("a")]).unwrap();
+        assert!(
+            !fs::read_to_string(dir.path().join(FILE))
+                .unwrap()
+                .contains("default_label")
+        );
+        let renamed = Machine {
+            label: "Studio".into(),
+            default_label: Some("mac".into()),
+            ..machine("a")
+        };
+        store.save(std::slice::from_ref(&renamed)).unwrap();
+        assert_eq!(store.load().unwrap(), vec![renamed]);
     }
 
     #[test]

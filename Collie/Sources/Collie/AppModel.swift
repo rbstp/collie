@@ -169,6 +169,12 @@ final class AppModel {
         machines = (core?.machines() ?? []).filter { !removing.contains($0.id) }
     }
 
+    /// Shown only on this phone; nil or a blank name restores the name from pairing.
+    func renameMachine(_ machine: Machine, to name: String?) throws {
+        try core?.renameMachine(machineId: machine.id, name: name)
+        reloadMachines()
+    }
+
     /// The row leaves the list now; removeMachine finishes the removal.
     func hideMachine(_ machine: Machine) {
         removing.insert(machine.id)

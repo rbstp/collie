@@ -118,3 +118,26 @@ private func node(_ state: TailnetState, authUrl: String? = nil) -> NodeState {
     let error: any Error = CoreError.PinViolation(message: "mac is not tagged tag:collie-mac")
     #expect(describe(error) == "refusing to connect: mac is not tagged tag:collie-mac")
 }
+
+@Test func aRenamedMachineShowsItsNameUntilReset() throws {
+    let dir = try makeTemporaryDirectory()
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+    let stored = #"[{"id":"m1","label":"DEVOLUTIONS496","host":"collie-devolutions496.tail76e46a.ts.net","port":8457,"node_id":"n1"}]"#
+    try Data(stored.utf8).write(to: dir.appending(path: "machines.json"))
+    let core = try CollieCore(stateDir: dir.path)
+    #expect(core.machines().map(\.label) == ["DEVOLUTIONS496"])
+
+    try core.renameMachine(machineId: "m1", name: " Work Mac ")
+    let renamed = try #require(core.machines().first)
+    #expect(renamed.label == "Work Mac" && renamed.defaultLabel == "DEVOLUTIONS496")
+    #expect(renamed.host == "collie-devolutions496.tail76e46a.ts.net" && renamed.nodeId == "n1")
+    #expect(try CollieCore(stateDir: dir.path).machines().map(\.label) == ["Work Mac"])
+    #expect(throws: CoreError.self) { try core.renameMachine(machineId: "m1", name: String(repeating: "x", count: 65)) }
+    #expect(core.machines().map(\.label) == ["Work Mac"])
+
+    try core.renameMachine(machineId: "m1", name: nil)
+    #expect(core.machines().map(\.label) == ["DEVOLUTIONS496"] && core.machines().first?.defaultLabel == nil)
+    try core.renameMachine(machineId: "m1", name: "Work Mac")
+    try core.renameMachine(machineId: "m1", name: "  ")
+    #expect(try CollieCore(stateDir: dir.path).machines().map(\.label) == ["DEVOLUTIONS496"])
+}

@@ -1138,6 +1138,7 @@ mod tests {
             kind: MachineKind::Mac,
             key: String::new(),
             terminal_key: String::new(),
+            default_label: None,
         };
         let conn = Conn::spawn(
             &tokio::runtime::Handle::current(),
