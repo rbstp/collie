@@ -2,12 +2,8 @@ import XCTest
 
 @MainActor
 final class AttachmentMenuTests: XCTestCase {
-    func testSavedPromptsInNewTask() throws { try checkChoice("Saved prompts", newTask: true) }
-    func testFilesInNewTask() throws { try checkChoice("Files", newTask: true) }
-    func testPhotosInNewTask() throws { try checkChoice("Photo Library", newTask: true) }
-    func testSavedPromptsInSession() throws { try checkChoice("Saved prompts", newTask: false) }
-    func testFilesInSession() throws { try checkChoice("Files", newTask: false) }
-    func testPhotosInSession() throws { try checkChoice("Photo Library", newTask: false) }
+    func testChoicesInNewTask() throws { try checkChoices(newTask: true) }
+    func testChoicesInSession() throws { try checkChoices(newTask: false) }
 
     private func launchDemo() throws -> XCUIApplication {
         continueAfterFailure = false
@@ -19,11 +15,11 @@ final class AttachmentMenuTests: XCTestCase {
             fixture.path
         ]
         app.launch()
-        XCTAssertTrue(app.buttons["New task"].waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
         return app
     }
 
-    private func checkChoice(_ choice: String, newTask: Bool) throws {
+    private func checkChoices(newTask: Bool) throws {
         let app = try launchDemo()
         defer { app.terminate() }
         if newTask {
@@ -32,37 +28,49 @@ final class AttachmentMenuTests: XCTestCase {
             app.buttons["Layout"].tap()
             app.buttons["Grid"].tap()
             let agent = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
-            XCTAssertTrue(agent.waitForExistence(timeout: 5), app.debugDescription)
+            XCTAssertTrue(agent.appears(within: 5), app.debugDescription)
             agent.tap()
         }
+        let placeholder = newTask ? "What should the agent do?" : "Prompt the agent"
+        let field = app.textFields.matching(NSPredicate(format: "placeholderValue == %@ OR label == %@ OR value == %@", placeholder, placeholder, "test")).firstMatch
         for keyboard in [false, true] {
-            if keyboard {
-                let field = app.textFields[newTask ? "What should the agent do?" : "Prompt the agent"]
-                field.tap()
-                XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+            for choice in ["Saved prompts", "Files", "Photo Library"] {
+                XCTContext.runActivity(named: "\(choice), keyboard \(keyboard)") { _ in
+                    present(choice, keyboard: keyboard, field: field, in: app)
+                }
+            }
+        }
+    }
+
+    private func present(_ choice: String, keyboard: Bool, field: XCUIElement, in app: XCUIApplication) {
+        if keyboard && !app.keyboards.firstMatch.exists {
+            field.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.appears(within: 5), app.debugDescription)
+            if field.value as? String != "test" {
                 field.typeText("test")
             }
-            let attachment = app.buttons["Attachments and saved prompts"]
-            XCTAssertTrue(attachment.waitForExistence(timeout: 5), app.debugDescription)
-            let screenshot = XCTAttachment(screenshot: app.screenshot())
-            screenshot.name = "\(name)-keyboard-\(keyboard)"
-            screenshot.lifetime = .keepAlways
-            add(screenshot)
-            attachment.tap()
-            let option = app.buttons[choice].firstMatch
-            XCTAssertTrue(option.waitForExistence(timeout: 3), app.debugDescription)
-            option.tap()
-            let picker = switch choice {
-            case "Saved prompts": app.navigationBars["Saved prompts"]
-            case "Files": app.navigationBars["FullDocumentManagerViewControllerNavigationBar"]
-            default: app.navigationBars["Photos"]
-            }
-            // Cancel remote pickers before another presentation or terminating their host app.
-            XCTAssertTrue(picker.waitForExistence(timeout: choice == "Saved prompts" ? 5 : 30), app.debugDescription)
-            let cancel = picker.buttons["Cancel"]
-            XCTAssertTrue(cancel.waitForExistence(timeout: 5), app.debugDescription)
-            cancel.tap()
-            XCTAssertTrue(picker.waitForNonExistence(timeout: 5), app.debugDescription)
         }
+        XCTAssertEqual(app.keyboards.firstMatch.exists, keyboard, app.debugDescription)
+        let attachment = app.buttons["Attachments and saved prompts"]
+        XCTAssertTrue(attachment.appears(within: 5), app.debugDescription)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "\(name)-\(choice)-keyboard-\(keyboard)"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        attachment.tap()
+        let option = app.buttons[choice].firstMatch
+        XCTAssertTrue(option.appears(within: 3), app.debugDescription)
+        option.tap()
+        let picker = switch choice {
+        case "Saved prompts": app.navigationBars["Saved prompts"]
+        case "Files": app.navigationBars["FullDocumentManagerViewControllerNavigationBar"]
+        default: app.navigationBars["Photos"]
+        }
+        // Cancel remote pickers before another presentation or terminating their host app.
+        XCTAssertTrue(picker.appears(within: choice == "Saved prompts" ? 5 : 30), app.debugDescription)
+        let cancel = picker.buttons["Cancel"]
+        XCTAssertTrue(cancel.appears(within: 5), app.debugDescription)
+        cancel.tap()
+        XCTAssertTrue(picker.disappears(within: 5), app.debugDescription)
     }
 }

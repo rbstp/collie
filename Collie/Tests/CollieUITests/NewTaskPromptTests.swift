@@ -10,26 +10,26 @@ final class NewTaskPromptTests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         let newTask = app.buttons["New task"]
-        XCTAssertTrue(newTask.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(newTask.appears(within: 10), app.debugDescription)
         newTask.tap()
         let prompt = app.textFields["What should the agent do?"]
-        XCTAssertTrue(prompt.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(prompt.appears(within: 5), app.debugDescription)
         prompt.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.keyboards.firstMatch.appears(within: 5), app.debugDescription)
         prompt.typeText("keep this prompt")
         let collapse = app.buttons["Hide keyboard"]
-        XCTAssertTrue(collapse.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(collapse.appears(within: 5), app.debugDescription)
         XCTAssertTrue(collapse.isHittable, app.debugDescription)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "new-task-keyboard-collapse"
         screenshot.lifetime = .keepAlways
         add(screenshot)
         collapse.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.keyboards.firstMatch.disappears(within: 5), app.debugDescription)
         let preservedPrompt = app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", "keep this prompt")).firstMatch
-        XCTAssertTrue(preservedPrompt.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(preservedPrompt.appears(within: 5), app.debugDescription)
         preservedPrompt.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.keyboards.firstMatch.appears(within: 5), app.debugDescription)
         XCTAssertTrue(preservedPrompt.exists, app.debugDescription)
     }
 }
