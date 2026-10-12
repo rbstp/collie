@@ -675,7 +675,7 @@ impl Driver {
             );
         }
         let (a, screen) = match self
-            .writable_agent(&p.terminal_id, prompt::open_to_keys_or_codex_question)
+            .writable_agent(&p.terminal_id, prompt::open_to_agent_keys)
             .await
         {
             Ok(found) => found,

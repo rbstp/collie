@@ -233,6 +233,8 @@ Scope: collied on the Mac or on a Linux machine, Collie.app on the iPhone, the t
 
 Codex follow-up questions use a separate screen check. `shift+left` is accepted alone only while the queued question and its answer hint are visible. Up, Down and Enter are accepted one key per call only while the question editor is visible. Text is pasted only into that editor, including text-only questions without a selection cursor, and its Enter follows only after the same blocked agent session and question still show the exact answer. A permission dialog lacks the question editor footer and is refused. The remaining gap between the final screen read and Enter has the same conditional-input limit described above.
 
+Copilot is an intentional manual-key exception to the blocked-prompt restrictions above. All nine phone terminal buttons can answer any Copilot prompt, including permissions and folder trust, without an approval nonce, expiry, fingerprint or LocalAuthentication. Agent identity, a readable detection screen, peer authorization and key auditing remain required; prompts, typed answers and approval decisions remain refused while blocked. An unlocked paired phone can therefore approve Copilot operations with Enter, and a prompt that changes after display can receive a key intended for its predecessor. Claude Code and Codex restrictions are unchanged.
+
 ### Attachment uploads
 
 | | |

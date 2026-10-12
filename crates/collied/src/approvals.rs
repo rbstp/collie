@@ -236,9 +236,6 @@ fn decision_name(d: Decision) -> &'static str {
     }
 }
 
-/// The screen of the prompt `a` is blocked on, read now, when `open` lets the phone answer
-/// it with keys ([`prompt::open_to_keys`]) or text ([`prompt::open_to_text`]); a
-/// permission prompt is answered through `approval.decide` alone.
 pub async fn open_to(
     herdr: &Path,
     a: &AgentInfo,

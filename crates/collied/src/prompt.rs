@@ -70,8 +70,10 @@ pub fn open_to_text(kind: &str, rule: Option<&str>, text: &str) -> bool {
             }))
 }
 
-pub fn open_to_keys_or_codex_question(kind: &str, rule: Option<&str>, text: &str) -> bool {
-    open_to_keys(kind, rule, text) || (kind == "codex" && codex_question_open(text))
+pub fn open_to_agent_keys(kind: &str, rule: Option<&str>, text: &str) -> bool {
+    kind == "copilot"
+        || open_to_keys(kind, rule, text)
+        || (kind == "codex" && codex_question_open(text))
 }
 
 pub fn codex_question_queued(kind: &str, _rule: Option<&str>, text: &str) -> bool {

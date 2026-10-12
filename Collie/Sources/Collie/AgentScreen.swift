@@ -56,7 +56,7 @@ struct AgentScreen: View {
             }
             if let approvals {
                 ForEach(approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)) { item in
-                    ApprovalCard(model: approvals, item: item, questionInSession: model.codexQuestionQueued || model.codexQuestionOpen)
+                    ApprovalCard(model: approvals, item: item, questionInSession: model.agent?.kind == "copilot" || model.codexQuestionQueued || model.codexQuestionOpen)
                         .padding(.horizontal)
                         .background(Color.red.opacity(0.08))
                 }

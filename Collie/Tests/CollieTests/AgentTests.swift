@@ -1576,6 +1576,38 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 }
 
 @MainActor
+@Test func copilotApprovalAllowsEveryTerminalButton() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "copilot"
+        $0.status = .blocked
+    }
+    let model = agentModel(core)
+    model.poll()
+    model.blocked = .terminal
+
+    #expect(model.keyStrip == AgentKey.strip)
+    #expect(model.acceptsKeys && !model.answering)
+    #expect(!model.accepts(.shiftLeft))
+    for key in model.keyStrip {
+        #expect(model.accepts(key))
+        await model.tap(key)?.value
+    }
+    #expect(core.snapshot.keys == AgentKey.strip.map { [$0] })
+    #expect(model.notice == nil)
+
+    core.state.withLock { $0.kind = "claude" }
+    model.poll()
+    #expect(!model.acceptsKeys)
+    #expect(model.keyStrip.allSatisfy { !model.accepts($0) })
+
+    core.state.withLock { $0.kind = "codex" }
+    model.poll()
+    #expect(!model.acceptsKeys)
+    #expect(AgentKey.strip.allSatisfy { !model.accepts($0) })
+}
+
+@MainActor
 @Test func aScrolledUpTranscriptOffersJumpToBottomInsteadOfKeys() async {
     let core = FakeCore()
     core.state.withLock {
