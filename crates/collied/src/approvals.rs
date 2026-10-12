@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -234,19 +234,6 @@ fn decision_name(d: Decision) -> &'static str {
         Decision::Deny => "deny",
         Decision::Choose => "choose",
     }
-}
-
-pub async fn open_to(
-    herdr: &Path,
-    a: &AgentInfo,
-    open: fn(&str, Option<&str>, &str) -> bool,
-) -> Result<Option<String>, herdr::Error> {
-    let kind = a.agent.as_deref().unwrap_or_default();
-    let explain = herdr::agent_explain(herdr, &a.pane_id).await?;
-    let text =
-        prompt::without_deny_countdown(kind, &herdr::detection_text(herdr, &a.pane_id).await?);
-    let rule = explain.matched_rule.map(|r| r.id);
-    Ok(open(kind, rule.as_deref(), &text).then_some(text))
 }
 
 impl Approvals {

@@ -22,18 +22,8 @@ pub fn uses_menu(kind: &str, rule: Option<&str>) -> bool {
     kind == "claude" && rule.is_some_and(|r| CLAUDE_MENU_RULES.contains(&r))
 }
 
-/// herdr rule ids (claude manifest 2026.09.11.1) of Claude Code's question and form
-/// dialogs. Keys and typed text reach a blocked agent only under these: a permission
-/// rule, an unknown rule or none at all (a hook-reported status) fails closed, whatever
-/// the screen parses to.
 const CLAUDE_FORM_RULES: &[&str] = &["live_blocked_form"];
 
-/// Whether a blocked prompt may be answered with keys or text instead of an approval: a
-/// Claude Code form whose dialog has no trust wording and no option that reads as a
-/// decision or starts with "yes" (a plan's "Yes, and auto-accept edits" grants a
-/// permission mode). Every numbered or `❯` line of the dialog counts, not only a parsed
-/// menu, so a menu that does not parse (wrapped labels, a second `❯`) cannot hide its
-/// approve option.
 pub fn open_to_keys(kind: &str, rule: Option<&str>, text: &str) -> bool {
     kind == "claude"
         && rule.is_some_and(|r| CLAUDE_FORM_RULES.contains(&r))
@@ -53,10 +43,6 @@ const CLAUDE_PLAN_RULES: &[&str] = &["legacy_no_prompt_blocker"];
 const FEEDBACK: &str = "Tell Claude what to change";
 const FEEDBACK_HINT: &str = "shift+tab to approve with this feedback";
 
-/// Whether `agent.type_text` may answer a blocked prompt: one open to keys, or a Claude
-/// Code plan through its "Tell Claude what to change" option. A plan takes no keys: its
-/// other options grant permission modes. Text is confirmed only with Enter on that
-/// option, never with shift+tab, which approves the plan with the feedback.
 pub fn open_to_text(kind: &str, rule: Option<&str>, text: &str) -> bool {
     (kind == "codex" && codex_question_open(text))
         || open_to_keys(kind, rule, text)
@@ -68,26 +54,6 @@ pub fn open_to_text(kind: &str, rule: Option<&str>, text: &str) -> bool {
                     && m.free_text()
                         .is_some_and(|i| m.options[i].eq_ignore_ascii_case(FEEDBACK))
             }))
-}
-
-pub fn open_to_agent_keys(kind: &str, rule: Option<&str>, text: &str) -> bool {
-    kind == "copilot"
-        || open_to_keys(kind, rule, text)
-        || (kind == "codex" && codex_question_open(text))
-}
-
-pub fn codex_question_queued(kind: &str, _rule: Option<&str>, text: &str) -> bool {
-    if kind != "codex" {
-        return false;
-    }
-    let tail: Vec<&str> = text.lines().rev().take(16).collect();
-    tail.iter()
-        .any(|line| line.contains("Queued follow-up inputs"))
-        && tail
-            .iter()
-            .any(|line| line.trim().starts_with('?') && line.contains("question"))
-        && tail.iter().any(|line| line.contains("⇧← to answer"))
-        && !tail.iter().any(|line| line.contains("enter submit"))
 }
 
 pub fn codex_question_open(text: &str) -> bool {
@@ -114,120 +80,6 @@ fn codex_text_only(text: &str) -> bool {
                 .iter()
                 .any(|line| line.trim_start().starts_with('›'))
         })
-}
-
-pub fn codex_question_identity(text: &str) -> Option<String> {
-    if !codex_question_open(text) {
-        return None;
-    }
-    let lines: Vec<&str> = text.lines().collect();
-    let footer = lines
-        .iter()
-        .rposition(|line| line.contains("enter submit") && line.contains("main prompt"))?;
-    let mut before = &lines[..footer];
-    while before.last().is_some_and(|line| line.trim().is_empty()) {
-        before = &before[..before.len() - 1];
-    }
-    if codex_text_only(text) {
-        while before.last().is_some_and(|line| !line.trim().is_empty()) {
-            before = &before[..before.len() - 1];
-        }
-        while before.last().is_some_and(|line| line.trim().is_empty()) {
-            before = &before[..before.len() - 1];
-        }
-        let start = before
-            .iter()
-            .rposition(|line| line.trim().is_empty())
-            .map_or(0, |i| i + 1);
-        let question = before[start..]
-            .iter()
-            .map(|line| line.trim())
-            .collect::<Vec<_>>()
-            .join(" ");
-        return (!question.is_empty()).then_some(question);
-    }
-    while before.last().is_some_and(|line| !line.trim().is_empty()) {
-        before = &before[..before.len() - 1];
-    }
-    before
-        .iter()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| line.trim().to_owned())
-}
-
-pub fn codex_answer_visible(before: &str, text: &str, answer: &str) -> bool {
-    if !codex_question_open(before) || !codex_question_open(text) {
-        return false;
-    }
-    if codex_text_only(before) {
-        if codex_question_identity(before) != codex_question_identity(text) {
-            return false;
-        }
-        let lines: Vec<&str> = text.lines().collect();
-        let Some(footer) = lines
-            .iter()
-            .rposition(|line| line.contains("enter submit") && line.contains("main prompt"))
-        else {
-            return false;
-        };
-        let mut field = &lines[..footer];
-        while field.last().is_some_and(|line| line.trim().is_empty()) {
-            field = &field[..field.len() - 1];
-        }
-        let start = field
-            .iter()
-            .rposition(|line| line.trim().is_empty())
-            .map_or(0, |i| i + 1);
-        let field = field[start..]
-            .iter()
-            .flat_map(|line| line.split_whitespace())
-            .collect::<String>();
-        return field == answer.split_whitespace().collect::<String>();
-    }
-    let other = before.lines().rev().take(20).find_map(|line| {
-        let line = line.trim_start().trim_start_matches('›').trim_start();
-        line.strip_suffix(". Other")?.parse::<usize>().ok()
-    });
-    let lines: Vec<&str> = text.lines().collect();
-    let Some(footer) = lines
-        .iter()
-        .rposition(|line| line.contains("enter submit") && line.contains("main prompt"))
-    else {
-        return false;
-    };
-    let Some(selected) = lines[..footer]
-        .iter()
-        .rposition(|line| line.trim_start().starts_with('›'))
-    else {
-        return false;
-    };
-    let head = lines[selected]
-        .trim_start()
-        .trim_start_matches('›')
-        .trim_start();
-    match other {
-        Some(index) if !head.starts_with(&format!("{index}. ")) => return false,
-        None if head
-            .split_once(". ")
-            .is_some_and(|(index, _)| index.parse::<usize>().is_ok()) =>
-        {
-            return false;
-        }
-        _ => {}
-    }
-    let visible: String = lines[selected..footer]
-        .iter()
-        .flat_map(|line| line.split_whitespace())
-        .collect();
-    let answer: String = answer.split_whitespace().collect();
-    let field = match other {
-        Some(index) => visible
-            .strip_prefix(&format!("›{index}."))
-            .unwrap_or_default(),
-        None => visible.strip_prefix('›').unwrap_or_default(),
-    };
-    field == answer
 }
 
 const EFFORT_FOOTER: &str =
@@ -1943,62 +1795,18 @@ mod tests {
     fn codex_queued_question_and_editor_are_distinct_from_approvals() {
         let queued = "Working\nQueued follow-up inputs\n  ? 1 question\n    ⇧← to answer\n› Ask Codex to do anything\n⚠ 1 warning · f2 to view\n";
         let open = "Which database should we use?\n\n  › 1. SQLite\n    2. Redis\n    3. Other\n\n  enter submit   ⌃] skip   ⇧→ main prompt\n";
-        let filled = open
-            .replace("  › 1. SQLite", "    1. SQLite")
-            .replace("    3. Other", "  › 3. DuckDB");
         let approval = "Would you like to run the following command?\n› 1. Yes, proceed\n  2. No\nPress enter to confirm or esc to cancel\n";
-        assert!(codex_question_queued("codex", None, queued));
-        assert!(!codex_question_queued("claude", None, queued));
-        assert!(!codex_question_queued("codex", None, approval));
         assert!(!codex_question_open(queued));
         assert!(codex_question_open(open));
-        assert_eq!(
-            codex_question_identity(open).as_deref(),
-            Some("Which database should we use?")
-        );
-        assert!(codex_answer_visible(open, &filled, "DuckDB"));
-        assert!(!codex_answer_visible(open, open, "SQLite"));
-        assert!(!codex_answer_visible(open, open, "DuckDB"));
         assert!(!codex_question_open(approval));
         assert!(!open_to_text("codex", Some("osc_title_blocked"), approval));
         let freeform =
             "What changed?\n\n  › Type your answer\n\n  enter submit   ⌃] skip   ⇧→ main prompt\n";
-        let answered = freeform.replace("Type your answer", "It was in the background");
-        assert_eq!(
-            codex_question_identity(freeform),
-            codex_question_identity(&answered)
-        );
-        assert!(codex_answer_visible(
-            freeform,
-            &answered,
-            "It was in the background"
-        ));
+        assert!(codex_question_open(freeform));
         let queued_freeform = "Queued follow-up inputs\n\n  1 of 2\n\n  Which missing agent do you see in All, and which section is it under?\n\n  Type your answer\n\n  enter submit   ⌃] skip   ⇧→ main prompt   ⇧← next question\n";
-        let queued_answered = queued_freeform.replace("Type your answer", "It is in Done");
         let with_old_cursor = format!("› Prior prompt\n{queued_freeform}");
         assert!(codex_question_open(queued_freeform));
-        assert_eq!(
-            codex_question_identity(&with_old_cursor),
-            codex_question_identity(queued_freeform)
-        );
-        assert_eq!(
-            codex_question_identity(queued_freeform),
-            Some("Which missing agent do you see in All, and which section is it under?".into())
-        );
-        assert_eq!(
-            codex_question_identity(queued_freeform),
-            codex_question_identity(&queued_answered)
-        );
-        assert!(codex_answer_visible(
-            queued_freeform,
-            &queued_answered,
-            "It is in Done"
-        ));
-        assert!(!codex_answer_visible(
-            queued_freeform,
-            queued_freeform,
-            "It is in Done"
-        ));
+        assert!(codex_question_open(&with_old_cursor));
     }
 
     #[test]

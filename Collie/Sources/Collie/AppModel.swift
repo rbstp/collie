@@ -7,8 +7,8 @@ import UIKit
 import UserNotifications
 import os
 
-enum AppTab: Hashable {
-    case agents, approvals, machines, settings
+enum AppTab: CaseIterable, Hashable {
+    case agents, machines, settings
 }
 
 @MainActor
@@ -33,6 +33,8 @@ final class AppModel {
         didSet { DevicePrefs.update(in: DevicePrefs.file) { $0.accent = accent } }
     }
     var openingAgent: AgentRoute?
+    var approvalOpenError: String?
+    @ObservationIgnored private var openingApproval: Task<Void, Never>?
     @ObservationIgnored var viewingAgent: AgentRoute?
     private var backgroundedAt: Date?
     @ObservationIgnored private var activityDecisions: Set<String> = []
@@ -290,14 +292,36 @@ final class AppModel {
         pushStatus = describe(error)
     }
 
-    func open(_ link: ApprovalLink) {
-        tab = .approvals
-        approvals.open(link)
+    func open(_ link: ApprovalLink, terminalId: String? = nil) {
+        cancelApprovalOpening()
+        tab = .agents
+        let pending = approvals.open(link)
+        openingApproval = Task { [weak self] in
+            await pending?.value
+            guard !Task.isCancelled, let self else { return }
+            reloadMachines()
+            if let route = approvals.session(for: link) ?? Self.route(for: link, terminalId: terminalId, machines: machines),
+               machines.contains(where: { $0.id == route.machineId }) {
+                openingAgent = route
+            } else {
+                let message = approvals.notice ?? "This approval is no longer pending."
+                approvalOpenError = message
+                log.error("approval open: \(message, privacy: .public)")
+            }
+        }
+    }
+
+    func cancelApprovalOpening() {
+        openingApproval?.cancel()
+        openingApproval = nil
+        approvals.cancelOpening()
+        approvalOpenError = nil
     }
 
     /// A Live Activity tap: the Agents tab, on that agent. Links to a Mac that is not paired are ignored.
     func open(_ url: URL) {
         guard let route = Self.route(for: url, machines: machines) else { return }
+        cancelApprovalOpening()
         tab = .agents
         openingAgent = route
     }
@@ -311,6 +335,12 @@ final class AppModel {
     nonisolated static func route(for url: URL, machines: [Machine]) -> AgentRoute? {
         guard let link = AgentLink(url: url), machines.contains(where: { $0.id == link.machineId }) else { return nil }
         return AgentRoute(machineId: link.machineId, terminalId: link.terminalId)
+    }
+
+    nonisolated static func route(for link: ApprovalLink, terminalId: String?, machines: [Machine]) -> AgentRoute? {
+        guard let terminalId, let machine = machines.first(where: { $0.nodeId == link.nodeId }),
+              AgentLink(machineId: machine.id, terminalId: terminalId) != nil else { return nil }
+        return AgentRoute(machineId: machine.id, terminalId: terminalId)
     }
 
     /// Lock-screen Approve/Deny. iOS has already required the device owner to unlock

@@ -37,13 +37,10 @@ struct ApprovalItem: Identifiable, Equatable {
     var unreachable: Bool { [.waiting, .unavailable, .offline, .stopped].contains(link) }
 }
 
-/// What collied takes from the phone on the prompt an agent is blocked on.
 enum BlockedInput: Equatable {
-    /// Nothing: the prompt is answered in the terminal on the machine.
     case terminal
     case optionsOnly
     case keys
-    /// Keys, and typed text into the menu's free-text option.
     case keysAndText
 }
 
@@ -69,7 +66,6 @@ final class ApprovalsModel {
     private(set) var steps: [String: Step] = [:]
     private(set) var notice: String?
     private(set) var expanded: Set<String> = []
-    /// Unsent notes and plan feedback, by approval.
     var drafts: [String: String] = [:]
     /// Approvals whose note field is shown; a hidden note is never sent.
     private(set) var noting: Set<String> = []
@@ -77,6 +73,7 @@ final class ApprovalsModel {
     private var noticeSubject: String?
     private var noticeTimer: Task<Void, Never>?
     private let noticeLifetime: Duration
+    private let openingTimeout: Duration
     private(set) var refreshing = false
     private(set) var loading: LoadingApproval?
     private var loadTask: Task<Void, Never>?
@@ -88,11 +85,13 @@ final class ApprovalsModel {
     init(
         core: (any ApprovalCore)?, auth: any Authenticator = DeviceOwnerAuthenticator(),
         noticeLifetime: Duration = .seconds(6),
+        openingTimeout: Duration = .seconds(15),
         dismissResolved: @escaping @Sendable (_ nodeId: String, _ pending: Set<String>) -> Void = ApprovalsModel.removeDelivered
     ) {
         self.core = core
         self.auth = auth
         self.noticeLifetime = noticeLifetime
+        self.openingTimeout = openingTimeout
         self.dismissResolved = dismissResolved
     }
 
@@ -188,13 +187,24 @@ final class ApprovalsModel {
         items.filter { $0.machine.id == machineId && $0.approval.terminalId == terminalId }
     }
 
-    /// What collied takes from the phone while this agent is blocked: nil when no approval blocks it.
     func blockedInput(machineId: String, terminalId: String) -> BlockedInput? {
         let blocking = items(machineId: machineId, terminalId: terminalId).map(\.approval)
         guard !blocking.isEmpty else { return nil }
         guard !blocking.allSatisfy(\.answeredInTerminal) else { return .terminal }
         guard blocking.allSatisfy(\.acceptsInput) else { return .optionsOnly }
         return blocking.allSatisfy(\.hasTextField) ? .keysAndText : .keys
+    }
+
+    func session(for link: ApprovalLink) -> AgentRoute? {
+        guard let item = items.first(where: { $0.id == link.approvalId && $0.machine.nodeId == link.nodeId }) else { return nil }
+        return AgentRoute(machineId: item.machine.id, terminalId: item.approval.terminalId)
+    }
+
+    func cancelOpening() {
+        loadTask?.cancel()
+        loadTask = nil
+        loading = nil
+        highlighted = nil
     }
 
     @discardableResult
@@ -204,9 +214,15 @@ final class ApprovalsModel {
         loadTask?.cancel()
         loading = nil
         poll()
-        guard let core, !items.contains(where: { $0.id == link.approvalId }),
-            let machine = core.machines().first(where: { $0.nodeId == link.nodeId })
-        else { return nil }
+        if session(for: link) != nil { return nil }
+        guard let core else {
+            show("Approvals are unavailable on this phone.")
+            return nil
+        }
+        guard let machine = core.machines().first(where: { $0.nodeId == link.nodeId }) else {
+            show("This machine is no longer paired with this phone.")
+            return nil
+        }
         loading = LoadingApproval(link: link, machine: machine)
         loadTask = Task { await load(link, machine: machine, core: core) }
         return loadTask
@@ -215,17 +231,31 @@ final class ApprovalsModel {
     /// Until the approval shows up, or a snapshot fetched over an already connected link
     /// proves it is gone: on a cold launch the feed is empty only because nothing is connected yet.
     private func load(_ link: ApprovalLink, machine: Machine, core: any ApprovalCore) async {
+        let deadline = ContinuousClock.now + openingTimeout
         while !Task.isCancelled {
+            guard core.machines().contains(where: { $0.id == machine.id && $0.nodeId == link.nodeId }) else {
+                show("This machine is no longer paired with this phone.")
+                break
+            }
             let wasConnected = core.approvalFeed(machineId: machine.id)?.link == .connected
             let flock = try? await core.flock(machineId: machine.id)
             guard !Task.isCancelled else { return }
             poll()
-            if items.contains(where: { $0.id == link.approvalId }) { break }
+            if session(for: link) != nil { break }
             if wasConnected, flock?.link == .connected {
                 show("This approval is no longer pending.")
                 break
             }
-            if let phase = flock?.link { loading?.phase = phase }
+            let phase = flock?.link ?? core.approvalFeed(machineId: machine.id)?.link
+            loading?.phase = phase
+            if phase == .unavailable || phase == .offline {
+                show("Couldn't reach this machine. Try again after it reconnects.")
+                break
+            }
+            if ContinuousClock.now >= deadline {
+                show("Couldn't load this approval. Try again after the machine connects.")
+                break
+            }
             try? await Task.sleep(for: .milliseconds(500))
         }
         if !Task.isCancelled { loading = nil }
@@ -263,11 +293,9 @@ final class ApprovalsModel {
         poll()
     }
 
-    /// Typed into the plan's "Tell Claude what to change"; collied moves the cursor there and never sends shift+tab.
-    func sendFeedback(_ item: ApprovalItem) async {
+    func sendFeedback(_ item: ApprovalItem, send: ((String) async throws -> Void)? = nil) async {
         let text = drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
         guard let core, steps[item.id] == nil, item.approval.takesFeedback, !text.isEmpty else { return }
-        // Feedback is typed into whatever text option is on screen, so only for a plan still pending.
         poll()
         guard items.contains(where: { $0.id == item.id }) else {
             show("This plan is no longer waiting for an answer.", about: item.id)
@@ -277,9 +305,13 @@ final class ApprovalsModel {
         show(nil)
         defer { steps[item.id] = nil }
         do {
-            try await core.typeText(machineId: item.machine.id, terminalId: item.approval.terminalId, text: text)
+            if let send {
+                try await send(text)
+            } else {
+                try await core.typeText(machineId: item.machine.id, terminalId: item.approval.terminalId, text: text)
+            }
             drafts[item.id] = nil
-            show("Sent your feedback to \(item.approval.agentLabel).", about: item.id)
+            show("Sent your answer to \(item.approval.agentLabel).", about: item.id)
         } catch {
             show(describe(error), about: item.id)
         }
@@ -301,10 +333,8 @@ extension PendingApproval {
         supportsNote && (decision == .approve || decision == .deny)
     }
 
-    /// A plan prompt: options only for keys, but its free-text option takes typed feedback.
     var takesFeedback: Bool { hasTextField && !acceptsInput }
 
-    /// collied takes no answer from the phone: another agent kind (Codex, Copilot) or a prompt it does not read.
     var answeredInTerminal: Bool { options.isEmpty && choices.isEmpty && !acceptsInput && !hasTextField }
 }
 

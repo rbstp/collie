@@ -219,7 +219,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         vec![json!({"target": "w6:p1", "text": text})]
     );
 
-    println!("a blocked agent takes no prompt, and keys or text only without a decision");
+    println!("blocked agents refuse prompts but accept manual keys and text");
     let before = herdr.mutations();
     for terminal in [CODEX_BLOCKED, CLAUDE] {
         // CLAUDE is listed as working, but agent.get just before the write says blocked.
@@ -231,17 +231,12 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
     }
     herdr.with(|h| h.blocked_on = Some(BASH.into()));
-    let err = core
-        .send_keys(m.clone(), CLAUDE.into(), vec![AgentKey::Enter])
+    core.send_keys(m.clone(), CLAUDE.into(), vec![AgentKey::Enter])
         .await
-        .unwrap_err();
-    assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
-    let err = core
-        .type_text(m.clone(), CLAUDE.into(), "yes".into())
+        .unwrap();
+    core.type_text(m.clone(), CLAUDE.into(), "yes".into())
         .await
-        .unwrap_err();
-    assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
-    assert_eq!(herdr.mutations(), before, "a permission prompt got input");
+        .unwrap();
     herdr.with(|h| h.blocked_on = Some(QUESTION.into()));
     core.send_keys(m.clone(), CLAUDE.into(), vec![AgentKey::Down])
         .await
@@ -254,15 +249,19 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         [
             (
                 "agent.send_keys".to_owned(),
-                json!({"target": "w6:p1", "keys": ["down"]})
+                json!({"target": "w6:p1", "keys": ["enter"]})
             ),
             (
-                "pane.send_text".to_owned(),
-                json!({"pane_id": "w6:p1", "text": "DuckDB"})
+                "pane.send_input".to_owned(),
+                json!({"pane_id": "w6:p1", "text": "\u{1b}[200~yes\u{1b}[201~", "keys": ["enter"]})
             ),
             (
                 "agent.send_keys".to_owned(),
-                json!({"target": "w6:p1", "keys": ["enter"]})
+                json!({"target": "w6:p1", "keys": ["down"]})
+            ),
+            (
+                "pane.send_input".to_owned(),
+                json!({"pane_id": "w6:p1", "text": "\u{1b}[200~DuckDB\u{1b}[201~", "keys": ["enter"]})
             ),
         ]
     );
@@ -596,8 +595,9 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         [
             "agent.prompt",
             "agent.send_keys",
-            "pane.send_text",
+            "pane.send_input",
             "agent.send_keys",
+            "pane.send_input",
             "agent.send_keys",
             "workspace.create",
             "agent.start",
@@ -1079,7 +1079,7 @@ fn answer(h: &mut Herdr, req: &Value) -> Result<Value, String> {
         "agent.prompt" => {
             json!({"type": "agent_prompted", "agent": agent_by_pane(h, &p["target"]).unwrap_or(json!({}))})
         }
-        "agent.send_keys" | "workspace.close" | "pane.close" => {
+        "agent.send_keys" | "pane.send_input" | "workspace.close" | "pane.close" => {
             json!({"type": "ok"})
         }
         "workspace.create" => json!({"type": "workspace_created",

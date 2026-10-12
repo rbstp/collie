@@ -1402,10 +1402,6 @@ impl CollieCore {
         expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
     }
 
-    /// Answers a blocked prompt that offers no approval decision through its free-text
-    /// field, a question's "Type something." or a plan's "Tell Claude what to change":
-    /// collied types `text`, then Enter. One line. Refused with `AgentBlocked` on a
-    /// permission prompt, `AgentNotReady` when the agent is not blocked.
     pub async fn type_text(
         &self,
         machine_id: String,
@@ -1414,11 +1410,11 @@ impl CollieCore {
     ) -> Result<(), CoreError> {
         let text = PromptText::new(text)
             .ok()
-            .filter(|t| protocol::is_one_line(t.as_str()))
+            .filter(|t| !t.as_str().chars().any(protocol::is_format))
             .ok_or_else(|| {
                 invalid(
                     "text",
-                    "an answer must be one non-empty line of at most 32 KiB, without control or invisible characters (some combined emoji contain one)",
+                    "an answer must contain non-empty text of at most 32 KiB, without unsafe control or invisible characters",
                 )
             })?;
         let request = Request::AgentTypeText(AgentTypeTextParams {
@@ -3632,8 +3628,6 @@ mod tests {
         );
         for bad in [
             "",
-            "one\ntwo",
-            "a\tb",
             "x\u{1b}[2J",
             "echo ok \u{202E}x",
             "a\u{200B}b",
@@ -3648,6 +3642,12 @@ mod tests {
                 field(rt.block_on(core.terminal_run(m(), t(), bad.into()))),
                 Some("text".into()),
                 "{bad:?}"
+            );
+        }
+        for bad in ["one\ntwo", "a\tb"] {
+            assert_eq!(
+                field(rt.block_on(core.terminal_run(m(), t(), bad.into()))),
+                Some("text".into())
             );
         }
         assert_eq!(
@@ -4097,7 +4097,7 @@ mod tailnet_tests {
                             Err(ErrorCode::AgentBlocked)
                         }
                         Request::AgentTypeText(p) => {
-                            assert_eq!(p.text.as_str(), "DuckDB");
+                            assert_eq!(p.text.as_str(), "DuckDB\n\tRedis");
                             Ok(Response::Ok)
                         }
                         Request::TaskOptions(_) => {
@@ -4534,7 +4534,7 @@ mod tailnet_tests {
             .block_on(core.send_keys(id(), t1(), vec![AgentKey::ShiftTab, AgentKey::Down]))
             .unwrap_err();
         assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
-        rt.block_on(core.type_text(id(), t1(), "DuckDB".into()))
+        rt.block_on(core.type_text(id(), t1(), "DuckDB\n\tRedis".into()))
             .unwrap();
         let options = rt.block_on(core.task_options(id())).unwrap();
         assert_eq!(options.default_agent, "claude");

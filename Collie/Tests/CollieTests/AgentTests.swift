@@ -8,6 +8,11 @@ import UIKit
 @testable import Collie
 
 final class FakeCore: AgentCore {
+    enum Input: Equatable {
+        case keys([AgentKey])
+        case text(String)
+    }
+
     struct State {
         var gitCalls: [String] = []
         var gitPatch = "@@ -1 +1 @@\n-old\n+new\n"
@@ -19,6 +24,7 @@ final class FakeCore: AgentCore {
         var draftReads = 0
         var keys: [[AgentKey]] = []
         var typed: [String] = []
+        var input: [Input] = []
         var closes: [String] = []
         var stars: [String] = []
         var scrolls: [String] = []
@@ -179,10 +185,16 @@ final class FakeCore: AgentCore {
         }
     }
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {
-        try await call { $0.keys.append(keys) }
+        try await call {
+            $0.keys.append(keys)
+            $0.input.append(.keys(keys))
+        }
     }
     func typeText(machineId: String, terminalId: String, text: String) async throws {
-        try await call { $0.typed.append(text) }
+        try await call {
+            $0.typed.append(text)
+            $0.input.append(.text(text))
+        }
     }
     func focus(machineId: String, terminalId: String) async throws {}
     func scrollBottom(machineId: String, terminalId: String) async throws {
@@ -464,7 +476,7 @@ private func attach(_ model: AgentModel, _ core: FakeCore, _ names: String...) a
     await model.sendPrompt()
     #expect(model.draft == "continue")
     #expect(!model.sendingPrompt)
-    #expect(model.promptError?.contains("Approvals") == true)
+    #expect(model.promptError?.contains("approval") == true)
 
     core.set(error: .AgentNotReady)
     await model.sendPrompt()
@@ -728,6 +740,107 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     core.release()
     await drain?.value
     #expect(core.snapshot.keys == [[.down], [.down, .enter]])
+}
+
+@MainActor
+@Test(arguments: [AgentKey.down, .shiftLeft])
+func answersStayBetweenEarlierAndLaterTerminalKeys(first: AgentKey) async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = first == .shiftLeft ? "codex" : "claude"
+        $0.status = .blocked
+    }
+    let model = agentModel(core)
+    model.poll()
+    core.set(hold: true)
+    let drain = model.tap(first)
+    await core.waitHeld(1)
+    model.tap(.down)
+    model.draft = "DuckDB"
+    let answer = Task { await model.sendPrompt() }
+    while !model.sendingPrompt { await Task.yield() }
+    model.tap(.right)
+    #expect(core.snapshot.input == [.keys([first])])
+    core.release()
+    await answer.value
+    await drain?.value
+    #expect(core.snapshot.input == [.keys([first]), .keys([.down]), .text("DuckDB"), .keys([.right])])
+    #expect(model.draft.isEmpty)
+}
+
+@MainActor
+@Test func failedNavigationDoesNotSubmitTheQueuedAnswer() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.status = .blocked
+    }
+    let model = agentModel(core)
+    model.poll()
+    core.set(hold: true, error: .AgentNotReady)
+    let drain = model.tap(.down)
+    await core.waitHeld(1)
+    model.draft = "DuckDB"
+    let answer = Task { await model.sendPrompt() }
+    while !model.sendingPrompt { await Task.yield() }
+    core.release()
+    await answer.value
+    await drain?.value
+    #expect(core.snapshot.typed.isEmpty)
+    #expect(model.draft == "DuckDB")
+    #expect(model.promptError != nil)
+    #expect(!model.sendingPrompt)
+}
+
+@MainActor
+@Test func failedAnswerCancelsLaterTerminalKeys() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.status = .blocked
+    }
+    let model = agentModel(core)
+    model.poll()
+    core.set(hold: true, error: .AgentNotReady)
+    model.draft = "DuckDB"
+    let answer = Task { await model.sendPrompt() }
+    await core.waitHeld(1)
+    model.tap(.enter)
+    core.release()
+    await answer.value
+    #expect(core.snapshot.keys.isEmpty)
+    #expect(model.draft == "DuckDB")
+    #expect(model.promptError != nil)
+}
+
+@MainActor
+@Test func queuedAnswerDoesNotReachAShellAfterAgentExit() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.status = .blocked
+    }
+    let model = agentModel(core)
+    model.poll()
+    core.set(hold: true)
+    let drain = model.tap(.down)
+    await core.waitHeld(1)
+    model.draft = "DuckDB"
+    let answer = Task { await model.sendPrompt() }
+    while !model.sendingPrompt { await Task.yield() }
+    core.state.withLock {
+        $0.kind = nil
+        $0.shell = shellPane
+    }
+    model.poll()
+    core.release()
+    await answer.value
+    await drain?.value
+    #expect(model.isTerminal)
+    #expect(core.snapshot.typed.isEmpty)
+    #expect(core.snapshot.terminalKeys.isEmpty)
+    #expect(core.snapshot.commands.isEmpty)
+    #expect(!model.sendingPrompt)
 }
 
 @MainActor
@@ -1545,66 +1658,93 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 }
 
 @MainActor
-@Test func blockedInputGatesKeysAndTypedAnswers() async {
+@Test func approvalsAllowKeysAndTypedAnswers() async {
     let core = FakeCore()
     let model = agentModel(core)
     #expect(model.acceptsKeys && !model.answering && model.blockedHint == nil)
 
     model.blocked = .terminal
-    #expect(!model.acceptsKeys && !model.answering)
-    #expect(model.blockedHint == nil)
-    #expect(model.tap(.enter) == nil)
+    #expect(model.acceptsKeys && model.answering)
+    #expect(model.blockedHint == "Use the terminal buttons or type an answer.")
+    await model.tap(.enter)?.value
 
     model.blocked = .optionsOnly
-    #expect(!model.acceptsKeys && !model.answering)
-    #expect(model.blockedHint == "Choose an option above.")
-    #expect(model.tap(.down) == nil)
-    #expect(model.keyTaps == 0)
+    #expect(model.acceptsKeys && model.answering)
+    await model.tap(.down)?.value
+    #expect(model.keyTaps == 2)
     model.draft = "go"
     await model.sendPrompt()
-    #expect(core.snapshot.typed.isEmpty)
-    #expect(core.snapshot.prompts == ["go"])
+    #expect(core.snapshot.typed == ["go"])
+    #expect(core.snapshot.prompts.isEmpty)
 
     model.blocked = .keys
-    #expect(model.acceptsKeys && !model.answering)
+    #expect(model.acceptsKeys && model.answering)
     await model.tap(.down)?.value
-    #expect(core.snapshot.keys == [[.down]])
+    #expect(core.snapshot.keys == [[.enter], [.down], [.down]])
 
     model.blocked = .keysAndText
     #expect(model.acceptsKeys && model.answering)
-    #expect(model.blockedHint == "Choose an option above, use the arrow keys, or type an answer.")
+    #expect(model.blockedHint == "Use the terminal buttons or type an answer.")
 }
 
 @MainActor
-@Test func copilotApprovalAllowsEveryTerminalButton() async {
+@Test(arguments: ["claude", "codex", "copilot"])
+func agentApprovalAllowsEveryTerminalButton(kind: String) async {
     let core = FakeCore()
     core.state.withLock {
-        $0.kind = "copilot"
+        $0.kind = kind
         $0.status = .blocked
     }
     let model = agentModel(core)
     model.poll()
     model.blocked = .terminal
 
-    #expect(model.keyStrip == AgentKey.strip)
-    #expect(model.acceptsKeys && !model.answering)
-    #expect(!model.accepts(.shiftLeft))
+    let strip = kind == "codex" ? AgentKey.codexStrip : AgentKey.strip
+    #expect(model.keyStrip == strip)
+    #expect(model.acceptsKeys && model.answering)
+    #expect(model.accepts(.shiftLeft) == (kind == "codex"))
     for key in model.keyStrip {
         #expect(model.accepts(key))
         await model.tap(key)?.value
     }
-    #expect(core.snapshot.keys == AgentKey.strip.map { [$0] })
+    #expect(core.snapshot.keys == strip.map { [$0] })
     #expect(model.notice == nil)
 
-    core.state.withLock { $0.kind = "claude" }
-    model.poll()
-    #expect(!model.acceptsKeys)
-    #expect(model.keyStrip.allSatisfy { !model.accepts($0) })
+    for blocked in [BlockedInput.optionsOnly, .keys, .keysAndText] {
+        model.blocked = blocked
+        #expect(model.keyStrip.allSatisfy { model.accepts($0) })
+        #expect(model.answering)
+    }
 
-    core.state.withLock { $0.kind = "codex" }
+    model.blocked = nil
+    core.state.withLock { $0.status = .idle }
     model.poll()
-    #expect(!model.acceptsKeys)
-    #expect(AgentKey.strip.allSatisfy { !model.accepts($0) })
+    #expect(model.acceptsKeys && !model.answering)
+}
+
+@MainActor
+@Test(arguments: ["claude", "codex", "copilot"])
+func agentApprovalsSendManualText(kind: String) async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = kind
+        $0.status = .blocked
+    }
+    let model = agentModel(core)
+    model.poll()
+    model.draft = "yes\n\tuse this answer"
+    #expect(model.answering && model.canSendPrompt)
+    await model.sendPrompt()
+    #expect(core.snapshot.typed == ["yes\n\tuse this answer"])
+    #expect(core.snapshot.prompts.isEmpty)
+    #expect(model.draft.isEmpty)
+
+    model.blocked = .optionsOnly
+    model.draft = "another answer"
+    core.set(error: .AgentNotReady)
+    await model.sendPrompt()
+    #expect(model.draft == "another answer")
+    #expect(model.promptError != nil)
 }
 
 @MainActor
@@ -1774,7 +1914,7 @@ private func noticeShown(
     core.set(error: .AgentBlocked)
     await model.sendPrompt()
     #expect(model.draft == "again")
-    #expect(model.promptError?.contains("Approvals") == true)
+    #expect(model.promptError?.contains("approval") == true)
 
     core.set(error: nil)
     model.blocked = nil
@@ -1798,9 +1938,9 @@ private func noticeShown(
     model.poll()
     #expect(model.codexQuestionQueued && !model.answering && !model.canSendPrompt)
     #expect(model.keyStrip[5] == .shiftLeft)
-    #expect(model.accepts(.shiftLeft) && !model.accepts(.enter) && !model.accepts(.left))
+    #expect(model.keyStrip.allSatisfy { model.accepts($0) })
     model.typed("other input")
-    #expect(!model.canSendPrompt)
+    #expect(model.canSendPrompt)
     core.set(error: .AgentBlocked)
     await model.sendPrompt()
     #expect(model.promptError?.contains("⇧←") == true)
@@ -1818,7 +1958,7 @@ private func noticeShown(
     model.poll()
     #expect(model.answering && !model.codexQuestionQueued)
     #expect(model.accepts(.up) && model.accepts(.down) && model.accepts(.enter))
-    #expect(!model.accepts(.left) && model.accepts(.shiftLeft))
+    #expect(model.accepts(.left) && model.accepts(.shiftLeft))
     await model.tap(.down)?.value
     await model.tap(.enter)?.value
     #expect(core.snapshot.keys == [[.shiftLeft], [.down], [.enter]])
@@ -1857,7 +1997,7 @@ private func noticeShown(
     model.poll()
     model.blocked = .terminal
     #expect(model.codexQuestionOpen && model.answering)
-    #expect(model.blockedHint == nil)
+    #expect(model.blockedHint == "Use the terminal buttons or type an answer.")
     model.typed("It is in Done")
     #expect(model.canSendPrompt)
     await model.sendPrompt()
@@ -1871,6 +2011,7 @@ private func noticeShown(
         )
         $0.outputRevision += 1
     }
+    model.blocked = nil
     model.poll()
     #expect(!model.codexQuestionOpen && !model.answering)
     await attach(model, core, "a.png")
@@ -1886,7 +2027,12 @@ private func noticeShown(
         $0.outputRevision += 1
     }
     model.poll()
-    #expect(!model.codexQuestionOpen && !model.answering)
+    #expect(!model.codexQuestionOpen && model.answering)
+    #expect(model.keyStrip.allSatisfy { model.accepts($0) })
+    model.draft = "yes"
+    #expect(model.canSendPrompt)
+    await model.sendPrompt()
+    #expect(core.snapshot.typed == ["It is in Done", "yes"])
 }
 
 @MainActor

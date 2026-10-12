@@ -636,8 +636,6 @@ impl AgentSendKeysParams {
     }
 }
 
-/// Typed into the free-text field of a blocked Claude Code question or plan, then Enter.
-/// One line without bidi or invisible format characters: Enter is what submits it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentTypeTextParams {
@@ -648,7 +646,7 @@ pub struct AgentTypeTextParams {
 
 impl AgentTypeTextParams {
     pub fn is_valid(&self) -> bool {
-        is_one_line(self.text.as_str())
+        !self.text.as_str().chars().any(is_format)
     }
 }
 
@@ -2027,7 +2025,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_text_is_one_line() {
+    fn typed_text_accepts_lines_but_rejects_unsafe_characters() {
         let typed = |text: &str| {
             parse(&format!(
                 r#"{{"id":1,"method":"agent.type_text","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"t","text":{}}}}}"#,
@@ -2035,12 +2033,12 @@ mod tests {
             ))
         };
         assert!(typed("oui\u{202F}! c’est partagé 👍🏽").is_ok());
+        assert!(typed("a\nb").is_ok());
+        assert!(typed("a\tb").is_ok());
         let ok = typed("use Redis, it is shared").unwrap();
         assert_eq!(ok.request.class(), MethodClass::Drive);
         assert_eq!(ok.request.method(), "agent.type_text");
         for bad in [
-            "a\nb",
-            "a\tb",
             "a\u{1b}[2J",
             "  ",
             "use \u{202E}sideR",

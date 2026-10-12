@@ -326,6 +326,15 @@ pub fn test_alert() -> Alert {
     }
 }
 
+pub fn session_test_alert(node_id: &str, terminal_id: &TerminalId) -> Alert {
+    let mut alert = test_alert();
+    alert.payload["aps"]["alert"]["body"] = json!("Tap to open the selected agent session.");
+    alert.payload["aps"]["thread-id"] = json!(terminal_id.as_str());
+    alert.payload["node_id"] = json!(node_id);
+    alert.payload["terminal_id"] = json!(terminal_id.as_str());
+    alert
+}
+
 pub struct Push {
     path: PathBuf,
     devices: Mutex<Devices>,
@@ -1161,11 +1170,18 @@ fn write_private(path: &Path, data: &[u8]) -> anyhow::Result<()> {
     }
 }
 
-pub async fn send_test(data_dir: &Path, cfg: &ApnsConfig) -> anyhow::Result<bool> {
+pub async fn send_test(
+    data_dir: &Path,
+    cfg: &ApnsConfig,
+    session: Option<(String, TerminalId)>,
+) -> anyhow::Result<bool> {
     let apns = Apns::new(cfg)?;
     let store = peers::load(&data_dir.join(config::PEERS_FILE))?;
     let devices: Devices = peers::load_json(&data_dir.join(config::PUSH_FILE))?;
-    let alert = test_alert();
+    let alert = match session {
+        Some((node_id, terminal_id)) => session_test_alert(&node_id, &terminal_id),
+        None => test_alert(),
+    };
     let mut ok = true;
     let mut sent = 0;
     for d in &devices.devices {
@@ -1199,6 +1215,19 @@ pub mod tests {
     use protocol::{ApprovalId, Nonce, TerminalId};
 
     use super::*;
+
+    #[test]
+    fn session_test_targets_an_agent_without_approval_actions() {
+        let terminal = TerminalId::new("term_test").unwrap();
+        let alert = session_test_alert("nMAC", &terminal);
+        assert_eq!(alert.payload["node_id"], "nMAC");
+        assert_eq!(alert.payload["terminal_id"], "term_test");
+        assert_eq!(alert.payload["aps"]["thread-id"], "term_test");
+        assert!(alert.payload.get("approval_id").is_none());
+        assert!(alert.payload["aps"].get("category").is_none());
+        assert!(alert.context.is_none());
+        assert_eq!(alert.delivery, Delivery::Alert);
+    }
 
     // Throwaway P-256 key generated for these tests; it belongs to no Apple account.
     pub const TEST_KEY: &str = "-----BEGIN PRIVATE KEY-----

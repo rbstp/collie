@@ -483,7 +483,7 @@ private struct ApprovalDetail: View {
     @ViewBuilder
     private func actions(expired: Bool) -> some View {
         if approval.answeredInTerminal {
-            Text("Answer it in the terminal on the machine").font(.footnote).foregroundStyle(.secondary)
+            Text("Answer it on the iPhone").font(.footnote).foregroundStyle(.secondary)
         } else if model.state?.decisionsAllowed != true {
             Text("Read only. Turn on Decide from Apple Watch in collie Settings on the iPhone.")
                 .font(.footnote)

@@ -9,6 +9,7 @@ struct FlockScreen: View {
     @Binding var opening: AgentRoute?
     var tailnetStarting = false
     var reselected = 0
+    var navigationChanged: () -> Void = {}
     var viewing: (AgentRoute?) -> Void = { _ in }
     @State private var model = FlockModel()
     @State private var path: [AgentRoute] = []
@@ -139,6 +140,7 @@ struct FlockScreen: View {
                 DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout }
             }
             .onChange(of: path, initial: true) { _, path in viewing(path.last) }
+            .onChange(of: path) { _, _ in navigationChanged() }
             .onChange(of: reselected) { showsUsage = false }
             .onChange(of: opening, initial: true) { _, route in
                 guard let route else { return }

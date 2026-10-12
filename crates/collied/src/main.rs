@@ -70,7 +70,10 @@ enum Command {
 #[derive(Subcommand)]
 enum ApnsCommand {
     /// Send a test alert to every registered device of a paired phone.
-    Test,
+    Test {
+        #[arg(long, help = "Send a test that opens this agent session")]
+        terminal_id: Option<String>,
+    },
     /// Store a .p8 key (login Keychain on macOS, systemd credential on Linux), then offer
     /// to delete the file.
     Import { path: PathBuf },
@@ -140,14 +143,32 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
     match cli.command {
         Command::Doctor => return doctor::run(cli.config).await,
         Command::Apns {
-            command: ApnsCommand::Test,
+            command: ApnsCommand::Test { terminal_id },
         } => {
             let config = load_config(cli.config.as_deref(), &data_dir)?;
             let apns = config
                 .apns
                 .as_ref()
                 .context("no [apns] section in collied.toml")?;
-            return push::send_test(&data_dir, apns).await;
+            let session = if let Some(terminal_id) = terminal_id {
+                let terminal_id =
+                    protocol::TerminalId::new(terminal_id).context("invalid terminal id")?;
+                match control::request(&control_path, &Request::Status).await? {
+                    Some(Reply::Status(status))
+                        if status.backend_state == "Running" && !status.node_id.is_empty() =>
+                    {
+                        Some((status.node_id, terminal_id))
+                    }
+                    Some(Reply::Status(_)) => {
+                        anyhow::bail!("collied's tailnet node is not running")
+                    }
+                    Some(other) => anyhow::bail!("unexpected reply: {other:?}"),
+                    None => return Err(not_running()),
+                }
+            } else {
+                None
+            };
+            return push::send_test(&data_dir, apns, session).await;
         }
         Command::Apns {
             command: ApnsCommand::Import { path },

@@ -65,8 +65,6 @@ const CODEX_QUEUED_QUESTION: &str = "Working\nQueued follow-up inputs\n  ? 1 que
 const CODEX_QUESTION_OPEN: &str = "Which database should we use?\n\n  › 1. SQLite\n    2. Redis\n    3. Other\n\n  enter submit   ⌃] skip   ⇧→ main prompt\n";
 // Claude Code 2.1.289 in herdr 0.9.3 (rule legacy_no_prompt_blocker).
 const PLAN_LIVE: &str = include_str!("fixtures/claude-2.1.289/plan.detection.txt");
-const PLAN_TYPED_LIVE: &str =
-    include_str!("fixtures/claude-2.1.289/plan-feedback-typed.detection.txt");
 // Claude Code 2.1.293 fullscreen in herdr 0.9.3, scrolled up with Page Up.
 const SCROLLED: &str = include_str!("fixtures/claude-2.1.293/scrolled-idle.detection.txt");
 const SCROLLED_DIALOG: &str =
@@ -1696,7 +1694,7 @@ async fn enter_never_runs_a_slash_command_in_the_box() {
 }
 
 #[tokio::test]
-async fn keys_and_prompts_are_refused_while_claude_is_scrolled_up() {
+async fn idle_claude_scroll_safeguards_do_not_restrict_approval_keys() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
@@ -1708,10 +1706,10 @@ async fn keys_and_prompts_are_refused_while_claude_is_scrolled_up() {
     }
     block(&herdr, &format!("{QUESTION}\n   1 new message (click) ↓\n"));
     assert_eq!(
-        code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
-        ErrorCode::AgentNotReady
+        drive.send_keys(keys(CLAUDE), &yes()).await.0,
+        Ok(Response::Ok)
     );
-    assert!(herdr.mutations().is_empty());
+    assert_eq!(herdr.mutations(), ["agent.send_keys"]);
     for screen in [SCROLLED, SCROLLED_DIALOG, NEW_MESSAGE] {
         herdr.with(|h| {
             h.snapshot["agents"][0]["agent_status"] = json!("idle");
@@ -1725,7 +1723,7 @@ async fn keys_and_prompts_are_refused_while_claude_is_scrolled_up() {
             ))
         );
     }
-    assert!(herdr.mutations().is_empty());
+    assert_eq!(herdr.mutations(), ["agent.send_keys"]);
 
     herdr.with(|h| {
         h.snapshot["agents"][0]["agent_status"] = json!("idle");
@@ -1735,7 +1733,7 @@ async fn keys_and_prompts_are_refused_while_claude_is_scrolled_up() {
         drive.send_keys(keys(CLAUDE), &yes()).await,
         (Ok(Response::Ok), None)
     );
-    assert_eq!(herdr.mutations(), ["agent.send_keys"]);
+    assert_eq!(herdr.mutations(), ["agent.send_keys", "agent.send_keys"]);
 }
 
 #[tokio::test]
@@ -3235,106 +3233,157 @@ fn keys(terminal: &str) -> AgentSendKeysParams {
 }
 
 #[tokio::test]
-async fn copilot_approval_allows_every_terminal_button() {
-    let herdr = Mock::start();
-    let (_d, base) = root();
-    let drive = herdr.driver(&["copilot"], &base);
-    let buttons = [
-        Key::Esc,
-        Key::Left,
-        Key::Up,
-        Key::Down,
-        Key::Right,
-        Key::Tab,
-        Key::ShiftTab,
-        Key::Enter,
-        Key::CtrlEnter,
-    ];
-
-    for (rule, screen) in [
-        (
-            Some("permission_prompt"),
-            include_str!("fixtures/copilot/shell.detection.txt"),
-        ),
-        (
-            Some("path_trust_prompt"),
-            include_str!("fixtures/copilot/trust.detection.txt"),
-        ),
-        (None, "Allow this operation?"),
-    ] {
-        block(&herdr, screen);
-        herdr.with(|h| {
-            h.snapshot["agents"][0]["agent"] = json!("copilot");
-            h.rule = rule.map(str::to_owned);
-        });
-        for key in buttons {
-            let mut p = keys(CLAUDE);
-            p.keys = vec![key];
-            assert_eq!(
-                drive.send_keys(p, &yes()).await,
-                (
-                    Ok(Response::Ok),
-                    Some(format!("{CLAUDE} blocked keys={}", key.herdr_name()))
-                )
-            );
+async fn agent_approval_allows_every_terminal_button() {
+    for kind in ["claude", "codex", "copilot"] {
+        let herdr = Mock::start();
+        let (_d, base) = root();
+        let drive = herdr.driver(&[kind], &base);
+        let mut buttons = [
+            Key::Esc,
+            Key::Left,
+            Key::Up,
+            Key::Down,
+            Key::Right,
+            Key::Tab,
+            Key::ShiftTab,
+            Key::Enter,
+            Key::CtrlEnter,
+        ];
+        if kind == "codex" {
+            buttons[5] = Key::ShiftLeft;
         }
-    }
-    let sent = herdr.params("agent.send_keys");
-    assert_eq!(sent.len(), buttons.len() * 3);
-    for (p, key) in sent.iter().zip(buttons.iter().cycle()) {
-        assert_eq!(p, &json!({"target": "w6:p1", "keys": [key.herdr_name()]}));
-    }
-    assert_eq!(
-        code(drive.prompt(prompt(CLAUDE), &yes()).await),
-        ErrorCode::AgentBlocked
-    );
-    assert_eq!(
-        code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
-        ErrorCode::AgentBlocked
-    );
-    assert_eq!(
-        herdr.mutations(),
-        vec!["agent.send_keys"; buttons.len() * 3]
-    );
-}
 
-#[tokio::test]
-async fn copilot_approval_keys_keep_authorization_and_agent_checks() {
-    let herdr = Mock::start();
-    let (_d, base) = root();
-    let drive = herdr.driver(&["copilot"], &base);
-    block(&herdr, "Allow this operation?");
-    herdr.with(|h| h.snapshot["agents"][0]["agent"] = json!("copilot"));
-
-    assert_eq!(
-        code(drive.send_keys(keys(CLAUDE), &no()).await.0),
-        ErrorCode::NotPaired
-    );
-    for field in ["terminal_id", "agent", "agent_session"] {
-        let mut changed = herdr.with(|h| h.snapshot["agents"][0].clone());
-        changed[field] = if field == "agent_session" {
-            json!({"source": "herdr:copilot", "agent": "copilot", "kind": "id", "value": "another-session"})
-        } else {
-            json!("another-agent")
-        };
-        herdr.with(|h| h.gets.push_back(changed));
+        for (rule, screen) in [
+            (
+                Some("permission_prompt"),
+                include_str!("fixtures/copilot/shell.detection.txt"),
+            ),
+            (
+                Some("path_trust_prompt"),
+                include_str!("fixtures/copilot/trust.detection.txt"),
+            ),
+            (None, "Allow this operation?"),
+        ] {
+            block(&herdr, screen);
+            herdr.with(|h| {
+                h.snapshot["agents"][0]["agent"] = json!(kind);
+                h.rule = rule.map(str::to_owned);
+            });
+            for key in buttons {
+                let mut p = keys(CLAUDE);
+                p.keys = vec![key];
+                assert_eq!(
+                    drive.send_keys(p, &yes()).await,
+                    (
+                        Ok(Response::Ok),
+                        Some(format!("{CLAUDE} blocked keys={}", key.herdr_name()))
+                    )
+                );
+            }
+        }
+        let sent = herdr.params("agent.send_keys");
+        assert_eq!(sent.len(), buttons.len() * 3);
+        for (p, key) in sent.iter().zip(buttons.iter().cycle()) {
+            assert_eq!(p, &json!({"target": "w6:p1", "keys": [key.herdr_name()]}));
+        }
+        let mut batch = keys(CLAUDE);
+        batch.keys = buttons.to_vec();
+        assert!(drive.send_keys(batch, &yes()).await.0.is_ok());
         assert_eq!(
-            code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
-            ErrorCode::AgentNotReady,
-            "{field}"
+            code(drive.prompt(prompt(CLAUDE), &yes()).await),
+            ErrorCode::AgentBlocked
+        );
+        assert_eq!(
+            drive.type_text(typed(CLAUDE, "yes"), &yes()).await,
+            Ok(Response::Ok)
+        );
+        assert_eq!(herdr.params("agent.send_keys").len(), buttons.len() * 3 + 1);
+        assert_eq!(
+            herdr.params("pane.send_input"),
+            [json!({"pane_id": "w6:p1", "text": "\u{1b}[200~yes\u{1b}[201~", "keys": ["enter"]})]
         );
     }
-    assert!(herdr.mutations().is_empty());
-
-    herdr.fail_next("agent.send_keys", &["agent_not_running"]);
-    assert_eq!(
-        code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
-        ErrorCode::AgentNotReady
-    );
 }
 
 #[tokio::test]
-async fn keys_reach_a_blocked_agent_only_on_a_question() {
+async fn agent_approval_input_keeps_authorization_and_agent_checks() {
+    for kind in ["claude", "codex", "copilot"] {
+        let herdr = Mock::start();
+        let (_d, base) = root();
+        let drive = herdr.driver(&[kind], &base);
+        block(&herdr, "Allow this operation?");
+        herdr.with(|h| h.snapshot["agents"][0]["agent"] = json!(kind));
+
+        assert_eq!(
+            code(drive.send_keys(keys(CLAUDE), &no()).await.0),
+            ErrorCode::NotPaired
+        );
+        assert_eq!(
+            code(drive.type_text(typed(CLAUDE, "yes"), &no()).await),
+            ErrorCode::NotPaired
+        );
+        for field in ["terminal_id", "agent", "agent_session"] {
+            let mut changed = herdr.with(|h| h.snapshot["agents"][0].clone());
+            changed[field] = if field == "agent_session" {
+                json!({"source": "herdr:copilot", "agent": "copilot", "kind": "id", "value": "another-session"})
+            } else {
+                json!("another-agent")
+            };
+            herdr.with(|h| h.gets.extend([changed.clone(), changed]));
+            assert_eq!(
+                code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
+                ErrorCode::AgentNotReady,
+                "{field}"
+            );
+            assert_eq!(
+                code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
+                ErrorCode::AgentNotReady,
+                "{field}"
+            );
+        }
+        assert!(herdr.mutations().is_empty());
+
+        herdr.with(|h| h.snapshot["agents"][0]["agent"] = Value::Null);
+        assert_eq!(
+            code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
+            ErrorCode::AgentBlocked
+        );
+        assert_eq!(
+            code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
+            ErrorCode::AgentBlocked
+        );
+        herdr.with(|h| {
+            h.snapshot["agents"][0]["agent"] = json!(kind);
+            h.snapshot["agents"][0]["launch_pending"] = json!(true);
+        });
+        assert_eq!(
+            drive.type_text(typed(CLAUDE, "yes"), &yes()).await,
+            Ok(Response::Ok)
+        );
+        assert_eq!(herdr.params("pane.send_input").len(), 1);
+        herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("idle"));
+        assert_eq!(
+            code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
+            ErrorCode::AgentNotReady
+        );
+        herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("blocked"));
+        herdr.with(|h| h.snapshot["agents"][0]["launch_pending"] = json!(false));
+
+        herdr.fail_next("agent.send_keys", &["agent_not_running"]);
+        assert_eq!(
+            code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
+            ErrorCode::AgentNotReady
+        );
+        herdr.fail_next("pane.send_input", &["pane_input_failed"]);
+        assert_eq!(
+            code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
+            ErrorCode::Internal
+        );
+    }
+}
+
+#[tokio::test]
+async fn blocked_keys_do_not_depend_on_prompt_parsing() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
@@ -3349,18 +3398,9 @@ async fn keys_reach_a_blocked_agent_only_on_a_question() {
     );
     assert_eq!(
         herdr.methods(),
-        [
-            "agent.list",
-            "agent.get",
-            "agent.explain",
-            "pane.read",
-            "agent.send_keys"
-        ]
+        ["agent.list", "agent.get", "agent.send_keys"]
     );
-    assert_eq!(
-        herdr.params("pane.read")[0],
-        json!({"pane_id": "w6:p1", "source": "detection", "format": "text"})
-    );
+    assert!(herdr.params("pane.read").is_empty());
     block(&herdr, QUESTION_LIVE);
     assert_eq!(
         drive.send_keys(keys(CLAUDE), &yes()).await.0,
@@ -3370,13 +3410,12 @@ async fn keys_reach_a_blocked_agent_only_on_a_question() {
     for screen in [BASH, PLAN, TRUST] {
         block(&herdr, screen);
         let (reply, target) = drive.send_keys(keys(CLAUDE), &yes()).await;
-        assert_eq!(code(reply), ErrorCode::AgentBlocked, "{screen}");
-        assert_eq!(target, None);
+        assert_eq!(reply, Ok(Response::Ok), "{screen}");
+        assert_eq!(target, Some(format!("{CLAUDE} blocked keys=down,enter")));
     }
     assert_eq!(
         code(drive.send_keys(keys(CLAUDE), &no()).await.0),
-        ErrorCode::AgentBlocked,
-        "refused before authorization is even needed"
+        ErrorCode::NotPaired
     );
 
     block(&herdr, QUESTION);
@@ -3400,8 +3439,8 @@ async fn keys_reach_a_blocked_agent_only_on_a_question() {
             h.text = screen.into();
         });
         assert_eq!(
-            code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
-            ErrorCode::AgentBlocked,
+            drive.send_keys(keys(CLAUDE), &yes()).await.0,
+            Ok(Response::Ok),
             "{rule:?} {screen}"
         );
     }
@@ -3410,11 +3449,10 @@ async fn keys_reach_a_blocked_agent_only_on_a_question() {
         h.text = "Allow command `make`? [y/n]".into();
     });
     assert_eq!(
-        code(drive.send_keys(keys(CODEX_BLOCKED), &yes()).await.0),
-        ErrorCode::AgentBlocked,
-        "no menu on screen is no licence: only Claude Code question forms take keys"
+        drive.send_keys(keys(CODEX_BLOCKED), &yes()).await.0,
+        Ok(Response::Ok)
     );
-    assert_eq!(herdr.params("agent.send_keys").len(), 2);
+    assert_eq!(herdr.params("agent.send_keys").len(), 10);
     assert!(herdr.params("agent.prompt").is_empty());
     block(&herdr, QUESTION);
     assert_eq!(
@@ -3425,133 +3463,84 @@ async fn keys_reach_a_blocked_agent_only_on_a_question() {
 }
 
 #[tokio::test]
-async fn typed_text_goes_into_the_question_field_then_enter() {
+async fn typed_answers_keep_idle_claude_scroll_and_slash_safeguards() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
-    let on_field = QUESTION_LIVE
-        .replace("❯ 1. SQLite", "  1. SQLite")
-        .replace("  3. Type something.", "❯ 3. Type something.");
-    let filled = on_field.replace("❯ 3. Type something.", "❯ 3. DuckDB");
+    herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("idle"));
 
+    for screen in [SCROLLED, SCROLLED_DIALOG, NEW_MESSAGE, SLASH_STA] {
+        herdr.with(|h| h.text = screen.into());
+        assert_eq!(
+            code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
+            ErrorCode::AgentNotReady,
+            "{screen}"
+        );
+    }
+    assert!(herdr.mutations().is_empty());
+
+    for screen in [SCROLLED_DIALOG, SLASH_STA] {
+        block(&herdr, screen);
+        assert_eq!(
+            drive.type_text(typed(CLAUDE, "yes"), &yes()).await,
+            Ok(Response::Ok)
+        );
+    }
+    assert_eq!(herdr.params("pane.send_input").len(), 2);
+}
+
+#[tokio::test]
+async fn typed_text_is_pasted_and_submitted_without_prompt_parsing() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
     block(&herdr, QUESTION_LIVE);
-    herdr.with(|h| h.screens = [QUESTION_LIVE.to_owned(), on_field.clone(), filled.clone()].into());
     assert_eq!(
         drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await,
         Ok(Response::Ok)
     );
     assert_eq!(
         herdr.methods(),
-        [
-            "agent.list",
-            "agent.get",
-            "agent.explain",
-            "pane.read",
-            "agent.send_keys",
-            "agent.get",
-            "pane.read",
-            "pane.send_text",
-            "agent.get",
-            "pane.read",
-            "agent.send_keys"
-        ]
+        ["agent.list", "agent.get", "pane.send_input"]
     );
     assert_eq!(
-        herdr.params("pane.send_text"),
-        [json!({"pane_id": "w6:p1", "text": "DuckDB"})]
+        herdr.params("pane.send_input"),
+        [json!({"pane_id": "w6:p1", "text": "\u{1b}[200~DuckDB\u{1b}[201~", "keys": ["enter"]})]
     );
-    assert_eq!(
-        herdr.params("agent.send_keys"),
-        [
-            json!({"target": "w6:p1", "keys": ["down", "down"]}),
-            json!({"target": "w6:p1", "keys": ["enter"]})
-        ]
-    );
-
-    herdr.with(|h| h.screens = [on_field.clone(), on_field.clone()].into());
-    assert_eq!(
-        code(drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await),
-        ErrorCode::AgentNotReady,
-        "the field never showed the text"
-    );
-    assert_eq!(herdr.params("pane.send_text").len(), 2);
-    assert_eq!(herdr.params("agent.send_keys").len(), 2, "no Enter");
-
-    herdr.with(|h| h.screens = [QUESTION_LIVE.to_owned()].into());
-    assert_eq!(
-        code(drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await),
-        ErrorCode::AgentNotReady,
-        "the cursor did not reach the field"
-    );
-    assert_eq!(
-        herdr.params("pane.send_text").len(),
-        2,
-        "nothing typed under SQLite"
-    );
-    assert_eq!(herdr.params("agent.send_keys").len(), 3);
-
-    let blocked = herdr.with(|h| h.snapshot["agents"][0].clone());
-    let mut moved_on = blocked.clone();
-    moved_on["state_change_seq"] = json!(6);
-    herdr.with(|h| {
-        h.screens = [on_field.clone(), filled.clone()].into();
-        h.gets.extend([blocked, moved_on]);
-    });
-    assert_eq!(
-        code(drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await),
-        ErrorCode::AgentNotReady
-    );
-    assert_eq!(herdr.params("pane.send_text").len(), 3);
-    assert_eq!(
-        herdr.params("agent.send_keys").len(),
-        3,
-        "no Enter once the prompt changed"
-    );
-
-    let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let seen = checks.clone();
-    let revoked_after_typing: Authorized =
-        Arc::new(move || seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0);
-    herdr.with(|h| h.screens = [on_field.clone(), filled.clone()].into());
-    assert_eq!(
-        code(
-            drive
-                .type_text(typed(CLAUDE, "DuckDB"), &revoked_after_typing)
-                .await
-        ),
-        ErrorCode::NotPaired
-    );
-    assert_eq!(herdr.params("pane.send_text").len(), 4);
-    assert_eq!(herdr.params("agent.send_keys").len(), 3);
-
-    herdr.with(|h| h.screens.clear());
-    for screen in [BASH, PLAN, TRUST] {
+    assert!(herdr.params("agent.send_keys").is_empty());
+    assert!(herdr.params("pane.send_text").is_empty());
+    for screen in [BASH, PLAN, TRUST, "Unknown approval", ""] {
         block(&herdr, screen);
         assert_eq!(
-            code(drive.type_text(typed(CLAUDE, "1"), &yes()).await),
-            ErrorCode::AgentBlocked,
+            drive.type_text(typed(CLAUDE, "1"), &yes()).await,
+            Ok(Response::Ok),
             "{screen}"
         );
     }
-    block(&herdr, "Pick a name\nEnter to confirm · Esc to cancel");
     assert_eq!(
-        code(drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await),
-        ErrorCode::AgentBlocked,
-        "no text field to type into"
+        drive
+            .type_text(typed(CLAUDE, "first line\n\tsecond line"), &yes())
+            .await,
+        Ok(Response::Ok)
     );
-
+    assert_eq!(
+        herdr.params("pane.send_input").last().unwrap(),
+        &json!({"pane_id": "w6:p1", "text": "\u{1b}[200~first line\n\tsecond line\u{1b}[201~", "keys": ["enter"]})
+    );
     herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("working"));
     assert_eq!(
-        code(drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await),
-        ErrorCode::AgentNotReady,
-        "not blocked: a prompt is the way"
+        drive.type_text(typed(CLAUDE, "DuckDB"), &yes()).await,
+        Ok(Response::Ok)
     );
-    assert_eq!(herdr.params("pane.send_text").len(), 4);
-    assert_eq!(herdr.params("agent.send_keys").len(), 3);
+    assert_eq!(herdr.params("pane.send_input").len(), 8);
+    let reads = herdr.params("pane.read");
+    assert_eq!(reads.len(), 2);
+    assert_eq!(reads[0]["source"], "detection");
+    assert_eq!(reads[1]["source"], "visible");
 }
 
 #[tokio::test]
-async fn codex_question_opens_and_a_typed_answer_submits_without_approving() {
+async fn codex_question_opens_and_accepts_manual_text() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["codex"], &base);
@@ -3565,7 +3554,7 @@ async fn codex_question_opens_and_a_typed_answer_submits_without_approving() {
         drive.send_keys(open.clone(), &yes()).await,
         (
             Ok(Response::Ok),
-            Some(format!("{CODEX_BLOCKED} open question"))
+            Some(format!("{CODEX_BLOCKED} blocked keys=shift+left"))
         )
     );
     assert_eq!(
@@ -3573,10 +3562,7 @@ async fn codex_question_opens_and_a_typed_answer_submits_without_approving() {
         [json!({"target": "w7:p1", "keys": ["shift+left"]})]
     );
 
-    let filled = CODEX_QUESTION_OPEN
-        .replace("  › 1. SQLite", "    1. SQLite")
-        .replace("    3. Other", "  › 3. DuckDB");
-    herdr.with(|h| h.screens = [CODEX_QUESTION_OPEN.into(), filled].into());
+    herdr.with(|h| h.text = CODEX_QUESTION_OPEN.into());
     assert_eq!(
         drive
             .type_text(typed(CODEX_BLOCKED, "DuckDB"), &yes())
@@ -3584,60 +3570,32 @@ async fn codex_question_opens_and_a_typed_answer_submits_without_approving() {
         Ok(Response::Ok)
     );
     assert_eq!(
-        herdr.params("pane.send_text"),
-        [json!({"pane_id": "w7:p1", "text": "\u{1b}[200~DuckDB\u{1b}[201~"})]
+        herdr.params("pane.send_input"),
+        [json!({"pane_id": "w7:p1", "text": "\u{1b}[200~DuckDB\u{1b}[201~", "keys": ["enter"]})]
     );
     assert_eq!(
         herdr.params("agent.send_keys"),
-        [
-            json!({"target": "w7:p1", "keys": ["shift+left"]}),
-            json!({"target": "w7:p1", "keys": ["enter"]})
-        ]
+        [json!({"target": "w7:p1", "keys": ["shift+left"]})]
     );
 
-    herdr.with(|h| h.screens = [CODEX_QUESTION_OPEN.into()].into());
-    let enters = herdr.params("agent.send_keys").len();
     assert_eq!(
-        code(
-            drive
-                .type_text(typed(CODEX_BLOCKED, "SQLite"), &yes())
-                .await
-        ),
-        ErrorCode::AgentNotReady
+        drive
+            .type_text(typed(CODEX_BLOCKED, "SQLite"), &yes())
+            .await,
+        Ok(Response::Ok)
     );
-    assert_eq!(herdr.params("agent.send_keys").len(), enters);
-
-    let mut changed = herdr.with(|h| h.snapshot["agents"][1].clone());
-    changed["state_change_seq"] = json!(999);
-    herdr.with(|h| {
-        h.screens = [CODEX_QUESTION_OPEN.into()].into();
-        h.gets.extend([h.snapshot["agents"][1].clone(), changed]);
-    });
-    assert_eq!(
-        code(
-            drive
-                .type_text(typed(CODEX_BLOCKED, "DuckDB"), &yes())
-                .await
-        ),
-        ErrorCode::AgentNotReady
-    );
-    assert_eq!(herdr.params("agent.send_keys").len(), 2);
-
     let approval = "Would you like to run the following command?\n› 1. Yes, proceed\n  2. No\nPress enter to confirm or esc to cancel\n";
     herdr.with(|h| {
         h.text = approval.into();
         h.screens.clear();
     });
-    let writes = herdr.mutations();
+    assert_eq!(drive.send_keys(open, &yes()).await.0, Ok(Response::Ok));
     assert_eq!(
-        code(drive.send_keys(open, &yes()).await.0),
-        ErrorCode::AgentBlocked
+        drive.type_text(typed(CODEX_BLOCKED, "yes"), &yes()).await,
+        Ok(Response::Ok)
     );
-    assert_eq!(
-        code(drive.type_text(typed(CODEX_BLOCKED, "yes"), &yes()).await),
-        ErrorCode::AgentBlocked
-    );
-    assert_eq!(herdr.mutations(), writes);
+    assert_eq!(herdr.params("pane.send_input").len(), 3);
+    assert_eq!(herdr.params("agent.send_keys").len(), 2);
 }
 
 #[tokio::test]
@@ -3658,17 +3616,16 @@ async fn codex_text_only_question_accepts_a_typed_answer() {
         Ok(Response::Ok)
     );
     assert_eq!(
-        herdr.params("pane.send_text"),
-        [json!({"pane_id": "w7:p1", "text": "\u{1b}[200~It is in Done\u{1b}[201~"})]
+        herdr.params("pane.send_input"),
+        [
+            json!({"pane_id": "w7:p1", "text": "\u{1b}[200~It is in Done\u{1b}[201~", "keys": ["enter"]})
+        ]
     );
-    assert_eq!(
-        herdr.params("agent.send_keys"),
-        [json!({"target": "w7:p1", "keys": ["enter"]})]
-    );
+    assert!(herdr.params("agent.send_keys").is_empty());
 }
 
 #[tokio::test]
-async fn codex_question_options_use_arrows_and_enter_without_approving() {
+async fn codex_question_and_approval_accept_manual_key_batches() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["codex"], &base);
@@ -3691,33 +3648,18 @@ async fn codex_question_options_use_arrows_and_enter_without_approving() {
     );
 
     down.keys.push(Key::Enter);
-    assert_eq!(
-        code(drive.send_keys(down, &yes()).await.0),
-        ErrorCode::AgentBlocked
-    );
+    assert_eq!(drive.send_keys(down, &yes()).await.0, Ok(Response::Ok));
     let approval = "Would you like to run the following command?\n› 1. Yes, proceed\n  2. No\nPress enter to confirm or esc to cancel\n";
     herdr.with(|h| h.text = approval.into());
-    assert_eq!(
-        code(drive.send_keys(enter, &yes()).await.0),
-        ErrorCode::AgentBlocked
-    );
-    assert_eq!(herdr.params("agent.send_keys").len(), 2);
+    assert_eq!(drive.send_keys(enter, &yes()).await.0, Ok(Response::Ok));
+    assert_eq!(herdr.params("agent.send_keys").len(), 4);
 }
 
 #[tokio::test]
-async fn plan_feedback_is_typed_but_keys_are_refused() {
+async fn plan_prompts_accept_manual_keys_and_text() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
-    let on_field = PLAN_LIVE
-        .replace(
-            "   ❯ 1. Yes, and use auto mode",
-            "     1. Yes, and use auto mode",
-        )
-        .replace(
-            "     3. Tell Claude what to change",
-            "   ❯ 3. Tell Claude what to change",
-        );
     let plan = |rule: &str| {
         block(&herdr, PLAN_LIVE);
         herdr.with(|h| h.rule = Some(rule.into()));
@@ -3725,18 +3667,9 @@ async fn plan_feedback_is_typed_but_keys_are_refused() {
 
     plan("legacy_no_prompt_blocker");
     assert_eq!(
-        code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
-        ErrorCode::AgentBlocked,
-        "a plan takes no keys"
+        drive.send_keys(keys(CLAUDE), &yes()).await.0,
+        Ok(Response::Ok)
     );
-    herdr.with(|h| {
-        h.screens = [
-            PLAN_LIVE.to_owned(),
-            on_field.clone(),
-            PLAN_TYPED_LIVE.to_owned(),
-        ]
-        .into()
-    });
     assert_eq!(
         drive
             .type_text(typed(CLAUDE, "use echo instead"), &yes())
@@ -3745,55 +3678,34 @@ async fn plan_feedback_is_typed_but_keys_are_refused() {
     );
     assert_eq!(
         herdr.params("agent.send_keys"),
+        [json!({"target": "w6:p1", "keys": ["down", "enter"]})]
+    );
+    assert_eq!(
+        herdr.params("pane.send_input"),
         [
-            json!({"target": "w6:p1", "keys": ["down", "down"]}),
-            json!({"target": "w6:p1", "keys": ["enter"]})
-        ],
-        "never shift+tab"
+            json!({"pane_id": "w6:p1", "text": "\u{1b}[200~use echo instead\u{1b}[201~", "keys": ["enter"]})
+        ]
     );
-    assert_eq!(
-        herdr.params("pane.send_text"),
-        [json!({"pane_id": "w6:p1", "text": "use echo instead"})]
-    );
-
-    herdr.with(|h| h.screens = [PLAN_LIVE.to_owned(), on_field.clone(), on_field.clone()].into());
-    assert_eq!(
-        code(
-            drive
-                .type_text(typed(CLAUDE, "use echo instead"), &yes())
-                .await
-        ),
-        ErrorCode::AgentNotReady,
-        "the field never showed the text"
-    );
-    assert_eq!(herdr.params("agent.send_keys").len(), 3, "no Enter");
-
-    herdr.with(|h| h.screens.clear());
     for rule in ["live_blocked_form", "bash_permission_prompt"] {
         plan(rule);
         assert_eq!(
-            code(
-                drive
-                    .type_text(typed(CLAUDE, "use echo instead"), &yes())
-                    .await
-            ),
-            ErrorCode::AgentBlocked,
+            drive
+                .type_text(typed(CLAUDE, "use echo instead"), &yes())
+                .await,
+            Ok(Response::Ok),
             "{rule}"
         );
     }
     plan("legacy_no_prompt_blocker");
     herdr.with(|h| h.text = PLAN_LIVE.replace("2. Yes, manually approve edits", "2. Yes"));
     assert_eq!(
-        code(
-            drive
-                .type_text(typed(CLAUDE, "use echo instead"), &yes())
-                .await
-        ),
-        ErrorCode::AgentBlocked,
-        "a menu with a decision is a permission prompt"
+        drive
+            .type_text(typed(CLAUDE, "use echo instead"), &yes())
+            .await,
+        Ok(Response::Ok)
     );
-    assert_eq!(herdr.params("pane.send_text").len(), 2);
-    assert_eq!(herdr.params("agent.send_keys").len(), 3);
+    assert_eq!(herdr.params("pane.send_input").len(), 4);
+    assert_eq!(herdr.params("agent.send_keys").len(), 1);
 }
 
 #[tokio::test]

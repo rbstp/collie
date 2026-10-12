@@ -168,13 +168,16 @@ final class FakeApprovalCore: ApprovalCore {
         var outcome = DecisionOutcome.applied(decision: .approve, by: "phone")
         var link: [String: LinkPhase] = ["m1": .connected, "m2": .waiting]
         var flocks = 0
+        var removed: Set<String> = []
     }
 
     let state = Mutex(State())
     let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "nMAC", kind: .mac, key: "")
     let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
 
-    func machines() -> [Machine] { [mac, linux] }
+    func machines() -> [Machine] {
+        state.withLock { s in [mac, linux].filter { !s.removed.contains($0.id) } }
+    }
     func approvalFeed(machineId: String) -> ApprovalFeed? {
         let (link, pending) = state.withLock { ($0.link[machineId] ?? .stopped, $0.pending[machineId] ?? []) }
         return ApprovalFeed(link: link, pending: pending)
@@ -419,6 +422,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     #expect(model.loading == nil)
     #expect(model.items.map(\.id) == ["ap_1"])
     #expect(model.notice == nil)
+    #expect(model.session(for: link) == AgentRoute(machineId: "m1", terminalId: "term_1"))
 }
 
 @MainActor
@@ -433,6 +437,91 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     let unknown = try #require(ApprovalLink(nodeId: "nOTHER", approvalId: "ap_1"))
     #expect(model.open(unknown) == nil)
     #expect(model.loading == nil)
+    #expect(model.notice == "This machine is no longer paired with this phone.")
+}
+
+@Test func iPhoneTabsExcludeApprovals() {
+    #expect(AppTab.allCases == [.agents, .machines, .settings])
+}
+
+@Test func approvalNotificationThreadsRouteOnlyToPairedMachines() throws {
+    let core = FakeApprovalCore()
+    let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+    #expect(AppModel.route(for: link, terminalId: "term_2", machines: core.machines()) == AgentRoute(machineId: "m1", terminalId: "term_2"))
+    #expect(AppModel.route(for: link, terminalId: nil, machines: core.machines()) == nil)
+    #expect(AppModel.route(for: link, terminalId: "../term_2", machines: core.machines()) == nil)
+    #expect(AppModel.route(for: link, terminalId: "term_2", machines: [core.linux]) == nil)
+}
+
+@MainActor
+@Test func approvalSessionLookupIsScopedToItsMachine() throws {
+    let core = FakeApprovalCore()
+    var other = approval("ap_1")
+    other.terminalId = "term_2"
+    core.state.withLock {
+        $0.pending["m1"] = [approval("ap_1")]
+        $0.pending["m2"] = [other]
+    }
+    let model = ApprovalsModel(core: core)
+    model.poll()
+    let mac = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+    let linux = try #require(ApprovalLink(nodeId: "nLINUX", approvalId: "ap_1"))
+    #expect(model.session(for: mac) == AgentRoute(machineId: "m1", terminalId: "term_1"))
+    #expect(model.session(for: linux) == AgentRoute(machineId: "m2", terminalId: "term_2"))
+}
+
+@MainActor
+@Test(arguments: [LinkPhase.unavailable, .offline])
+func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async throws {
+    let core = FakeApprovalCore()
+    core.state.withLock { $0.link["m1"] = phase }
+    let model = ApprovalsModel(core: core)
+    let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+    await model.open(link)?.value
+    #expect(model.loading == nil)
+    #expect(model.notice == "Couldn't reach this machine. Try again after it reconnects.")
+    #expect(model.session(for: link) == nil)
+    #expect(AppModel.route(for: link, terminalId: "term_1", machines: core.machines()) == AgentRoute(machineId: "m1", terminalId: "term_1"))
+}
+
+@MainActor
+@Test func connectingApprovalLookupHasABoundedRetryWindow() async throws {
+    let core = FakeApprovalCore()
+    core.state.withLock { $0.link["m1"] = .connecting }
+    let model = ApprovalsModel(core: core, openingTimeout: .milliseconds(30))
+    let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+    await model.open(link)?.value
+    #expect(model.loading == nil)
+    #expect(model.notice == "Couldn't load this approval. Try again after the machine connects.")
+    #expect(model.session(for: link) == nil)
+}
+
+@MainActor
+@Test func leavingAnApprovalLinkCancelsItsLoading() async throws {
+    let core = FakeApprovalCore()
+    core.state.withLock { $0.link["m1"] = .connecting }
+    let model = ApprovalsModel(core: core)
+    let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+    let pending = model.open(link)
+    model.cancelOpening()
+    await pending?.value
+    #expect(model.loading == nil)
+    #expect(model.highlighted == nil)
+    #expect(model.notice == nil)
+}
+
+@MainActor
+@Test func removingAMachineEndsApprovalLoading() async throws {
+    let core = FakeApprovalCore()
+    core.state.withLock { $0.link["m1"] = .connecting }
+    let model = ApprovalsModel(core: core)
+    let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+    let pending = model.open(link)
+    while core.state.withLock({ $0.flocks }) == 0 { await Task.yield() }
+    core.state.withLock { $0.removed = ["m1"] }
+    await pending?.value
+    #expect(model.loading == nil)
+    #expect(model.notice == "This machine is no longer paired with this phone.")
 }
 
 @MainActor
@@ -612,6 +701,39 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
 }
 
 @MainActor
+@Test func approvalCardAnswersShareTheSessionInputQueue() async throws {
+    let core = FakeApprovalCore()
+    core.state.withLock {
+        $0.pending["m1"] = [approval("ap_plan", options: [], choices: planChoices, hasTextField: true)]
+    }
+    let model = ApprovalsModel(core: core)
+    model.poll()
+    let item = try #require(model.items.first)
+    model.drafts[item.id] = "DuckDB"
+
+    let agentCore = FakeCore()
+    agentCore.state.withLock {
+        $0.kind = "claude"
+        $0.status = .blocked
+    }
+    let session = AgentModel(core: agentCore, route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil)
+    session.poll()
+    agentCore.set(hold: true)
+    let drain = session.tap(.down)
+    await agentCore.waitHeld(1)
+    session.tap(.down)
+    let answer = Task { await model.sendFeedback(item, send: session.typeAnswer) }
+    while model.steps[item.id] == nil { await Task.yield() }
+    #expect(agentCore.snapshot.typed.isEmpty)
+    agentCore.release()
+    await answer.value
+    await drain?.value
+    #expect(agentCore.snapshot.input == [.keys([.down]), .keys([.down]), .text("DuckDB")])
+    #expect(core.state.withLock { $0.typed }.isEmpty)
+    #expect(model.drafts[item.id] == nil)
+}
+
+@MainActor
 @Test func planFeedbackIsTypedIntoItsTextField() async throws {
     let core = FakeApprovalCore()
     let auth = FakeAuthenticator()
@@ -643,7 +765,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     await model.sendFeedback(plan)
     #expect(core.state.withLock { $0.typed } == ["m1 term_1 use echo instead", "m1 term_1 use echo instead"])
     #expect(model.drafts[plan.id] == nil)
-    #expect(model.notice == "Sent your feedback to claude.")
+    #expect(model.notice == "Sent your answer to claude.")
     #expect(auth.state.withLock { $0.reasons }.isEmpty)
     #expect(core.state.withLock { $0.decisions }.isEmpty)
 }

@@ -167,7 +167,6 @@
     },
     "AgentTypeTextParams": {
       "additionalProperties": false,
-      "description": "Typed into the free-text field of a blocked Claude Code question or plan, then Enter.\nOne line without bidi or invisible format characters: Enter is what submits it.",
       "properties": {
         "op_id": {
           "$ref": "#/$defs/OpId"
