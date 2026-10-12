@@ -65,6 +65,9 @@ import UIKit
     #expect(rows.map(\.newLine) == [nil, 1, 2, 3, 4, 5, 6, 7, 8, 9, nil, 10, 11])
     #expect(rows.allSatisfy { $0.oldLine == nil })
     #expect(rows.map(\.text) == ["@@@ -1,6 -1,5 +1,11 @@@", "one", "<<<<<<< HEAD", "TWO main", "||||||| c6c83ac", "two", "=======", "TWO side", ">>>>>>> side", "", "three", "four", "five"])
+    let removed = GitDiffRow.parse("@@@ -1,3 -1,3 +1,2 @@@\n- a\n -b\n  c\n\n")
+    #expect(removed.map(\.kind) == [.hunk, .removed, .removed, .context, .context])
+    #expect(removed.map(\.newLine) == [nil, nil, nil, 1, 2])
 }
 
 @Test func gitDiffSelectionUsesUTF16AndAnchorsTheLastSelectedRow() throws {

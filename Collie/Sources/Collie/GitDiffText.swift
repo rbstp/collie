@@ -37,7 +37,7 @@ struct GitDiffRow: Identifiable, Equatable {
                                  oldLine: kind == .added || parents > 1 ? nil : oldLine, newLine: kind == .removed ? nil : newLine))
                 if kind != .added { old = oldLine + 1 }
                 if kind != .removed { new = newLine + 1 }
-                for (column, mark) in prefix.enumerated() where mark != "+" { left[column] -= 1 }
+                for (column, mark) in prefix.enumerated() where kind == .removed ? mark == "-" : mark != "+" { left[column] -= 1 }
                 if kind != .removed { left[parents] -= 1 }
             } else if line.hasPrefix("\\ ") || line.hasPrefix("Binary ") || line.hasPrefix("New empty ") {
                 rows.append(Self(id: rows.count, kind: .notice, text: line))
