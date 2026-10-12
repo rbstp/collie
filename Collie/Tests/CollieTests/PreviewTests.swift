@@ -34,9 +34,7 @@ private func entry(
 @MainActor
 private func running(_ model: PreviewModel, _ core: FakeCore, screens: Int) async -> Task<Void, Never> {
     let run = Task { await model.run(core: core) }
-    while model.screens.count < screens {
-        await Task.yield()
-    }
+    await poll { model.screens.count >= screens }
     return run
 }
 
@@ -525,7 +523,8 @@ private func capture(_ name: String) throws -> [String] {
     model.update([entry("m1", [("t1", .idle), ("t2", .idle)])])
     let run = Task { await model.run(core: core) }
     // Until `run` has the core, a toggle does nothing.
-    while core.snapshot.stars.isEmpty {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    while core.snapshot.stars.isEmpty, ContinuousClock.now < deadline {
         await Task.yield()
         await model.toggleStar(route("t1"))
     }

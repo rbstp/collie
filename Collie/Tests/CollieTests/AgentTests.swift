@@ -747,7 +747,7 @@ func answersStayBetweenEarlierAndLaterTerminalKeys(first: AgentKey) async {
     model.tap(.down)
     model.draft = "DuckDB"
     let answer = Task { await model.sendPrompt() }
-    while !model.sendingPrompt { await Task.yield() }
+    await poll { model.sendingPrompt }
     model.tap(.right)
     #expect(core.snapshot.input == [.keys([first])])
     core.release()
@@ -771,7 +771,7 @@ func answersStayBetweenEarlierAndLaterTerminalKeys(first: AgentKey) async {
     await core.waitHeld(1)
     model.draft = "DuckDB"
     let answer = Task { await model.sendPrompt() }
-    while !model.sendingPrompt { await Task.yield() }
+    await poll { model.sendingPrompt }
     core.release()
     await answer.value
     await drain?.value
@@ -816,7 +816,7 @@ func answersStayBetweenEarlierAndLaterTerminalKeys(first: AgentKey) async {
     await core.waitHeld(1)
     model.draft = "DuckDB"
     let answer = Task { await model.sendPrompt() }
-    while !model.sendingPrompt { await Task.yield() }
+    await poll { model.sendingPrompt }
     core.state.withLock {
         $0.kind = nil
         $0.shell = shellPane

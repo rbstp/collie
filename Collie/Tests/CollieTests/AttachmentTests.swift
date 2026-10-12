@@ -62,7 +62,7 @@ func png(width: CGFloat, height: CGFloat) -> Data {
     #expect(model.upload?.name == "notes.txt")
     #expect(model.attach(name: "other.txt") { _ in Data([1]) } == nil)
     await core.waitHeld(1)
-    while model.upload?.sent != 50_000 { await Task.yield() }
+    await poll { model.upload?.sent == 50_000 }
     #expect(model.upload?.fraction == 0.5)
     core.release()
     await upload?.value

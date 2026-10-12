@@ -78,7 +78,7 @@ private func page(_ messages: [HistoryMessage], session: String = "s1", reset: B
             await withCheckedContinuation { pending = $0 }
         }
     }
-    while pending == nil { await Task.yield() }
+    await poll { pending != nil }
     model.begin(query: "needle")
     await model.fetch { before, after, query in
         #expect(before == nil && after == nil)
@@ -98,7 +98,7 @@ private func page(_ messages: [HistoryMessage], session: String = "s1", reset: B
     let task = Task {
         await model.fetch { _, _, _ in await withCheckedContinuation { pending = $0 } }
     }
-    while pending == nil { await Task.yield() }
+    await poll { pending != nil }
     task.cancel()
     pending?.resume(returning: page([message("late")]))
     await task.value
@@ -243,7 +243,7 @@ private func tool(_ id: String, call: String? = nil, result: Bool = false) -> Hi
             await withCheckedContinuation { pending = $0 }
         }
     }
-    while pending == nil { await Task.yield() }
+    await poll { pending != nil }
     #expect(model.loadingOlder)
     pending?.resume(returning: page([message("older")], before: nil))
     await task.value

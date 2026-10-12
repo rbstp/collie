@@ -509,7 +509,7 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     let model = ApprovalsModel(core: core)
     let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
     let pending = model.open(link)
-    while core.state.withLock({ $0.flocks }) == 0 { await Task.yield() }
+    await poll { core.state.withLock { $0.flocks } > 0 }
     core.state.withLock { $0.removed = ["m1"] }
     await pending?.value
     #expect(model.loading == nil)
@@ -713,7 +713,7 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     await agentCore.waitHeld(1)
     session.tap(.down)
     let answer = Task { await model.sendFeedback(item, send: session.typeAnswer) }
-    while model.steps[item.id] == nil { await Task.yield() }
+    await poll { model.steps[item.id] != nil }
     #expect(agentCore.snapshot.typed.isEmpty)
     agentCore.release()
     await answer.value
