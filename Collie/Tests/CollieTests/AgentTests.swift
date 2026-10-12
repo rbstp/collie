@@ -86,9 +86,7 @@ final class FakeCore: AgentCore {
     }
 
     func waitHeld(_ count: Int) async {
-        while state.withLock({ $0.held.count }) < count {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await poll { state.withLock { $0.held.count } >= count }
     }
 
     func release() {
@@ -315,9 +313,7 @@ final class FakeCore: AgentCore {
     let first = AgentModel(core: core, route: AgentRoute(machineId: "replaced", terminalId: "term_1"), prefsFile: nil)
     let second = AgentModel(core: core, route: AgentRoute(machineId: "replaced", terminalId: "term_2"), prefsFile: nil)
     func waitWatches(_ count: Int) async {
-        while core.snapshot.watches.count < count {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await poll { core.snapshot.watches.count >= count }
     }
     let firstRun = Task { await first.run() }
     await waitWatches(1)
@@ -516,9 +512,7 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
     try? await Task.sleep(for: .milliseconds(300))
     #expect(core.snapshot.draftReads == 0)
     core.state.withLock { $0.kind = "claude" }
-    for _ in 0..<400 where model.macDraft == nil {
-        try? await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { model.macDraft != nil }
     run.cancel()
     await run.value
     #expect(core.snapshot.draftReads == 1)
@@ -1572,9 +1566,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     let model = AgentModel(core: core, route: AgentRoute(machineId: "history", terminalId: "term_1"), prefsFile: file)
     func runOnce(_ watches: Int) async {
         let run = Task { await model.run() }
-        while core.snapshot.watches.count < watches {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await poll { core.snapshot.watches.count >= watches }
         run.cancel()
         await run.value
     }
@@ -1589,9 +1581,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     prefs.save(to: file)
     await runOnce(3)
     await model.refresh()
-    while core.snapshot.watches.count < 4 {
-        try? await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { core.snapshot.watches.count >= 4 }
     #expect(core.snapshot.watches == ["term_1", nil, "term_1", nil])
     #expect(core.snapshot.depths == [200, 200, 200, 1000, 1000, 1000])
     #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, historyLines: 1000))
@@ -2086,17 +2076,13 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
     model.poll()
     #expect(!model.terminalLocked)
     #expect(model.paneNotice == nil)
-    while core.snapshot.shellWatches.isEmpty {
-        try? await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { !core.snapshot.shellWatches.isEmpty }
     #expect(core.snapshot.shellWatches == ["term_1"])
 
     core.state.withLock { $0.kind = "claude" }
     model.poll()
     #expect(model.mode == .agent)
-    while core.snapshot.watches.isEmpty {
-        try? await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { !core.snapshot.watches.isEmpty }
     #expect(core.snapshot.watches == ["term_1"], "back to the agent's watch")
 }
 
@@ -2249,9 +2235,7 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
 
     core.state.withLock { $0.kind = "claude" }
     model.poll()
-    while core.snapshot.watches.isEmpty {
-        try? await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { !core.snapshot.watches.isEmpty }
     #expect(core.snapshot.watches == ["term_1"])
     #expect(core.snapshot.shellWatches.isEmpty)
 }
@@ -2316,9 +2300,7 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     let model = await slashReady(core)
     model.typed("/")
     model.typed("/s")
-    for _ in 0..<100 where core.snapshot.slashes.isEmpty {
-        try? await Task.sleep(for: .milliseconds(10))
-    }
+    await poll { !core.snapshot.slashes.isEmpty }
     #expect(core.snapshot.slashes == ["/s"], "debounced")
 
     core.set(hold: true)
@@ -2735,9 +2717,5 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     model.showArchiveNotice("Closed pane. gh poi did not complete (timeout); branch cleanup may be partial.")
     try await Task.sleep(for: .seconds(1.3))
     #expect(model.archiveNotice == "Archive complete\nSome branches could not be cleaned up.")
-    let deadline = ContinuousClock.now + .seconds(5)
-    while model.archiveNotice != nil, ContinuousClock.now < deadline {
-        try await Task.sleep(for: .milliseconds(20))
-    }
-    #expect(model.archiveNotice == nil)
+    await poll { model.archiveNotice == nil }
 }

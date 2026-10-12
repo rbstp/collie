@@ -60,20 +60,13 @@ final class FakeDictationEngine: DictationEngine {
 }
 
 @MainActor
-private func until(_ condition: () -> Bool) async {
-    for _ in 0..<500 where !condition() {
-        try? await Task.sleep(for: .milliseconds(2))
-    }
-}
-
-@MainActor
 private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) async -> AgentModel {
     let model = AgentModel(
         core: FakeCore(), route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: prefsFile, dictationEngine: engine
     )
     model.draft = "fix"
     model.startDictation()
-    await until { model.dictation.phase == .listening }
+    await poll { model.dictation.phase == .listening }
     return model
 }
 
@@ -87,12 +80,12 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     model.cwd = "/Users/me/app"
     model.prompt = "fix"
     model.startDictation()
-    await until { model.dictation.phase == .listening }
+    await poll { model.dictation.phase == .listening }
     #expect(!model.canStart)
     await engine.send(.final("the build"))
-    await until { model.prompt == "fix the build" }
+    await poll { model.prompt == "fix the build" }
     model.dictation.stop()
-    await until { !model.dictation.isActive }
+    await poll { !model.dictation.isActive }
     #expect(model.prompt == "fix the build")
     #expect(model.canStart)
 }
@@ -105,27 +98,27 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     #expect(engine.started == [.english])
 
     await engine.send(.level(0.5))
-    await until { model.dictation.levels == [0.5] }
+    await poll { model.dictation.levels == [0.5] }
     #expect(model.dictation.levels == [0.5])
     await engine.send(.volatile("the bil"))
-    await until { model.draft == "fix the bil" }
+    await poll { model.draft == "fix the bil" }
     #expect(model.draft == "fix the bil")
     await engine.send(.volatile("the build"))
-    await until { model.draft == "fix the build" }
+    await poll { model.draft == "fix the build" }
     #expect(model.draft == "fix the build")
     await engine.send(.final("the build."))
-    await until { model.draft == "fix the build." }
+    await poll { model.draft == "fix the build." }
     #expect(model.draft == "fix the build.")
     await engine.send(.volatile("and"))
-    await until { model.draft == "fix the build. and" }
+    await poll { model.draft == "fix the build. and" }
     #expect(model.draft == "fix the build. and")
     await engine.send(.final(" and the tests"))
-    await until { model.draft == "fix the build. and the tests" }
+    await poll { model.draft == "fix the build. and the tests" }
     #expect(model.draft == "fix the build. and the tests")
 
     model.dictation.stop()
     #expect(model.dictation.phase == .finishing)
-    await until { !model.dictation.isActive }
+    await poll { !model.dictation.isActive }
     #expect(engine.finished == 1)
     #expect(model.draft == "fix the build. and the tests")
     #expect(model.dictation.levels.isEmpty)
@@ -146,7 +139,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     #expect(model.draft == "fix heard words")
     model.dictation.stop()
     #expect(model.dictation.levels.isEmpty)
-    await until { !model.dictation.isActive }
+    await poll { !model.dictation.isActive }
 }
 
 @MainActor
@@ -155,7 +148,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     let model = await dictating(engine)
     await engine.send(.level(0.7))
     model.dictation.select(.french)
-    await until { engine.started.count == 2 && model.dictation.phase == .listening }
+    await poll { engine.started.count == 2 && model.dictation.phase == .listening }
     #expect(model.dictation.levels.isEmpty)
     await engine.send(.level(0.2))
     #expect(model.dictation.levels == [0.2])
@@ -168,7 +161,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     let engine = FakeDictationEngine()
     let model = await dictating(engine)
     await engine.send(.volatile("hello"))
-    await until { model.draft == "fix hello" }
+    await poll { model.draft == "fix hello" }
 
     model.paste("pasted")
     #expect(model.draft == "fix hello")
@@ -210,14 +203,14 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     let model = await dictating(engine, prefsFile: file)
     #expect(model.dictation.language == .english)
     await engine.send(.volatile("bonjour"))
-    await until { model.draft == "fix bonjour" }
+    await poll { model.draft == "fix bonjour" }
 
     model.dictation.select(.french)
-    await until { engine.started.count == 2 && model.dictation.phase == .listening }
+    await poll { engine.started.count == 2 && model.dictation.phase == .listening }
     #expect(engine.started == [.english, .french])
     #expect(engine.cancelled == 1)
     await engine.send(.final("à tous"))
-    await until { model.draft == "fix bonjour à tous" }
+    await poll { model.draft == "fix bonjour à tous" }
     #expect(model.draft == "fix bonjour à tous")
     #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, dictationLanguage: .french))
 
@@ -245,7 +238,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
 
     engine.microphone = true
     model.startDictation()
-    await until { model.dictation.phase == .listening }
+    await poll { model.dictation.phase == .listening }
     #expect(model.dictation.problem == nil)
     model.dictation.cancel()
 }
@@ -266,10 +259,10 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     dictation.select(.english)
     #expect(dictation.problem == nil)
     dictation.start(appendingTo: "") { _ in }
-    await until { engine.installing }
+    await poll { engine.installing }
     #expect(dictation.phase == .preparing(download: 0.5))
     engine.finishInstall()
-    await until { dictation.phase == .listening }
+    await poll { dictation.phase == .listening }
     #expect(engine.started == [.english])
     dictation.cancel()
 }
@@ -280,7 +273,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     engine.holdsInstall = true
     let dictation = DictationModel(engine: engine, language: .english, prefsFile: nil)
     let task = dictation.start(appendingTo: "") { _ in }
-    await until { engine.installing }
+    await poll { engine.installing }
     dictation.stop()
     #expect(!dictation.isActive)
     engine.finishInstall()
@@ -298,7 +291,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     model.dictation.scenePhaseChanged(to: .inactive)
     #expect(model.dictation.phase == .listening)
     model.dictation.scenePhaseChanged(to: .background)
-    await until { !model.dictation.isActive }
+    await poll { !model.dictation.isActive }
     #expect(engine.finished == 1)
     #expect(model.draft == "fix half a sentence")
 }
@@ -309,7 +302,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     let model = await dictating(engine)
     await engine.send(.final("done"))
     engine.fail(CocoaError(.featureUnsupported))
-    await until { !model.dictation.isActive }
+    await poll { !model.dictation.isActive }
     #expect(model.draft == "fix done")
     #expect(model.dictation.problem?.message.hasPrefix("Dictation stopped: ") == true)
     #expect(engine.cancelled == 1)

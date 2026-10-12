@@ -19,11 +19,13 @@ final class NewTaskSheetTests: XCTestCase {
                 return descendants(host.view).compactMap { $0 as? UITextView }.first { $0.text == model.prompt }
             }
             let navigation = try XCTUnwrap(controllers(host).compactMap { $0 as? UINavigationController }.first)
-            navigation.pushViewController(UIHostingController(rootView: Text("Folders")), animated: false)
-            try await Task.sleep(for: .milliseconds(250))
+            let root = try XCTUnwrap(navigation.topViewController)
+            let folders = UIHostingController(rootView: Text("Folders"))
+            navigation.pushViewController(folders, animated: false)
+            _ = try await waitFor("folders") { folders.view.window != nil && root.view.window == nil ? true : nil }
             XCTAssertFalse(model.cancelled)
             navigation.popViewController(animated: false)
-            try await Task.sleep(for: .milliseconds(250))
+            _ = try await waitFor("sheet root") { root.view.window != nil && folders.view.window == nil ? true : nil }
             XCTAssertFalse(model.cancelled)
             XCTAssertTrue(model.canStart)
             XCTAssertEqual(model.prompt, "keep this prompt")

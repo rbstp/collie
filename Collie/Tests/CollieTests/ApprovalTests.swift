@@ -231,9 +231,7 @@ final class FakeAuthenticator: Authenticator {
     }
 
     func waitHeld() async {
-        while state.withLock({ $0.held.isEmpty }) {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        await poll { !state.withLock { $0.held.isEmpty } }
     }
 
     func release(result: Bool) {
@@ -405,9 +403,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
     let load = model.open(link)
     #expect(model.loading?.link == link)
-    while core.state.withLock({ $0.flocks }) < 2 {
-        try await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { core.state.withLock { $0.flocks } >= 2 }
     #expect(model.loading?.phase == .connecting)
     #expect(model.items.isEmpty)
 
@@ -531,9 +527,7 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     await model.decide(item, .approve)
     #expect(model.notice == "Approved: claude. The agent moved on.")
     #expect(model.items.isEmpty)
-    while model.notice != nil {
-        try await Task.sleep(for: .milliseconds(5))
-    }
+    await poll { model.notice == nil }
 }
 
 @MainActor

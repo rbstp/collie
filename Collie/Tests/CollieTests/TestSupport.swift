@@ -1,5 +1,6 @@
 import CollieCore
 import Foundation
+import Testing
 import UIKit
 import XCTest
 
@@ -49,6 +50,20 @@ func waitFor<T>(_ description: String, value: () -> T?) async throws -> T {
         try await Task.sleep(for: .milliseconds(50))
     } while ContinuousClock.now < deadline
     return try XCTUnwrap(value(), "Timed out waiting for \(description)")
+}
+
+func poll(
+    timeout: Duration = .seconds(10), isolation: isolated (any Actor)? = #isolation,
+    sourceLocation: SourceLocation = #_sourceLocation, until condition: () -> Bool
+) async {
+    let deadline = ContinuousClock.now.advanced(by: timeout)
+    while !condition() {
+        guard ContinuousClock.now < deadline else {
+            Issue.record("Timed out polling", sourceLocation: sourceLocation)
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
 }
 
 @MainActor
