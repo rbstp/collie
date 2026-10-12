@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
-use protocol::{AttachmentName, ErrorCode, Sha256Hex, UploadId, limits};
+use protocol::{AttachmentName, ErrorCode, Sha256Hex, UploadId, hex, limits};
 use sha2::{Digest, Sha256};
 
 use crate::drive::{Fail, fail};
@@ -62,10 +62,6 @@ pub fn sanitize(name: &str) -> String {
         }
         None => stem[..stem.len().min(max)].to_owned(),
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn random_hex(n: usize) -> String {

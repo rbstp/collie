@@ -8,9 +8,19 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-schemars.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+protocol = { workspace = true, features = ["schema"] }
+
+[features]
+schema = ["dep:schemars"]
+
+[[bin]]
+name = "protocol-schema"
+required-features = ["schema"]
 
 [lints]
 workspace = true
