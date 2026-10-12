@@ -38,6 +38,7 @@ extension DevicePrefs {
     }
 
     /// Another watch needs a fresh authenticated opt-in before it can decide.
+    @MainActor
     static func turnOffWatchDecisions(in file: URL?) {
         var prefs = load(from: file)
         if prefs.watchDecisions {
@@ -50,18 +51,18 @@ extension DevicePrefs {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = DevicePrefs()
-        wrapLines = try container.decodeIfPresent(Bool.self, forKey: .wrapLines) ?? defaults.wrapLines
-        keepKeyboard = try container.decodeIfPresent(Bool.self, forKey: .keepKeyboard) ?? defaults.keepKeyboard
+        wrapLines = (try? container.decodeIfPresent(Bool.self, forKey: .wrapLines)) ?? defaults.wrapLines
+        keepKeyboard = (try? container.decodeIfPresent(Bool.self, forKey: .keepKeyboard)) ?? defaults.keepKeyboard
         gestures = (try? container.decodeIfPresent(TerminalGestures.self, forKey: .gestures)) ?? defaults.gestures
-        fontSize = try container.decodeIfPresent(Double.self, forKey: .fontSize) ?? defaults.fontSize
+        fontSize = (try? container.decodeIfPresent(Double.self, forKey: .fontSize)) ?? defaults.fontSize
         dictationLanguage = (try? container.decodeIfPresent(DictationLanguage.self, forKey: .dictationLanguage)) ?? defaults.dictationLanguage
         agentsLayout = (try? container.decodeIfPresent(AgentsLayout.self, forKey: .agentsLayout)) ?? defaults.agentsLayout
-        historyLines = try container.decodeIfPresent(UInt16.self, forKey: .historyLines) ?? defaults.historyLines
+        historyLines = (try? container.decodeIfPresent(UInt16.self, forKey: .historyLines)) ?? defaults.historyLines
         defaultSessionView = (try? container.decodeIfPresent(SessionView.self, forKey: .defaultSessionView)) ?? defaults.defaultSessionView
-        watchDecisions = try container.decodeIfPresent(Bool.self, forKey: .watchDecisions) ?? defaults.watchDecisions
-        doneAlerts = try container.decodeIfPresent(Bool.self, forKey: .doneAlerts) ?? defaults.doneAlerts
+        watchDecisions = (try? container.decodeIfPresent(Bool.self, forKey: .watchDecisions)) ?? defaults.watchDecisions
+        doneAlerts = (try? container.decodeIfPresent(Bool.self, forKey: .doneAlerts)) ?? defaults.doneAlerts
         accent = (try? container.decodeIfPresent(AppAccent.self, forKey: .accent)) ?? defaults.accent
-        taskBases = try container.decodeIfPresent([String: String].self, forKey: .taskBases) ?? defaults.taskBases
+        taskBases = (try? container.decodeIfPresent([String: String].self, forKey: .taskBases)) ?? defaults.taskBases
     }
 
     /// Kept only once collied has listed it, in the canonical form it returned.

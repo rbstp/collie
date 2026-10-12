@@ -44,6 +44,16 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
     #expect(!prefs.wrapLines)
 }
 
+@Test(arguments: [
+    #""wrapLines":"yes""#, #""fontSize":"big""#, #""historyLines":70000"#,
+    #""watchDecisions":"true""#, #""doneAlerts":0"#, #""taskBases":[]"#,
+])
+func prefsWithOneWrongTypedFieldKeepTheOthers(_ wrong: String) throws {
+    let file = try write(#"{"keepKeyboard":true,"accent":"red",\#(wrong)}"#, as: "prefs.json")
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    #expect(DevicePrefs.load(from: file) == DevicePrefs(keepKeyboard: true, accent: .red))
+}
+
 @Test func prefsFromBeforeDoneAlertsKeepThemOn() throws {
     #expect(try JSONDecoder().decode(DevicePrefs.self, from: Data(#"{"wrapLines":false,"watchDecisions":true}"#.utf8)).doneAlerts)
     #expect(DevicePrefs.load(from: nil).doneAlerts)

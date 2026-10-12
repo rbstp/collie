@@ -447,6 +447,7 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(auth.state.withLock { $0.reasons }.count == 2)
 }
 
+@MainActor
 @Test func anotherWatchTurnsWatchDecisionsOff() throws {
     let file = try prefsFile()
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }

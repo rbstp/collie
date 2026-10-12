@@ -30,6 +30,43 @@ import UIKit
     #expect(GitDiffRow.parse("@@ - + @@\n").isEmpty)
 }
 
+@Test func gitDiffKeepsAnEmptyContextLineWithoutAddingTheTrailingNewline() {
+    let rows = GitDiffRow.parse("@@ -1,3 +1,3 @@\n a\n\n-b\n+c\n")
+    #expect(rows.map(\.kind) == [.hunk, .context, .context, .removed, .added])
+    #expect(rows.map(\.oldLine) == [nil, 1, 2, 3, nil])
+    #expect(rows.map(\.newLine) == [nil, 1, 2, nil, 3])
+    #expect(rows[2].text.isEmpty)
+    #expect(GitDiffRow.parse("@@ -1,2 +1,2 @@\n a\n-b\n+c\n\n").count == 4)
+}
+
+@Test func gitDiffShowsCombinedMergeConflictDiffs() {
+    let patch = """
+        diff --cc f
+        index b8cdd60,d24f24b..0000000
+        --- a/f
+        +++ b/f
+        @@@ -1,6 -1,5 +1,11 @@@
+          one
+        ++<<<<<<< HEAD
+         +TWO main
+        ++||||||| c6c83ac
+        ++two
+        ++=======
+        + TWO side
+        ++>>>>>>> side
+          \("")
+        --three
+          four
+         +five
+
+        """
+    let rows = GitDiffRow.parse(patch)
+    #expect(rows.map(\.kind) == [.hunk, .context, .added, .added, .added, .added, .added, .added, .added, .context, .removed, .context, .added])
+    #expect(rows.map(\.newLine) == [nil, 1, 2, 3, 4, 5, 6, 7, 8, 9, nil, 10, 11])
+    #expect(rows.allSatisfy { $0.oldLine == nil })
+    #expect(rows.map(\.text) == ["@@@ -1,6 -1,5 +1,11 @@@", "one", "<<<<<<< HEAD", "TWO main", "||||||| c6c83ac", "two", "=======", "TWO side", ">>>>>>> side", "", "three", "four", "five"])
+}
+
 @Test func gitDiffSelectionUsesUTF16AndAnchorsTheLastSelectedRow() throws {
     let rows = GitDiffRow.parse("@@ -1,2 +1,2 @@\n-old 🐑\n+new 🐑\n context\n")
     let block = GitDiffBlock(rows: rows)

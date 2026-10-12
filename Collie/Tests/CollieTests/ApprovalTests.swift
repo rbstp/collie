@@ -89,8 +89,9 @@ import UserNotifications
         ("mixed", ["node_id": "nMAC", "terminal_id": "term_2", "approval_id": "ap_2"]),
         ("bad-terminal", ["node_id": "nMAC", "terminal_id": "../term"]),
         ("done-b", ["node_id": "nOTHER", "terminal_id": "term_3"]),
+        ("done-herdr", ["node_id": "nMAC", "terminal_id": "w6:p1.a-b"]),
     ]
-    #expect(DoneNotification.identifiers(delivered) == ["done-a", "done-b"])
+    #expect(DoneNotification.identifiers(delivered) == ["done-a", "done-b", "done-herdr"])
 }
 
 @Test func reachabilityParsing() {
