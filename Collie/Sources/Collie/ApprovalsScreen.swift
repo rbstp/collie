@@ -119,7 +119,7 @@ struct ApprovalCard: View {
                 NoteField(model: model, item: item)
             }
             if approval.answeredInTerminal {
-                Label(questionInSession ? "Answer the question in this session" : "Answer it in the terminal on \(item.machine.label)", systemImage: "terminal")
+                Label(questionInSession ? "Use the terminal buttons or type an answer" : "Open this agent's session to answer", systemImage: "terminal")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -176,14 +176,13 @@ private struct NoteField: View {
     }
 }
 
-/// The plan's "Tell Claude what to change", sent with `typeText`.
 private struct FeedbackField: View {
     let model: ApprovalsModel
     let item: ApprovalItem
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField("Tell Claude what to change", text: model.draft(item))
+            TextField("Answer this prompt", text: model.draft(item))
                 .textFieldStyle(.roundedBorder)
                 .submitLabel(.send)
                 .onSubmit { Task { await model.sendFeedback(item) } }
@@ -200,7 +199,7 @@ private struct FeedbackField: View {
             .buttonBorderShape(.circle)
             .controlSize(.small)
             .disabled(model.drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityLabel("Send feedback")
+            .accessibilityLabel("Send answer")
         }
         .disabled(item.unreachable || model.steps[item.id] != nil)
     }

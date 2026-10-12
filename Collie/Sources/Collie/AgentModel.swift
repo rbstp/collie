@@ -68,7 +68,6 @@ final class AgentModel {
     private var uploadTask: Task<Void, Never>?
     private(set) var attachments: [AttachedFile] = []
 
-    /// nil while no approval blocks the agent; collied refuses keys and text on the rest.
     var blocked: BlockedInput?
     private(set) var notice: String?
     private(set) var keyTaps = 0
@@ -175,7 +174,7 @@ final class AgentModel {
     var commandShown: Bool { mode == .agent && blocked == nil && agent?.status != .blocked && macDraft?.hasPrefix("/") == true }
 
     var acceptsKeys: Bool {
-        isTerminal ? !unlocking : (agent?.kind == "copilot" || blocked != .optionsOnly && blocked != .terminal) && !jumpBanner
+        isTerminal ? !unlocking : answering || !jumpBanner
     }
 
     var keyStrip: [AgentKey] {
@@ -184,8 +183,6 @@ final class AgentModel {
 
     func accepts(_ key: AgentKey) -> Bool {
         if key == .shiftLeft { return agent?.kind == "codex" }
-        if codexQuestionQueued { return false }
-        if codexQuestionOpen { return key == .up || key == .down || key == .enter }
         return acceptsKeys
     }
 
@@ -207,8 +204,7 @@ final class AgentModel {
             && lines.suffix(25).contains { $0.contains("›") || $0.contains("Queued follow-up inputs") }
     }
 
-    /// Typed text answers the blocking prompt instead of prompting the agent.
-    var answering: Bool { !isTerminal && (blocked == .keysAndText || codexQuestionOpen) }
+    var answering: Bool { !isTerminal && (blocked != nil || agent?.status == .blocked || codexQuestionOpen) }
 
     /// What the screen says in place of the agent's prompt.
     var paneNotice: String? {
@@ -234,18 +230,12 @@ final class AgentModel {
     var canUnlock: Bool { isTerminal && terminalLocked && !terminalKeyMissing && !unlocking }
 
     var blockedHint: String? {
-        if codexQuestionOpen { return nil }
-        return switch blocked {
-        case nil, .terminal: nil
-        case .optionsOnly: "Choose an option above."
-        case .keys: "Choose an option above or use the arrow keys."
-        case .keysAndText: "Choose an option above, use the arrow keys, or type an answer."
-        }
+        answering ? "Use the terminal buttons or type an answer." : nil
     }
 
     var canSendPrompt: Bool {
         if isTerminal { return !sendingPrompt && !unlocking && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        return !sendingPrompt && !dictation.isActive && !codexQuestionQueued
+        return !sendingPrompt && !dictation.isActive
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!answering && !attachments.isEmpty))
     }
 
@@ -587,7 +577,6 @@ final class AgentModel {
         }
     }
 
-    /// Typed into the prompt's own answer field and submitted with Enter; attachments stay for the next prompt.
     private func sendAnswer() async {
         let sent = draft
         let typed = sent.trimmingCharacters(in: .whitespacesAndNewlines)

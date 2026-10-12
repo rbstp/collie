@@ -37,13 +37,10 @@ struct ApprovalItem: Identifiable, Equatable {
     var unreachable: Bool { [.waiting, .unavailable, .offline, .stopped].contains(link) }
 }
 
-/// What collied takes from the phone on the prompt an agent is blocked on.
 enum BlockedInput: Equatable {
-    /// Nothing: the prompt is answered in the terminal on the machine.
     case terminal
     case optionsOnly
     case keys
-    /// Keys, and typed text into the menu's free-text option.
     case keysAndText
 }
 
@@ -69,7 +66,6 @@ final class ApprovalsModel {
     private(set) var steps: [String: Step] = [:]
     private(set) var notice: String?
     private(set) var expanded: Set<String> = []
-    /// Unsent notes and plan feedback, by approval.
     var drafts: [String: String] = [:]
     /// Approvals whose note field is shown; a hidden note is never sent.
     private(set) var noting: Set<String> = []
@@ -188,7 +184,6 @@ final class ApprovalsModel {
         items.filter { $0.machine.id == machineId && $0.approval.terminalId == terminalId }
     }
 
-    /// What collied takes from the phone while this agent is blocked: nil when no approval blocks it.
     func blockedInput(machineId: String, terminalId: String) -> BlockedInput? {
         let blocking = items(machineId: machineId, terminalId: terminalId).map(\.approval)
         guard !blocking.isEmpty else { return nil }
@@ -263,11 +258,9 @@ final class ApprovalsModel {
         poll()
     }
 
-    /// Typed into the plan's "Tell Claude what to change"; collied moves the cursor there and never sends shift+tab.
     func sendFeedback(_ item: ApprovalItem) async {
         let text = drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
         guard let core, steps[item.id] == nil, item.approval.takesFeedback, !text.isEmpty else { return }
-        // Feedback is typed into whatever text option is on screen, so only for a plan still pending.
         poll()
         guard items.contains(where: { $0.id == item.id }) else {
             show("This plan is no longer waiting for an answer.", about: item.id)
@@ -279,7 +272,7 @@ final class ApprovalsModel {
         do {
             try await core.typeText(machineId: item.machine.id, terminalId: item.approval.terminalId, text: text)
             drafts[item.id] = nil
-            show("Sent your feedback to \(item.approval.agentLabel).", about: item.id)
+            show("Sent your answer to \(item.approval.agentLabel).", about: item.id)
         } catch {
             show(describe(error), about: item.id)
         }
@@ -301,10 +294,8 @@ extension PendingApproval {
         supportsNote && (decision == .approve || decision == .deny)
     }
 
-    /// A plan prompt: options only for keys, but its free-text option takes typed feedback.
     var takesFeedback: Bool { hasTextField && !acceptsInput }
 
-    /// collied takes no answer from the phone: another agent kind (Codex, Copilot) or a prompt it does not read.
     var answeredInTerminal: Bool { options.isEmpty && choices.isEmpty && !acceptsInput && !hasTextField }
 }
 

@@ -152,10 +152,8 @@ struct NewTaskSheet: View {
                 } header: {
                     Text("Agent")
                 } footer: {
-                    if model.agent == "copilot" {
-                        Text("Approve and Deny are for Claude Code. Use the session's terminal buttons for Copilot prompts.")
-                    } else if !model.agent.isEmpty, model.agent != "claude" {
-                        Text("Approve and Deny are for Claude Code: this agent's prompts are answered in the terminal on the machine.")
+                    if !model.agent.isEmpty {
+                        Text("Use the session's terminal buttons or type an answer to respond to approval prompts.")
                     }
                 }
 

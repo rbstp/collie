@@ -643,7 +643,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     await model.sendFeedback(plan)
     #expect(core.state.withLock { $0.typed } == ["m1 term_1 use echo instead", "m1 term_1 use echo instead"])
     #expect(model.drafts[plan.id] == nil)
-    #expect(model.notice == "Sent your feedback to claude.")
+    #expect(model.notice == "Sent your answer to claude.")
     #expect(auth.state.withLock { $0.reasons }.isEmpty)
     #expect(core.state.withLock { $0.decisions }.isEmpty)
 }
