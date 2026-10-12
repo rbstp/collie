@@ -865,6 +865,44 @@ impl CollieCore {
         lock(&self.inner.machines).clone()
     }
 
+    /// Sets the name this phone shows for a machine. No name, a blank one or the default
+    /// restores the name from pairing.
+    pub fn rename_machine(
+        &self,
+        machine_id: String,
+        name: Option<String>,
+    ) -> Result<(), CoreError> {
+        let name = name
+            .map(|n| n.trim().to_owned())
+            .filter(|n| !n.is_empty())
+            .map(|n| {
+                Label::new(n).map(String::from).map_err(|_| {
+                    invalid(
+                        "name",
+                        "name must be 1 to 64 characters without control characters",
+                    )
+                })
+            })
+            .transpose()?;
+        let mut machines = lock(&self.inner.machines);
+        let mut renamed = machines.clone();
+        let machine = renamed
+            .iter_mut()
+            .find(|m| m.id == machine_id)
+            .ok_or(CoreError::MachineNotFound)?;
+        let default = machine
+            .default_label
+            .take()
+            .unwrap_or_else(|| machine.label.clone());
+        machine.label = name.unwrap_or_else(|| default.clone());
+        if machine.label != default {
+            machine.default_label = Some(default);
+        }
+        self.inner.store.save(&renamed)?;
+        *machines = renamed;
+        Ok(())
+    }
+
     /// Asks a connected machine to revoke this phone first, so it stops sending pushes, and
     /// returns whether it did. The machine is forgotten either way.
     pub async fn remove_machine(&self, id: String) -> Result<bool, CoreError> {
@@ -2606,6 +2644,7 @@ impl Inner {
             kind,
             key: invite.key.as_str().to_owned(),
             terminal_key: terminal_key.map(String::from).unwrap_or_default(),
+            default_label: None,
         };
         let node_id = machine.node_id.clone();
         self.update_machines(|m| m.node_id == node_id, Some(machine.clone()))?;
@@ -3193,6 +3232,7 @@ mod tests {
             kind: MachineKind::Mac,
             key: String::new(),
             terminal_key: String::new(),
+            default_label: None,
         };
         MachineStore::new(state.clone())
             .save(&[mac("m1"), mac("m2")])
@@ -3205,6 +3245,76 @@ mod tests {
         assert!(low_data("m2"), "a conn made later starts in Low Data Mode");
         core.set_low_data(false);
         assert!(!low_data("m1") && !low_data("m2"));
+    }
+
+    #[test]
+    fn a_rename_is_kept_and_cleared_without_touching_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("s");
+        ensure_private_dir(&state).unwrap();
+        let mac = |id: &str| Machine {
+            id: id.into(),
+            label: "mac".into(),
+            host: format!("{id}.tail1234.ts.net"),
+            port: 8457,
+            node_id: format!("n{id}"),
+            kind: MachineKind::Mac,
+            key: String::new(),
+            terminal_key: String::new(),
+            default_label: None,
+        };
+        MachineStore::new(state.clone())
+            .save(&[mac("m1"), mac("m2")])
+            .unwrap();
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        let conn = core.conn("m1").unwrap();
+        let shown = |core: &CollieCore| {
+            core.machines()
+                .into_iter()
+                .map(|m| (m.label, m.default_label))
+                .collect::<Vec<_>>()
+        };
+        core.rename_machine("m1".into(), Some("  Studio ".into()))
+            .unwrap();
+        core.rename_machine("m1".into(), Some("Office".into()))
+            .unwrap();
+        let renamed = vec![
+            ("Office".to_owned(), Some("mac".to_owned())),
+            ("mac".to_owned(), None),
+        ];
+        assert_eq!(shown(&core), renamed);
+        assert!(Arc::ptr_eq(&conn, &core.conn("m1").unwrap()));
+        let again = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        assert_eq!(shown(&again), renamed);
+        assert_eq!(
+            again.machines()[0],
+            Machine {
+                label: "Office".into(),
+                default_label: Some("mac".into()),
+                ..mac("m1")
+            }
+        );
+
+        for bad in ["a\u{7}b", &"x".repeat(65)] {
+            assert!(matches!(
+                core.rename_machine("m1".into(), Some(bad.into())),
+                Err(CoreError::InvalidInput { field: Some(f), .. }) if f == "name"
+            ));
+        }
+        assert!(matches!(
+            core.rename_machine("nope".into(), Some("Office".into())),
+            Err(CoreError::MachineNotFound)
+        ));
+        assert_eq!(shown(&core), renamed);
+
+        for clear in [None, Some(" ".into()), Some("mac".into())] {
+            core.rename_machine("m1".into(), Some("Office".into()))
+                .unwrap();
+            core.rename_machine("m1".into(), clear).unwrap();
+            assert_eq!(shown(&core)[0], ("mac".to_owned(), None));
+        }
+        let cleared = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        assert_eq!(cleared.machines(), vec![mac("m1"), mac("m2")]);
     }
 
     #[test]
@@ -3221,6 +3331,7 @@ mod tests {
             kind: MachineKind::Mac,
             key: String::new(),
             terminal_key: String::new(),
+            default_label: None,
         };
         MachineStore::new(state.clone())
             .save(&[mac("m1"), mac("m2")])
@@ -3326,6 +3437,7 @@ mod tests {
                 kind: MachineKind::Mac,
                 key: String::new(),
                 terminal_key: String::new(),
+                default_label: None,
             }])
             .unwrap();
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
@@ -3439,6 +3551,7 @@ mod tests {
             kind: MachineKind::Mac,
             key: String::new(),
             terminal_key: String::new(),
+            default_label: None,
         };
         MachineStore::new(state.clone())
             .save(&[mac("m1"), mac("m2")])
@@ -3554,6 +3667,7 @@ mod tests {
                 kind: MachineKind::Mac,
                 key: String::new(),
                 terminal_key: URL_SAFE_NO_PAD.encode(&paired),
+                default_label: None,
             }])
             .unwrap();
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();

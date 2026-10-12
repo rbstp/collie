@@ -25,6 +25,7 @@ struct MachinesView: View {
 struct MachinesList: View {
     let app: AppModel
     @Binding var removeError: String?
+    @State private var renaming: Machine?
 
     var body: some View {
         List {
@@ -37,6 +38,9 @@ struct MachinesList: View {
                     MachineRow(machine: machine, flock: app.core?.cachedFlock(machineId: machine.id)) {
                         MachineSettingsView(app: app, machine: machine)
                     }
+                }
+                .contextMenu {
+                    Button("Rename", systemImage: "pencil") { renaming = machine }
                 }
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                 .listRowBackground(Color.clear)
@@ -64,6 +68,7 @@ struct MachinesList: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .renameMachine($renaming, app: app)
     }
 }
 
@@ -157,8 +162,10 @@ struct MachineSettingsView: View {
     @State private var roots: [String] = []
     @State private var saving = false
     @State private var error: String?
+    @State private var renaming: Machine?
 
     private var typed: String { base.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var current: Machine { app.machines.first { $0.id == machine.id } ?? machine }
 
     var body: some View {
         Form {
@@ -207,7 +214,11 @@ struct MachineSettingsView: View {
                 }
             }
         }
-        .navigationTitle(machine.label)
+        .navigationTitle(current.label)
+        .toolbar {
+            Button("Rename", systemImage: "pencil") { renaming = current }
+        }
+        .renameMachine($renaming, app: app)
         .task { await load() }
     }
 
@@ -234,6 +245,48 @@ struct MachineSettingsView: View {
         } catch {
             self.error = AgentModel.message(for: error)
         }
+    }
+}
+
+private struct RenameMachine: ViewModifier {
+    @Binding var machine: Machine?
+    let app: AppModel
+    @State private var name = ""
+    @State private var error: String?
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Rename machine", isPresented: Binding(get: { machine != nil }, set: { if !$0 { machine = nil } }), presenting: machine) { machine in
+                TextField(machine.defaultLabel ?? machine.label, text: $name)
+                    .textInputAutocapitalization(.words)
+                Button("Cancel", role: .cancel) {}
+                Button("Save") { rename(machine, to: name) }
+                if let defaultLabel = machine.defaultLabel {
+                    Button("Reset to \(defaultLabel)") { rename(machine, to: nil) }
+                }
+            } message: { _ in
+                Text("Shown only on this phone.")
+            }
+            .alert("Could not rename", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                Button("OK") { error = nil }
+            } message: {
+                Text(error ?? "")
+            }
+            .onChange(of: machine?.id) { name = machine?.label ?? "" }
+    }
+
+    private func rename(_ machine: Machine, to name: String?) {
+        do {
+            try app.renameMachine(machine, to: name)
+        } catch {
+            self.error = describe(error)
+        }
+    }
+}
+
+extension View {
+    func renameMachine(_ machine: Binding<Machine?>, app: AppModel) -> some View {
+        modifier(RenameMachine(machine: machine, app: app))
     }
 }
 
