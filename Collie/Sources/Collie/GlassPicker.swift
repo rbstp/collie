@@ -10,9 +10,10 @@ struct GlassPicker<Selection: Hashable>: View {
     @Binding var selection: Selection
     let options: [(String, Selection)]
     var expands = false
+    var icons: [UIImage?] = []
 
     var body: some View {
-        NativeSegmentedPicker(title: title, selection: $selection, options: options, expands: expands)
+        NativeSegmentedPicker(title: title, selection: $selection, options: options, expands: expands, icons: icons)
             .glassEffect(expands ? .regular : .identity)
     }
 }
@@ -22,6 +23,7 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
     @Binding var selection: Selection
     let options: [(String, Selection)]
     var expands = false
+    var icons: [UIImage?] = []
     @ScaledMetric(relativeTo: .subheadline) private var fontSize = 15
     @Environment(\.controlSize) private var controlSize
 
@@ -46,8 +48,15 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
         control.setTitleTextAttributes([.font: font, .foregroundColor: accent], for: .selected)
         for index in options.indices {
             let label = String(localized: String.LocalizationValue(options[index].0), locale: context.environment.locale)
-            control.setTitle(label, forSegmentAt: index)
-            control.setWidth(expands ? 0 : ceil((label as NSString).size(withAttributes: [.font: font]).width) + 28, forSegmentAt: index)
+            if let icon = icons.indices.contains(index) ? icons[index] : nil {
+                let image = icon.isSymbolImage ? icon.withConfiguration(UIImage.SymbolConfiguration(font: font, scale: .small)) : icon
+                image.accessibilityLabel = label
+                control.setImage(image, forSegmentAt: index)
+                control.setWidth(expands ? 0 : 44, forSegmentAt: index)
+            } else {
+                control.setTitle(label, forSegmentAt: index)
+                control.setWidth(expands ? 0 : ceil((label as NSString).size(withAttributes: [.font: font]).width) + 28, forSegmentAt: index)
+            }
         }
         control.selectedSegmentIndex = options.firstIndex { $0.1 == selection } ?? UISegmentedControl.noSegment
         control.isEnabled = context.environment.isEnabled

@@ -502,7 +502,7 @@ struct ContextRing: View {
     var body: some View {
         let tone = Self.tone(left)
         ZStack {
-            Circle().stroke(tone.opacity(0.25), lineWidth: 2)
+            Circle().stroke(tone.opacity(0.2), lineWidth: 2)
             Circle()
                 .trim(from: 0, to: Double(min(left, 100)) / 100)
                 .stroke(tone, style: StrokeStyle(lineWidth: 2, lineCap: .round))
@@ -514,13 +514,7 @@ struct ContextRing: View {
         .accessibilityLabel("Context \(left)% left")
     }
 
-    static func tone(_ left: UInt8) -> Color {
-        switch left {
-        case 51...: Color.teal.mix(with: .gray, by: 0.45)
-        case 20...: Color.orange.mix(with: .yellow, by: 0.25)
-        default: Color.pink.mix(with: .orange, by: 0.45)
-        }
-    }
+    static func tone(_ left: UInt8) -> Color { WatchUsage.usedColor(100 - min(left, 100)) }
 }
 
 extension AgentState {

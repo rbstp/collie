@@ -19,10 +19,11 @@ final class GlassPickerTests: XCTestCase {
                 let compact = try XCTUnwrap(controls.first { $0.accessibilityLabel == "View" })
                 let expanded = try XCTUnwrap(controls.first { $0.accessibilityLabel == "Session view" })
                 let toolbar = try XCTUnwrap(controls.first { $0.accessibilityLabel == "Toolbar view" })
-                XCTAssertLessThan(compact.bounds.width, expanded.bounds.width)
                 XCTAssertGreaterThanOrEqual(compact.bounds.height, 44)
                 XCTAssertLessThan(expanded.bounds.height, compact.bounds.height)
-                XCTAssertLessThanOrEqual(expanded.bounds.width, 240)
+                XCTAssertEqual((0..<expanded.numberOfSegments).map { expanded.widthForSegment(at: $0) }, [44, 44])
+                XCTAssertEqual((0..<expanded.numberOfSegments).map { expanded.imageForSegment(at: $0)?.accessibilityLabel }, ["Chat", "Terminal"])
+                XCTAssertEqual((0..<expanded.numberOfSegments).compactMap { expanded.titleForSegment(at: $0) }, [])
                 XCTAssertGreaterThanOrEqual(compact.bounds.width, 150)
                 XCTAssertEqual(compact.selectedSegmentIndex, 0)
                 let attributes = try XCTUnwrap(compact.titleTextAttributes(for: .selected))
@@ -83,9 +84,9 @@ final class GlassPickerTests: XCTestCase {
             NavigationStack {
                 VStack(spacing: 24) {
                     GlassPicker(title: "View", selection: $state.selected, options: [("Agents", false), ("Usage", true)])
-                    GlassPicker(title: "Session view", selection: $state.selected, options: [("Chat", false), ("Terminal", true)], expands: true)
+                    GlassPicker(title: "Session view", selection: $state.selected, options: [("Chat", false), ("Terminal", true)],
+                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
                         .controlSize(.small)
-                        .frame(maxWidth: 240)
                 }
                 .padding()
                 .navigationTitle("Agents")
