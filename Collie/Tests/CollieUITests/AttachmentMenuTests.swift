@@ -64,8 +64,8 @@ final class AttachmentMenuTests: XCTestCase {
         let picker = switch choice {
         case "Saved prompts": app.navigationBars["Saved prompts"]
         case "Files": app.navigationBars["FullDocumentManagerViewControllerNavigationBar"]
-        // The picker shows PUPickerUnavailableView while the simulator's photo service is not ready.
-        default: app.navigationBars.matching(NSPredicate(format: "identifier IN %@", ["Photos", "PUPickerUnavailableView"])).firstMatch
+        // On CI the picker can stay on PUPickerUnavailableView, loading, when the simulator's photo service does not start.
+        default: app.navigationBars["Photos"].appears(within: 30) ? app.navigationBars["Photos"] : app.navigationBars["PUPickerUnavailableView"]
         }
         // Cancel remote pickers before another presentation or terminating their host app.
         XCTAssertTrue(picker.appears(within: choice == "Saved prompts" ? 5 : 30), app.debugDescription)
