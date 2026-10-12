@@ -82,7 +82,7 @@ private struct SubscriptionUsage: View {
 
     var body: some View {
         let limits = usage.limits(now: now)
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Image("Claude")
                     .resizable()
@@ -94,38 +94,24 @@ private struct SubscriptionUsage: View {
                 Text("Claude Code").font(.headline)
             }
             if !limits.isEmpty {
-                Group {
-                    if dynamicTypeSize.isAccessibilitySize {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(limits, id: \.label) { limit in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack {
-                                        Text(limit.label).foregroundStyle(.secondary)
-                                        Spacer()
-                                        Text("\(limit.used)%")
-                                    }
-                                    Text(limit.resets(now: now)).foregroundStyle(.secondary)
-                                    UsageBar(used: limit.used, elapsed: limit.elapsed)
-                                }
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(limits, id: \.label) { limit in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(limit.title).font(.subheadline)
+                            UsageBar(used: limit.used, elapsed: limit.elapsed)
+                            let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout())
+                            layout {
+                                Text("\(limit.used)% used")
+                                if !dynamicTypeSize.isAccessibilitySize { Spacer() }
+                                Text(limit.resetsLine(now: now))
                             }
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
                         }
-                    } else {
-                        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                            ForEach(limits, id: \.label) { limit in
-                                GridRow {
-                                    Text(limit.label).foregroundStyle(.secondary)
-                                    UsageBar(used: limit.used, elapsed: limit.elapsed)
-                                    Text("\(limit.used)%").gridColumnAlignment(.trailing)
-                                    Text(limit.resets(now: now)).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
-                                }
-                            }
-                        }
-                        .lineLimit(1)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(limit.spokenLine(now: now))
                     }
                 }
-                .font(.subheadline.monospacedDigit())
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(limits.map { $0.spokenLine(now: now) }.joined(separator: ". "))
             }
         }
         .padding(.vertical, 4)
