@@ -691,7 +691,10 @@ private struct PromptBar: View {
                 model.attachFailed(error)
             }
         }
-        .onChange(of: model.quotes) { editing = true }
+        .onChange(of: model.quotes) {
+            selection = TextSelection(insertionPoint: model.draft.endIndex)
+            editing = true
+        }
         .onChange(of: model.draft.isEmpty) { _, empty in
             if empty && !model.dictation.isActive { dictationExpanded = false }
         }

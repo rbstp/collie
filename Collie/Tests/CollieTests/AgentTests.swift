@@ -2606,11 +2606,11 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     let core = FakeCore()
     let model = await slashReady(core)
     model.quote("```\nls\n```")
-    #expect(model.draft == "````\n```\nls\n```\n````")
+    #expect(model.draft == "````\n```\nls\n```\n````\n")
     #expect(model.quotes == 1)
     model.quote("two")
     await model.flushMirror()
-    #expect(model.draft == "````\n```\nls\n```\n````\n\n```\ntwo\n```")
+    #expect(model.draft == "````\n```\nls\n```\n````\n\n\n```\ntwo\n```\n")
     #expect(model.quotes == 2)
     #expect(core.snapshot.prompts.isEmpty && core.snapshot.slashes.isEmpty && core.snapshot.keys.isEmpty)
     model.quote("")
@@ -2627,7 +2627,7 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     #expect(model.quotes == 0)
     #expect(model.promptError == "The prompt would be longer than 32 KiB.")
     model.quote("short")
-    #expect(model.draft == "Keep this\n\n```\nshort\n```")
+    #expect(model.draft == "Keep this\n\n```\nshort\n```\n")
     #expect(model.promptError == nil)
 }
 

@@ -667,7 +667,7 @@ final class AgentModel {
     }
 
     func quote(_ text: String) {
-        guard !text.isEmpty, insert(PromptShortcut(text: CodeFence.block(text))) else { return }
+        guard !text.isEmpty, insert(PromptShortcut(text: CodeFence.block(text) + "\n")) else { return }
         quotes += 1
     }
 
