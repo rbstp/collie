@@ -516,6 +516,7 @@ private struct PromptBar: View {
     @FocusState private var editing: Bool
     @State private var typingCommand = false
     @State private var dictationExpanded = false
+    @State private var selection: TextSelection?
     @State private var pickingPhoto = false
     @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
@@ -572,7 +573,7 @@ private struct PromptBar: View {
                         } else {
                             TextField(
                                 model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: { model.typed($0) }),
-                                axis: .vertical
+                                selection: $selection, axis: .vertical
                             )
                                 .lineLimit(expanded ? 1...5 : 1...1)
                                 .focused($editing)
@@ -610,8 +611,8 @@ private struct PromptBar: View {
                 HStack(spacing: 8) {
                     if !model.isTerminal && !model.dictation.isActive {
                         DictationButton(dictation: model.dictation, disabled: model.sendingPrompt) {
+                            dictationExpanded = model.startDictation(at: editing ? selection : nil) != nil
                             editing = false
-                            dictationExpanded = model.startDictation() != nil
                         }
                     }
                     if editing || typingCommand {

@@ -1,6 +1,7 @@
 import CollieCore
 import Foundation
 import Observation
+import SwiftUI
 
 /// What the pane runs now: its agent, a plain shell once the agent exited, or nothing.
 enum PaneMode: Equatable {
@@ -662,10 +663,10 @@ final class AgentModel {
 
     /// Dictation owns the field until it stops; a send in flight would trim the text it started from.
     @discardableResult
-    func startDictation() -> Task<Void, Never>? {
+    func startDictation(at selection: TextSelection? = nil) -> Task<Void, Never>? {
         guard !sendingPrompt else { return nil }
         loadedMacDraft = nil
-        return dictation.start(appendingTo: draft) { [weak self] in self?.draft = $0 }
+        return dictation.start(in: draft, at: selection) { [weak self] in self?.draft = $0 }
     }
 
     var attachmentSlots: Int { Attachment.maxPerPrompt - attachments.count }

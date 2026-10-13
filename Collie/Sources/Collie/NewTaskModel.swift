@@ -1,6 +1,7 @@
 import CollieCore
 import Foundation
 import Observation
+import SwiftUI
 
 extension TaskFolders {
     func folderPath(_ name: String) -> String {
@@ -141,9 +142,9 @@ final class NewTaskModel {
     }
 
     @discardableResult
-    func startDictation() -> Task<Void, Never>? {
+    func startDictation(at selection: TextSelection? = nil) -> Task<Void, Never>? {
         guard phase == .editing else { return nil }
-        return dictation.start(appendingTo: prompt) { [weak self] in self?.prompt = $0 }
+        return dictation.start(in: prompt, at: selection) { [weak self] in self?.prompt = $0 }
     }
 
     @discardableResult
