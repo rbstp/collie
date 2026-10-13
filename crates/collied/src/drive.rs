@@ -1604,6 +1604,7 @@ fn clone_command(source: &CloneSource, target: &Cwd, gh: Option<&str>) -> Comman
     command
         .env("PATH", tool_path())
         .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
         .env("GH_PROMPT_DISABLED", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_CONFIG_COUNT", CLONE_PROTOCOLS.len().to_string());
@@ -1622,9 +1623,31 @@ fn clone_command(source: &CloneSource, target: &Cwd, gh: Option<&str>) -> Comman
 }
 
 async fn clone_repository(source: &CloneSource, target: &Cwd) -> Result<(), String> {
-    let mut child = clone_command(source, target, gh())
+    let deadline = tokio::time::Instant::now() + CLONE_TIMEOUT;
+    let gh = gh().filter(|_| source.github_repo().is_some());
+    let mut result = run_clone(clone_command(source, target, gh), deadline).await;
+    if gh.is_some() && gh_signed_out(&result, target) {
+        result = run_clone(clone_command(source, target, None), deadline)
+            .await
+            .map_err(|(code, message)| (code, format!("{message}; gh is not logged in")));
+    }
+    result.map_err(|(_, message)| message)
+}
+
+/// gh exits 4 when it has no login, before running anything; git over HTTPS still clones a
+/// public repository.
+fn gh_signed_out(result: &Result<(), (Option<i32>, String)>, target: &Cwd) -> bool {
+    matches!(result, Err((Some(4), _)))
+        && std::fs::read_dir(target.as_str()).is_ok_and(|mut entries| entries.next().is_none())
+}
+
+async fn run_clone(
+    mut command: Command,
+    deadline: tokio::time::Instant,
+) -> Result<(), (Option<i32>, String)> {
+    let mut child = command
         .spawn()
-        .map_err(|_| "git or gh is unavailable".to_owned())?;
+        .map_err(|_| (None, "git or gh is unavailable".to_owned()))?;
     let pid = child.id();
     let mut stderr = child.stderr.take();
     let run = async {
@@ -1639,25 +1662,33 @@ async fn clone_repository(source: &CloneSource, target: &Cwd) -> Result<(), Stri
         }
         (child.wait().await, tail)
     };
-    let Ok((status, tail)) = timeout(CLONE_TIMEOUT, run).await else {
+    let Ok((status, tail)) = tokio::time::timeout_at(deadline, run).await else {
         if let Some(group) = pid.and_then(|pid| rustix::process::Pid::from_raw(pid as i32)) {
             let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
         }
-        return Err(format!("timed out after {} s", CLONE_TIMEOUT.as_secs()));
+        return Err((
+            None,
+            format!("timed out after {} s", CLONE_TIMEOUT.as_secs()),
+        ));
     };
-    if status.is_ok_and(|status| status.success()) {
-        return Ok(());
-    }
+    let code = match status {
+        Ok(status) if status.success() => return Ok(()),
+        Ok(status) => status.code(),
+        Err(_) => None,
+    };
     let text: String = String::from_utf8_lossy(&tail)
         .chars()
         .filter(|&c| c == '\n' || !(c.is_control() || protocol::is_format(c)))
         .collect();
     let text = text.trim();
-    Err(if text.is_empty() {
-        "git exited with an error".to_owned()
-    } else {
-        text.to_owned()
-    })
+    Err((
+        code,
+        if text.is_empty() {
+            "git exited with an error".to_owned()
+        } else {
+            text.to_owned()
+        },
+    ))
 }
 
 async fn run_poi(repo: &Cwd) -> Result<(), &'static str> {
@@ -2704,6 +2735,7 @@ mod tests {
         assert_eq!(envs["GIT_TERMINAL_PROMPT"].as_deref(), Some("0"));
         assert_eq!(envs["GH_PROMPT_DISABLED"].as_deref(), Some("1"));
         assert_eq!(envs["GH_TOKEN"], None);
+        assert_eq!(envs["GITHUB_TOKEN"], None);
 
         let repo = base.join("repos/group/app");
         std::fs::create_dir_all(&repo).unwrap();
@@ -2743,5 +2775,36 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&control.stderr)
         );
+    }
+
+    #[tokio::test]
+    async fn owner_repo_falls_back_to_git_only_when_gh_is_signed_out_and_left_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let target = Cwd::new(base.join("app").to_str().unwrap()).unwrap();
+        std::fs::create_dir(target.as_str()).unwrap();
+        let fake = |name: &str, code: u8| {
+            let path = base.join(name);
+            std::fs::write(
+                &path,
+                format!("#!/bin/sh\necho \"gh says $1\" >&2\nexit {code}\n"),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path.to_str().unwrap().to_owned()
+        };
+        let source = CloneSource::new("owner/app").unwrap();
+        let deadline = tokio::time::Instant::now() + CLONE_TIMEOUT;
+        let run = |gh: String| run_clone(clone_command(&source, &target, Some(&gh)), deadline);
+        let signed_out = run(fake("out", 4)).await;
+        assert_eq!(signed_out, Err((Some(4), "gh says repo".to_owned())));
+        assert!(gh_signed_out(&signed_out, &target));
+        let failed = run(fake("failed", 1)).await;
+        assert_eq!(failed, Err((Some(1), "gh says repo".to_owned())));
+        assert!(!gh_signed_out(&failed, &target));
+        assert!(!gh_signed_out(&Err((None, "timed out".into())), &target));
+        std::fs::write(base.join("app/partial"), "").unwrap();
+        assert!(!gh_signed_out(&signed_out, &target));
     }
 }
