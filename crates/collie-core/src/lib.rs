@@ -706,7 +706,6 @@ async fn task_new_inner(
     }
 }
 
-/// The folder `task_clone` makes for `repository`, or nil when collied would refuse it.
 #[uniffi::export]
 pub fn clone_folder_name(repository: String) -> Option<String> {
     CloneSource::new(repository)
@@ -1643,7 +1642,6 @@ impl CollieCore {
         .await
     }
 
-    /// Clones `repository` into a new folder inside `cwd` and starts the agent there.
     pub async fn task_clone(
         &self,
         machine_id: String,

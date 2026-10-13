@@ -1001,7 +1001,7 @@ impl Driver {
         let left = if std::fs::remove_dir(cwd.as_str()).is_ok() {
             String::new()
         } else {
-            format!(" Folder {} was left in place.", cwd.as_str())
+            format!("; folder {} was left in place", cwd.as_str())
         };
         fail(code, format!("{message}{left}"))
     }
@@ -1621,11 +1621,10 @@ fn clone_command(source: &CloneSource, target: &Cwd, gh: Option<&str>) -> Comman
     command
 }
 
-/// The error is the tail of git's (or gh's) stderr, without control or invisible characters.
 async fn clone_repository(source: &CloneSource, target: &Cwd) -> Result<(), String> {
     let mut child = clone_command(source, target, gh())
         .spawn()
-        .map_err(|_| "git is unavailable".to_owned())?;
+        .map_err(|_| "git or gh is unavailable".to_owned())?;
     let pid = child.id();
     let mut stderr = child.stderr.take();
     let run = async {

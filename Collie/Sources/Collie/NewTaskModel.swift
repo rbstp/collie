@@ -70,7 +70,6 @@ final class NewTaskModel {
     var newFolderRoot: String?
     var folderName = ""
     var repository = ""
-    /// The folder collied names the clone, or nil for a source it would refuse.
     var cloneFolder: String? { cloneFolderName(repository: trimmed(repository)) }
     private(set) var cloning: String?
     var agent = ""
@@ -315,8 +314,18 @@ final class NewTaskModel {
                 listed.folders.contains(name)
             {
                 let path = listed.path + "/" + name
-                if location == .clone, self.error?.contains(path) != true {
-                    self.error = (self.error ?? "") + " The clone stays in \(path)."
+                if location == .clone {
+                    // Only a failure after the clone completed: anything else may name an
+                    // unrelated folder or a clone still running.
+                    switch error as? CoreError {
+                    case .AgentBlocked, .AgentNotReady, .HerdrUnavailable, .NotFound:
+                        self.error = (self.error ?? "") + " The clone stays in \(path)."
+                    default:
+                        guard self.error?.contains("folder \(path) was cloned and left in place") == true else {
+                            phase = .editing
+                            return nil
+                        }
+                    }
                 }
                 location = .folder
                 newFolder = false

@@ -49,6 +49,7 @@ final class FakeCore: AgentCore {
         ])
         var worktreeCalls: [String] = []
         var started: TaskStarted?
+        var cloneError: CoreError?
         var uploads: [String] = []
         var cancelledUploads: [String] = []
         var maxAttachmentBytes: UInt64 = 20 * 1024 * 1024
@@ -275,6 +276,7 @@ final class FakeCore: AgentCore {
             $0.taskNews.append("\(cwd) clone=\(repository)")
             $0.taskPrompts.append(prompt)
         }
+        if let error = state.withLock({ $0.cloneError }) { throw error }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
@@ -1383,15 +1385,25 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     await model.loadOptions()
     model.prompt = "set it up"
     model.location = .clone
-    model.repository = "git@github.com:owner/brand-new.git"
-    #expect(await model.start() == nil)
-    #expect(model.location == .clone && model.error?.contains("stays") == false, "a failed clone keeps Clone on")
+    for repository in ["git@github.com:owner/brand-new.git", "owner/collie"] {
+        model.repository = repository
+        #expect(await model.start() == nil)
+        #expect(model.location == .clone && model.cwd.isEmpty, "a refused or failed clone keeps Clone on, even when the name exists")
+        #expect(model.error?.contains("stays") == false)
+    }
+    core.state.withLock { $0.cloneError = .AgentNotReady }
     model.repository = "https://github.com/owner/collie"
     #expect(await model.start() == nil)
     #expect(model.location == .folder && !model.newFolder && model.cwd == "/Users/me/git/collie")
     #expect(model.error?.hasSuffix(" The clone stays in /Users/me/git/collie.") == true)
+    let named = "folder /Users/me/git/collie was cloned and left in place: herdr refused: x"
+    core.state.withLock { $0.cloneError = .InvalidInput(field: nil, message: named) }
+    model.location = .clone
+    #expect(await model.start() == nil)
+    #expect(model.location == .folder && model.error == named)
     #expect(core.snapshot.taskNews == [
-        "/Users/me/git clone=git@github.com:owner/brand-new.git", "/Users/me/git clone=https://github.com/owner/collie",
+        "/Users/me/git clone=git@github.com:owner/brand-new.git", "/Users/me/git clone=owner/collie",
+        "/Users/me/git clone=https://github.com/owner/collie", "/Users/me/git clone=https://github.com/owner/collie",
     ])
 }
 

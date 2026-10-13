@@ -208,7 +208,8 @@ fn clone_folder(s: &str) -> Option<&str> {
         repo_path(path)?
     } else {
         let (owner, repo) = s.split_once('/')?;
-        if owner.len() > 39
+        if owner.is_empty()
+            || owner.len() > 39
             || owner.starts_with('-')
             || !owner
                 .bytes()
@@ -390,12 +391,10 @@ validated_string!(
 );
 
 impl CloneSource {
-    /// The last path segment without `.git`.
     pub fn folder_name(&self) -> FolderName {
         FolderName(clone_folder(&self.0).unwrap_or_default().to_owned())
     }
 
-    /// `owner/repo` without `.git` when this is the GitHub shorthand.
     pub fn github_repo(&self) -> Option<&str> {
         if self.0.starts_with("https://") || self.0.starts_with("git@") {
             None
@@ -623,6 +622,7 @@ mod tests {
         for bad in [
             "",
             "collie",
+            "/repo",
             "-u/x",
             "--upload-pack=touch x/y",
             "o/-x",
