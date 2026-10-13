@@ -14,9 +14,18 @@ pub type RequestId = u32;
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum GitSection {
+    Committed,
     Staged,
     Unstaged,
     Untracked,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentChangesParams {
+    pub terminal_id: TerminalId,
+    pub root: Option<Cwd>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,6 +45,14 @@ pub struct GitChanges {
     pub branch: Option<String>,
     pub files: Vec<GitFile>,
     pub truncated: bool,
+    pub worktrees: Vec<GitWorktree>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct GitWorktree {
+    pub root: Cwd,
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -135,7 +152,7 @@ pub enum Request {
     #[serde(rename = "task.options")]
     TaskOptions(Empty),
     #[serde(rename = "agent.changes")]
-    AgentChanges(AgentTarget),
+    AgentChanges(AgentChangesParams),
     #[serde(rename = "agent.diff")]
     AgentDiff(AgentDiffParams),
     #[serde(rename = "agent.draft")]
@@ -1782,7 +1799,35 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 16);
+        assert_eq!(crate::PROTOCOL_VERSION, 17);
+    }
+
+    #[test]
+    fn agent_changes_root_is_optional() {
+        let changes = |params: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"agent.changes","params":{params}}}"#
+            ))
+        };
+        let Request::AgentChanges(plain) = changes(r#"{"terminal_id":"t"}"#).unwrap().request
+        else {
+            panic!("not agent.changes");
+        };
+        assert_eq!(plain.root, None);
+        let frame = changes(r#"{"terminal_id":"t","root":"/a"}"#).unwrap();
+        assert_eq!(frame.request.class(), MethodClass::Read);
+        let json = serde_json::to_string(&frame).unwrap();
+        assert_eq!(parse(&json).unwrap(), frame);
+        for params in [
+            r#"{"terminal_id":"t","root":"a"}"#,
+            r#"{"terminal_id":"t","path":"/a"}"#,
+        ] {
+            assert_eq!(
+                changes(params).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{params}"
+            );
+        }
     }
 
     #[test]

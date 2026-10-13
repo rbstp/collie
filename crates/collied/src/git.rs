@@ -3,7 +3,9 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use protocol::{AgentDiffParams, Cwd, ErrorCode, GitChanges, GitDiff, GitFile, GitSection};
+use protocol::{
+    AgentDiffParams, Cwd, ErrorCode, GitChanges, GitDiff, GitFile, GitSection, GitWorktree,
+};
 use rustix::fs::{Mode, OFlags};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -14,6 +16,7 @@ const OUTPUT_LIMIT: usize = 2 * 1024 * 1024;
 const FILE_LIMIT: u64 = 1024 * 1024;
 const RESPONSE_LIMIT: usize = 48 * 1024;
 const MAX_FILES: usize = 200;
+const MAX_WORKTREES: usize = 20;
 
 fn error(message: &str) -> Fail {
     (ErrorCode::InvalidParams, message.into())
@@ -131,25 +134,108 @@ async fn root(cwd: &Cwd, roots: &[PathBuf]) -> Result<Option<Cwd>, Fail> {
         .trim_end_matches('\n');
     let root = resolve_cwd(path, roots).map_err(error)?;
     for option in ["--absolute-git-dir", "--git-common-dir"] {
-        let (out, ok, truncated) = git(&root, &["rev-parse", option], 4096).await?;
-        if !ok || truncated {
-            return Err(error("Git metadata is unavailable"));
-        }
-        let path = std::str::from_utf8(&out)
-            .map_err(|_| error("Invalid Git metadata path"))?
-            .trim_end_matches('\n');
-        let path = Path::new(root.as_str()).join(path);
-        resolve_cwd(
-            path.to_str()
-                .ok_or_else(|| error("Invalid Git metadata path"))?,
-            roots,
-        )
-        .map_err(error)?;
+        metadata(&root, option, roots).await?;
     }
     Ok(Some(root))
 }
 
-fn diff_args(section: GitSection) -> Vec<&'static str> {
+async fn metadata(root: &Cwd, option: &str, roots: &[PathBuf]) -> Result<Cwd, Fail> {
+    let (out, ok, truncated) = git(root, &["rev-parse", option], 4096).await?;
+    if !ok || truncated {
+        return Err(error("Git metadata is unavailable"));
+    }
+    let path = std::str::from_utf8(&out)
+        .map_err(|_| error("Invalid Git metadata path"))?
+        .trim_end_matches('\n');
+    let path = Path::new(root.as_str()).join(path);
+    resolve_cwd(
+        path.to_str()
+            .ok_or_else(|| error("Invalid Git metadata path"))?,
+        roots,
+    )
+    .map_err(error)
+}
+
+async fn worktrees(checkout: &Cwd, roots: &[PathBuf]) -> Result<Vec<GitWorktree>, Fail> {
+    let (out, ok, truncated) = git(
+        checkout,
+        &["worktree", "list", "--porcelain", "-z"],
+        64 * 1024,
+    )
+    .await?;
+    if !ok || truncated {
+        return Ok(Vec::new());
+    }
+    let lines: Vec<&[u8]> = out.split(|b| *b == 0).collect();
+    let mut list = Vec::new();
+    for record in lines.split(|line| line.is_empty()) {
+        let mut root = None;
+        let mut branch = None;
+        for line in record {
+            if let Some(path) = line.strip_prefix(b"worktree ") {
+                root = std::str::from_utf8(path)
+                    .ok()
+                    .and_then(|p| resolve_cwd(p, roots).ok());
+            } else if let Some(name) = line.strip_prefix(b"branch refs/heads/") {
+                branch = std::str::from_utf8(name).ok().map(str::to_owned);
+            } else if *line == b"bare" || line.starts_with(b"prunable") {
+                root = None;
+                break;
+            }
+        }
+        if let Some(root) = root
+            && (list.len() < MAX_WORKTREES || &root == checkout)
+        {
+            list.push(GitWorktree { root, branch });
+        }
+    }
+    Ok(list)
+}
+
+/// The phone may only pick a worktree collied itself listed for the agent's repository.
+/// The listing comes from metadata the agent can write, so the pick is re-checked like the
+/// agent's own checkout and must share its Git common directory.
+async fn worktree(
+    checkout: &Cwd,
+    worktrees: &[GitWorktree],
+    requested: &Cwd,
+    roots: &[PathBuf],
+) -> Result<Option<Cwd>, Fail> {
+    if !worktrees.iter().any(|w| &w.root == requested) {
+        return Ok(None);
+    }
+    let Some(root) = root(requested, roots)
+        .await?
+        .filter(|root| root == requested)
+    else {
+        return Ok(None);
+    };
+    let common = metadata(checkout, "--git-common-dir", roots).await?;
+    Ok((metadata(&root, "--git-common-dir", roots).await? == common).then_some(root))
+}
+
+async fn base(root: &Cwd) -> Result<Option<String>, Fail> {
+    let (out, ok, truncated) = git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/remotes/origin/HEAD^{commit}",
+        ],
+        4096,
+    )
+    .await?;
+    let sha = String::from_utf8_lossy(&out)
+        .trim_end_matches('\n')
+        .to_owned();
+    Ok(
+        (ok && !truncated && !sha.is_empty() && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| format!("{sha}...HEAD")),
+    )
+}
+
+fn diff_args(section: GitSection, range: &str) -> Vec<&str> {
     let mut args = vec![
         "diff",
         "--no-ext-diff",
@@ -158,8 +244,10 @@ fn diff_args(section: GitSection) -> Vec<&'static str> {
         "--find-renames",
         "--ignore-submodules=none",
     ];
-    if section == GitSection::Staged {
-        args.push("--cached");
+    match section {
+        GitSection::Committed => args.push(range),
+        GitSection::Staged => args.push("--cached"),
+        _ => {}
     }
     args
 }
@@ -280,15 +368,28 @@ fn text_content(bytes: &[u8]) -> Option<&str> {
     }
 }
 
-pub async fn changes(cwd: &Cwd, roots: &[PathBuf]) -> Result<GitChanges, Fail> {
-    let Some(root) = root(cwd, roots).await? else {
+pub async fn changes(
+    cwd: &Cwd,
+    roots: &[PathBuf],
+    requested: Option<&Cwd>,
+) -> Result<GitChanges, Fail> {
+    let Some(checkout) = root(cwd, roots).await? else {
         return Ok(GitChanges {
             root: None,
             branch: None,
             files: Vec::new(),
             truncated: false,
+            worktrees: Vec::new(),
         });
     };
+    let worktrees = worktrees(&checkout, roots).await?;
+    let root = match requested {
+        Some(requested) => worktree(&checkout, &worktrees, requested, roots)
+            .await?
+            .unwrap_or(checkout),
+        None => checkout,
+    };
+    let range = base(&root).await?;
     let (branch, ok, _) = git(&root, &["symbolic-ref", "--quiet", "--short", "HEAD"], 4096).await?;
     let branch = ok.then(|| {
         String::from_utf8_lossy(&branch)
@@ -300,9 +401,10 @@ pub async fn changes(cwd: &Cwd, roots: &[PathBuf]) -> Result<GitChanges, Fail> {
         branch,
         files: Vec::new(),
         truncated: false,
+        worktrees,
     };
     for section in [GitSection::Staged, GitSection::Unstaged] {
-        let mut args = diff_args(section);
+        let mut args = diff_args(section, "");
         args.extend(["--raw", "--numstat", "-z", "--"]);
         let (out, ok, truncated) = git(&root, &args, OUTPUT_LIMIT).await?;
         if !ok {
@@ -344,6 +446,14 @@ pub async fn changes(cwd: &Cwd, roots: &[PathBuf]) -> Result<GitChanges, Fail> {
             deletions: additions.map(|_| 0),
         });
     }
+    if let Some(range) = &range {
+        let mut args = diff_args(GitSection::Committed, range);
+        args.extend(["--raw", "--numstat", "-z", "--"]);
+        if let Ok((out, true, truncated)) = git(&root, &args, OUTPUT_LIMIT).await {
+            changes.truncated |= truncated;
+            changes.files.extend(tracked(&out, GitSection::Committed)?);
+        }
+    }
     if changes.files.len() > MAX_FILES {
         changes.files.truncate(MAX_FILES);
         changes.truncated = true;
@@ -353,7 +463,9 @@ pub async fn changes(cwd: &Cwd, roots: &[PathBuf]) -> Result<GitChanges, Fail> {
         .len()
         > RESPONSE_LIMIT
     {
-        changes.files.pop();
+        if changes.files.pop().is_none() {
+            return Err(error("Git changes are too large to list"));
+        }
         changes.truncated = true;
     }
     Ok(changes)
@@ -361,12 +473,21 @@ pub async fn changes(cwd: &Cwd, roots: &[PathBuf]) -> Result<GitChanges, Fail> {
 
 pub async fn diff(cwd: &Cwd, roots: &[PathBuf], p: &AgentDiffParams) -> Result<GitDiff, Fail> {
     path(p.path.as_bytes())?;
-    let Some(root) = root(cwd, roots).await? else {
+    let Some(checkout) = root(cwd, roots).await? else {
         return Err(error("This folder is no longer a Git checkout"));
     };
-    if root != p.root {
-        return Err(error("Agent checkout changed; reopen Git changes"));
-    }
+    let root = if checkout == p.root {
+        checkout
+    } else {
+        worktree(
+            &checkout,
+            &worktrees(&checkout, roots).await?,
+            &p.root,
+            roots,
+        )
+        .await?
+        .ok_or_else(|| error("Agent checkout changed; reopen Git changes"))?
+    };
     let (bytes, truncated) = if p.section == GitSection::Untracked {
         let (out, ok, truncated) = git(
             &root,
@@ -407,7 +528,14 @@ pub async fn diff(cwd: &Cwd, roots: &[PathBuf], p: &AgentDiffParams) -> Result<G
         };
         (patch.into_bytes(), false)
     } else {
-        let mut args = diff_args(p.section);
+        let range = if p.section == GitSection::Committed {
+            base(&root)
+                .await?
+                .ok_or_else(|| error("File no longer has changes in this section; refresh"))?
+        } else {
+            String::new()
+        };
+        let mut args = diff_args(p.section, &range);
         args.extend(["--raw", "-z", "--"]);
         let (out, ok, truncated) = git(&root, &args, OUTPUT_LIMIT).await?;
         if !ok || truncated {
@@ -417,7 +545,7 @@ pub async fn diff(cwd: &Cwd, roots: &[PathBuf], p: &AgentDiffParams) -> Result<G
             .into_iter()
             .find(|f| f.path == p.path)
             .ok_or_else(|| error("File no longer has changes in this section; refresh"))?;
-        let mut args = diff_args(p.section);
+        let mut args = diff_args(p.section, &range);
         args.extend([
             "--raw",
             "-z",
@@ -544,7 +672,7 @@ mod tests {
         std::fs::write(root.join("new file.txt"), "one\ntwo").unwrap();
         std::fs::write(root.join("binary"), [0, 1, 2]).unwrap();
         std::fs::write(root.join("empty"), "").unwrap();
-        let list = changes(&cwd, &roots).await.unwrap();
+        let list = changes(&cwd, &roots, None).await.unwrap();
         assert_eq!(list.branch.as_deref(), Some("main"));
         assert_eq!(list.files.len(), 7);
         for section in [GitSection::Staged, GitSection::Unstaged] {
@@ -615,19 +743,19 @@ mod tests {
     #[tokio::test]
     async fn unborn_clean_detached_non_git_and_worktree_checkout() {
         let (_dir, cwd, roots) = repo();
-        assert!(changes(&cwd, &roots).await.unwrap().files.is_empty());
+        assert!(changes(&cwd, &roots, None).await.unwrap().files.is_empty());
         let root = Path::new(cwd.as_str());
         std::fs::write(root.join("first"), "new\n").unwrap();
         run(root, &["add", "."]);
         assert_eq!(
-            changes(&cwd, &roots).await.unwrap().files[0].additions,
+            changes(&cwd, &roots, None).await.unwrap().files[0].additions,
             Some(1)
         );
         run(root, &["commit", "-m", "first"]);
         run(root, &["worktree", "add", "-b", "feature", "checkout"]);
         let checkout = Cwd::new(root.join("checkout").to_str().unwrap()).unwrap();
         std::fs::write(Path::new(checkout.as_str()).join("first"), "worktree\n").unwrap();
-        let list = changes(&checkout, &roots).await.unwrap();
+        let list = changes(&checkout, &roots, None).await.unwrap();
         assert_eq!(list.root, Some(checkout.clone()));
         assert_eq!(list.branch.as_deref(), Some("feature"));
         assert!(
@@ -637,11 +765,115 @@ mod tests {
                 .contains("+worktree")
         );
         run(Path::new(checkout.as_str()), &["checkout", "--detach"]);
-        assert_eq!(changes(&checkout, &roots).await.unwrap().branch, None);
+        assert_eq!(changes(&checkout, &roots, None).await.unwrap().branch, None);
         let outside = tempfile::tempdir().unwrap();
         let outside = outside.path().canonicalize().unwrap();
         let outside_cwd = Cwd::new(outside.to_str().unwrap()).unwrap();
-        assert_eq!(changes(&outside_cwd, &[outside]).await.unwrap().root, None);
+        assert_eq!(
+            changes(&outside_cwd, &[outside], None).await.unwrap().root,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn listed_worktrees_can_be_selected_with_commits_since_origin() {
+        let (_dir, cwd, roots) = repo();
+        let root = Path::new(cwd.as_str());
+        std::fs::write(root.join("base"), "base\n").unwrap();
+        run(root, &["add", "."]);
+        run(root, &["commit", "-m", "base"]);
+        run(root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        run(
+            root,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
+        run(root, &["worktree", "add", "-b", "feature", "checkout"]);
+        std::fs::write(root.join(".git/info/exclude"), "checkout\n").unwrap();
+        let checkout = Cwd::new(root.join("checkout").to_str().unwrap()).unwrap();
+        let tree = Path::new(checkout.as_str());
+        std::fs::write(tree.join("feature"), "committed\n").unwrap();
+        run(tree, &["add", "."]);
+        run(tree, &["commit", "-m", "feature"]);
+        std::fs::write(tree.join("base"), "unstaged\n").unwrap();
+        std::fs::write(root.join("upstream"), "upstream\n").unwrap();
+        run(root, &["add", "."]);
+        run(root, &["commit", "-m", "upstream"]);
+        run(root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
+        let list = changes(&cwd, &roots, None).await.unwrap();
+        assert_eq!(list.root, Some(cwd.clone()));
+        assert!(list.files.is_empty());
+        let listed: Vec<_> = list
+            .worktrees
+            .iter()
+            .map(|w| (w.root.clone(), w.branch.as_deref()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (cwd.clone(), Some("main")),
+                (checkout.clone(), Some("feature"))
+            ]
+        );
+
+        let list = changes(&cwd, &roots, Some(&checkout)).await.unwrap();
+        assert_eq!(list.root, Some(checkout.clone()));
+        assert_eq!(list.branch.as_deref(), Some("feature"));
+        let files: Vec<_> = list
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.section))
+            .collect();
+        assert_eq!(
+            files,
+            [
+                ("base", GitSection::Unstaged),
+                ("feature", GitSection::Committed)
+            ]
+        );
+        let committed = diff(
+            &cwd,
+            &roots,
+            &AgentDiffParams {
+                terminal_id: protocol::TerminalId::new("term_test").unwrap(),
+                root: checkout.clone(),
+                path: "feature".into(),
+                section: GitSection::Committed,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(committed.patch.contains("+committed"));
+
+        let foreign = root.join("foreign");
+        run(root, &["init", "-b", "main", "foreign"]);
+        std::fs::write(
+            root.join(".git/worktrees/checkout/gitdir"),
+            format!("{}\n", foreign.join(".git").display()),
+        )
+        .unwrap();
+        let foreign = Cwd::new(foreign.to_str().unwrap()).unwrap();
+        let list = changes(&cwd, &roots, Some(&foreign)).await.unwrap();
+        assert!(list.worktrees.iter().any(|w| w.root == foreign));
+        assert_eq!(list.root, Some(cwd.clone()));
+
+        let other = tempfile::tempdir_in(root).unwrap();
+        let other = Cwd::new(other.path().canonicalize().unwrap().to_str().unwrap()).unwrap();
+        assert_eq!(
+            changes(&cwd, &roots, Some(&other)).await.unwrap().root,
+            Some(cwd.clone())
+        );
+        let unlisted = AgentDiffParams {
+            terminal_id: protocol::TerminalId::new("term_test").unwrap(),
+            root: other,
+            path: "base".into(),
+            section: GitSection::Unstaged,
+        };
+        assert!(diff(&cwd, &roots, &unlisted).await.is_err());
     }
 
     #[tokio::test]
@@ -657,11 +889,15 @@ mod tests {
         assert!(untracked_content(&cwd, "/etc/passwd").is_err());
         let symlink = patch(&cwd, &roots, "link", GitSection::Untracked).await;
         assert!(!symlink.patch.contains("secret content"));
-        assert!(changes(&cwd, &[outside.path().to_owned()]).await.is_err());
+        assert!(
+            changes(&cwd, &[outside.path().to_owned()], None)
+                .await
+                .is_err()
+        );
         for index in 0..210 {
             std::fs::write(root.join(format!("file{index}")), "\u{1}\n".repeat(40000)).unwrap();
         }
-        let list = changes(&cwd, &roots).await.unwrap();
+        let list = changes(&cwd, &roots, None).await.unwrap();
         assert!(list.truncated);
         assert!(list.files.len() <= MAX_FILES);
         assert!(serde_json::to_vec(&list).unwrap().len() <= RESPONSE_LIMIT);
@@ -709,7 +945,7 @@ mod tests {
             run(root, &["config", key, &command]);
         }
         run(root, &["config", "filter.test.required", "true"]);
-        assert!(!changes(&cwd, &roots).await.unwrap().files.is_empty());
+        assert!(!changes(&cwd, &roots, None).await.unwrap().files.is_empty());
         assert!(
             patch(&cwd, &roots, "file", GitSection::Unstaged)
                 .await

@@ -25,6 +25,28 @@
       ],
       "type": "object"
     },
+    "AgentChangesParams": {
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cwd"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id"
+      ],
+      "type": "object"
+    },
     "AgentDiffParams": {
       "additionalProperties": false,
       "properties": {
@@ -394,6 +416,7 @@
     },
     "GitSection": {
       "enum": [
+        "committed",
         "staged",
         "unstaged",
         "untracked"
@@ -1045,7 +1068,7 @@
           "type": "string"
         },
         "params": {
-          "$ref": "#/$defs/AgentTarget"
+          "$ref": "#/$defs/AgentChangesParams"
         }
       },
       "required": [

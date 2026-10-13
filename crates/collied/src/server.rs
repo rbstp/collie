@@ -1171,7 +1171,7 @@ impl Session<'_> {
             }
             Request::Unpair(_) => return self.unpair(id).await,
             Request::FlockSnapshot(_) => (self.flock().await, None),
-            Request::AgentChanges(p) => (drive.git_changes(p.terminal_id, &auth).await, None),
+            Request::AgentChanges(p) => (drive.git_changes(p, &auth).await, None),
             Request::AgentDiff(p) => (drive.git_diff(p, &auth).await, None),
             Request::AgentRead(p) => (drive.read(p, true).await, None),
             Request::AgentHistory(p) => (self.history(p, &auth).await, None),
@@ -1860,7 +1860,8 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::AgentHistory(p) => p.terminal_id.as_str(),
         Request::AgentWatch(p) => p.terminal_id.as_ref().map_or("none", |t| t.as_str()),
         Request::AgentPrompt(p) => p.terminal_id.as_str(),
-        Request::AgentDraft(p) | Request::AgentChanges(p) => p.terminal_id.as_str(),
+        Request::AgentDraft(p) => p.terminal_id.as_str(),
+        Request::AgentChanges(p) => p.terminal_id.as_str(),
         Request::AgentDiff(p) => p.terminal_id.as_str(),
         Request::AgentSendKeys(p) => p.terminal_id.as_str(),
         Request::AgentTypeText(p) => p.terminal_id.as_str(),

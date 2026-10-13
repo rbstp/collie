@@ -15,6 +15,7 @@ final class FakeCore: AgentCore {
 
     struct State {
         var gitCalls: [String] = []
+        var gitWorktrees: [GitWorktree] = []
         var gitPatch = "@@ -1 +1 @@\n-old\n+new\n"
         var gitDiffDelay: Duration = .zero
         var prompts: [String] = []
@@ -161,9 +162,12 @@ final class FakeCore: AgentCore {
         if let error { throw error }
         return TerminalSnapshot(terminalId: terminalId, source: source, ansi: "read \(read)", truncated: false)
     }
-    func agentChanges(machineId: String, terminalId: String) async throws -> GitChanges {
-        state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)") }
-        return GitChanges(root: "/worktree", branch: "feature", files: [], truncated: false)
+    func agentChanges(machineId: String, terminalId: String, root: String?) async throws -> GitChanges {
+        let worktrees = state.withLock { s in
+            s.gitCalls.append("\(machineId)|\(terminalId)" + (root.map { "|\($0)" } ?? ""))
+            return s.gitWorktrees
+        }
+        return GitChanges(root: root ?? "/worktree", branch: "feature", files: [], truncated: false, worktrees: worktrees)
     }
     func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff {
         state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)") }
@@ -2720,6 +2724,26 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
 }
 
 @MainActor
+@Test func gitReviewNamesAnotherListedWorktreeAndRejectsUnlistedOnes() async {
+    let core = FakeCore()
+    core.state.withLock { $0.gitWorktrees = [GitWorktree(root: "/worktree", branch: "main"), GitWorktree(root: "/feature", branch: "feature")] }
+    let model = await slashReady(core)
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "committed", status: "M", additions: 1, deletions: 1)
+    let review = model.gitReview
+    review.add(root: "/other", file: file, selection: "")
+    review.comments[0].text = "Please simplify."
+    #expect(!(await review.send(using: model)))
+    #expect(review.error?.contains("checkout changed") == true)
+    review.comments = []
+    review.add(root: "/feature", file: file, selection: "")
+    review.comments[0].text = "Please simplify."
+    review.add(root: "/worktree", file: file, selection: "")
+    review.comments[1].text = "Keep this."
+    #expect(await review.send(using: model))
+    #expect(core.snapshot.prompts == ["Feedback for file.swift in /feature: Please simplify.\n\nFeedback for file.swift: Keep this."])
+}
+
+@MainActor
 @Test func gitReadsStayOnTheAgentRouteAndSelectedCheckout() async throws {
     let core = FakeCore()
     let model = await slashReady(core)
@@ -2727,8 +2751,9 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     let file = GitFile(path: "a.swift", oldPath: nil, section: "staged", status: "M", additions: 1, deletions: 1)
     let root = try #require(changes.root)
     _ = try await model.gitDiff(root: root, file: file)
+    _ = try await model.gitChanges(root: "/feature")
     let target = "\(model.route.machineId)|\(model.route.terminalId)"
-    #expect(core.snapshot.gitCalls == [target, target + "|/worktree|a.swift|staged"])
+    #expect(core.snapshot.gitCalls == [target, target + "|/worktree|a.swift|staged", target + "|/feature"])
     #expect(core.snapshot.prompts.isEmpty)
 }
 
