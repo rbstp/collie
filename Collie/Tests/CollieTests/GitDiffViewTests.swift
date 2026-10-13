@@ -155,10 +155,17 @@ final class GitDiffViewTests: XCTestCase {
                 _ = try await waitFor("\(gitFile.path) diff") {
                     core.snapshot.gitCalls.last == "m|t|/worktree|\(gitFile.path)|unstaged" ? true : nil
                 }
-                try await Task.sleep(for: .milliseconds(300))
-                host.view.layoutIfNeeded()
-                let shown = descendants(host.view).contains { ($0 as? UITextView)?.text.contains("new") == true }
-                XCTAssertEqual(shown, !collapsed, gitFile.path)
+                let shown = { descendants(host.view).contains { ($0 as? UITextView)?.text.contains("new") == true } }
+                if collapsed {
+                    try await Task.sleep(for: .milliseconds(500))
+                    host.view.layoutIfNeeded()
+                    XCTAssertFalse(shown(), gitFile.path)
+                } else {
+                    _ = try await waitFor("\(gitFile.path) expanded") {
+                        host.view.layoutIfNeeded()
+                        return shown() ? true : nil
+                    }
+                }
             }
         }
 

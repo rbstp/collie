@@ -439,13 +439,15 @@ pub async fn changes(
     };
     if scope == GitScope::Branch {
         if let Some((name, range)) = base(&root).await? {
-            changes.base = Some(name);
             let mut args = diff_args(GitSection::Committed, &range);
             args.extend(["--raw", "--no-abbrev", "--numstat", "-z", "--"]);
             let (out, ok, truncated) = git(&root, &args, OUTPUT_LIMIT).await?;
             if !ok {
-                return Err(error("Could not list branch changes"));
+                return Err(error(&format!(
+                    "Could not compare this branch with {name}; it may share no history with it"
+                )));
             }
+            changes.base = Some(name);
             changes.truncated |= truncated;
             changes.files.extend(tracked(&out, GitSection::Committed)?);
         }
