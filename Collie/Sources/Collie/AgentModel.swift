@@ -73,6 +73,7 @@ final class AgentModel {
     var blocked: BlockedInput?
     private(set) var notice: String?
     private(set) var keyTaps = 0
+    private(set) var quotes = 0
     private enum Input {
         case key(AgentKey)
         case answer(String, CheckedContinuation<Void, any Error>)
@@ -649,10 +650,23 @@ final class AgentModel {
         }
     }
 
-    func insert(_ shortcut: PromptShortcut) {
-        guard !isTerminal, !answering, !sendingPrompt, !dictation.isActive else { return }
+    @discardableResult
+    func insert(_ shortcut: PromptShortcut) -> Bool {
+        guard !isTerminal, !answering, !sendingPrompt, !dictation.isActive else { return false }
+        let next = shortcut.appending(to: draft)
+        guard next.utf8.count <= 32 * 1024 else {
+            promptError = "The prompt would be longer than 32 KiB."
+            return false
+        }
         loadedMacDraft = nil
-        draft = shortcut.appending(to: draft)
+        draft = next
+        return true
+    }
+
+    func quote(_ text: String) {
+        guard !text.isEmpty, insert(PromptShortcut(text: CodeFence.block(text))) else { return }
+        promptError = nil
+        quotes += 1
     }
 
     func paste(_ text: String?) {

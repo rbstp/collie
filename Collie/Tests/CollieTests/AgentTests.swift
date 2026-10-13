@@ -2593,6 +2593,58 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     #expect(GitFeedback.draft(file: file, selection: "```\n").contains("````diff\n```\n````"))
 }
 
+@Test func codeFenceGrowsPastBackticksInTheText() {
+    #expect(CodeFence.block("let x = 1") == "```\nlet x = 1\n```")
+    #expect(CodeFence.block("a\n", info: "diff") == "```diff\na\n```")
+    #expect(CodeFence.block("run `ls`") == "```\nrun `ls`\n```")
+    #expect(CodeFence.block("```swift\nx\n```") == "````\n```swift\nx\n```\n````")
+    #expect(CodeFence.block("`````") == "``````\n`````\n``````")
+}
+
+@MainActor
+@Test func quoteAppendsAFencedBlockWithoutSending() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.quote("```\nls\n```")
+    #expect(model.draft == "````\n```\nls\n```\n````")
+    #expect(model.quotes == 1)
+    model.quote("two")
+    await model.flushMirror()
+    #expect(model.draft == "````\n```\nls\n```\n````\n\n```\ntwo\n```")
+    #expect(model.quotes == 2)
+    #expect(core.snapshot.prompts.isEmpty && core.snapshot.slashes.isEmpty && core.snapshot.keys.isEmpty)
+    model.quote("")
+    #expect(model.quotes == 2)
+}
+
+@MainActor
+@Test func aQuoteOverThePromptLimitLeavesTheDraftUnchanged() async {
+    let core = FakeCore()
+    let model = await slashReady(core)
+    model.draft = "Keep this"
+    model.quote(String(repeating: "x", count: 32 * 1024))
+    #expect(model.draft == "Keep this")
+    #expect(model.quotes == 0)
+    #expect(model.promptError == "The prompt would be longer than 32 KiB.")
+    model.quote("short")
+    #expect(model.draft == "Keep this\n\n```\nshort\n```")
+    #expect(model.promptError == nil)
+}
+
+@MainActor
+@Test func aShellRefusesQuotes() {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = nil
+        $0.shell = shellPane
+    }
+    let model = terminalModel(core, FakeUnlocker(signs: true))
+    model.poll()
+    #expect(model.isTerminal)
+    model.quote("ls")
+    #expect(model.draft.isEmpty && model.quotes == 0)
+}
+
 @MainActor
 @Test(arguments: [0, 1, 2])
 func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {

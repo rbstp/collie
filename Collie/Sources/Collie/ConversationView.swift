@@ -108,6 +108,10 @@ final class ConversationModel {
     }
 }
 
+extension EnvironmentValues {
+    @Entry var quote: (@MainActor (String) -> Void)? = nil
+}
+
 struct ConversationView: View {
     @Bindable var model: ConversationModel
     @Binding var searching: Bool
@@ -328,6 +332,7 @@ private struct ConversationActivity: View {
 private struct ConversationMessage: View {
     let message: HistoryMessage
     let query: String
+    @Environment(\.quote) private var quote
 
     var body: some View {
         HStack(alignment: .top) {
@@ -354,6 +359,9 @@ private struct ConversationMessage: View {
         }
         .contextMenu {
             Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+            if let quote {
+                Button("Quote", systemImage: "text.quote") { quote(message.text) }
+            }
         }
     }
 }
@@ -361,12 +369,17 @@ private struct ConversationMessage: View {
 private struct ConversationToolRecord: View {
     let message: HistoryMessage
     let query: String
+    @Environment(\.quote) private var quote
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(message.role == "tool" ? "Result" : "Input").font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                if let quote {
+                    Button("Quote", systemImage: "text.quote") { quote(message.text) }
+                        .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
+                }
                 Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
                     .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
             }
@@ -394,6 +407,7 @@ private struct ConversationTruncation: View {
 struct ConversationMarkdown: View {
     let text: String
     var query: String = ""
+    @Environment(\.quote) private var quote
 
     static func allowsLink(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else { return false }
@@ -456,6 +470,10 @@ struct ConversationMarkdown: View {
                         HStack {
                             Text("Code").font(.caption).foregroundStyle(.secondary)
                             Spacer()
+                            if let quote {
+                                Button("Quote code", systemImage: "text.quote") { quote(block.text) }
+                                    .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
+                            }
                             Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = block.text }
                                 .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
                         }

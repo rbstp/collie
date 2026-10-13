@@ -123,6 +123,7 @@ ios-build-sim: ios-framework ios-project
 
 ios-test diagnostics="on-failure": ios-framework ios-project
     swift test --package-path Collie/GhosttyTerminal
+    cd Collie/GhosttyTerminal && xcodebuild -scheme GhosttyTerminal -destination 'platform=iOS Simulator,name={{ sim }}' -derivedDataPath ../../target/ios/GhosttyTerminal CODE_SIGNING_ALLOWED=NO test
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' CODE_SIGNING_ALLOWED=NO test
 
 # Debug build with automatic signing on the first connected iPhone. Release keeps its manual TestFlight signing.

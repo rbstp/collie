@@ -14,9 +14,7 @@ enum GitFeedback {
     static func draft(file: GitFile, selection: String, root: String? = nil) -> String {
         let heading = "Feedback for \(file.path)\(root.map { " in \($0)" } ?? ""): "
         guard !selection.isEmpty else { return heading }
-        var fence = "```"
-        while selection.contains(fence) { fence += "`" }
-        return heading + "\n\n\(fence)diff\n\(selection)\(selection.hasSuffix("\n") ? "" : "\n")\(fence)\n\n"
+        return heading + "\n\n\(CodeFence.block(selection, info: "diff"))\n\n"
     }
 }
 
