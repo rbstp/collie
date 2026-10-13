@@ -43,6 +43,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
         didSet { gesturesChanged() }
     }
     public var canSwipe: ((TerminalSwipe) -> Bool)?
+    /// Shows Quote in the selection menu, which hands this the selected text.
+    public var onQuote: ((String) -> Void)?
 
     private let screen = TerminalScreen(background: GhosttyTerminalUIView.background, foreground: GhosttyTerminalUIView.foreground)
     private let canvas = TerminalCanvas()
@@ -53,7 +55,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private var renderedColumns: Int?
     private var followsBottom = true
     private var laidOutSize = CGSize.zero
-    private var selection: TerminalSelection? {
+    var selection: TerminalSelection? {
         didSet { selectionChanged() }
     }
     private var pressedWord: TerminalSelection?
@@ -63,6 +65,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private let startHandle = SelectionHandle(edge: .start)
     private let endHandle = SelectionHandle(edge: .end)
     private let copyButton = UIButton(configuration: .glass())
+    let quoteButton = UIButton(configuration: .glass())
     private let openButton = UIButton(configuration: .glass())
     private let menu = UIStackView()
     /// Where the pop-up points, relative to the visible area so it stays put while the
@@ -132,7 +135,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
             handle.isHidden = true
             addSubview(handle)
         }
-        for button in [copyButton, openButton] {
+        for button in [copyButton, quoteButton, openButton] {
             button.configuration?.cornerStyle = .capsule
             button.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14)
             button.configuration?.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
@@ -144,6 +147,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
         }
         copyButton.accessibilityLabel = "Copy"
         copyButton.addAction(UIAction { [weak self] _ in self?.copySelection() }, for: .primaryActionTriggered)
+        quoteButton.configuration?.title = "Quote"
+        quoteButton.addAction(UIAction { [weak self] _ in self?.quoteSelection() }, for: .primaryActionTriggered)
         openButton.configuration?.title = "Open"
         openButton.addAction(UIAction { [weak self] _ in self?.openLink() }, for: .primaryActionTriggered)
         menu.spacing = 8
@@ -416,6 +421,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
         copyButton.configuration?.title = "Copy"
         copyButton.isUserInteractionEnabled = true
         shownLink = frameData.flatMap { selection?.link(in: $0) }
+        quoteButton.isHidden = onQuote == nil
         openButton.isHidden = shownLink == nil
         menu.isHidden = false
         setNeedsLayout()
@@ -444,6 +450,11 @@ public final class GhosttyTerminalUIView: UIScrollView {
             guard let self, self.selection == selection else { return }
             self.selection = nil
         }
+    }
+
+    private func quoteSelection() {
+        if let selection, let frameData { onQuote?(selection.text(in: frameData)) }
+        selection = nil
     }
 
     private func openLink() {

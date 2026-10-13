@@ -68,10 +68,12 @@ struct AgentScreen: View {
             }
             if showingChat && !model.isTerminal {
                 ConversationView(model: model.conversation, searching: $searchingChat, load: model.history) { showingChat = false }
+                    .environment(model)
             } else {
                 AgentTerminal(
                     ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
                     perform: perform, resized: { model.fontSize = $0 }, resizeEnded: model.saveFontSize,
+                    quote: model.isTerminal ? nil : model.quote,
                     // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
                     neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
                     switchAgent: switchAgent
@@ -401,6 +403,7 @@ private struct AgentTerminal: UIViewRepresentable {
     let perform: @MainActor (GestureAction) -> Void
     let resized: @MainActor (Double) -> Void
     let resizeEnded: @MainActor () -> Void
+    let quote: (@MainActor (String) -> Void)?
     let neighbor: ((Int) -> AgentRoute?)?
     let switchAgent: (AgentRoute) -> Void
     let refresh: @MainActor () async -> Void
@@ -432,6 +435,7 @@ private struct AgentTerminal: UIViewRepresentable {
         view.onTripleTap = gestures.tripleTap == .none ? nil : { perform(gestures.tripleTap) }
         view.onPinch = gestures.pinchResizesText ? { resized($0) } : nil
         view.onPinchEnded = { resizeEnded() }
+        view.onQuote = quote.map { quote in { quote($0) } }
         if gestures.swipeSwitchesAgents, let neighbor {
             let switchAgent = switchAgent
             let offset = { (swipe: TerminalSwipe) in swipe == .left ? 1 : -1 }
@@ -686,6 +690,10 @@ private struct PromptBar: View {
             case .failure(let error):
                 model.attachFailed(error)
             }
+        }
+        .onChange(of: model.quotes) {
+            selection = TextSelection(insertionPoint: model.draft.endIndex)
+            editing = true
         }
         .onChange(of: model.draft.isEmpty) { _, empty in
             if empty && !model.dictation.isActive { dictationExpanded = false }

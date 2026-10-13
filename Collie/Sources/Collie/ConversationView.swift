@@ -328,6 +328,7 @@ private struct ConversationActivity: View {
 private struct ConversationMessage: View {
     let message: HistoryMessage
     let query: String
+    @Environment(AgentModel.self) private var agent: AgentModel?
 
     var body: some View {
         HStack(alignment: .top) {
@@ -354,6 +355,9 @@ private struct ConversationMessage: View {
         }
         .contextMenu {
             Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+            if let agent {
+                Button("Quote", systemImage: "text.quote") { agent.quote(message.text) }
+            }
         }
     }
 }
@@ -361,12 +365,17 @@ private struct ConversationMessage: View {
 private struct ConversationToolRecord: View {
     let message: HistoryMessage
     let query: String
+    @Environment(AgentModel.self) private var agent: AgentModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(message.role == "tool" ? "Result" : "Input").font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                if let agent {
+                    Button("Quote", systemImage: "text.quote") { agent.quote(message.text) }
+                        .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
+                }
                 Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
                     .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
             }
@@ -394,6 +403,7 @@ private struct ConversationTruncation: View {
 struct ConversationMarkdown: View {
     let text: String
     var query: String = ""
+    @Environment(AgentModel.self) private var agent: AgentModel?
 
     static func allowsLink(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else { return false }
@@ -456,6 +466,10 @@ struct ConversationMarkdown: View {
                         HStack {
                             Text("Code").font(.caption).foregroundStyle(.secondary)
                             Spacer()
+                            if let agent {
+                                Button("Quote code", systemImage: "text.quote") { agent.quote(block.text) }
+                                    .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
+                            }
                             Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = block.text }
                                 .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
                         }
