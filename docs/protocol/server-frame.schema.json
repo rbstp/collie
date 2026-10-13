@@ -648,6 +648,12 @@
     },
     "GitChanges": {
       "properties": {
+        "base": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "branch": {
           "type": [
             "string",
@@ -717,6 +723,12 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "hash": {
+          "type": [
+            "string",
             "null"
           ]
         },

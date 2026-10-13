@@ -104,7 +104,7 @@ import UIKit
 @MainActor
 @Test func gitReviewPreservesInlineAnchorsAndOriginalQuotes() throws {
     let review = GitReview()
-    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1, hash: nil)
     let patch = "@@ -1 +1 @@\n-old\n+new\n"
     let anchor = GitDiffAnchor(patch: patch, row: 2)
     let id = try #require(review.add(root: "/worktree", file: file, selection: "new", anchor: anchor))
