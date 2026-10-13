@@ -67,7 +67,7 @@ enum DictationProblem: Equatable {
     }
 }
 
-/// Dictated text goes after what the field held at the start; volatile results are replaced as they firm up.
+/// Dictated text goes at the cursor the field held at the start, or at the end without one; volatile results are replaced as they firm up.
 @MainActor
 @Observable
 final class DictationModel {
@@ -89,6 +89,7 @@ final class DictationModel {
     private var task: Task<Void, Never>?
     private var session: DictationSession?
     private var base = ""
+    private var tail = ""
     private var finalized = ""
     private var volatile = ""
     private var write: (@MainActor (String) -> Void)?
@@ -101,13 +102,27 @@ final class DictationModel {
 
     var isActive: Bool { phase != .idle }
 
-    var output: String { Self.join(base, Self.join(finalized, volatile)) }
+    var output: String {
+        let heard = Self.join(finalized, volatile)
+        guard !heard.isEmpty else { return base + tail }
+        let head = Self.join(base, heard)
+        return tail.first?.isPunctuation == true ? head + tail : Self.join(head, tail)
+    }
 
     @discardableResult
-    func start(appendingTo text: String, write: @escaping @MainActor (String) -> Void) -> Task<Void, Never>? {
+    func start(in text: String, at selection: TextSelection? = nil, write: @escaping @MainActor (String) -> Void) -> Task<Void, Never>? {
+        guard case .selection(let range) = selection?.indices,
+              let lower = String.Index(range.lowerBound, within: text),
+              let upper = String.Index(range.upperBound, within: text)
+        else { return start(text, "", write: write) }
+        return start(String(text[..<lower]), String(text[upper...]), write: write)
+    }
+
+    private func start(_ head: String, _ tail: String, write: @escaping @MainActor (String) -> Void) -> Task<Void, Never>? {
         guard phase == .idle else { return nil }
         generation += 1
-        base = text
+        base = head
+        self.tail = tail
         finalized = ""
         volatile = ""
         problem = nil
@@ -200,9 +215,10 @@ final class DictationModel {
         problem = nil
         DevicePrefs.update(in: prefsFile) { $0.dictationLanguage = language }
         guard phase != .idle, phase != .finishing, let write else { return }
-        let text = output
+        let head = Self.join(base, Self.join(finalized, volatile))
+        let tail = tail
         cancel()
-        start(appendingTo: text, write: write)
+        start(head, tail, write: write)
     }
 
     func scenePhaseChanged(to phase: ScenePhase) {

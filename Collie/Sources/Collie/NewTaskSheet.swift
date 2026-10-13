@@ -12,6 +12,7 @@ struct NewTaskSheet: View {
     @State private var pickingFile = false
     @State private var pickingPrompt = false
     @State private var dictationExpanded = false
+    @State private var selection: TextSelection?
     @FocusState private var editingPrompt: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -193,7 +194,7 @@ struct NewTaskSheet: View {
                                 .disabled(model.upload != nil || model.phase != .editing)
                             }
                             HStack(alignment: .bottom, spacing: 8) {
-                                TextField("What should the agent do?", text: $model.prompt, axis: .vertical)
+                                TextField("What should the agent do?", text: $model.prompt, selection: $selection, axis: .vertical)
                                     .lineLimit(expandedPrompt ? 1...5 : 1...1)
                                     .focused($editingPrompt)
                                     .disabled(model.dictation.isActive)
@@ -224,8 +225,8 @@ struct NewTaskSheet: View {
                             HStack(spacing: 8) {
                                 if !model.dictation.isActive {
                                     DictationButton(dictation: model.dictation, disabled: model.phase != .editing) {
+                                        dictationExpanded = model.startDictation(at: editingPrompt ? selection : nil) != nil
                                         editingPrompt = false
-                                        dictationExpanded = model.startDictation() != nil
                                     }
                                 }
                                 if editingPrompt {

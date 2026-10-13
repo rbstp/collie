@@ -126,6 +126,40 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
 }
 
 @MainActor
+@Test func dictationGoesAtTheCursorAndReplacesASelection() async {
+    let engine = FakeDictationEngine()
+    let model = AgentModel(
+        core: FakeCore(), route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: nil, dictationEngine: engine
+    )
+    model.draft = "fix tests"
+    let cursor = model.draft.index(model.draft.startIndex, offsetBy: 4)
+    model.startDictation(at: TextSelection(insertionPoint: cursor))
+    await poll { model.dictation.phase == .listening }
+    await engine.send(.volatile("the"))
+    #expect(model.draft == "fix the tests")
+    model.dictation.select(.french)
+    await poll { engine.started.count == 2 && model.dictation.phase == .listening }
+    await engine.send(.final("build and"))
+    #expect(model.draft == "fix the build and tests")
+    model.dictation.cancel()
+
+    let start = model.draft.index(model.draft.startIndex, offsetBy: 8)
+    let end = model.draft.index(start, offsetBy: 9)
+    model.startDictation(at: TextSelection(range: start..<end))
+    await poll { model.dictation.phase == .listening }
+    await engine.send(.final("app"))
+    #expect(model.draft == "fix the app tests")
+    model.dictation.cancel()
+
+    model.draft = "why fail?"
+    model.startDictation(at: TextSelection(insertionPoint: model.draft.index(before: model.draft.endIndex)))
+    await poll { model.dictation.phase == .listening }
+    await engine.send(.final("now"))
+    #expect(model.draft == "why fail now?")
+    model.dictation.cancel()
+}
+
+@MainActor
 @Test func dictationWaveformKeepsSpeechAndSilenceInOrderAndDropsOldSamples() async {
     let engine = FakeDictationEngine()
     let model = await dictating(engine)
@@ -249,7 +283,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     engine.unavailable = [.french]
     let dictation = DictationModel(engine: engine, language: .english, prefsFile: nil)
     dictation.select(.french)
-    await dictation.start(appendingTo: "") { _ in }?.value
+    await dictation.start(in: "") { _ in }?.value
     #expect(dictation.problem == .unavailable(.french))
     #expect(dictation.problem?.message == "On-device dictation in French (Canada) is not available on this device.")
     #expect(engine.started.isEmpty)
@@ -258,7 +292,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     engine.holdsInstall = true
     dictation.select(.english)
     #expect(dictation.problem == nil)
-    dictation.start(appendingTo: "") { _ in }
+    dictation.start(in: "") { _ in }
     await poll { engine.installing }
     #expect(dictation.phase == .preparing(download: 0.5))
     engine.finishInstall()
@@ -272,7 +306,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     let engine = FakeDictationEngine()
     engine.holdsInstall = true
     let dictation = DictationModel(engine: engine, language: .english, prefsFile: nil)
-    let task = dictation.start(appendingTo: "") { _ in }
+    let task = dictation.start(in: "") { _ in }
     await poll { engine.installing }
     dictation.stop()
     #expect(!dictation.isActive)
