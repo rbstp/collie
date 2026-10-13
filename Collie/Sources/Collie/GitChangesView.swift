@@ -193,7 +193,10 @@ struct GitChangesView: View {
         loading = true
         error = nil
         defer { loading = false }
-        do { changes = try await agent.gitChanges(root: review.root) }
+        do {
+            changes = try await agent.gitChanges(root: review.root)
+            if changes?.root != review.root { review.root = nil }
+        }
         catch { changes = nil; self.error = AgentModel.message(for: error) }
     }
 }

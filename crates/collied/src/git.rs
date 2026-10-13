@@ -134,22 +134,26 @@ async fn root(cwd: &Cwd, roots: &[PathBuf]) -> Result<Option<Cwd>, Fail> {
         .trim_end_matches('\n');
     let root = resolve_cwd(path, roots).map_err(error)?;
     for option in ["--absolute-git-dir", "--git-common-dir"] {
-        let (out, ok, truncated) = git(&root, &["rev-parse", option], 4096).await?;
-        if !ok || truncated {
-            return Err(error("Git metadata is unavailable"));
-        }
-        let path = std::str::from_utf8(&out)
-            .map_err(|_| error("Invalid Git metadata path"))?
-            .trim_end_matches('\n');
-        let path = Path::new(root.as_str()).join(path);
-        resolve_cwd(
-            path.to_str()
-                .ok_or_else(|| error("Invalid Git metadata path"))?,
-            roots,
-        )
-        .map_err(error)?;
+        metadata(&root, option, roots).await?;
     }
     Ok(Some(root))
+}
+
+async fn metadata(root: &Cwd, option: &str, roots: &[PathBuf]) -> Result<Cwd, Fail> {
+    let (out, ok, truncated) = git(root, &["rev-parse", option], 4096).await?;
+    if !ok || truncated {
+        return Err(error("Git metadata is unavailable"));
+    }
+    let path = std::str::from_utf8(&out)
+        .map_err(|_| error("Invalid Git metadata path"))?
+        .trim_end_matches('\n');
+    let path = Path::new(root.as_str()).join(path);
+    resolve_cwd(
+        path.to_str()
+            .ok_or_else(|| error("Invalid Git metadata path"))?,
+        roots,
+    )
+    .map_err(error)
 }
 
 async fn worktrees(checkout: &Cwd, roots: &[PathBuf]) -> Result<Vec<GitWorktree>, Fail> {
@@ -180,7 +184,7 @@ async fn worktrees(checkout: &Cwd, roots: &[PathBuf]) -> Result<Vec<GitWorktree>
             }
         }
         if let Some(root) = root
-            && list.len() < MAX_WORKTREES
+            && (list.len() < MAX_WORKTREES || &root == checkout)
         {
             list.push(GitWorktree { root, branch });
         }
@@ -188,9 +192,11 @@ async fn worktrees(checkout: &Cwd, roots: &[PathBuf]) -> Result<Vec<GitWorktree>
     Ok(list)
 }
 
-/// The phone may only pick a worktree collied itself listed for the agent's repository,
-/// re-checked like the agent's own checkout.
+/// The phone may only pick a worktree collied itself listed for the agent's repository.
+/// The listing comes from metadata the agent can write, so the pick is re-checked like the
+/// agent's own checkout and must share its Git common directory.
 async fn worktree(
+    checkout: &Cwd,
     worktrees: &[GitWorktree],
     requested: &Cwd,
     roots: &[PathBuf],
@@ -198,9 +204,14 @@ async fn worktree(
     if !worktrees.iter().any(|w| &w.root == requested) {
         return Ok(None);
     }
-    Ok(root(requested, roots)
+    let Some(root) = root(requested, roots)
         .await?
-        .filter(|root| root == requested))
+        .filter(|root| root == requested)
+    else {
+        return Ok(None);
+    };
+    let common = metadata(checkout, "--git-common-dir", roots).await?;
+    Ok((metadata(&root, "--git-common-dir", roots).await? == common).then_some(root))
 }
 
 async fn base(root: &Cwd) -> Result<Option<String>, Fail> {
@@ -373,7 +384,7 @@ pub async fn changes(
     };
     let worktrees = worktrees(&checkout, roots).await?;
     let root = match requested {
-        Some(requested) => worktree(&worktrees, requested, roots)
+        Some(requested) => worktree(&checkout, &worktrees, requested, roots)
             .await?
             .unwrap_or(checkout),
         None => checkout,
@@ -392,20 +403,10 @@ pub async fn changes(
         truncated: false,
         worktrees,
     };
-    for section in [
-        GitSection::Committed,
-        GitSection::Staged,
-        GitSection::Unstaged,
-    ] {
-        if section == GitSection::Committed && range.is_none() {
-            continue;
-        }
-        let mut args = diff_args(section, range.as_deref().unwrap_or_default());
+    for section in [GitSection::Staged, GitSection::Unstaged] {
+        let mut args = diff_args(section, "");
         args.extend(["--raw", "--numstat", "-z", "--"]);
         let (out, ok, truncated) = git(&root, &args, OUTPUT_LIMIT).await?;
-        if section == GitSection::Committed && !ok {
-            continue;
-        }
         if !ok {
             return Err(error("Could not list Git changes"));
         }
@@ -445,6 +446,14 @@ pub async fn changes(
             deletions: additions.map(|_| 0),
         });
     }
+    if let Some(range) = &range {
+        let mut args = diff_args(GitSection::Committed, range);
+        args.extend(["--raw", "--numstat", "-z", "--"]);
+        if let Ok((out, true, truncated)) = git(&root, &args, OUTPUT_LIMIT).await {
+            changes.truncated |= truncated;
+            changes.files.extend(tracked(&out, GitSection::Committed)?);
+        }
+    }
     if changes.files.len() > MAX_FILES {
         changes.files.truncate(MAX_FILES);
         changes.truncated = true;
@@ -470,9 +479,14 @@ pub async fn diff(cwd: &Cwd, roots: &[PathBuf], p: &AgentDiffParams) -> Result<G
     let root = if checkout == p.root {
         checkout
     } else {
-        worktree(&worktrees(&checkout, roots).await?, &p.root, roots)
-            .await?
-            .ok_or_else(|| error("Agent checkout changed; reopen Git changes"))?
+        worktree(
+            &checkout,
+            &worktrees(&checkout, roots).await?,
+            &p.root,
+            roots,
+        )
+        .await?
+        .ok_or_else(|| error("Agent checkout changed; reopen Git changes"))?
     };
     let (bytes, truncated) = if p.section == GitSection::Untracked {
         let (out, ok, truncated) = git(
@@ -817,8 +831,8 @@ mod tests {
         assert_eq!(
             files,
             [
-                ("feature", GitSection::Committed),
-                ("base", GitSection::Unstaged)
+                ("base", GitSection::Unstaged),
+                ("feature", GitSection::Committed)
             ]
         );
         let committed = diff(
@@ -834,6 +848,18 @@ mod tests {
         .await
         .unwrap();
         assert!(committed.patch.contains("+committed"));
+
+        let foreign = root.join("foreign");
+        run(root, &["init", "-b", "main", "foreign"]);
+        std::fs::write(
+            root.join(".git/worktrees/checkout/gitdir"),
+            format!("{}\n", foreign.join(".git").display()),
+        )
+        .unwrap();
+        let foreign = Cwd::new(foreign.to_str().unwrap()).unwrap();
+        let list = changes(&cwd, &roots, Some(&foreign)).await.unwrap();
+        assert!(list.worktrees.iter().any(|w| w.root == foreign));
+        assert_eq!(list.root, Some(cwd.clone()));
 
         let other = tempfile::tempdir_in(root).unwrap();
         let other = Cwd::new(other.path().canonicalize().unwrap().to_str().unwrap()).unwrap();
