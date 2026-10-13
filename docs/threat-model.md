@@ -253,6 +253,16 @@ Manual keys and text intentionally have no approval-specific restrictions for Cl
 | Residual | Empty folders can pile up under the base, as fast as the shared rate limit lets new tasks start (one at a time per session). A folder stays if the agent then fails to start; the error names it. herdr opens the path by name after collied's check, as for any `task.new`, so a process running as the user could swap it in between ([Same-UID malware on the Mac](#same-uid-malware-on-the-mac)). The names of folders directly inside any visible folder under the roots (the home folder by default) are visible to the paired phone, which could already have an agent list them. The base folder is a phone setting: collied re-checks every path against the roots, whatever the phone stored. |
 | Phase | Built |
 
+### Task clone from the phone
+
+| | |
+|---|---|
+| Assets | The user's account on the computer; the disk under the task roots; git and SSH credentials |
+| Attack | A paired phone (or a stolen, unlocked one) sends a clone source that git reads as an option (`-u`, `--upload-pack`), a local path or another transport (`file://`, `ext::`, `fd::`), credentials in a URL, or a target that escapes the roots or overwrites an existing folder; relies on an `insteadOf` rewrite or a `protocol.<name>.allow` in the user's config to reach a dangerous transport; or hangs collied on a credential prompt. |
+| Mitigations | Same gate as `task.new` with `new_folder`: paired full session, one task at a time, an `op_id`, authorization re-checked before the folder is created and again before the clone runs, and an audit line naming the source (built). `CloneSource` admits only `owner/repo`, `https://host[:port]/path` and `git@host:path` with a narrow ASCII alphabet, no leading `-` in any part, no userinfo, query or `..`; `owner/repo` never reaches git as typed. The source and target follow `--` for both `git clone` and `gh repo clone`. The target is a new empty folder made with `mkdirat` under the roots, so an existing one is refused before anything runs. The child has null stdin, `GIT_TERMINAL_PROMPT=0`, `GH_PROMPT_DISABLED=1`, no inherited `GIT_*` variables, and command-line config that allows only `https` and `ssh`, which outranks the user's config files and applies after URL rewriting. It runs in its own process group with a 75 s timeout and `kill_on_drop`. Submodules are not cloned. |
+| Residual | The user's own git config still applies otherwise: `url.<base>.insteadOf` may send a source to another HTTPS or SSH host the user configured, and credential helpers, `core.sshCommand` and hooks from `init.templateDir` run as configured. A GUI credential helper or SSH askpass could show a prompt on the Mac until the timeout. A clone that times out leaves its partial folder in place; the error names it. The cloned repository is untrusted content the agent then works in (prompt injection, as with any repository). |
+| Phase | Built |
+
 ### Task archive from the phone
 
 | | |

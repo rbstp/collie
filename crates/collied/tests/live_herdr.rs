@@ -303,6 +303,7 @@ async fn scenario(session: &HerdrSession) {
         label: None,
         new_folder: None,
         worktree: None,
+        clone: None,
     };
     assert_eq!(
         drive.task_new(outside, &yes).await.0.unwrap_err().0,
@@ -320,6 +321,7 @@ async fn scenario(session: &HerdrSession) {
                     label: Some(Label::new("collie-live").unwrap()),
                     new_folder: None,
                     worktree: None,
+                    clone: None,
                 },
                 &yes,
             )

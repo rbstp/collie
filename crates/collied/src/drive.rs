@@ -11,13 +11,14 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
-    AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, Cwd, ErrorCode, FolderName, Key, OpId,
-    OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response, TaskArchiveParams,
-    TaskFoldersParams, TaskNewParams, TaskOptions, TaskWorktree, TaskWorktreeInfo,
-    TaskWorktreesParams, TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams,
-    WorkspaceId, limits,
+    AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, CloneSource, Cwd, ErrorCode,
+    FolderName, Key, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response,
+    TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskOptions, TaskWorktree,
+    TaskWorktreeInfo, TaskWorktreesParams, TerminalId, TerminalRead, TerminalRunParams,
+    WorkspaceCloseParams, WorkspaceId, limits,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::{process::Command, time::timeout};
@@ -54,6 +55,20 @@ const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
 const COMMAND_SHOWN: &str = "a slash command shows in the input box; send it as a prompt";
 const MAX_FOLDERS: usize = 500;
 const MAX_FOLDERS_SCANNED: usize = 10_000;
+/// Within the phone's `TASK_CLONE_TIMEOUT`, before the agent start's own budget.
+const CLONE_TIMEOUT: Duration = Duration::from_secs(75);
+const MAX_CLONE_ERROR_BYTES: usize = 1000;
+/// Command-line config, so it outranks every config file; a `protocol.<name>.allow`
+/// in a file would otherwise override `protocol.allow`.
+const CLONE_PROTOCOLS: [(&str, &str); 7] = [
+    ("protocol.allow", "never"),
+    ("protocol.file.allow", "never"),
+    ("protocol.ext.allow", "never"),
+    ("protocol.git.allow", "never"),
+    ("protocol.http.allow", "never"),
+    ("protocol.https.allow", "always"),
+    ("protocol.ssh.allow", "always"),
+];
 /// `UF_HIDDEN` from `sys/stat.h`: Finder hides `~/Library` with it, not with a dot.
 #[cfg(target_os = "macos")]
 const UF_HIDDEN: u32 = 0x8000;
@@ -912,13 +927,29 @@ impl Driver {
 
     /// Also returns the canonical cwd once it is resolved or created, for the audit line.
     pub async fn task_new(&self, p: TaskNewParams, auth: &Authorized) -> (Reply, Option<Cwd>) {
-        if p.worktree.is_some() && p.new_folder.is_some() {
+        if [
+            p.worktree.is_some(),
+            p.new_folder.is_some(),
+            p.clone.is_some(),
+        ]
+        .into_iter()
+        .filter(|set| *set)
+        .count()
+            > 1
+        {
             return (
-                fail(ErrorCode::InvalidParams, "choose a folder or worktree"),
+                fail(
+                    ErrorCode::InvalidParams,
+                    "choose a folder, worktree or clone",
+                ),
                 None,
             );
         }
-        let created = p.new_folder.is_some();
+        let made = if p.clone.is_some() {
+            Some("cloned")
+        } else {
+            p.new_folder.as_ref().map(|_| "created")
+        };
         match self.task_cwd(&p, auth).await {
             Ok(cwd) => {
                 let mut reply = if p.worktree.is_some() {
@@ -926,9 +957,9 @@ impl Driver {
                 } else {
                     self.start_task(p, &cwd, auth).await
                 };
-                if created {
+                if let Some(made) = made {
                     reply = reply.map_err(|(code, message)| {
-                        let left = format!("folder {} was created and left in place", cwd.as_str());
+                        let left = format!("folder {} was {made} and left in place", cwd.as_str());
                         (code, format!("{left}: {message}"))
                     });
                 }
@@ -944,13 +975,35 @@ impl Driver {
         }
         let roots = self.roots.clone();
         let requested = p.cwd.as_str().to_owned();
-        let (new_folder, auth) = (p.new_folder.clone(), auth.clone());
-        tokio::task::spawn_blocking(move || match new_folder {
-            Some(name) => create_folder(&requested, &name, &roots, &auth),
+        let new_folder = p
+            .new_folder
+            .clone()
+            .or_else(|| p.clone.as_ref().map(CloneSource::folder_name));
+        let auth_check = auth.clone();
+        let cwd = tokio::task::spawn_blocking(move || match new_folder {
+            Some(name) => create_folder(&requested, &name, &roots, &auth_check),
             None => resolve_cwd(&requested, &roots).map_err(invalid),
         })
         .await
-        .map_err(|_| (ErrorCode::Internal, "cwd check failed".to_owned()))?
+        .map_err(|_| (ErrorCode::Internal, "cwd check failed".to_owned()))??;
+        let Some(source) = &p.clone else {
+            return Ok(cwd);
+        };
+        let cloned = match authorized(auth) {
+            Ok(()) => clone_repository(source, &cwd)
+                .await
+                .map_err(|message| invalid(&format!("clone failed: {message}"))),
+            Err(e) => Err(e),
+        };
+        let Err((code, message)) = cloned else {
+            return Ok(cwd);
+        };
+        let left = if std::fs::remove_dir(cwd.as_str()).is_ok() {
+            String::new()
+        } else {
+            format!(" Folder {} was left in place.", cwd.as_str())
+        };
+        fail(code, format!("{message}{left}"))
     }
 
     /// On a failure after `workspace.create` nothing is closed: the error names the
@@ -1508,15 +1561,109 @@ fn checkout_removed(repo: &Cwd, checkout: &Cwd) -> bool {
         })
 }
 
-async fn run_poi(repo: &Cwd) -> Result<(), &'static str> {
-    let gh = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
+fn gh() -> Option<&'static str> {
+    ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
         .into_iter()
         .find(|path| Path::new(path).is_file())
-        .unwrap_or("gh");
-    let path = format!(
+}
+
+fn tool_path() -> String {
+    format!(
         "/opt/homebrew/bin:/usr/local/bin:{}",
         std::env::var("PATH").unwrap_or_default()
-    );
+    )
+}
+
+/// `owner/repo` goes through `gh` when it is installed, else to GitHub over HTTPS; never
+/// to git as typed, where it would be a local path. Only HTTPS and SSH transports are
+/// allowed, also after a `url.<base>.insteadOf` rewrite, and nothing can prompt.
+fn clone_command(source: &CloneSource, target: &Cwd, gh: Option<&str>) -> Command {
+    let mut command = match (source.github_repo(), gh) {
+        (Some(repo), Some(gh)) => {
+            let mut command = Command::new(gh);
+            command.args(["repo", "clone", "--", repo, target.as_str()]);
+            command
+        }
+        (Some(repo), None) => {
+            let mut command = Command::new("git");
+            let url = format!("https://github.com/{repo}.git");
+            command.args(["clone", "--", &url, target.as_str()]);
+            command
+        }
+        (None, _) => {
+            let mut command = Command::new("git");
+            command.args(["clone", "--", source.as_str(), target.as_str()]);
+            command
+        }
+    };
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(key);
+        }
+    }
+    command
+        .env("PATH", tool_path())
+        .env_remove("GH_TOKEN")
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_COUNT", CLONE_PROTOCOLS.len().to_string());
+    for (i, (key, value)) in CLONE_PROTOCOLS.iter().enumerate() {
+        command
+            .env(format!("GIT_CONFIG_KEY_{i}"), key)
+            .env(format!("GIT_CONFIG_VALUE_{i}"), value);
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .kill_on_drop(true);
+    command
+}
+
+/// The error is the tail of git's (or gh's) stderr, without control or invisible characters.
+async fn clone_repository(source: &CloneSource, target: &Cwd) -> Result<(), String> {
+    let mut child = clone_command(source, target, gh())
+        .spawn()
+        .map_err(|_| "git is unavailable".to_owned())?;
+    let pid = child.id();
+    let mut stderr = child.stderr.take();
+    let run = async {
+        let mut tail = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while let Some(pipe) = stderr.as_mut() {
+            match pipe.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => tail.extend_from_slice(&chunk[..n]),
+            }
+            tail.drain(..tail.len().saturating_sub(MAX_CLONE_ERROR_BYTES));
+        }
+        (child.wait().await, tail)
+    };
+    let Ok((status, tail)) = timeout(CLONE_TIMEOUT, run).await else {
+        if let Some(group) = pid.and_then(|pid| rustix::process::Pid::from_raw(pid as i32)) {
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        }
+        return Err(format!("timed out after {} s", CLONE_TIMEOUT.as_secs()));
+    };
+    if status.is_ok_and(|status| status.success()) {
+        return Ok(());
+    }
+    let text: String = String::from_utf8_lossy(&tail)
+        .chars()
+        .filter(|&c| c == '\n' || !(c.is_control() || protocol::is_format(c)))
+        .collect();
+    let text = text.trim();
+    Err(if text.is_empty() {
+        "git exited with an error".to_owned()
+    } else {
+        text.to_owned()
+    })
+}
+
+async fn run_poi(repo: &Cwd) -> Result<(), &'static str> {
+    let gh = gh().unwrap_or("gh");
+    let path = tool_path();
     let mut command = Command::new(gh);
     command
         .arg("poi")
@@ -2504,6 +2651,98 @@ mod tests {
         assert_eq!(
             herdr_fail(herdr::Error::Timeout).0,
             ErrorCode::HerdrUnavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn clone_runs_git_or_gh_with_the_source_after_double_dash_and_https_or_ssh_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let target = base.join("app");
+        let target = Cwd::new(target.to_str().unwrap()).unwrap();
+        let source = |s: &str| CloneSource::new(s).unwrap();
+        let args = |s: &str, gh: Option<&str>| {
+            let command = clone_command(&source(s), &target, gh);
+            let command = command.as_std();
+            let mut args = vec![command.get_program().to_str().unwrap().to_owned()];
+            args.extend(command.get_args().map(|a| a.to_str().unwrap().to_owned()));
+            args
+        };
+        let t = target.as_str();
+        let gh = Some("/opt/homebrew/bin/gh");
+        assert_eq!(
+            args("owner/app", gh),
+            [
+                "/opt/homebrew/bin/gh",
+                "repo",
+                "clone",
+                "--",
+                "owner/app",
+                t
+            ]
+        );
+        assert_eq!(
+            args("owner/app.git", None),
+            ["git", "clone", "--", "https://github.com/owner/app.git", t]
+        );
+        for url in [
+            "https://git.example.com/group/app.git",
+            "git@git.example.com:group/app.git",
+        ] {
+            assert_eq!(args(url, gh), ["git", "clone", "--", url, t]);
+        }
+        let command = clone_command(&source("owner/app"), &target, None);
+        let envs: HashMap<_, _> = command
+            .as_std()
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_str().unwrap().to_owned(),
+                    v.map(|v| v.to_str().unwrap().to_owned()),
+                )
+            })
+            .collect();
+        assert_eq!(envs["GIT_TERMINAL_PROMPT"].as_deref(), Some("0"));
+        assert_eq!(envs["GH_PROMPT_DISABLED"].as_deref(), Some("1"));
+        assert_eq!(envs["GH_TOKEN"], None);
+
+        let repo = base.join("repos/group/app");
+        std::fs::create_dir_all(&repo).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&repo)
+            .status()
+            .unwrap();
+        assert!(init.success());
+        let home = base.join("home");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::write(
+            home.join(".gitconfig"),
+            format!(
+                "[url \"file://{}/repos/\"]\n\tinsteadOf = https://example.invalid/\n[protocol \"file\"]\n\tallow = always\n",
+                base.display()
+            ),
+        )
+        .unwrap();
+        let rewritten = |allowlist: bool| {
+            let mut command =
+                clone_command(&source("https://example.invalid/group/app"), &target, None);
+            command.env("HOME", &home).env_remove("XDG_CONFIG_HOME");
+            if !allowlist {
+                command.env("GIT_CONFIG_COUNT", "0");
+            }
+            command.output()
+        };
+        let refused = rewritten(true).await.unwrap();
+        assert!(!refused.status.success());
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(stderr.contains("transport 'file' not allowed"), "{stderr}");
+        assert!(!Path::new(t).exists());
+        let control = rewritten(false).await.unwrap();
+        assert!(
+            control.status.success(),
+            "{}",
+            String::from_utf8_lossy(&control.stderr)
         );
     }
 }

@@ -1218,6 +1218,7 @@ impl Session<'_> {
             Request::TaskNew(p) => {
                 let (op_id, d) = (p.op_id.clone(), drive.clone());
                 let created = p.new_folder.is_some();
+                let cloned = p.clone.as_ref().map(|c| format!("clone={:?}", c.as_str()));
                 let worktree_target = p.worktree.as_ref().map(|w| match w {
                     protocol::TaskWorktree::Create { branch } => {
                         format!("create branch={branch:?}")
@@ -1231,6 +1232,8 @@ impl Session<'_> {
                     let cwd = cwd.map(|c| {
                         if let Some(worktree_target) = &worktree_target {
                             format!("{} {worktree_target}", c.as_str())
+                        } else if let Some(cloned) = &cloned {
+                            format!("{} (cloned) {cloned}", c.as_str())
                         } else if created {
                             format!("{} (created)", c.as_str())
                         } else {
@@ -1889,6 +1892,9 @@ fn audit_target(request: &Request) -> Option<String> {
                         format!("{} open path={:?}", p.cwd.as_str(), path.as_str())
                     }
                 });
+            }
+            if let Some(source) = &p.clone {
+                return Some(format!("{} clone={:?}", p.cwd.as_str(), source.as_str()));
             }
             match &p.new_folder {
                 Some(name) => {

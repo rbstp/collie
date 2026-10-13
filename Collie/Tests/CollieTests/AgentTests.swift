@@ -270,6 +270,14 @@ final class FakeCore: AgentCore {
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
+    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
+        try await call {
+            $0.taskNews.append("\(cwd) clone=\(repository)")
+            $0.taskPrompts.append(prompt)
+        }
+        guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
+        return started
+    }
     func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String {
         progress.onProgress(sent: UInt64(data.count / 2), total: UInt64(data.count))
         try await call { $0.uploads.append("\(name) \(data.count)") }
@@ -1362,6 +1370,29 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
         "list /Users/me/app", "open /Users/me/app /Users/me/app-feature codex"
     ])
     #expect(core.snapshot.taskPrompts == ["build it", "continue"])
+}
+
+@MainActor
+@Test func aCloneLeftInPlaceIsNamedAndBecomesTheNextStartsFolder() async throws {
+    let core = FakeCore()
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    DevicePrefs.update(in: file) { $0.taskBases["m1"] = "/Users/me/git" }
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac], prefsFile: file)
+    await model.loadOptions()
+    model.prompt = "set it up"
+    model.location = .clone
+    model.repository = "git@github.com:owner/brand-new.git"
+    #expect(await model.start() == nil)
+    #expect(model.location == .clone && model.error?.contains("stays") == false, "a failed clone keeps Clone on")
+    model.repository = "https://github.com/owner/collie"
+    #expect(await model.start() == nil)
+    #expect(model.location == .folder && !model.newFolder && model.cwd == "/Users/me/git/collie")
+    #expect(model.error?.hasSuffix(" The clone stays in /Users/me/git/collie.") == true)
+    #expect(core.snapshot.taskNews == [
+        "/Users/me/git clone=git@github.com:owner/brand-new.git", "/Users/me/git clone=https://github.com/owner/collie",
+    ])
 }
 
 @MainActor

@@ -157,6 +157,73 @@ fn folder_name(s: &str) -> bool {
         && s.trim() == s
 }
 
+fn repo_segment(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with(['.', '-'])
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
+fn repo_host(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with(['.', '-'])
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))
+}
+
+fn repo_path(s: &str) -> Option<&str> {
+    s.split('/')
+        .all(repo_segment)
+        .then(|| s.rsplit('/').next())
+        .flatten()
+}
+
+/// The folder name of an `owner/repo`, `https://host[:port]/path` or `git@host:path`
+/// source. Anything else (another transport, a local path, userinfo, a query, `..`, a
+/// leading `-`) is `None`, so git never sees it.
+fn clone_folder(s: &str) -> Option<&str> {
+    if s.len() > limits::MAX_CLONE_SOURCE_BYTES {
+        return None;
+    }
+    let last = if let Some(rest) = s.strip_prefix("https://") {
+        let (authority, path) = rest.split_once('/')?;
+        let host = match authority.split_once(':') {
+            Some((host, port))
+                if (1..=5).contains(&port.len()) && port.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                host
+            }
+            Some(_) => return None,
+            None => authority,
+        };
+        if !repo_host(host) {
+            return None;
+        }
+        repo_path(path)?
+    } else if let Some(rest) = s.strip_prefix("git@") {
+        let (host, path) = rest.split_once(':')?;
+        if !repo_host(host) {
+            return None;
+        }
+        repo_path(path)?
+    } else {
+        let (owner, repo) = s.split_once('/')?;
+        if owner.len() > 39
+            || owner.starts_with('-')
+            || !owner
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            || repo.len() > 100
+            || !repo_segment(repo)
+        {
+            return None;
+        }
+        repo
+    };
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    folder_name(name).then_some(name)
+}
+
 /// Default_Ignorable code points `is_format` leaves out, plus the braille blank: they
 /// render as nothing, so a name could look empty or like another folder's.
 fn is_blank(c: char) -> bool {
@@ -313,6 +380,30 @@ validated_string!(
     check = folder_name,
     schema = { "minLength": 1, "maxLength": limits::MAX_FOLDER_NAME_BYTES, "pattern": "^[^.]" }
 );
+
+validated_string!(
+    /// A repository to clone: `owner/repo` on GitHub, an `https://` URL or `git@host:path`.
+    CloneSource,
+    debug = plain,
+    check = |s| clone_folder(s).is_some(),
+    schema = { "minLength": 3, "maxLength": limits::MAX_CLONE_SOURCE_BYTES }
+);
+
+impl CloneSource {
+    /// The last path segment without `.git`.
+    pub fn folder_name(&self) -> FolderName {
+        FolderName(clone_folder(&self.0).unwrap_or_default().to_owned())
+    }
+
+    /// `owner/repo` without `.git` when this is the GitHub shorthand.
+    pub fn github_repo(&self) -> Option<&str> {
+        if self.0.starts_with("https://") || self.0.starts_with("git@") {
+            None
+        } else {
+            Some(self.0.strip_suffix(".git").unwrap_or(&self.0))
+        }
+    }
+}
 
 validated_string!(
     /// Text typed into an agent. ESC and other C0/C1 controls are rejected because
@@ -503,6 +594,83 @@ mod tests {
         }
         assert!(FolderName::new("a".repeat(limits::MAX_FOLDER_NAME_BYTES)).is_ok());
         assert!(FolderName::new("é".repeat(128)).is_err(), "256 bytes");
+    }
+
+    #[test]
+    fn clone_sources_and_their_folders() {
+        for (ok, folder, github) in [
+            ("owner/app", "app", Some("owner/app")),
+            ("owner/app.git", "app", Some("owner/app")),
+            ("a-b/c_d.e", "c_d.e", Some("a-b/c_d.e")),
+            ("https://github.com/owner/app", "app", None),
+            ("https://github.com/owner/app.git", "app", None),
+            (
+                "https://git.example.com:8443/group/sub/app.git",
+                "app",
+                None,
+            ),
+            ("git@github.com:owner/app.git", "app", None),
+            ("git@ssh.dev.azure.com:v3/org/project/repo", "repo", None),
+        ] {
+            let source = CloneSource::new(ok).unwrap();
+            assert_eq!(source.folder_name().as_str(), folder, "{ok:?}");
+            assert_eq!(source.github_repo(), github, "{ok:?}");
+        }
+        let long = format!(
+            "https://github.com/o/{}",
+            "a".repeat(limits::MAX_CLONE_SOURCE_BYTES)
+        );
+        for bad in [
+            "",
+            "collie",
+            "-u/x",
+            "--upload-pack=touch x/y",
+            "o/-x",
+            "o/.x",
+            "o/.git",
+            "o/a/b",
+            "o/a b",
+            "/Users/me/repo",
+            "./repo",
+            "../repo",
+            "file:///tmp/repo",
+            "file://host/repo",
+            "ext::sh -c touch% /tmp/pwned",
+            "fd::3",
+            "ssh://git@github.com/o/r.git",
+            "git://github.com/o/r.git",
+            "http://github.com/o/r.git",
+            "HTTPS://github.com/o/r.git",
+            "https://github.com",
+            "https://github.com/",
+            "https://github.com/o/r/",
+            "https://github.com//r",
+            "https://github.com/o/../r",
+            "https://user:token@github.com/o/r.git",
+            "https://-oProxyCommand=x/o/r",
+            "https://github.com:/o/r",
+            "https://github.com:123456/o/r",
+            "https://github.com:x/o/r",
+            "https://github.com/o/r?x=1",
+            "https://github.com/o/r#x",
+            "https://github.com/o/r%20x",
+            "https://[::1]/o/r",
+            "https://github.com/o/r\nx",
+            "git@github.com",
+            "git@github.com:",
+            "git@-oProxyCommand=touch:o/r",
+            "git@github.com:/o/r",
+            "git@github.com:-o/r",
+            "git@github.com:o/r.git\n",
+            "user@github.com:o/r",
+            " owner/app",
+            "owner/app ",
+            "owner/app\u{202e}",
+            "owner/appé",
+            long.as_str(),
+        ] {
+            assert!(CloneSource::new(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

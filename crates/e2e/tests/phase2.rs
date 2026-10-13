@@ -440,6 +440,27 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         "{err:?}"
     );
     assert_eq!(herdr.mutations().len(), before.len() + 3);
+    let clone = |source: &str| {
+        core.task_clone(
+            m.clone(),
+            s(&projects),
+            source.into(),
+            "claude".into(),
+            "Set it up".into(),
+            None,
+        )
+    };
+    let err = clone("file:///tmp/fresh").await.unwrap_err();
+    assert!(
+        matches!(&err, CoreError::InvalidInput { field: Some(field), .. } if field == "clone"),
+        "{err:?}"
+    );
+    let err = clone("owner/fresh").await.unwrap_err();
+    assert!(
+        matches!(&err, CoreError::InvalidInput { message, .. } if message == "folder already exists"),
+        "{err:?}"
+    );
+    assert_eq!(herdr.mutations().len(), before.len() + 3);
     let lines = audit_lines(&audit);
     let audited: Vec<(&Value, &Value)> = lines
         .iter()
@@ -447,7 +468,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         .map(|l| (&l["target"], &l["result"]))
         .collect();
     assert_eq!(
-        audited[audited.len() - 4..],
+        audited[audited.len() - 5..],
         [
             (&json!(s(&projects)), &json!("ok folders=1")),
             (
@@ -460,6 +481,10 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             ),
             (
                 &json!(format!("{} new_folder=\"fresh\"", s(&projects))),
+                &json!("invalid_params: folder already exists")
+            ),
+            (
+                &json!(format!("{} clone=\"owner/fresh\"", s(&projects))),
                 &json!("invalid_params: folder already exists")
             ),
         ]

@@ -217,6 +217,7 @@ final class DemoAgentCore: ActivityCore {
     func taskWorktrees(machineId: String, cwd: String) async throws -> WorktreeListing { throw CoreError.NotImplemented }
     func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted { throw CoreError.NotImplemented }
     func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted { throw CoreError.NotImplemented }
+    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted { throw CoreError.NotImplemented }
 
     func flock(machineId: String) async throws -> MachineFlock { demoFlock }
 

@@ -19,7 +19,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
     ActivityId, AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStarParams, AgentTarget, AgentTypeTextParams, AgentWatchParams,
-    ApprovalId, Cwd, DraftText, Empty, ErrorCode, FolderName, Key, Label, NoticeDigit,
+    ApprovalId, CloneSource, Cwd, DraftText, Empty, ErrorCode, FolderName, Key, Label, NoticeDigit,
     NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
     PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
     ReadSource, Request, Response, Signature, SlashCommand, TaskArchiveParams, TaskFoldersParams,
@@ -62,6 +62,8 @@ const DRIVE_TIMEOUT: Duration = Duration::from_secs(30);
 /// herdr's `agent.start` waits up to 30 s for the agent before collied prompts it.
 const TASK_NEW_TIMEOUT: Duration = Duration::from_secs(90);
 const TASK_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(150);
+/// collied's 75 s clone, then `TASK_NEW_TIMEOUT`.
+const TASK_CLONE_TIMEOUT: Duration = Duration::from_secs(165);
 /// An unanswered mutation's `op_id` is reused for an identical retry within this window.
 /// Longer than any mutation timeout, shorter than collied's 600 s outcome cache.
 const OP_REUSE_WINDOW: Duration = Duration::from_secs(180);
@@ -653,7 +655,13 @@ async fn task_new_inner(
     label: Option<String>,
     new_folder: Option<String>,
     worktree: Option<TaskWorktree>,
+    clone: Option<String>,
 ) -> Result<TaskStarted, CoreError> {
+    let timeout = if clone.is_some() {
+        TASK_CLONE_TIMEOUT
+    } else {
+        TASK_NEW_TIMEOUT
+    };
     let label = label
         .map(|l| l.trim().to_owned())
         .filter(|l| !l.is_empty())
@@ -675,8 +683,18 @@ async fn task_new_inner(
         new_folder: new_folder.map(|n| FolderName::new(n)
             .map_err(|_| invalid("new_folder", "folder name must be one plain name of at most 255 bytes, without / or \\, a leading dot, or control or invisible characters"))).transpose()?,
         worktree,
+        clone: clone
+            .map(|c| {
+                CloneSource::new(c).map_err(|_| {
+                    invalid(
+                        "clone",
+                        "enter owner/repo, an https:// URL or git@host:owner/repo.git",
+                    )
+                })
+            })
+            .transpose()?,
     });
-    match core.mutate(&machine_id, request, TASK_NEW_TIMEOUT).await? {
+    match core.mutate(&machine_id, request, timeout).await? {
         Response::TaskStarted {
             workspace_id,
             terminal_id,
@@ -686,6 +704,14 @@ async fn task_new_inner(
         }),
         other => Err(unexpected(&other).into()),
     }
+}
+
+/// The folder `task_clone` makes for `repository`, or nil when collied would refuse it.
+#[uniffi::export]
+pub fn clone_folder_name(repository: String) -> Option<String> {
+    CloneSource::new(repository)
+        .ok()
+        .map(|source| source.folder_name().into())
 }
 
 #[uniffi::export]
@@ -1612,7 +1638,31 @@ impl CollieCore {
         new_folder: Option<String>,
     ) -> Result<TaskStarted, CoreError> {
         task_new_inner(
-            self, machine_id, cwd, agent, prompt, label, new_folder, None,
+            self, machine_id, cwd, agent, prompt, label, new_folder, None, None,
+        )
+        .await
+    }
+
+    /// Clones `repository` into a new folder inside `cwd` and starts the agent there.
+    pub async fn task_clone(
+        &self,
+        machine_id: String,
+        cwd: String,
+        repository: String,
+        agent: String,
+        prompt: String,
+        label: Option<String>,
+    ) -> Result<TaskStarted, CoreError> {
+        task_new_inner(
+            self,
+            machine_id,
+            cwd,
+            agent,
+            prompt,
+            label,
+            None,
+            None,
+            Some(repository),
         )
         .await
     }
@@ -1796,6 +1846,7 @@ impl CollieCore {
             label,
             None,
             Some(TaskWorktree::Create { branch }),
+            None,
         )
         .await
     }
@@ -1819,6 +1870,7 @@ impl CollieCore {
             label,
             None,
             Some(TaskWorktree::Open { path }),
+            None,
         )
         .await
     }
@@ -2904,6 +2956,7 @@ fn invalid_field(message: &str) -> Option<String> {
             "ChunkData" => "data",
             "Signature" => "signature",
             "TerminalKey" => "terminal_key",
+            "CloneSource" => "clone",
             _ => return None,
         };
         return Some(field.into());

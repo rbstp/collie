@@ -6,10 +6,10 @@ use std::time::Duration;
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
-    AgentSlashDraftParams, AgentTypeTextParams, Cwd, DraftText, ErrorCode, FolderName, Key, Label,
-    NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request, Response,
-    SlashCommand, TaskArchiveParams, TaskNewParams, TaskWorktree, TaskWorktreesParams, TerminalId,
-    TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
+    AgentSlashDraftParams, AgentTypeTextParams, CloneSource, Cwd, DraftText, ErrorCode, FolderName,
+    Key, Label, NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request,
+    Response, SlashCommand, TaskArchiveParams, TaskNewParams, TaskWorktree, TaskWorktreesParams,
+    TerminalId, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -517,6 +517,7 @@ fn task(cwd: &Path, agent: &str) -> TaskNewParams {
         label: Some(Label::new("tests").unwrap()),
         new_folder: None,
         worktree: None,
+        clone: None,
     }
 }
 
@@ -2067,6 +2068,47 @@ async fn task_new_creates_its_new_folder_once() {
     assert_eq!(code(reply), ErrorCode::NotPaired);
     assert!(herdr.methods().is_empty());
     assert!(!base.join("root/third").exists() && !base.join("outside/third").exists());
+}
+
+#[tokio::test]
+async fn task_new_clone_refusals_run_nothing() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base.join("root"));
+    let clone = |cwd: &str, source: &str| {
+        let mut p = task(&base.join(cwd), "claude");
+        p.clone = Some(CloneSource::new(source).unwrap());
+        p
+    };
+    let mut both = clone("root", "owner/fresh");
+    both.new_folder = Some(FolderName::new("fresh").unwrap());
+    let mut worktree = clone("root", "owner/fresh");
+    worktree.worktree = Some(TaskWorktree::Create {
+        branch: "feature".into(),
+    });
+    let refused = [
+        (clone("root", "owner/a"), "folder already exists"),
+        (
+            clone("root", "https://git.example.com/group/a.git"),
+            "folder already exists",
+        ),
+        (clone("outside", "owner/fresh"), "outside"),
+        (clone("root/../outside", "owner/fresh"), "outside"),
+        (both, "choose a folder, worktree or clone"),
+        (worktree, "choose a folder, worktree or clone"),
+    ];
+    for (p, why) in refused {
+        let (reply, cwd) = drive.task_new(p, &yes()).await;
+        assert!(cwd.is_none());
+        let (code, message) = reply.unwrap_err();
+        assert_eq!(code, ErrorCode::InvalidParams);
+        assert!(message.contains(why), "{message}");
+    }
+    let (reply, _) = drive.task_new(clone("root", "owner/fresh"), &no()).await;
+    assert_eq!(code(reply), ErrorCode::NotPaired);
+    assert!(herdr.methods().is_empty());
+    assert!(!base.join("root/fresh").exists() && !base.join("outside/fresh").exists());
+    assert_eq!(std::fs::read_dir(base.join("root/a")).unwrap().count(), 0);
 }
 
 #[tokio::test]

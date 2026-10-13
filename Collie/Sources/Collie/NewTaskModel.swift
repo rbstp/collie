@@ -12,7 +12,7 @@ extension TaskFolders {
 @MainActor
 @Observable
 final class NewTaskModel {
-    enum Location: String, CaseIterable { case folder = "Folder", worktree = "Git worktree" }
+    enum Location: String, CaseIterable { case folder = "Folder", worktree = "Git worktree", clone = "Clone" }
     enum WorktreeAction: String, CaseIterable { case create = "Create", open = "Open" }
     enum Phase: Equatable {
         case editing
@@ -69,6 +69,10 @@ final class NewTaskModel {
     var newFolder = false
     var newFolderRoot: String?
     var folderName = ""
+    var repository = ""
+    /// The folder collied names the clone, or nil for a source it would refuse.
+    var cloneFolder: String? { cloneFolderName(repository: trimmed(repository)) }
+    private(set) var cloning: String?
     var agent = ""
     var prompt = ""
     var label = ""
@@ -131,6 +135,9 @@ final class NewTaskModel {
                 return createPath != nil
             }
             return worktrees?.worktrees.contains { $0.path == checkoutPath } == true
+        }
+        if location == .clone {
+            return newFolderParent != nil && cloneFolder != nil
         }
         return newFolder ? newFolderParent != nil && newFolderNameIsValid : folder != nil
     }
@@ -284,6 +291,14 @@ final class NewTaskModel {
                         agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
                     )
                 }
+            } else if location == .clone {
+                guard let cwd = newFolderParent else { phase = .editing; return nil }
+                cloning = trimmed(repository)
+                defer { cloning = nil }
+                started = try await core.taskClone(
+                    machineId: machineId, cwd: cwd, repository: trimmed(repository),
+                    agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
+                )
             } else {
                 guard let cwd = newFolder ? newFolderParent : folder else { phase = .editing; return nil }
                 started = try await core.taskNew(
@@ -293,14 +308,19 @@ final class NewTaskModel {
             }
         } catch {
             self.error = AgentModel.message(for: error)
-            // A folder made before the agent failed to start stays; start in it next time.
-            let name = trimmed(folderName)
-            if location == .folder, newFolder, let cwd = newFolderParent,
+            // A folder made or cloned before the agent failed to start stays; start in it next time.
+            let made = location == .clone ? cloneFolder : newFolder ? trimmed(folderName) : nil
+            if location != .worktree, let name = made, let cwd = newFolderParent,
                 let listed = try? await core.taskFolders(machineId: machineId, path: cwd),
                 listed.folders.contains(name)
             {
+                let path = listed.path + "/" + name
+                if location == .clone, self.error?.contains(path) != true {
+                    self.error = (self.error ?? "") + " The clone stays in \(path)."
+                }
+                location = .folder
                 newFolder = false
-                self.cwd = listed.path + "/" + name
+                self.cwd = path
             }
             phase = .editing
             return nil
