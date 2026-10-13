@@ -650,14 +650,17 @@ final class AgentModel {
         }
     }
 
+    private static let tooLong = "The prompt would be longer than 32 KiB."
+
     @discardableResult
     func insert(_ shortcut: PromptShortcut) -> Bool {
         guard !isTerminal, !answering, !sendingPrompt, !dictation.isActive else { return false }
         let next = shortcut.appending(to: draft)
         guard next.utf8.count <= 32 * 1024 else {
-            promptError = "The prompt would be longer than 32 KiB."
+            promptError = Self.tooLong
             return false
         }
+        if promptError == Self.tooLong { promptError = nil }
         loadedMacDraft = nil
         draft = next
         return true
@@ -665,7 +668,6 @@ final class AgentModel {
 
     func quote(_ text: String) {
         guard !text.isEmpty, insert(PromptShortcut(text: CodeFence.block(text))) else { return }
-        promptError = nil
         quotes += 1
     }
 

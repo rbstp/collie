@@ -68,7 +68,7 @@ struct AgentScreen: View {
             }
             if showingChat && !model.isTerminal {
                 ConversationView(model: model.conversation, searching: $searchingChat, load: model.history) { showingChat = false }
-                    .environment(\.quote, model.quote)
+                    .environment(model)
             } else {
                 AgentTerminal(
                     ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
