@@ -94,6 +94,31 @@ struct NewTaskSheet: View {
                             }
                         }
                     }
+                } else if model.location == .clone {
+                    Section {
+                        if model.base == nil, let roots = model.options?.roots, roots.count > 1 {
+                            Picker("In", selection: Binding(get: { model.newFolderParent }, set: { model.newFolderRoot = $0 })) {
+                                ForEach(roots, id: \.self) { Text($0).tag(Optional($0)) }
+                            }
+                            .tint(.primary)
+                        }
+                        TextField("owner/repo or URL", text: $model.repository)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                            .font(.body.monospaced())
+                    } header: {
+                        Text("Repository")
+                    } footer: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let parent = model.newFolderParent {
+                                Text("Clones into \(parent)/\(model.cloneFolder ?? "repo") and starts the agent there.")
+                            }
+                            if let error = model.optionsError {
+                                Text(error).foregroundStyle(.red)
+                            }
+                        }
+                    }
                 } else {
                     Section("Git worktree") {
                         Picker("Action", selection: $model.worktreeAction) {
@@ -278,6 +303,21 @@ struct NewTaskSheet: View {
                 }
             }
             .safeAreaPadding(.bottom, editingPrompt ? 48 : 0)
+            .safeAreaInset(edge: .top) {
+                if let repository = model.cloning {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Cloning \(repository)…")
+                    }
+                    .font(.footnote)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                    .allowsHitTesting(false)
+                }
+            }
             .navigationTitle("New task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

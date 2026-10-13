@@ -382,6 +382,11 @@
       "pattern": "^[A-Za-z0-9+/]*={0,2}$",
       "type": "string"
     },
+    "CloneSource": {
+      "maxLength": 512,
+      "minLength": 3,
+      "type": "string"
+    },
     "Cwd": {
       "maxLength": 1024,
       "pattern": "^/",
@@ -724,6 +729,17 @@
       "properties": {
         "agent": {
           "$ref": "#/$defs/AgentKind"
+        },
+        "clone": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloneSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When set, collied clones this repository into a new folder directly inside `cwd`,\nnamed by `CloneSource::folder_name`, and starts there."
         },
         "cwd": {
           "$ref": "#/$defs/Cwd"

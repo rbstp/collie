@@ -724,6 +724,10 @@ pub struct TaskNewParams {
     pub new_folder: Option<FolderName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<TaskWorktree>,
+    /// When set, collied clones this repository into a new folder directly inside `cwd`,
+    /// named by `CloneSource::folder_name`, and starts there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clone: Option<CloneSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1812,7 +1816,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 18);
+        assert_eq!(crate::PROTOCOL_VERSION, 19);
     }
 
     #[test]
@@ -1877,10 +1881,21 @@ mod tests {
         assert_eq!(p.new_folder.as_ref().unwrap().as_str(), "app");
         let json = serde_json::to_string(&frame).unwrap();
         assert_eq!(parse(&json).unwrap(), frame);
+        let frame = task(r#","clone":"owner/app""#).unwrap();
+        let Request::TaskNew(p) = &frame.request else {
+            panic!("not a task");
+        };
+        assert_eq!(p.clone.as_ref().unwrap().folder_name().as_str(), "app");
+        assert_eq!(
+            parse(&serde_json::to_string(&frame).unwrap()).unwrap(),
+            frame
+        );
         for bad in [
             r#","new_folder":"../x""#,
             r#","new_folder":".x""#,
             r#","new_folder":"a/b""#,
+            r#","clone":"file:///tmp/x""#,
+            r#","clone":"-u/x""#,
         ] {
             assert_eq!(
                 task(bad).unwrap_err().code,

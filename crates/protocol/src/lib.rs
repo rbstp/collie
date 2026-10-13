@@ -14,7 +14,7 @@ pub use output::*;
 #[cfg(feature = "schema")]
 pub use schema::{client_frame_schema, server_frame_schema};
 
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -34,6 +34,7 @@ pub mod limits {
     pub const MAX_NOTE_CHARS: usize = 200;
     pub const MAX_CWD_BYTES: usize = 1024;
     pub const MAX_FOLDER_NAME_BYTES: usize = 255;
+    pub const MAX_CLONE_SOURCE_BYTES: usize = 512;
     pub const NONCE_BYTES: usize = 32;
     pub const PAIRING_CODE_BYTES: usize = 16;
     pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
