@@ -3735,7 +3735,12 @@ async fn git_changes_use_live_agent_checkout_and_existing_authorization() {
         agent["agent_status"] = json!("blocked");
     });
     let drive = herdr.driver(&["claude"], &base.join("root"));
-    let Response::GitChanges(list) = drive.git_changes(tid(CLAUDE), &yes()).await.unwrap() else {
+    let target = protocol::AgentChangesParams {
+        terminal_id: tid(CLAUDE),
+        root: Some(protocol::Cwd::new(base.join("root/b").to_str().unwrap()).unwrap()),
+    };
+    let Response::GitChanges(list) = drive.git_changes(target.clone(), &yes()).await.unwrap()
+    else {
         panic!()
     };
     assert_eq!(
@@ -3755,7 +3760,11 @@ async fn git_changes_use_live_agent_checkout_and_existing_authorization() {
     };
     assert!(diff.patch.contains("+feedback"));
     assert_eq!(
-        drive.git_changes(tid(CLAUDE), &no()).await.unwrap_err().0,
+        drive
+            .git_changes(target.clone(), &no())
+            .await
+            .unwrap_err()
+            .0,
         ErrorCode::NotPaired
     );
     assert_eq!(
@@ -3771,7 +3780,7 @@ async fn git_changes_use_live_agent_checkout_and_existing_authorization() {
             .unwrap();
         agent["foreground_cwd"] = json!(base.join("outside"));
     });
-    assert!(drive.git_changes(tid(CLAUDE), &yes()).await.is_err());
+    assert!(drive.git_changes(target, &yes()).await.is_err());
     assert!(drive.git_diff(params, &yes()).await.is_err());
     assert!(herdr.mutations().is_empty());
 }

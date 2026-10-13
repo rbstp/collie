@@ -112,5 +112,5 @@ import UIKit
     let comment = try #require(review.comments.first)
     #expect(comment.anchor == anchor)
     #expect(comment.anchor != GitDiffAnchor(patch: patch + " context\n", row: 2))
-    #expect(comment.message == "Feedback for file.swift: \n\n```diff\nnew\n```\n\nExplain this change.")
+    #expect(comment.message(checkout: "/worktree") == "Feedback for file.swift: \n\n```diff\nnew\n```\n\nExplain this change.")
 }

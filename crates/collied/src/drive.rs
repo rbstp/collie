@@ -255,9 +255,9 @@ impl Driver {
         resolve_cwd(cwd, &self.roots).map_err(invalid)
     }
 
-    pub async fn git_changes(&self, terminal_id: TerminalId, auth: &Authorized) -> Reply {
-        let cwd = self.git_checkout(&terminal_id, auth).await?;
-        let changes = crate::git::changes(&cwd, &self.roots).await?;
+    pub async fn git_changes(&self, p: protocol::AgentChangesParams, auth: &Authorized) -> Reply {
+        let cwd = self.git_checkout(&p.terminal_id, auth).await?;
+        let changes = crate::git::changes(&cwd, &self.roots, p.root.as_ref()).await?;
         authorized(auth)?;
         Ok(Response::GitChanges(changes))
     }

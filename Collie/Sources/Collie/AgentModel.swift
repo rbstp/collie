@@ -610,8 +610,8 @@ final class AgentModel {
         promptError = nil
     }
 
-    func gitChanges() async throws -> GitChanges {
-        try await core.agentChanges(machineId: route.machineId, terminalId: route.terminalId)
+    func gitChanges(root: String? = nil) async throws -> GitChanges {
+        try await core.agentChanges(machineId: route.machineId, terminalId: route.terminalId, root: root)
     }
 
     func gitDiff(root: String, file: GitFile) async throws -> GitDiff {

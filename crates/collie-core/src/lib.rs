@@ -545,6 +545,13 @@ pub struct GitChanges {
     pub branch: Option<String>,
     pub files: Vec<GitFile>,
     pub truncated: bool,
+    pub worktrees: Vec<GitWorktree>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GitWorktree {
+    pub root: String,
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -1660,16 +1667,29 @@ impl CollieCore {
         &self,
         machine_id: String,
         terminal_id: String,
+        root: Option<String>,
     ) -> Result<GitChanges, CoreError> {
-        let request = Request::AgentChanges(AgentTarget {
+        let request = Request::AgentChanges(protocol::AgentChangesParams {
             terminal_id: TerminalId::new(terminal_id)
                 .map_err(|_| invalid("terminal_id", "invalid terminal"))?,
+            root: root
+                .map(Cwd::new)
+                .transpose()
+                .map_err(|_| invalid("root", "invalid checkout"))?,
         });
         match self.call(&machine_id, request, CALL_TIMEOUT).await? {
             Response::GitChanges(changes) => Ok(GitChanges {
                 root: changes.root.map(String::from),
                 branch: changes.branch,
                 truncated: changes.truncated,
+                worktrees: changes
+                    .worktrees
+                    .into_iter()
+                    .map(|w| GitWorktree {
+                        root: w.root.into(),
+                        branch: w.branch,
+                    })
+                    .collect(),
                 files: changes
                     .files
                     .into_iter()
@@ -1678,6 +1698,7 @@ impl CollieCore {
                         old_path: f.old_path,
                         status: f.status,
                         section: match f.section {
+                            protocol::GitSection::Committed => "committed",
                             protocol::GitSection::Staged => "staged",
                             protocol::GitSection::Unstaged => "unstaged",
                             protocol::GitSection::Untracked => "untracked",
@@ -1701,6 +1722,7 @@ impl CollieCore {
         section: String,
     ) -> Result<GitDiff, CoreError> {
         let section = match section.as_str() {
+            "committed" => protocol::GitSection::Committed,
             "staged" => protocol::GitSection::Staged,
             "unstaged" => protocol::GitSection::Unstaged,
             "untracked" => protocol::GitSection::Untracked,

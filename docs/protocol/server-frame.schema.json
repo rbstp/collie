@@ -672,11 +672,18 @@
         },
         "truncated": {
           "type": "boolean"
+        },
+        "worktrees": {
+          "items": {
+            "$ref": "#/$defs/GitWorktree"
+          },
+          "type": "array"
         }
       },
       "required": [
         "files",
-        "truncated"
+        "truncated",
+        "worktrees"
       ],
       "type": "object"
     },
@@ -738,11 +745,29 @@
     },
     "GitSection": {
       "enum": [
+        "committed",
         "staged",
         "unstaged",
         "untracked"
       ],
       "type": "string"
+    },
+    "GitWorktree": {
+      "properties": {
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "$ref": "#/$defs/Cwd"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
     },
     "HelloResult": {
       "properties": {

@@ -11,8 +11,8 @@ enum GitFeedback {
         return source.substring(with: range)
     }
 
-    static func draft(file: GitFile, selection: String) -> String {
-        let heading = "Feedback for \(file.path): "
+    static func draft(file: GitFile, selection: String, root: String? = nil) -> String {
+        let heading = "Feedback for \(file.path)\(root.map { " in \($0)" } ?? ""): "
         guard !selection.isEmpty else { return heading }
         var fence = "```"
         while selection.contains(fence) { fence += "`" }
@@ -28,13 +28,17 @@ struct GitComment: Identifiable {
     var anchor: GitDiffAnchor?
     var text = ""
 
-    var message: String { GitFeedback.draft(file: file, selection: selection) + text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    func message(checkout: String?) -> String {
+        GitFeedback.draft(file: file, selection: selection, root: root == checkout ? nil : root)
+            + text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 @MainActor
 @Observable
 final class GitReview {
     var comments: [GitComment] = []
+    var root: String?
     private(set) var sending = false
     private(set) var error: String?
 
@@ -69,9 +73,12 @@ final class GitReview {
         error = nil
         defer { sending = false }
         let pending = comments
+        let checkout: String?
         do {
-            let checkout = try await agent.gitChanges().root
-            guard pending.allSatisfy({ $0.root == checkout }) else {
+            let changes = try await agent.gitChanges()
+            checkout = changes.root
+            let roots = Set(changes.worktrees.map(\.root) + [checkout].compactMap { $0 })
+            guard pending.allSatisfy({ roots.contains($0.root) }) else {
                 error = "The agent’s checkout changed. Review the feedback before sending."
                 return false
             }
@@ -79,7 +86,7 @@ final class GitReview {
             self.error = AgentModel.message(for: error)
             return false
         }
-        if let error = await agent.sendGitFeedback(pending.map(\.message).joined(separator: "\n\n")) {
+        if let error = await agent.sendGitFeedback(pending.map { $0.message(checkout: checkout) }.joined(separator: "\n\n")) {
             self.error = error
             return false
         }
@@ -113,7 +120,18 @@ struct GitChangesView: View {
                 if let changes {
                     if let root = changes.root {
                         Section {
-                            Label(changes.branch ?? "Detached HEAD", systemImage: "arrow.triangle.branch")
+                            if changes.worktrees.count > 1 {
+                                Picker(selection: Binding(get: { root }, set: { review.root = $0; Task { await refresh() } })) {
+                                    ForEach(changes.worktrees, id: \.root) { worktree in
+                                        Text(verbatim: worktree.branch ?? URL(fileURLWithPath: worktree.root).lastPathComponent).tag(worktree.root)
+                                    }
+                                } label: {
+                                    Label("Branch", systemImage: "arrow.triangle.branch")
+                                }
+                                .disabled(loading)
+                            } else {
+                                Label(changes.branch ?? "Detached HEAD", systemImage: "arrow.triangle.branch")
+                            }
                             Text(verbatim: root).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                             Text("\(Set(changes.files.map(\.path)).count) changed files").font(.subheadline)
                             GitCounts(files: changes.files)
@@ -121,7 +139,7 @@ struct GitChangesView: View {
                         if changes.files.isEmpty {
                             Text("No Git changes").foregroundStyle(.secondary)
                         }
-                        ForEach(["staged", "unstaged", "untracked"], id: \.self) { section in
+                        ForEach(["committed", "staged", "unstaged", "untracked"], id: \.self) { section in
                             let files = changes.files.filter { $0.section == section }
                             if !files.isEmpty {
                                 Section(section.capitalized) {
@@ -175,7 +193,7 @@ struct GitChangesView: View {
         loading = true
         error = nil
         defer { loading = false }
-        do { changes = try await agent.gitChanges() }
+        do { changes = try await agent.gitChanges(root: review.root) }
         catch { changes = nil; self.error = AgentModel.message(for: error) }
     }
 }
