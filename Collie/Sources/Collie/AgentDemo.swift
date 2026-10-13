@@ -166,7 +166,7 @@ final class DemoAgentCore: ActivityCore {
         read(terminalId)
     }
 
-    func agentChanges(machineId: String, terminalId: String, root: String?) async throws -> GitChanges { throw CoreError.NotImplemented }
+    func agentChanges(machineId: String, terminalId: String, root: String?, branch: Bool) async throws -> GitChanges { throw CoreError.NotImplemented }
     func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff { throw CoreError.NotImplemented }
     func agentDraft(machineId: String, terminalId: String) async throws -> String? { nil }
 

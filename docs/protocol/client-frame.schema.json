@@ -38,6 +38,10 @@
             }
           ]
         },
+        "scope": {
+          "$ref": "#/$defs/GitScope",
+          "default": "uncommitted"
+        },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"
         }
@@ -412,6 +416,13 @@
       "maxLength": 255,
       "minLength": 1,
       "pattern": "^[^.]",
+      "type": "string"
+    },
+    "GitScope": {
+      "enum": [
+        "uncommitted",
+        "branch"
+      ],
       "type": "string"
     },
     "GitSection": {

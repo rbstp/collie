@@ -16,6 +16,8 @@ final class FakeCore: AgentCore {
     struct State {
         var gitCalls: [String] = []
         var gitWorktrees: [GitWorktree] = []
+        var gitFiles: [GitFile] = []
+        var gitBase: String?
         var gitPatch = "@@ -1 +1 @@\n-old\n+new\n"
         var gitDiffDelay: Duration = .zero
         var prompts: [String] = []
@@ -162,12 +164,15 @@ final class FakeCore: AgentCore {
         if let error { throw error }
         return TerminalSnapshot(terminalId: terminalId, source: source, ansi: "read \(read)", truncated: false)
     }
-    func agentChanges(machineId: String, terminalId: String, root: String?) async throws -> GitChanges {
-        let worktrees = state.withLock { s in
-            s.gitCalls.append("\(machineId)|\(terminalId)" + (root.map { "|\($0)" } ?? ""))
-            return s.gitWorktrees
+    func agentChanges(machineId: String, terminalId: String, root: String?, branch: Bool) async throws -> GitChanges {
+        let s = state.withLock { s in
+            s.gitCalls.append("\(machineId)|\(terminalId)" + (root.map { "|\($0)" } ?? "") + (branch ? "|branch" : ""))
+            return s
         }
-        return GitChanges(root: root ?? "/worktree", branch: "feature", files: [], truncated: false, worktrees: worktrees)
+        return GitChanges(
+            root: root ?? "/worktree", branch: "feature", base: branch ? s.gitBase : nil,
+            files: s.gitFiles.filter { ($0.section == "committed") == branch }, truncated: false, worktrees: s.gitWorktrees
+        )
     }
     func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff {
         state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)") }
@@ -2577,7 +2582,7 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
 }
 
 @Test func gitFeedbackContainsOnlySelectedTextOrTheFilename() {
-    let file = GitFile(path: "a.swift", oldPath: "old.swift", section: "staged", status: "R90", additions: 1, deletions: 1)
+    let file = GitFile(path: "a.swift", oldPath: "old.swift", section: "staged", status: "R90", additions: 1, deletions: 1, hash: nil)
     let source = "@@ -1 +1 @@\n-old\r\n+new 🐑 value\r\n@@ -30 +30 @@\n-before\n+after\n"
     let selected = "new 🐑 value"
     let range = (source as NSString).range(of: selected)
@@ -2597,7 +2602,7 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
 @Test(arguments: [0, 1, 2])
 func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     let review = GitReview()
-    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1, hash: nil)
     let ids = try (0..<3).map { index in
         try #require(review.add(root: "/worktree", file: file, selection: "line \(index)"))
     }
@@ -2635,8 +2640,8 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     model.draft = "Keep my prompt"
     await model.attach(name: "notes.txt") { _ in Data([1]) }?.value
     let attachments = model.attachments.map(\.path)
-    let first = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
-    let second = GitFile(path: "other.swift", oldPath: nil, section: "staged", status: "A", additions: 1, deletions: 0)
+    let first = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1, hash: nil)
+    let second = GitFile(path: "other.swift", oldPath: nil, section: "staged", status: "A", additions: 1, deletions: 0, hash: nil)
     let review = model.gitReview
     review.add(root: "/worktree", file: first, selection: "new 🐑 value")
     review.comments[0].text = "Handle the empty case."
@@ -2664,7 +2669,7 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     let core = FakeCore()
     let model = await slashReady(core)
     model.draft = "Keep this draft"
-    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1, hash: nil)
     let review = model.gitReview
     review.add(root: "/worktree", file: file, selection: "")
     review.comments[0].text = "Please simplify."
@@ -2693,7 +2698,7 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
 @Test func gitReviewRejectsChangedCheckoutAndDuplicateSends() async {
     let core = FakeCore()
     let model = await slashReady(core)
-    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1, hash: nil)
     let review = model.gitReview
     review.add(root: "/old-checkout", file: file, selection: "")
     review.comments[0].text = "Please simplify."
@@ -2728,7 +2733,7 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     let core = FakeCore()
     core.state.withLock { $0.gitWorktrees = [GitWorktree(root: "/worktree", branch: "main"), GitWorktree(root: "/feature", branch: "feature")] }
     let model = await slashReady(core)
-    let file = GitFile(path: "file.swift", oldPath: nil, section: "committed", status: "M", additions: 1, deletions: 1)
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "committed", status: "M", additions: 1, deletions: 1, hash: nil)
     let review = model.gitReview
     review.add(root: "/other", file: file, selection: "")
     review.comments[0].text = "Please simplify."
@@ -2748,7 +2753,7 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     let core = FakeCore()
     let model = await slashReady(core)
     let changes = try await model.gitChanges()
-    let file = GitFile(path: "a.swift", oldPath: nil, section: "staged", status: "M", additions: 1, deletions: 1)
+    let file = GitFile(path: "a.swift", oldPath: nil, section: "staged", status: "M", additions: 1, deletions: 1, hash: nil)
     let root = try #require(changes.root)
     _ = try await model.gitDiff(root: root, file: file)
     _ = try await model.gitChanges(root: "/feature")

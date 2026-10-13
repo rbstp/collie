@@ -20,12 +20,23 @@ pub enum GitSection {
     Untracked,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum GitScope {
+    #[default]
+    Uncommitted,
+    Branch,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentChangesParams {
     pub terminal_id: TerminalId,
     pub root: Option<Cwd>,
+    #[serde(default)]
+    pub scope: GitScope,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,6 +54,7 @@ pub struct AgentDiffParams {
 pub struct GitChanges {
     pub root: Option<Cwd>,
     pub branch: Option<String>,
+    pub base: Option<String>,
     pub files: Vec<GitFile>,
     pub truncated: bool,
     pub worktrees: Vec<GitWorktree>,
@@ -64,6 +76,7 @@ pub struct GitFile {
     pub status: String,
     pub additions: Option<u32>,
     pub deletions: Option<u32>,
+    pub hash: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1799,7 +1812,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 17);
+        assert_eq!(crate::PROTOCOL_VERSION, 18);
     }
 
     #[test]
@@ -1814,13 +1827,15 @@ mod tests {
             panic!("not agent.changes");
         };
         assert_eq!(plain.root, None);
-        let frame = changes(r#"{"terminal_id":"t","root":"/a"}"#).unwrap();
+        assert_eq!(plain.scope, GitScope::Uncommitted);
+        let frame = changes(r#"{"terminal_id":"t","root":"/a","scope":"branch"}"#).unwrap();
         assert_eq!(frame.request.class(), MethodClass::Read);
         let json = serde_json::to_string(&frame).unwrap();
         assert_eq!(parse(&json).unwrap(), frame);
         for params in [
             r#"{"terminal_id":"t","root":"a"}"#,
             r#"{"terminal_id":"t","path":"/a"}"#,
+            r#"{"terminal_id":"t","scope":"main"}"#,
         ] {
             assert_eq!(
                 changes(params).unwrap_err().code,

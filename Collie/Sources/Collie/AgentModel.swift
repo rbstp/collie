@@ -43,7 +43,7 @@ final class AgentModel {
     private(set) var refreshing = false
     private var revision: UInt64 = 0
 
-    let gitReview = GitReview()
+    let gitReview: GitReview
     let conversation = ConversationModel()
     var draft = ""
     /// What the phone last saw in the Mac's input box: nil when unknown. A send replaces exactly this text.
@@ -119,7 +119,7 @@ final class AgentModel {
     private static var watchers: [String: ObjectIdentifier] = [:]
 
     init(
-        core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file, draftsFile: URL? = nil,
+        core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file, draftsFile: URL? = nil, viewedFile: URL? = nil,
         dictationEngine: any DictationEngine = SpeechDictationEngine(),
         unlocker: any TerminalUnlocker = SecureEnclaveUnlocker(), machineLabel: String? = nil,
         now: @escaping () -> ContinuousClock.Instant = { .now }
@@ -131,6 +131,7 @@ final class AgentModel {
         self.machineLabel = machineLabel
         self.prefsFile = prefsFile
         self.draftsFile = draftsFile
+        gitReview = GitReview(viewedFile: viewedFile)
         let prefs = DevicePrefs.load(from: prefsFile)
         dictation = DictationModel(engine: dictationEngine, language: prefs.dictationLanguage, prefsFile: prefsFile)
         wrapLines = prefs.wrapLines
@@ -611,8 +612,8 @@ final class AgentModel {
         promptError = nil
     }
 
-    func gitChanges(root: String? = nil) async throws -> GitChanges {
-        try await core.agentChanges(machineId: route.machineId, terminalId: route.terminalId, root: root)
+    func gitChanges(root: String? = nil, branch: Bool = false) async throws -> GitChanges {
+        try await core.agentChanges(machineId: route.machineId, terminalId: route.terminalId, root: root, branch: branch)
     }
 
     func gitDiff(root: String, file: GitFile) async throws -> GitDiff {

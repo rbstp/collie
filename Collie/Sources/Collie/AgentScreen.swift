@@ -27,7 +27,7 @@ struct AgentScreen: View {
         switchAgent: @escaping (AgentRoute) -> Void, opened: @escaping (AgentSummary) -> Void,
         archived: @escaping (String) -> Void
     ) {
-        _model = State(initialValue: AgentModel(core: core, route: route, draftsFile: AgentDrafts.file, machineLabel: machineLabel))
+        _model = State(initialValue: AgentModel(core: core, route: route, draftsFile: AgentDrafts.file, viewedFile: GitViewed.file, machineLabel: machineLabel))
         self.approvals = approvals
         self.follows = follows
         self.machineLabel = machineLabel

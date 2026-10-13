@@ -41,6 +41,30 @@ final class GitReview {
     var root: String?
     private(set) var sending = false
     private(set) var error: String?
+    private(set) var viewed: GitViewed
+    private let viewedFile: URL?
+
+    init(viewedFile: URL? = nil) {
+        self.viewedFile = viewedFile
+        viewed = GitViewed.load(from: viewedFile)
+    }
+
+    func isViewed(route: AgentRoute, root: String, file: GitFile) -> Bool {
+        GitViewed.mark(route: route, root: root, file: file).map { viewed.marks[$0] != nil } ?? false
+    }
+
+    func ordered(_ files: [GitFile], route: AgentRoute, root: String) -> [(file: GitFile, viewed: Bool)] {
+        let entries = files.map { (file: $0, viewed: isViewed(route: route, root: root, file: $0)) }
+        return entries.filter { !$0.viewed } + entries.filter(\.viewed)
+    }
+
+    func setViewed(_ on: Bool, route: AgentRoute, root: String, file: GitFile) {
+        guard let mark = GitViewed.mark(route: route, root: root, file: file) else { return }
+        var saved = viewedFile == nil ? viewed : GitViewed.load(from: viewedFile)
+        saved.set(mark, viewed: on, nowMs: Date().unixMs)
+        saved.save(to: viewedFile)
+        viewed = saved
+    }
 
     var ready: Bool { !comments.isEmpty && comments.allSatisfy { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } }
 
@@ -104,10 +128,18 @@ struct GitChangesView: View {
     @State private var changes: GitChanges?
     @State private var error: String?
     @State private var loading = false
+    @State private var branch = false
 
     var body: some View {
         NavigationStack {
             List {
+                Picker("Scope", selection: $branch) {
+                    Text("Uncommitted").tag(false)
+                    Text("Branch").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .disabled(loading)
+                .onChange(of: branch) { changes = nil; Task { await refresh() } }
                 if !review.comments.isEmpty {
                     Section("Feedback (\(review.comments.count))") {
                         ForEach(review.comments) { comment in
@@ -133,30 +165,43 @@ struct GitChangesView: View {
                                 Label(changes.branch ?? "Detached HEAD", systemImage: "arrow.triangle.branch")
                             }
                             Text(verbatim: root).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            if branch, let base = changes.base {
+                                Text("Compared with \(base)").font(.subheadline)
+                            }
                             Text("\(Set(changes.files.map(\.path)).count) changed files").font(.subheadline)
                             GitCounts(files: changes.files)
                         }
-                        if changes.files.isEmpty {
-                            Text("No Git changes").foregroundStyle(.secondary)
+                        if branch && changes.base == nil {
+                            Text("No default branch to compare with. This checkout has no origin/HEAD, main or master.")
+                                .foregroundStyle(.secondary)
+                        } else if changes.files.isEmpty {
+                            Text(branch ? "No changes on this branch" : "No Git changes").foregroundStyle(.secondary)
                         }
                         ForEach(["committed", "staged", "unstaged", "untracked"], id: \.self) { section in
-                            let files = changes.files.filter { $0.section == section }
+                            let files = review.ordered(changes.files.filter { $0.section == section }, route: agent.route, root: root)
                             if !files.isEmpty {
                                 Section(section.capitalized) {
-                                    ForEach(Array(files.enumerated()), id: \.offset) { _, file in
+                                    ForEach(Array(files.enumerated()), id: \.offset) { _, entry in
+                                        let file = entry.file
                                         NavigationLink {
                                             GitDiffView(agent: agent, root: root, file: file, sent: sent, review: review)
                                         } label: {
                                             VStack(alignment: .leading, spacing: 4) {
-                                                Text(verbatim: file.path).font(.callout)
-                                                if let old = file.oldPath {
-                                                    Text("From \(old)").font(.caption).foregroundStyle(.secondary)
+                                                if entry.viewed {
+                                                    Label { Text(verbatim: file.path) } icon: { Image(systemName: "checkmark.circle.fill") }
+                                                        .font(.callout).foregroundStyle(.secondary)
+                                                        .accessibilityLabel("\(file.path), viewed")
+                                                } else {
+                                                    Text(verbatim: file.path).font(.callout)
+                                                    if let old = file.oldPath {
+                                                        Text("From \(old)").font(.caption).foregroundStyle(.secondary)
+                                                    }
+                                                    HStack {
+                                                        Text(file.statusLabel).foregroundStyle(.secondary)
+                                                        Spacer()
+                                                        GitCounts(files: [file])
+                                                    }.font(.caption)
                                                 }
-                                                HStack {
-                                                    Text(file.statusLabel).foregroundStyle(.secondary)
-                                                    Spacer()
-                                                    GitCounts(files: [file])
-                                                }.font(.caption)
                                             }
                                         }
                                     }
@@ -194,7 +239,7 @@ struct GitChangesView: View {
         error = nil
         defer { loading = false }
         do {
-            changes = try await agent.gitChanges(root: review.root)
+            changes = try await agent.gitChanges(root: review.root, branch: branch)
             if changes?.root != review.root { review.root = nil }
         }
         catch { changes = nil; self.error = AgentModel.message(for: error) }
@@ -285,8 +330,22 @@ struct GitDiffView: View {
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }.disabled(loading)
                 }
             }
+            .onAppear { if viewed.wrappedValue { collapsed = true } }
             .task { await refresh() }
         }
+    }
+
+    private var viewed: Binding<Bool> {
+        Binding(
+            get: { review.isViewed(route: agent.route, root: root, file: file) },
+            set: { on in
+                review.setViewed(on, route: agent.route, root: root, file: file)
+                if on {
+                    collapsed = true
+                    editing = nil
+                }
+            }
+        )
     }
 
     private var comments: [GitComment] {
@@ -309,6 +368,14 @@ struct GitDiffView: View {
                 if let old = file.oldPath { Text("From \(old)").font(.caption).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 0)
+            if file.hash != nil {
+                Toggle(isOn: viewed) {
+                    Label("Viewed", systemImage: viewed.wrappedValue ? "checkmark.circle.fill" : "circle")
+                }
+                .toggleStyle(.button)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.glass)
+            }
             Button("File feedback", systemImage: "text.bubble") {
                 collapsed = false
                 editing = review.add(root: root, file: file, selection: "")

@@ -3738,6 +3738,7 @@ async fn git_changes_use_live_agent_checkout_and_existing_authorization() {
     let target = protocol::AgentChangesParams {
         terminal_id: tid(CLAUDE),
         root: Some(protocol::Cwd::new(base.join("root/b").to_str().unwrap()).unwrap()),
+        scope: protocol::GitScope::Uncommitted,
     };
     let Response::GitChanges(list) = drive.git_changes(target.clone(), &yes()).await.unwrap()
     else {

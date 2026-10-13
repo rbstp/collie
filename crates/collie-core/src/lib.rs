@@ -543,6 +543,7 @@ pub struct TaskStarted {
 pub struct GitChanges {
     pub root: Option<String>,
     pub branch: Option<String>,
+    pub base: Option<String>,
     pub files: Vec<GitFile>,
     pub truncated: bool,
     pub worktrees: Vec<GitWorktree>,
@@ -562,6 +563,7 @@ pub struct GitFile {
     pub status: String,
     pub additions: Option<u32>,
     pub deletions: Option<u32>,
+    pub hash: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -1668,6 +1670,7 @@ impl CollieCore {
         machine_id: String,
         terminal_id: String,
         root: Option<String>,
+        branch: bool,
     ) -> Result<GitChanges, CoreError> {
         let request = Request::AgentChanges(protocol::AgentChangesParams {
             terminal_id: TerminalId::new(terminal_id)
@@ -1676,11 +1679,17 @@ impl CollieCore {
                 .map(Cwd::new)
                 .transpose()
                 .map_err(|_| invalid("root", "invalid checkout"))?,
+            scope: if branch {
+                protocol::GitScope::Branch
+            } else {
+                protocol::GitScope::Uncommitted
+            },
         });
         match self.call(&machine_id, request, CALL_TIMEOUT).await? {
             Response::GitChanges(changes) => Ok(GitChanges {
                 root: changes.root.map(String::from),
                 branch: changes.branch,
+                base: changes.base,
                 truncated: changes.truncated,
                 worktrees: changes
                     .worktrees
@@ -1706,6 +1715,7 @@ impl CollieCore {
                         .into(),
                         additions: f.additions,
                         deletions: f.deletions,
+                        hash: f.hash,
                     })
                     .collect(),
             }),

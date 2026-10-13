@@ -25,7 +25,7 @@ final class GitDiffViewTests: XCTestCase {
             }
             let model = AgentModel(core: core, route: AgentRoute(machineId: "test", terminalId: "test"), prefsFile: nil)
             let review = GitReview()
-            let file = GitFile(path: "Collie/UsageSection.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1)
+            let file = GitFile(path: "Collie/UsageSection.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1, hash: nil)
             let host = UIHostingController(rootView: NavigationStack {
                 GitDiffView(agent: model, root: "/worktree", file: file, sent: {}, review: review)
             })
@@ -92,6 +92,81 @@ final class GitDiffViewTests: XCTestCase {
                 snapshot(window, name: name)
             }
         }
+    }
+
+    func testScopePickerLoadsTheBranchChanges() async throws {
+        let core = FakeCore()
+        core.state.withLock {
+            $0.gitBase = "origin/main"
+            $0.gitFiles = [
+                GitFile(path: "a.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1, hash: "a"),
+                GitFile(path: "b.swift", oldPath: nil, section: "committed", status: "A", additions: 2, deletions: 0, hash: "b")
+            ]
+        }
+        let model = AgentModel(core: core, route: AgentRoute(machineId: "m", terminalId: "t"), prefsFile: nil)
+        let host = UIHostingController(rootView: GitChangesView(agent: model, sent: {}, review: model.gitReview))
+        try await hosting(host) { window in
+            let picker = try await waitFor("scope picker") {
+                host.view.layoutIfNeeded()
+                let picker = descendants(host.view).compactMap { $0 as? UISegmentedControl }.first
+                return picker?.isEnabled == true && core.snapshot.gitCalls == ["m|t"] ? picker : nil
+            }
+            XCTAssertEqual((0..<picker.numberOfSegments).map { picker.titleForSegment(at: $0) }, ["Uncommitted", "Branch"])
+            XCTAssertEqual(picker.selectedSegmentIndex, 0)
+            snapshot(window, name: "uncommitted")
+            picker.selectedSegmentIndex = 1
+            picker.sendActions(for: .valueChanged)
+            _ = try await waitFor("branch changes") {
+                host.view.layoutIfNeeded()
+                return core.snapshot.gitCalls == ["m|t", "m|t|branch"] && picker.isEnabled ? true : nil
+            }
+            snapshot(window, name: "branch")
+        }
+    }
+
+    func testViewedMarksPersistSortLastCollapseAndClearWhenTheDiffChanges() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let route = AgentRoute(machineId: "m", terminalId: "t")
+        let first = GitFile(path: "a.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1, hash: "1")
+        let second = GitFile(path: "b.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1, hash: "2")
+        let review = GitReview(viewedFile: file)
+        review.setViewed(true, route: route, root: "/worktree", file: first)
+        XCTAssertEqual(review.ordered([first, second], route: route, root: "/worktree").map(\.file.path), ["b.swift", "a.swift"])
+        XCTAssertEqual(review.ordered([first, second], route: route, root: "/worktree").map(\.viewed), [false, true])
+
+        let reloaded = GitReview(viewedFile: file)
+        XCTAssertTrue(reloaded.isViewed(route: route, root: "/worktree", file: first))
+        XCTAssertFalse(reloaded.isViewed(route: route, root: "/other", file: first))
+        XCTAssertFalse(reloaded.isViewed(route: AgentRoute(machineId: "m", terminalId: "u"), root: "/worktree", file: first))
+        var changed = first
+        changed.hash = "3"
+        XCTAssertFalse(reloaded.isViewed(route: route, root: "/worktree", file: changed))
+        changed.hash = nil
+        XCTAssertFalse(reloaded.isViewed(route: route, root: "/worktree", file: changed))
+
+        let core = FakeCore()
+        let model = AgentModel(core: core, route: route, prefsFile: nil, viewedFile: file)
+        for (gitFile, collapsed) in [(second, false), (first, true)] {
+            let host = UIHostingController(rootView: NavigationStack {
+                GitDiffView(agent: model, root: "/worktree", file: gitFile, sent: {}, review: model.gitReview)
+            })
+            try await hosting(host) { _ in
+                _ = try await waitFor("\(gitFile.path) diff") {
+                    core.snapshot.gitCalls.last == "m|t|/worktree|\(gitFile.path)|unstaged" ? true : nil
+                }
+                try await Task.sleep(for: .milliseconds(300))
+                host.view.layoutIfNeeded()
+                let shown = descendants(host.view).contains { ($0 as? UITextView)?.text.contains("new") == true }
+                XCTAssertEqual(shown, !collapsed, gitFile.path)
+            }
+        }
+
+        reloaded.setViewed(false, route: route, root: "/worktree", file: first)
+        XCTAssertFalse(GitReview(viewedFile: file).isViewed(route: route, root: "/worktree", file: first))
+        reloaded.setViewed(true, route: route, root: "/worktree", file: first)
+        GitViewed.forget(machineId: "m", file: file)
+        XCTAssertFalse(GitReview(viewedFile: file).isViewed(route: route, root: "/worktree", file: first))
     }
 
     private func snapshot(_ window: UIWindow, name: String) {
