@@ -951,6 +951,12 @@ async fn scenario(
     while snapshots() == before {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    let queued = json!({"op_id": "V".repeat(22), "terminal_id": "term_65ce7ae4fd5731",
+        "text": "zq7revoked"});
+    assert_eq!(
+        result(call(&mut extra[0], "agent.queue_add", queued).await),
+        Response::Ok
+    );
     let revoked = collied::control::request(
         &control,
         &Request::PeersRevoke {
@@ -966,6 +972,11 @@ async fn scenario(
             ..
         })
     ));
+    let queue = std::fs::read_to_string(data_dir.join("prompt-queue.json")).unwrap();
+    assert!(
+        !queue.contains("zq7revoked"),
+        "the revoke drops the phone's queued prompts before the queue task reads herdr"
+    );
     assert_closed(&mut ws).await;
     for s in &mut extra {
         assert_closed(s).await;
@@ -1670,7 +1681,13 @@ async fn assert_closed(ws: &mut Ws) {
     loop {
         match tokio::time::timeout(Duration::from_secs(10), ws.next()).await {
             Ok(None | Some(Err(_)) | Some(Ok(Message::Close(_)))) => return,
-            Ok(Some(Ok(Message::Text(t)))) => panic!("unexpected frame {t}"),
+            Ok(Some(Ok(Message::Text(t)))) => {
+                let frame: ServerFrame = serde_json::from_str(t.as_str()).unwrap();
+                assert!(
+                    matches!(frame, ServerFrame::Event { .. }),
+                    "unexpected frame {t}"
+                );
+            }
             Ok(Some(Ok(_))) => {}
             Err(_) => panic!("connection still open"),
         }

@@ -803,46 +803,24 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
 /// one item per turn, with or without a phone.
 async fn prompt_queues(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     let mut interval = tokio::time::interval(QUEUE_EVERY);
+    let paired: queue::Paired = {
+        let state = state.clone();
+        Arc::new(move |by: &str| lock(&state.peers).get(by).is_some())
+    };
     loop {
         tokio::select! {
             _ = interval.tick() => {}
             _ = shutdown.changed() => return,
         }
-        if lock(&state.queues).is_empty() {
-            continue;
+        let (changed, sent) = queue::tick(&state.drive, &state.herdr, &state.queues, &paired).await;
+        for (terminal_id, reply) in &sent {
+            let result = outcome(reply);
+            state
+                .audit
+                .log("collied", "queue.send", Some(terminal_id), &result);
         }
-        let Ok(agents) = herdr::agent_list(&state.herdr).await else {
-            continue;
-        };
-        let peers = state.peers();
-        let dropped = {
-            let mut queues = lock(&state.queues);
-            queues.retain_listed(&agents) | queues.retain_paired(|by| peers.get(by).is_some())
-        };
-        if dropped {
+        if changed {
             let _ = state.events.send(Event::FlockChanged {});
-        }
-        let heads = lock(&state.queues).heads();
-        for (terminal_id, item) in heads {
-            let Some(agent) = agents.iter().find(|a| a.terminal_id == terminal_id) else {
-                continue;
-            };
-            let status = flock::status(&agent.agent_status);
-            if agent.agent.as_deref() != Some("claude")
-                || !lock(&state.queues).ready(&terminal_id, status, Instant::now())
-            {
-                continue;
-            }
-            let Ok(t) = TerminalId::new(terminal_id.clone()) else {
-                continue;
-            };
-            let (reply, claimed) = send_queued(&state, t, item, None, None).await;
-            if claimed {
-                let result = outcome(&reply);
-                state
-                    .audit
-                    .log("collied", "queue.send", Some(&terminal_id), &result);
-            }
         }
     }
 }
@@ -875,39 +853,37 @@ async fn queue_add(state: &State, p: AgentQueueAddParams, by: &str, auth: &Autho
         .map(|a| a.as_str().to_owned())
         .collect();
     let text = p.text.as_ref().map_or("", |t| t.as_str());
-    lock(&state.queues).add(p.terminal_id.as_str(), text, files, by)?;
+    let session = agent.agent_session.as_ref().map(|s| s.value.as_str());
+    lock(&state.queues).add(p.terminal_id.as_str(), text, files, (by, session))?;
     let _ = state.events.send(Event::FlockChanged {});
     Ok(Response::Ok)
 }
 
-/// `now` is the session of a phone sending the item now; without one it waits for an
-/// idle agent. Either way the phone that queued it must still be paired.
+/// A phone sends a queued item now, under its session's authorization `now`.
 async fn send_queued(
     state: &Arc<State>,
     terminal_id: TerminalId,
     item: queue::Item,
     expected_draft: Option<DraftText>,
-    now: Option<Authorized>,
-) -> (Reply, bool) {
-    let idle_only = now.is_none();
-    let paired: Authorized = {
+    now: &Authorized,
+) -> Reply {
+    let owner: Authorized = {
         let (state, by) = (state.clone(), item.by.clone());
-        Arc::new(move || now.as_ref().is_none_or(|a| a()) && lock(&state.peers).get(&by).is_some())
+        Arc::new(move || lock(&state.peers).get(&by).is_some())
     };
-    let queues = state.queues.clone();
     let (reply, claimed) = queue::send(
         &state.drive,
-        &queues,
-        &paired,
+        &state.queues,
+        &owner,
+        Some(now),
         (terminal_id, item),
         expected_draft,
-        idle_only,
     )
     .await;
     if claimed {
         let _ = state.events.send(Event::FlockChanged {});
     }
-    (reply, claimed)
+    reply
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -1524,10 +1500,7 @@ impl Session<'_> {
                     let item = lock(&state.queues).get(p.terminal_id.as_str(), p.id);
                     let reply = match item {
                         Ok(item) => {
-                            let now = Some(auth);
-                            send_queued(&state, p.terminal_id, item, p.expected_draft, now)
-                                .await
-                                .0
+                            send_queued(&state, p.terminal_id, item, p.expected_draft, &auth).await
                         }
                         Err(e) => Err(e),
                     };

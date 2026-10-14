@@ -143,6 +143,7 @@ struct Herdr {
     worktree_workspace_id: Option<String>,
     pane_occupied: bool,
     disconnect_after_remove: bool,
+    unanswered: Option<String>,
 }
 
 struct Mock {
@@ -185,6 +186,17 @@ impl Mock {
                     if req["method"] == "worktree.remove"
                         && state.lock().unwrap().disconnect_after_remove
                     {
+                        return;
+                    }
+                    let unanswered = {
+                        let mut h = state.lock().unwrap();
+                        let hit = h.unanswered.as_deref() == req["method"].as_str();
+                        if hit {
+                            h.unanswered = None;
+                        }
+                        hit
+                    };
+                    if unanswered {
                         return;
                     }
                     let mut resp = json!({ "id": req["id"] });
@@ -802,7 +814,7 @@ async fn a_queued_prompt_waits_for_an_idle_agent_with_an_empty_box_and_leaves_on
     let queues = Arc::new(Mutex::new(Queues::default()));
     for text in ["one", "two"] {
         let mut q = queues.lock().unwrap();
-        q.add(CLAUDE, text, Vec::new(), "phone").unwrap();
+        q.add(CLAUDE, text, Vec::new(), ("phone", None)).unwrap();
     }
     let head = || queues.lock().unwrap().heads().remove(0).1;
     let texts = || -> Vec<String> {
@@ -811,7 +823,7 @@ async fn a_queued_prompt_waits_for_an_idle_agent_with_an_empty_box_and_leaves_on
     };
     let send = |paired: Authorized, item: queue::Item| {
         let (drive, queues) = (drive.clone(), queues.clone());
-        async move { queue::send(&drive, &queues, &paired, (tid(CLAUDE), item), None, true).await }
+        async move { queue::send(&drive, &queues, &paired, None, (tid(CLAUDE), item), None).await }
     };
     assert_eq!(
         send(yes(), head()).await,
@@ -839,7 +851,7 @@ async fn a_queued_prompt_waits_for_an_idle_agent_with_an_empty_box_and_leaves_on
     let (reply, claimed) = send(no(), head()).await;
     assert_eq!(
         (code(reply), claimed),
-        (ErrorCode::NotPaired, false),
+        (ErrorCode::NotFound, false),
         "the phone that queued it was revoked"
     );
     let stale = head();
@@ -875,6 +887,152 @@ async fn a_queued_prompt_waits_for_an_idle_agent_with_an_empty_box_and_leaves_on
         ),
         "the next one waits for the turn this one starts"
     );
+}
+
+#[tokio::test]
+async fn a_queued_prompt_sent_now_answers_for_the_session_and_is_lost_rather_than_doubled() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let queues = Arc::new(Mutex::new(Queues::default()));
+    let files = tempfile::tempdir().unwrap();
+    let upload = files.path().join("0123456789abcdef");
+    std::fs::create_dir(&upload).unwrap();
+    std::fs::write(upload.join("shot.png"), b"x").unwrap();
+    let day_ago = std::time::SystemTime::now() - Duration::from_secs(24 * 60 * 60);
+    std::fs::File::open(&upload)
+        .unwrap()
+        .set_modified(day_ago)
+        .unwrap();
+    let file = upload.join("shot.png").to_str().unwrap().to_owned();
+    for text in ["one", "two"] {
+        let mut q = queues.lock().unwrap();
+        q.add(CLAUDE, text, vec![file.clone()], ("phone", None))
+            .unwrap();
+    }
+    let head = || queues.lock().unwrap().heads().remove(0).1;
+    let send = |owner: Authorized, session: Authorized| {
+        let (drive, queues, item) = (drive.clone(), queues.clone(), head());
+        let t = tid(CLAUDE);
+        async move { queue::send(&drive, &queues, &owner, Some(&session), (t, item), None).await }
+    };
+    herdr.with(|h| h.text = screen(PLACEHOLDER));
+    let (reply, claimed) = send(no(), yes()).await;
+    assert_eq!(
+        (code(reply), claimed),
+        (ErrorCode::NotFound, false),
+        "the phone that queued it was revoked; the one sending it now stays paired"
+    );
+    let (reply, claimed) = send(yes(), no()).await;
+    assert_eq!((code(reply), claimed), (ErrorCode::NotPaired, false));
+    assert!(herdr.mutations().is_empty());
+
+    herdr.with(|h| h.unanswered = Some("agent.prompt".into()));
+    let (reply, claimed) = send(yes(), yes()).await;
+    assert_eq!((code(reply), claimed), (ErrorCode::HerdrUnavailable, true));
+    let left = queues.lock().unwrap().shown(CLAUDE);
+    assert_eq!(left.len(), 1, "herdr may have typed it: not put back");
+    assert_eq!(left[0].text, "two");
+    assert!(upload.metadata().unwrap().modified().unwrap() < day_ago + Duration::from_secs(60));
+
+    assert_eq!(send(yes(), yes()).await, (Ok(Response::Ok), true));
+    assert_eq!(
+        herdr.params("agent.prompt").last(),
+        Some(&json!({"target": "w6:p1", "text": format!("{file} two")}))
+    );
+    assert!(
+        upload.metadata().unwrap().modified().unwrap() > day_ago + Duration::from_secs(60),
+        "a sent attachment starts its 24 h again"
+    );
+}
+
+#[tokio::test]
+async fn the_queue_task_sends_one_item_per_turn_and_drops_queues_whose_agent_is_gone() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let queues = Arc::new(Mutex::new(Queues::default()));
+    let session = herdr.with(|h| h.snapshot["agents"][0]["agent_session"]["value"].clone());
+    let session = session.as_str().unwrap().to_owned();
+    let add = |text: &str, by: &str| {
+        let mut q = queues.lock().unwrap();
+        q.add(CLAUDE, text, Vec::new(), (by, Some(&session)))
+            .unwrap();
+    };
+    add("one", "phone");
+    add("two", "phone");
+    add("three", "revoked");
+    let paired: queue::Paired = Arc::new(|by: &str| by == "phone");
+    let tick = || {
+        let (drive, queues, paired) = (drive.clone(), queues.clone(), paired.clone());
+        let socket = herdr.socket.clone();
+        async move { queue::tick(&drive, &socket, &queues, &paired).await }
+    };
+    let texts = || -> Vec<String> {
+        let shown = queues.lock().unwrap().shown(CLAUDE);
+        shown.into_iter().map(|q| q.text).collect()
+    };
+    let status = |s: &str| herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!(s));
+    let sent = |t: Vec<(String, Reply)>| -> Vec<(String, bool)> {
+        t.into_iter().map(|(t, r)| (t, r.is_ok())).collect()
+    };
+    herdr.with(|h| h.text = screen(PLACEHOLDER));
+
+    let (changed, out) = tick().await;
+    assert!(
+        changed && out.is_empty(),
+        "the revoked phone's item is dropped"
+    );
+    assert_eq!(texts(), ["one", "two"]);
+    status("idle");
+    let (_, out) = tick().await;
+    assert_eq!(sent(out), [(CLAUDE.to_owned(), true)]);
+    assert_eq!(texts(), ["two"]);
+    assert!(
+        tick().await.1.is_empty(),
+        "the turn it started was not seen yet"
+    );
+    status("blocked");
+    assert!(tick().await.1.is_empty());
+    status("done");
+    let (_, out) = tick().await;
+    assert_eq!(sent(out), [(CLAUDE.to_owned(), true)]);
+    let typed: Vec<Value> = herdr.params("agent.prompt");
+    assert_eq!(
+        typed.iter().map(|p| p["text"].clone()).collect::<Vec<_>>(),
+        [json!("one"), json!("two")]
+    );
+
+    status("working");
+    add("four", "phone");
+    herdr.with(|h| h.snapshot["agents"][0]["agent_session"]["value"] = json!("another"));
+    assert!(tick().await.0, "another session in the pane");
+    assert_eq!(texts(), Vec::<String>::new());
+
+    herdr.with(|h| h.snapshot["agents"][0]["agent_session"]["value"] = json!(session.clone()));
+    add("five", "phone");
+    let agent = herdr.with(|h| h.snapshot["agents"].as_array_mut().unwrap().remove(0));
+    assert!(!tick().await.0, "no agent for one tick");
+    assert_eq!(texts(), ["five"]);
+    assert!(tick().await.0, "no agent on two ticks in a row");
+    assert_eq!(texts(), Vec::<String>::new());
+
+    herdr.with(|h| {
+        h.snapshot["agents"]
+            .as_array_mut()
+            .unwrap()
+            .insert(0, agent)
+    });
+    add("six", "phone");
+    let panes = herdr.with(|h| std::mem::take(&mut h.snapshot["panes"]));
+    assert!(!tick().await.0, "a snapshot with no pane is not trusted");
+    herdr.with(|h| {
+        h.snapshot["panes"] = panes;
+        h.snapshot["panes"].as_array_mut().unwrap().remove(0);
+    });
+    assert!(tick().await.0, "the pane closed");
+    assert!(queues.lock().unwrap().is_empty());
+    assert_eq!(herdr.params("agent.prompt").len(), 2);
 }
 
 #[tokio::test]

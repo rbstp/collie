@@ -2516,6 +2516,19 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
 }
 
 @MainActor
+@Test func aSlashCommandTypedWhileQueueingIsNotMirrored() async {
+    let core = FakeCore()
+    core.state.withLock { $0.status = .working }
+    let model = await slashReady(core)
+    #expect(model.queuesPrompt)
+    for text in ["/", "/sk"] { model.typed(text) }
+    await model.flushMirror()
+    #expect(core.snapshot.slashes.isEmpty, "a queued send needs the Mac's box empty")
+    await model.sendPrompt()
+    #expect(core.snapshot.queueCalls == ["add term_1 /sk"])
+}
+
+@MainActor
 @Test func aBurstOfTypingMakesFewMirrorCalls() async {
     let core = FakeCore()
     let model = await slashReady(core)
