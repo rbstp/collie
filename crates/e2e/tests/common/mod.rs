@@ -23,7 +23,10 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, header};
 use zeroize::Zeroizing;
 
-pub const KNOBS: [(&str, &str); 1] = [("TS_DISABLE_PORTMAPPER", "1")];
+pub const KNOBS: [(&str, &str); 2] = [
+    ("TS_DISABLE_PORTMAPPER", "1"),
+    ("TS_DEBUG_MAGICSOCK_BIND_LOOPBACK", "1"),
+];
 pub const PORT: u16 = protocol::DEFAULT_PORT;
 pub const WATCHDOG: Duration = Duration::from_secs(240);
 pub const LABEL: &str = "E2E iPhone";

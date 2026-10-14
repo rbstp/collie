@@ -4343,7 +4343,10 @@ mod tailnet_tests {
     use super::*;
     use crate::session::Session;
 
-    const KNOBS: [(&str, &str); 1] = [("TS_DISABLE_PORTMAPPER", "1")];
+    const KNOBS: [(&str, &str); 2] = [
+        ("TS_DISABLE_PORTMAPPER", "1"),
+        ("TS_DEBUG_MAGICSOCK_BIND_LOOPBACK", "1"),
+    ];
     const CODE: &str = "Zm9vYmFyYmF6cXV4cXV1dQ";
 
     struct TestControl(Child, String);
