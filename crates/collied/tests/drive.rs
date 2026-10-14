@@ -4,12 +4,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
+use collied::transcript::Transcripts;
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentTypeTextParams, CloneSource, Cwd, DraftText, ErrorCode, FolderName,
     Key, Label, NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request,
-    Response, SlashCommand, TaskArchiveParams, TaskNewParams, TaskWorktree, TaskWorktreesParams,
-    TerminalId, TerminalRunParams, WorkspaceCloseParams, WorkspaceId,
+    Response, SessionId, SlashCommand, TaskArchiveParams, TaskNewParams, TaskSessionsParams,
+    TaskWorktree, TaskWorktreesParams, TerminalId, TerminalRunParams, WorkspaceCloseParams,
+    WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -513,11 +515,12 @@ fn task(cwd: &Path, agent: &str) -> TaskNewParams {
         op_id: op('T'),
         cwd: Cwd::new(cwd.to_str().unwrap()).unwrap(),
         agent: AgentKind::new(agent).unwrap(),
-        prompt: PromptText::new("write the tests").unwrap(),
+        prompt: Some(PromptText::new("write the tests").unwrap()),
         label: Some(Label::new("tests").unwrap()),
         new_folder: None,
         worktree: None,
         clone: None,
+        resume: None,
     }
 }
 
@@ -1888,6 +1891,199 @@ async fn codex_tasks_keep_session_hooks_in_their_own_pane() {
         assert_eq!(starts[0]["pane_id"], "w9:p1");
         assert_eq!(starts[0]["args"], json!(["--no-daemon"]));
         assert_eq!(herdr.params("agent.prompt").len(), 1);
+    }
+}
+
+const CLAUDE_SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+const CODEX_SESSION: &str = "01a10f07-b5ed-79a3-989d-fa10b96c5cab";
+/// The session of the Claude agent in the snapshot.
+const OPEN_SESSION: &str = "00000000-0000-4000-8000-000000000000";
+
+/// Transcripts of `root/a`: Claude's `CLAUDE_SESSION` and `OPEN_SESSION`, Codex's `CODEX_SESSION`.
+fn sessions_driver(herdr: &Mock, base: &Path) -> (tempfile::TempDir, Arc<Driver>) {
+    let store = tempfile::tempdir().unwrap();
+    let folder = base.join("root/a");
+    let folder = folder.to_str().unwrap();
+    let project: String = folder
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let project = store.path().join("projects").join(project);
+    std::fs::create_dir_all(&project).unwrap();
+    for id in [CLAUDE_SESSION, OPEN_SESSION] {
+        std::fs::write(
+            project.join(format!("{id}.jsonl")),
+            include_str!("fixtures/transcripts/claude.jsonl"),
+        )
+        .unwrap();
+    }
+    let day = store.path().join("sessions/2026/10/05");
+    std::fs::create_dir_all(&day).unwrap();
+    std::fs::write(
+        day.join(format!("rollout-2026-10-05T22-25-26-{CODEX_SESSION}.jsonl")),
+        include_str!("fixtures/transcripts/codex.jsonl").replace("/Users/me/src/collie", folder),
+    )
+    .unwrap();
+    let drive = Driver::new(
+        herdr.socket.clone(),
+        ["claude", "codex", "copilot"]
+            .into_iter()
+            .map(|a| AgentKind::new(a).unwrap())
+            .collect(),
+        &[base.join("root")],
+    )
+    .unwrap()
+    .with_transcripts(Transcripts::new(
+        Some(store.path().join("projects")),
+        Some(store.path().join("sessions")),
+    ));
+    (store, Arc::new(drive))
+}
+
+fn resume(cwd: &Path, agent: &str, id: &str) -> TaskNewParams {
+    TaskNewParams {
+        prompt: None,
+        resume: Some(SessionId::new(id).unwrap()),
+        ..task(cwd, agent)
+    }
+}
+
+#[tokio::test]
+async fn task_sessions_lists_the_folders_sessions_and_resume_refusals_start_nothing() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let (_store, drive) = sessions_driver(&herdr, &base);
+    let list = |cwd: &str| TaskSessionsParams {
+        cwd: Cwd::new(base.join(cwd).to_str().unwrap()).unwrap(),
+    };
+    let Ok(Response::TaskSessions { sessions }) =
+        drive.task_sessions(list("root/b/../a"), &yes()).await
+    else {
+        panic!("no sessions");
+    };
+    let mut listed: Vec<(&str, &str, &str)> = sessions
+        .iter()
+        .map(|s| {
+            (
+                s.agent.as_str(),
+                s.session_id.as_str(),
+                s.first_prompt.as_str(),
+            )
+        })
+        .collect();
+    listed.sort();
+    assert_eq!(
+        listed,
+        [
+            ("claude", OPEN_SESSION, "fix the flaky approval test"),
+            ("claude", CLAUDE_SESSION, "fix the flaky approval test"),
+            (
+                "codex",
+                CODEX_SESSION,
+                "add approval tests for the codex menu"
+            ),
+        ]
+    );
+    assert!(matches!(
+        drive.task_sessions(list("root/b"), &yes()).await,
+        Ok(Response::TaskSessions { sessions }) if sessions.is_empty()
+    ));
+    assert_eq!(
+        code(drive.task_sessions(list("outside"), &yes()).await),
+        ErrorCode::InvalidParams
+    );
+    assert_eq!(
+        code(drive.task_sessions(list("root/a"), &no()).await),
+        ErrorCode::NotPaired
+    );
+
+    let a = base.join("root/a");
+    let mut new_folder = resume(&base.join("root"), "claude", CLAUDE_SESSION);
+    new_folder.new_folder = Some(FolderName::new("fresh").unwrap());
+    let mut neither = task(&a, "claude");
+    neither.prompt = None;
+    let refused = [
+        (
+            resume(&a, "claude", OPEN_SESSION),
+            "already open in a herdr pane",
+        ),
+        (
+            resume(&base.join("root/b"), "claude", CLAUDE_SESSION),
+            "no such session in this folder",
+        ),
+        (
+            resume(&a, "codex", CLAUDE_SESSION),
+            "no such session in this folder",
+        ),
+        (
+            resume(&a, "claude", CODEX_SESSION),
+            "no such session in this folder",
+        ),
+        (
+            resume(&a, "copilot", CLAUDE_SESSION),
+            "this agent cannot resume a session",
+        ),
+        (new_folder, "resume a session in its own folder"),
+        (neither, "empty prompt"),
+    ];
+    for (p, why) in refused {
+        let (code, message) = drive.task_new(p, &yes()).await.0.unwrap_err();
+        assert_eq!(code, ErrorCode::InvalidParams);
+        assert!(message.contains(why), "{message}");
+    }
+    let (reply, _) = drive
+        .task_new(resume(&a, "claude", CLAUDE_SESSION), &no())
+        .await;
+    assert_eq!(code(reply), ErrorCode::NotPaired);
+    assert!(herdr.mutations().is_empty(), "{:?}", herdr.methods());
+    assert!(!base.join("root/fresh").exists());
+}
+
+#[tokio::test]
+async fn resume_starts_the_session_in_a_new_workspace_and_prompts_only_when_asked() {
+    for (kind, id, args, prompt) in [
+        (
+            "claude",
+            CLAUDE_SESSION,
+            json!(["--resume", CLAUDE_SESSION]),
+            None,
+        ),
+        (
+            "codex",
+            CODEX_SESSION,
+            json!(["resume", CODEX_SESSION, "--no-daemon"]),
+            Some("keep going"),
+        ),
+    ] {
+        let herdr = Mock::start();
+        let (_d, base) = root();
+        let (_store, drive) = sessions_driver(&herdr, &base);
+        let mut agent = started_agent("idle", true, false);
+        agent["agent"] = json!(kind);
+        herdr.with(|h| {
+            h.text = "› Ask Codex to do anything\n  100% context left".into();
+            h.gets.extend([agent.clone(), agent]);
+        });
+        let mut p = resume(&base.join("root/a"), kind, id);
+        p.prompt = prompt.map(|t| PromptText::new(t).unwrap());
+        let (reply, cwd) = drive.task_new(p, &yes()).await;
+        assert!(reply.is_ok(), "{reply:?}");
+        assert_eq!(cwd.unwrap().as_str(), base.join("root/a").to_str().unwrap());
+        assert_eq!(
+            &herdr.methods()[..3],
+            ["agent.list", "workspace.create", "agent.start"]
+        );
+        let start = &herdr.params("agent.start")[0];
+        assert_eq!((&start["kind"], &start["args"]), (&json!(kind), &args));
+        let prompts: Vec<Value> = herdr
+            .params("agent.prompt")
+            .iter()
+            .map(|p| p["text"].clone())
+            .collect();
+        assert_eq!(
+            prompts,
+            prompt.map(|t| json!(t)).into_iter().collect::<Vec<_>>()
+        );
     }
 }
 

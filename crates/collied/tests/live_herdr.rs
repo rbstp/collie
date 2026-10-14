@@ -120,7 +120,7 @@ async fn approval_scenario(session: &HerdrSession, input: ApprovalInput) {
     let terminal = created.root_pane.terminal_id.clone();
     let mut started = None;
     for _ in 0..100 {
-        match herdr::agent_start(socket, "collie-live-claude", "claude", &pane).await {
+        match herdr::agent_start(socket, "collie-live-claude", "claude", &pane, None).await {
             Ok(a) => {
                 started = Some(a);
                 break;
@@ -299,11 +299,12 @@ async fn scenario(session: &HerdrSession) {
         op_id: OpId::new("O".repeat(22)).unwrap(),
         cwd: Cwd::new("/").unwrap(),
         agent: AgentKind::new("claude").unwrap(),
-        prompt: PromptText::new("x").unwrap(),
+        prompt: Some(PromptText::new("x").unwrap()),
         label: None,
         new_folder: None,
         worktree: None,
         clone: None,
+        resume: None,
     };
     assert_eq!(
         drive.task_new(outside, &yes).await.0.unwrap_err().0,
@@ -317,11 +318,12 @@ async fn scenario(session: &HerdrSession) {
                     op_id: OpId::new("T".repeat(22)).unwrap(),
                     cwd: Cwd::new(work.to_str().unwrap()).unwrap(),
                     agent: AgentKind::new("pi").unwrap(),
-                    prompt: PromptText::new("say hello").unwrap(),
+                    prompt: Some(PromptText::new("say hello").unwrap()),
                     label: Some(Label::new("collie-live").unwrap()),
                     new_folder: None,
                     worktree: None,
                     clone: None,
+                    resume: None,
                 },
                 &yes,
             )

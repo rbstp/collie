@@ -680,6 +680,10 @@
       ],
       "type": "string"
     },
+    "SessionId": {
+      "pattern": "^[0-9a-f][0-9a-f-]{35}$",
+      "type": "string"
+    },
     "Sha256Hex": {
       "pattern": "^[0-9a-f]{64}$",
       "type": "string"
@@ -769,7 +773,26 @@
           "$ref": "#/$defs/OpId"
         },
         "prompt": {
-          "$ref": "#/$defs/PromptText"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required unless `resume` is set."
+        },
+        "resume": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When set, collied starts `agent` resuming this session of `cwd`."
         },
         "worktree": {
           "anyOf": [
@@ -785,8 +808,19 @@
       "required": [
         "op_id",
         "cwd",
-        "agent",
-        "prompt"
+        "agent"
+      ],
+      "type": "object"
+    },
+    "TaskSessionsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "cwd": {
+          "$ref": "#/$defs/Cwd"
+        }
+      },
+      "required": [
+        "cwd"
       ],
       "type": "object"
     },
@@ -1304,6 +1338,22 @@
         },
         "params": {
           "$ref": "#/$defs/TaskWorktreesParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.sessions",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TaskSessionsParams"
         }
       },
       "required": [

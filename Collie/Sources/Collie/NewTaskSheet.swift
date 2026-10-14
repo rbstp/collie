@@ -119,6 +119,52 @@ struct NewTaskSheet: View {
                             }
                         }
                     }
+                } else if model.location == .resume {
+                    Section {
+                        folderPicker($model.cwd, completions: model.completions)
+                    } header: {
+                        Text("Folder")
+                    } footer: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let error = model.optionsError {
+                                Text(error).foregroundStyle(.red)
+                            }
+                            if let error = model.foldersError {
+                                Text(error).foregroundStyle(.red)
+                            }
+                        }
+                    }
+                    Section("Session") {
+                        if model.sessions == nil, model.sessionsError == nil, model.folder != nil {
+                            ProgressView("Finding sessions…")
+                        }
+                        if let sessions = model.sessions {
+                            if sessions.isEmpty {
+                                Text("No Claude Code or Codex session in this folder.").foregroundStyle(.secondary)
+                            }
+                            ForEach(sessions, id: \.sessionId) { session in
+                                Button {
+                                    model.session = session
+                                } label: {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(session.firstPrompt).lineLimit(2)
+                                            HStack {
+                                                AgentKindLabel(kind: session.agent)
+                                                Text(Date(timeIntervalSince1970: Double(session.modifiedMs) / 1000), format: .relative(presentation: .named))
+                                            }
+                                            .font(.footnote)
+                                            .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        if model.session?.sessionId == session.sessionId { Image(systemName: "checkmark") }
+                                    }
+                                }
+                                .foregroundStyle(.primary)
+                            }
+                        }
+                        if let error = model.sessionsError { Text(error).foregroundStyle(.red) }
+                    }
                 } else {
                     Section("Git worktree") {
                         Picker("Action", selection: $model.worktreeAction) {
@@ -166,24 +212,26 @@ struct NewTaskSheet: View {
                     }
                 }
 
-                Section {
-                    if let agents = model.options?.agents {
-                        Picker("Agent", selection: $model.agent) {
-                            ForEach(agents, id: \.self) { AgentKindLabel(kind: $0).tag($0) }
+                if model.location != .resume {
+                    Section {
+                        if let agents = model.options?.agents {
+                            Picker("Agent", selection: $model.agent) {
+                                ForEach(agents, id: \.self) { AgentKindLabel(kind: $0).tag($0) }
+                            }
+                            .tint(.primary)
+                        } else if model.optionsError == nil {
+                            ProgressView()
                         }
-                        .tint(.primary)
-                    } else if model.optionsError == nil {
-                        ProgressView()
-                    }
-                } header: {
-                    Text("Agent")
-                } footer: {
-                    if !model.agent.isEmpty {
-                        Text("Use the session's terminal buttons or type an answer to respond to approval prompts.")
+                    } header: {
+                        Text("Agent")
+                    } footer: {
+                        if !model.agent.isEmpty {
+                            Text("Use the session's terminal buttons or type an answer to respond to approval prompts.")
+                        }
                     }
                 }
 
-                Section("Prompt") {
+                Section(model.location == .resume ? "Prompt (optional)" : "Prompt") {
                     if let error = model.attachmentError {
                         Text(error).font(.footnote).foregroundStyle(.red)
                     }
@@ -336,6 +384,12 @@ struct NewTaskSheet: View {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled else { return }
                 await model.loadWorktrees()
+            }
+            .task(id: model.location == .resume ? "\(model.machineId ?? ""):\(model.base ?? ""):\(model.cwd)" : nil) {
+                guard model.location == .resume, model.folder != nil else { return }
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                await model.loadSessions()
             }
             .sheet(isPresented: $pickingPrompt) {
                 NavigationStack {

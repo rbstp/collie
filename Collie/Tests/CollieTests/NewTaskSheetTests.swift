@@ -71,6 +71,37 @@ final class NewTaskSheetTests: XCTestCase {
         }
     }
 
+    func testResumeListsTheFoldersSessionsAndStartsWithoutAPrompt() async throws {
+        let core = FakeCore()
+        let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil)
+        await model.loadOptions()
+        model.location = .resume
+        model.cwd = "/Users/me/app"
+        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [machine]) { _ in })
+        try await hosting(host) { _ in
+            let sessions = try await waitFor("sessions listed by the sheet") { model.sessions }
+            XCTAssertEqual(sessions.map(\.firstPrompt), ["add approval tests", "fix the flaky test"])
+            XCTAssertEqual(core.snapshot.sessionCalls, ["/Users/me/app"])
+            XCTAssertFalse(model.canStart, "no session picked")
+            model.session = sessions[1]
+            XCTAssertTrue(model.canStart, "the prompt is optional")
+            model.cwd = "/Users/me/other"
+            XCTAssertNil(model.session)
+            XCTAssertFalse(model.canStart)
+            let other = try await waitFor("the other folder's sessions") {
+                core.snapshot.sessionCalls.last == "/Users/me/other" ? model.sessions : nil
+            }
+            model.session = other[1]
+            XCTAssertTrue(model.canStart)
+            core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+            let route = await model.start()
+            XCTAssertEqual(route, AgentRoute(machineId: "m1", terminalId: "term_new"))
+            XCTAssertEqual(core.snapshot.taskNews, ["/Users/me/other resume=claude:3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"])
+            XCTAssertEqual(core.snapshot.taskPrompts, [""])
+        }
+    }
+
     private func controllers(_ controller: UIViewController) -> [UIViewController] {
         [controller] + controller.children.flatMap(controllers)
     }

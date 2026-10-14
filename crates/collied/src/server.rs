@@ -482,11 +482,10 @@ pub async fn start_with(
         Some(roots) => roots.clone(),
         None => vec![config::home_dir()?],
     };
-    let drive = Arc::new(Driver::new(
-        herdr_socket.clone(),
-        tasks.agents.clone(),
-        &roots,
-    )?);
+    let drive = Arc::new(
+        Driver::new(herdr_socket.clone(), tasks.agents.clone(), &roots)?
+            .with_transcripts(Transcripts::from_env()),
+    );
     let st = {
         let node = node.clone();
         tokio::task::spawn_blocking(move || node.status()).await??
@@ -1219,6 +1218,10 @@ impl Session<'_> {
                 let (op_id, d) = (p.op_id.clone(), drive.clone());
                 let created = p.new_folder.is_some();
                 let cloned = p.clone.as_ref().map(|c| format!("clone={:?}", c.as_str()));
+                let resumed = p
+                    .resume
+                    .as_ref()
+                    .map(|id| format!("resume={}", id.as_str()));
                 let worktree_target = p.worktree.as_ref().map(|w| match w {
                     protocol::TaskWorktree::Create { branch } => {
                         format!("create branch={branch:?}")
@@ -1234,6 +1237,8 @@ impl Session<'_> {
                             format!("{} {worktree_target}", c.as_str())
                         } else if let Some(cloned) = &cloned {
                             format!("{} (cloned) {cloned}", c.as_str())
+                        } else if let Some(resumed) = &resumed {
+                            format!("{} {resumed}", c.as_str())
                         } else if created {
                             format!("{} (created)", c.as_str())
                         } else {
@@ -1257,6 +1262,7 @@ impl Session<'_> {
             }
             Request::TaskFolders(p) => (drive.task_folders(p, &auth).await, None),
             Request::TaskWorktrees(p) => (drive.task_worktrees(p, &auth).await, None),
+            Request::TaskSessions(p) => (drive.task_sessions(p, &auth).await, None),
             Request::TaskArchive(_) if !self.tasks.is_empty() => (
                 err(
                     ErrorCode::RateLimited,
@@ -1896,6 +1902,9 @@ fn audit_target(request: &Request) -> Option<String> {
             if let Some(source) = &p.clone {
                 return Some(format!("{} clone={:?}", p.cwd.as_str(), source.as_str()));
             }
+            if let Some(id) = &p.resume {
+                return Some(format!("{} resume={}", p.cwd.as_str(), id.as_str()));
+            }
             match &p.new_folder {
                 Some(name) => {
                     return Some(format!("{} new_folder={:?}", p.cwd.as_str(), name.as_str()));
@@ -1905,6 +1914,7 @@ fn audit_target(request: &Request) -> Option<String> {
         }
         Request::TaskFolders(p) => p.path.as_str(),
         Request::TaskWorktrees(p) => p.cwd.as_str(),
+        Request::TaskSessions(p) => p.cwd.as_str(),
         Request::TaskArchive(p) => p.terminal_id.as_str(),
         Request::PushActivityToken(p) => {
             return Some(activity::target(&p.terminal_id, &p.activity_id));
@@ -2038,6 +2048,7 @@ fn outcome(reply: &Reply) -> String {
             folders.len(),
             if *truncated { " truncated" } else { "" }
         ),
+        Ok(Response::TaskSessions { sessions }) => format!("ok sessions={}", sessions.len()),
         Ok(_) => "ok".to_owned(),
         Err((ErrorCode::DraftChanged, _)) => code_name(ErrorCode::DraftChanged),
         Err((code, message)) => format!("{}: {message}", code_name(*code)),

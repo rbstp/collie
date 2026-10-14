@@ -1207,6 +1207,26 @@
           "type": "object"
         },
         {
+          "description": "The most recent sessions of `cwd`, newest first.",
+          "properties": {
+            "sessions": {
+              "items": {
+                "$ref": "#/$defs/TaskSessionInfo"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "task_sessions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sessions"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "terminal_id": {
               "$ref": "#/$defs/TerminalId"
@@ -1434,6 +1454,10 @@
         }
       ]
     },
+    "SessionId": {
+      "pattern": "^[0-9a-f][0-9a-f-]{35}$",
+      "type": "string"
+    },
     "TaskOptions": {
       "properties": {
         "agents": {
@@ -1463,6 +1487,32 @@
         "default_agent",
         "recent_cwds",
         "roots"
+      ],
+      "type": "object"
+    },
+    "TaskSessionInfo": {
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "first_prompt": {
+          "description": "The first line of the session's first prompt, at most 160 characters.",
+          "type": "string"
+        },
+        "modified_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "agent",
+        "session_id",
+        "first_prompt",
+        "modified_ms"
       ],
       "type": "object"
     },

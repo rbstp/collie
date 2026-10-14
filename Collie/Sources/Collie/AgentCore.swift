@@ -28,6 +28,8 @@ protocol AgentCore: AnyObject, Sendable {
     func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted
     func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted
     func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted
+    func taskSessions(machineId: String, cwd: String) async throws -> [TaskSession]
+    func taskResume(machineId: String, cwd: String, agent: String, sessionId: String, prompt: String, label: String?) async throws -> TaskStarted
     func flock(machineId: String) async throws -> MachineFlock
     func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String
     func maxAttachmentBytes() -> UInt64

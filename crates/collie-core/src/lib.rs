@@ -22,10 +22,10 @@ use protocol::{
     ApprovalId, CloneSource, Cwd, DraftText, Empty, ErrorCode, FolderName, Key, Label, NoticeDigit,
     NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
     PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
-    ReadSource, Request, Response, Signature, SlashCommand, TaskArchiveParams, TaskFoldersParams,
-    TaskNewParams, TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId, TerminalKey,
-    TerminalRead, TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId,
-    limits,
+    ReadSource, Request, Response, SessionId, Signature, SlashCommand, TaskArchiveParams,
+    TaskFoldersParams, TaskNewParams, TaskSessionsParams, TaskWorktree, TaskWorktreesParams,
+    TerminalGrantParams, TerminalId, TerminalKey, TerminalRead, TerminalRunParams,
+    TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -604,6 +604,14 @@ pub struct WorktreeListing {
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TaskSession {
+    pub agent: String,
+    pub session_id: String,
+    pub first_prompt: String,
+    pub modified_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct WorktreeChoice {
     pub path: String,
     pub branch: Option<String>,
@@ -656,6 +664,7 @@ async fn task_new_inner(
     new_folder: Option<String>,
     worktree: Option<TaskWorktree>,
     clone: Option<String>,
+    resume: Option<String>,
 ) -> Result<TaskStarted, CoreError> {
     let timeout = if clone.is_some() {
         TASK_CLONE_TIMEOUT
@@ -678,7 +687,11 @@ async fn task_new_inner(
         op_id: new_op_id(),
         cwd: Cwd::new(cwd).map_err(|_| invalid("cwd", "folder must be an absolute path of at most 1024 bytes"))?,
         agent: AgentKind::new(agent).map_err(|_| invalid("agent", "unknown agent kind"))?,
-        prompt: prompt_text(prompt)?,
+        prompt: if resume.is_some() && prompt.trim().is_empty() {
+            None
+        } else {
+            Some(prompt_text(prompt)?)
+        },
         label,
         new_folder: new_folder.map(|n| FolderName::new(n)
             .map_err(|_| invalid("new_folder", "folder name must be one plain name of at most 255 bytes, without / or \\, a leading dot, or control or invisible characters"))).transpose()?,
@@ -692,6 +705,9 @@ async fn task_new_inner(
                     )
                 })
             })
+            .transpose()?,
+        resume: resume
+            .map(|id| SessionId::new(id).map_err(|_| invalid("resume", "invalid session")))
             .transpose()?,
     });
     match core.mutate(&machine_id, request, timeout).await? {
@@ -1637,7 +1653,7 @@ impl CollieCore {
         new_folder: Option<String>,
     ) -> Result<TaskStarted, CoreError> {
         task_new_inner(
-            self, machine_id, cwd, agent, prompt, label, new_folder, None, None,
+            self, machine_id, cwd, agent, prompt, label, new_folder, None, None, None,
         )
         .await
     }
@@ -1661,6 +1677,7 @@ impl CollieCore {
             None,
             None,
             Some(repository),
+            None,
         )
         .await
     }
@@ -1826,6 +1843,53 @@ impl CollieCore {
         }
     }
 
+    pub async fn task_sessions(
+        &self,
+        machine_id: String,
+        cwd: String,
+    ) -> Result<Vec<TaskSession>, CoreError> {
+        let request = Request::TaskSessions(TaskSessionsParams {
+            cwd: Cwd::new(cwd).map_err(|_| invalid("cwd", "invalid folder"))?,
+        });
+        match self.call(&machine_id, request, CALL_TIMEOUT).await? {
+            Response::TaskSessions { sessions } => Ok(sessions
+                .into_iter()
+                .map(|s| TaskSession {
+                    agent: s.agent.into(),
+                    session_id: s.session_id.into(),
+                    first_prompt: s.first_prompt,
+                    modified_ms: s.modified_ms,
+                })
+                .collect()),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
+    /// `prompt` may be empty: the session resumes without one.
+    pub async fn task_resume(
+        &self,
+        machine_id: String,
+        cwd: String,
+        agent: String,
+        session_id: String,
+        prompt: String,
+        label: Option<String>,
+    ) -> Result<TaskStarted, CoreError> {
+        task_new_inner(
+            self,
+            machine_id,
+            cwd,
+            agent,
+            prompt,
+            label,
+            None,
+            None,
+            None,
+            Some(session_id),
+        )
+        .await
+    }
+
     pub async fn task_worktree_create(
         &self,
         machine_id: String,
@@ -1844,6 +1908,7 @@ impl CollieCore {
             label,
             None,
             Some(TaskWorktree::Create { branch }),
+            None,
             None,
         )
         .await
@@ -1868,6 +1933,7 @@ impl CollieCore {
             label,
             None,
             Some(TaskWorktree::Open { path }),
+            None,
             None,
         )
         .await
@@ -4317,7 +4383,7 @@ mod tailnet_tests {
                         }
                         Request::TaskNew(p) => {
                             assert_eq!(
-                                (p.cwd.as_str(), p.agent.as_str(), p.prompt.as_str()),
+                                (p.cwd.as_str(), p.agent.as_str(), p.prompt.unwrap().as_str()),
                                 ("/src/collie", "claude", "add tests")
                             );
                             assert_eq!(p.label.unwrap().as_str(), "tests");

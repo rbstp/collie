@@ -562,10 +562,14 @@ pub async fn agent_start(
     name: &str,
     kind: &str,
     pane_id: &str,
+    resume: Option<&str>,
 ) -> Result<AgentInfo, Error> {
     let mut params = json!({ "name": name, "kind": kind, "pane_id": pane_id });
-    if kind == "codex" {
-        params["args"] = json!(["--no-daemon"]);
+    match (kind, resume) {
+        ("claude", Some(id)) => params["args"] = json!(["--resume", id]),
+        ("codex", Some(id)) => params["args"] = json!(["resume", id, "--no-daemon"]),
+        ("codex", None) => params["args"] = json!(["--no-daemon"]),
+        _ => {}
     }
     let AgentStartedResult::AgentStarted { agent } = call(socket, "agent.start", params).await?;
     Ok(agent)
