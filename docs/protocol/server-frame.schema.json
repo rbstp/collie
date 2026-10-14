@@ -52,6 +52,17 @@
             "null"
           ]
         },
+        "pull_request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PullRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The pull request of the agent's branch, as `gh` on the machine last read it."
+        },
         "status": {
           "$ref": "#/$defs/AgentStatus"
         },
@@ -1072,6 +1083,51 @@
         "recorded_ms"
       ],
       "type": "object"
+    },
+    "PullChecks": {
+      "enum": [
+        "passing",
+        "failing",
+        "pending",
+        "none",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "PullRequest": {
+      "properties": {
+        "checks": {
+          "$ref": "#/$defs/PullChecks"
+        },
+        "number": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/PullState"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "state",
+        "checks",
+        "url"
+      ],
+      "type": "object"
+    },
+    "PullState": {
+      "enum": [
+        "open",
+        "draft",
+        "merged",
+        "closed",
+        "unknown"
+      ],
+      "type": "string"
     },
     "ReadSource": {
       "enum": [

@@ -1082,6 +1082,42 @@ pub struct Agent {
     /// When the transcript last changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_activity_ms: Option<u64>,
+    /// The pull request of the agent's branch, as `gh` on the machine last read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<PullRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct PullRequest {
+    pub number: u64,
+    pub state: PullState,
+    pub checks: PullChecks,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PullState {
+    Open,
+    Draft,
+    Merged,
+    Closed,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PullChecks {
+    Passing,
+    Failing,
+    Pending,
+    None,
+    #[serde(other)]
+    Unknown,
 }
 
 /// From Claude Code's status line input, as `collied statusline` last recorded it.
@@ -2086,6 +2122,28 @@ mod tests {
             r#""last_line":"Done.","context_left":100,"last_prompt":"go","last_activity_ms":7}"#
         ));
         assert_eq!(serde_json::from_str::<Agent>(&json).unwrap(), full);
+        let linked = Agent {
+            pull_request: Some(PullRequest {
+                number: 12,
+                state: PullState::Draft,
+                checks: PullChecks::None,
+                url: "https://github.com/o/r/pull/12".into(),
+            }),
+            ..full.clone()
+        };
+        let json = serde_json::to_string(&linked).unwrap();
+        assert!(json.ends_with(
+            r#""pull_request":{"number":12,"state":"draft","checks":"none","url":"https://github.com/o/r/pull/12"}}"#
+        ));
+        let newer = json.replace(r#""draft","checks":"none""#, r#""queued","checks":"stale""#);
+        let parsed = serde_json::from_str::<Agent>(&newer)
+            .unwrap()
+            .pull_request
+            .unwrap();
+        assert_eq!(
+            (parsed.state, parsed.checks),
+            (PullState::Unknown, PullChecks::Unknown)
+        );
         let event = ServerFrame::Event {
             seq: 2,
             event: Event::AgentStatus { agent: full },

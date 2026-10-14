@@ -629,6 +629,7 @@ mod tests {
             context_left: None,
             last_prompt: None,
             last_activity_ms: None,
+            pull_request: None,
         }
     }
 

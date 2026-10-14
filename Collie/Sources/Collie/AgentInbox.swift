@@ -296,6 +296,9 @@ private struct InboxRow: View {
                     if let kind = agent.kind {
                         AgentKindLabel(kind: kind, iconOnly: true)
                     }
+                    if let pullRequest = agent.pullRequest {
+                        PullRequestBadge(pullRequest: pullRequest)
+                    }
                     Text(item.machine)
                     if item.stale {
                         Text(item.linkDown ? "Offline · cached" : "Cached")

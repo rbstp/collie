@@ -23,6 +23,7 @@ pub mod keychain;
 pub mod pairing;
 pub mod peers;
 pub mod prompt;
+pub mod pulls;
 pub mod push;
 pub mod reflow;
 pub mod server;

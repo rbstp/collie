@@ -344,6 +344,34 @@ pub struct AgentSummary {
     pub last_prompt: Option<String>,
     #[uniffi(default = None)]
     pub last_activity_ms: Option<u64>,
+    #[uniffi(default = None)]
+    pub pull_request: Option<PullRequestSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct PullRequestSummary {
+    pub number: u64,
+    pub state: PullState,
+    pub checks: PullChecks,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PullState {
+    Open,
+    Draft,
+    Merged,
+    Closed,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PullChecks {
+    Passing,
+    Failing,
+    Pending,
+    NoChecks,
+    Unknown,
 }
 
 /// The subscription's plan usage on the machine; `recorded_ms` dates it.
@@ -2966,6 +2994,24 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
         context_left: a.context_left,
         last_prompt: a.last_prompt.clone(),
         last_activity_ms: a.last_activity_ms,
+        pull_request: a.pull_request.as_ref().map(|pr| PullRequestSummary {
+            number: pr.number,
+            state: match pr.state {
+                protocol::PullState::Open => PullState::Open,
+                protocol::PullState::Draft => PullState::Draft,
+                protocol::PullState::Merged => PullState::Merged,
+                protocol::PullState::Closed => PullState::Closed,
+                protocol::PullState::Unknown => PullState::Unknown,
+            },
+            checks: match pr.checks {
+                protocol::PullChecks::Passing => PullChecks::Passing,
+                protocol::PullChecks::Failing => PullChecks::Failing,
+                protocol::PullChecks::Pending => PullChecks::Pending,
+                protocol::PullChecks::None => PullChecks::NoChecks,
+                protocol::PullChecks::Unknown => PullChecks::Unknown,
+            },
+            url: pr.url.clone(),
+        }),
     }
 }
 
@@ -3223,6 +3269,21 @@ mod tests {
         assert_eq!(s.context_left, Some(42));
         assert_eq!(s.last_prompt.as_deref(), Some("fix it"));
         assert_eq!(s.last_activity_ms, Some(9));
+        assert_eq!(s.pull_request, None);
+        let linked = newer.replace(
+            r#""last_activity_ms":9"#,
+            r#""last_activity_ms":9,"pull_request":{"number":7,"state":"merged","checks":"none","url":"https://github.com/o/r/pull/7"}"#,
+        );
+        let s = agent_summary(&serde_json::from_str(&linked).unwrap());
+        assert_eq!(
+            s.pull_request,
+            Some(PullRequestSummary {
+                number: 7,
+                state: PullState::Merged,
+                checks: PullChecks::NoChecks,
+                url: "https://github.com/o/r/pull/7".into(),
+            })
+        );
     }
 
     #[test]
@@ -4123,6 +4184,7 @@ mod tailnet_tests {
                 context_left: None,
                 last_prompt: None,
                 last_activity_ms: None,
+                pull_request: None,
             }],
             approvals: Vec::new(),
             terminals: Vec::new(),

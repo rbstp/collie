@@ -269,13 +269,21 @@ impl Driver {
             Ok(()) | Err((ErrorCode::AgentBlocked, _)) => {}
             Err(e) => return Err(e),
         }
-        let cwd = current
+        self.checkout(&current)
+    }
+
+    pub(crate) fn checkout(&self, agent: &AgentInfo) -> Result<Cwd, Fail> {
+        let cwd = agent
             .foreground_cwd
             .as_deref()
             .filter(|s| !s.is_empty())
-            .or(current.cwd.as_deref())
+            .or(agent.cwd.as_deref())
             .ok_or_else(|| invalid("agent has no checkout"))?;
         resolve_cwd(cwd, &self.roots).map_err(invalid)
+    }
+
+    pub(crate) fn roots(&self) -> &[PathBuf] {
+        &self.roots
     }
 
     pub async fn git_changes(&self, p: protocol::AgentChangesParams, auth: &Authorized) -> Reply {
@@ -1663,13 +1671,13 @@ fn checkout_removed(repo: &Cwd, checkout: &Cwd) -> bool {
         })
 }
 
-fn gh() -> Option<&'static str> {
+pub(crate) fn gh() -> Option<&'static str> {
     ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
         .into_iter()
         .find(|path| Path::new(path).is_file())
 }
 
-fn tool_path() -> String {
+pub(crate) fn tool_path() -> String {
     format!(
         "/opt/homebrew/bin:/usr/local/bin:{}",
         std::env::var("PATH").unwrap_or_default()
@@ -1794,19 +1802,8 @@ async fn run_clone(
 }
 
 async fn run_poi(repo: &Cwd) -> Result<(), &'static str> {
-    let gh = gh().unwrap_or("gh");
-    let path = tool_path();
-    let mut command = Command::new(gh);
-    command
-        .arg("poi")
-        .current_dir(repo.as_str())
-        .env("PATH", path)
-        .env_remove("GH_TOKEN")
-        .env("GH_PROMPT_DISABLED", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
+    let mut command = crate::pulls::gh_command(gh().unwrap_or("gh"));
+    command.arg("poi").current_dir(repo.as_str());
     let output = timeout(Duration::from_secs(60), command.output())
         .await
         .map_err(|_| "timed out")?

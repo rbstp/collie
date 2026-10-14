@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
 use std::os::fd::OwnedFd;
@@ -14,7 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use protocol::{
     AgentStarParams, AgentWatchParams, AttachmentChunkParams, ErrorBody, ErrorCode, Event,
     HelloResult, KeyPin, MachineInfo, MethodClass, PairCompleteParams, PairingCode, PairingInvite,
-    Request, Response, ServerFrame, TerminalGrantParams, TerminalId, TerminalKey,
+    PullRequest, Request, Response, ServerFrame, TerminalGrantParams, TerminalId, TerminalKey,
     TerminalWatchParams,
 };
 use serde::{Deserialize, Serialize};
@@ -41,11 +41,12 @@ use crate::flock::{self, Baseline, Stars, StatusTracker};
 use crate::gate::{self, Decision};
 use crate::pairing::{Attempt, Pairing};
 use crate::peers::{self, Peer, Store};
+use crate::pulls::{self, Pulls};
 use crate::push::{self, ActivityError, Push};
 use crate::terminal::{self, Grants};
 use crate::transcript::Transcripts;
 use crate::turns::Turns;
-use crate::{config, herdr, lock};
+use crate::{config, git, herdr, lock};
 
 const MAX_CONNECTIONS: usize = 64;
 const MAX_SESSIONS_PER_NODE: usize = 4;
@@ -57,6 +58,7 @@ const SILENCE_LIMIT: Duration = Duration::from_secs(45);
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 const RECONCILE_EVERY: Duration = Duration::from_secs(1);
 const RECONCILE_MAX_BACKOFF: Duration = Duration::from_secs(30);
+const PULLS_EVERY: Duration = Duration::from_secs(30);
 const RATE_PER_SEC: f64 = 20.0;
 const RATE_BURST: f64 = 40.0;
 const REJECT_AUDIT_PER_SEC: f64 = 1.0;
@@ -198,6 +200,7 @@ pub struct State {
     transcripts: Mutex<Transcripts>,
     live: Mutex<activity::Live>,
     turns: Mutex<Turns>,
+    pulls: Mutex<Pulls>,
     events: broadcast::Sender<Event>,
     drive: Arc<Driver>,
     pub(crate) approvals: Arc<Approvals>,
@@ -571,6 +574,7 @@ pub async fn start_with(
         transcripts: Mutex::new(transcripts),
         live: Mutex::new(activity::Live::default()),
         turns: Mutex::new(Turns::default()),
+        pulls: Mutex::new(Pulls::default()),
         events,
         drive,
         approvals,
@@ -588,6 +592,7 @@ pub async fn start_with(
         tokio::spawn(control::serve(control, state.clone(), rx.clone())),
         tokio::spawn(upkeep(state.attachments.clone(), rx.clone())),
         tokio::spawn(codex_usage(state.clone(), rx.clone())),
+        tokio::spawn(pull_requests(state.clone(), rx.clone())),
         tokio::spawn(reconcile(state.clone(), rx)),
     ];
     tracing::info!(host = %state.dns_name, port = state.cfg.port, "listening on the tailnet");
@@ -612,6 +617,76 @@ async fn codex_usage(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             _ = shutdown.changed() => return,
         }
     }
+}
+
+/// Only while a phone is connected, and `gh` runs at most once per `pulls::REFRESH` for
+/// each checkout and branch.
+async fn pull_requests(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
+    let mut interval = tokio::time::interval(PULLS_EVERY);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = shutdown.changed() => return,
+        }
+        if state.events.receiver_count() == 0 {
+            continue;
+        }
+        let Some(gh) = drive::gh() else {
+            if lock(&state.pulls).link(HashMap::new(), &HashSet::new()) {
+                let _ = state.events.send(Event::FlockChanged {});
+            }
+            continue;
+        };
+        let Ok(agents) = herdr::agent_list(&state.herdr).await else {
+            continue;
+        };
+        if let Some((linked, seen)) = read_pulls(&state, gh, &agents).await
+            && lock(&state.pulls).link(linked, &seen)
+        {
+            let _ = state.events.send(Event::FlockChanged {});
+        }
+    }
+}
+
+async fn read_pulls(
+    state: &State,
+    gh: &str,
+    agents: &[herdr::AgentInfo],
+) -> Option<(HashMap<String, PullRequest>, HashSet<pulls::Key>)> {
+    let roots = state.drive.roots();
+    let mut linked = HashMap::new();
+    let mut seen = HashSet::new();
+    for a in agents {
+        let Ok(cwd) = state.drive.checkout(a) else {
+            continue;
+        };
+        let Ok(Some((root, branch))) = git::branch(&cwd, roots).await else {
+            continue;
+        };
+        let key = (root.as_str().to_owned(), branch);
+        let cached = lock(&state.pulls).cached(&key, Instant::now());
+        let pr = match cached {
+            Some(pr) => pr,
+            None => {
+                if state.events.receiver_count() == 0 {
+                    return None;
+                }
+                let read = pulls::fetch(gh, &root).await;
+                let same = git::branch(&cwd, roots)
+                    .await
+                    .is_ok_and(|now| now.is_some_and(|(r, b)| r.as_str() == key.0 && b == key.1));
+                if !same {
+                    continue;
+                }
+                lock(&state.pulls).store(key.clone(), Instant::now(), read)
+            }
+        };
+        if let Some(pr) = pr {
+            linked.insert(a.terminal_id.clone(), pr);
+        }
+        seen.insert(key);
+    }
+    Some((linked, seen))
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -1669,6 +1744,11 @@ impl Session<'_> {
             self.seq,
             Some(&mut lock(&self.state.transcripts)),
         );
+        let pulls = lock(&self.state.pulls);
+        for agent in &mut flock.agents {
+            agent.pull_request = pulls.get(agent.terminal_id.as_str());
+        }
+        drop(pulls);
         flock.approvals = self.state.approvals.pending();
         flock.starred = lock(&self.state.stars).reconcile(&snap.panes);
         if self.state.cfg.terminals {
@@ -2088,6 +2168,7 @@ fn observe_agent(
     agent: &herdr::AgentInfo,
     tracker: &mut StatusTracker,
     transcripts: &mut Transcripts,
+    pulls: &Pulls,
     events: &broadcast::Sender<Event>,
     now_ms: u64,
 ) {
@@ -2097,9 +2178,10 @@ fn observe_agent(
     } else {
         None
     };
-    if let Some(agent) = flock::map_agent(agent, tracker, now_ms, derived)
+    if let Some(mut agent) = flock::map_agent(agent, tracker, now_ms, derived)
         && phones
     {
+        agent.pull_request = pulls.get(agent.terminal_id.as_str());
         let _ = events.send(Event::AgentStatus { agent });
     }
 }
@@ -2159,8 +2241,16 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                 if !changed.is_empty() {
                     transcripts.retain(&agents);
                     let now = crate::now_ms();
+                    let pulls = lock(&state.pulls);
                     for a in agents.iter().filter(|a| changed.contains(&a.terminal_id)) {
-                        observe_agent(a, &mut tracker, &mut transcripts, &state.events, now);
+                        observe_agent(
+                            a,
+                            &mut tracker,
+                            &mut transcripts,
+                            &pulls,
+                            &state.events,
+                            now,
+                        );
                     }
                 }
                 if shape {
@@ -2233,11 +2323,26 @@ mod tests {
         let mut transcripts = Transcripts::new(Some(projects), None);
         let mut tracker = StatusTracker::default();
         let events = broadcast::channel(16).0;
+        let mut pulls = Pulls::default();
 
-        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 1000);
+        observe_agent(
+            &agent,
+            &mut tracker,
+            &mut transcripts,
+            &pulls,
+            &events,
+            1000,
+        );
         agent.agent_status = "idle".into();
         agent.state_change_seq += 1;
-        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 2000);
+        observe_agent(
+            &agent,
+            &mut tracker,
+            &mut transcripts,
+            &pulls,
+            &events,
+            2000,
+        );
 
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(
@@ -2251,11 +2356,29 @@ mod tests {
             Some("**Fixed** the flaky test.")
         );
 
+        let pr = PullRequest {
+            number: 7,
+            state: protocol::PullState::Open,
+            checks: protocol::PullChecks::Failing,
+            url: "https://github.com/o/r/pull/7".into(),
+        };
+        pulls.link(
+            HashMap::from([(agent.terminal_id.clone(), pr.clone())]),
+            &HashSet::new(),
+        );
         let mut phone = events.subscribe();
-        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 3000);
+        observe_agent(
+            &agent,
+            &mut tracker,
+            &mut transcripts,
+            &pulls,
+            &events,
+            3000,
+        );
         let Event::AgentStatus { agent: shown } = phone.try_recv().unwrap() else {
             panic!("expected agent status");
         };
+        assert_eq!(shown.pull_request, Some(pr));
         assert_eq!(shown.status, protocol::AgentStatus::Idle);
         assert_eq!(shown.status_since_ms, 2000);
         assert_eq!(shown.last_line, derived.last_line);
@@ -2265,7 +2388,14 @@ mod tests {
         drop(phone);
         agent.agent_status = "working".into();
         agent.state_change_seq += 1;
-        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 4000);
+        observe_agent(
+            &agent,
+            &mut tracker,
+            &mut transcripts,
+            &pulls,
+            &events,
+            4000,
+        );
         assert!(matches!(
             other_phone.try_recv().unwrap(),
             Event::AgentStatus { .. }
@@ -2273,10 +2403,24 @@ mod tests {
         drop(other_phone);
         agent.agent_status = "done".into();
         agent.state_change_seq += 1;
-        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 5000);
+        observe_agent(
+            &agent,
+            &mut tracker,
+            &mut transcripts,
+            &pulls,
+            &events,
+            5000,
+        );
         let mut phone = events.subscribe();
         assert!(phone.try_recv().is_err());
-        observe_agent(&agent, &mut tracker, &mut transcripts, &events, 6000);
+        observe_agent(
+            &agent,
+            &mut tracker,
+            &mut transcripts,
+            &pulls,
+            &events,
+            6000,
+        );
         let Event::AgentStatus { agent: shown } = phone.try_recv().unwrap() else {
             panic!("expected agent status");
         };

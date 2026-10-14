@@ -195,6 +195,7 @@ private struct AgentCard: View {
     let starred: Bool
     let now: Date
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -230,6 +231,9 @@ private struct AgentCard: View {
                             Text(verbatim: "·")
                         }
                         StatusAge(agent: agent, now: now).fixedSize()
+                        if let pullRequest = agent.pullRequest {
+                            PullRequestBadge(pullRequest: pullRequest)
+                        }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -243,6 +247,11 @@ private struct AgentCard: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .accessibilityActions {
+            if let url = agent.pullRequest.flatMap(PullRequestBadge.url) {
+                Button("Open pull request") { openURL(url) }
+            }
+        }
     }
 }
 
