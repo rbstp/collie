@@ -11,14 +11,13 @@ use tokio::time::timeout;
 
 use crate::drive::{Authorized, Driver, Fail, fail};
 use crate::herdr::AgentInfo;
-use crate::pulls::{self, Check, Outcome};
+use crate::pulls::{self, Check, Outcome, clean};
 use crate::{flock, peers};
 
 pub const EVERY_MINUTES: [u32; 4] = [2, 5, 15, 30];
 const COMMENT_WAKES: u32 = 10;
 const FAILED_READS: u32 = 8;
 const LISTED: usize = 10;
-const MAX_NAME_CHARS: usize = 100;
 
 /// No body is asked for: review and comment text never reaches collied.
 const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
@@ -298,16 +297,6 @@ pub async fn fetch(gh: &str, url: &str, dir: &Path) -> Option<Read> {
         return None;
     }
     parse(&output.stdout)
-}
-
-fn clean(name: &str) -> String {
-    let name: String = name
-        .chars()
-        .map(|c| if c.is_whitespace() { ' ' } else { c })
-        .filter(|&c| !c.is_control() && !protocol::is_format(c) && c != '"')
-        .take(MAX_NAME_CHARS)
-        .collect();
-    name.trim().to_owned()
 }
 
 impl Watch {

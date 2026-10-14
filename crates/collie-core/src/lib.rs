@@ -63,7 +63,7 @@ const DRIVE_TIMEOUT: Duration = Duration::from_secs(30);
 /// herdr's `agent.start` waits up to 30 s for the agent before collied prompts it.
 const TASK_NEW_TIMEOUT: Duration = Duration::from_secs(90);
 const TASK_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(150);
-/// collied's 75 s clone, then `TASK_NEW_TIMEOUT`.
+/// collied's 75 s clone or pull request fetch, then `TASK_NEW_TIMEOUT`.
 const TASK_CLONE_TIMEOUT: Duration = Duration::from_secs(165);
 /// An unanswered mutation's `op_id` is reused for an identical retry within this window.
 /// Longer than any mutation timeout, shorter than collied's 600 s outcome cache.
@@ -359,6 +359,13 @@ pub struct PullRequestSummary {
     pub state: PullState,
     pub checks: PullChecks,
     pub url: String,
+    #[uniffi(default = [])]
+    pub failing_checks: Vec<String>,
+    /// Reviews plus comments.
+    #[uniffi(default = 0)]
+    pub remarks: u32,
+    #[uniffi(default = false)]
+    pub conflicting: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -718,7 +725,7 @@ async fn task_new_inner(
     resume: Option<String>,
     ultracode: bool,
 ) -> Result<TaskStarted, CoreError> {
-    let timeout = if clone.is_some() {
+    let timeout = if clone.is_some() || matches!(worktree, Some(TaskWorktree::PullRequest { .. })) {
         TASK_CLONE_TIMEOUT
     } else {
         TASK_NEW_TIMEOUT
@@ -1994,6 +2001,33 @@ impl CollieCore {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub async fn task_worktree_pull_request(
+        &self,
+        machine_id: String,
+        cwd: String,
+        number: u64,
+        agent: String,
+        prompt: String,
+        label: Option<String>,
+        ultracode: bool,
+    ) -> Result<TaskStarted, CoreError> {
+        task_new_inner(
+            self,
+            machine_id,
+            cwd,
+            agent,
+            prompt,
+            label,
+            None,
+            Some(TaskWorktree::PullRequest { number }),
+            None,
+            None,
+            ultracode,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub async fn task_worktree_open(
         &self,
         machine_id: String,
@@ -3088,6 +3122,9 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
                 protocol::PullChecks::Unknown => PullChecks::Unknown,
             },
             url: pr.url.clone(),
+            failing_checks: pr.failing_checks.clone(),
+            remarks: pr.remarks,
+            conflicting: pr.conflicting,
         }),
         pr_watch: a.pr_watch.as_ref().map(|w| PrWatchSummary {
             number: w.number,
@@ -3364,7 +3401,21 @@ mod tests {
                 state: PullState::Merged,
                 checks: PullChecks::NoChecks,
                 url: "https://github.com/o/r/pull/7".into(),
+                failing_checks: Vec::new(),
+                remarks: 0,
+                conflicting: false,
             })
+        );
+        let busy = linked.replace(
+            r#""url":"https://github.com/o/r/pull/7"}"#,
+            r#""url":"https://github.com/o/r/pull/7","failing_checks":["lint"],"remarks":2,"conflicting":true}"#,
+        );
+        let pr = agent_summary(&serde_json::from_str(&busy).unwrap())
+            .pull_request
+            .unwrap();
+        assert_eq!(
+            (pr.failing_checks, pr.remarks, pr.conflicting),
+            (vec!["lint".to_owned()], 2, true)
         );
         assert_eq!(s.pr_watch, None);
         let watched = linked.replace(

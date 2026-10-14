@@ -13,7 +13,7 @@ extension TaskFolders {
 @Observable
 final class NewTaskModel {
     enum Location: String, CaseIterable { case folder = "Folder", worktree = "Git worktree", clone = "Clone", resume = "Resume" }
-    enum WorktreeAction: String, CaseIterable { case create = "Create", open = "Open" }
+    enum WorktreeAction: String, CaseIterable { case create = "Create", open = "Open", pullRequest = "Pull request" }
     enum Phase: Equatable {
         case editing
         case starting
@@ -76,6 +76,12 @@ final class NewTaskModel {
     private let generatedBranch = "task-\(UUID().uuidString.lowercased())"
     var createBranch: String { trimmed(branch).nilIfEmpty ?? generatedBranch }
     var checkoutPath = ""
+    var pullRequestNumber = ""
+    var pullRequest: UInt64? {
+        let typed = trimmed(pullRequestNumber)
+        guard typed.allSatisfy({ ("0"..."9").contains($0) }), let number = UInt64(typed), number > 0, number <= UInt32.max else { return nil }
+        return number
+    }
     private(set) var worktrees: WorktreeListing?
     private(set) var worktreesError: String?
     private var listedSource = ""
@@ -157,10 +163,11 @@ final class NewTaskModel {
         guard !agent.isEmpty, !trimmed(prompt).isEmpty || !attachments.isEmpty else { return false }
         if location == .worktree {
             guard let sourceFolder, worktrees != nil, listedSource == sourceFolder else { return false }
-            if worktreeAction == .create {
-                return createPath != nil
+            switch worktreeAction {
+            case .create: return createPath != nil
+            case .open: return worktrees?.worktrees.contains { $0.path == checkoutPath } == true
+            case .pullRequest: return pullRequest != nil
             }
-            return worktrees?.worktrees.contains { $0.path == checkoutPath } == true
         }
         if location == .clone {
             return newFolderParent != nil && cloneFolder != nil
@@ -325,14 +332,21 @@ final class NewTaskModel {
         do {
             if location == .worktree {
                 guard let sourceFolder else { phase = .editing; return nil }
-                if worktreeAction == .create {
+                switch worktreeAction {
+                case .create:
                     started = try await core.taskWorktreeCreate(
                         machineId: machineId, cwd: sourceFolder, branch: createBranch,
                         agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode
                     )
-                } else {
+                case .open:
                     started = try await core.taskWorktreeOpen(
                         machineId: machineId, cwd: sourceFolder, path: checkoutPath,
+                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode
+                    )
+                case .pullRequest:
+                    guard let number = pullRequest else { phase = .editing; return nil }
+                    started = try await core.taskWorktreePullRequest(
+                        machineId: machineId, cwd: sourceFolder, number: number,
                         agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode
                     )
                 }

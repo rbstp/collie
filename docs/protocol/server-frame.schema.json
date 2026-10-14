@@ -1140,8 +1140,24 @@
         "checks": {
           "$ref": "#/$defs/PullChecks"
         },
+        "conflicting": {
+          "type": "boolean"
+        },
+        "failing_checks": {
+          "description": "At most 10 names, each without control or format characters or quotes and at most\n100 characters.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "number": {
           "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "remarks": {
+          "description": "Reviews plus comments, never their text.",
+          "format": "uint32",
           "minimum": 0,
           "type": "integer"
         },

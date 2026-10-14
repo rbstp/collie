@@ -901,6 +901,26 @@
             "path"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "collied checks out the head branch of this pull request of the repository.",
+          "properties": {
+            "mode": {
+              "const": "pull_request",
+              "type": "string"
+            },
+            "number": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "mode",
+            "number"
+          ],
+          "type": "object"
         }
       ]
     },

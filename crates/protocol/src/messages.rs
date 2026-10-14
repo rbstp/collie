@@ -769,7 +769,9 @@ pub struct TaskNewParams {
 
 impl TaskNewParams {
     pub fn is_valid(&self) -> bool {
-        self.prompt.is_some() || self.resume.is_some()
+        (self.prompt.is_some() || self.resume.is_some())
+            && !matches!(&self.worktree, Some(TaskWorktree::PullRequest { number })
+                if !(1..=u64::from(u32::MAX)).contains(number))
     }
 }
 
@@ -777,8 +779,16 @@ impl TaskNewParams {
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskWorktree {
-    Create { branch: String },
-    Open { path: Cwd },
+    Create {
+        branch: String,
+    },
+    Open {
+        path: Cwd,
+    },
+    /// collied checks out the head branch of this pull request of the repository.
+    PullRequest {
+        number: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1132,6 +1142,19 @@ pub struct PullRequest {
     pub state: PullState,
     pub checks: PullChecks,
     pub url: String,
+    /// At most 10 names, each without control or format characters or quotes and at most
+    /// 100 characters.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failing_checks: Vec<String>,
+    /// Reviews plus comments, never their text.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub remarks: u32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub conflicting: bool,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// The pull request collied watches for this terminal, whether or not it is still the
@@ -1952,7 +1975,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 23);
+        assert_eq!(crate::PROTOCOL_VERSION, 24);
     }
 
     #[test]
@@ -2054,6 +2077,8 @@ mod tests {
         for choice in [
             r#"{"mode":"create","branch":"feature"}"#,
             r#"{"mode":"open","path":"/repo/feature"}"#,
+            r#"{"mode":"pull_request","number":42}"#,
+            r#"{"mode":"pull_request","number":4294967295}"#,
         ] {
             let frame = task(choice).unwrap();
             assert_eq!(
@@ -2065,6 +2090,12 @@ mod tests {
             r#"{"mode":"create","branch":"feature","path":"/repo/feature"}"#,
             r#"{"mode":"open","path":"/repo/feature","extra":true}"#,
             r#"{"mode":"remove","path":"/repo/feature"}"#,
+            r#"{"mode":"pull_request","number":0}"#,
+            r#"{"mode":"pull_request","number":-1}"#,
+            r#"{"mode":"pull_request","number":"42"}"#,
+            r#"{"mode":"pull_request","number":4294967296}"#,
+            r#"{"mode":"pull_request","number":42,"branch":"main"}"#,
+            r#"{"mode":"pull_request"}"#,
         ] {
             assert_eq!(task(choice).unwrap_err().code, ErrorCode::InvalidParams);
         }
@@ -2214,6 +2245,9 @@ mod tests {
                 state: PullState::Draft,
                 checks: PullChecks::None,
                 url: "https://github.com/o/r/pull/12".into(),
+                failing_checks: Vec::new(),
+                remarks: 0,
+                conflicting: false,
             }),
             ..full.clone()
         };
@@ -2241,6 +2275,15 @@ mod tests {
             (parsed.state, parsed.checks),
             (PullState::Unknown, PullChecks::Unknown)
         );
+        let busy = PullRequest {
+            failing_checks: vec!["lint".into()],
+            remarks: 3,
+            conflicting: true,
+            ..linked.pull_request.clone().unwrap()
+        };
+        let json = serde_json::to_string(&busy).unwrap();
+        assert!(json.ends_with(r#""failing_checks":["lint"],"remarks":3,"conflicting":true}"#));
+        assert_eq!(serde_json::from_str::<PullRequest>(&json).unwrap(), busy);
         let event = ServerFrame::Event {
             seq: 2,
             event: Event::AgentStatus { agent: full },

@@ -280,6 +280,14 @@ final class FakeCore: AgentCore {
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
+    func taskWorktreePullRequest(machineId: String, cwd: String, number: UInt64, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted {
+        try await call {
+            $0.worktreeCalls.append("pull_request \(cwd) \(number) \(agent)")
+            $0.taskPrompts.append(prompt)
+        }
+        guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
+        return started
+    }
     func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted {
         try await call {
             $0.taskNews.append("\(cwd) clone=\(repository)")
