@@ -196,6 +196,7 @@ pub fn map_agent(
         last_prompt: derived.last_prompt,
         last_activity_ms: derived.last_activity_ms,
         pull_request: None,
+        pr_watch: None,
     })
 }
 

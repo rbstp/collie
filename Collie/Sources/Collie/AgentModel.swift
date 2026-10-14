@@ -848,6 +848,15 @@ final class AgentModel {
         }
     }
 
+    func watchPullRequest(everyMinutes: UInt32?) async {
+        do {
+            try await core.watchPullRequest(machineId: route.machineId, terminalId: route.terminalId, everyMinutes: everyMinutes)
+            notice = nil
+        } catch {
+            notice = Self.message(for: error)
+        }
+    }
+
     func jumpToBottom() async {
         screenBanner = false
         do {

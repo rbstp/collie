@@ -52,6 +52,16 @@
             "null"
           ]
         },
+        "pr_watch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PrWatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pull_request": {
           "anyOf": [
             {
@@ -1081,6 +1091,30 @@
       },
       "required": [
         "recorded_ms"
+      ],
+      "type": "object"
+    },
+    "PrWatch": {
+      "description": "The pull request collied watches for this terminal, whether or not it is still the\nagent's linked one.",
+      "properties": {
+        "every_minutes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "number": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "url",
+        "every_minutes"
       ],
       "type": "object"
     },

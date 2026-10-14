@@ -293,6 +293,16 @@ Manual keys and text intentionally have no approval-specific restrictions for Cl
 | Residual | `gh` reads the checkout's git config and remotes, as `gh poi` does. A repository whose remote points at another GitHub repository shows that repository's pull request. |
 | Phase | Built |
 
+### Pull request watch
+
+| | |
+|---|---|
+| Assets | The agent's input; the user's `gh` login |
+| Attack | Someone who can comment on, review or run checks on a watched pull request uses the wake to steer the agent, or a crafted answer makes collied type something else into the agent. |
+| Mitigations | Starting a watch is a paired-phone request, audited, only for a Claude Code agent's linked open pull request with a GitHub-shaped URL, at an interval from a fixed list, with `gh` signed in. The GraphQL query asks for no comment or review body. The prompt holds only the pull request number and URL, check names stripped of controls, format characters and quotes and cut at 100 characters, and `https://` comment and review URLs. It is a `PromptText`, so no control character reaches the paste. It goes through `Driver::prompt` with no `expected_draft`, only to an idle or done agent still on the watched branch, never over text in the input box, which is never cleared. Right before the write, collied checks that the watch still exists and that the phone that started it is still paired. Revoking that phone ends its watches. Each wake is audited. Comment-only wakes stop after 10 in a row, and failed reads after 8. |
+| Residual | The woken agent may open a review or comment URL and read its text, which is untrusted, as it would if the user asked it to. |
+| Phase | Built |
+
 ### Shell input from the phone
 
 | | |

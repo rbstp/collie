@@ -19,13 +19,13 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
     ActivityId, AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStarParams, AgentTarget, AgentTypeTextParams, AgentWatchParams,
-    ApprovalId, CloneSource, Cwd, DraftText, Empty, ErrorCode, FolderName, Key, Label, NoticeDigit,
-    NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
-    PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
-    ReadSource, Request, Response, SessionId, Signature, SlashCommand, TaskArchiveParams,
-    TaskFoldersParams, TaskNewParams, TaskSessionsParams, TaskWorktree, TaskWorktreesParams,
-    TerminalGrantParams, TerminalId, TerminalKey, TerminalRead, TerminalRunParams,
-    TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
+    AgentWatchPullRequestParams, ApprovalId, CloneSource, Cwd, DraftText, Empty, ErrorCode,
+    FolderName, Key, Label, NoticeDigit, NotificationKey, OpId, PairCompleteParams, PairingInvite,
+    PaneCloseParams, PromptText, PushActivityEndParams, PushActivityTokenParams,
+    PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response, SessionId, Signature,
+    SlashCommand, TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskSessionsParams,
+    TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId, TerminalKey, TerminalRead,
+    TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -346,6 +346,8 @@ pub struct AgentSummary {
     pub last_activity_ms: Option<u64>,
     #[uniffi(default = None)]
     pub pull_request: Option<PullRequestSummary>,
+    #[uniffi(default = None)]
+    pub pr_watch: Option<PrWatchSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -354,6 +356,13 @@ pub struct PullRequestSummary {
     pub state: PullState,
     pub checks: PullChecks,
     pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct PrWatchSummary {
+    pub number: u64,
+    pub url: String,
+    pub every_minutes: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -1628,6 +1637,22 @@ impl CollieCore {
             }
         }
         Ok(())
+    }
+
+    /// The machine watches the agent's linked pull request every `every_minutes` and
+    /// prompts the agent when it needs attention; `None` stops it. The next snapshot shows it.
+    pub async fn watch_pull_request(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        every_minutes: Option<u32>,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentWatchPullRequest(AgentWatchPullRequestParams {
+            terminal_id: terminal(terminal_id)?,
+            watching: every_minutes.is_some(),
+            every_minutes,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
     }
 
     pub async fn task_options(&self, machine_id: String) -> Result<TaskOptions, CoreError> {
@@ -3012,6 +3037,11 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
             },
             url: pr.url.clone(),
         }),
+        pr_watch: a.pr_watch.as_ref().map(|w| PrWatchSummary {
+            number: w.number,
+            url: w.url.clone(),
+            every_minutes: w.every_minutes,
+        }),
     }
 }
 
@@ -3282,6 +3312,20 @@ mod tests {
                 state: PullState::Merged,
                 checks: PullChecks::NoChecks,
                 url: "https://github.com/o/r/pull/7".into(),
+            })
+        );
+        assert_eq!(s.pr_watch, None);
+        let watched = linked.replace(
+            r#""pull_request":"#,
+            r#""pr_watch":{"number":6,"url":"https://github.com/o/r/pull/6","every_minutes":30},"pull_request":"#,
+        );
+        let s = agent_summary(&serde_json::from_str(&watched).unwrap());
+        assert_eq!(
+            s.pr_watch,
+            Some(PrWatchSummary {
+                number: 6,
+                url: "https://github.com/o/r/pull/6".into(),
+                every_minutes: 30,
             })
         );
     }
@@ -4185,6 +4229,7 @@ mod tailnet_tests {
                 last_prompt: None,
                 last_activity_ms: None,
                 pull_request: None,
+                pr_watch: None,
             }],
             approvals: Vec::new(),
             terminals: Vec::new(),

@@ -18,6 +18,7 @@ protocol AgentCore: AnyObject, Sendable {
     func answerNotice(machineId: String, terminalId: String, digit: UInt8, label: String) async throws
     func slashDraft(machineId: String, terminalId: String, command: String, expectedDraft: String?) async throws
     func star(machineId: String, terminalId: String, starred: Bool) async throws
+    func watchPullRequest(machineId: String, terminalId: String, everyMinutes: UInt32?) async throws
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws
     func closePane(machineId: String, terminalId: String, confirm: Bool) async throws
     func archiveTask(machineId: String, terminalId: String, confirm: Bool) async throws -> String

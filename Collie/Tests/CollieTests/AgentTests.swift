@@ -30,6 +30,7 @@ final class FakeCore: AgentCore {
         var input: [Input] = []
         var closes: [String] = []
         var stars: [String] = []
+        var prWatches: [String] = []
         var scrolls: [String] = []
         var answers: [UInt8] = []
         var answerLabels: [String] = []
@@ -229,6 +230,9 @@ final class FakeCore: AgentCore {
     }
     func star(machineId: String, terminalId: String, starred: Bool) async throws {
         try await call { $0.stars.append("\(machineId) \(terminalId) \(starred)") }
+    }
+    func watchPullRequest(machineId: String, terminalId: String, everyMinutes: UInt32?) async throws {
+        try await call { $0.prWatches.append("\(machineId) \(terminalId) \(everyMinutes.map(String.init) ?? "stop")") }
     }
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
         try await call { $0.closes.append("workspace \(workspaceId) confirm=\(confirm)") }

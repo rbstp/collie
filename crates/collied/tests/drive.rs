@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
+use collied::pr_watch;
 use collied::transcript::Transcripts;
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
@@ -672,6 +673,121 @@ async fn prompt_rechecks_the_agent_before_writing() {
             "{herdr_code}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_pull_request_wake_waits_for_an_idle_agent_on_its_branch_with_an_empty_box() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let repo = base.join("root/a");
+    let git = std::process::Command::new("git")
+        .args(["init", "-q", "-b", "feature"])
+        .arg(&repo)
+        .status()
+        .unwrap();
+    assert!(git.success());
+    let mut watch = pr_watch::Watch::new("https://github.com/o/r/pull/7", 7);
+    watch.checkout = repo.to_str().unwrap().to_owned();
+    watch.branch = "feature".into();
+    let text = || {
+        PromptText::new(
+            "Pull request #7 (https://github.com/o/r/pull/7) changed: check \"ci\" failed.",
+        )
+        .unwrap()
+    };
+    herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("idle"));
+    let mut agent: collied::herdr::AgentInfo =
+        serde_json::from_value(herdr.with(|h| h.snapshot["agents"][0].clone())).unwrap();
+    assert_eq!(agent.terminal_id, CLAUDE);
+    agent.foreground_cwd = None;
+    agent.cwd = Some(watch.checkout.clone());
+    for status in ["working", "blocked"] {
+        agent.agent_status = status.into();
+        assert_eq!(
+            pr_watch::wake(&drive, &agent, &watch, text(), &yes())
+                .await
+                .unwrap_err()
+                .0,
+            ErrorCode::AgentNotReady,
+            "{status}"
+        );
+    }
+    agent.agent_status = "idle".into();
+    let mut other = watch.clone();
+    other.branch = "other".into();
+    assert_eq!(
+        pr_watch::wake(&drive, &agent, &other, text(), &yes()).await,
+        Err((
+            ErrorCode::AgentNotReady,
+            "the agent left the watched branch".to_owned()
+        ))
+    );
+    let mut codex = agent.clone();
+    codex.agent = Some("codex".into());
+    assert_eq!(
+        pr_watch::wake(&drive, &codex, &watch, text(), &yes())
+            .await
+            .unwrap_err()
+            .0,
+        ErrorCode::AgentNotReady
+    );
+    assert!(herdr.methods().is_empty());
+
+    herdr.with(|h| h.text = screen("❯\u{a0}typed on the Mac"));
+    assert_eq!(
+        pr_watch::wake(&drive, &agent, &watch, text(), &yes()).await,
+        Err((ErrorCode::DraftChanged, "typed on the Mac".to_owned()))
+    );
+    assert!(herdr.mutations().is_empty(), "{:?}", herdr.methods());
+
+    let mut blocked_now = herdr.with(|h| h.snapshot["agents"][0].clone());
+    blocked_now["agent_status"] = json!("blocked");
+    herdr.with(|h| h.gets.push_back(blocked_now));
+    assert_eq!(
+        pr_watch::wake(&drive, &agent, &watch, text(), &yes())
+            .await
+            .unwrap_err()
+            .0,
+        ErrorCode::AgentBlocked
+    );
+    herdr.with(|h| h.text = screen(PLACEHOLDER));
+    let mut working_now = herdr.with(|h| h.snapshot["agents"][0].clone());
+    working_now["agent_status"] = json!("working");
+    herdr.with(|h| h.gets.push_back(working_now));
+    assert_eq!(
+        pr_watch::wake(&drive, &agent, &watch, text(), &yes()).await,
+        Err((ErrorCode::AgentNotReady, "the agent is busy".to_owned())),
+        "listed idle, read working right before the write"
+    );
+    assert!(herdr.mutations().is_empty());
+    herdr.with(|h| h.snapshot["agents"][0]["agent"] = json!("codex"));
+    assert_eq!(
+        pr_watch::wake(&drive, &agent, &watch, text(), &yes()).await,
+        Err((ErrorCode::AgentNotReady, "the agent is busy".to_owned())),
+        "listed as Claude Code, read as Codex right before the write"
+    );
+    assert!(herdr.mutations().is_empty());
+    herdr.with(|h| h.snapshot["agents"][0]["agent"] = json!("claude"));
+    assert_eq!(
+        pr_watch::wake(&drive, &agent, &watch, text(), &no())
+            .await
+            .unwrap_err()
+            .0,
+        ErrorCode::NotPaired,
+        "a watch stopped while the wake ran types nothing"
+    );
+    assert!(herdr.mutations().is_empty());
+
+    agent.agent_status = "done".into();
+    assert_eq!(
+        pr_watch::wake(&drive, &agent, &watch, text(), &yes()).await,
+        Ok(())
+    );
+    assert_eq!(
+        herdr.params("agent.prompt"),
+        vec![json!({"target": "w6:p1", "text": text().as_str()})]
+    );
 }
 
 #[tokio::test]

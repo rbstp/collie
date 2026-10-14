@@ -297,7 +297,7 @@ private struct InboxRow: View {
                         AgentKindLabel(kind: kind, iconOnly: true)
                     }
                     if let pullRequest = agent.pullRequest {
-                        PullRequestBadge(pullRequest: pullRequest)
+                        PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch)
                     }
                     Text(item.machine)
                     if item.stale {

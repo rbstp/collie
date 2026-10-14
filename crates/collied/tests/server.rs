@@ -709,6 +709,31 @@ async fn scenario(
     assert_eq!(starred, ["term_0a1b2c3d4e5f60", "term_65ce7ae4fd5731"]);
     assert_eq!(mode(&data_dir.join("stars.json")), 0o600);
 
+    println!("a pull request is watched only once it is linked, at a listed interval");
+    for params in [
+        json!({"terminal_id": "term_65ce7ae4fd5731", "watching": true, "every_minutes": 15}),
+        json!({"terminal_id": "term_65ce7ae4fd5731", "watching": true}),
+        json!({"terminal_id": "term_65ce7ae4fd5731", "watching": true, "every_minutes": 10}),
+        json!({"terminal_id": "term_0a1b2c3d4e5f60", "watching": true, "every_minutes": 2}),
+        json!({"terminal_id": "term_65ce7ae4fd5731", "watching": false, "every_minutes": 2}),
+    ] {
+        assert_error(
+            &call(&mut ws, "agent.watch_pull_request", params.clone()).await,
+            ErrorCode::InvalidParams,
+        );
+    }
+    assert_eq!(
+        result(
+            call(
+                &mut ws,
+                "agent.watch_pull_request",
+                json!({"terminal_id": "term_65ce7ae4fd5731", "watching": false})
+            )
+            .await
+        ),
+        Response::Ok
+    );
+
     println!("the reconcile drops the star of a closed pane with no snapshot asked");
     let shell = "term_ffffffffffff01";
     assert_eq!(

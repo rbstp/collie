@@ -2,13 +2,15 @@ use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use protocol::{Cwd, PullChecks, PullRequest, PullState};
+use protocol::{Agent, Cwd, PullChecks, PullRequest, PullState};
 use serde::Deserialize;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+use crate::pr_watch::Watches;
+
 pub const REFRESH: Duration = Duration::from_secs(120);
-const GH_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const GH_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_URL_BYTES: usize = 512;
 
 pub type Key = (String, String);
@@ -29,6 +31,15 @@ pub fn gh_command(gh: &str) -> Command {
         .stderr(Stdio::null())
         .kill_on_drop(true);
     command
+}
+
+pub async fn signed_in(gh: &str) -> bool {
+    let mut command = gh_command(gh);
+    command.args(["auth", "status"]);
+    matches!(
+        timeout(Duration::from_secs(15), command.status()).await,
+        Ok(Ok(status)) if status.success()
+    )
 }
 
 /// With no argument gh finds the current branch itself, so no branch name reaches its
@@ -71,14 +82,14 @@ struct View {
 }
 
 #[derive(Deserialize)]
-struct Check {
+pub(crate) struct Check {
     status: Option<String>,
     conclusion: Option<String>,
     state: Option<String>,
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-enum Outcome {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Outcome {
     Pass,
     Pending,
     Fail,
@@ -93,13 +104,7 @@ fn parse(json: &[u8]) -> Option<PullRequest> {
         ("CLOSED", _) => PullState::Closed,
         _ => return None,
     };
-    if !view.url.starts_with("https://")
-        || view.url.len() > MAX_URL_BYTES
-        || view
-            .url
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control())
-    {
+    if !valid_url(&view.url) {
         return None;
     }
     Some(PullRequest {
@@ -110,9 +115,15 @@ fn parse(json: &[u8]) -> Option<PullRequest> {
     })
 }
 
+pub(crate) fn valid_url(url: &str) -> bool {
+    url.starts_with("https://")
+        && url.len() <= MAX_URL_BYTES
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 /// A status context has a `state`; a check run a `status`, and a `conclusion` once it
 /// completed.
-fn outcome(check: &Check) -> Outcome {
+pub(crate) fn outcome(check: &Check) -> Outcome {
     match (
         check.state.as_deref(),
         check.status.as_deref(),
@@ -141,11 +152,24 @@ fn checks(rollup: &[Check]) -> PullChecks {
 pub struct Pulls {
     cache: HashMap<Key, (Instant, Option<PullRequest>, bool)>,
     linked: HashMap<String, PullRequest>,
+    pub watches: Watches,
 }
 
 impl Pulls {
+    pub fn new(watches: Watches) -> Self {
+        Self {
+            watches,
+            ..Self::default()
+        }
+    }
+
     pub fn get(&self, terminal_id: &str) -> Option<PullRequest> {
         self.linked.get(terminal_id).cloned()
+    }
+
+    pub fn fill(&self, agent: &mut Agent) {
+        agent.pull_request = self.get(agent.terminal_id.as_str());
+        agent.pr_watch = self.watches.shown(agent.terminal_id.as_str());
     }
 
     pub fn cached(&self, key: &Key, now: Instant) -> Option<Option<PullRequest>> {
