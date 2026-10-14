@@ -1,4 +1,5 @@
 mod history;
+mod live;
 mod subagents;
 
 use std::collections::{HashMap, HashSet};
@@ -59,6 +60,10 @@ pub struct Transcripts {
     missed: HashSet<String>,
     usage: Usage,
     live: subagents::Live,
+    panes: HashMap<String, live::Pane>,
+    resolved: HashMap<String, live::Resolved>,
+    /// The live session last logged per terminal, so a mismatch with herdr is logged once.
+    noted: HashMap<String, String>,
 }
 
 impl Transcripts {
@@ -70,6 +75,9 @@ impl Transcripts {
             missed: HashSet::new(),
             usage: Usage::default(),
             live: subagents::Live::default(),
+            panes: HashMap::new(),
+            resolved: HashMap::new(),
+            noted: HashMap::new(),
         }
     }
 
@@ -100,10 +108,18 @@ impl Transcripts {
     }
 
     pub fn retain(&mut self, agents: &[AgentInfo]) {
-        let live = |id: &String| agents.iter().any(|a| session_id(a) == Some(id.as_str()));
+        let ids: Vec<String> = agents
+            .iter()
+            .filter_map(|a| self.resolve(a, false))
+            .collect();
+        let live = |id: &String| ids.contains(id);
         self.cache.retain(|id, _| live(id));
         self.missed.retain(&live);
         self.live.retain(live);
+        let open = |t: &String| agents.iter().any(|a| &a.terminal_id == t);
+        self.panes.retain(|t, _| open(t));
+        self.resolved.retain(|t, _| open(t));
+        self.noted.retain(|t, _| open(t));
     }
 
     /// Cached by size and mtime, so an unchanged transcript costs one open and fstat. A
@@ -114,7 +130,22 @@ impl Transcripts {
             "codex" => Kind::Codex,
             _ => return None,
         };
-        let id = session_id(a)?;
+        let id = self.resolve(a, relocate)?;
+        if session_id(a) != Some(id.as_str())
+            && self
+                .noted
+                .insert(a.terminal_id.clone(), id.clone())
+                .as_ref()
+                != Some(&id)
+        {
+            tracing::info!(
+                terminal_id = %a.terminal_id,
+                herdr = session_id(a).unwrap_or("none"),
+                live = %id,
+                "following the live Claude Code session"
+            );
+        }
+        let id = id.as_str();
         let path = match self.cache.get(id) {
             Some(c) => c.path.clone(),
             None if !relocate && self.missed.contains(id) => return None,
@@ -135,14 +166,11 @@ impl Transcripts {
         let (window, subagents) = match kind {
             Kind::Claude => {
                 self.usage.refresh();
-                {
-                    let sessions = self.claude_projects.as_deref().and_then(Path::parent);
-                    let sessions = sessions.map(|d| d.join("sessions"));
-                    (
-                        self.usage.window(id),
-                        self.live.running(sessions.as_deref(), &path, id),
-                    )
-                }
+                let sessions = self.sessions_dir();
+                (
+                    self.usage.window(id),
+                    self.live.running(sessions.as_deref(), &path, id),
+                )
             }
             Kind::Codex => (None, Vec::new()),
         };

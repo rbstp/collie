@@ -2395,6 +2395,11 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             }
         };
         delay = RECONCILE_EVERY;
+        let stale = lock(&state.transcripts).stale_panes(&agents);
+        for (terminal_id, pane_id) in stale {
+            let pids = herdr::pane_pids(&state.herdr, &pane_id).await.ok();
+            lock(&state.transcripts).set_pane(terminal_id, pane_id, pids);
+        }
         let phones = state.events.receiver_count() > 0;
         let mut next = {
             let mut transcripts = lock(&state.transcripts);

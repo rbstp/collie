@@ -7,7 +7,7 @@ use std::path::Path;
 use protocol::{HistoryMessage, HistoryPage, HistoryParams};
 use serde_json::Value;
 
-use super::{Kind, Transcripts, open, session_id};
+use super::{Kind, Transcripts, open};
 use crate::herdr::AgentInfo;
 
 const SCAN_BYTES: u64 = 2 * 1024 * 1024;
@@ -16,14 +16,17 @@ const RECORD_TEXT_BYTES: usize = 6000;
 
 impl Transcripts {
     pub fn history_reader(&self) -> Self {
-        Self::new(self.claude_projects.clone(), self.codex_sessions.clone())
+        Self {
+            panes: self.panes.clone(),
+            ..Self::new(self.claude_projects.clone(), self.codex_sessions.clone())
+        }
     }
 
     pub fn history(&self, agent: &AgentInfo, params: &HistoryParams) -> HistoryPage {
         self.read_history(agent, params).unwrap_or(HistoryPage {
             session: None,
             available: false,
-            unavailable_reason: Some(if session_id(agent).is_none() {
+            unavailable_reason: Some(if self.live_id(agent).is_none() {
                 "The agent has not reported its session ID to herdr. Chat cannot safely identify this conversation. Check the agent’s herdr SessionStart integration, then resume the session."
             } else {
                 "The transcript for this session is not readable yet. Terminal remains available."
@@ -43,7 +46,8 @@ impl Transcripts {
             "codex" => Kind::Codex,
             _ => return None,
         };
-        let id = session_id(agent)?;
+        let id = self.live_id(agent)?;
+        let id = id.as_str();
         let path = self.locate(kind, id, agent)?;
         let (mut file, len, _) = open(&path)?;
         let meta = file.metadata().ok()?;

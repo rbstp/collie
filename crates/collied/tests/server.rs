@@ -30,7 +30,7 @@ const ACTIVITY: &str = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
 const ACTIVITY_TOKEN: &str =
     "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
 const WATCHDOG: Duration = Duration::from_secs(300);
-const HERDR_CALLED: [&str; 12] = [
+const HERDR_CALLED: [&str; 13] = [
     "ping",
     "session.snapshot",
     "agent.list",
@@ -43,6 +43,7 @@ const HERDR_CALLED: [&str; 12] = [
     "pane.read",
     "pane.send_input",
     "pane.send_keys",
+    "pane.process_info",
 ];
 const SHELL: &str = "term_ffffffffffff01";
 const SECRET: &str = "echo do-not-log-this";

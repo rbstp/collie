@@ -206,7 +206,7 @@ fn process(path: &Path, pid: &str) -> Option<(String, i32, u64)> {
     ))
 }
 
-fn alive(pid: i32) -> bool {
+pub(super) fn alive(pid: i32) -> bool {
     rustix::process::Pid::from_raw(pid).is_some_and(|p| {
         !matches!(
             rustix::process::test_kill_process(p),

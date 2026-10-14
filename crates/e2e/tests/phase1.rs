@@ -17,13 +17,14 @@ use protocol::PairingInvite;
 use tailnet::{Node, Status};
 
 const PHONE_TAG: &str = "tag:collie-phone";
-const READ_ONLY_HERDR: [&str; 6] = [
+const READ_ONLY_HERDR: [&str; 7] = [
     "ping",
     "session.snapshot",
     "agent.list",
     "workspace.list",
     "agent.explain",
     "pane.read",
+    "pane.process_info",
 ];
 
 #[test]
