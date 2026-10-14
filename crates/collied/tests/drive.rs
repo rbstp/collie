@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
 use collied::pr_watch;
+use collied::queue::{self, Queues};
 use collied::transcript::Transcripts;
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
@@ -790,6 +791,89 @@ async fn a_pull_request_wake_waits_for_an_idle_agent_on_its_branch_with_an_empty
     assert_eq!(
         herdr.params("agent.prompt"),
         vec![json!({"target": "w6:p1", "text": text().as_str()})]
+    );
+}
+
+#[tokio::test]
+async fn a_queued_prompt_waits_for_an_idle_agent_with_an_empty_box_and_leaves_once_sent() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    let queues = Arc::new(Mutex::new(Queues::default()));
+    for text in ["one", "two"] {
+        let mut q = queues.lock().unwrap();
+        q.add(CLAUDE, text, Vec::new(), "phone").unwrap();
+    }
+    let head = || queues.lock().unwrap().heads().remove(0).1;
+    let texts = || -> Vec<String> {
+        let shown = queues.lock().unwrap().shown(CLAUDE);
+        shown.into_iter().map(|q| q.text).collect()
+    };
+    let send = |paired: Authorized, item: queue::Item| {
+        let (drive, queues) = (drive.clone(), queues.clone());
+        async move { queue::send(&drive, &queues, &paired, (tid(CLAUDE), item), None, true).await }
+    };
+    assert_eq!(
+        send(yes(), head()).await,
+        (
+            Err((ErrorCode::AgentNotReady, "the agent is busy".to_owned())),
+            false
+        ),
+        "the agent is working"
+    );
+    herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("idle"));
+    herdr.with(|h| h.text = screen("❯\u{a0}typed on the Mac"));
+    assert_eq!(
+        send(yes(), head()).await,
+        (
+            Err((ErrorCode::DraftChanged, "typed on the Mac".to_owned())),
+            false
+        )
+    );
+    herdr.with(|h| h.text = screen(PLACEHOLDER));
+    let mut blocked_now = herdr.with(|h| h.snapshot["agents"][0].clone());
+    blocked_now["agent_status"] = json!("blocked");
+    herdr.with(|h| h.gets.push_back(blocked_now));
+    let (reply, claimed) = send(yes(), head()).await;
+    assert_eq!((code(reply), claimed), (ErrorCode::AgentBlocked, false));
+    let (reply, claimed) = send(no(), head()).await;
+    assert_eq!(
+        (code(reply), claimed),
+        (ErrorCode::NotPaired, false),
+        "the phone that queued it was revoked"
+    );
+    let stale = head();
+    queues
+        .lock()
+        .unwrap()
+        .edit(CLAUDE, stale.id, "uno")
+        .unwrap();
+    let (reply, claimed) = send(yes(), stale).await;
+    assert_eq!(
+        (code(reply), claimed),
+        (ErrorCode::NotFound, false),
+        "edited after it was read"
+    );
+    assert!(herdr.mutations().is_empty(), "{:?}", herdr.methods());
+    assert_eq!(texts(), ["uno", "two"]);
+
+    herdr.fail_next("agent.prompt", &["timeout"]);
+    let (reply, claimed) = send(yes(), head()).await;
+    assert_eq!((code(reply), claimed), (ErrorCode::AgentNotReady, true));
+    assert_eq!(texts(), ["uno", "two"], "a failed write puts it back");
+    assert_eq!(send(yes(), head()).await, (Ok(Response::Ok), true));
+    assert_eq!(texts(), ["two"]);
+    assert_eq!(
+        herdr.params("agent.prompt").last(),
+        Some(&json!({"target": "w6:p1", "text": "uno"}))
+    );
+    assert!(
+        !queues.lock().unwrap().ready(
+            CLAUDE,
+            protocol::AgentStatus::Idle,
+            std::time::Instant::now()
+        ),
+        "the next one waits for the turn this one starts"
     );
 }
 

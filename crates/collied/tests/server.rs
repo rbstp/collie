@@ -734,6 +734,76 @@ async fn scenario(
         Response::Ok
     );
 
+    println!("prompts queue for a Claude Code agent only, in a private file");
+    let claude = "term_65ce7ae4fd5731";
+    let add = |terminal: &str, op: char, text: &str, attachments: Value| {
+        json!({"op_id": op.to_string().repeat(22), "terminal_id": terminal, "text": text,
+            "attachments": attachments})
+    };
+    for params in [
+        add("term_0a1b2c3d4e5f60", 'Q', "zq7queued", json!([])),
+        add(claude, 'R', "zq7queued", json!(["/etc/hosts"])),
+        json!({"op_id": "S".repeat(22), "terminal_id": claude}),
+    ] {
+        assert_error(
+            &call(&mut ws, "agent.queue_add", params).await,
+            ErrorCode::InvalidParams,
+        );
+    }
+    for (op, text) in [('T', "zq7one"), ('U', "zq7two"), ('U', "zq7two")] {
+        assert_eq!(
+            result(call(&mut ws, "agent.queue_add", add(claude, op, text, json!([]))).await),
+            Response::Ok
+        );
+    }
+    let queued = |flock: Response| {
+        let Response::Flock(flock) = flock else {
+            panic!("no flock");
+        };
+        let agent = flock
+            .agents
+            .into_iter()
+            .find(|a| a.terminal_id.as_str() == claude);
+        agent.unwrap().queue
+    };
+    let texts: Vec<String> = queued(result(call(&mut ws, "flock.snapshot", json!({})).await))
+        .into_iter()
+        .map(|q| q.text)
+        .collect();
+    assert_eq!(texts, ["zq7one", "zq7two"], "a replayed add queues once");
+    let item = |id: u64| json!({"terminal_id": claude, "id": id});
+    for (method, params) in [
+        (
+            "agent.queue_edit",
+            json!({"terminal_id": claude, "id": 1, "text": "zq7deux"}),
+        ),
+        (
+            "agent.queue_move",
+            json!({"terminal_id": claude, "id": 1, "up": true}),
+        ),
+        ("agent.queue_remove", item(0)),
+    ] {
+        assert_eq!(result(call(&mut ws, method, params).await), Response::Ok);
+    }
+    let left = queued(result(call(&mut ws, "flock.snapshot", json!({})).await));
+    assert_eq!(
+        left,
+        [protocol::QueuedPrompt {
+            id: 1,
+            text: "zq7deux".into(),
+            attachments: Vec::new(),
+        }]
+    );
+    assert_eq!(mode(&data_dir.join("prompt-queue.json")), 0o600);
+    assert_error(
+        &call(&mut ws, "agent.queue_remove", item(0)).await,
+        ErrorCode::NotFound,
+    );
+    assert_eq!(
+        result(call(&mut ws, "agent.queue_remove", item(1)).await),
+        Response::Ok
+    );
+
     println!("the reconcile drops the star of a closed pane with no snapshot asked");
     let shell = "term_ffffffffffff01";
     assert_eq!(
@@ -958,6 +1028,8 @@ async fn scenario(
         "\"method\":\"agent.slash_draft\"",
         "\"result\":\"draft_not_cleared: the agent's input box could not be read; nothing was sent\"",
         "\"method\":\"agent.star\"",
+        "\"method\":\"agent.queue_add\"",
+        "\"method\":\"agent.queue_move\"",
         "\"target\":\"term_65ce7ae4fd5731\"",
         "\"method\":\"agent.watch\"",
         "\"result\":\"agent_blocked: agent is blocked; answer it through an approval (replayed)\"",
@@ -985,8 +1057,8 @@ async fn scenario(
         "activity token in the audit log"
     );
     assert!(
-        !audit.contains("zq9") && !audit.contains("zq8"),
-        "slash command or draft in the audit log"
+        !audit.contains("zq9") && !audit.contains("zq8") && !audit.contains("zq7"),
+        "slash command, draft or queued prompt in the audit log"
     );
     for line in audit.lines() {
         let entry: Value = serde_json::from_str(line).unwrap();

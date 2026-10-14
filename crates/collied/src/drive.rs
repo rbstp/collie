@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, CloneSource, Cwd, ErrorCode,
@@ -85,6 +87,13 @@ fn startup_prompt(kind: &AgentKind, screen: Option<&str>) -> &'static str {
     } else {
         STARTUP_PROMPT
     }
+}
+
+pub(crate) fn new_op_id() -> Result<OpId, Fail> {
+    let mut op = [0u8; 16];
+    getrandom::fill(&mut op).map_err(|_| (ErrorCode::Internal, "no randomness".to_owned()))?;
+    OpId::new(URL_SAFE_NO_PAD.encode(op))
+        .map_err(|_| (ErrorCode::Internal, "invalid op id".to_owned()))
 }
 
 pub(crate) fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, Fail> {

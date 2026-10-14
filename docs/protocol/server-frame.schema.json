@@ -73,6 +73,13 @@
           ],
           "description": "The pull request of the agent's branch, as `gh` on the machine last read it."
         },
+        "queue": {
+          "description": "Prompts collied sends one at a time, each once the agent is idle again.",
+          "items": {
+            "$ref": "#/$defs/QueuedPrompt"
+          },
+          "type": "array"
+        },
         "status": {
           "$ref": "#/$defs/AgentStatus"
         },
@@ -1169,6 +1176,29 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "QueuedPrompt": {
+      "properties": {
+        "attachments": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "type": "object"
     },
     "ReadSource": {
       "enum": [

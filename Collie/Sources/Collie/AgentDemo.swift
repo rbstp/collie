@@ -194,6 +194,26 @@ final class DemoAgentCore: ActivityCore {
         throw CoreError.NotImplemented
     }
 
+    func queuePrompt(machineId: String, terminalId: String, text: String, attachments: [String]) async throws {
+        throw CoreError.NotImplemented
+    }
+
+    func editQueued(machineId: String, terminalId: String, id: UInt64, text: String) async throws {
+        throw CoreError.NotImplemented
+    }
+
+    func moveQueued(machineId: String, terminalId: String, id: UInt64, up: Bool) async throws {
+        throw CoreError.NotImplemented
+    }
+
+    func removeQueued(machineId: String, terminalId: String, id: UInt64) async throws {
+        throw CoreError.NotImplemented
+    }
+
+    func sendQueued(machineId: String, terminalId: String, id: UInt64, expectedDraft: String?) async throws {
+        throw CoreError.NotImplemented
+    }
+
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
         throw CoreError.NotImplemented
     }

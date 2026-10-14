@@ -19,6 +19,11 @@ protocol AgentCore: AnyObject, Sendable {
     func slashDraft(machineId: String, terminalId: String, command: String, expectedDraft: String?) async throws
     func star(machineId: String, terminalId: String, starred: Bool) async throws
     func watchPullRequest(machineId: String, terminalId: String, everyMinutes: UInt32?) async throws
+    func queuePrompt(machineId: String, terminalId: String, text: String, attachments: [String]) async throws
+    func editQueued(machineId: String, terminalId: String, id: UInt64, text: String) async throws
+    func moveQueued(machineId: String, terminalId: String, id: UInt64, up: Bool) async throws
+    func removeQueued(machineId: String, terminalId: String, id: UInt64) async throws
+    func sendQueued(machineId: String, terminalId: String, id: UInt64, expectedDraft: String?) async throws
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws
     func closePane(machineId: String, terminalId: String, confirm: Bool) async throws
     func archiveTask(machineId: String, terminalId: String, confirm: Bool) async throws -> String

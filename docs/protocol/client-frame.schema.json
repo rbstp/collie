@@ -110,6 +110,141 @@
       ],
       "type": "object"
     },
+    "AgentQueueAddParams": {
+      "additionalProperties": false,
+      "description": "A prompt collied sends once the agent is idle with an empty input box. `attachments`\nare paths `attachment.commit` returned; collied puts them before `text`, as the phone\ndoes for a prompt sent now. `text` may be left out only with an attachment.",
+      "properties": {
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/Cwd"
+          },
+          "maxItems": 10,
+          "type": "array"
+        },
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op_id",
+        "terminal_id"
+      ],
+      "type": "object"
+    },
+    "AgentQueueEditParams": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "terminal_id",
+        "id"
+      ],
+      "type": "object"
+    },
+    "AgentQueueItemParams": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "id"
+      ],
+      "type": "object"
+    },
+    "AgentQueueMoveParams": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "up": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "id",
+        "up"
+      ],
+      "type": "object"
+    },
+    "AgentQueueSendParams": {
+      "additionalProperties": false,
+      "description": "Sends a queued prompt now, as `agent.prompt` would, and takes it off the queue.",
+      "properties": {
+        "expected_draft": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DraftText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "op_id",
+        "terminal_id",
+        "id"
+      ],
+      "type": "object"
+    },
     "AgentSendKeysParams": {
       "additionalProperties": false,
       "properties": {
@@ -1331,6 +1466,86 @@
         },
         "params": {
           "$ref": "#/$defs/AgentWatchPullRequestParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.queue_add",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentQueueAddParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.queue_edit",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentQueueEditParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.queue_move",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentQueueMoveParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.queue_remove",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentQueueItemParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.queue_send",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentQueueSendParams"
         }
       },
       "required": [

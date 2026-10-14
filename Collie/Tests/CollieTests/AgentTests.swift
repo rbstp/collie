@@ -31,6 +31,8 @@ final class FakeCore: AgentCore {
         var closes: [String] = []
         var stars: [String] = []
         var prWatches: [String] = []
+        var queue: [QueuedPromptSummary] = []
+        var queueCalls: [String] = []
         var scrolls: [String] = []
         var answers: [UInt8] = []
         var answerLabels: [String] = []
@@ -151,7 +153,7 @@ final class FakeCore: AgentCore {
         guard let kind = s.kind else { return nil }
         let agent = AgentSummary(
             terminalId: terminalId, workspaceId: "w1", kind: kind, name: nil, title: nil,
-            status: s.status, statusSinceMs: 0, cwd: nil, lastLine: nil, lastPrompt: s.lastPrompt
+            status: s.status, statusSinceMs: 0, cwd: nil, lastLine: nil, lastPrompt: s.lastPrompt, queue: s.queue
         )
         return AgentView(link: .connected, lastError: nil, agent: agent, output: nil, outputRevision: 0)
     }
@@ -233,6 +235,21 @@ final class FakeCore: AgentCore {
     }
     func watchPullRequest(machineId: String, terminalId: String, everyMinutes: UInt32?) async throws {
         try await call { $0.prWatches.append("\(machineId) \(terminalId) \(everyMinutes.map(String.init) ?? "stop")") }
+    }
+    func queuePrompt(machineId: String, terminalId: String, text: String, attachments: [String]) async throws {
+        try await call { $0.queueCalls.append((["add", terminalId, text] + attachments).joined(separator: " ")) }
+    }
+    func editQueued(machineId: String, terminalId: String, id: UInt64, text: String) async throws {
+        try await call { $0.queueCalls.append("edit \(terminalId) \(id) \(text)") }
+    }
+    func moveQueued(machineId: String, terminalId: String, id: UInt64, up: Bool) async throws {
+        try await call { $0.queueCalls.append("move \(terminalId) \(id) \(up ? "up" : "down")") }
+    }
+    func removeQueued(machineId: String, terminalId: String, id: UInt64) async throws {
+        try await call { $0.queueCalls.append("remove \(terminalId) \(id)") }
+    }
+    func sendQueued(machineId: String, terminalId: String, id: UInt64, expectedDraft: String?) async throws {
+        try await call { $0.queueCalls.append("send \(terminalId) \(id) \(expectedDraft ?? "nil")") }
     }
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
         try await call { $0.closes.append("workspace \(workspaceId) confirm=\(confirm)") }
@@ -449,6 +466,88 @@ private func attach(_ model: AgentModel, _ core: FakeCore, _ names: String...) a
     await model.sendPrompt()
     #expect(core.snapshot.prompts == ["/Users/me/Library/Caches/dev.rbstp.collied/attachments/a.png/a.png"])
     #expect(model.attachments.isEmpty)
+}
+
+@MainActor
+@Test func sendQueuesWhileAClaudeAgentWorksAndSendNowSkipsTheQueue() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.status = .working
+    }
+    let model = agentModel(core)
+    model.poll()
+    #expect(model.queuesPrompt)
+    await attach(model, core, "a.png")
+    model.draft = "  then this\n"
+    await model.sendPrompt()
+    let a = "/Users/me/Library/Caches/dev.rbstp.collied/attachments/a.png/a.png"
+    #expect(core.snapshot.queueCalls == ["add term_1 then this \(a)"])
+    #expect(core.snapshot.prompts.isEmpty)
+    #expect(model.draft.isEmpty)
+    #expect(model.attachments.isEmpty)
+    model.draft = "now"
+    await model.sendPrompt(now: true)
+    #expect(core.snapshot.prompts == ["now"])
+    #expect(core.snapshot.queueCalls.count == 1)
+    for (kind, status) in [("claude", AgentState.idle), ("claude", .done), ("claude", .blocked), ("codex", .working)] {
+        core.state.withLock {
+            $0.kind = kind
+            $0.status = status
+        }
+        model.poll()
+        #expect(!model.queuesPrompt, "\(kind) \(status)")
+    }
+}
+
+@MainActor
+@Test func aRefusedQueueKeepsTheDraftAndAttachments() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.status = .working
+    }
+    let model = agentModel(core)
+    model.poll()
+    await attach(model, core, "a.png")
+    model.draft = "later"
+    core.set(error: .TooLarge(message: "at most 10 prompts can wait per agent"))
+    await model.sendPrompt()
+    #expect(model.draft == "later")
+    #expect(model.attachments.map(\.name) == ["a.png"])
+    #expect(model.promptError == "at most 10 prompts can wait per agent")
+}
+
+@MainActor
+@Test func queuedPromptsShowAndCanBeEditedMovedRemovedAndSentNow() async {
+    let core = FakeCore()
+    let queue = [
+        QueuedPromptSummary(id: 4, text: "first", attachments: []),
+        QueuedPromptSummary(id: 7, text: "", attachments: ["/c/0123456789abcdef/a.png"]),
+    ]
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.status = .working
+        $0.queue = queue
+    }
+    let model = agentModel(core)
+    model.poll()
+    #expect(model.queuedPrompts == queue)
+    await model.editQueued(queue[0], text: "first, edited")
+    await model.moveQueued(queue[1], up: true)
+    await model.moveQueued(queue[0], up: false)
+    await model.sendQueuedNow(queue[1])
+    await model.removeQueued(queue[0])
+    #expect(core.snapshot.queueCalls == [
+        "edit term_1 4 first, edited", "move term_1 7 up", "move term_1 4 down", "send term_1 7 nil", "remove term_1 4",
+    ])
+    #expect(model.promptError == nil)
+    core.set(error: .DraftChanged(current: "typed on the Mac"))
+    await model.sendQueuedNow(queue[0])
+    #expect(model.promptError == "The agent’s input box has unsent text. Send or clear it in the session first.")
+    core.set(error: .NotFound)
+    await model.removeQueued(queue[0])
+    #expect(model.promptError == "This prompt is no longer queued.")
 }
 
 @MainActor

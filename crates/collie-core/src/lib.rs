@@ -17,11 +17,12 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
-    ActivityId, AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
-    AgentSlashDraftParams, AgentStarParams, AgentTarget, AgentTypeTextParams, AgentWatchParams,
-    AgentWatchPullRequestParams, ApprovalId, CloneSource, Cwd, DraftText, Empty, ErrorCode,
-    FolderName, Key, Label, NoticeDigit, NotificationKey, OpId, PairCompleteParams, PairingInvite,
-    PaneCloseParams, PromptText, PushActivityEndParams, PushActivityTokenParams,
+    ActivityId, AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentQueueAddParams,
+    AgentQueueEditParams, AgentQueueItemParams, AgentQueueMoveParams, AgentQueueSendParams,
+    AgentSendKeysParams, AgentSlashDraftParams, AgentStarParams, AgentTarget, AgentTypeTextParams,
+    AgentWatchParams, AgentWatchPullRequestParams, ApprovalId, CloneSource, Cwd, DraftText, Empty,
+    ErrorCode, FolderName, Key, Label, NoticeDigit, NotificationKey, OpId, PairCompleteParams,
+    PairingInvite, PaneCloseParams, PromptText, PushActivityEndParams, PushActivityTokenParams,
     PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response, SessionId, Signature,
     SlashCommand, TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskSessionsParams,
     TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId, TerminalKey, TerminalRead,
@@ -350,6 +351,15 @@ pub struct AgentSummary {
     pub pull_request: Option<PullRequestSummary>,
     #[uniffi(default = None)]
     pub pr_watch: Option<PrWatchSummary>,
+    #[uniffi(default = [])]
+    pub queue: Vec<QueuedPromptSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct QueuedPromptSummary {
+    pub id: u64,
+    pub text: String,
+    pub attachments: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -1665,6 +1675,95 @@ impl CollieCore {
             every_minutes,
         });
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    /// The machine sends the prompt once the agent is idle with an empty input box, after
+    /// the prompts queued before it. `attachments` are uploaded paths. The next snapshot
+    /// shows it.
+    pub async fn queue_prompt(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        text: String,
+        attachments: Vec<String>,
+    ) -> Result<(), CoreError> {
+        if attachments.len() > limits::MAX_PROMPT_ATTACHMENTS {
+            return Err(invalid("attachments", "at most 10 attachments per prompt"));
+        }
+        let request = Request::AgentQueueAdd(AgentQueueAddParams {
+            op_id: new_op_id(),
+            terminal_id: terminal(terminal_id)?,
+            text: optional_prompt(text)?,
+            attachments: attachments
+                .into_iter()
+                .map(Cwd::new)
+                .collect::<Result<_, _>>()
+                .map_err(|_| invalid("attachments", "invalid attachment path"))?,
+        });
+        expect_ok(self.mutate(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    pub async fn edit_queued(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        id: u64,
+        text: String,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentQueueEdit(AgentQueueEditParams {
+            terminal_id: terminal(terminal_id)?,
+            id,
+            text: optional_prompt(text)?,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    pub async fn move_queued(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        id: u64,
+        up: bool,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentQueueMove(AgentQueueMoveParams {
+            terminal_id: terminal(terminal_id)?,
+            id,
+            up,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    pub async fn remove_queued(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        id: u64,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentQueueRemove(AgentQueueItemParams {
+            terminal_id: terminal(terminal_id)?,
+            id,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    /// Sends a queued prompt now, as `prompt` does, and takes it off the queue.
+    pub async fn send_queued(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        id: u64,
+        expected_draft: Option<String>,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentQueueSend(AgentQueueSendParams {
+            op_id: new_op_id(),
+            terminal_id: terminal(terminal_id)?,
+            id,
+            expected_draft: expected_draft
+                .map(DraftText::new)
+                .transpose()
+                .map_err(|_| invalid("expected_draft", "invalid draft"))?,
+        });
+        expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
     }
 
     pub async fn task_options(&self, machine_id: String) -> Result<TaskOptions, CoreError> {
@@ -3065,6 +3164,15 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
             url: w.url.clone(),
             every_minutes: w.every_minutes,
         }),
+        queue: a
+            .queue
+            .iter()
+            .map(|q| QueuedPromptSummary {
+                id: q.id,
+                text: q.text.clone(),
+                attachments: q.attachments.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -3091,6 +3199,8 @@ fn op_id_mut(request: &mut Request) -> Option<&mut OpId> {
         Request::AgentPrompt(p) => Some(&mut p.op_id),
         Request::AgentSendKeys(p) => Some(&mut p.op_id),
         Request::AgentTypeText(p) => Some(&mut p.op_id),
+        Request::AgentQueueAdd(p) => Some(&mut p.op_id),
+        Request::AgentQueueSend(p) => Some(&mut p.op_id),
         Request::TaskNew(p) => Some(&mut p.op_id),
         Request::TaskArchive(p) => Some(&mut p.op_id),
         Request::TerminalRun(p) => Some(&mut p.op_id),
@@ -3159,6 +3269,15 @@ fn prompt_text(text: String) -> Result<PromptText, CoreError> {
             "prompt must be non-empty, at most 32 KiB, without control characters other than newline and tab",
         )
     })
+}
+
+/// Empty only for a prompt with an attachment, which collied checks.
+fn optional_prompt(text: String) -> Result<Option<PromptText>, CoreError> {
+    if text.trim().is_empty() {
+        Ok(None)
+    } else {
+        prompt_text(text).map(Some)
+    }
 }
 
 fn expect_ok(response: Response) -> Result<(), CoreError> {
@@ -3350,6 +3469,20 @@ mod tests {
                 url: "https://github.com/o/r/pull/6".into(),
                 every_minutes: 30,
             })
+        );
+        assert!(s.queue.is_empty());
+        let queued = linked.replace(
+            r#""pull_request":"#,
+            r#""queue":[{"id":4,"text":"then this","attachments":["/c/0123456789abcdef/a.png"]}],"pull_request":"#,
+        );
+        let s = agent_summary(&serde_json::from_str(&queued).unwrap());
+        assert_eq!(
+            s.queue,
+            [QueuedPromptSummary {
+                id: 4,
+                text: "then this".into(),
+                attachments: vec!["/c/0123456789abcdef/a.png".into()],
+            }]
         );
         assert!(s.subagents.is_empty());
         let running = newer.replace(
@@ -4270,6 +4403,7 @@ mod tailnet_tests {
                 subagents: Vec::new(),
                 pull_request: None,
                 pr_watch: None,
+                queue: Vec::new(),
             }],
             approvals: Vec::new(),
             terminals: Vec::new(),

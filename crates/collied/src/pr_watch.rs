@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use protocol::{AgentPromptParams, AgentStatus, ErrorCode, OpId, PrWatch, PromptText, TerminalId};
+use protocol::{AgentPromptParams, AgentStatus, ErrorCode, PrWatch, PromptText, TerminalId};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
@@ -680,12 +678,8 @@ pub async fn wake(
     }
     let terminal_id = TerminalId::new(agent.terminal_id.clone())
         .map_err(|_| (ErrorCode::InvalidParams, "invalid terminal id".to_owned()))?;
-    let mut op = [0u8; 16];
-    getrandom::fill(&mut op).map_err(|_| (ErrorCode::Internal, "no randomness".to_owned()))?;
-    let op_id = OpId::new(URL_SAFE_NO_PAD.encode(op))
-        .map_err(|_| (ErrorCode::Internal, "invalid op id".to_owned()))?;
     let params = AgentPromptParams {
-        op_id,
+        op_id: crate::drive::new_op_id()?,
         terminal_id,
         text,
         expected_draft: None,

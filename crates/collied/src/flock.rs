@@ -199,6 +199,7 @@ pub fn map_agent(
         subagents: derived.subagents,
         pull_request: None,
         pr_watch: None,
+        queue: Vec::new(),
     })
 }
 

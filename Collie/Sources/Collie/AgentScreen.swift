@@ -608,6 +608,9 @@ private struct PromptBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if !model.queuedPrompts.isEmpty {
+                QueuedPrompts(model: model)
+            }
             if let error = model.promptError {
                 Text(error).font(.footnote).foregroundStyle(.red)
             }
@@ -709,24 +712,32 @@ private struct PromptBar: View {
                         .controlSize(.small)
                         .accessibilityLabel("Hide keyboard")
                     }
-                    Button {
-                        if !model.keepsKeyboard {
-                            editing = false
-                            typingCommand = false
+                    if model.queuesPrompt {
+                        Menu {
+                            Button("Send Now", systemImage: "paperplane") { send(now: true) }
+                        } label: {
+                            sendLabel("text.append")
+                        } primaryAction: {
+                            send(now: false)
                         }
-                        Task { await model.sendPrompt() }
-                    } label: {
-                        if model.sendingPrompt {
-                            ProgressView().frame(width: 28, height: 28)
-                        } else {
-                            Image(systemName: "paperplane.fill").frame(width: 28, height: 28)
+                        .buttonStyle(.glassProminent)
+                        .buttonBorderShape(.circle)
+                        .controlSize(.small)
+                        .disabled(!model.canSendPrompt)
+                        .accessibilityLabel("Queue")
+                        .accessibilityHint("Sends once the agent is idle. Touch and hold to send now.")
+                    } else {
+                        Button {
+                            send(now: false)
+                        } label: {
+                            sendLabel("paperplane.fill")
                         }
+                        .buttonStyle(.glassProminent)
+                        .buttonBorderShape(.circle)
+                        .controlSize(.small)
+                        .disabled(!model.canSendPrompt)
+                        .accessibilityLabel(model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
                     }
-                    .buttonStyle(.glassProminent)
-                    .buttonBorderShape(.circle)
-                    .controlSize(.small)
-                    .disabled(!model.canSendPrompt)
-                    .accessibilityLabel(model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
                 }
             }
         }
@@ -778,6 +789,76 @@ private struct PromptBar: View {
             if !active && model.draft.isEmpty { dictationExpanded = false }
         }
         .onDisappear { dictationExpanded = false }
+    }
+
+    private func send(now: Bool) {
+        if !model.keepsKeyboard {
+            editing = false
+            typingCommand = false
+        }
+        Task { await model.sendPrompt(now: now) }
+    }
+
+    @ViewBuilder
+    private func sendLabel(_ symbol: String) -> some View {
+        if model.sendingPrompt {
+            ProgressView().frame(width: 28, height: 28)
+        } else {
+            Image(systemName: symbol).frame(width: 28, height: 28)
+        }
+    }
+}
+
+/// Prompts collied sends one at a time once the agent is idle again, first on top.
+private struct QueuedPrompts: View {
+    let model: AgentModel
+    @State private var editing: QueuedPromptSummary?
+    @State private var text = ""
+
+    var body: some View {
+        let queued = model.queuedPrompts
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Queued").font(.caption).foregroundStyle(.secondary)
+            ForEach(Array(queued.enumerated()), id: \.element.id) { index, item in
+                HStack(spacing: 8) {
+                    Text(item.text.isEmpty ? item.attachments.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ") : item.text)
+                        .font(.footnote)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if !item.attachments.isEmpty {
+                        Label("\(item.attachments.count)", systemImage: "paperclip")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Menu {
+                        Button("Send Now", systemImage: "paperplane") { Task { await model.sendQueuedNow(item) } }
+                        Button("Edit", systemImage: "pencil") {
+                            text = item.text
+                            editing = item
+                        }
+                        Button("Move Up", systemImage: "arrow.up") { Task { await model.moveQueued(item, up: true) } }
+                            .disabled(index == 0)
+                        Button("Move Down", systemImage: "arrow.down") { Task { await model.moveQueued(item, up: false) } }
+                            .disabled(index == queued.count - 1)
+                        Button("Remove", systemImage: "trash", role: .destructive) { Task { await model.removeQueued(item) } }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .frame(width: 36, height: 36)
+                            .contentShape(Rectangle())
+                    }
+                    .disabled(model.sendingPrompt)
+                    .accessibilityLabel("Queued prompt \(index + 1)")
+                }
+            }
+        }
+        .alert("Edit queued prompt", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
+            TextField("Prompt", text: $text, axis: .vertical)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                guard let item = editing else { return }
+                Task { await model.editQueued(item, text: text) }
+            }
+        }
     }
 }
 

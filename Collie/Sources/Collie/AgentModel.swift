@@ -246,6 +246,11 @@ final class AgentModel {
         answering ? "Use the terminal buttons or type an answer." : nil
     }
 
+    /// A working Claude Code agent: Send queues the prompt on the machine, which sends it once the agent is idle again.
+    var queuesPrompt: Bool { mode == .agent && agent?.kind == "claude" && agent?.status == .working && !answering }
+
+    var queuedPrompts: [QueuedPromptSummary] { mode == .agent ? agent?.queue ?? [] : [] }
+
     var canSendPrompt: Bool {
         if isTerminal { return !sendingPrompt && !unlocking && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         return !sendingPrompt && !dictation.isActive
@@ -321,7 +326,7 @@ final class AgentModel {
 
     private var mirrors: Bool {
         mode == .agent && agent?.kind == "claude" && agent?.status != .blocked && blocked == nil && !jumpBanner
-            && !dictation.isActive && !sendingPrompt && !mirrorPaused
+            && !dictation.isActive && !sendingPrompt && !mirrorPaused && !queuesPrompt
     }
 
     /// One call at a time until the Mac's box holds the draft's command token, or nothing once the
@@ -502,7 +507,8 @@ final class AgentModel {
 
     /// Text typed and files attached while the send is in flight stay for the next prompt.
     /// Paths on the Mac never have spaces, so they are set apart by single spaces.
-    func sendPrompt() async {
+    /// While `queuesPrompt`, the prompt is queued unless `now`.
+    func sendPrompt(now: Bool = false) async {
         defer { saveDraft() }
         if isTerminal {
             await sendCommand()
@@ -514,6 +520,7 @@ final class AgentModel {
             await sendAnswer()
             return
         }
+        let queueing = queuesPrompt && !now
         let sent = draft
         let files = attachments
         let typed = sent.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -522,7 +529,7 @@ final class AgentModel {
         mirrorDelay?.cancel()
         await mirroring?.value
         guard !sendingPrompt else { return }
-        if menuMoved, commandShown {
+        if !queueing, menuMoved, commandShown {
             promptError = "Press ⇥ to take the highlighted command, then send."
             return
         }
@@ -531,11 +538,15 @@ final class AgentModel {
         defer { sendingPrompt = false }
         saveDraft("", [])
         do {
-            try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: macDraft)
-            if macDraft != nil { macDraft = "" }
-            mirrorPaused = false
-            mirrored = ""
-            menuMoved = false
+            if queueing {
+                try await core.queuePrompt(machineId: route.machineId, terminalId: route.terminalId, text: typed, attachments: files.map(\.path))
+            } else {
+                try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: macDraft)
+                if macDraft != nil { macDraft = "" }
+                mirrorPaused = false
+                mirrored = ""
+                menuMoved = false
+            }
             loadedMacDraft = nil
             let sentIds = Set(files.map(\.id))
             attachments.removeAll { sentIds.contains($0.id) }
@@ -845,6 +856,42 @@ final class AgentModel {
             notice = nil
         } catch {
             notice = Self.message(for: error)
+        }
+    }
+
+    func editQueued(_ item: QueuedPromptSummary, text: String) async {
+        await queueAction { try await $0.editQueued(machineId: $1.machineId, terminalId: $1.terminalId, id: item.id, text: text) }
+    }
+
+    func moveQueued(_ item: QueuedPromptSummary, up: Bool) async {
+        await queueAction { try await $0.moveQueued(machineId: $1.machineId, terminalId: $1.terminalId, id: item.id, up: up) }
+    }
+
+    func removeQueued(_ item: QueuedPromptSummary) async {
+        await queueAction { try await $0.removeQueued(machineId: $1.machineId, terminalId: $1.terminalId, id: item.id) }
+    }
+
+    /// Never replaces text in the Mac's input box: the box must be empty.
+    func sendQueuedNow(_ item: QueuedPromptSummary) async {
+        guard !sendingPrompt else { return }
+        sendingPrompt = true
+        defer { sendingPrompt = false }
+        await queueAction { try await $0.sendQueued(machineId: $1.machineId, terminalId: $1.terminalId, id: item.id, expectedDraft: nil) }
+    }
+
+    private func queueAction(_ action: (any AgentCore, AgentRoute) async throws -> Void) async {
+        promptError = nil
+        do {
+            try await action(core, route)
+        } catch {
+            switch error as? CoreError {
+            case .DraftChanged:
+                promptError = "The agent’s input box has unsent text. Send or clear it in the session first."
+            case .NotFound:
+                promptError = "This prompt is no longer queued."
+            default:
+                promptError = Self.message(for: error)
+            }
         }
     }
 

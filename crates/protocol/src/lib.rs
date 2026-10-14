@@ -14,7 +14,7 @@ pub use output::*;
 #[cfg(feature = "schema")]
 pub use schema::{client_frame_schema, server_frame_schema};
 
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -40,4 +40,5 @@ pub mod limits {
     pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
     pub const MAX_ATTACHMENT_CHUNK_BYTES: usize = 32 * 1024;
     pub const MAX_ATTACHMENT_NAME_CHARS: usize = 64;
+    pub const MAX_PROMPT_ATTACHMENTS: usize = 10;
 }

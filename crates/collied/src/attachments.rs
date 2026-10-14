@@ -102,6 +102,29 @@ pub fn prepare_root(root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A file `attachment.commit` stored: `<root>/<16 hex>/<sanitized name>`, still there.
+pub fn is_stored(root: &Path, path: &str) -> bool {
+    let path = Path::new(path);
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return false;
+    };
+    dir.parent() == Some(root)
+        && dir.file_name().and_then(|d| d.to_str()).is_some_and(|d| {
+            d.len() == 16 && d.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        })
+        && sanitize(name) == name
+        && std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
+}
+
+/// Restarts the retention of an upload directory, so an agent sent a queued prompt has
+/// the full 24 h to read its attachments.
+pub fn touch(dir: &Path) {
+    let touched = File::open(dir).and_then(|d| d.set_modified(SystemTime::now()));
+    if let Err(e) = touched {
+        tracing::warn!(error = %e, path = %dir.display(), "attachment touch");
+    }
+}
+
 pub fn stored_bytes(root: &Path) -> u64 {
     stored_except(root, &[]).bytes
 }
@@ -212,13 +235,13 @@ pub struct Attachments {
 
 impl Attachments {
     /// Partial files left by a previous run cannot be resumed and are removed at once.
-    pub fn open(root: PathBuf) -> anyhow::Result<Self> {
+    pub fn open(root: PathBuf, keep: &[PathBuf]) -> anyhow::Result<Self> {
         prepare_root(&root)?;
         let store = Self {
             root,
             uploads: Mutex::default(),
         };
-        store.sweep(SystemTime::now(), true);
+        store.sweep(SystemTime::now(), true, keep);
         Ok(store)
     }
 
@@ -376,9 +399,9 @@ impl Attachments {
     }
 
     /// Removes entries of the root older than `RETENTION` (and, with `partials`, any dir
-    /// still holding a partial file), skipping uploads in flight. Never follows symlinks:
-    /// a symlink is removed as a link.
-    pub fn sweep(&self, now: SystemTime, partials: bool) {
+    /// still holding a partial file), skipping uploads in flight and `keep`. Never follows
+    /// symlinks: a symlink is removed as a link.
+    pub fn sweep(&self, now: SystemTime, partials: bool, keep: &[PathBuf]) {
         let in_flight: Vec<PathBuf> = lock(&self.uploads)
             .values()
             .map(|e| e.dir.clone())
@@ -388,7 +411,7 @@ impl Attachments {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if in_flight.contains(&path) {
+            if in_flight.contains(&path) || keep.contains(&path) {
                 continue;
             }
             let Ok(meta) = std::fs::symlink_metadata(&path) else {
@@ -470,7 +493,7 @@ mod tests {
 
     fn store() -> (tempfile::TempDir, Attachments) {
         let tmp = tempfile::tempdir().unwrap();
-        let store = Attachments::open(tmp.path().join("cache/attachments")).unwrap();
+        let store = Attachments::open(tmp.path().join("cache/attachments"), &[]).unwrap();
         (tmp, store)
     }
 
@@ -705,6 +728,43 @@ mod tests {
     }
 
     #[test]
+    fn only_a_committed_file_is_a_stored_attachment() {
+        let (tmp, store) = store();
+        let id = store
+            .begin(1, PEER, &name("shot one.png"), 1, &sha(b"x"))
+            .unwrap();
+        store.chunk(1, PEER, &id, 0, b"x").unwrap();
+        let committed = lock(&store.take(1, PEER, &id).unwrap()).commit().unwrap();
+        let path = committed.path.to_str().unwrap();
+        assert!(is_stored(store.root(), path));
+        let dir = committed.path.parent().unwrap();
+        let other = tmp.path().join("0123456789abcdef");
+        std::fs::create_dir(&other).unwrap();
+        std::fs::write(other.join("x"), b"x").unwrap();
+        std::fs::write(dir.join(PART), b"x").unwrap();
+        for path in [
+            other.join("x"),
+            dir.join(PART),
+            dir.join("missing.png"),
+            dir.to_path_buf(),
+            store.root().join("0123456789ABCDEF/x"),
+            dir.join("../")
+                .join(dir.file_name().unwrap())
+                .join("shot-one.png"),
+        ] {
+            assert!(!is_stored(store.root(), path.to_str().unwrap()), "{path:?}");
+        }
+        let old = SystemTime::now() - RETENTION;
+        File::open(dir).unwrap().set_modified(old).unwrap();
+        touch(dir);
+        store.sweep(SystemTime::now(), false, &[]);
+        assert!(
+            committed.path.exists(),
+            "a touched directory starts its 24 h again"
+        );
+    }
+
+    #[test]
     fn sweep_removes_old_entries_and_stale_partials() {
         let (tmp, store) = store();
         let id = store.begin(1, PEER, &name("a"), 1, &sha(b"x")).unwrap();
@@ -719,12 +779,15 @@ mod tests {
         std::fs::create_dir(&stale).unwrap();
         std::fs::write(stale.join(PART), b"half").unwrap();
 
-        store.sweep(SystemTime::now(), false);
+        store.sweep(SystemTime::now(), false, &[]);
         assert_eq!(entries(store.root()), 4, "nothing is old yet");
-        store.sweep(SystemTime::now(), true);
+        store.sweep(SystemTime::now(), true, &[]);
         assert!(!stale.exists(), "partial from a previous run");
         assert!(kept.path.exists());
-        store.sweep(SystemTime::now() + RETENTION, false);
+        let queued = kept.path.parent().unwrap().to_path_buf();
+        store.sweep(SystemTime::now() + RETENTION, false, &[queued]);
+        assert!(kept.path.exists(), "a queued prompt's attachment stays");
+        store.sweep(SystemTime::now() + RETENTION, false, &[]);
         assert!(!kept.path.exists());
         assert!(!store.root().join("link").exists());
         assert!(

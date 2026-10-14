@@ -191,6 +191,16 @@ pub enum Request {
     AgentStar(AgentStarParams),
     #[serde(rename = "agent.watch_pull_request")]
     AgentWatchPullRequest(AgentWatchPullRequestParams),
+    #[serde(rename = "agent.queue_add")]
+    AgentQueueAdd(AgentQueueAddParams),
+    #[serde(rename = "agent.queue_edit")]
+    AgentQueueEdit(AgentQueueEditParams),
+    #[serde(rename = "agent.queue_move")]
+    AgentQueueMove(AgentQueueMoveParams),
+    #[serde(rename = "agent.queue_remove")]
+    AgentQueueRemove(AgentQueueItemParams),
+    #[serde(rename = "agent.queue_send")]
+    AgentQueueSend(AgentQueueSendParams),
     #[serde(rename = "task.new")]
     TaskNew(TaskNewParams),
     #[serde(rename = "task.folders")]
@@ -264,6 +274,11 @@ impl Request {
         "agent.slash_draft",
         "agent.star",
         "agent.watch_pull_request",
+        "agent.queue_add",
+        "agent.queue_edit",
+        "agent.queue_move",
+        "agent.queue_remove",
+        "agent.queue_send",
         "task.new",
         "task.folders",
         "task.worktrees",
@@ -311,6 +326,11 @@ impl Request {
             Self::AgentSlashDraft(_) => "agent.slash_draft",
             Self::AgentStar(_) => "agent.star",
             Self::AgentWatchPullRequest(_) => "agent.watch_pull_request",
+            Self::AgentQueueAdd(_) => "agent.queue_add",
+            Self::AgentQueueEdit(_) => "agent.queue_edit",
+            Self::AgentQueueMove(_) => "agent.queue_move",
+            Self::AgentQueueRemove(_) => "agent.queue_remove",
+            Self::AgentQueueSend(_) => "agent.queue_send",
             Self::TaskNew(_) => "task.new",
             Self::TaskFolders(_) => "task.folders",
             Self::TaskWorktrees(_) => "task.worktrees",
@@ -358,6 +378,11 @@ impl Request {
             | Self::AgentSlashDraft(_)
             | Self::AgentStar(_)
             | Self::AgentWatchPullRequest(_)
+            | Self::AgentQueueAdd(_)
+            | Self::AgentQueueEdit(_)
+            | Self::AgentQueueMove(_)
+            | Self::AgentQueueRemove(_)
+            | Self::AgentQueueSend(_)
             | Self::TaskNew(_)
             | Self::TaskFolders(_)
             | Self::TaskWorktrees(_)
@@ -569,6 +594,67 @@ pub struct AgentWatchPullRequestParams {
     pub watching: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub every_minutes: Option<u32>,
+}
+
+/// A prompt collied sends once the agent is idle with an empty input box. `attachments`
+/// are paths `attachment.commit` returned; collied puts them before `text`, as the phone
+/// does for a prompt sent now. `text` may be left out only with an attachment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentQueueAddParams {
+    pub op_id: OpId,
+    pub terminal_id: TerminalId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<PromptText>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(length(max = limits::MAX_PROMPT_ATTACHMENTS)))]
+    pub attachments: Vec<Cwd>,
+}
+
+impl AgentQueueAddParams {
+    pub fn is_valid(&self) -> bool {
+        self.attachments.len() <= limits::MAX_PROMPT_ATTACHMENTS
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentQueueItemParams {
+    pub terminal_id: TerminalId,
+    pub id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentQueueEditParams {
+    pub terminal_id: TerminalId,
+    pub id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<PromptText>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentQueueMoveParams {
+    pub terminal_id: TerminalId,
+    pub id: u64,
+    pub up: bool,
+}
+
+/// Sends a queued prompt now, as `agent.prompt` would, and takes it off the queue.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentQueueSendParams {
+    pub op_id: OpId,
+    pub terminal_id: TerminalId,
+    pub id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_draft: Option<DraftText>,
 }
 
 /// `signature` is over [`terminal_grant_message`] for the challenge this session was given.
@@ -1107,6 +1193,18 @@ pub struct Agent {
     pub pull_request: Option<PullRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_watch: Option<PrWatch>,
+    /// Prompts collied sends one at a time, each once the agent is idle again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queue: Vec<QueuedPrompt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct QueuedPrompt {
+    pub id: u64,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1661,6 +1759,7 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
         Request::ApprovalDecide(p) => p.is_valid(),
         Request::AttachmentBegin(p) => p.is_valid(),
         Request::TaskNew(p) => p.is_valid(),
+        Request::AgentQueueAdd(p) => p.is_valid(),
         _ => true,
     };
     if !valid {
@@ -1936,7 +2035,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 21);
+        assert_eq!(crate::PROTOCOL_VERSION, 23);
     }
 
     #[test]
@@ -2145,6 +2244,25 @@ mod tests {
     }
 
     #[test]
+    fn a_queued_prompt_has_at_most_ten_attachments() {
+        let add = |n: usize| {
+            let paths: Vec<String> = (0..n).map(|i| format!("\"/a/{i}\"")).collect();
+            parse(&format!(
+                r#"{{"id":1,"method":"agent.queue_add","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"t","attachments":[{}]}}}}"#,
+                paths.join(",")
+            ))
+        };
+        let frame = add(limits::MAX_PROMPT_ATTACHMENTS).unwrap();
+        assert_eq!(frame.request.class(), MethodClass::Drive);
+        assert_eq!(
+            add(limits::MAX_PROMPT_ATTACHMENTS + 1).unwrap_err().code,
+            ErrorCode::InvalidParams
+        );
+        let hostile = r#"{"id":1,"method":"agent.queue_edit","params":{"terminal_id":"t","id":1,"text":"\u001b[2J"}}"#;
+        assert_eq!(parse(hostile).unwrap_err().code, ErrorCode::InvalidParams);
+    }
+
+    #[test]
     fn agent_transcript_fields_are_optional() {
         let older = r#"{"terminal_id":"term_1","workspace_id":"w1","kind":null,"name":null,"title":null,"status":"idle","status_since_ms":1,"cwd":null,"last_line":null}"#;
         let a: Agent = serde_json::from_str(older).unwrap();
@@ -2196,6 +2314,19 @@ mod tests {
         assert!(serde_json::to_string(&watched).unwrap().ends_with(
             r#""pr_watch":{"number":11,"url":"https://github.com/o/r/pull/11","every_minutes":15}}"#
         ));
+        let queued = Agent {
+            queue: vec![QueuedPrompt {
+                id: 3,
+                text: "next".into(),
+                attachments: vec!["/a/0123456789abcdef/x.png".into()],
+            }],
+            ..watched.clone()
+        };
+        let json = serde_json::to_string(&queued).unwrap();
+        assert!(json.ends_with(
+            r#""queue":[{"id":3,"text":"next","attachments":["/a/0123456789abcdef/x.png"]}]}"#
+        ));
+        assert_eq!(serde_json::from_str::<Agent>(&json).unwrap(), queued);
         let newer = json.replace(r#""draft","checks":"none""#, r#""queued","checks":"stale""#);
         let parsed = serde_json::from_str::<Agent>(&newer)
             .unwrap()

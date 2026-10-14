@@ -12,10 +12,11 @@ use collie_tls::rustls::sign::CertifiedKey;
 use collie_tls::server::TlsStream;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
+    AgentQueueAddParams, AgentQueueEditParams, AgentQueueItemParams, AgentQueueMoveParams,
     AgentStarParams, AgentWatchParams, AgentWatchPullRequestParams, AttachmentChunkParams,
-    ErrorBody, ErrorCode, Event, HelloResult, KeyPin, MachineInfo, MethodClass, PairCompleteParams,
-    PairingCode, PairingInvite, PullRequest, PullState, Request, Response, ServerFrame,
-    TerminalGrantParams, TerminalId, TerminalKey, TerminalWatchParams,
+    DraftText, ErrorBody, ErrorCode, Event, HelloResult, KeyPin, MachineInfo, MethodClass,
+    PairCompleteParams, PairingCode, PairingInvite, PullRequest, PullState, Request, Response,
+    ServerFrame, TerminalGrantParams, TerminalId, TerminalKey, TerminalWatchParams,
 };
 use serde::{Deserialize, Serialize};
 use tailnet::{Accepted, BackendState, Node, WhoIs};
@@ -44,6 +45,7 @@ use crate::peers::{self, Peer, Store};
 use crate::pr_watch::{self, Watch, Watches};
 use crate::pulls::{self, Pulls};
 use crate::push::{self, ActivityError, Push};
+use crate::queue::{self, Queues};
 use crate::terminal::{self, Grants};
 use crate::transcript::Transcripts;
 use crate::turns::Turns;
@@ -61,6 +63,7 @@ const RECONCILE_EVERY: Duration = Duration::from_secs(1);
 const RECONCILE_MAX_BACKOFF: Duration = Duration::from_secs(30);
 const PULLS_EVERY: Duration = Duration::from_secs(30);
 const WATCH_EVERY: Duration = Duration::from_secs(30);
+const QUEUE_EVERY: Duration = Duration::from_secs(2);
 const RATE_PER_SEC: f64 = 20.0;
 const RATE_BURST: f64 = 40.0;
 const REJECT_AUDIT_PER_SEC: f64 = 1.0;
@@ -203,6 +206,8 @@ pub struct State {
     live: Mutex<activity::Live>,
     turns: Mutex<Turns>,
     pulls: Mutex<Pulls>,
+    /// Lock order: pulls, then queues.
+    queues: Arc<Mutex<Queues>>,
     events: broadcast::Sender<Event>,
     drive: Arc<Driver>,
     pub(crate) approvals: Arc<Approvals>,
@@ -306,7 +311,9 @@ impl State {
         if let Err(e) = self.push.forget(&peer.stable_id) {
             tracing::error!(error = %e, "could not drop the revoked phone's APNs token");
         }
-        if lock(&self.pulls).watches.forget(&peer.stable_id) {
+        if lock(&self.pulls).watches.forget(&peer.stable_id)
+            | lock(&self.queues).forget(&peer.stable_id)
+        {
             let _ = self.events.send(Event::FlockChanged {});
         }
         self.audit.log(
@@ -541,9 +548,10 @@ pub async fn start_with(
         )
         .with_timing(cfg.approval_ttl, approvals::SETTLE),
     );
+    let queues = Queues::load(cfg.data_dir.join(config::QUEUE_FILE));
     let attachments = {
-        let dir = cfg.attachments_dir.clone();
-        Arc::new(tokio::task::spawn_blocking(move || Attachments::open(dir)).await??)
+        let (dir, keep) = (cfg.attachments_dir.clone(), queues.kept());
+        Arc::new(tokio::task::spawn_blocking(move || Attachments::open(dir, &keep)).await??)
     };
     let tls = load_tls_key(&cfg.data_dir.join(config::TLS_KEY_FILE))?;
     let tls_pin = collie_tls::pin(tls.cert[0].as_ref());
@@ -581,6 +589,7 @@ pub async fn start_with(
         live: Mutex::new(activity::Live::default()),
         turns: Mutex::new(Turns::default()),
         pulls: Mutex::new(Pulls::new(watches)),
+        queues: Arc::new(Mutex::new(queues)),
         events,
         drive,
         approvals,
@@ -596,10 +605,11 @@ pub async fn start_with(
     let tasks = vec![
         tokio::spawn(accept_loop(listener, state.clone(), rx.clone(), dead_tx)),
         tokio::spawn(control::serve(control, state.clone(), rx.clone())),
-        tokio::spawn(upkeep(state.attachments.clone(), rx.clone())),
+        tokio::spawn(upkeep(state.clone(), rx.clone())),
         tokio::spawn(codex_usage(state.clone(), rx.clone())),
         tokio::spawn(pull_requests(state.clone(), rx.clone())),
         tokio::spawn(pr_watches(state.clone(), rx.clone())),
+        tokio::spawn(prompt_queues(state.clone(), rx.clone())),
         tokio::spawn(reconcile(state.clone(), rx)),
     ];
     tracing::info!(host = %state.dns_name, port = state.cfg.port, "listening on the tailnet");
@@ -787,6 +797,117 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             let _ = state.events.send(Event::FlockChanged {});
         }
     }
+}
+
+/// Each queue's first item goes to its Claude Code agent once the agent is idle or done,
+/// one item per turn, with or without a phone.
+async fn prompt_queues(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
+    let mut interval = tokio::time::interval(QUEUE_EVERY);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = shutdown.changed() => return,
+        }
+        if lock(&state.queues).is_empty() {
+            continue;
+        }
+        let Ok(agents) = herdr::agent_list(&state.herdr).await else {
+            continue;
+        };
+        let peers = state.peers();
+        let dropped = {
+            let mut queues = lock(&state.queues);
+            queues.retain_listed(&agents) | queues.retain_paired(|by| peers.get(by).is_some())
+        };
+        if dropped {
+            let _ = state.events.send(Event::FlockChanged {});
+        }
+        let heads = lock(&state.queues).heads();
+        for (terminal_id, item) in heads {
+            let Some(agent) = agents.iter().find(|a| a.terminal_id == terminal_id) else {
+                continue;
+            };
+            let status = flock::status(&agent.agent_status);
+            if agent.agent.as_deref() != Some("claude")
+                || !lock(&state.queues).ready(&terminal_id, status, Instant::now())
+            {
+                continue;
+            }
+            let Ok(t) = TerminalId::new(terminal_id.clone()) else {
+                continue;
+            };
+            let (reply, claimed) = send_queued(&state, t, item, None, None).await;
+            if claimed {
+                let result = outcome(&reply);
+                state
+                    .audit
+                    .log("collied", "queue.send", Some(&terminal_id), &result);
+            }
+        }
+    }
+}
+
+async fn queue_add(state: &State, p: AgentQueueAddParams, by: &str, auth: &Authorized) -> Reply {
+    let agent = state.drive.find_agent(&p.terminal_id).await?;
+    if agent.agent.as_deref() != Some("claude") {
+        return err(
+            ErrorCode::InvalidParams,
+            "only a Claude Code agent can queue prompts",
+        );
+    }
+    let root = state.attachments.root();
+    if !p
+        .attachments
+        .iter()
+        .all(|a| attachments::is_stored(root, a.as_str()))
+    {
+        return err(
+            ErrorCode::InvalidParams,
+            "an attachment is no longer on the machine; attach it again",
+        );
+    }
+    if !auth() {
+        return err(ErrorCode::NotPaired, "peer is no longer authorized");
+    }
+    let files = p
+        .attachments
+        .iter()
+        .map(|a| a.as_str().to_owned())
+        .collect();
+    let text = p.text.as_ref().map_or("", |t| t.as_str());
+    lock(&state.queues).add(p.terminal_id.as_str(), text, files, by)?;
+    let _ = state.events.send(Event::FlockChanged {});
+    Ok(Response::Ok)
+}
+
+/// `now` is the session of a phone sending the item now; without one it waits for an
+/// idle agent. Either way the phone that queued it must still be paired.
+async fn send_queued(
+    state: &Arc<State>,
+    terminal_id: TerminalId,
+    item: queue::Item,
+    expected_draft: Option<DraftText>,
+    now: Option<Authorized>,
+) -> (Reply, bool) {
+    let idle_only = now.is_none();
+    let paired: Authorized = {
+        let (state, by) = (state.clone(), item.by.clone());
+        Arc::new(move || now.as_ref().is_none_or(|a| a()) && lock(&state.peers).get(&by).is_some())
+    };
+    let queues = state.queues.clone();
+    let (reply, claimed) = queue::send(
+        &state.drive,
+        &queues,
+        &paired,
+        (terminal_id, item),
+        expected_draft,
+        idle_only,
+    )
+    .await;
+    if claimed {
+        let _ = state.events.send(Event::FlockChanged {});
+    }
+    (reply, claimed)
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -1385,6 +1506,36 @@ impl Session<'_> {
             Request::AgentSlashDraft(p) => (drive.slash_draft(p, &auth).await, None),
             Request::AgentStar(p) => (self.star(p).await, None),
             Request::AgentWatchPullRequest(p) => (self.watch_pull_request(p).await, None),
+            Request::AgentQueueAdd(p) => {
+                let (op_id, state) = (p.op_id.clone(), self.state.clone());
+                let by = peer.clone();
+                let op = self.audited(method, target.clone(), async move {
+                    (queue_add(&state, p, &by, &auth).await, None)
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
+            Request::AgentQueueEdit(p) => (self.queue_edit(p), None),
+            Request::AgentQueueMove(p) => (self.queue_move(p), None),
+            Request::AgentQueueRemove(p) => (self.queue_remove(p), None),
+            Request::AgentQueueSend(p) => {
+                let (op_id, state) = (p.op_id.clone(), self.state.clone());
+                let op = self.audited(method, target.clone(), async move {
+                    let item = lock(&state.queues).get(p.terminal_id.as_str(), p.id);
+                    let reply = match item {
+                        Ok(item) => {
+                            let now = Some(auth);
+                            send_queued(&state, p.terminal_id, item, p.expected_draft, now)
+                                .await
+                                .0
+                        }
+                        Err(e) => Err(e),
+                    };
+                    (reply, None)
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
             // Starting an agent takes up to 30 s; the session keeps serving meanwhile.
             Request::TaskNew(_) if !self.tasks.is_empty() => (
                 err(ErrorCode::RateLimited, "a task is already starting"),
@@ -1846,10 +1997,12 @@ impl Session<'_> {
             Some(&mut lock(&self.state.transcripts)),
         );
         let pulls = lock(&self.state.pulls);
+        let queues = lock(&self.state.queues);
         for agent in &mut flock.agents {
             pulls.fill(agent);
+            agent.queue = queues.shown(agent.terminal_id.as_str());
         }
-        drop(pulls);
+        drop((pulls, queues));
         flock.approvals = self.state.approvals.pending();
         flock.starred = lock(&self.state.stars).reconcile(&snap.panes);
         if self.state.cfg.terminals {
@@ -1939,6 +2092,28 @@ impl Session<'_> {
         watch.checkout = root.as_str().to_owned();
         watch.branch = branch;
         lock(&self.state.pulls).watches.start(terminal_id, watch);
+        let _ = self.state.events.send(Event::FlockChanged {});
+        Ok(Response::Ok)
+    }
+
+    fn queue_edit(&self, p: AgentQueueEditParams) -> Reply {
+        let t = p.terminal_id.as_str();
+        let text = p.text.as_ref().map_or("", |t| t.as_str());
+        self.queue_changed(lock(&self.state.queues).edit(t, p.id, text))
+    }
+
+    fn queue_move(&self, p: AgentQueueMoveParams) -> Reply {
+        let t = p.terminal_id.as_str();
+        self.queue_changed(lock(&self.state.queues).move_item(t, p.id, p.up))
+    }
+
+    fn queue_remove(&self, p: AgentQueueItemParams) -> Reply {
+        let t = p.terminal_id.as_str();
+        self.queue_changed(lock(&self.state.queues).remove(t, p.id))
+    }
+
+    fn queue_changed(&self, changed: Result<(), drive::Fail>) -> Reply {
+        changed?;
         let _ = self.state.events.send(Event::FlockChanged {});
         Ok(Response::Ok)
     }
@@ -2140,6 +2315,11 @@ fn audit_target(request: &Request) -> Option<String> {
         }
         Request::AgentSlashDraft(p) => p.terminal_id.as_str(),
         Request::AgentStar(p) => p.terminal_id.as_str(),
+        Request::AgentQueueAdd(p) => p.terminal_id.as_str(),
+        Request::AgentQueueEdit(p) => p.terminal_id.as_str(),
+        Request::AgentQueueMove(p) => p.terminal_id.as_str(),
+        Request::AgentQueueRemove(p) => p.terminal_id.as_str(),
+        Request::AgentQueueSend(p) => p.terminal_id.as_str(),
         Request::AgentWatchPullRequest(p) => {
             return Some(format!(
                 "{} watching={}",
@@ -2269,7 +2449,7 @@ async fn commit(
     }
 }
 
-async fn upkeep(store: Arc<Attachments>, mut shutdown: watch::Receiver<bool>) {
+async fn upkeep(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     let mut swept = Instant::now();
     loop {
         tokio::select! {
@@ -2280,11 +2460,12 @@ async fn upkeep(store: Arc<Attachments>, mut shutdown: watch::Receiver<bool>) {
         if sweep {
             swept = Instant::now();
         }
-        let store = store.clone();
+        let store = state.attachments.clone();
+        let keep = lock(&state.queues).kept();
         let _ = tokio::task::spawn_blocking(move || {
             store.reap(Instant::now());
             if sweep {
-                store.sweep(std::time::SystemTime::now(), false);
+                store.sweep(std::time::SystemTime::now(), false, &keep);
             }
         })
         .await;
@@ -2350,6 +2531,7 @@ fn observe_agent(
     tracker: &mut StatusTracker,
     transcripts: &mut Transcripts,
     pulls: &Pulls,
+    queues: &Queues,
     events: &broadcast::Sender<Event>,
     now_ms: u64,
 ) {
@@ -2363,6 +2545,7 @@ fn observe_agent(
         && phones
     {
         pulls.fill(&mut agent);
+        agent.queue = queues.shown(agent.terminal_id.as_str());
         let _ = events.send(Event::AgentStatus { agent });
     }
 }
@@ -2424,12 +2607,14 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                     transcripts.retain(&agents);
                     let now = crate::now_ms();
                     let pulls = lock(&state.pulls);
+                    let queues = lock(&state.queues);
                     for a in agents.iter().filter(|a| changed.contains(&a.terminal_id)) {
                         observe_agent(
                             a,
                             &mut tracker,
                             &mut transcripts,
                             &pulls,
+                            &queues,
                             &state.events,
                             now,
                         );
@@ -2512,6 +2697,7 @@ mod tests {
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &Queues::default(),
             &events,
             1000,
         );
@@ -2522,6 +2708,7 @@ mod tests {
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &Queues::default(),
             &events,
             2000,
         );
@@ -2554,6 +2741,7 @@ mod tests {
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &Queues::default(),
             &events,
             3000,
         );
@@ -2575,6 +2763,7 @@ mod tests {
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &Queues::default(),
             &events,
             4000,
         );
@@ -2590,6 +2779,7 @@ mod tests {
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &Queues::default(),
             &events,
             5000,
         );
@@ -2600,6 +2790,7 @@ mod tests {
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &Queues::default(),
             &events,
             6000,
         );
