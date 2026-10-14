@@ -14,10 +14,12 @@ enum Prev {
 
 /// The rows of a Claude Code read (split on `\n`) that continue a paragraph it wrapped at the
 /// pane's `cols`, as `(wraps, splits)` of a `TerminalRead`. Only prose under an indent-0 `⏺`
-/// or `※` row counts; a row that only might continue the one above never does.
+/// or `※` row counts; a row that only might continue the one above never does. A shaded sent
+/// prompt joins only after a row Claude Code ended with a space in the text's style.
 pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let (mut wraps, mut splits) = (Vec::new(), Vec::new());
     let mut prose = false;
+    let mut prompt: Option<bool> = None;
     let mut prev = Prev::Start;
     let (mut plain, mut tail) = (String::new(), String::new());
     for (i, row) in ansi.split('\n').enumerate() {
@@ -30,6 +32,12 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             continue;
         }
         if ind == 0 {
+            if let Some(text) = s.strip_prefix("❯ ").filter(|_| shaded_start(row)) {
+                (prose, prompt) = (false, Some(ends_in_space(row, false)));
+                prev = row_above(&mut tail, text, 2);
+                continue;
+            }
+            prompt = None;
             let body = s.strip_prefix(['⏺', '※']);
             prose = body.is_some();
             prev = match body.map(|b| b.trim_start_matches([' ', '\u{a0}'])) {
@@ -38,6 +46,21 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             };
             continue;
         }
+        if let Some(spaced) = prompt.filter(|_| shaded_start(row)) {
+            let width = cols.saturating_sub(2);
+            if spaced
+                && ind == 2
+                && matches!(prev, Prev::Row(2))
+                && tail.width() <= width
+                && separator(&tail, s, width) == " "
+            {
+                wraps.push(u32::try_from(i).unwrap_or(u32::MAX));
+            }
+            prompt = Some(ends_in_space(row, false));
+            prev = row_above(&mut tail, s, ind);
+            continue;
+        }
+        prompt = None;
         if !prose {
             continue;
         }
@@ -362,6 +385,18 @@ fn ends_in_space(row: &str, first: bool) -> bool {
     }
     let rest = &marked[text.len()..];
     rest.starts_with(' ') && !rest[1..].starts_with(' ')
+}
+
+/// Whether `row` sets a background before its first character.
+fn shaded_start(row: &str) -> bool {
+    let mut rest = row;
+    while let Some((sgr, after)) = rest.strip_prefix("\u{1b}[").and_then(|r| r.split_once('m')) {
+        if sgr.starts_with("48;") {
+            return true;
+        }
+        rest = after;
+    }
+    false
 }
 
 fn row_above(tail: &mut String, text: &str, hang: usize) -> Prev {
@@ -804,6 +839,26 @@ mod tests {
             "  2.",
         ];
         assert_eq!(wraps(&rows, 40), [1, 2, 5, 7, 9, 11, 14]);
+    }
+
+    #[test]
+    fn claude_sent_prompts_join_only_where_claude_wrapped_them() {
+        let wrapped = include_str!("../tests/fixtures/claude-2.1.293/heads-up.ansi.txt");
+        assert_eq!(soft_wraps(wrapped, 212), (vec![6, 14], vec![]));
+        let (wraps, splits) = soft_wraps(wrapped, 212);
+        let read = protocol::TerminalRead {
+            terminal_id: protocol::TerminalId::new("t").unwrap(),
+            source: protocol::ReadSource::Recent,
+            ansi: wrapped.into(),
+            truncated: false,
+            wraps,
+            splits,
+            copilot_scrollbar: false,
+        };
+        let joined = read.reflowed().unwrap();
+        assert!(joined.contains("6) run python3 -c \u{1b}[0m\u{1b}[48;2;55;55;55m\u{1b}[0m\u{1b}[0m\u{1b}[48;2;55;55;55m\u{1b}[0m\u{1b}[38;2;255;255;255m\u{1b}[48;2;55;55;55m'print(round"));
+        let typed = include_str!("../tests/fixtures/claude-2.1.299/sent-multiline.ansi.txt");
+        assert_eq!(soft_wraps(typed, 182), (vec![8], vec![]));
     }
 
     #[test]

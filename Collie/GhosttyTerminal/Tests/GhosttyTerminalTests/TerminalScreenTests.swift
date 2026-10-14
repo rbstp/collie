@@ -481,6 +481,18 @@ private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB
     }
 }
 
+@Test func claudesPromptWrappedOnTheMacStaysShadedToBothEdges() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let url = URL(filePath: #filePath).deletingLastPathComponent()
+        .appending(path: "../../../../crates/collied/tests/fixtures/claude-2.1.293/heads-up.ansi.txt")
+    let snapshot = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")[5...6].joined(separator: "\r\n")
+    let frame = screen.render(ansiSnapshot: snapshot, wrapColumns: 40)
+    #expect(frame.rows > 6)
+    for row in 0..<frame.rows {
+        #expect(painted(frame, row: row, TerminalRGB(55, 55, 55)) == 0..<40, "\(row)")
+    }
+}
+
 @Test func paddedPanelsKeepOneRowPerLine() throws {
     let screen = try #require(TerminalScreen(background: bg, foreground: fg))
     let line = { (count: Int) in String(repeating: "\u{2500}", count: count) }

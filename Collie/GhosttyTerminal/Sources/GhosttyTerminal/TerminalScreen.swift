@@ -295,6 +295,9 @@ final class TerminalScreen {
                 }
                 i += 1
             }
+            let shadedRow = shadedStart && uniformBackground
+            // Claude Code ends a row it wrapped with a space in the text's style before its padding.
+            if shadedRow { uniform = true }
             let clip = boxOnly && sawBox
             let shade = shadedBox && uniformBackground && columns > 1 ? background : nil
             let collapse = !clip && contentWidth > columns && (sawBox && padded || runs.contains { $0 >= columns })
@@ -325,7 +328,7 @@ final class TerminalScreen {
             } else if !clip && contentWidth > columns {
                 let broken = Self.appendBrokenAtWords(
                     scalars, rowStart..<contentEnd, keepingPadding: collapse ? keep : nil, indent: indent < columns / 2 ? indent : 0,
-                    filling: fill != nil && uniform, paintIndent: shadedStart && uniformBackground, shade: shade, columns: columns, into: &out
+                    filling: fill != nil && uniform, paintIndent: shadedRow, shade: shade, columns: columns, into: &out
                 )
                 (height, end) = (height + broken.breaks, broken.column)
             } else {
