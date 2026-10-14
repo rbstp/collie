@@ -121,6 +121,11 @@ impl Live {
             .filter_map(|s| {
                 Some(Subagent {
                     agent_type: s.agent_type.clone(),
+                    title: if s.description.is_empty() {
+                        s.agent_type.clone()
+                    } else {
+                        s.description.clone()
+                    },
                     activity: s.activity.clone().unwrap_or_else(|| s.description.clone()),
                     started_at_ms: s.started_ms?,
                     tokens: s.input + s.output,
@@ -566,6 +571,7 @@ mod tests {
             started,
             [Subagent {
                 agent_type: "general-purpose".into(),
+                title: "Check the pairing code".into(),
                 activity: "Check the pairing code".into(),
                 started_at_ms: 1_791_927_845_000,
                 tokens: 0,
@@ -577,6 +583,7 @@ mod tests {
         let working = s.running(&mut live);
         assert_eq!(working.len(), 1);
         assert_eq!(working[0].activity, "Reading pairing.rs");
+        assert_eq!(working[0].title, "Check the pairing code");
         assert_eq!(working[0].tokens, 42_084);
         assert!(working[0].called_tools);
         assert_eq!(working[0].started_at_ms, started[0].started_at_ms);
@@ -651,9 +658,16 @@ mod tests {
         let running = s.running(&mut live);
         assert_eq!(running.len(), 1);
         assert_eq!(
-            (running[0].agent_type.as_str(), running[0].activity.as_str()),
+            (running[0].agent_type.as_str(), running[0].title.as_str()),
             ("workflow-subagent", "review:correctness")
         );
+        std::fs::write(
+            flow.join("agent-w1.meta.json"),
+            r#"{"agentType":"workflow-subagent"}"#,
+        )
+        .unwrap();
+        live = Live::default();
+        assert_eq!(s.running(&mut live)[0].title, "workflow-subagent");
         let result = r#"{"type":"assistant","message":{"model":"m","stop_reason":"tool_use","content":[{"type":"tool_use","name":"StructuredOutput","input":{}}],"usage":{"input_tokens":1}}}"#;
         append(&file, &format!("{result}\n"));
         assert!(s.running(&mut live).is_empty());
