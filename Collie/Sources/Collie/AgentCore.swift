@@ -11,6 +11,7 @@ protocol AgentCore: AnyObject, Sendable {
     func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff
     func agentDraft(machineId: String, terminalId: String) async throws -> String?
     func prompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws
+    func resendPrompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws
     func typeText(machineId: String, terminalId: String, text: String) async throws
     func focus(machineId: String, terminalId: String) async throws

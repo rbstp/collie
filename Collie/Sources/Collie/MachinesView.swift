@@ -119,7 +119,6 @@ struct MachineRow<Destination: View>: View {
 private struct MachineConnectionDetails: View {
     let message: String
     @State private var copiedAt: Date?
-    @Environment(\.appAccent) private var accent
 
     var body: some View {
         HStack(spacing: 4) {
@@ -132,25 +131,35 @@ private struct MachineConnectionDetails: View {
                 UIPasteboard.general.string = message
                 copiedAt = .now
             } label: {
-                Label(copiedAt == nil ? "Copy connection error" : "Copied",
-                      systemImage: copiedAt == nil ? "doc.on.clipboard" : AgentActivityStatus(.done).symbol)
-                    .labelStyle(.iconOnly)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(copiedAt == nil ? accent : AgentState.done.color)
-                    .frame(minWidth: 28, minHeight: 28)
-                    .darkGlass(in: .circle, interactive: true)
+                CopyIcon(label: "Copy connection error", copiedAt: $copiedAt)
                     .padding(6)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
         .onChange(of: message) { _, _ in copiedAt = nil }
-        .task(id: copiedAt) {
-            guard copiedAt != nil else { return }
-            try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled else { return }
-            copiedAt = nil
-        }
+    }
+}
+
+struct CopyIcon: View {
+    let label: String
+    @Binding var copiedAt: Date?
+    @Environment(\.appAccent) private var accent
+
+    var body: some View {
+        Label(copiedAt == nil ? label : "Copied",
+              systemImage: copiedAt == nil ? "doc.on.clipboard" : AgentActivityStatus(.done).symbol)
+            .labelStyle(.iconOnly)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(copiedAt == nil ? accent : AgentState.done.color)
+            .frame(minWidth: 28, minHeight: 28)
+            .darkGlass(in: .circle, interactive: true)
+            .task(id: copiedAt) {
+                guard copiedAt != nil else { return }
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                copiedAt = nil
+            }
     }
 }
 

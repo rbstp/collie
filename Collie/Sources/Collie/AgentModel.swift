@@ -16,6 +16,8 @@ final class AgentModel {
     private let unlocker: any TerminalUnlocker
     private let machineLabel: String?
     @ObservationIgnored private let now: () -> ContinuousClock.Instant
+    @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
+    @ObservationIgnored private let resends: PromptResends
 
     private(set) var agent: AgentSummary?
     private(set) var terminal: TerminalSummary?
@@ -54,6 +56,11 @@ final class AgentModel {
     @ObservationIgnored private var seenPrompt: String?
     @ObservationIgnored private(set) var sentMacDraftCheck: Task<Void, Never>?
     private(set) var sendingPrompt = false
+    var retrying: Bool { sendingPrompt && resends.entries[route].map { $0.retrying && !$0.stopped } == true }
+    /// The prompt this model sent or took over, while it is in flight.
+    @ObservationIgnored private var resend: PromptResends.Entry?
+    /// The prompt ended with another screen, or none, which keeps the draft instead.
+    @ObservationIgnored private var draftElsewhere = false
     /// The Mac's input box holds text the mirror did not put there; it waits for the next send.
     private var mirrorPaused = false
     /// The draft as the keyboard last left it; dictation, paste and restore never reach the Mac.
@@ -132,10 +139,14 @@ final class AgentModel {
         core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file, draftsFile: URL? = nil, viewedFile: URL? = nil,
         dictationEngine: any DictationEngine = SpeechDictationEngine(),
         unlocker: any TerminalUnlocker = SecureEnclaveUnlocker(), machineLabel: String? = nil,
-        now: @escaping () -> ContinuousClock.Instant = { .now }
+        now: @escaping () -> ContinuousClock.Instant = { .now },
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        resends: PromptResends = .shared
     ) {
         self.core = core
         self.now = now
+        self.sleep = sleep
+        self.resends = resends
         self.route = route
         self.unlocker = unlocker
         self.machineLabel = machineLabel
@@ -153,6 +164,7 @@ final class AgentModel {
             attachments = saved.attachments.filter { $0.uploaded.timeIntervalSinceNow > -Attachment.keptOnMachine }
             restoredShell = saved.shell
         }
+        promptError = resends.takeUnseen(route)
     }
 
     /// A send in flight saves what stays once it succeeds, so a screen opened meanwhile never offers
@@ -278,6 +290,7 @@ final class AgentModel {
     }
 
     func run() async {
+        if let resend, resends.entries[route] === resend, resend.viewer == nil { resend.viewer = self }
         Self.watchers[route.machineId] = ObjectIdentifier(self)
         watch(route.terminalId)
         var loading: Task<Void, Never>?
@@ -288,6 +301,7 @@ final class AgentModel {
             }
             try? await Task.sleep(for: .milliseconds(isTerminal ? 100 : 250))
         }
+        if resend?.stopped == false { resends.leave(route, self) }
         if Self.watchers[route.machineId] == ObjectIdentifier(self) {
             Self.watchers[route.machineId] = nil
             watch(nil)
@@ -318,7 +332,10 @@ final class AgentModel {
 
     /// Keyboard typing in the prompt field: only this mirrors the draft's slash command to the Mac.
     func typed(_ text: String) {
-        if text != draft { loadedMacDraft = nil }
+        if text != draft {
+            loadedMacDraft = nil
+            stopRetry()
+        }
         draft = text
         typedDraft = text
         mirrorDelay?.cancel()
@@ -398,8 +415,13 @@ final class AgentModel {
     }
 
     func poll() {
+        adoptResend()
+        if let resend, draft != resend.sent { stopRetry() }
         guard let view = core.agentView(machineId: route.machineId, terminalId: route.terminalId, afterRevision: revision) else { return }
-        if link != view.link { link = view.link }
+        if link != view.link {
+            link = view.link
+            if link == .connected { resends.wake(route) }
+        }
         if linkError != view.lastError { linkError = view.lastError }
         if agent != view.agent {
             if loadedMacDraft != nil, let prompt = view.agent?.lastPrompt, prompt != seenPrompt {
@@ -522,7 +544,9 @@ final class AgentModel {
     /// Text typed and files attached while the send is in flight stay for the next prompt.
     /// Paths on the Mac never have spaces, so they are set apart by single spaces.
     func sendPrompt() async {
-        defer { saveDraft() }
+        defer {
+            if draftElsewhere { draftElsewhere = false } else { saveDraft() }
+        }
         if isTerminal {
             await sendCommand()
             return
@@ -547,10 +571,19 @@ final class AgentModel {
         }
         sendingPrompt = true
         promptError = nil
+        _ = resends.takeUnseen(route)
         defer { sendingPrompt = false }
         saveDraft("", [])
         do {
-            try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: macDraft)
+            try await prompt(text, sent: sent, files: files)
+            finish(sent, files: files, error: nil)
+        } catch {
+            finish(sent, files: files, error: error)
+        }
+    }
+
+    private func finish(_ sent: String, files: [AttachedFile], error: (any Error)?) {
+        guard let error else {
             if macDraft != nil { macDraft = "" }
             mirrorPaused = false
             mirrored = ""
@@ -561,17 +594,75 @@ final class AgentModel {
             if draft.hasPrefix(sent) {
                 draft = String(draft.dropFirst(sent.count).drop(while: \.isWhitespace))
             }
-        } catch {
-            if case .DraftChanged(let current) = error as? CoreError {
-                let mine = Self.slashToken(draft)
-                if !mine.isEmpty, Self.boxToken(current)?.hasPrefix(mine) == true { adopt(current) } else { macDraft = current }
+            return
+        }
+        if isTerminal { return }
+        if case .DraftChanged(let current) = error as? CoreError {
+            let mine = Self.slashToken(draft)
+            if !mine.isEmpty, Self.boxToken(current)?.hasPrefix(mine) == true { adopt(current) } else { macDraft = current }
+        }
+        if case .AgentBlocked = error as? CoreError, codexQuestionQueued {
+            promptError = "Tap ⇧← to view and answer the pending question."
+        } else {
+            promptError = Self.promptMessage(for: error)
+        }
+    }
+
+    static func promptMessage(for error: any Error) -> String {
+        PromptRetry.retries(error) ? "May not have been sent: machine unreachable" : message(for: error)
+    }
+
+    /// A prompt still in flight for this agent, from a screen that did not take it over, ends first, so
+    /// prompts arrive in order. The last prompt counts only when the link was up, so it is not stale.
+    private func prompt(_ text: String, sent: String, files: [AttachedFile]) async throws {
+        while true {
+            if let pending = resends.entries[route] {
+                pending.viewer = self
+                resends.stop(route)
+                _ = await pending.outcome.value
+                continue
             }
-            if case .AgentBlocked = error as? CoreError, codexQuestionQueued {
-                promptError = "Tap ⇧← to view and answer the pending question."
+            let linked = link == .connected
+            let send = PromptResends.Send(
+                core: core, route: route, text: text, expected: macDraft, before: linked ? agent?.lastPrompt : nil,
+                draftsFile: draftsFile, now: now, sleep: sleep
+            )
+            guard let entry = resends.start(send, sent: sent, files: files, linked: linked, viewer: self) else { continue }
+            resend = entry
+            let outcome = await entry.outcome.value
+            resend = nil
+            draftElsewhere = entry.viewer !== self
+            if let outcome { throw outcome }
+            return
+        }
+    }
+
+    /// A screen that opens while its agent's prompt is being resent shows it, as if it never left.
+    private func adoptResend() {
+        guard !sendingPrompt, let entry = resends.entries[route], entry.viewer == nil, !entry.stopped, attachments.isEmpty,
+            draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft == loadedMacDraft
+        else { return }
+        entry.viewer = self
+        resend = entry
+        loadedMacDraft = nil
+        draft = entry.sent
+        attachments = entry.files
+        sendingPrompt = true
+        Task {
+            let outcome = await entry.outcome.value
+            resend = nil
+            if entry.viewer === self {
+                finish(entry.sent, files: entry.files, error: outcome)
+                sendingPrompt = false
+                saveDraft()
             } else {
-                promptError = Self.message(for: error)
+                sendingPrompt = false
             }
         }
+    }
+
+    func stopRetry() {
+        if let resend, resends.entries[route] === resend { resends.stop(route) }
     }
 
     /// One line, then Enter, into the shell; a locked terminal is unlocked first, in the same action.
@@ -624,6 +715,7 @@ final class AgentModel {
     }
 
     private func dropInput() {
+        stopRetry()
         dictation.cancel()
         cancelUpload()
         draft = ""
@@ -701,6 +793,7 @@ final class AgentModel {
     func paste(_ text: String?) {
         guard let text, !dictation.isActive else { return }
         loadedMacDraft = nil
+        stopRetry()
         draft += text
     }
 

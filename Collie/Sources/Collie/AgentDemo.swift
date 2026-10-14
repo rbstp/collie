@@ -209,6 +209,10 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         try await Task.sleep(for: .milliseconds(500))
     }
 
+    func resendPrompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws {
+        try await Task.sleep(for: .milliseconds(500))
+    }
+
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {}
 
     func typeText(machineId: String, terminalId: String, text: String) async throws {}

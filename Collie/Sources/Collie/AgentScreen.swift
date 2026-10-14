@@ -687,7 +687,9 @@ private struct PromptBar: View {
     @State private var pickingFile = false
     @State private var pickingPrompt = false
     @State private var droppingLetter: String?
+    @State private var copiedAt: Date?
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.appAccent) private var appAccent
 
     private func typed(_ text: String) {
         let old = model.draft
@@ -701,6 +703,12 @@ private struct PromptBar: View {
         droppingLetter = old
     }
 
+    private func copyPrompt() {
+        guard !model.draft.isEmpty else { return }
+        UIPasteboard.general.string = model.draft
+        copiedAt = .now
+    }
+
     private var expanded: Bool {
         editing || typingCommand || model.dictation.isActive || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
     }
@@ -709,6 +717,9 @@ private struct PromptBar: View {
         VStack(alignment: .leading, spacing: 4) {
             if let error = model.promptError {
                 Text(error).font(.footnote).foregroundStyle(.red)
+            }
+            if model.retrying {
+                Text("Unreachable, retrying…").font(.footnote).foregroundStyle(.secondary)
             }
             if let upload = model.upload {
                 UploadChip(upload: upload) { model.cancelUpload() }
@@ -771,6 +782,20 @@ private struct PromptBar: View {
                                 .lineLimit(expanded ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
                                 .focused($editing)
                                 .disabled(model.dictation.isActive)
+                                .overlay(alignment: .trailing) {
+                                    if !editing && !model.draft.isEmpty && !model.dictation.isActive {
+                                        Color.clear
+                                            .contentShape(Rectangle())
+                                            .onTapGesture { editing = true }
+                                            .onLongPressGesture(perform: copyPrompt)
+                                            .accessibilityHidden(true)
+                                    }
+                                    if copiedAt != nil {
+                                        CopyIcon(label: "Copy prompt", copiedAt: $copiedAt)
+                                            .allowsHitTesting(false)
+                                    }
+                                }
+                                .accessibilityAction(named: "Copy prompt", copyPrompt)
                         }
                         if expanded && !model.draft.isEmpty {
                             Button {
@@ -823,6 +848,10 @@ private struct PromptBar: View {
                         .accessibilityLabel("Hide keyboard")
                     }
                     Button {
+                        if model.retrying {
+                            model.stopRetry()
+                            return
+                        }
                         if !model.keepsKeyboard {
                             editing = false
                             typingCommand = false
@@ -830,16 +859,18 @@ private struct PromptBar: View {
                         Task { await model.sendPrompt() }
                     } label: {
                         if model.sendingPrompt {
-                            ProgressView().frame(width: 28, height: 28)
+                            ProgressView().tint(appAccent).frame(width: 28, height: 28)
                         } else {
                             Image(systemName: "paperplane.fill").frame(width: 28, height: 28)
                         }
                     }
                     .buttonStyle(.glassProminent)
+                    // Enabled only so a tap stops the retry, so it keeps the look of a send in progress.
+                    .tint(model.retrying ? Color(.systemGray4) : appAccent)
                     .buttonBorderShape(.circle)
                     .controlSize(.small)
-                    .disabled(!model.canSendPrompt)
-                    .accessibilityLabel(model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
+                    .disabled(!model.canSendPrompt && !model.retrying)
+                    .accessibilityLabel(model.retrying ? "Stop retrying" : model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
                 }
             }
         }

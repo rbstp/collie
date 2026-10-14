@@ -82,6 +82,9 @@ final class FakeCore: AgentCore {
         var machines: [Machine] = []
         var cachedFlock: MachineFlock?
         var flocks = 0
+        var link = LinkPhase.connected
+        var heldOps: Set<String> = []
+        var resends: [String] = []
     }
 
     let state = Mutex(State())
@@ -153,7 +156,7 @@ final class FakeCore: AgentCore {
             terminalId: terminalId, workspaceId: "w1", kind: kind, name: nil, title: nil,
             status: s.status, statusSinceMs: 0, cwd: nil, lastLine: nil, lastPrompt: s.lastPrompt
         )
-        return AgentView(link: .connected, lastError: nil, agent: agent, output: nil, outputRevision: 0)
+        return AgentView(link: s.link, lastError: nil, agent: agent, output: nil, outputRevision: 0)
     }
     func watchAgent(machineId: String, terminalId: String?, lines: UInt16) async throws {
         state.withLock {
@@ -192,11 +195,27 @@ final class FakeCore: AgentCore {
             return s.macDraft
         }
     }
+    /// Like the core, an unanswered prompt holds its op_id and only a held one can be resent.
     func prompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws {
-        try await call {
-            $0.prompts.append(text)
-            $0.expectedDrafts.append(expectedDraft)
+        do {
+            try await call {
+                $0.prompts.append(text)
+                $0.expectedDrafts.append(expectedDraft)
+            }
+            state.withLock { _ = $0.heldOps.remove(text) }
+        } catch {
+            state.withLock {
+                if PromptRetry.retries(error) { $0.heldOps.insert(text) } else { $0.heldOps.remove(text) }
+            }
+            throw error
         }
+    }
+    func resendPrompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws {
+        try state.withLock {
+            guard $0.heldOps.contains(text) else { throw CoreError.NotResent }
+            $0.resends.append(text)
+        }
+        try await prompt(machineId: machineId, terminalId: terminalId, text: text, expectedDraft: expectedDraft)
     }
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {
         try await call {
