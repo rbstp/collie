@@ -2919,13 +2919,19 @@ private func caretAt(_ model: AgentModel, _ offset: Int) {
     #expect(model.mentionChoices == ["Config.toml", "src/config.rs"])
 
     let caret = model.pickMention("src/config.rs")
-    #expect(model.draft == "fix @src/config.rs  in place")
+    #expect(model.draft == "fix @src/config.rs in place")
     #expect(caret.map { model.draft[..<$0] } == "fix @src/config.rs ")
     #expect(model.mentionChoices.isEmpty)
     model.moveCaret(caret.map { TextSelection(insertionPoint: $0) })
     try? await Task.sleep(for: .milliseconds(300))
     #expect(core.snapshot.fileQueries == ["CONF"])
     #expect(model.mentionChoices.isEmpty)
+
+    model.typed("see @REA")
+    caretAt(model, 8)
+    let end = model.pickMention("README.md")
+    #expect(model.draft == "see @README.md ")
+    #expect(end == model.draft.endIndex)
 }
 
 @MainActor

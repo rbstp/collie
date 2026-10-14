@@ -355,14 +355,17 @@ final class AgentModel {
 
     func pickMention(_ path: String) -> String.Index? {
         guard !sendingPrompt, !dictation.isActive, let range = mentionWord else { return nil }
-        let inserted = "@\(path) "
+        let following = range.upperBound < draft.endIndex && draft[range.upperBound].isWhitespace ? draft[range.upperBound] : nil
+        let inserted = "@\(path)" + (following == nil ? " " : "")
         var next = draft
         next.replaceSubrange(range, with: inserted)
         guard next.utf8.count <= 32 * 1024 else {
             promptError = Self.tooLong
             return nil
         }
-        let end = next.utf8.index(next.startIndex, offsetBy: draft.utf8.distance(from: draft.startIndex, to: range.lowerBound) + inserted.utf8.count)
+        if promptError == Self.tooLong { promptError = nil }
+        let offset = draft.utf8.distance(from: draft.startIndex, to: range.lowerBound) + inserted.utf8.count + (following?.utf8.count ?? 0)
+        let end = next.utf8.index(next.startIndex, offsetBy: offset)
         mentionLookup?.cancel()
         mentions = nil
         loadedMacDraft = nil
