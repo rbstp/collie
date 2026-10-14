@@ -165,25 +165,23 @@ struct GridPageLock: UIViewRepresentable {
     final class Probe: UIView {
         var locked = false
         private weak var pager: UIScrollView?
-        private var wasEnabled = true
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
             update()
         }
 
-        func restore() { pager?.isScrollEnabled = wasEnabled }
+        func restore() { pager?.isScrollEnabled = true }
 
         func update() {
             var ancestor = superview
             while let view = ancestor {
                 if let scroll = view as? UIScrollView {
                     if pager !== scroll {
-                        pager?.isScrollEnabled = wasEnabled
+                        pager?.isScrollEnabled = true
                         pager = scroll
-                        wasEnabled = scroll.isScrollEnabled
                     }
-                    scroll.isScrollEnabled = locked ? false : wasEnabled
+                    scroll.isScrollEnabled = !locked
                     return
                 }
                 ancestor = view.superview
