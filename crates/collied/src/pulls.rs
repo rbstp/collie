@@ -1,0 +1,302 @@
+use std::collections::{HashMap, HashSet};
+use std::process::Stdio;
+use std::time::{Duration, Instant};
+
+use protocol::{Cwd, PullChecks, PullRequest, PullState};
+use serde::Deserialize;
+use tokio::process::Command;
+use tokio::time::timeout;
+
+pub const REFRESH: Duration = Duration::from_secs(120);
+const GH_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_URL_BYTES: usize = 512;
+
+pub type Key = (String, String);
+
+/// Never prompts and never uses a token from collied's environment: only the user's
+/// `gh auth login`.
+pub fn gh_command(gh: &str) -> Command {
+    let mut command = Command::new(gh);
+    command
+        .env("PATH", crate::drive::tool_path())
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_ENTERPRISE_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN")
+        .env("GH_PROMPT_DISABLED", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    command
+}
+
+/// With no argument gh finds the current branch itself, so no branch name reaches its
+/// command line.
+pub async fn fetch(gh: &str, checkout: &Cwd) -> Result<Option<PullRequest>, &'static str> {
+    let mut command = gh_command(gh);
+    command
+        .args([
+            "pr",
+            "view",
+            "--json",
+            "number,state,isDraft,url,statusCheckRollup",
+        ])
+        .current_dir(checkout.as_str())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = timeout(GH_TIMEOUT, command.output())
+        .await
+        .map_err(|_| "timed out")?
+        .map_err(|_| "unavailable")?;
+    if output.status.success() {
+        return parse(&output.stdout).map(Some).ok_or("unreadable output");
+    }
+    if String::from_utf8_lossy(&output.stderr).contains("no pull requests found") {
+        Ok(None)
+    } else {
+        Err("command failed")
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct View {
+    number: u64,
+    state: String,
+    is_draft: bool,
+    url: String,
+    #[serde(default)]
+    status_check_rollup: Option<Vec<Check>>,
+}
+
+#[derive(Deserialize)]
+struct Check {
+    status: Option<String>,
+    conclusion: Option<String>,
+    state: Option<String>,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Outcome {
+    Pass,
+    Pending,
+    Fail,
+}
+
+fn parse(json: &[u8]) -> Option<PullRequest> {
+    let view: View = serde_json::from_slice(json).ok()?;
+    let state = match (view.state.as_str(), view.is_draft) {
+        ("OPEN", true) => PullState::Draft,
+        ("OPEN", false) => PullState::Open,
+        ("MERGED", _) => PullState::Merged,
+        ("CLOSED", _) => PullState::Closed,
+        _ => return None,
+    };
+    if !view.url.starts_with("https://")
+        || view.url.len() > MAX_URL_BYTES
+        || view
+            .url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return None;
+    }
+    Some(PullRequest {
+        number: view.number,
+        state,
+        checks: checks(&view.status_check_rollup.unwrap_or_default()),
+        url: view.url,
+    })
+}
+
+/// A status context has a `state`; a check run a `status`, and a `conclusion` once it
+/// completed.
+fn outcome(check: &Check) -> Outcome {
+    match (
+        check.state.as_deref(),
+        check.status.as_deref(),
+        check.conclusion.as_deref(),
+    ) {
+        (Some("SUCCESS"), ..) => Outcome::Pass,
+        (Some("PENDING" | "EXPECTED"), ..) => Outcome::Pending,
+        (Some(_), ..) => Outcome::Fail,
+        (None, Some(status), _) if status != "COMPLETED" => Outcome::Pending,
+        (None, _, Some("SUCCESS" | "NEUTRAL" | "SKIPPED")) => Outcome::Pass,
+        (None, _, None | Some("")) => Outcome::Pending,
+        (None, _, Some(_)) => Outcome::Fail,
+    }
+}
+
+fn checks(rollup: &[Check]) -> PullChecks {
+    match rollup.iter().map(outcome).max() {
+        None => PullChecks::None,
+        Some(Outcome::Pass) => PullChecks::Passing,
+        Some(Outcome::Pending) => PullChecks::Pending,
+        Some(Outcome::Fail) => PullChecks::Failing,
+    }
+}
+
+#[derive(Default)]
+pub struct Pulls {
+    cache: HashMap<Key, (Instant, Option<PullRequest>)>,
+    linked: HashMap<String, PullRequest>,
+}
+
+impl Pulls {
+    pub fn get(&self, terminal_id: &str) -> Option<PullRequest> {
+        self.linked.get(terminal_id).cloned()
+    }
+
+    pub fn cached(&self, key: &Key, now: Instant) -> Option<Option<PullRequest>> {
+        self.cache
+            .get(key)
+            .filter(|(at, _)| now.saturating_duration_since(*at) < REFRESH)
+            .map(|(_, pr)| pr.clone())
+    }
+
+    /// A failed read keeps what the last good one found until the next refresh.
+    pub fn store(
+        &mut self,
+        key: Key,
+        now: Instant,
+        read: Result<Option<PullRequest>, &str>,
+    ) -> Option<PullRequest> {
+        let pr = match read {
+            Ok(pr) => pr,
+            Err(_) => self.cache.get(&key).and_then(|(_, pr)| pr.clone()),
+        };
+        self.cache.insert(key, (now, pr.clone()));
+        pr
+    }
+
+    pub fn link(&mut self, linked: HashMap<String, PullRequest>, seen: &HashSet<Key>) -> bool {
+        self.cache.retain(|key, _| seen.contains(key));
+        let changed = linked != self.linked;
+        self.linked = linked;
+        changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(name: &str) -> Vec<u8> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/gh")
+                .join(name),
+        )
+        .unwrap()
+    }
+
+    fn summary(name: &str) -> (u64, PullState, PullChecks) {
+        let pr = parse(&fixture(name)).unwrap();
+        (pr.number, pr.state, pr.checks)
+    }
+
+    #[test]
+    fn parses_recorded_gh_pr_view_output() {
+        assert_eq!(
+            summary("pr-view-failing.json"),
+            (14673, PullState::Open, PullChecks::Failing)
+        );
+        assert_eq!(
+            summary("pr-view-draft.json"),
+            (14355, PullState::Draft, PullChecks::Passing)
+        );
+        assert_eq!(
+            summary("pr-view-merged.json"),
+            (275, PullState::Merged, PullChecks::Passing)
+        );
+        assert_eq!(
+            summary("pr-view-no-checks.json"),
+            (14665, PullState::Open, PullChecks::None)
+        );
+        assert_eq!(
+            summary("pr-view-pending.json"),
+            (276, PullState::Open, PullChecks::Pending)
+        );
+        assert_eq!(
+            parse(&fixture("pr-view-merged.json")).unwrap().url,
+            "https://github.com/rbstp/collie/pull/275"
+        );
+    }
+
+    #[test]
+    fn closed_state_status_contexts_and_bad_output() {
+        let merged = String::from_utf8(fixture("pr-view-merged.json")).unwrap();
+        let closed = merged.replace(r#""state":"MERGED""#, r#""state":"CLOSED""#);
+        assert_eq!(parse(closed.as_bytes()).unwrap().state, PullState::Closed);
+        let error = r#"{"number":1,"state":"OPEN","isDraft":false,"url":"https://github.com/o/r/pull/1","statusCheckRollup":[{"__typename":"StatusContext","state":"PENDING"},{"__typename":"StatusContext","state":"ERROR"}]}"#;
+        assert_eq!(parse(error.as_bytes()).unwrap().checks, PullChecks::Failing);
+        let null = error.replace(r#"[{"__typename":"StatusContext","state":"PENDING"},{"__typename":"StatusContext","state":"ERROR"}]"#, "null");
+        assert_eq!(parse(null.as_bytes()).unwrap().checks, PullChecks::None);
+        for bad in [
+            merged.replace(r#""state":"MERGED""#, r#""state":"LOCKED""#),
+            merged.replace("https://github.com", "http://github.com"),
+            merged.replace("https://github.com", "javascript:alert(1)//"),
+            merged.replace("/pull/275", "/pull/275 x"),
+            merged.replace("/pull/275", &format!("/{}", "a".repeat(MAX_URL_BYTES))),
+            "no pull requests found".to_owned(),
+        ] {
+            assert_eq!(parse(bad.as_bytes()), None, "{bad}");
+        }
+    }
+
+    fn pr(number: u64) -> PullRequest {
+        PullRequest {
+            number,
+            state: PullState::Open,
+            checks: PullChecks::Pending,
+            url: format!("https://github.com/o/r/pull/{number}"),
+        }
+    }
+
+    #[test]
+    fn cache_refreshes_every_two_minutes_and_keeps_the_last_read_on_failure() {
+        let mut pulls = Pulls::default();
+        let key = ("/repo".to_owned(), "feature".to_owned());
+        let start = Instant::now();
+        assert_eq!(pulls.cached(&key, start), None);
+        assert_eq!(
+            pulls.store(key.clone(), start, Ok(Some(pr(1)))),
+            Some(pr(1))
+        );
+        assert_eq!(
+            pulls.cached(&key, start + REFRESH - Duration::from_secs(1)),
+            Some(Some(pr(1)))
+        );
+        assert_eq!(pulls.cached(&key, start + REFRESH), None);
+        let later = start + REFRESH;
+        assert_eq!(
+            pulls.store(key.clone(), later, Err("command failed")),
+            Some(pr(1))
+        );
+        assert_eq!(pulls.cached(&key, later), Some(Some(pr(1))));
+        assert_eq!(pulls.store(key.clone(), later, Ok(None)), None);
+        assert_eq!(pulls.cached(&key, later), Some(None));
+        assert_eq!(pulls.store(key.clone(), later, Err("command failed")), None);
+    }
+
+    #[test]
+    fn link_reports_changes_and_forgets_branches_no_agent_is_on() {
+        let mut pulls = Pulls::default();
+        let now = Instant::now();
+        let a = ("/a".to_owned(), "x".to_owned());
+        let b = ("/b".to_owned(), "y".to_owned());
+        pulls.store(a.clone(), now, Ok(Some(pr(1))));
+        pulls.store(b.clone(), now, Ok(None));
+        let linked = HashMap::from([("t1".to_owned(), pr(1))]);
+        let seen = HashSet::from([a.clone()]);
+        assert!(pulls.link(linked.clone(), &seen));
+        assert_eq!(pulls.get("t1"), Some(pr(1)));
+        assert_eq!(pulls.get("t2"), None);
+        assert_eq!(pulls.cached(&b, now), None);
+        assert!(!pulls.link(linked, &seen));
+        assert!(pulls.link(HashMap::new(), &HashSet::new()));
+        assert_eq!(pulls.get("t1"), None);
+        assert_eq!(pulls.cached(&a, now), None);
+    }
+}

@@ -110,6 +110,8 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     r.line(s, "hooks", d);
     let (s, d) = check_usage(&data_dir, crate::now_ms());
     r.line(s, "plan usage", d);
+    let (s, d) = check_gh().await;
+    r.line(s, "gh", d);
 
     Ok(!r.failed)
 }
@@ -130,6 +132,25 @@ fn check_hooks() -> (Status, String) {
         )
     } else {
         (Status::Warn, missing.to_owned())
+    }
+}
+
+async fn check_gh() -> (Status, String) {
+    let Some(gh) = crate::drive::gh() else {
+        return (
+            Status::Warn,
+            "not in /opt/homebrew/bin, /usr/local/bin or /usr/bin; agents show no pull request"
+                .to_owned(),
+        );
+    };
+    let mut command = crate::pulls::gh_command(gh);
+    command.args(["auth", "status"]);
+    match tokio::time::timeout(std::time::Duration::from_secs(15), command.status()).await {
+        Ok(Ok(status)) if status.success() => (Status::Ok, format!("{gh}, signed in")),
+        _ => (
+            Status::Warn,
+            format!("{gh} is not signed in (gh auth login); agents show no pull request"),
+        ),
     }
 }
 

@@ -400,6 +400,22 @@ fn text_content(bytes: &[u8]) -> Option<&str> {
     }
 }
 
+async fn head(root: &Cwd) -> Result<Option<String>, Fail> {
+    let (branch, ok, _) = git(root, &["symbolic-ref", "--quiet", "--short", "HEAD"], 4096).await?;
+    Ok(ok.then(|| {
+        String::from_utf8_lossy(&branch)
+            .trim_end_matches('\n')
+            .to_owned()
+    }))
+}
+
+pub async fn branch(cwd: &Cwd, roots: &[PathBuf]) -> Result<Option<(Cwd, String)>, Fail> {
+    let Some(root) = root(cwd, roots).await? else {
+        return Ok(None);
+    };
+    Ok(head(&root).await?.map(|branch| (root, branch)))
+}
+
 pub async fn changes(
     cwd: &Cwd,
     roots: &[PathBuf],
@@ -423,12 +439,7 @@ pub async fn changes(
             .unwrap_or(checkout),
         None => checkout,
     };
-    let (branch, ok, _) = git(&root, &["symbolic-ref", "--quiet", "--short", "HEAD"], 4096).await?;
-    let branch = ok.then(|| {
-        String::from_utf8_lossy(&branch)
-            .trim_end_matches('\n')
-            .to_owned()
-    });
+    let branch = head(&root).await?;
     let mut changes = GitChanges {
         root: Some(root.clone()),
         branch,
@@ -828,6 +839,14 @@ mod tests {
             .unwrap();
         assert_eq!(list.root, Some(checkout.clone()));
         assert_eq!(list.branch.as_deref(), Some("feature"));
+        let sub = Path::new(checkout.as_str()).join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        assert_eq!(
+            branch(&Cwd::new(sub.to_str().unwrap()).unwrap(), &roots)
+                .await
+                .unwrap(),
+            Some((checkout.clone(), "feature".to_owned()))
+        );
         assert!(
             patch(&checkout, &roots, "first", GitSection::Unstaged)
                 .await
@@ -842,16 +861,23 @@ mod tests {
                 .branch,
             None
         );
+        assert_eq!(branch(&checkout, &roots).await.unwrap(), None);
         let outside = tempfile::tempdir().unwrap();
         let outside = outside.path().canonicalize().unwrap();
         let outside_cwd = Cwd::new(outside.to_str().unwrap()).unwrap();
         assert_eq!(
-            changes(&outside_cwd, &[outside], None, GitScope::Uncommitted)
-                .await
-                .unwrap()
-                .root,
+            changes(
+                &outside_cwd,
+                std::slice::from_ref(&outside),
+                None,
+                GitScope::Uncommitted
+            )
+            .await
+            .unwrap()
+            .root,
             None
         );
+        assert_eq!(branch(&outside_cwd, &[outside]).await.unwrap(), None);
     }
 
     #[tokio::test]

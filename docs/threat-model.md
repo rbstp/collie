@@ -283,6 +283,16 @@ Manual keys and text intentionally have no approval-specific restrictions for Cl
 | Residual | Archive deliberately forces removal of a linked worktree, including uncommitted changes. `gh poi` may remove other merged branches and worktrees in the repository, even when archiving from a regular folder. Repository paths can change between checks and subprocess execution under the same user account. |
 | Phase | Built |
 
+### Linked pull requests
+
+| | |
+|---|---|
+| Assets | The user's `gh` login; the repository and branch of each agent's checkout |
+| Attack | A crafted checkout or GitHub response makes collied run `gh` somewhere it should not, with a token it should not use, or makes the phone open a hostile link. |
+| Mitigations | collied runs `gh pr view` only while a phone is connected, only in checkouts that resolve inside the task roots, with no argument taken from the checkout, a fixed binary path, `GH_PROMPT_DISABLED=1`, `GH_TOKEN`, `GITHUB_TOKEN` and the enterprise token variables removed, null stdin, a 30 s timeout and `kill_on_drop`. Only the number, state, check outcome and an `https://` URL without whitespace or control characters reach the phone, which opens only `https` links. Nothing from `gh` is logged. |
+| Residual | `gh` reads the checkout's git config and remotes, as `gh poi` does. A repository whose remote points at another GitHub repository shows that repository's pull request. |
+| Phase | Built |
+
 ### Shell input from the phone
 
 | | |
