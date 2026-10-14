@@ -58,6 +58,8 @@ final class AgentModel {
     private(set) var retrying = false
     @ObservationIgnored private var retryWait: Task<Void, any Error>?
     @ObservationIgnored private var retryStopped = false
+    /// The screen is gone: a send already in flight is never retried out of sight.
+    @ObservationIgnored private var left = false
     /// The Mac's input box holds text the mirror did not put there; it waits for the next send.
     private var mirrorPaused = false
     /// The draft as the keyboard last left it; dictation, paste and restore never reach the Mac.
@@ -265,6 +267,7 @@ final class AgentModel {
     }
 
     func run() async {
+        left = false
         Self.watchers[route.machineId] = ObjectIdentifier(self)
         watch(route.terminalId)
         var loading: Task<Void, Never>?
@@ -275,6 +278,8 @@ final class AgentModel {
             }
             try? await Task.sleep(for: .milliseconds(isTerminal ? 100 : 250))
         }
+        left = true
+        retryStopped = true
         stopRetry()
         if Self.watchers[route.machineId] == ObjectIdentifier(self) {
             Self.watchers[route.machineId] = nil
@@ -564,7 +569,7 @@ final class AgentModel {
             if case .AgentBlocked = error as? CoreError, codexQuestionQueued {
                 promptError = "Tap ⇧← to view and answer the pending question."
             } else if PromptRetry.retries(error) {
-                promptError = "Not sent: machine unreachable"
+                promptError = "May not have been sent: machine unreachable"
             } else {
                 promptError = Self.message(for: error)
             }
@@ -578,7 +583,7 @@ final class AgentModel {
         let before = agent?.lastPrompt
         var retry = PromptRetry(started: now())
         var resend = false
-        retryStopped = false
+        retryStopped = left
         defer { retrying = false }
         while true {
             let linked = link == .connected

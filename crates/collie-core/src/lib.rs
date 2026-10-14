@@ -169,7 +169,7 @@ pub enum CoreError {
     Storage { message: String },
     #[error("internal: {message}")]
     Internal { message: String },
-    #[error("Not sent: check the session before sending again.")]
+    #[error("May not have been sent: check the session")]
     NotResent,
 }
 
@@ -2606,7 +2606,7 @@ impl Inner {
         Some(key)
     }
 
-    /// A clock set back expires every entry rather than stretching the window.
+    /// An entry the clock was set back past expires rather than stretching the window.
     fn live_ops(&self) -> MutexGuard<'_, HashMap<String, (OpId, SystemTime)>> {
         let mut ops = lock(&self.ops);
         let now = SystemTime::now();

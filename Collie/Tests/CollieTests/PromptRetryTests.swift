@@ -6,7 +6,7 @@ import Testing
 @testable import Collie
 
 private let unreachable = CoreError.Unreachable(message: "timed out waiting for the machine")
-private let notSent = "Not sent: machine unreachable"
+private let notSent = "May not have been sent: machine unreachable"
 
 private final class TestClock: Sendable {
     private let state = Mutex((now: ContinuousClock.now, sleeps: [Duration]()))
@@ -196,12 +196,13 @@ private func waitingModel(_ core: FakeCore) async -> (AgentModel, Task<Void, Nev
 }
 
 @Test func aChangedLastPromptMeansTheResendArrived() {
-    #expect(PromptRetry.arrived("  fix the build\nand the tests", lastPrompt: "fix the build", before: nil))
+    #expect(PromptRetry.arrived("  fix the build\nand the tests", lastPrompt: "fix the build", before: "older"))
+    #expect(!PromptRetry.arrived("continue", lastPrompt: "continue", before: nil), "unknown at the start")
     #expect(!PromptRetry.arrived("fix the build", lastPrompt: "fix the build", before: "fix the build"))
     #expect(!PromptRetry.arrived("fix the build", lastPrompt: nil, before: "older"))
-    #expect(!PromptRetry.arrived("fix the build", lastPrompt: "fix the tests", before: nil))
+    #expect(!PromptRetry.arrived("fix the build", lastPrompt: "fix the tests", before: "older"))
     let long = String(repeating: "a", count: 200)
-    #expect(PromptRetry.arrived(long, lastPrompt: String(repeating: "a", count: 159) + "…", before: nil))
+    #expect(PromptRetry.arrived(long, lastPrompt: String(repeating: "a", count: 159) + "…", before: "older"))
 }
 
 @MainActor
@@ -292,7 +293,10 @@ private func waitingModel(_ core: FakeCore) async -> (AgentModel, Task<Void, Nev
 @MainActor
 @Test func aPromptTheAgentAlreadyShowsIsNotResent() async {
     let core = FakeCore()
-    core.state.withLock { $0.link = .connecting }
+    core.state.withLock {
+        $0.link = .connecting
+        $0.lastPrompt = "run the tests"
+    }
     let (model, send) = await waitingModel(core)
     core.state.withLock {
         $0.lastPrompt = "fix the build"
@@ -319,4 +323,44 @@ private func waitingModel(_ core: FakeCore) async -> (AgentModel, Task<Void, Nev
     #expect(model.isTerminal)
     #expect(model.promptError == nil)
     #expect(model.draft.isEmpty)
+}
+
+@MainActor
+@Test func anUnknownLastPromptIsNeverTakenAsArrived() async {
+    let core = FakeCore()
+    core.state.withLock { $0.link = .connecting }
+    let (model, send) = await waitingModel(core)
+    core.set(error: nil)
+    core.state.withLock {
+        $0.lastPrompt = "fix the build"
+        $0.link = .connected
+    }
+    model.poll()
+    await send.value
+    #expect(core.snapshot.resends == ["fix the build"], "sent again, under the held op_id")
+    #expect(model.draft.isEmpty)
+}
+
+@MainActor
+@Test func leavingDuringTheFirstAttemptNeverRetries() async {
+    let core = FakeCore()
+    let model = await retryingModel(core, TestClock()) { try await Task.sleep(for: $0) }
+    let run = Task { await model.run() }
+    model.draft = "fix the build"
+    core.set(hold: true, error: unreachable)
+    let send = Task { await model.sendPrompt() }
+    await core.waitHeld(1)
+    run.cancel()
+    await run.value
+    core.release()
+    await send.value
+    #expect(core.snapshot.prompts == ["fix the build"])
+    #expect(core.snapshot.resends.isEmpty)
+    #expect(!model.retrying)
+    #expect(model.promptError == notSent)
+
+    model.draft = "again"
+    core.set(error: unreachable)
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["fix the build", "again"], "a send after leaving is not retried either")
 }

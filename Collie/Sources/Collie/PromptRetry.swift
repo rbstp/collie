@@ -38,9 +38,10 @@ struct PromptRetry {
     }
 
     /// collied's last prompt is the first non-empty line, cut to 160 characters with "…". It must
-    /// have changed since the send started, so a prompt sent twice on purpose is not taken as arrived.
+    /// have changed from a known one since the send started, so a prompt sent twice on purpose, or
+    /// while the last one was unknown, is not taken as arrived.
     static func arrived(_ text: String, lastPrompt: String?, before: String?) -> Bool {
-        guard let lastPrompt, lastPrompt != before else { return false }
+        guard let before, let lastPrompt, lastPrompt != before else { return false }
         let line = text.split(whereSeparator: \.isNewline).lazy
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty } ?? ""
