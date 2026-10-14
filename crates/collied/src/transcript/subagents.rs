@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -11,6 +11,8 @@ use super::open;
 use crate::prompt;
 
 const TAIL_BYTES: u64 = 64 * 1024;
+/// Growth since the last read is read whole up to this, else only the tail.
+const GROWTH_BYTES: u64 = 512 * 1024;
 const MAX_FILES: usize = 8;
 const ACTIVITY_CHARS: usize = 120;
 const TYPE_CHARS: usize = 64;
@@ -26,7 +28,11 @@ struct Seen {
     finished: bool,
     activity: Option<String>,
     started_ms: Option<u64>,
-    tokens: u64,
+    /// The latest input, cache creation and cache read tokens.
+    input: u64,
+    /// This run's output tokens, counting records of one message once.
+    output: u64,
+    message: Option<(String, u64)>,
     called_tools: bool,
 }
 
@@ -50,8 +56,8 @@ impl Live {
     }
 
     /// Only for a live Claude Code process of this session, and only files written since it
-    /// started. Files known to have finished are skipped unopened; at most `MAX_FILES` others
-    /// are opened, each read again only when its size or mtime moved, and then only its tail.
+    /// started. A file whose size and mtime did not move is not opened; at most `MAX_FILES`
+    /// others are, newest first, and read from where the last read ended or only their tail.
     pub fn running(
         &mut self,
         sessions: Option<&Path>,
@@ -82,14 +88,15 @@ impl Live {
         let mut opened = 0;
         for (key, modified, len, path) in files {
             let prev = old.get(&key);
-            if let Some(p) =
-                prev.filter(|p| p.finished && p.len == len && p.modified == Some(modified))
-            {
+            if let Some(p) = prev.filter(|p| p.len == len && p.modified == Some(modified)) {
                 seen.insert(key, p.clone());
                 continue;
             }
             if opened == MAX_FILES {
-                break;
+                if let Some(p) = prev {
+                    seen.insert(key, p.clone());
+                }
+                continue;
             }
             opened += 1;
             if let Some(s) = read(&path, session, prev) {
@@ -104,7 +111,7 @@ impl Live {
                     agent_type: s.agent_type.clone(),
                     activity: s.activity.clone().unwrap_or_else(|| s.description.clone()),
                     started_at_ms: s.started_ms?,
-                    tokens: (s.tokens + 500) / 1000 * 1000,
+                    tokens: (s.input + s.output + 500) / 1000 * 1000,
                     called_tools: s.called_tools,
                 })
             })
@@ -217,22 +224,23 @@ fn read(path: &Path, session: &str, prev: Option<&Seen>) -> Option<Seen> {
         Some(p) => p.clone(),
         None => meta(&path.with_extension("meta.json"))?,
     };
-    // One byte early, so a window that starts on a record keeps it.
-    let start = len.saturating_sub(TAIL_BYTES).saturating_sub(1);
+    let grown = prev
+        .map(|p| p.len)
+        .filter(|from| *from <= len && len - from <= GROWTH_BYTES);
+    // One byte early, so a tail window that starts on a record keeps it.
+    let start = grown.unwrap_or_else(|| len.saturating_sub(TAIL_BYTES).saturating_sub(1));
     file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::new();
-    (&mut file).take(len - start).read_to_end(&mut bytes).ok()?;
-    let mut lines = bytes.split(|b| *b == b'\n');
-    if start > 0 {
-        lines.next();
-    }
     let mut earliest = None;
-    for line in lines {
+    let mut skip = grown.is_none() && start > 0;
+    let end = lines(&mut file, start, len, |line| {
+        if std::mem::take(&mut skip) {
+            return;
+        }
         if let Ok(v) = serde_json::from_slice::<Value>(line) {
             earliest = earliest.or_else(|| v["timestamp"].as_str().and_then(timestamp_ms));
             s.apply(&v, session);
         }
-    }
+    })?;
     if s.started_ms.is_none() {
         let mut head = Vec::new();
         file.seek(SeekFrom::Start(0)).ok()?;
@@ -243,9 +251,46 @@ fn read(path: &Path, session: &str, prev: Option<&Seen>) -> Option<Seen> {
             .and_then(|v| v["timestamp"].as_str().and_then(timestamp_ms))
             .or(earliest);
     }
-    s.len = len;
+    s.len = end;
     s.modified = Some(modified);
     Some(s)
+}
+
+/// Calls `each` with every complete line from `start` to `len`, leaving out lines longer than
+/// `TAIL_BYTES` without holding them, and returns the offset after the last complete line.
+fn lines(
+    file: &mut std::fs::File,
+    start: u64,
+    len: u64,
+    mut each: impl FnMut(&[u8]),
+) -> Option<u64> {
+    let mut reader = std::io::BufReader::new(file.take(len - start));
+    let (mut line, mut over, mut at, mut end) = (Vec::new(), false, start, start);
+    loop {
+        let buf = reader.fill_buf().ok()?;
+        if buf.is_empty() {
+            return Some(end);
+        }
+        let newline = buf.iter().position(|b| *b == b'\n');
+        let chunk = &buf[..newline.unwrap_or(buf.len())];
+        over |= line.len() + chunk.len() > TAIL_BYTES as usize;
+        if over {
+            line.clear();
+        } else {
+            line.extend_from_slice(chunk);
+        }
+        let used = chunk.len() + usize::from(newline.is_some());
+        reader.consume(used);
+        at += used as u64;
+        if newline.is_some() {
+            if !over {
+                each(&line);
+            }
+            line.clear();
+            over = false;
+            end = at;
+        }
+    }
 }
 
 fn meta(path: &Path) -> Option<Seen> {
@@ -270,18 +315,34 @@ impl Seen {
         }
         let m = &v["message"];
         match v["type"].as_str() {
-            Some("assistant") if m["model"] != "<synthetic>" => {
+            Some("assistant") if m["model"] == "<synthetic>" => {
+                if v["isApiErrorMessage"] == true {
+                    self.finished = true;
+                }
+            }
+            Some("assistant") => {
                 let u = &m["usage"];
                 if u["input_tokens"].is_u64() {
-                    self.tokens = [
+                    self.input = [
                         "input_tokens",
                         "cache_creation_input_tokens",
                         "cache_read_input_tokens",
-                        "output_tokens",
                     ]
                     .iter()
                     .map(|k| u[k].as_u64().unwrap_or(0))
                     .sum();
+                    let out = u["output_tokens"].as_u64().unwrap_or(0);
+                    let id = m["id"].as_str().unwrap_or_default();
+                    match &mut self.message {
+                        Some((last, n)) if last == id => {
+                            self.output = self.output - *n + out;
+                            *n = out;
+                        }
+                        _ => {
+                            self.output += out;
+                            self.message = Some((id.to_owned(), out));
+                        }
+                    }
                 }
                 self.finished = m["stop_reason"] == "end_turn";
                 for b in m["content"].as_array().into_iter().flatten() {
@@ -322,6 +383,8 @@ impl Seen {
                     self.finished = false;
                     self.called_tools = false;
                     self.activity = None;
+                    self.output = 0;
+                    self.message = None;
                     self.started_ms = v["timestamp"]
                         .as_str()
                         .and_then(timestamp_ms)
@@ -337,8 +400,10 @@ impl Seen {
 fn activity(tool: &str, input: &Value) -> Option<String> {
     let s = |k: &str| input[k].as_str().and_then(|v| bounded(v, ACTIVITY_CHARS));
     let file = || {
-        let path = s("file_path").or_else(|| s("notebook_path"))?;
-        Some(path.rsplit('/').next().unwrap_or(&path).to_owned())
+        let path = input["file_path"]
+            .as_str()
+            .or(input["notebook_path"].as_str())?;
+        bounded(path.rsplit('/').next().unwrap_or(path), ACTIVITY_CHARS)
     };
     let text = match tool {
         "Bash" => format!("Running {}", s("description").or_else(|| s("command"))?),
@@ -633,11 +698,18 @@ mod tests {
             r#"{{"type":"assistant","message":{{"model":"m","content":[{{"type":"tool_use","name":"Bash","input":{{"description":"{}\u001b[2J"}}}}],"usage":{{"input_tokens":5}}}}}}"#,
             "é".repeat(500)
         );
-        append(&file, &format!("{filler}{long}\n"));
+        let search = r#"{"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","name":"ToolSearch","input":{}}],"usage":{"input_tokens":5}}}"#;
+        append(&file, &format!("{filler}{search}\n"));
         let mut live = Live::default();
+        let first = s.running(&mut live);
+        assert_eq!(
+            (first[0].activity.as_str(), first[0].tokens),
+            ("Check the pairing code", 0),
+            "only the tail is read, not the Read call before it"
+        );
+        assert_eq!(first[0].started_at_ms, 1_791_927_845_000);
+        append(&file, &format!("{long}\n"));
         let running = s.running(&mut live);
-        assert_eq!(running[0].started_at_ms, 1_791_927_845_000);
-        assert_eq!(running[0].tokens, 0);
         assert_eq!(running[0].activity.chars().count(), ACTIVITY_CHARS);
         assert!(
             running[0].activity.starts_with("Running éé") && running[0].activity.ends_with('…')
@@ -697,11 +769,47 @@ mod tests {
         for n in 0..MAX_FILES + 2 {
             agent(&s.sub, &format!("r{n}"), lines[0]);
         }
-        assert_eq!(s.running(&mut live).len(), MAX_FILES);
+        assert_eq!(
+            s.running(&mut live).len(),
+            MAX_FILES + 1,
+            "8 opened, the unchanged one kept from the last read"
+        );
+        assert_eq!(s.running(&mut live).len(), MAX_FILES + 3);
+        assert_eq!(s.running(&mut live).len(), MAX_FILES + 3);
+    }
+
+    #[test]
+    fn records_behind_a_large_result_and_api_errors() {
+        let lines = fixture();
+        let s = setup(&lines[..5].concat());
+        let mut live = Live::default();
+        assert_eq!(s.running(&mut live)[0].activity, "Reading pairing.rs");
+        let file = s.sub.join(format!("agent-{AGENT}.jsonl"));
+        let big = format!(
+            "{{\"type\":\"user\",\"message\":{{\"content\":[{{\"type\":\"tool_result\",\"content\":\"{}\"}}]}}}}\n",
+            "x".repeat(2 * TAIL_BYTES as usize)
+        );
+        append(&file, &[lines[5], &big].concat());
+        let running = s.running(&mut live);
+        assert_eq!(running[0].activity, "Running Check for unwraps");
+        assert_eq!(running[0].tokens, 44_000);
+        append(&file, &lines[6][..20]);
+        assert_eq!(s.running(&mut live), running);
+        append(&file, &lines[6][20..]);
+        assert_eq!(s.running(&mut live), running);
+
+        let error = r#"{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","stop_reason":"stop_sequence","content":[{"type":"text","text":"API Error"}]}}"#;
+        append(&file, &format!("{error}\n"));
+        assert!(s.running(&mut live).is_empty());
     }
 
     #[test]
     fn activity_lines() {
+        let deep = format!("/{}/pairing.rs", "d".repeat(200));
+        assert_eq!(
+            activity("Read", &serde_json::json!({ "file_path": deep })).as_deref(),
+            Some("Reading pairing.rs")
+        );
         let input = serde_json::json!({"file_path":"/a/b/pairing.rs","pattern":"unwrap","command":"\n  cargo test\nmore","description":"Fetch"});
         assert_eq!(
             activity("Edit", &input).as_deref(),

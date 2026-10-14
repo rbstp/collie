@@ -35,4 +35,22 @@ final class SubagentListTests: XCTestCase {
         XCTAssertEqual(height([subagent(long, tokens: 500)]), one, accuracy: 0.5)
         XCTAssertEqual(height([subagent(long, tokens: 500), subagent("Running tests", tokens: 1_200)]), one * 2 + 2, accuracy: 1)
     }
+
+    func testLongTypesTruncateAndLargeTextWrapsTheUsage() async throws {
+        let type = String(repeating: "very-long-custom-agent-type-", count: 8)
+        let row = SubagentSummary(agentType: type, activity: "Reading pairing.rs", startedAtMs: started, tokens: 496_000, calledTools: true)
+        for size in [UIContentSizeCategory.large, .accessibilityExtraExtraExtraLarge] {
+            let host = UIHostingController(rootView: SubagentList(subagents: [row]).frame(width: 370))
+            host.traitOverrides.preferredContentSizeCategory = size
+            try await hosting(host) { _ in
+                let fits = try await waitFor("row") {
+                    host.view.layoutIfNeeded()
+                    let size = host.sizeThatFits(in: CGSize(width: 370, height: CGFloat.greatestFiniteMagnitude))
+                    return size.width > 0 ? size : nil
+                }
+                XCTAssertLessThanOrEqual(fits.width, 370.5)
+                XCTAssertLessThan(fits.height, 400)
+            }
+        }
+    }
 }

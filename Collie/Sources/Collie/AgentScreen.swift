@@ -392,21 +392,27 @@ private struct AgentHeader: View {
 /// One line per running Claude Code subagent, laid out like Claude Code's agent panel.
 struct SubagentList: View {
     let subagents: [SubagentSummary]
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(subagents.enumerated()), id: \.offset) { _, subagent in
-                    HStack(spacing: 6) {
-                        Image(systemName: "circle").font(.system(size: 7)).foregroundStyle(.secondary).accessibilityHidden(true)
-                        Text(verbatim: subagent.agentType).fontWeight(.semibold).lineLimit(1).fixedSize()
-                        Text(verbatim: subagent.activity).foregroundStyle(.secondary).lineLimit(1)
-                        Spacer(minLength: 4)
-                        Text(verbatim: subagent.usage(now: context.date))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .fixedSize()
+                    let usage = Text(verbatim: subagent.usage(now: context.date))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "circle").font(.system(size: 7)).foregroundStyle(.secondary).accessibilityHidden(true)
+                            // Type and activity share the room left, so a long type truncates instead of hiding the activity.
+                            Text(verbatim: subagent.agentType).fontWeight(.semibold).lineLimit(1)
+                            Text(verbatim: subagent.activity).foregroundStyle(.secondary).lineLimit(1)
+                                .frame(minWidth: 40, alignment: .leading)
+                            Spacer(minLength: 4)
+                            if !typeSize.isAccessibilitySize { usage.fixedSize() }
+                        }
+                        if typeSize.isAccessibilitySize { usage }
                     }
                     .accessibilityElement(children: .combine)
                 }
