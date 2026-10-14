@@ -240,8 +240,9 @@ struct AgentScreen: View {
         }
         .task { await model.run() }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
-            // A hardware keyboard shows only its shortcut bar.
-            keyboardShown = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect)?.height ?? 0 > 100
+            // A hardware keyboard shows only its shortcut bar, or a frame off screen.
+            guard let screen = note.object as? UIScreen, let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            keyboardShown = frame.intersection(screen.bounds).height > 100
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardShown = false }
         .onAppear { model.reloadGestures() }
