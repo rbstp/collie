@@ -44,7 +44,9 @@ use conn::{
 pub use identity::IdentitySigner;
 use pin::PinError;
 use reach::Reachability;
-use session::{CALL_TIMEOUT, SessionError, expect_flock, expect_paired, lock, unexpected};
+use session::{
+    CALL_TIMEOUT, SessionError, expect_flock, expect_paired, lock, unexpected, version_mismatch,
+};
 pub use store::{Machine, MachineKind};
 use store::{MachineStore, random_id};
 
@@ -171,6 +173,8 @@ pub enum CoreError {
     Internal { message: String },
     #[error("May not have been sent: check the session")]
     NotResent,
+    #[error("{message}")]
+    VersionMismatch { message: String },
 }
 
 impl From<tailnet::Error> for CoreError {
@@ -257,6 +261,7 @@ impl From<SessionError> for CoreError {
                 _ => Self::Rejected { message },
             },
             SessionError::DraftChanged { current } => Self::DraftChanged { current },
+            SessionError::VersionMismatch { .. } => Self::VersionMismatch { message },
             _ => Self::Unreachable { message },
         }
     }
@@ -464,6 +469,8 @@ pub struct MachineFlock {
     pub plan_usage: Option<PlanUsage>,
     #[uniffi(default = [])]
     pub starred: Vec<String>,
+    #[uniffi(default = false)]
+    pub version_mismatch: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -1031,7 +1038,11 @@ impl CollieCore {
         if machine.label != default {
             machine.default_label = Some(default);
         }
+        let label = machine.label.clone();
         self.inner.store.save(&renamed)?;
+        if let Some(conn) = lock(&self.inner.conns).get(&machine_id) {
+            *lock(&conn.shared.label) = label;
+        }
         *machines = renamed;
         Ok(())
     }
@@ -1070,8 +1081,9 @@ impl CollieCore {
                     expect_flock(response).map_err(CoreError::from)?;
                 }
                 // The session ended under the request (a resume reconnect, or iOS killed
-                // the socket): the link phase reports it, and the supervisor reconnects.
-                Err(RequestError::Failed(e)) if e.is_transport() => {}
+                // the socket, or the redial met a version mismatch): the link reports it.
+                Err(RequestError::Failed(e))
+                    if e.is_transport() || matches!(e, SessionError::VersionMismatch { .. }) => {}
                 Err(e) => return Err(request_error(&conn, e)),
             }
             Ok(view(&conn))
@@ -3083,6 +3095,11 @@ fn request_error(conn: &Conn, e: RequestError) -> CoreError {
     let link = lock(&conn.shared.link);
     let last = link.last_error.clone();
     match e {
+        RequestError::Failed(SessionError::VersionMismatch { collied }) => {
+            CoreError::VersionMismatch {
+                message: version_mismatch(collied, &lock(&conn.shared.label)),
+            }
+        }
         RequestError::Failed(e) => e.into(),
         RequestError::Stopped if link.phase == LinkPhase::Stopped => CoreError::Unauthorized {
             message: last.unwrap_or_default(),
@@ -3095,10 +3112,14 @@ fn request_error(conn: &Conn, e: RequestError) -> CoreError {
 }
 
 fn view(conn: &Conn) -> MachineFlock {
-    let (link, last_error) = {
+    let label = lock(&conn.shared.label).clone();
+    let (link, last_error, mismatch) = {
         let link = lock(&conn.shared.link);
-        (link.phase, link.last_error.clone())
+        let mismatch = link.version_mismatch.map(|v| version_mismatch(v, &label));
+        (link.phase, link.last_error.clone(), mismatch)
     };
+    let version_mismatch = mismatch.is_some();
+    let last_error = mismatch.or(last_error);
     let guard = lock(&conn.shared.flock);
     let state = &*guard;
     let last_error = last_error.or_else(|| {
@@ -3143,6 +3164,7 @@ fn view(conn: &Conn) -> MachineFlock {
             .flat_map(|f| &f.starred)
             .map(|t| t.as_str().into())
             .collect(),
+        version_mismatch,
     }
 }
 
@@ -4619,6 +4641,7 @@ mod tailnet_tests {
         slashes: Vec<(String, String, Option<String>)>,
         connections: usize,
         closed: usize,
+        refuse_hello: Option<Option<u32>>,
     }
 
     const NONCE: &str = "Tm9uY2VOb25jZU5vbmNlTm9uY2VOb25jZU5vbmNlTm9";
@@ -4747,6 +4770,21 @@ mod tailnet_tests {
                 let mut announced = std::collections::HashSet::new();
                 while let Some(Ok(Message::Text(text))) = ws.next().await {
                     let frame = parse_client_frame(text.as_bytes()).unwrap();
+                    let refuse = lock(&seen).refuse_hello;
+                    if let (Request::Hello(_), Some(collied)) = (&frame.request, refuse) {
+                        let reply = ServerFrame::Error {
+                            id: Some(frame.id),
+                            error: protocol::ErrorBody {
+                                code: ErrorCode::UnsupportedProtocol,
+                                message: "fake".into(),
+                                draft: None,
+                                protocol_version: collied,
+                            },
+                        };
+                        let text = serde_json::to_string(&reply).unwrap();
+                        ws.send(Message::text(text)).await.unwrap();
+                        break;
+                    }
                     let machine = MachineInfo {
                         node_id: mac_id.clone(),
                         ..info()
@@ -5335,6 +5373,40 @@ mod tailnet_tests {
         rt.block_on(core.watch_agent(id(), None, 500)).unwrap();
         assert_eq!(lock(&seen).watches.last(), Some(&None));
         assert!(core.agent_view(id(), t1(), 0).unwrap().output.is_none());
+
+        lock(&seen).refuse_hello = Some(Some(PROTOCOL_VERSION - 1));
+        core.rename_machine(id(), Some("Studio".into())).unwrap();
+        lock(&core.inner.conns)[&id()].reconnect_now();
+        let stopped = (0..200)
+            .find_map(|_| {
+                let f = rt.block_on(core.flock(id())).unwrap();
+                std::thread::sleep(Duration::from_millis(50));
+                (f.link == LinkPhase::Stopped).then_some(f)
+            })
+            .expect("stopped on the version mismatch");
+        let update = "Update collied on Studio: run just collied-install there.";
+        assert!(stopped.version_mismatch);
+        assert_eq!(stopped.last_error.as_deref(), Some(update));
+        let asked = Instant::now();
+        let err = rt
+            .block_on(core.prompt(id(), t1(), "parked".into(), None))
+            .unwrap_err();
+        assert!(
+            matches!(&err, CoreError::VersionMismatch { message } if message == update),
+            "{err:?}"
+        );
+        assert!(asked.elapsed() < Duration::from_secs(2), "answered at once");
+        lock(&seen).refuse_hello = None;
+        core.reconnect(id()).unwrap();
+        let back = (0..200)
+            .find_map(|_| {
+                let f = rt.block_on(core.flock(id())).unwrap();
+                std::thread::sleep(Duration::from_millis(50));
+                (f.link == LinkPhase::Connected).then_some(f)
+            })
+            .expect("connected again after the update, without pairing");
+        assert!(!back.version_mismatch);
+        assert!(back.last_error.is_none());
 
         let again = rt
             .block_on(core.pair(invite(&mac_self.stable_id), "iPhone".into()))

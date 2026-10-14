@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::pin::{self, PinError};
 use crate::reach::{Reachability, now_ms};
-use crate::session::{FlockState, Reply, Seed, Session, SessionError, lock, version_mismatch};
+use crate::session::{FlockState, Reply, Seed, Session, SessionError, lock};
 use crate::store::{Machine, MachineKind, write_atomic};
 
 const BACKOFF: [Duration; 6] = [
@@ -404,6 +404,8 @@ pub struct Link {
     pub last_error: Option<String>,
     resumed: Option<Instant>,
     pub last_dial: Instant,
+    /// Set while stopped on a protocol version mismatch: collied's version, if it sent one.
+    pub version_mismatch: Option<Option<u32>>,
 }
 
 impl Link {
@@ -418,6 +420,8 @@ impl Link {
 pub struct Shared {
     pub flock: Mutex<FlockState>,
     pub link: Mutex<Link>,
+    /// The machine's current name, kept up to date on rename.
+    pub label: Mutex<String>,
 }
 
 impl Shared {
@@ -481,7 +485,9 @@ impl Conn {
                 last_error: None,
                 resumed: None,
                 last_dial: Instant::now(),
+                version_mismatch: None,
             }),
+            label: Mutex::new(machine.label.clone()),
         });
         let (requests, rx) = mpsc::channel(QUEUE);
         let (reconnect, reconnect_rx) = watch::channel(0);
@@ -717,11 +723,24 @@ async fn supervise(
             }
             Err(e) => e,
         };
-        // Only an update fixes it: wait for a resume or pull to refresh, then dial again.
+        // Only an update fixes it: answer requests at once until a resume or a pull to
+        // refresh dials again.
         if let ConnectError::Session(SessionError::VersionMismatch { collied }) = err {
-            let message = version_mismatch(collied, &machine.label);
-            shared.set(LinkPhase::Stopped, Some(message));
-            wake.notified().await;
+            {
+                let mut link = lock(&shared.link);
+                link.phase = LinkPhase::Stopped;
+                link.last_error = None;
+                link.version_mismatch = Some(collied);
+            }
+            loop {
+                tokio::select! {
+                    () = wake.notified() => break,
+                    Some((_, reply)) = requests.recv() => {
+                        let _ = reply.send(Err(SessionError::VersionMismatch { collied }));
+                    }
+                }
+            }
+            lock(&shared.link).version_mismatch = None;
             continue;
         }
         let Some(delay) = backoff.failed(&shared, &err, Instant::now()) else {
@@ -949,7 +968,9 @@ mod tests {
                 last_error: None,
                 resumed: None,
                 last_dial: Instant::now(),
+                version_mismatch: None,
             }),
+            label: Mutex::default(),
         }
     }
 
