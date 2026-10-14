@@ -83,3 +83,14 @@ private func agent(kind: String = "claude", pullRequest: PullRequestSummary?, wa
     await model.watchPullRequest(everyMinutes: 2)
     #expect(model.notice != nil)
 }
+
+@MainActor
+@Test func sessionMenuPutsArchiveFirstOnceThePullRequestMerged() {
+    #expect(PullRequestBadge.archiveFirst(agent(pullRequest: pullRequest(.merged, .passing))))
+    #expect(PullRequestBadge.archiveFirst(agent(kind: "codex", pullRequest: pullRequest(.merged, .noChecks))))
+    for state in [PullState.open, .draft, .closed, .unknown] {
+        #expect(!PullRequestBadge.archiveFirst(agent(pullRequest: pullRequest(state, .passing))), "\(state)")
+    }
+    #expect(!PullRequestBadge.archiveFirst(agent(pullRequest: nil)))
+    #expect(!PullRequestBadge.archiveFirst(nil))
+}

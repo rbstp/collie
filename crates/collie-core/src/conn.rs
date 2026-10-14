@@ -8,7 +8,7 @@ use collie_tls::rustls::CertificateError;
 use collie_tls::rustls::sign::CertifiedKey;
 use protocol::{
     ActivityId, Empty, HelloResult, KeyPin, PushActivityEndParams, PushActivityTokenParams,
-    PushRegisterParams, Request, Response,
+    PushRegisterParams, Request, Response, TaskArchiveOnMergeParams,
 };
 use serde::{Deserialize, Serialize};
 use tailnet::{BackendState, Node};
@@ -75,6 +75,8 @@ pub type PushSlot = Arc<Mutex<Pushes>>;
 pub struct Pushes {
     /// Keyed by machine id: each Mac gets its own notification key.
     pub machines: BTreeMap<String, Registrations>,
+    /// "Archive when the PR merges", sent to every machine on every session once the app set it.
+    pub archive_on_merge: Option<bool>,
     /// Where unsent ends are kept, `None` for memory only.
     dir: Option<PathBuf>,
 }
@@ -103,8 +105,24 @@ impl Pushes {
             .collect();
         Self {
             machines,
+            archive_on_merge: None,
             dir: Some(dir),
         }
+    }
+
+    pub fn requests(&self, machine_id: &str) -> (Seed, Acks) {
+        let (mut seed, acks) = self
+            .machines
+            .get(machine_id)
+            .map(Registrations::requests)
+            .unwrap_or_default();
+        if let Some(enabled) = self.archive_on_merge {
+            seed.push((
+                Request::TaskArchiveOnMerge(TaskArchiveOnMergeParams { enabled }),
+                None,
+            ));
+        }
+        (seed, acks)
     }
 
     pub fn acknowledged(&mut self, machine_id: &str, activity_id: &ActivityId) {
@@ -677,11 +695,7 @@ async fn supervise(
                 reconnect.borrow_and_update();
                 // A clone, so the request that ends the session still forces the next dial.
                 let mut ended = reconnect.clone();
-                let (seed, acks) = lock(&push)
-                    .machines
-                    .get(&machine.id)
-                    .map(Registrations::requests)
-                    .unwrap_or_default();
+                let (seed, acks) = lock(&push).requests(&machine.id);
                 tokio::spawn(acknowledge(push.clone(), machine.id.clone(), acks));
                 let end = session
                     .run(&mut requests, &shared.flock, seed, async {

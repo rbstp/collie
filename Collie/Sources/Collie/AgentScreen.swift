@@ -50,6 +50,14 @@ struct AgentScreen: View {
 
     private var title: String { model.agent?.displayTitle ?? model.terminal?.displayTitle ?? "Agent" }
 
+    private var archiveButton: some View {
+        Button("Archive", systemImage: "archivebox", role: .destructive) {
+            model.close.begin(.archive)
+        }
+        .tint(.red)
+        .disabled(model.archiving)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil, showingChat: $showingChat)
@@ -142,6 +150,10 @@ struct AgentScreen: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu("More", systemImage: "ellipsis") {
+                    if PullRequestBadge.archiveFirst(model.agent) {
+                        archiveButton
+                        Divider()
+                    }
                     if !model.isTerminal {
                         Button("Git changes", systemImage: "arrow.triangle.branch") { showingChanges = true }
                         Button("Refresh", systemImage: "arrow.clockwise") {
@@ -184,11 +196,9 @@ struct AgentScreen: View {
                     }
                     .tint(.red)
                     .disabled(model.archiving || (model.agent == nil && model.terminal == nil))
-                    Button("Archive", systemImage: "archivebox", role: .destructive) {
-                        model.close.begin(.archive)
+                    if !PullRequestBadge.archiveFirst(model.agent) {
+                        archiveButton
                     }
-                    .tint(.red)
-                    .disabled(model.archiving)
                 }
                 .tint(.primary)
             }

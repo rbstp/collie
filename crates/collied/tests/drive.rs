@@ -3034,6 +3034,116 @@ async fn archive_codex_refuses_to_create_a_group_shell_outside_task_roots() {
 }
 
 #[tokio::test]
+async fn automatic_archive_needs_an_idle_clean_worktree_inside_the_merged_head() {
+    let herdr = Mock::start();
+    let (_dir, base) = root();
+    let source = base.join("root/a");
+    let checkout = source.join(".worktree/feature");
+    let git = |dir: &Path, args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=Collie Test",
+                "-c",
+                "user.email=collie@example.invalid",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}");
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    git(&source, &["init", "-q"]);
+    git(&source, &["commit", "-q", "--allow-empty", "-m", "initial"]);
+    git(
+        &source,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            checkout.to_str().unwrap(),
+        ],
+    );
+    git(&checkout, &["commit", "-q", "--allow-empty", "-m", "work"]);
+    let head = git(&checkout, &["rev-parse", "HEAD"]);
+    herdr.with(|h| {
+        h.worktree_path = Some(checkout.to_str().unwrap().into());
+        h.worktree_open = true;
+        h.worktree_workspace_id = Some("w7".into());
+        h.snapshot["workspaces"][1]["worktree"] = json!({
+            "repo_root": source, "checkout_path": checkout, "is_linked_worktree": true
+        });
+        h.snapshot["panes"][1]["cwd"] = json!(checkout);
+        h.snapshot["agents"][1]["agent_status"] = json!("idle");
+    });
+    let drive = herdr.driver(&["codex"], &base.join("root"));
+    let cwd = |path: &Path| Cwd::new(path.to_str().unwrap()).unwrap();
+    let refused = async |code: ErrorCode| {
+        let error = drive
+            .archive_merged(&tid(CODEX_BLOCKED), &cwd(&checkout), &head, &yes())
+            .await
+            .unwrap_err();
+        assert_eq!(error.0, code, "{}", error.1);
+        assert!(herdr.mutations().is_empty());
+    };
+
+    refused(ErrorCode::AgentNotReady).await;
+    herdr.with(|h| {
+        h.snapshot["panes"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|pane| pane["terminal_id"] != SHELL);
+        h.snapshot["agents"][1]["agent_status"] = json!("working");
+    });
+    refused(ErrorCode::AgentNotReady).await;
+    herdr.with(|h| {
+        h.snapshot["agents"][1]["agent_status"] = json!("done");
+        h.snapshot["workspaces"][1]["worktree"]["is_linked_worktree"] = json!(false);
+    });
+    refused(ErrorCode::AgentNotReady).await;
+    herdr.with(|h| h.snapshot["workspaces"][1]["worktree"]["is_linked_worktree"] = json!(true));
+
+    std::fs::write(checkout.join("notes.txt"), "keep me").unwrap();
+    refused(ErrorCode::InvalidParams).await;
+    git(&checkout, &["add", "notes.txt"]);
+    refused(ErrorCode::InvalidParams).await;
+    git(
+        &checkout,
+        &["commit", "-q", "-m", "not in the pull request"],
+    );
+    refused(ErrorCode::InvalidParams).await;
+    git(&checkout, &["reset", "-q", "--hard", &head]);
+    let error = drive
+        .archive_merged(&tid(CODEX_BLOCKED), &cwd(&source), &head, &yes())
+        .await
+        .unwrap_err();
+    assert_eq!(error.0, ErrorCode::InvalidParams, "{}", error.1);
+    assert!(herdr.mutations().is_empty());
+
+    let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let auth: Authorized = {
+        let checks = checks.clone();
+        std::sync::Arc::new(move || checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2)
+    };
+    let Response::TaskArchived { message } = drive
+        .archive_merged(&tid(CODEX_BLOCKED), &cwd(&checkout), &head, &auth)
+        .await
+        .unwrap()
+    else {
+        panic!("unexpected response");
+    };
+    assert!(message.contains("Removed worktree checkout"), "{message}");
+    assert_eq!(
+        herdr.params("worktree.remove"),
+        vec![json!({"workspace_id": "w7", "force": true})]
+    );
+}
+
+#[tokio::test]
 async fn archive_reports_removed_checkout_when_herdr_drops_its_response() {
     let herdr = Mock::start();
     let (_dir, base) = root();

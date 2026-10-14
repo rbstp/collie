@@ -13,6 +13,7 @@ struct DevicePrefs: StateFile, Equatable {
     var defaultSessionView = SessionView.chat
     var watchDecisions = false
     var doneAlerts = true
+    var archiveOnMerge = false
     var accent = AppAccent.blue
     /// Per machine id: the canonical folder collied returned when it was saved.
     var taskBases: [String: String] = [:]
@@ -62,6 +63,7 @@ extension DevicePrefs {
         defaultSessionView = (try? container.decodeIfPresent(SessionView.self, forKey: .defaultSessionView)) ?? defaults.defaultSessionView
         watchDecisions = (try? container.decodeIfPresent(Bool.self, forKey: .watchDecisions)) ?? defaults.watchDecisions
         doneAlerts = (try? container.decodeIfPresent(Bool.self, forKey: .doneAlerts)) ?? defaults.doneAlerts
+        archiveOnMerge = (try? container.decodeIfPresent(Bool.self, forKey: .archiveOnMerge)) ?? defaults.archiveOnMerge
         accent = (try? container.decodeIfPresent(AppAccent.self, forKey: .accent)) ?? defaults.accent
         taskBases = (try? container.decodeIfPresent([String: String].self, forKey: .taskBases)) ?? defaults.taskBases
         taskUltracode = (try? container.decodeIfPresent([String: Bool].self, forKey: .taskUltracode)) ?? defaults.taskUltracode

@@ -49,6 +49,7 @@ final class AppModel {
             let identity = try Identity.load()
             try core.setIdentity(publicKey: identity.publicKey, signer: identity.signer)
             core.setLog(log: CoreLogRelay())
+            core.setArchiveOnMerge(enabled: DevicePrefs.load(from: DevicePrefs.file).archiveOnMerge)
             self.core = core
         } catch {
             core = nil
@@ -294,6 +295,11 @@ final class AppModel {
     func setDoneAlerts(_ on: Bool) {
         DevicePrefs.update(in: DevicePrefs.file) { $0.doneAlerts = on }
         if let pushToken { registerPush(token: pushToken) }
+    }
+
+    func setArchiveOnMerge(_ on: Bool) {
+        DevicePrefs.update(in: DevicePrefs.file) { $0.archiveOnMerge = on }
+        core?.setArchiveOnMerge(enabled: on)
     }
 
     func pushRegistrationFailed(_ error: any Error) {

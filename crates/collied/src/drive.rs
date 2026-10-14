@@ -1574,6 +1574,29 @@ impl Driver {
         if !p.confirm {
             return fail(ErrorCode::ConfirmRequired, "confirm must be true");
         }
+        self.archive(&p.terminal_id, auth, None).await
+    }
+
+    /// The automatic archive of the task in `checkout`, whose pull request merged at `head`:
+    /// only a linked worktree whose panes are all idle or done agents, and only while its
+    /// checkout is `checkout`, clean and inside `head`, checked again right before the removal.
+    pub async fn archive_merged(
+        &self,
+        terminal_id: &TerminalId,
+        checkout: &Cwd,
+        head: &str,
+        auth: &Authorized,
+    ) -> Reply {
+        self.archive(terminal_id, auth, Some((checkout, head)))
+            .await
+    }
+
+    async fn archive(
+        &self,
+        terminal_id: &TerminalId,
+        auth: &Authorized,
+        merged: Option<(&Cwd, &str)>,
+    ) -> Reply {
         authorized(auth)?;
         let snapshot = herdr::session_snapshot(&self.herdr)
             .await
@@ -1581,7 +1604,7 @@ impl Driver {
         let pane = snapshot
             .panes
             .iter()
-            .find(|pane| pane.terminal_id == p.terminal_id.as_str())
+            .find(|pane| pane.terminal_id == terminal_id.as_str())
             .ok_or_else(|| (ErrorCode::NotFound, "no such terminal".to_owned()))?;
         let workspace = snapshot
             .workspaces
@@ -1592,6 +1615,12 @@ impl Driver {
             .worktree
             .as_ref()
             .filter(|worktree| worktree.is_linked_worktree);
+        if merged.is_some() && !worktree_settled(&snapshot, terminal_id.as_str()) {
+            return fail(
+                ErrorCode::AgentNotReady,
+                "only an idle worktree task is archived automatically",
+            );
+        }
         let (repo, closed) = if let Some(worktree) = linked {
             let checkout = resolve_cwd(&worktree.checkout_path, &self.roots).map_err(invalid)?;
             if checkout.as_str() != worktree.checkout_path {
@@ -1610,6 +1639,15 @@ impl Driver {
                 return Err(invalid("worktree is no longer linked to this workspace"));
             }
             authorized(auth)?;
+            if let Some((expected, head)) = merged
+                && !(checkout == *expected
+                    && crate::git::clean(&checkout).await?
+                    && crate::git::contains(&checkout, head).await?)
+            {
+                return Err(invalid(
+                    "the checkout has changes or commits outside the pull request",
+                ));
+            }
             let closed = match herdr::worktree_remove(&self.herdr, &pane.workspace_id).await {
                 Ok(removed) if removed.path == checkout.as_str() => {
                     format!(
@@ -1730,6 +1768,31 @@ impl Driver {
             message: format!("{closed} {cleanup}"),
         })
     }
+}
+
+/// The terminal's workspace is a linked worktree whose every pane is an idle or done agent.
+pub fn worktree_settled(snapshot: &herdr::SessionSnapshot, terminal_id: &str) -> bool {
+    let Some(pane) = snapshot.panes.iter().find(|p| p.terminal_id == terminal_id) else {
+        return false;
+    };
+    let linked = snapshot.workspaces.iter().any(|w| {
+        w.workspace_id == pane.workspace_id
+            && w.worktree.as_ref().is_some_and(|t| t.is_linked_worktree)
+    });
+    linked
+        && snapshot
+            .panes
+            .iter()
+            .filter(|p| p.workspace_id == pane.workspace_id)
+            .all(|p| {
+                snapshot.agents.iter().any(|a| {
+                    a.terminal_id == p.terminal_id
+                        && matches!(
+                            flock::status(&a.agent_status),
+                            AgentStatus::Idle | AgentStatus::Done
+                        )
+                })
+            })
 }
 
 fn git_repository(cwd: &Cwd, roots: &[PathBuf]) -> Option<Cwd> {
@@ -2328,6 +2391,56 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+
+    #[test]
+    fn only_a_linked_worktree_of_idle_or_done_agents_is_settled() {
+        let snapshot = |linked: bool, statuses: &[&str], shell: bool| {
+            let mut panes: Vec<_> = (0..statuses.len())
+                .map(|i| serde_json::json!({"pane_id": format!("w1:p{i}"), "terminal_id": format!("t{i}"), "workspace_id": "w1", "tab_id": "w1:t1"}))
+                .collect();
+            if shell {
+                panes.push(serde_json::json!({"pane_id": "w1:p9", "terminal_id": "t9", "workspace_id": "w1", "tab_id": "w1:t1"}));
+            }
+            panes.push(serde_json::json!({"pane_id": "w2:p1", "terminal_id": "other", "workspace_id": "w2", "tab_id": "w2:t1"}));
+            let agents: Vec<_> = statuses
+                .iter()
+                .enumerate()
+                .map(|(i, status)| serde_json::json!({"terminal_id": format!("t{i}"), "workspace_id": "w1", "pane_id": format!("w1:p{i}"), "agent": "claude", "agent_status": status}))
+                .chain([serde_json::json!({"terminal_id": "other", "workspace_id": "w2", "pane_id": "w2:p1", "agent": "claude", "agent_status": "working"})])
+                .collect();
+            serde_json::from_value::<herdr::SessionSnapshot>(serde_json::json!({
+                "workspaces": [
+                    {"workspace_id": "w1", "number": 1, "label": "a", "agent_status": "idle",
+                     "worktree": {"repo_root": "/r", "checkout_path": "/r/.worktree/x", "is_linked_worktree": linked}},
+                    {"workspace_id": "w2", "number": 2, "label": "b", "agent_status": "working"},
+                ],
+                "panes": panes,
+                "agents": agents,
+            }))
+            .unwrap()
+        };
+        assert!(worktree_settled(&snapshot(true, &["idle"], false), "t0"));
+        assert!(worktree_settled(
+            &snapshot(true, &["done", "idle"], false),
+            "t0"
+        ));
+        assert!(!worktree_settled(&snapshot(false, &["idle"], false), "t0"));
+        assert!(!worktree_settled(&snapshot(true, &["idle"], true), "t0"));
+        for busy in ["working", "blocked", "unknown"] {
+            assert!(
+                !worktree_settled(&snapshot(true, &["idle", busy], false), "t0"),
+                "{busy}"
+            );
+        }
+        assert!(!worktree_settled(
+            &snapshot(true, &["idle"], false),
+            "missing"
+        ));
+        assert!(!worktree_settled(
+            &snapshot(true, &["idle"], false),
+            "other"
+        ));
+    }
 
     #[test]
     fn the_watch_slows_down_after_a_quiet_spell_or_in_low_data_mode() {

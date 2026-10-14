@@ -26,7 +26,7 @@ fn error(message: &str) -> Fail {
 
 async fn git(cwd: &Cwd, args: &[&str], limit: usize) -> Result<(Vec<u8>, bool, bool), Fail> {
     let mut overrides = Vec::new();
-    if args.first() == Some(&"diff") {
+    if matches!(args.first(), Some(&"diff" | &"status")) {
         let (out, _, truncated) = git_command(
             cwd,
             &[
@@ -416,6 +416,33 @@ pub async fn branch(cwd: &Cwd, roots: &[PathBuf]) -> Result<Option<(Cwd, String)
     Ok(head(&root).await?.map(|branch| (root, branch)))
 }
 
+/// No uncommitted or untracked file, in the checkout or a submodule, and no submodule off
+/// its recorded commit, whatever the repository's config says.
+pub async fn clean(root: &Cwd) -> Result<bool, Fail> {
+    let (out, ok, truncated) = git(
+        root,
+        &[
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=normal",
+            "--ignore-submodules=none",
+        ],
+        4096,
+    )
+    .await?;
+    Ok(ok && !truncated && out.is_empty())
+}
+
+/// `HEAD` holds no commit that `commit`'s history does not.
+pub async fn contains(root: &Cwd, commit: &str) -> Result<bool, Fail> {
+    if !matches!(commit.len(), 40 | 64) || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(false);
+    }
+    let (_, ok, _) = git(root, &["merge-base", "--is-ancestor", "HEAD", commit], 64).await?;
+    Ok(ok)
+}
+
 pub async fn changes(
     cwd: &Cwd,
     roots: &[PathBuf],
@@ -716,6 +743,81 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn clean_and_contained_in_the_merged_head() {
+        let (_dir, cwd, _) = repo();
+        let root = Path::new(cwd.as_str());
+        let rev = || {
+            let out = std::process::Command::new("git")
+                .current_dir(root)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap();
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        run(root, &["add", "."]);
+        run(root, &["commit", "-m", "a"]);
+        let first = rev();
+        run(root, &["commit", "--allow-empty", "-m", "b"]);
+        let merged = rev();
+        std::fs::create_dir(root.join("target")).unwrap();
+        std::fs::write(root.join("target/out"), "x").unwrap();
+        assert!(clean(&cwd).await.unwrap());
+        assert!(contains(&cwd, &merged).await.unwrap());
+
+        run(root, &["config", "status.showUntrackedFiles", "no"]);
+        std::fs::write(root.join("new.txt"), "x").unwrap();
+        assert!(!clean(&cwd).await.unwrap());
+        std::fs::remove_file(root.join("new.txt")).unwrap();
+        std::fs::write(root.join("a.txt"), "changed\n").unwrap();
+        assert!(!clean(&cwd).await.unwrap());
+        run(root, &["add", "a.txt"]);
+        assert!(!clean(&cwd).await.unwrap());
+
+        run(root, &["commit", "-m", "not in the pull request"]);
+        assert!(clean(&cwd).await.unwrap());
+        assert!(!contains(&cwd, &merged).await.unwrap());
+        run(root, &["reset", "-q", "--hard", &first]);
+        assert!(contains(&cwd, &merged).await.unwrap());
+        for bad in [&"0".repeat(40), "--all", "HEAD", &merged[..12]] {
+            assert!(!contains(&cwd, bad).await.unwrap(), "{bad}");
+        }
+
+        let (_sub_dir, sub, _) = repo();
+        run(
+            Path::new(sub.as_str()),
+            &["commit", "--allow-empty", "-m", "sub"],
+        );
+        run(
+            root,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                sub.as_str(),
+                "lib",
+            ],
+        );
+        run(
+            root,
+            &["config", "-f", ".gitmodules", "submodule.lib.ignore", "all"],
+        );
+        run(root, &["commit", "-qam", "submodule"]);
+        assert!(clean(&cwd).await.unwrap());
+        std::fs::write(root.join("lib/new.txt"), "x").unwrap();
+        assert!(!clean(&cwd).await.unwrap());
+        std::fs::remove_file(root.join("lib/new.txt")).unwrap();
+        run(
+            &root.join("lib"),
+            &["commit", "--allow-empty", "-m", "not recorded"],
+        );
+        assert!(!clean(&cwd).await.unwrap());
     }
 
     #[tokio::test]

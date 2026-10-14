@@ -23,9 +23,10 @@ use protocol::{
     FolderName, Key, Label, NoticeDigit, NotificationKey, OpId, PairCompleteParams, PairingInvite,
     PaneCloseParams, PromptText, PushActivityEndParams, PushActivityTokenParams,
     PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response, SessionId, Signature,
-    SlashCommand, TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskSessionsParams,
-    TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId, TerminalKey, TerminalRead,
-    TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
+    SlashCommand, TaskArchiveOnMergeParams, TaskArchiveParams, TaskFoldersParams, TaskNewParams,
+    TaskSessionsParams, TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId,
+    TerminalKey, TerminalRead, TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams,
+    WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -2172,6 +2173,20 @@ impl CollieCore {
         self.send_if_connected(&machine_id, Request::PushRegister(push), None)
     }
 
+    /// Sends "Archive when the PR merges" to every connected machine now, and to each one
+    /// again on every later connection of this process.
+    pub fn set_archive_on_merge(&self, enabled: bool) {
+        lock(&self.inner.push).archive_on_merge = Some(enabled);
+        let ids: Vec<String> = lock(&self.inner.machines)
+            .iter()
+            .map(|m| m.id.clone())
+            .collect();
+        for id in ids {
+            let request = Request::TaskArchiveOnMerge(TaskArchiveOnMergeParams { enabled });
+            let _ = self.send_if_connected(&id, request, None);
+        }
+    }
+
     /// Sends a Live Activity's update token to the Mac that runs `terminal_id`, now if
     /// connected and again on every later connection of this process. collied takes the
     /// APNs environment from `push.register`, so call [`Self::register_push`] first.
@@ -3729,6 +3744,51 @@ mod tests {
         }
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
         assert!(lock(&core.inner.push).machines.is_empty());
+    }
+
+    #[test]
+    fn archive_on_merge_rides_every_session_once_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("s");
+        ensure_private_dir(&state).unwrap();
+        MachineStore::new(state.clone())
+            .save(&[Machine {
+                id: "m1".into(),
+                label: "mac".into(),
+                host: "m1.tail1234.ts.net".into(),
+                port: 8457,
+                node_id: "nm1".into(),
+                kind: MachineKind::Mac,
+                key: String::new(),
+                terminal_key: String::new(),
+                default_label: None,
+            }])
+            .unwrap();
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        let seed = || -> Vec<Request> {
+            let (seed, _) = lock(&core.inner.push).requests("m1");
+            seed.into_iter().map(|(r, _)| r).collect()
+        };
+        assert!(seed().is_empty());
+        for enabled in [true, false] {
+            core.set_archive_on_merge(enabled);
+            assert_eq!(
+                seed(),
+                [Request::TaskArchiveOnMerge(TaskArchiveOnMergeParams {
+                    enabled
+                })]
+            );
+        }
+        core.register_push(
+            "m1".into(),
+            "ab".repeat(32),
+            PushEnvironment::Sandbox,
+            vec![3; 32],
+            false,
+        )
+        .unwrap();
+        let methods: Vec<&str> = seed().iter().map(Request::method).collect();
+        assert_eq!(methods, ["push.register", "task.archive_on_merge"]);
     }
 
     #[test]

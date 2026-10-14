@@ -19,7 +19,7 @@ private func object(_ data: Data) throws -> NSDictionary {
 
 @Test func prefsFileLoadsAndSavesTheSameJSON() throws {
     let json = #"""
-        {"wrapLines":false,"keepKeyboard":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"accent":"blue","taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true}}
+        {"wrapLines":false,"keepKeyboard":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"archiveOnMerge":true,"accent":"blue","taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true}}
         """#
     let file = try write(json, as: "prefs.json")
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
@@ -30,7 +30,7 @@ private func object(_ data: Data) throws -> NSDictionary {
                 wrapLines: false, keepKeyboard: true,
                 gestures: TerminalGestures(doubleTap: .escape, tripleTap: .paste, pinchResizesText: false, swipeSwitchesAgents: true),
                 fontSize: 13, dictationLanguage: .french, agentsLayout: .inbox, historyLines: 500, defaultSessionView: .terminal, watchDecisions: true,
-                doneAlerts: false, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true]
+                doneAlerts: false, archiveOnMerge: true, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true]
             )
     )
     prefs.save(to: file)
@@ -46,12 +46,22 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
 
 @Test(arguments: [
     #""wrapLines":"yes""#, #""fontSize":"big""#, #""historyLines":70000"#,
-    #""watchDecisions":"true""#, #""doneAlerts":0"#, #""taskBases":[]"#,
+    #""watchDecisions":"true""#, #""doneAlerts":0"#, #""archiveOnMerge":"on""#, #""taskBases":[]"#,
 ])
 func prefsWithOneWrongTypedFieldKeepTheOthers(_ wrong: String) throws {
     let file = try write(#"{"keepKeyboard":true,"accent":"red",\#(wrong)}"#, as: "prefs.json")
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
     #expect(DevicePrefs.load(from: file) == DevicePrefs(keepKeyboard: true, accent: .red))
+}
+
+@Test func archiveOnMergeIsOffUntilTurnedOn() throws {
+    #expect(!(try JSONDecoder().decode(DevicePrefs.self, from: Data(#"{"wrapLines":false,"doneAlerts":true}"#.utf8)).archiveOnMerge))
+    #expect(!DevicePrefs.load(from: nil).archiveOnMerge)
+    let dir = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appending(path: "prefs.json")
+    DevicePrefs.update(in: file) { $0.archiveOnMerge = true }
+    #expect(DevicePrefs.load(from: file).archiveOnMerge)
 }
 
 @Test func prefsFromBeforeDoneAlertsKeepThemOn() throws {

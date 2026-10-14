@@ -14,7 +14,7 @@ pub use output::*;
 #[cfg(feature = "schema")]
 pub use schema::{client_frame_schema, server_frame_schema};
 
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()

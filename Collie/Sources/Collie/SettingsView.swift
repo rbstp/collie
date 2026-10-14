@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var historyLines = DevicePrefs.load(from: DevicePrefs.file).historyLines
     @State private var watchDecisions = DevicePrefs.load(from: DevicePrefs.file).watchDecisions
     @State private var doneAlerts = DevicePrefs.load(from: DevicePrefs.file).doneAlerts
+    @State private var archiveOnMerge = DevicePrefs.load(from: DevicePrefs.file).archiveOnMerge
     private let build = buildInfo()
 
     var body: some View {
@@ -62,11 +63,16 @@ struct SettingsView: View {
                     NavigationLink("Saved prompts") { PromptShortcutsView() }
                     Toggle("Keep keyboard open after sending", isOn: $keepKeyboard)
                 }
-                Section("Sessions") {
+                Section {
                     Picker("Default view", selection: $defaultSessionView) {
                         ForEach(SessionView.allCases, id: \.self) { Text($0.label) }
                     }
                     .tint(.primary)
+                    Toggle("Archive when the PR merges", isOn: $archiveOnMerge)
+                } header: {
+                    Text("Sessions")
+                } footer: {
+                    Text("Removes a worktree task's checkout once its pull request merges, only when its agents are idle or done, it has no uncommitted or untracked changes and no commits outside the pull request. Regular folders are never archived.")
                 }
                 Section("Terminal") {
                     Picker("Scrollback", selection: $historyLines) {
@@ -112,6 +118,7 @@ struct SettingsView: View {
                 DevicePrefs.update(in: DevicePrefs.file) { $0.historyLines = lines }
             }
             .onChange(of: doneAlerts) { _, on in app.setDoneAlerts(on) }
+            .onChange(of: archiveOnMerge) { _, on in app.setArchiveOnMerge(on) }
             .refreshable { await app.refreshNode() }
             .task {
                 await app.refreshNode()

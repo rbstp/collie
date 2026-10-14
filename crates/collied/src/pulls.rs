@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -67,6 +68,71 @@ pub async fn fetch(gh: &str, checkout: &Cwd) -> Result<Option<PullRequest>, &'st
         Ok(None)
     } else {
         Err("command failed")
+    }
+}
+
+/// Read again right before an automatic archive: the number and head commit of the
+/// current branch's pull request, only when it merged.
+pub async fn merged_head(gh: &str, checkout: &Cwd) -> Option<(u64, String)> {
+    let mut command = gh_command(gh);
+    command
+        .args(["pr", "view", "--json", "number,state,headRefOid"])
+        .current_dir(checkout.as_str())
+        .stdout(Stdio::piped());
+    let output = timeout(GH_TIMEOUT, command.output()).await.ok()?.ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    merged(&output.stdout)
+}
+
+fn merged(json: &[u8]) -> Option<(u64, String)> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Merged {
+        number: u64,
+        state: String,
+        head_ref_oid: String,
+    }
+    let view: Merged = serde_json::from_slice(json).ok()?;
+    (view.state == "MERGED").then_some((view.number, view.head_ref_oid))
+}
+
+/// The paired phones that turned on "Archive when the PR merges", by `StableID`, kept on
+/// disk so the setting holds with no phone connected and across a restart.
+#[derive(Default)]
+pub struct ArchiveOnMerge {
+    by: BTreeSet<String>,
+    path: Option<PathBuf>,
+}
+
+impl ArchiveOnMerge {
+    pub fn load(path: PathBuf) -> Self {
+        let by = crate::peers::load_json(&path).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "could not read the archive on merge setting");
+            BTreeSet::new()
+        });
+        Self {
+            by,
+            path: Some(path),
+        }
+    }
+
+    pub fn set(&mut self, by: &str, enabled: bool) {
+        let changed = if enabled {
+            self.by.insert(by.to_owned())
+        } else {
+            self.by.remove(by)
+        };
+        if let (true, Some(path)) = (changed, &self.path)
+            && let Err(e) = crate::peers::replace_json(path, &self.by)
+        {
+            tracing::warn!(error = %e, "could not save the archive on merge setting");
+        }
+    }
+
+    pub fn enabled(&self, paired: impl Fn(&str) -> bool) -> bool {
+        self.by.iter().any(|by| paired(by))
     }
 }
 
@@ -153,12 +219,14 @@ pub struct Pulls {
     cache: HashMap<Key, (Instant, Option<PullRequest>, bool)>,
     linked: HashMap<String, PullRequest>,
     pub watches: Watches,
+    pub archive: ArchiveOnMerge,
 }
 
 impl Pulls {
-    pub fn new(watches: Watches) -> Self {
+    pub fn new(watches: Watches, archive: ArchiveOnMerge) -> Self {
         Self {
             watches,
+            archive,
             ..Self::default()
         }
     }
@@ -250,6 +318,35 @@ mod tests {
             parse(&fixture("pr-view-merged.json")).unwrap().url,
             "https://github.com/rbstp/collie/pull/275"
         );
+    }
+
+    #[test]
+    fn only_a_merged_pull_request_gives_its_head() {
+        let json = r#"{"number":275,"state":"MERGED","headRefOid":"0123456789abcdef0123456789abcdef01234567"}"#;
+        assert_eq!(
+            merged(json.as_bytes()),
+            Some((275, "0123456789abcdef0123456789abcdef01234567".to_owned()))
+        );
+        for state in ["OPEN", "CLOSED"] {
+            let json = json.replace("MERGED", state);
+            assert_eq!(merged(json.as_bytes()), None, "{state}");
+        }
+        assert_eq!(merged(br#"{"number":275,"state":"MERGED"}"#), None);
+    }
+
+    #[test]
+    fn archive_on_merge_is_per_phone_and_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("archive-on-merge.json");
+        let mut setting = ArchiveOnMerge::load(path.clone());
+        assert!(!setting.enabled(|_| true));
+        setting.set("a", true);
+        setting.set("b", true);
+        setting.set("b", false);
+        let setting = ArchiveOnMerge::load(path);
+        assert!(setting.enabled(|by| by == "a"));
+        assert!(!setting.enabled(|by| by == "b"));
+        assert!(!setting.enabled(|_| false));
     }
 
     #[test]

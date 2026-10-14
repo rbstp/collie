@@ -721,6 +721,19 @@
       "pattern": "^(/[A-Za-z0-9_:.-]{0,63})?$",
       "type": "string"
     },
+    "TaskArchiveOnMergeParams": {
+      "additionalProperties": false,
+      "description": "The phone's \"Archive when the PR merges\" setting, sent on every connection.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "type": "object"
+    },
     "TaskArchiveParams": {
       "additionalProperties": false,
       "properties": {
@@ -1415,6 +1428,22 @@
         },
         "params": {
           "$ref": "#/$defs/TaskArchiveParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.archive_on_merge",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TaskArchiveOnMergeParams"
         }
       },
       "required": [
