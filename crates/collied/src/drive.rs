@@ -346,16 +346,21 @@ impl Driver {
         }
     }
 
+    /// Read with SGR: [`protocol::jump_banner`] finds the banner by how it is drawn.
+    async fn scrolled(&self, pane_id: &str) -> Result<bool, Fail> {
+        let read = herdr::pane_read(&self.herdr, pane_id, source_name(ReadSource::Visible), None)
+            .await
+            .map_err(herdr_fail)?;
+        Ok(protocol::jump_banner(&sanitize_ansi(&read.text)))
+    }
+
     async fn input_safeguards(&self, a: &AgentInfo, submits: bool) -> Result<(), Fail> {
         if a.agent.as_deref() != Some("claude")
             || flock::status(&a.agent_status) == AgentStatus::Blocked
         {
             return Ok(());
         }
-        let screen = herdr::detection_text(&self.herdr, &a.pane_id)
-            .await
-            .map_err(herdr_fail)?;
-        if protocol::jump_banner(&screen) {
+        if self.scrolled(&a.pane_id).await? {
             return fail(ErrorCode::AgentNotReady, SCROLLED);
         }
         if submits
@@ -608,10 +613,7 @@ impl Driver {
         // herdr pastes a prompt after whatever is in Claude Code's input box.
         if a.agent.as_deref() == Some("claude") {
             // herdr ends a prompt with Enter, which would confirm a dialog scrolled out of view.
-            let screen = herdr::detection_text(&self.herdr, &a.pane_id)
-                .await
-                .map_err(herdr_fail)?;
-            if protocol::jump_banner(&screen) {
+            if self.scrolled(&a.pane_id).await? {
                 return fail(ErrorCode::AgentNotReady, SCROLLED);
             }
             let expected = p.expected_draft.as_ref().map(|d| d.as_str());
@@ -767,10 +769,7 @@ impl Driver {
         if current.agent.as_deref() != Some("claude") {
             return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
         }
-        let screen = herdr::detection_text(&self.herdr, &current.pane_id)
-            .await
-            .map_err(herdr_fail)?;
-        if !protocol::jump_banner(&screen) {
+        if !self.scrolled(&current.pane_id).await? {
             return fail(ErrorCode::AgentNotReady, "already at the bottom");
         }
         authorized(auth)?;
@@ -794,10 +793,7 @@ impl Driver {
         if a.agent.as_deref() != Some("claude") {
             return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
         }
-        let screen = herdr::detection_text(&self.herdr, &a.pane_id)
-            .await
-            .map_err(herdr_fail)?;
-        if protocol::jump_banner(&screen) {
+        if self.scrolled(&a.pane_id).await? {
             return fail(ErrorCode::AgentNotReady, SCROLLED);
         }
         let read = herdr::pane_read(
@@ -890,10 +886,7 @@ impl Driver {
         if a.agent.as_deref() != Some("claude") {
             return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
         }
-        let screen = herdr::detection_text(&self.herdr, &a.pane_id)
-            .await
-            .map_err(herdr_fail)?;
-        if protocol::jump_banner(&screen) {
+        if self.scrolled(&a.pane_id).await? {
             return fail(ErrorCode::AgentNotReady, SCROLLED);
         }
         Ok(a)

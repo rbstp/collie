@@ -1,0 +1,62 @@
+[0m[38;2;80;80;80m[48;2;55;55;55m❯ Without using any tools, reply with 60 numbered lines; each line must be one long sentence of roughly 200 characters about clouds and weather. Do not read or modify any files.[0m[48;2;55;55;55m     [0m
+     and are often mistaken for UFOs.
+  8. Rain begins when tiny cloud droplets collide and merge into larger drops, or when ice crystals grow at the expense of supercooled water, until they become heavy enough to
+     overcome updrafts and fall to Earth.
+  9. Hailstones grow inside strong thunderstorms as they are tossed up and down through layers of supercooled water, adding a new coat of ice on each trip until they become too heavy
+     for the updraft to support. 
+  10. Nimbostratus clouds bring long periods of steady rain or snow, forming thick, dark layers that can blanket an entire region for hours and completely hide the sun behind a
+      uniform wall of gray moisture. 
+  11. The puffy, cotton-like cumulus clouds of a summer afternoon form as the sun heats the ground, sending bubbles of warm air upward until they cool enough for their water vapor to
+      condense into visible droplets.
+  12. A halo around the sun or moon appears when light passes through hexagonal ice crystals in high cirrostratus clouds, and folklore has long claimed that such a ring means rain or
+      snow is on the way soon.
+  13. Weather fronts mark the boundaries between air masses of different temperature and humidity, and as they advance they reshape the sky with characteristic sequences of clouds,
+      wind shifts, and precipitation patterns. 
+  14. Mammatus clouds hang like rounded pouches beneath the anvil of a severe thunderstorm, formed by sinking pockets of cold, moist air, and their dramatic appearance often
+      accompanies some of the most intense storms.
+  15. Snowflakes take shape as water vapor freezes directly onto tiny ice crystals high in the clouds, and the precise temperature and humidity they encounter while falling determine
+      their delicate and varied patterns.
+  16. Satellite imagery has transformed weather forecasting by letting scientists track cloud systems across entire oceans, revealing hurricanes, frontal bands, and developing storms
+      long before they ever reach the coastline.
+  17. Altostratus clouds create a gray or bluish veil across the middle levels of the sky, often thin enough that the sun appears as a dim, watery disk shining through, as though
+      seen through a sheet of frosted glass.
+  18. Thunder is the sound of air expanding explosively after being heated by a lightning bolt to temperatures hotter than the surface of the sun, and you can estimate a storm's
+      distance by counting seconds after the flash.
+  19. Contrails are artificial clouds formed when hot, humid exhaust from aircraft engines meets the frigid air of high altitudes, and whether they linger or fade quickly tells
+      observers about humidity up at flight level.
+  20. Hurricanes draw their tremendous energy from warm ocean water, organizing towering bands of thunderstorms that spiral around a calm, clear eye where the sky can briefly appear
+      deceptively peaceful and blue.
+  21. Morning glory clouds are rare, rolling tubes of cloud that can stretch hundreds of kilometers across northern Australia, moving steadily across the sky at dawn and attracting
+      glider pilots eager to ride their lift.
+  22. Relative humidity measures how close the air is to saturation, and when it nears one hundred percent, clouds, fog, or dew are likely to form as the excess water vapor condenses
+      onto tiny particles in the atmosphere.
+  23. Virga describes streaks of rain or snow that fall from the base of a cloud but evaporate before reaching the ground, leaving graceful, wispy trails that hang beneath the cloud
+      like a curtain of fading gray brushstrokes.
+  24. Lake-effect snow develops when frigid air sweeps across a large, relatively warm body of water, picking up heat and moisture that build narrow bands of clouds capable of
+      dumping enormous amounts of snow downwind.
+  25. Cloud seeding attempts to coax more precipitation from existing clouds by dispersing particles like silver iodide, giving water vapor additional surfaces to freeze onto, though
+      scientists still debate how effective it is.
+  26. The vivid reds and oranges of a sunset often owe their intensity to high and middle-level clouds that catch the last rays of sunlight, reflecting and scattering colors across
+      the sky long after the sun has disappeared.
+  27. Shelf clouds form along the leading edge of a thunderstorm's gust front, appearing as a long, menacing wedge of cloud that warns observers of strong, gusty winds and heavy rain
+      that are about to arrive at any moment.
+  28. Noctilucent clouds glow electric blue in the summer twilight at polar latitudes, floating about eighty kilometers above the ground, far higher than any ordinary weather cloud,
+      and their origins still intrigue scientists.
+  29. Barometric pressure tends to fall as a storm approaches and rise once it passes, so a simple barometer has long helped farmers and sailors anticipate changing weather even
+      before any clouds appear on the horizon.
+  30. Freezing rain occurs when snow melts while falling through a warm layer of air, then refreezes on contact with cold surfaces below, coating trees, power lines, and roads with a
+      heavy and treacherous glaze of clear ice.
+  31. Cumulus congestus clouds are the growing, cauliflower-shaped towers that mark an atmosphere becoming more unstable, and if their tops continue to rise and freeze, they may soon
+      mature into a full-fledged thunderstorm.
+  32. Monsoon seasons bring dramatic shifts in wind direction that carry moisture from warm oceans onto land, building enormous cloud systems that deliver the heavy, life-giving
+      rains that billions of people depend upon.
+  33. Dew forms on grass and car windows during calm, clear nights when the ground radiates heat into space and cools below the dew point, causing water vapor in the air nearby to
+      condense into countless sparkling droplets.
+  34. Tornadoes typically descend from rotating supercell thunderstorms, where a wall cloud lowers beneath the main updraft and a funnel extends toward the ground, bringing some of
+      the most destructive winds found on Earth.                           [0m[38;2;255;255;255m[48;2;55;55;55m Jump to bottom: fn+↓ to scroll [0m
+
+[0m[38;2;136;136;136m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+❯ 
+[0m[38;2;136;136;136m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[1m[38;5;4mOpus 5.5[0m[38;2;153;153;153m high [0m[38;2;118;159;240m[48;2;57;66;96m  master $ [0m[38;2;153;153;153m [0m[1m[38;5;2m▒░░░░5% [0m[1m[38;5;4m51s[0m[38;2;153;153;153m | 5h [0m[1m[38;5;2m0%[0m[38;2;153;153;153m (4h58m) · 7d [0m[1m[38;5;2m42%[0m[38;2;153;153;153m | Est. usage: $0.23[0m
+  [0m[38;2;153;153;153m⏸ manual mode on · ← for agents[0m
