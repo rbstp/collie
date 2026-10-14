@@ -644,7 +644,8 @@ final class TerminalScreen {
             foreground = TerminalRGB(fg)
         }
         if ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &bg) == GHOSTTY_SUCCESS {
-            background = TerminalRGB(bg)
+            // Claude Code draws its logo on true black, a dark terminal's background on the Mac.
+            background = TerminalRGB(bg) == TerminalRGB(0, 0, 0) ? nil : TerminalRGB(bg)
         }
         var styled = false
         ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING, &styled)

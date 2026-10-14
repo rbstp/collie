@@ -533,3 +533,14 @@ private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB
     #expect(TerminalScreen.wrapColumns(width: 100_000, cellWidth: 6.6) == Int(TerminalScreen.maxColumns))
     #expect(TerminalScreen.wrapColumns(width: 377, cellWidth: 0) == 1)
 }
+
+@Test func claudesLogoShowsNoBlackBlock() throws {
+    let url = URL(filePath: #filePath).deletingLastPathComponent()
+        .appending(path: "../../../../crates/collied/tests/fixtures/claude-2.1.293/heads-up.ansi.txt")
+    let logo = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")[0...2].joined(separator: "\r\n")
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    for frame in [screen.render(ansiSnapshot: logo), screen.render(ansiSnapshot: logo, wrapColumns: 40)] {
+        #expect(frame.runs.contains { $0.text.contains("▛███▛█") })
+        #expect(!frame.runs.contains { $0.style.background == TerminalRGB(0, 0, 0) })
+    }
+}
