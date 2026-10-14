@@ -91,19 +91,6 @@ private func entry(
     #expect(seen.markers.isEmpty)
 }
 
-@Test func doneMarksAFinishedAgentSeenAndUnseenRevertsIt() {
-    let route = AgentRoute(machineId: "m1", terminalId: "done")
-    let finished = agent("done", .done, activity: nowMs - 20, since: nowMs - 30)
-    let item = InboxItem.items(in: [entry("m1", [finished])])[0]
-    var seen = SeenAgents()
-    #expect(InboxFilter.needsAttention.includes(item, seen: seen, now: now))
-    seen.markOpened(finished, route: route, nowMs: nowMs)
-    #expect(seen.isSeen(finished, route: route))
-    #expect(!InboxFilter.needsAttention.includes(item, seen: seen, now: now))
-    seen.markUnseen(finished, route: route)
-    #expect(InboxFilter.needsAttention.includes(item, seen: seen, now: now))
-}
-
 @Test func snoozeLastsUntilItsWakeTimeAndSurvivesReload() {
     let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: file) }

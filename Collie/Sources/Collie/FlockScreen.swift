@@ -27,7 +27,7 @@ struct FlockScreen: View {
     var body: some View {
         NavigationStack(path: $path) {
             TabView(selection: $showsUsage) {
-                agents.background(GridPageLock(locked: dragging != nil)).tag(false)
+                agents.background(GridPageLock(locked: dragging != nil || (layout == .inbox && !showsUsage))).tag(false)
                 List { UsageSections(entries: model.entries) }.tag(true)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
@@ -175,7 +175,7 @@ struct FlockScreen: View {
         case .inbox:
             AgentInbox(
                 entries: model.entries, notice: model.closeNotice, follows: follows,
-                seen: seen, markSeen: markSeen, snoozed: snoozed, snooze: snooze, menu: menu
+                seen: seen, markUnseen: markUnseen, snoozed: snoozed, snooze: snooze, menu: menu
             )
         case .list:
             TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -246,12 +246,8 @@ struct FlockScreen: View {
         try? core?.reconnect(machineId: entry.id)
     }
 
-    private func markSeen(_ agent: AgentSummary, route: AgentRoute, seen isSeen: Bool) {
-        if isSeen {
-            seen.markOpened(agent, route: route, nowMs: Date().unixMs)
-        } else {
-            seen.markUnseen(agent, route: route)
-        }
+    private func markUnseen(_ agent: AgentSummary, route: AgentRoute) {
+        seen.markUnseen(agent, route: route)
         seen.save(to: SeenAgents.file)
     }
 

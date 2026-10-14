@@ -6,7 +6,7 @@ struct AgentInbox<Menu: View>: View {
     let notice: String?
     let follows: FollowModel?
     let seen: SeenAgents
-    let markSeen: (AgentSummary, AgentRoute, Bool) -> Void
+    let markUnseen: (AgentSummary, AgentRoute) -> Void
     let snoozed: SnoozedAgents
     let snooze: (AgentSummary, AgentRoute, Date?) -> Void
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
@@ -133,24 +133,13 @@ struct AgentInbox<Menu: View>: View {
                 Divider()
             }
             if isSeen {
-                Button("Mark unseen", systemImage: "circle.fill") { markSeen(item.agent, item.route, false) }
+                Button("Mark unseen", systemImage: "circle.fill") { markUnseen(item.agent, item.route) }
                     .tint(.primary)
                 Divider()
             }
             menu(item.agent, item.route)
         }
         .swipeActions(edge: .leading) {
-            if item.agent.status == .done {
-                if isSeen {
-                    Button("Unseen", systemImage: "circle.fill") { markSeen(item.agent, item.route, false) }
-                        .tint(.blue)
-                } else {
-                    Button("Done", systemImage: "checkmark") { markSeen(item.agent, item.route, true) }
-                        .tint(.green)
-                }
-            }
-        }
-        .swipeActions(edge: .trailing) {
             if item.agent.status != .blocked {
                 Button("Snooze", systemImage: "moon.zzz") { snoozing = item }
                     .tint(.indigo)
