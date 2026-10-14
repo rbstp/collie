@@ -252,9 +252,9 @@ final class FakeCore: AgentCore {
         try await call { $0.folderPaths.append(path) }
         return state.withLock { $0.folders }
     }
-    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?) async throws -> TaskStarted {
+    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?, ultracode: Bool) async throws -> TaskStarted {
         try await call {
-            $0.taskNews.append("\(cwd) \(newFolder ?? "-")")
+            $0.taskNews.append("\(cwd) \(newFolder ?? "-")" + (ultracode ? " ultracode" : ""))
             $0.taskPrompts.append(prompt)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
@@ -264,7 +264,7 @@ final class FakeCore: AgentCore {
         try await call { $0.worktreeCalls.append("list \(cwd)") }
         return state.withLock { $0.worktreeListing }
     }
-    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
+    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted {
         try await call {
             $0.worktreeCalls.append("create \(cwd) \(branch) \(agent)")
             $0.taskPrompts.append(prompt)
@@ -272,7 +272,7 @@ final class FakeCore: AgentCore {
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
-    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
+    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted {
         try await call {
             $0.worktreeCalls.append("open \(cwd) \(path) \(agent)")
             $0.taskPrompts.append(prompt)
@@ -280,7 +280,7 @@ final class FakeCore: AgentCore {
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
-    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted {
+    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted {
         try await call {
             $0.taskNews.append("\(cwd) clone=\(repository)")
             $0.taskPrompts.append(prompt)

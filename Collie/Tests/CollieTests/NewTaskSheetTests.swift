@@ -102,6 +102,55 @@ final class NewTaskSheetTests: XCTestCase {
         }
     }
 
+    func testUltracodeShowsOnlyForClaudeCodeAndIsRememberedPerMachine() async throws {
+        let core = FakeCore()
+        let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "n2", kind: .linux, key: "")
+        let prefs = FileManager.default.temporaryDirectory.appending(path: "prefs-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: prefs) }
+        core.state.withLock { $0.options.agents.append("copilot") }
+        let model = NewTaskModel(core: core, machines: [mac, linux], prefsFile: prefs)
+        await model.loadOptions()
+        XCTAssertEqual(model.agent, "codex")
+        XCTAssertFalse(model.ultracode)
+        model.prompt = "go"
+        model.cwd = "/Users/me/app"
+        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [mac, linux]) { _ in })
+        try await hosting(host) { _ in
+            let switches = {
+                host.view.layoutIfNeeded()
+                return descendants(host.view).filter { view in
+                    view is UISwitch && view.window != nil
+                        && sequence(first: view, next: \.superview).allSatisfy { !$0.isHidden && $0.alpha > 0 }
+                }.count
+            }
+            _ = try await waitFor("only the new folder switch") { switches() == 1 ? true : nil }
+            model.agent = "claude"
+            _ = try await waitFor("the ultracode switch") { switches() == 2 ? true : nil }
+            model.ultracode = true
+            model.agent = "copilot"
+            _ = try await waitFor("no ultracode switch for Copilot CLI") { switches() == 1 ? true : nil }
+            model.agent = "claude"
+            core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+            let route = await model.start()
+            XCTAssertEqual(route, AgentRoute(machineId: "m1", terminalId: "term_new"))
+            XCTAssertEqual(core.snapshot.taskNews, ["/Users/me/app - ultracode"])
+        }
+        XCTAssertEqual(DevicePrefs.load(from: prefs).taskUltracode, ["m1": true])
+
+        let next = NewTaskModel(core: core, machines: [mac, linux], preferredMachineId: "m2", prefsFile: prefs)
+        await next.loadOptions()
+        XCTAssertFalse(next.ultracode)
+        next.machineId = "m1"
+        await next.loadOptions()
+        XCTAssertTrue(next.ultracode)
+        XCTAssertEqual(next.agent, "codex")
+        next.prompt = "go"
+        next.cwd = "/Users/me/app"
+        _ = await next.start()
+        XCTAssertEqual(core.snapshot.taskNews.last, "/Users/me/app -", "only Claude Code gets ultracode")
+    }
+
     private func controllers(_ controller: UIViewController) -> [UIViewController] {
         [controller] + controller.children.flatMap(controllers)
     }

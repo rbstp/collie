@@ -24,11 +24,11 @@ protocol AgentCore: AnyObject, Sendable {
     func archiveTask(machineId: String, terminalId: String, confirm: Bool) async throws -> String
     func taskOptions(machineId: String) async throws -> TaskOptions
     func taskFolders(machineId: String, path: String) async throws -> TaskFolders
-    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?) async throws -> TaskStarted
+    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?, ultracode: Bool) async throws -> TaskStarted
     func taskWorktrees(machineId: String, cwd: String) async throws -> WorktreeListing
-    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted
-    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted
-    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?) async throws -> TaskStarted
+    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted
+    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted
+    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted
     func taskSessions(machineId: String, cwd: String) async throws -> [TaskSession]
     func taskResume(machineId: String, cwd: String, agent: String, sessionId: String, prompt: String, label: String?) async throws -> TaskStarted
     func flock(machineId: String) async throws -> MachineFlock

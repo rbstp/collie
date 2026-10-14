@@ -90,6 +90,12 @@ final class NewTaskModel {
     var cloneFolder: String? { cloneFolderName(repository: trimmed(repository)) }
     private(set) var cloning: String?
     var agent = ""
+    var ultracode = false {
+        didSet {
+            guard oldValue != ultracode, let machineId else { return }
+            DevicePrefs.update(in: prefsFile) { $0.taskUltracode[machineId] = ultracode }
+        }
+    }
     var prompt = ""
     var label = ""
     private(set) var attachments: [AttachedFile] = []
@@ -245,8 +251,10 @@ final class NewTaskModel {
         options = nil
         optionsError = nil
         newFolderRoot = nil
-        let base = DevicePrefs.load(from: prefsFile).taskBases[machineId]
+        let prefs = DevicePrefs.load(from: prefsFile)
+        let base = prefs.taskBases[machineId]
         self.base = base
+        ultracode = prefs.taskUltracode[machineId] ?? false
         folders = nil
         foldersError = nil
         do {
@@ -310,6 +318,7 @@ final class NewTaskModel {
     func start() async -> AgentRoute? {
         guard canStart, !cancelled, let machineId else { return nil }
         let text = (attachments.map(\.path) + [trimmed(prompt)].filter { !$0.isEmpty }).joined(separator: " ")
+        let ultracode = agent == "claude" && self.ultracode
         phase = .starting
         error = nil
         let started: TaskStarted
@@ -319,12 +328,12 @@ final class NewTaskModel {
                 if worktreeAction == .create {
                     started = try await core.taskWorktreeCreate(
                         machineId: machineId, cwd: sourceFolder, branch: createBranch,
-                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
+                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode
                     )
                 } else {
                     started = try await core.taskWorktreeOpen(
                         machineId: machineId, cwd: sourceFolder, path: checkoutPath,
-                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
+                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode
                     )
                 }
             } else if location == .resume {
@@ -339,13 +348,14 @@ final class NewTaskModel {
                 defer { cloning = nil }
                 started = try await core.taskClone(
                     machineId: machineId, cwd: cwd, repository: trimmed(repository),
-                    agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
+                    agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode
                 )
             } else {
                 guard let cwd = newFolder ? newFolderParent : folder else { phase = .editing; return nil }
                 started = try await core.taskNew(
                     machineId: machineId, cwd: cwd, agent: agent, prompt: text,
-                    label: trimmed(label).nilIfEmpty, newFolder: newFolder ? trimmed(folderName) : nil
+                    label: trimmed(label).nilIfEmpty, newFolder: newFolder ? trimmed(folderName) : nil,
+                    ultracode: ultracode
                 )
             }
         } catch {

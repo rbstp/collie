@@ -757,6 +757,9 @@ pub struct TaskNewParams {
     /// When set, collied starts `agent` resuming this session of `cwd`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<SessionId>,
+    /// Claude Code only: start it with ultracode on, checked on screen before the prompt.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ultracode: bool,
 }
 
 impl TaskNewParams {
@@ -1936,7 +1939,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 21);
+        assert_eq!(crate::PROTOCOL_VERSION, 22);
     }
 
     #[test]

@@ -120,7 +120,7 @@ async fn approval_scenario(session: &HerdrSession, input: ApprovalInput) {
     let terminal = created.root_pane.terminal_id.clone();
     let mut started = None;
     for _ in 0..100 {
-        match herdr::agent_start(socket, "collie-live-claude", "claude", &pane, None).await {
+        match herdr::agent_start(socket, "collie-live-claude", "claude", &pane, None, false).await {
             Ok(a) => {
                 started = Some(a);
                 break;
@@ -305,6 +305,7 @@ async fn scenario(session: &HerdrSession) {
         worktree: None,
         clone: None,
         resume: None,
+        ultracode: false,
     };
     assert_eq!(
         drive.task_new(outside, &yes).await.0.unwrap_err().0,
@@ -324,6 +325,7 @@ async fn scenario(session: &HerdrSession) {
                     worktree: None,
                     clone: None,
                     resume: None,
+                    ultracode: false,
                 },
                 &yes,
             )

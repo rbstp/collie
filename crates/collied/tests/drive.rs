@@ -525,6 +525,7 @@ fn task(cwd: &Path, agent: &str) -> TaskNewParams {
         worktree: None,
         clone: None,
         resume: None,
+        ultracode: false,
     }
 }
 
@@ -2013,6 +2014,48 @@ async fn codex_tasks_keep_session_hooks_in_their_own_pane() {
     }
 }
 
+// Claude Code 2.1.299 started without and with `--settings '{"ultracode":true}'`.
+const IDLE_299: &str = include_str!("fixtures/claude-2.1.299/idle.tmux.txt");
+const IDLE_ULTRACODE_299: &str = include_str!("fixtures/claude-2.1.299/idle-ultracode.tmux.txt");
+
+#[tokio::test]
+async fn ultracode_tasks_prompt_only_once_it_shows() {
+    for (screen, shown) in [(IDLE_ULTRACODE_299, true), (IDLE_299, false)] {
+        let herdr = Mock::start();
+        let (_d, base) = root();
+        let drive = herdr.driver(&["claude"], &base.join("root"));
+        herdr.with(|h| {
+            h.text = screen.into();
+            h.gets.extend([
+                started_agent("idle", true, false),
+                started_agent("idle", true, false),
+            ]);
+        });
+        let p = TaskNewParams {
+            ultracode: true,
+            ..task(&base.join("root/a"), "claude")
+        };
+        let (reply, _) = drive.task_new(p, &yes()).await;
+        assert_eq!(
+            herdr.params("agent.start")[0]["args"],
+            json!(["--settings", r#"{"ultracode":true}"#])
+        );
+        if shown {
+            assert!(reply.is_ok(), "{reply:?}");
+            assert_eq!(herdr.params("agent.prompt").len(), 1);
+        } else {
+            let (code, message) = reply.unwrap_err();
+            assert_eq!(code, ErrorCode::AgentNotReady);
+            assert!(
+                message.contains("workspace w9 was created and left open")
+                    && message.contains("ultracode could not be enabled"),
+                "{message}"
+            );
+            assert!(herdr.params("agent.prompt").is_empty());
+        }
+    }
+}
+
 const CLAUDE_SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
 const CODEX_SESSION: &str = "01a10f07-b5ed-79a3-989d-fa10b96c5cab";
 /// The session of the Claude agent in the snapshot.
@@ -2435,6 +2478,13 @@ async fn task_new_refusals() {
         (task(&base.join("root/../outside"), "claude"), "outside"),
         (task(&base.join("root/missing"), "claude"), "does not exist"),
         (task(&base.join("root/a"), "codex"), "not allowed"),
+        (
+            TaskNewParams {
+                ultracode: true,
+                ..task(&base.join("root/a"), "codex")
+            },
+            "needs Claude Code",
+        ),
     ];
     for (p, why) in refused {
         let (reply, cwd) = drive.task_new(p, &yes()).await;

@@ -819,6 +819,10 @@
           ],
           "description": "When set, collied starts `agent` resuming this session of `cwd`."
         },
+        "ultracode": {
+          "description": "Claude Code only: start it with ultracode on, checked on screen before the prompt.",
+          "type": "boolean"
+        },
         "worktree": {
           "anyOf": [
             {

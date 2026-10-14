@@ -715,6 +715,7 @@ async fn task_new_inner(
     worktree: Option<TaskWorktree>,
     clone: Option<String>,
     resume: Option<String>,
+    ultracode: bool,
 ) -> Result<TaskStarted, CoreError> {
     let timeout = if clone.is_some() {
         TASK_CLONE_TIMEOUT
@@ -759,6 +760,7 @@ async fn task_new_inner(
         resume: resume
             .map(|id| SessionId::new(id).map_err(|_| invalid("resume", "invalid session")))
             .transpose()?,
+        ultracode,
     });
     match core.mutate(&machine_id, request, timeout).await? {
         Response::TaskStarted {
@@ -1709,6 +1711,7 @@ impl CollieCore {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn task_new(
         &self,
         machine_id: String,
@@ -1717,13 +1720,15 @@ impl CollieCore {
         prompt: String,
         label: Option<String>,
         new_folder: Option<String>,
+        ultracode: bool,
     ) -> Result<TaskStarted, CoreError> {
         task_new_inner(
-            self, machine_id, cwd, agent, prompt, label, new_folder, None, None, None,
+            self, machine_id, cwd, agent, prompt, label, new_folder, None, None, None, ultracode,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn task_clone(
         &self,
         machine_id: String,
@@ -1732,6 +1737,7 @@ impl CollieCore {
         agent: String,
         prompt: String,
         label: Option<String>,
+        ultracode: bool,
     ) -> Result<TaskStarted, CoreError> {
         task_new_inner(
             self,
@@ -1744,6 +1750,7 @@ impl CollieCore {
             None,
             Some(repository),
             None,
+            ultracode,
         )
         .await
     }
@@ -1953,10 +1960,12 @@ impl CollieCore {
             None,
             None,
             Some(session_id),
+            false,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn task_worktree_create(
         &self,
         machine_id: String,
@@ -1965,6 +1974,7 @@ impl CollieCore {
         agent: String,
         prompt: String,
         label: Option<String>,
+        ultracode: bool,
     ) -> Result<TaskStarted, CoreError> {
         task_new_inner(
             self,
@@ -1977,10 +1987,12 @@ impl CollieCore {
             Some(TaskWorktree::Create { branch }),
             None,
             None,
+            ultracode,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn task_worktree_open(
         &self,
         machine_id: String,
@@ -1989,6 +2001,7 @@ impl CollieCore {
         agent: String,
         prompt: String,
         label: Option<String>,
+        ultracode: bool,
     ) -> Result<TaskStarted, CoreError> {
         let path = Cwd::new(path).map_err(|_| invalid("path", "invalid checkout path"))?;
         task_new_inner(
@@ -2002,6 +2015,7 @@ impl CollieCore {
             Some(TaskWorktree::Open { path }),
             None,
             None,
+            ultracode,
         )
         .await
     }
@@ -4077,6 +4091,7 @@ mod tests {
                 "go".into(),
                 label.map(Into::into),
                 None,
+                false,
             ))
             .map(|_| ())
         };
@@ -4090,6 +4105,7 @@ mod tests {
                         "go".into(),
                         None,
                         Some(bad.into()),
+                        false,
                     ))
                     .map(|_| ())
                 ),
@@ -4970,6 +4986,7 @@ mod tailnet_tests {
                 "add tests".into(),
                 Some(" tests ".into()),
                 Some("new app".into()),
+                false,
             ))
             .unwrap();
         assert_eq!(
