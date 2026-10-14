@@ -389,6 +389,7 @@ pub enum PullChecks {
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct SubagentSummary {
     pub agent_type: String,
+    pub title: String,
     pub activity: String,
     pub started_at_ms: u64,
     pub tokens: u64,
@@ -3050,6 +3051,7 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
             .iter()
             .map(|s| SubagentSummary {
                 agent_type: s.agent_type.clone(),
+                title: s.title.clone(),
                 activity: s.activity.clone(),
                 started_at_ms: s.started_at_ms,
                 tokens: s.tokens,
@@ -3368,13 +3370,14 @@ mod tests {
         assert!(s.subagents.is_empty());
         let running = newer.replace(
             r#""last_activity_ms":9"#,
-            r#""last_activity_ms":9,"subagents":[{"agent_type":"Explore","activity":"Reading lib.rs","started_at_ms":3,"tokens":1500,"called_tools":true}]"#,
+            r#""last_activity_ms":9,"subagents":[{"agent_type":"Explore","title":"Find the reader","activity":"Reading lib.rs","started_at_ms":3,"tokens":1500,"called_tools":true}]"#,
         );
         let s = agent_summary(&serde_json::from_str(&running).unwrap());
         assert_eq!(
             s.subagents,
             [SubagentSummary {
                 agent_type: "Explore".into(),
+                title: "Find the reader".into(),
                 activity: "Reading lib.rs".into(),
                 started_at_ms: 3,
                 tokens: 1500,

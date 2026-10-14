@@ -762,6 +762,7 @@ mod tests {
     fn subagent_token_changes_are_held_for_five_seconds() {
         let sub = |activity: &str, tokens: u64| Subagent {
             agent_type: "general-purpose".into(),
+            title: "Check the pairing code".into(),
             activity: activity.into(),
             started_at_ms: 1,
             tokens,

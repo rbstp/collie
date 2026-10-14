@@ -1159,6 +1159,9 @@ pub enum PullChecks {
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct Subagent {
     pub agent_type: String,
+    /// The description it was started with, else its type.
+    #[serde(default)]
+    pub title: String,
     pub activity: String,
     pub started_at_ms: u64,
     pub tokens: u64,
@@ -2163,6 +2166,7 @@ mod tests {
             last_activity_ms: Some(7),
             subagents: vec![Subagent {
                 agent_type: "general-purpose".into(),
+                title: "Check the pairing code".into(),
                 activity: "Reading lib.rs".into(),
                 started_at_ms: 5,
                 tokens: 500,
@@ -2172,7 +2176,7 @@ mod tests {
         };
         let json = serde_json::to_string(&full).unwrap();
         assert!(json.ends_with(
-            r#""last_line":"Done.","context_left":100,"last_prompt":"go","last_activity_ms":7,"subagents":[{"agent_type":"general-purpose","activity":"Reading lib.rs","started_at_ms":5,"tokens":500,"called_tools":true}]}"#
+            r#""last_line":"Done.","context_left":100,"last_prompt":"go","last_activity_ms":7,"subagents":[{"agent_type":"general-purpose","title":"Check the pairing code","activity":"Reading lib.rs","started_at_ms":5,"tokens":500,"called_tools":true}]}"#
         ));
         assert_eq!(serde_json::from_str::<Agent>(&json).unwrap(), full);
         let linked = Agent {

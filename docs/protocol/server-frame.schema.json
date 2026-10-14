@@ -1578,6 +1578,11 @@
           "minimum": 0,
           "type": "integer"
         },
+        "title": {
+          "default": "",
+          "description": "The description it was started with, else its type.",
+          "type": "string"
+        },
         "tokens": {
           "format": "uint64",
           "minimum": 0,

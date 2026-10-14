@@ -395,9 +395,9 @@ struct SubagentList: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(subagents.enumerated()), id: \.offset) { _, subagent in
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(subagents.enumerated()), id: \.offset) { _, subagent in
+                TimelineView(.periodic(from: Date(timeIntervalSince1970: Double(subagent.startedAtMs / 1000)), by: 60)) { context in
                     let usage = Text(verbatim: subagent.usage(now: context.date))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
@@ -405,10 +405,7 @@ struct SubagentList: View {
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(spacing: 6) {
                             Image(systemName: "circle").font(.system(size: 7)).foregroundStyle(.secondary).accessibilityHidden(true)
-                            // Type and activity share the room left, so a long type truncates instead of hiding the activity.
-                            Text(verbatim: subagent.agentType).fontWeight(.semibold).lineLimit(1)
-                            Text(verbatim: subagent.activity).foregroundStyle(.secondary).lineLimit(1)
-                                .frame(minWidth: 40, alignment: .leading)
+                            Text(verbatim: subagent.title).lineLimit(1)
                             Spacer(minLength: 4)
                             if !typeSize.isAccessibilitySize { usage.fixedSize() }
                         }
@@ -417,23 +414,23 @@ struct SubagentList: View {
                     .accessibilityElement(children: .combine)
                 }
             }
-            .font(.caption)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .font(.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 extension SubagentSummary {
-    /// "4m 23s · ↓ 496.5k tokens": ↓ once the subagent has called a tool, ↑ before.
+    /// "1h 11m · ↓ 270.8k": ↓ once the subagent has called a tool, ↑ before.
     func usage(now: Date) -> String {
-        let seconds = max(0, Int(now.timeIntervalSince1970) - Int(startedAtMs / 1000))
-        let elapsed = switch seconds {
-        case ..<60: "\(seconds)s"
-        case ..<3600: "\(seconds / 60)m \(seconds % 60)s"
-        default: "\(seconds / 3600)h \(seconds % 3600 / 60)m \(seconds % 60)s"
+        let minutes = max(0, Int(now.timeIntervalSince1970) - Int(startedAtMs / 1000)) / 60
+        let elapsed = switch minutes {
+        case 0: "<1m"
+        case ..<60: "\(minutes)m"
+        default: "\(minutes / 60)h \(minutes % 60)m"
         }
         guard tokens > 0 else { return elapsed }
-        return "\(elapsed) · \(calledTools ? "↓" : "↑") \(Self.count(tokens)) tokens"
+        return "\(elapsed) · \(calledTools ? "↓" : "↑") \(Self.count(tokens))"
     }
 
     static func count(_ n: UInt64) -> String {
