@@ -20,6 +20,12 @@ const CLAUDE_WINDOW: u64 = 200_000;
 const CLAUDE_LONG_WINDOW: u64 = 1_000_000;
 /// codex-rs `BASELINE_TOKENS`, so the percentage matches Codex's own "context left".
 const CODEX_BASELINE: u64 = 12_000;
+const MAX_SESSIONS: usize = 20;
+/// Codex writes its instructions first (tens of KB); the first prompt follows.
+const HEAD_BYTES: u64 = 256 * 1024;
+const META_BYTES: u64 = 64 * 1024;
+const MAX_LISTED: usize = 10_000;
+const MAX_CANDIDATES: usize = 400;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Derived {
@@ -180,29 +186,261 @@ impl Transcripts {
                     .map(|e| e.path().join(&name));
                 by_cwd.chain(any).find(|p| is_file(p))
             }
-            Kind::Codex => {
-                let root = self.codex_sessions.as_ref()?;
-                let day = (uuid_v7_ms(id)? / 86_400_000) as i64;
-                let suffix = format!("-{id}.jsonl");
-                // Rollouts sit under the local date the session started; the id has it in UTC.
-                (day - 1..=day + 1)
-                    .flat_map(|d| {
-                        let (y, m, d) = civil(d);
-                        std::fs::read_dir(root.join(format!("{y:04}/{m:02}/{d:02}")))
-                            .into_iter()
-                            .flatten()
-                            .flatten()
-                    })
-                    .map(|e| e.path())
-                    .find(|p| {
-                        p.file_name()
-                            .and_then(|n| n.to_str())
-                            .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(&suffix))
-                            && is_file(p)
-                    })
-            }
+            Kind::Codex => self.codex_rollout(id),
         }
     }
+
+    fn codex_rollout(&self, id: &str) -> Option<PathBuf> {
+        let root = self.codex_sessions.as_ref()?;
+        let day = (uuid_v7_ms(id)? / 86_400_000) as i64;
+        let suffix = format!("-{id}.jsonl");
+        // Rollouts sit under the local date the session started; the id has it in UTC.
+        (day - 1..=day + 1)
+            .flat_map(|d| {
+                let (y, m, d) = civil(d);
+                std::fs::read_dir(root.join(format!("{y:04}/{m:02}/{d:02}")))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+            })
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(&suffix))
+                    && is_file(p)
+            })
+    }
+
+    /// The most recent sessions started in `cwd` (canonical) that have a prompt, newest first.
+    pub fn sessions(&self, cwd: &str, claude: bool, codex: bool) -> Vec<Session> {
+        let mut out = Vec::new();
+        if claude {
+            out.extend(self.claude_sessions(cwd));
+        }
+        if codex {
+            out.extend(self.codex_sessions(cwd));
+        }
+        out.sort_by_key(|s| std::cmp::Reverse(s.modified_ms));
+        out.truncate(MAX_SESSIONS);
+        out
+    }
+
+    /// Whether `id` names a transcript of this kind that belongs to `cwd`.
+    pub fn has_session(&self, agent: &str, cwd: &str, id: &str) -> bool {
+        if !is_session_id(id) {
+            return false;
+        }
+        match agent {
+            "claude" => self.claude_projects.as_ref().is_some_and(|root| {
+                open(&root.join(project_dir(cwd)).join(format!("{id}.jsonl"))).is_some()
+            }),
+            "codex" => self
+                .codex_rollout(id)
+                .or_else(|| {
+                    self.codex_files()
+                        .into_iter()
+                        .find_map(|(path, i)| (i == id).then_some(path))
+                })
+                .and_then(|path| open(&path))
+                .is_some_and(|(mut file, _, _)| {
+                    head(&mut file, META_BYTES)
+                        .and_then(|h| codex_meta(&h))
+                        .is_some_and(|(i, c, _)| i == id && c == cwd)
+                }),
+            _ => false,
+        }
+    }
+
+    fn claude_sessions(&self, cwd: &str) -> Vec<Session> {
+        let Some(root) = &self.claude_projects else {
+            return Vec::new();
+        };
+        let files = std::fs::read_dir(root.join(project_dir(cwd)))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .take(MAX_LISTED)
+            .filter_map(|e| {
+                let name = e.file_name();
+                let id = name.to_str()?.strip_suffix(".jsonl")?;
+                is_session_id(id).then(|| (e.path(), id.to_owned()))
+            })
+            .collect();
+        recent("claude", files, |file, _| {
+            let text = head(file, HEAD_BYTES)?;
+            Some(claude_first_prompt(&String::from_utf8_lossy(&text)))
+        })
+    }
+
+    /// Rollouts in the newest dated folders first, at most `MAX_LISTED`.
+    fn codex_files(&self) -> Vec<(PathBuf, String)> {
+        let Some(root) = &self.codex_sessions else {
+            return Vec::new();
+        };
+        let mut files = Vec::new();
+        'walk: for year in dated_dirs(root) {
+            for month in dated_dirs(&year) {
+                for day in dated_dirs(&month) {
+                    for e in std::fs::read_dir(&day).into_iter().flatten().flatten() {
+                        if files.len() >= MAX_LISTED {
+                            break 'walk;
+                        }
+                        let name = e.file_name();
+                        if let Some(id) = name.to_str().and_then(rollout_id) {
+                            files.push((e.path(), id.to_owned()));
+                        }
+                    }
+                }
+            }
+        }
+        files
+    }
+
+    fn codex_sessions(&self, cwd: &str) -> Vec<Session> {
+        recent("codex", self.codex_files(), |file, id| {
+            let (i, c, interactive) = codex_meta(&head(file, META_BYTES)?)?;
+            if i != id || c != cwd || !interactive {
+                return None;
+            }
+            file.seek(SeekFrom::Start(0)).ok()?;
+            let text = head(file, HEAD_BYTES)?;
+            Some(codex_first_prompt(&String::from_utf8_lossy(&text)))
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Session {
+    pub agent: &'static str,
+    pub id: String,
+    pub first_prompt: String,
+    pub modified_ms: u64,
+}
+
+/// Newest first by mtime; only the `MAX_CANDIDATES` newest are opened. A transcript longer
+/// than its head without a prompt found there is listed with an empty one: the prompt may
+/// sit in a line the head cuts (an inline image) or after it.
+fn recent(
+    agent: &'static str,
+    files: Vec<(PathBuf, String)>,
+    prompt: impl Fn(&mut File, &str) -> Option<Option<String>>,
+) -> Vec<Session> {
+    let mut dated: Vec<(SystemTime, PathBuf, String)> = files
+        .into_iter()
+        .filter_map(|(path, id)| {
+            let meta = std::fs::symlink_metadata(&path)
+                .ok()
+                .filter(|m| m.is_file())?;
+            Some((meta.modified().ok()?, path, id))
+        })
+        .collect();
+    dated.sort_by_key(|d| std::cmp::Reverse(d.0));
+    dated
+        .into_iter()
+        .take(MAX_CANDIDATES)
+        .filter_map(|(_, path, id)| {
+            let (mut file, len, modified) = open(&path)?;
+            let first_prompt =
+                prompt(&mut file, &id)?.or_else(|| (len > HEAD_BYTES).then(String::new))?;
+            Some(Session {
+                agent,
+                modified_ms: modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64,
+                id,
+                first_prompt,
+            })
+        })
+        .take(MAX_SESSIONS)
+        .collect()
+}
+
+fn head(file: &mut File, limit: u64) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    file.by_ref().take(limit).read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
+/// Numbered subfolders (`YYYY`, `MM`, `DD`), newest first, never through a symlink.
+fn dated_dirs(dir: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                && e.file_type().is_ok_and(|t| t.is_dir())
+        })
+        .map(|e| e.path())
+        .collect();
+    dirs.sort_by(|a, b| b.cmp(a));
+    dirs
+}
+
+fn rollout_id(name: &str) -> Option<&str> {
+    let stem = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    let id = stem.get(stem.len().checked_sub(36)?..)?;
+    is_session_id(id).then_some(id)
+}
+
+/// The rollout's id and cwd from its first line, and whether a person started it (the TUI
+/// or the app, not `codex exec` or a subagent).
+fn codex_meta(head: &[u8]) -> Option<(String, String, bool)> {
+    let first = head.split(|b| *b == b'\n').next()?;
+    let v: Value = serde_json::from_slice(first).ok()?;
+    if v["type"] != "session_meta" {
+        return None;
+    }
+    let p = &v["payload"];
+    Some((
+        p["id"].as_str()?.to_owned(),
+        p["cwd"].as_str()?.to_owned(),
+        matches!(p["source"].as_str(), Some("cli" | "vscode")),
+    ))
+}
+
+fn first_block_line(content: &Value, kind: &str) -> Option<String> {
+    content
+        .as_array()?
+        .iter()
+        .filter(|b| b["type"] == kind)
+        .find_map(|b| first_line(b["text"].as_str()?))
+}
+
+fn claude_first_prompt(text: &str) -> Option<String> {
+    text.lines()
+        .filter(|l| l.contains("human"))
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find_map(|v| {
+            if v["type"] != "user" || v["isSidechain"] == true || v["origin"]["kind"] != "human" {
+                return None;
+            }
+            let content = &v["message"]["content"];
+            match content.as_str() {
+                Some(s) => first_line(s),
+                None => first_block_line(content, "text"),
+            }
+        })
+}
+
+fn codex_first_prompt(text: &str) -> Option<String> {
+    text.lines()
+        .filter(|l| l.contains("UserMessage") || l.contains("user_message"))
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find_map(|v| {
+            let p = &v["payload"];
+            if v["type"] != "event_msg" {
+                return None;
+            }
+            match p["type"].as_str()? {
+                "item_completed" if p["item"]["type"] == "UserMessage" => {
+                    first_block_line(&p["item"]["content"], "text")
+                }
+                "user_message" => p["message"].as_str().and_then(first_line),
+                _ => None,
+            }
+        })
 }
 
 /// The id becomes a file name, so it must be a plain lowercase UUID: no separator, no `..`.
@@ -765,5 +1003,181 @@ mod tests {
         let tail = tail(file, len).unwrap();
         assert!(tail.len() < TAIL_BYTES as usize && tail.starts_with('{'));
         assert_eq!(claude(&tail, None).context_left, Some(94));
+    }
+
+    fn aged(path: &Path, text: &str, secs: u64) {
+        write(path, text);
+        let at = UNIX_EPOCH + std::time::Duration::from_secs(1_790_000_000 + secs);
+        File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+
+    fn uuid(n: u32) -> String {
+        format!("{n:08x}-1111-4222-8333-444444444444")
+    }
+
+    #[test]
+    fn lists_the_folders_recent_sessions_with_their_first_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = roots(dir.path());
+        let cwd = "/Users/me/src/collie";
+        let project = dir.path().join("claude/projects/-Users-me-src-collie");
+        aged(&project.join(format!("{CLAUDE_ID}.jsonl")), CLAUDE, 10);
+        let no_prompt = r#"{"type":"mode","mode":"normal"}"#;
+        aged(&project.join(format!("{}.jsonl", uuid(1))), no_prompt, 50);
+        aged(&project.join("notes.jsonl"), CLAUDE, 50);
+        aged(&dir.path().join("secret.jsonl"), CLAUDE, 50);
+        std::os::unix::fs::symlink(
+            dir.path().join("secret.jsonl"),
+            project.join(format!("{}.jsonl", uuid(2))),
+        )
+        .unwrap();
+        aged(
+            &dir.path()
+                .join("claude/projects/-Users-me-src-other")
+                .join(format!("{}.jsonl", uuid(3))),
+            CLAUDE,
+            50,
+        );
+
+        let day = dir.path().join("codex/sessions/2026/10/05");
+        let rollout = |id: &str| day.join(format!("rollout-2026-10-05T22-25-26-{id}.jsonl"));
+        aged(&rollout(CODEX_ID), CODEX, 20);
+        let first = CODEX.lines().next().unwrap();
+        let variant = |from: &str, to: &str| CODEX.replacen(first, &first.replace(from, to), 1);
+        for (n, text) in [
+            (4, variant("/Users/me/src/collie", "/Users/me/src/other")),
+            (5, variant(r#""source":"cli""#, r#""source":"exec""#)),
+            (6, variant(r#""id":"01a10f07"#, r#""id":"01a10f08"#)),
+        ] {
+            let id = CODEX_ID.replacen("01a10f07", &format!("0{n}a10f07"), 1);
+            aged(&rollout(&id), &text.replace(CODEX_ID, &id), 60);
+        }
+        let legacy = format!(
+            r#"{{"type":"session_meta","payload":{{"id":"{}","cwd":"{cwd}","source":"vscode"}}}}
+{{"type":"event_msg","payload":{{"type":"user_message","message":"  ship the\nrelease"}}}}"#,
+            uuid(7)
+        );
+        aged(
+            &dir.path().join(format!(
+                "codex/sessions/2025/01/31/rollout-x-{}.jsonl",
+                uuid(7)
+            )),
+            &legacy,
+            5,
+        );
+
+        let listed = |claude, codex| -> Vec<(&str, String, String, u64)> {
+            t.sessions(cwd, claude, codex)
+                .into_iter()
+                .map(|s| (s.agent, s.id, s.first_prompt, s.modified_ms))
+                .collect()
+        };
+        let ms = |secs: u64| (1_790_000_000 + secs) * 1000;
+        assert_eq!(
+            listed(true, true),
+            [
+                (
+                    "codex",
+                    CODEX_ID.to_owned(),
+                    "add approval tests for the codex menu".to_owned(),
+                    ms(20)
+                ),
+                (
+                    "claude",
+                    CLAUDE_ID.to_owned(),
+                    "fix the flaky approval test".to_owned(),
+                    ms(10)
+                ),
+                ("codex", uuid(7), "ship the".to_owned(), ms(5)),
+            ]
+        );
+        assert_eq!(listed(true, false).len(), 1);
+        assert_eq!(listed(false, true).len(), 2);
+        assert!(t.sessions("/Users/me/src/elsewhere", true, true).is_empty());
+
+        for n in 10..40 {
+            aged(
+                &project.join(format!("{}.jsonl", uuid(n))),
+                CLAUDE,
+                100 + u64::from(n),
+            );
+        }
+        let many = listed(true, true);
+        assert_eq!(many.len(), MAX_SESSIONS);
+        assert_eq!(many[0].1, uuid(39));
+        assert!(many.windows(2).all(|w| w[0].3 >= w[1].3));
+
+        assert!(t.has_session("claude", cwd, CLAUDE_ID));
+        assert!(t.has_session("codex", cwd, CODEX_ID));
+        assert!(
+            t.has_session("codex", cwd, &uuid(7)),
+            "not a UUIDv7: found by scanning"
+        );
+        assert!(!t.has_session("claude", "/Users/me/src/other", CLAUDE_ID));
+        assert!(!t.has_session("codex", "/Users/me/src/other", CODEX_ID));
+        assert!(!t.has_session("codex", cwd, CLAUDE_ID));
+        assert!(!t.has_session("claude", cwd, &uuid(2)));
+        assert!(!t.has_session("copilot", cwd, CLAUDE_ID));
+        assert!(!t.has_session("claude", cwd, "../-Users-me-src-other/x"));
+    }
+
+    #[test]
+    fn a_prompt_past_or_across_the_head_lists_the_session_without_its_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = roots(dir.path());
+        let cwd = "/Users/me/src/collie";
+        let project = dir.path().join("claude/projects/-Users-me-src-collie");
+        let big = "A".repeat(HEAD_BYTES as usize + 1000);
+        let human = |text: &str| {
+            format!(
+                r#"{{"type":"user","isSidechain":false,"origin":{{"kind":"human"}},"message":{{"role":"user","content":[{{"type":"image","source":{{"data":"{big}"}}}},{{"type":"text","text":"{text}"}}]}}}}"#
+            )
+        };
+        let late = format!(
+            "{{\"type\":\"attachment\",\"data\":\"{big}\"}}\n{}",
+            r#"{"type":"user","isSidechain":false,"origin":{"kind":"human"},"message":{"role":"user","content":"look later"}}"#
+        );
+        aged(
+            &project.join(format!("{}.jsonl", uuid(1))),
+            &human("look at this"),
+            30,
+        );
+        aged(&project.join(format!("{}.jsonl", uuid(2))), &late, 20);
+
+        let day = dir.path().join("codex/sessions/2026/10/05");
+        let meta = |id: &str, source: &str| {
+            format!(
+                r#"{{"type":"session_meta","payload":{{"id":"{id}","cwd":"{cwd}","source":"{source}"}}}}"#
+            )
+        };
+        let image = format!(
+            r#"{{"type":"event_msg","payload":{{"type":"item_completed","item":{{"type":"UserMessage","content":[{{"type":"image","url":"data:image/png;base64,{big}"}},{{"type":"text","text":"fix it"}}]}}}}}}"#
+        );
+        for (n, source) in [(3, "cli"), (4, "exec")] {
+            aged(
+                &day.join(format!("rollout-x-{}.jsonl", uuid(n))),
+                &format!("{}\n{image}\n", meta(&uuid(n), source)),
+                10,
+            );
+        }
+
+        let listed: Vec<(&str, String, String)> = t
+            .sessions(cwd, true, true)
+            .into_iter()
+            .map(|s| (s.agent, s.id, s.first_prompt))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("claude", uuid(1), String::new()),
+                ("claude", uuid(2), String::new()),
+                ("codex", uuid(3), String::new()),
+            ]
+        );
     }
 }

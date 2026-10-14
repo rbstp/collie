@@ -50,6 +50,11 @@ final class FakeCore: AgentCore {
         var worktreeCalls: [String] = []
         var started: TaskStarted?
         var cloneError: CoreError?
+        var sessions = [
+            TaskSession(agent: "codex", sessionId: "01a10f07-b5ed-79a3-989d-fa10b96c5cab", firstPrompt: "add approval tests", modifiedMs: 1_790_000_000_000),
+            TaskSession(agent: "claude", sessionId: "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", firstPrompt: "fix the flaky test", modifiedMs: 1_789_000_000_000),
+        ]
+        var sessionCalls: [String] = []
         var uploads: [String] = []
         var cancelledUploads: [String] = []
         var maxAttachmentBytes: UInt64 = 20 * 1024 * 1024
@@ -277,6 +282,18 @@ final class FakeCore: AgentCore {
             $0.taskPrompts.append(prompt)
         }
         if let error = state.withLock({ $0.cloneError }) { throw error }
+        guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
+        return started
+    }
+    func taskSessions(machineId: String, cwd: String) async throws -> [TaskSession] {
+        try await call { $0.sessionCalls.append(cwd) }
+        return state.withLock { $0.sessions }
+    }
+    func taskResume(machineId: String, cwd: String, agent: String, sessionId: String, prompt: String, label: String?) async throws -> TaskStarted {
+        try await call {
+            $0.taskNews.append("\(cwd) resume=\(agent):\(sessionId)")
+            $0.taskPrompts.append(prompt)
+        }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }

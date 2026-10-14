@@ -13,9 +13,9 @@ use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, CloneSource, Cwd, ErrorCode,
     FolderName, Key, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response,
-    TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskOptions, TaskWorktree,
-    TaskWorktreeInfo, TaskWorktreesParams, TerminalId, TerminalRead, TerminalRunParams,
-    WorkspaceCloseParams, WorkspaceId, limits,
+    SessionId, TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskOptions, TaskSessionInfo,
+    TaskSessionsParams, TaskWorktree, TaskWorktreeInfo, TaskWorktreesParams, TerminalId,
+    TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use tokio::io::AsyncReadExt;
@@ -25,6 +25,7 @@ use tokio::{process::Command, time::timeout};
 
 use crate::draft::{self, InputBox};
 use crate::herdr::{self, AgentInfo, PaneInfo};
+use crate::transcript::{self, Transcripts};
 use crate::{flock, prompt, reflow};
 
 /// For `draft_changed` the message is the Mac's current draft: it goes to the phone in
@@ -153,6 +154,7 @@ pub struct Driver {
     /// interleave, so a mirrored command or a side agent's note is never submitted by
     /// another session's write.
     box_writes: tokio::sync::Mutex<()>,
+    transcripts: Transcripts,
 }
 
 pub enum Watched {
@@ -193,7 +195,13 @@ impl Driver {
             roots,
             ops: OpCache::new(OPS_PER_PEER, OP_TTL),
             box_writes: tokio::sync::Mutex::new(()),
+            transcripts: Transcripts::default(),
         })
+    }
+
+    pub fn with_transcripts(mut self, transcripts: Transcripts) -> Self {
+        self.transcripts = transcripts;
+        self
     }
 
     pub async fn once<F>(
@@ -925,6 +933,36 @@ impl Driver {
         Ok(Response::TaskWorktrees { source, worktrees })
     }
 
+    pub async fn task_sessions(&self, p: TaskSessionsParams, auth: &Authorized) -> Reply {
+        authorized(auth)?;
+        let cwd = resolve_cwd(p.cwd.as_str(), &self.roots).map_err(invalid)?;
+        let allowed = |kind: &str| self.agents.iter().any(|a| a.as_str() == kind);
+        let (claude, codex) = (allowed("claude"), allowed("codex"));
+        let open: Vec<String> = herdr::agent_list(&self.herdr)
+            .await
+            .map_err(herdr_fail)?
+            .into_iter()
+            .filter_map(|a| a.agent_session.map(|s| s.value))
+            .collect();
+        let reader = self.transcripts.history_reader();
+        let sessions =
+            tokio::task::spawn_blocking(move || reader.sessions(cwd.as_str(), claude, codex))
+                .await
+                .map_err(|_| (ErrorCode::Internal, "session listing failed".to_owned()))?
+                .into_iter()
+                .filter(|s| !open.contains(&s.id))
+                .filter_map(|s| {
+                    Some(TaskSessionInfo {
+                        agent: AgentKind::new(s.agent).ok()?,
+                        session_id: SessionId::new(s.id).ok()?,
+                        first_prompt: s.first_prompt,
+                        modified_ms: s.modified_ms,
+                    })
+                })
+                .collect();
+        Ok(Response::TaskSessions { sessions })
+    }
+
     /// Also returns the canonical cwd once it is resolved or created, for the audit line.
     pub async fn task_new(&self, p: TaskNewParams, auth: &Authorized) -> (Reply, Option<Cwd>) {
         if [
@@ -944,6 +982,20 @@ impl Driver {
                 ),
                 None,
             );
+        }
+        if p.resume.is_some()
+            && (p.worktree.is_some() || p.new_folder.is_some() || p.clone.is_some())
+        {
+            return (
+                fail(
+                    ErrorCode::InvalidParams,
+                    "resume a session in its own folder",
+                ),
+                None,
+            );
+        }
+        if p.prompt.is_none() && p.resume.is_none() {
+            return (fail(ErrorCode::InvalidParams, "empty prompt"), None);
         }
         let made = if p.clone.is_some() {
             Some("cloned")
@@ -1009,6 +1061,9 @@ impl Driver {
     /// On a failure after `workspace.create` nothing is closed: the error names the
     /// workspace that was left open.
     async fn start_task(&self, p: TaskNewParams, cwd: &Cwd, auth: &Authorized) -> Reply {
+        if let Some(id) = &p.resume {
+            self.resumable(&p.agent, id, cwd).await?;
+        }
         authorized(auth)?;
         let pane = herdr::workspace_create(
             &self.herdr,
@@ -1020,6 +1075,47 @@ impl Driver {
         .root_pane;
         self.finish_task(&p, &pane, "created and left open", true, auth)
             .await
+    }
+
+    async fn resumable(&self, agent: &AgentKind, id: &SessionId, cwd: &Cwd) -> Result<(), Fail> {
+        if !transcript::is_session_id(id.as_str()) {
+            return fail(ErrorCode::InvalidParams, "invalid session id");
+        }
+        if !matches!(agent.as_str(), "claude" | "codex") {
+            return fail(
+                ErrorCode::InvalidParams,
+                "this agent cannot resume a session",
+            );
+        }
+        let (reader, kind, session, folder) = (
+            self.transcripts.history_reader(),
+            agent.as_str().to_owned(),
+            id.as_str().to_owned(),
+            cwd.as_str().to_owned(),
+        );
+        let found =
+            tokio::task::spawn_blocking(move || reader.has_session(&kind, &folder, &session))
+                .await
+                .map_err(|_| (ErrorCode::Internal, "session check failed".to_owned()))?;
+        if !found {
+            return fail(ErrorCode::InvalidParams, "no such session in this folder");
+        }
+        let open = herdr::agent_list(&self.herdr)
+            .await
+            .map_err(herdr_fail)?
+            .iter()
+            .any(|a| {
+                a.agent_session
+                    .as_ref()
+                    .is_some_and(|s| s.value == id.as_str())
+            });
+        if open {
+            return fail(
+                ErrorCode::InvalidParams,
+                "the session is already open in a herdr pane",
+            );
+        }
+        Ok(())
     }
 
     async fn start_worktree_task(
@@ -1211,7 +1307,7 @@ impl Driver {
             )
         };
         let name = self
-            .start_agent(pane, &p.agent, retry_busy, auth)
+            .start_agent(pane, &p.agent, p.resume.as_ref(), retry_busy, auth)
             .await
             .map_err(left_open)?;
         let current = herdr::agent_get(&self.herdr, &name)
@@ -1220,22 +1316,25 @@ impl Driver {
         self.started_check(&current, pane, &name, &p.agent)
             .await
             .map_err(left_open)?;
-        // herdr may not rule another kind's startup prompt `blocked`, and the prompt's Enter
-        // would answer it.
-        if p.agent.as_str() != "claude"
-            && herdr::detection_text(&self.herdr, &pane.pane_id)
+        if let Some(text) = &p.prompt {
+            // herdr may not rule another kind's startup prompt `blocked`, and the prompt's
+            // Enter would answer it.
+            if p.agent.as_str() != "claude"
+                && herdr::detection_text(&self.herdr, &pane.pane_id)
+                    .await
+                    .map_or(true, |t| prompt::shows_dialog(&t))
+            {
+                return Err(left_open((
+                    ErrorCode::AgentBlocked,
+                    "the agent is blocked on a startup prompt; answer it in the terminal"
+                        .to_owned(),
+                )));
+            }
+            authorized(auth).map_err(left_open)?;
+            herdr::agent_prompt(&self.herdr, &name, text.as_str())
                 .await
-                .map_or(true, |t| prompt::shows_dialog(&t))
-        {
-            return Err(left_open((
-                ErrorCode::AgentBlocked,
-                "the agent is blocked on a startup prompt; answer it in the terminal".to_owned(),
-            )));
+                .map_err(|e| left_open(herdr_fail(e)))?;
         }
-        authorized(auth).map_err(left_open)?;
-        herdr::agent_prompt(&self.herdr, &name, p.prompt.as_str())
-            .await
-            .map_err(|e| left_open(herdr_fail(e)))?;
         Ok(Response::TaskStarted {
             workspace_id,
             terminal_id,
@@ -1249,14 +1348,17 @@ impl Driver {
         &self,
         pane: &PaneInfo,
         kind: &AgentKind,
+        resume: Option<&SessionId>,
         retry_busy: bool,
         auth: &Authorized,
     ) -> Result<String, Fail> {
+        let resume = resume.map(SessionId::as_str);
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         let name = agent_name()?;
         let started = loop {
             authorized(auth)?;
-            match herdr::agent_start(&self.herdr, &name, kind.as_str(), &pane.pane_id).await {
+            match herdr::agent_start(&self.herdr, &name, kind.as_str(), &pane.pane_id, resume).await
+            {
                 Ok(a) => break a,
                 // Retried while the pane still holds the terminal created for this task: what
                 // runs there is the shell's startup (rc files often run helpers in the

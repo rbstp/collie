@@ -193,6 +193,8 @@ pub enum Request {
     TaskFolders(TaskFoldersParams),
     #[serde(rename = "task.worktrees")]
     TaskWorktrees(TaskWorktreesParams),
+    #[serde(rename = "task.sessions")]
+    TaskSessions(TaskSessionsParams),
     #[serde(rename = "task.archive")]
     TaskArchive(TaskArchiveParams),
     #[serde(rename = "workspace.close")]
@@ -260,6 +262,7 @@ impl Request {
         "task.new",
         "task.folders",
         "task.worktrees",
+        "task.sessions",
         "task.archive",
         "workspace.close",
         "pane.close",
@@ -305,6 +308,7 @@ impl Request {
             Self::TaskNew(_) => "task.new",
             Self::TaskFolders(_) => "task.folders",
             Self::TaskWorktrees(_) => "task.worktrees",
+            Self::TaskSessions(_) => "task.sessions",
             Self::TaskArchive(_) => "task.archive",
             Self::WorkspaceClose(_) => "workspace.close",
             Self::PaneClose(_) => "pane.close",
@@ -350,6 +354,7 @@ impl Request {
             | Self::TaskNew(_)
             | Self::TaskFolders(_)
             | Self::TaskWorktrees(_)
+            | Self::TaskSessions(_)
             | Self::TaskArchive(_)
             | Self::WorkspaceClose(_)
             | Self::PaneClose(_)
@@ -716,7 +721,9 @@ pub struct TaskNewParams {
     pub op_id: OpId,
     pub cwd: Cwd,
     pub agent: AgentKind,
-    pub prompt: PromptText,
+    /// Required unless `resume` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<PromptText>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<Label>,
     /// When set, collied creates this empty folder directly inside `cwd` and starts there.
@@ -728,6 +735,15 @@ pub struct TaskNewParams {
     /// named by `CloneSource::folder_name`, and starts there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clone: Option<CloneSource>,
+    /// When set, collied starts `agent` resuming this session of `cwd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<SessionId>,
+}
+
+impl TaskNewParams {
+    pub fn is_valid(&self) -> bool {
+        self.prompt.is_some() || self.resume.is_some()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -742,6 +758,13 @@ pub enum TaskWorktree {
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TaskWorktreesParams {
+    pub cwd: Cwd,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TaskSessionsParams {
     pub cwd: Cwd,
 }
 
@@ -942,6 +965,10 @@ pub enum Response {
     TaskWorktrees {
         source: Cwd,
         worktrees: Vec<TaskWorktreeInfo>,
+    },
+    /// The most recent sessions of `cwd`, newest first.
+    TaskSessions {
+        sessions: Vec<TaskSessionInfo>,
     },
     TaskStarted {
         workspace_id: WorkspaceId,
@@ -1321,6 +1348,17 @@ pub struct TaskWorktreeInfo {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct TaskSessionInfo {
+    pub agent: AgentKind,
+    pub session_id: SessionId,
+    /// The first line of the session's first prompt, at most 160 characters; empty when it
+    /// is not in the first 256 KiB of the transcript.
+    pub first_prompt: String,
+    pub modified_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct PendingTool {
     pub name: String,
     pub summary: String,
@@ -1541,6 +1579,7 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
         Request::TerminalSendKeys(p) => p.is_valid(),
         Request::ApprovalDecide(p) => p.is_valid(),
         Request::AttachmentBegin(p) => p.is_valid(),
+        Request::TaskNew(p) => p.is_valid(),
         _ => true,
     };
     if !valid {
@@ -1816,7 +1855,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 19);
+        assert_eq!(crate::PROTOCOL_VERSION, 20);
     }
 
     #[test]
@@ -1931,6 +1970,46 @@ mod tests {
             r#"{"mode":"remove","path":"/repo/feature"}"#,
         ] {
             assert_eq!(task(choice).unwrap_err().code, ErrorCode::InvalidParams);
+        }
+    }
+
+    #[test]
+    fn sessions_and_resume_need_a_session_id_and_only_resume_skips_the_prompt() {
+        let list = parse(r#"{"id":1,"method":"task.sessions","params":{"cwd":"/repo"}}"#).unwrap();
+        assert_eq!(list.request.class(), MethodClass::Drive);
+        assert_eq!(list.request.method(), "task.sessions");
+        for params in [r#"{"cwd":"repo"}"#, r#"{"cwd":"/repo","agent":"claude"}"#] {
+            let bad = format!(r#"{{"id":1,"method":"task.sessions","params":{params}}}"#);
+            assert_eq!(parse(&bad).unwrap_err().code, ErrorCode::InvalidParams);
+        }
+        let task = |extra: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"task.new","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","cwd":"/repo","agent":"claude"{extra}}}}}"#
+            ))
+        };
+        for extra in [
+            r#","resume":"3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d""#,
+            r#","resume":"3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","prompt":"go on""#,
+            r#","prompt":"go""#,
+        ] {
+            let frame = task(extra).unwrap();
+            assert_eq!(
+                parse(&serde_json::to_string(&frame).unwrap()).unwrap(),
+                frame
+            );
+        }
+        for bad in [
+            "",
+            r#","prompt":"""#,
+            r#","resume":"3F1B2C4D-5E6F-4A7B-8C9D-0E1F2A3B4C5D""#,
+            r#","resume":"--fork-session""#,
+            r#","resume":"","prompt":"go""#,
+        ] {
+            assert_eq!(
+                task(bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{bad}"
+            );
         }
     }
 

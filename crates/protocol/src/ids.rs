@@ -405,6 +405,15 @@ impl CloneSource {
 }
 
 validated_string!(
+    /// A Claude Code or Codex session id. It becomes a file name and an agent argument,
+    /// so it is a plain lowercase UUID: no separator, no `..`, no leading `-`.
+    SessionId,
+    debug = plain,
+    check = |s| s.len() == 36 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'-')) && !s.starts_with('-'),
+    schema = { "pattern": "^[0-9a-f][0-9a-f-]{35}$" }
+);
+
+validated_string!(
     /// Text typed into an agent. ESC and other C0/C1 controls are rejected because
     /// herdr writes prompts as bracketed paste: an embedded `ESC[201~` would end the
     /// paste and let the remainder run as raw keystrokes.
@@ -683,6 +692,23 @@ mod tests {
                 .is_ok()
         );
         assert!(Sha256Hex::new("g".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn session_ids_are_plain_lowercase_uuids() {
+        assert!(SessionId::new("3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d").is_ok());
+        for bad in [
+            "",
+            "sess-1",
+            "3F1B2C4D-5E6F-4A7B-8C9D-0E1F2A3B4C5D",
+            "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d0",
+            "3f1b2c4d/5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "../../../../../../../../../../etc/pa",
+            "-f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "3f1b2c4d 5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+        ] {
+            assert!(SessionId::new(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

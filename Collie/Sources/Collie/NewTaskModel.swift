@@ -12,7 +12,7 @@ extension TaskFolders {
 @MainActor
 @Observable
 final class NewTaskModel {
-    enum Location: String, CaseIterable { case folder = "Folder", worktree = "Git worktree", clone = "Clone" }
+    enum Location: String, CaseIterable { case folder = "Folder", worktree = "Git worktree", clone = "Clone", resume = "Resume" }
     enum WorktreeAction: String, CaseIterable { case create = "Create", open = "Open" }
     enum Phase: Equatable {
         case editing
@@ -33,6 +33,9 @@ final class NewTaskModel {
             worktreesError = nil
             source = ""
             checkoutPath = ""
+            sessions = nil
+            sessionsError = nil
+            session = nil
         }
     }
     private(set) var options: TaskOptions?
@@ -40,7 +43,18 @@ final class NewTaskModel {
     private(set) var base: String?
     private(set) var folders: TaskFolders?
     private(set) var foldersError: String?
-    var cwd = ""
+    var cwd = "" {
+        didSet {
+            guard oldValue != cwd else { return }
+            sessions = nil
+            sessionsError = nil
+            session = nil
+        }
+    }
+    private(set) var sessions: [TaskSession]?
+    private(set) var sessionsError: String?
+    private var sessionsFolder = ""
+    var session: TaskSession?
     var location = Location.folder {
         didSet {
             guard oldValue != location, location == .worktree, !newFolder, let folder else { return }
@@ -126,8 +140,12 @@ final class NewTaskModel {
     }
 
     var canStart: Bool {
-        guard !cancelled, phase == .editing, machineId != nil, !agent.isEmpty, upload == nil, !dictation.isActive,
-            !trimmed(prompt).isEmpty || !attachments.isEmpty else { return false }
+        guard !cancelled, phase == .editing, machineId != nil, upload == nil, !dictation.isActive else { return false }
+        if location == .resume {
+            guard let session, let folder, sessionsFolder == folder else { return false }
+            return sessions?.contains { $0.sessionId == session.sessionId } == true
+        }
+        guard !agent.isEmpty, !trimmed(prompt).isEmpty || !attachments.isEmpty else { return false }
         if location == .worktree {
             guard let sourceFolder, worktrees != nil, listedSource == sourceFolder else { return false }
             if worktreeAction == .create {
@@ -267,6 +285,22 @@ final class NewTaskModel {
         }
     }
 
+    func loadSessions() async {
+        guard let machineId, let requested = folder else { return }
+        sessions = nil
+        sessionsError = nil
+        do {
+            let listed = try await core.taskSessions(machineId: machineId, cwd: requested)
+            guard machineId == self.machineId, requested == folder else { return }
+            sessionsFolder = requested
+            sessions = listed
+            if !listed.contains(where: { $0.sessionId == session?.sessionId }) { session = nil }
+        } catch {
+            guard machineId == self.machineId, requested == folder else { return }
+            sessionsError = AgentModel.message(for: error)
+        }
+    }
+
     /// Starts the task, then waits for its agent to show in the flock so the agent screen
     /// can watch it. A started task is never offered again from this sheet. Returns nil once
     /// cancelled, even if the task started.
@@ -290,6 +324,12 @@ final class NewTaskModel {
                         agent: agent, prompt: text, label: trimmed(label).nilIfEmpty
                     )
                 }
+            } else if location == .resume {
+                guard let cwd = folder, let session else { phase = .editing; return nil }
+                started = try await core.taskResume(
+                    machineId: machineId, cwd: cwd, agent: session.agent, sessionId: session.sessionId,
+                    prompt: text, label: trimmed(label).nilIfEmpty
+                )
             } else if location == .clone {
                 guard let cwd = newFolderParent else { phase = .editing; return nil }
                 cloning = trimmed(repository)
@@ -308,8 +348,8 @@ final class NewTaskModel {
         } catch {
             self.error = AgentModel.message(for: error)
             // A folder made or cloned before the agent failed to start stays; start in it next time.
-            let made = location == .clone ? cloneFolder : newFolder ? trimmed(folderName) : nil
-            if location != .worktree, let name = made, let cwd = newFolderParent,
+            let made = location == .clone ? cloneFolder : location == .folder && newFolder ? trimmed(folderName) : nil
+            if let name = made, let cwd = newFolderParent,
                 let listed = try? await core.taskFolders(machineId: machineId, path: cwd),
                 listed.folders.contains(name)
             {
