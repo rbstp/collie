@@ -132,11 +132,28 @@ private func entry(
     #expect(snoozed.wake(of: agent("a", .done, activity: nowMs, since: 9), route: route, now: now) == nil)
     snoozed.snooze(agent("a", .done, activity: nowMs, since: 5), route: route, until: wake)
     #expect(snoozed.wake(of: agent("a", .done, activity: nowMs, since: 5), route: route, now: now) == wake)
-    #expect(snoozed.wake(of: agent("a", .working, activity: nowMs, since: 7), route: route, now: now) == wake)
     #expect(snoozed.wake(of: agent("a", .done, activity: nowMs, since: 9), route: route, now: now) == nil)
     snoozed.snooze(agent("a", .blocked, activity: nowMs, since: 5), route: route, until: wake)
     #expect(snoozed.wake(of: agent("a", .blocked, activity: nowMs, since: 5), route: route, now: now) == wake)
     #expect(snoozed.wake(of: agent("a", .blocked, activity: nowMs, since: 9), route: route, now: now) == nil)
+}
+
+@Test func anEarlyWakeIsFinal() {
+    let route = AgentRoute(machineId: "m1", terminalId: "a")
+    let wake = now.addingTimeInterval(3600)
+    var snoozed = SnoozedAgents()
+    for woke in [agent("a", .blocked, activity: nowMs, since: 7), agent("a", .done, activity: nowMs, since: 7)] {
+        snoozed.snooze(agent("a", .working, activity: nowMs, since: 5), route: route, until: wake)
+        snoozed.endWoken([entry("m1", [agent("a", .working, activity: nowMs, since: 5)], link: .offline)])
+        #expect(snoozed.wake(of: agent("a", .working, activity: nowMs, since: 5), route: route, now: now) == wake)
+        snoozed.endWoken([entry("m1", [woke], link: .offline)])
+        #expect(snoozed.snoozes.isEmpty)
+        #expect(snoozed.wake(of: agent("a", .working, activity: nowMs, since: 9), route: route, now: now) == nil)
+    }
+    snoozed.snooze(agent("a", .working, activity: nowMs, since: 5), route: route, until: wake)
+    let first = snoozed.wakeNow(route)
+    let second = snoozed.wakeNow(route)
+    #expect(first && !second)
 }
 
 @Test func snoozesArePrunedWhenGoneWokenOrExpired() {

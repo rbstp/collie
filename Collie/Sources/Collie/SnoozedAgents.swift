@@ -5,6 +5,10 @@ struct SnoozedAgents: StateFile {
     struct Snooze: Codable, Equatable {
         let wake: Date
         let statusSinceMs: UInt64
+
+        func ended(by agent: AgentSummary) -> Bool {
+            statusSinceMs != agent.statusSinceMs && (agent.status == .blocked || agent.status == .done)
+        }
     }
 
     static let file: URL? = try? StateDirectory.prepare().appending(path: "snoozed-agents.json")
@@ -12,17 +16,26 @@ struct SnoozedAgents: StateFile {
     var snoozes: [AgentRoute: Snooze] = [:]
 
     func wake(of agent: AgentSummary, route: AgentRoute, now: Date) -> Date? {
-        guard let snooze = snoozes[route], snooze.wake > now else { return nil }
-        if snooze.statusSinceMs != agent.statusSinceMs && (agent.status == .blocked || agent.status == .done) { return nil }
+        guard let snooze = snoozes[route], snooze.wake > now, !snooze.ended(by: agent) else { return nil }
         return snooze.wake
+    }
+
+    mutating func endWoken(_ entries: [MachineFlockEntry]) {
+        for entry in entries {
+            for agent in entry.agents {
+                let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
+                if snoozes[route]?.ended(by: agent) == true { snoozes.removeValue(forKey: route) }
+            }
+        }
     }
 
     mutating func snooze(_ agent: AgentSummary, route: AgentRoute, until wake: Date) {
         snoozes[route] = Snooze(wake: wake, statusSinceMs: agent.statusSinceMs)
     }
 
-    mutating func wakeNow(_ route: AgentRoute) {
-        snoozes.removeValue(forKey: route)
+    @discardableResult
+    mutating func wakeNow(_ route: AgentRoute) -> Bool {
+        snoozes.removeValue(forKey: route) != nil
     }
 
     mutating func prune(_ entries: [MachineFlockEntry], now: Date) {

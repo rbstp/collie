@@ -88,6 +88,7 @@ struct FlockScreen: View {
                         opened: { agent in
                             seen.markOpened(agent, route: route, nowMs: Date().unixMs)
                             seen.save(to: SeenAgents.file)
+                            if snoozed.wakeNow(route) { snoozed.save(to: SnoozedAgents.file) }
                         },
                         archived: { model.showArchiveNotice($0) }
                     )
@@ -138,6 +139,9 @@ struct FlockScreen: View {
             .onChange(of: model.entries, initial: true) { _, entries in
                 previews.update(entries)
                 gridOrder.update(entries)
+                let snoozes = snoozed.snoozes.count
+                snoozed.endWoken(entries)
+                if snoozed.snoozes.count != snoozes { snoozed.save(to: SnoozedAgents.file) }
             }
             .onChange(of: gridOrder) { _, order in order.save(to: GridOrder.file) }
             .onChange(of: layout) { _, layout in
@@ -254,6 +258,7 @@ struct FlockScreen: View {
     private func snooze(_ agent: AgentSummary, route: AgentRoute, until wake: Date?) {
         if let wake {
             snoozed.snooze(agent, route: route, until: wake)
+            snoozed.endWoken(model.entries)
         } else {
             snoozed.wakeNow(route)
         }
