@@ -1585,7 +1585,7 @@ impl Driver {
     }
 
     /// The automatic archive of `agent`'s task in `root`, whose pull request `number` a fresh
-    /// read found merged. Each condition is read fresh, `gh pr view` again, and
+    /// or kept read found merged. Each condition is read fresh, `gh pr view` again, and
     /// `archive_merged` checks them once more; `None` when one fails before the archive starts.
     pub async fn archive_if_merged(
         &self,

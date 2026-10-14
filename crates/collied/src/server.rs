@@ -683,8 +683,8 @@ async fn pull_requests(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
 
 type Merged = Vec<(herdr::AgentInfo, Cwd, u64)>;
 
-/// `Merged` lists the agents whose pull request a fresh read found merged, only while
-/// automatic archive is on.
+/// `Merged` lists the agents whose pull request a fresh or kept read found merged, only
+/// while automatic archive is on.
 async fn read_pulls(
     state: &State,
     gh: &str,
@@ -709,7 +709,15 @@ async fn read_pulls(
                 if !state.reads_pulls() {
                     return None;
                 }
-                let read = pulls::fetch(gh, &root).await;
+                let head = git::line(&root, &["rev-parse", "--verify", "--quiet", "HEAD"]).await;
+                let kept = head
+                    .ok()
+                    .flatten()
+                    .and_then(|head| lock(&state.pulls).kept(&key, &head));
+                let read = match kept {
+                    Some(kept) => Ok(Some(kept)),
+                    None => pulls::fetch(gh, &root).await,
+                };
                 let same = git::branch(&cwd, roots)
                     .await
                     .is_ok_and(|now| now.is_some_and(|(r, b)| r.as_str() == key.0 && b == key.1));

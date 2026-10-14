@@ -17,6 +17,8 @@ const MAX_NAME_CHARS: usize = 100;
 const MAX_FAILING_CHECKS: usize = 10;
 
 pub type Key = (String, String);
+/// A pull request and its head commit.
+pub type Pull = (PullRequest, String);
 
 /// Never prompts and never uses a token from collied's environment: only the user's
 /// `gh auth login`.
@@ -48,14 +50,14 @@ pub async fn signed_in(gh: &str) -> bool {
 /// With no argument gh finds the current branch itself, so no branch name reaches its
 /// command line. Reviews and comments are reduced to their count inside gh, so their text
 /// never reaches collied.
-pub async fn fetch(gh: &str, checkout: &Cwd) -> Result<Option<PullRequest>, &'static str> {
+pub async fn fetch(gh: &str, checkout: &Cwd) -> Result<Option<Pull>, &'static str> {
     let mut command = gh_command(gh);
     command
         .args([
             "pr",
             "view",
             "--json",
-            "number,state,isDraft,url,statusCheckRollup,mergeable,reviews,comments",
+            "number,state,isDraft,url,statusCheckRollup,mergeable,reviews,comments,headRefOid",
             "--jq",
             ".reviews |= length | .comments |= length",
         ])
@@ -91,13 +93,13 @@ pub async fn merged_head(gh: &str, checkout: &Cwd) -> Option<(u64, String)> {
     merged(&output.stdout)
 }
 
-/// The number of a pull request a fresh read found merged, only while `enabled`.
+/// The number of a pull request a fresh or kept read found merged, only while `enabled`.
 pub fn merged_number(
-    read: &Result<Option<PullRequest>, &str>,
+    read: &Result<Option<Pull>, &str>,
     enabled: impl FnOnce() -> bool,
 ) -> Option<u64> {
     match read {
-        Ok(Some(pr)) if pr.state == PullState::Merged && enabled() => Some(pr.number),
+        Ok(Some((pr, _))) if pr.state == PullState::Merged && enabled() => Some(pr.number),
         _ => None,
     }
 }
@@ -245,6 +247,8 @@ struct View {
     reviews: u32,
     #[serde(default)]
     comments: u32,
+    #[serde(default)]
+    head_ref_oid: String,
 }
 
 #[derive(Deserialize)]
@@ -269,7 +273,7 @@ pub(crate) enum Outcome {
     Fail,
 }
 
-fn parse(json: &[u8]) -> Option<PullRequest> {
+fn parse(json: &[u8]) -> Option<Pull> {
     let view: View = serde_json::from_slice(json).ok()?;
     let state = match (view.state.as_str(), view.is_draft) {
         ("OPEN", true) => PullState::Draft,
@@ -299,7 +303,7 @@ fn parse(json: &[u8]) -> Option<PullRequest> {
             failing_checks.push(name);
         }
     }
-    Some(PullRequest {
+    let pr = PullRequest {
         number: view.number,
         state,
         checks: checks(rollup.iter().map(|n| &n.check)),
@@ -307,7 +311,8 @@ fn parse(json: &[u8]) -> Option<PullRequest> {
         failing_checks,
         remarks: view.reviews.saturating_add(view.comments),
         conflicting: view.mergeable.as_deref() == Some("CONFLICTING"),
-    })
+    };
+    Some((pr, view.head_ref_oid))
 }
 
 pub(crate) fn clean(name: &str) -> String {
@@ -355,7 +360,7 @@ fn checks<'a>(rollup: impl Iterator<Item = &'a Check>) -> PullChecks {
 
 #[derive(Default)]
 pub struct Pulls {
-    cache: HashMap<Key, (Instant, Option<PullRequest>, bool)>,
+    cache: HashMap<Key, (Instant, Option<Pull>, bool)>,
     linked: HashMap<String, PullRequest>,
     pub watches: Watches,
     pub archive: ArchiveOnMerge,
@@ -383,7 +388,20 @@ impl Pulls {
         self.cache
             .get(key)
             .filter(|(at, ..)| now.saturating_duration_since(*at) < REFRESH)
-            .map(|(_, pr, _)| pr.clone())
+            .map(|(_, pr, _)| pr.as_ref().map(|(pr, _)| pr.clone()))
+    }
+
+    /// A merged pull request cannot change, so its last good read is kept while the
+    /// checkout's `head` is still its head commit.
+    pub fn kept(&self, key: &Key, head: &str) -> Option<Pull> {
+        match self.cache.get(key) {
+            Some((_, Some((pr, oid)), false))
+                if pr.state == PullState::Merged && !oid.is_empty() && oid == head =>
+            {
+                Some((pr.clone(), oid.clone()))
+            }
+            _ => None,
+        }
     }
 
     /// A failed read keeps what the last good one found for one refresh, then shows none.
@@ -391,7 +409,7 @@ impl Pulls {
         &mut self,
         key: Key,
         now: Instant,
-        read: Result<Option<PullRequest>, &str>,
+        read: Result<Option<Pull>, &str>,
     ) -> Option<PullRequest> {
         let failed = read.is_err();
         let pr = match read {
@@ -401,8 +419,9 @@ impl Pulls {
                 _ => None,
             },
         };
-        self.cache.insert(key, (now, pr.clone(), failed));
-        pr
+        let shown = pr.as_ref().map(|(pr, _)| pr.clone());
+        self.cache.insert(key, (now, pr, failed));
+        shown
     }
 
     pub fn link(&mut self, linked: HashMap<String, PullRequest>, seen: &HashSet<Key>) -> bool {
@@ -427,7 +446,7 @@ mod tests {
     }
 
     fn summary(name: &str) -> (u64, PullState, PullChecks) {
-        let pr = parse(&fixture(name)).unwrap();
+        let (pr, _) = parse(&fixture(name)).unwrap();
         (pr.number, pr.state, pr.checks)
     }
 
@@ -454,7 +473,7 @@ mod tests {
             (276, PullState::Open, PullChecks::Pending)
         );
         assert_eq!(
-            parse(&fixture("pr-view-merged.json")).unwrap().url,
+            parse(&fixture("pr-view-merged.json")).unwrap().0.url,
             "https://github.com/rbstp/collie/pull/275"
         );
     }
@@ -493,13 +512,10 @@ mod tests {
 
     #[test]
     fn only_a_fresh_merged_read_with_the_setting_on_is_a_candidate() {
-        let merged = Ok(Some(PullRequest {
-            state: PullState::Merged,
-            ..pr(7)
-        }));
+        let merged = Ok(Some(read(PullState::Merged, 7, OID)));
         assert_eq!(merged_number(&merged, || true), Some(7));
         assert_eq!(merged_number(&merged, || false), None);
-        assert_eq!(merged_number(&Ok(Some(pr(7))), || true), None);
+        assert_eq!(merged_number(&Ok(Some((pr(7), OID.into()))), || true), None);
         assert_eq!(merged_number(&Ok(None), || true), None);
         assert_eq!(merged_number(&Err("command failed"), || true), None);
     }
@@ -508,11 +524,14 @@ mod tests {
     fn closed_state_status_contexts_and_bad_output() {
         let merged = String::from_utf8(fixture("pr-view-merged.json")).unwrap();
         let closed = merged.replace(r#""state":"MERGED""#, r#""state":"CLOSED""#);
-        assert_eq!(parse(closed.as_bytes()).unwrap().state, PullState::Closed);
+        assert_eq!(parse(closed.as_bytes()).unwrap().0.state, PullState::Closed);
         let error = r#"{"number":1,"state":"OPEN","isDraft":false,"url":"https://github.com/o/r/pull/1","statusCheckRollup":[{"__typename":"StatusContext","state":"PENDING"},{"__typename":"StatusContext","state":"ERROR"}]}"#;
-        assert_eq!(parse(error.as_bytes()).unwrap().checks, PullChecks::Failing);
+        assert_eq!(
+            parse(error.as_bytes()).unwrap().0.checks,
+            PullChecks::Failing
+        );
         let null = error.replace(r#"[{"__typename":"StatusContext","state":"PENDING"},{"__typename":"StatusContext","state":"ERROR"}]"#, "null");
-        assert_eq!(parse(null.as_bytes()).unwrap().checks, PullChecks::None);
+        assert_eq!(parse(null.as_bytes()).unwrap().0.checks, PullChecks::None);
         for bad in [
             merged.replace(r#""state":"MERGED""#, r#""state":"LOCKED""#),
             merged.replace("https://github.com", "http://github.com"),
@@ -527,7 +546,7 @@ mod tests {
 
     #[test]
     fn failing_check_names_remarks_and_conflicts_reach_the_phone_bounded() {
-        let failing = parse(&fixture("pr-view-failing.json")).unwrap();
+        let (failing, _) = parse(&fixture("pr-view-failing.json")).unwrap();
         assert_eq!(failing.failing_checks, ["govulncheck"]);
         assert_eq!((failing.remarks, failing.conflicting), (0, false));
         let check = |name: &str| {
@@ -553,7 +572,7 @@ mod tests {
             r#"{{"number":1,"state":"OPEN","isDraft":false,"url":"https://github.com/o/r/pull/1","mergeable":"CONFLICTING","reviews":2,"comments":3,"statusCheckRollup":[{}]}}"#,
             rollup.join(",")
         );
-        let pr = parse(json.as_bytes()).unwrap();
+        let (pr, _) = parse(json.as_bytes()).unwrap();
         assert_eq!(pr.failing_checks.len(), MAX_FAILING_CHECKS);
         assert_eq!(pr.failing_checks[0], "ci/legacy");
         assert_eq!(
@@ -564,7 +583,7 @@ mod tests {
         assert_eq!((pr.remarks, pr.conflicting), (5, true));
         let merged = String::from_utf8(fixture("pr-view-merged.json")).unwrap();
         let unknown = merged.replacen('{', r#"{"mergeable":"UNKNOWN","#, 1);
-        assert!(!parse(unknown.as_bytes()).unwrap().conflicting);
+        assert!(!parse(unknown.as_bytes()).unwrap().0.conflicting);
     }
 
     #[test]
@@ -609,6 +628,18 @@ mod tests {
         }
     }
 
+    const OID: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn read(state: PullState, number: u64, oid: &str) -> Pull {
+        (
+            PullRequest {
+                state,
+                ..pr(number)
+            },
+            oid.to_owned(),
+        )
+    }
+
     #[test]
     fn cache_refreshes_every_two_minutes_and_keeps_the_last_read_through_one_failure() {
         let mut pulls = Pulls::default();
@@ -616,7 +647,7 @@ mod tests {
         let start = Instant::now();
         assert_eq!(pulls.cached(&key, start), None);
         assert_eq!(
-            pulls.store(key.clone(), start, Ok(Some(pr(1)))),
+            pulls.store(key.clone(), start, Ok(Some((pr(1), OID.into())))),
             Some(pr(1))
         );
         assert_eq!(
@@ -635,7 +666,7 @@ mod tests {
         assert_eq!(pulls.store(key.clone(), again, Err("command failed")), None);
         assert_eq!(pulls.cached(&key, again), Some(None));
         assert_eq!(
-            pulls.store(key.clone(), later, Ok(Some(pr(1)))),
+            pulls.store(key.clone(), later, Ok(Some((pr(1), OID.into())))),
             Some(pr(1))
         );
         assert_eq!(pulls.store(key.clone(), later, Ok(None)), None);
@@ -649,7 +680,7 @@ mod tests {
         let now = Instant::now();
         let a = ("/a".to_owned(), "x".to_owned());
         let b = ("/b".to_owned(), "y".to_owned());
-        pulls.store(a.clone(), now, Ok(Some(pr(1))));
+        pulls.store(a.clone(), now, Ok(Some((pr(1), OID.into()))));
         pulls.store(b.clone(), now, Ok(None));
         let linked = HashMap::from([("t1".to_owned(), pr(1))]);
         let seen = HashSet::from([a.clone()]);
@@ -661,5 +692,78 @@ mod tests {
         assert!(pulls.link(HashMap::new(), &HashSet::new()));
         assert_eq!(pulls.get("t1"), None);
         assert_eq!(pulls.cached(&a, now), None);
+    }
+
+    #[test]
+    fn a_merged_pull_request_is_kept_while_the_checkout_head_is_its_head_commit() {
+        let json = String::from_utf8(fixture("pr-view-merged.json"))
+            .unwrap()
+            .replacen('{', &format!(r#"{{"headRefOid":"{OID}","#), 1);
+        assert_eq!(parse(json.as_bytes()).unwrap().1, OID);
+        let mut pulls = Pulls::default();
+        let key = ("/repo".to_owned(), "feature".to_owned());
+        let start = Instant::now();
+        let merged = read(PullState::Merged, 7, OID);
+        pulls.store(key.clone(), start, Ok(Some(merged.clone())));
+        assert_eq!(pulls.cached(&key, start + REFRESH), None);
+        assert_eq!(pulls.kept(&key, OID), Some(merged.clone()));
+        let later = start + REFRESH;
+        assert_eq!(
+            pulls.store(key.clone(), later, Ok(Some(merged.clone()))),
+            Some(merged.0.clone())
+        );
+        assert_eq!(pulls.kept(&key, OID), Some(merged.clone()));
+        assert_eq!(
+            pulls.kept(&("/repo".to_owned(), "other".to_owned()), OID),
+            None
+        );
+        pulls.store(key.clone(), later, Ok(Some(read(PullState::Merged, 7, ""))));
+        assert_eq!(pulls.kept(&key, ""), None);
+    }
+
+    #[test]
+    fn a_new_commit_or_pull_request_on_the_branch_is_read_again() {
+        let mut pulls = Pulls::default();
+        let key = ("/repo".to_owned(), "feature".to_owned());
+        let start = Instant::now();
+        pulls.store(
+            key.clone(),
+            start,
+            Ok(Some(read(PullState::Merged, 7, OID))),
+        );
+        let moved = "1123456789abcdef0123456789abcdef01234567";
+        assert_eq!(pulls.kept(&key, moved), None);
+        let later = start + REFRESH;
+        let reopened = read(PullState::Open, 8, moved);
+        assert_eq!(
+            pulls.store(key.clone(), later, Ok(Some(reopened.clone()))),
+            Some(reopened.0)
+        );
+        assert_eq!(pulls.kept(&key, moved), None);
+        assert_eq!(pulls.kept(&key, OID), None);
+    }
+
+    #[test]
+    fn open_draft_closed_and_failed_reads_still_refresh_every_two_minutes() {
+        let mut pulls = Pulls::default();
+        let key = ("/repo".to_owned(), "feature".to_owned());
+        let start = Instant::now();
+        for state in [PullState::Open, PullState::Draft, PullState::Closed] {
+            let pr = read(state, 7, OID);
+            pulls.store(key.clone(), start, Ok(Some(pr.clone())));
+            assert_eq!(
+                pulls.cached(&key, start + REFRESH - Duration::from_secs(1)),
+                Some(Some(pr.0))
+            );
+            assert_eq!(pulls.cached(&key, start + REFRESH), None);
+            assert_eq!(pulls.kept(&key, OID), None, "{state:?}");
+        }
+        pulls.store(
+            key.clone(),
+            start,
+            Ok(Some(read(PullState::Merged, 7, OID))),
+        );
+        pulls.store(key.clone(), start + REFRESH, Err("command failed"));
+        assert_eq!(pulls.kept(&key, OID), None);
     }
 }
