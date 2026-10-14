@@ -48,13 +48,12 @@ final class LandscapeTests: XCTestCase {
         let keys = app.buttons["Keys"]
         XCTAssertTrue(eventually { shown(keys, app) }, app.debugDescription)
         if !keys.isSelected { keys.tap() }
-        let field = app.textFields["Prompt the agent"]
+        let field = app.textFields.firstMatch
         XCTAssertTrue(eventually { shown(field, app) }, app.debugDescription)
         field.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
-        field.typeText("keep this draft")
-        let draft = app.textFields.matching(NSPredicate(format: "value == %@", "keep this draft")).firstMatch
+        let draft = typeAfterClearing("keep this draft", into: field, app)
         let dictation = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Dictate in")).firstMatch
         let controls = [
             draft, app.buttons["Send"], app.buttons["Hide keyboard"], app.buttons["Attachments and saved prompts"], dictation,
@@ -91,8 +90,7 @@ final class LandscapeTests: XCTestCase {
         prompt.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
-        prompt.typeText("keep this prompt")
-        let typed = app.textFields.matching(NSPredicate(format: "value == %@", "keep this prompt")).firstMatch
+        let typed = typeAfterClearing("keep this prompt", into: prompt, app)
         let controls = [typed, app.buttons["Hide keyboard"], app.buttons["Attachments and saved prompts"]]
         for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait, .landscapeRight] {
             rotate(orientation, app)
@@ -146,6 +144,20 @@ final class LandscapeTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
         return app
+    }
+
+    /// Clears a draft an earlier run left, and types again when the simulator drops keystrokes.
+    private func typeAfterClearing(_ text: String, into field: XCUIElement, _ app: XCUIApplication) -> XCUIElement {
+        let clear = app.buttons["Clear text"]
+        if clear.exists { clear.tap() }
+        field.typeText(text)
+        let typed = app.textFields.matching(NSPredicate(format: "value == %@", text)).firstMatch
+        for _ in 0..<3 where !typed.appears(within: 10) {
+            clear.tap()
+            field.typeText(text)
+        }
+        XCTAssertTrue(typed.appears(within: 10), app.debugDescription)
+        return typed
     }
 
     // Element frames lag the rotation, so callers wait on what they check next.
