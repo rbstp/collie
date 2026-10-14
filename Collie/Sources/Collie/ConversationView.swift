@@ -282,7 +282,7 @@ struct ConversationRowView: View {
             if let message = row.message {
                 ConversationMessage(message: message, query: query)
             } else {
-                ConversationActivity(tools: row.tools)
+                ConversationActivity(tools: row.tools, steps: row.subagentSteps)
             }
         }
     }
@@ -290,6 +290,7 @@ struct ConversationRowView: View {
 
 private struct ConversationActivity: View {
     let tools: [ConversationTool]
+    let steps: Int
     @State private var expanded = false
 
     var body: some View {
@@ -299,7 +300,7 @@ private struct ConversationActivity: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "wrench.and.screwdriver")
-                    Text("Activity · \(tools.count) \(tools.count == 1 ? "call" : "calls")")
+                    Text("Activity · \(tools.count) \(tools.count == 1 ? "call" : "calls")\(steps == 0 ? "" : " · \(steps) subagent \(steps == 1 ? "step" : "steps")")")
                     Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2)
                 }
                 .font(.footnote)
@@ -312,6 +313,26 @@ private struct ConversationActivity: View {
                         DisclosureGroup {
                             ForEach(tool.records, id: \.id) { record in
                                 ConversationToolRecord(message: record, query: "")
+                            }
+                            if !tool.steps.isEmpty {
+                                LazyVStack(alignment: .leading, spacing: 12) {
+                                    ForEach(tool.subagent) { step in
+                                        if step.records.contains(where: { $0.tool != nil }) {
+                                            DisclosureGroup {
+                                                ForEach(step.records, id: \.id) { record in
+                                                    ConversationToolRecord(message: record, query: "")
+                                                }
+                                            } label: {
+                                                Text(verbatim: step.name).font(.callout)
+                                            }
+                                        } else {
+                                            ForEach(step.records, id: \.id) { record in
+                                                ConversationToolRecord(message: record, query: "")
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding(.leading, 12)
                             }
                         } label: {
                             Text(verbatim: tool.name).font(.callout.weight(.medium))
@@ -330,12 +351,14 @@ private struct ConversationMessage: View {
     let query: String
     @Environment(AgentModel.self) private var agent: AgentModel?
 
+    private var user: Bool { message.role == "user" && message.parentCallId == nil }
+
     var body: some View {
         HStack(alignment: .top) {
-            if message.role == "user" { Spacer(minLength: 28) }
+            if user { Spacer(minLength: 28) }
             VStack(alignment: .leading, spacing: 6) {
-                if message.role == "user" {
-                    Text("You").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                if user || message.parentCallId != nil {
+                    Text(user ? "You" : "Subagent").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 }
                 if message.tool != nil {
                     Text(verbatim: message.tool ?? "Tool").font(.callout.weight(.semibold))
@@ -346,9 +369,9 @@ private struct ConversationMessage: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(message.role == "user" ? 12 : 0)
+            .padding(user ? 12 : 0)
             .background {
-                if message.role == "user" {
+                if user {
                     RoundedRectangle(cornerRadius: 18).fill(.tint.opacity(0.1))
                 }
             }
@@ -370,7 +393,8 @@ private struct ConversationToolRecord: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(message.role == "tool" ? "Result" : "Input").font(.caption).foregroundStyle(.secondary)
+                Text(message.role == "tool" ? "Result" : message.tool != nil ? "Input" : message.role == "user" ? "Subagent prompt" : "Subagent reply")
+                    .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let agent {
                     Button("Quote", systemImage: "text.quote") { agent.quote(message.text) }

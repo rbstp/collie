@@ -576,6 +576,7 @@ pub struct HistoryMessage {
     pub tool: Option<String>,
     pub call_id: Option<String>,
     pub truncated: bool,
+    pub parent_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -1706,6 +1707,7 @@ impl CollieCore {
                         tool: m.tool,
                         call_id: m.call_id,
                         truncated: m.truncated,
+                        parent_call_id: m.parent_call_id,
                     })
                     .collect(),
             }),

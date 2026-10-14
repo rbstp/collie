@@ -6,7 +6,7 @@ import Testing
 @testable import Collie
 
 private func message(_ id: String, _ text: String = "hello") -> HistoryMessage {
-    HistoryMessage(id: id, role: "assistant", text: text, tool: nil, callId: nil, truncated: false)
+    HistoryMessage(id: id, role: "assistant", text: text, tool: nil, callId: nil, truncated: false, parentCallId: nil)
 }
 
 private func page(_ messages: [HistoryMessage], session: String = "s1", reset: Bool = false, before: String? = "older", after: String = "latest") -> HistoryPage {
@@ -143,7 +143,35 @@ private func page(_ messages: [HistoryMessage], session: String = "s1", reset: B
 }
 
 private func tool(_ id: String, call: String? = nil, result: Bool = false) -> HistoryMessage {
-    HistoryMessage(id: id, role: result ? "tool" : "assistant", text: "body", tool: result ? "Result" : "exec", callId: call, truncated: false)
+    HistoryMessage(id: id, role: result ? "tool" : "assistant", text: "body", tool: result ? "Result" : "exec", callId: call, truncated: false, parentCallId: nil)
+}
+
+private func step(_ id: String, role: String = "assistant", tool: String? = nil, call: String? = nil) -> HistoryMessage {
+    HistoryMessage(id: id, role: role, text: "body", tool: tool, callId: call, truncated: false, parentCallId: "task")
+}
+
+@Test func conversationNestsSubagentStepsUnderTheirAgentCall() {
+    let rows = ConversationRow.build([
+        message("before"), tool("t", call: "task"), tool("tr", call: "task", result: true),
+        step("prompt", role: "user"), step("read", tool: "Read", call: "r1"), step("readResult", role: "tool", tool: "Result", call: "r1"),
+        step("reply"), message("handback"), step("late", tool: "Grep", call: "r2"), message("after"),
+    ])
+    #expect(rows.map(\.id) == ["message:before", "activity:t", "message:handback", "message:after"])
+    #expect(rows[1].tools.count == 1)
+    #expect(rows[1].tools[0].records.map(\.id) == ["t", "tr"])
+    #expect(rows[1].tools[0].subagent.map { $0.records.map(\.id) } == [["prompt"], ["read", "readResult"], ["reply"], ["late"]])
+    #expect(rows[1].subagentSteps == 4)
+}
+
+@MainActor
+@Test func conversationNestsStepsOnceTheirAgentCallLoadsFromAnOlderPage() {
+    let model = ConversationModel()
+    model.apply(page([message("handback"), step("late", tool: "Grep", call: "r2")]), older: false)
+    #expect(model.rows.count == 2)
+    #expect(model.rows[1].tools[0].name == "Subagent")
+    model.apply(page([tool("t", call: "task"), tool("tr", call: "task", result: true)], before: nil), older: true)
+    #expect(model.rows.map(\.id) == ["activity:t", "message:handback"])
+    #expect(model.rows[0].tools[0].steps.map(\.id) == ["late"])
 }
 
 @Test func conversationGroupsActivityAndPairsInterleavedResults() {
