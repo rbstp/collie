@@ -111,7 +111,7 @@ impl Live {
                     agent_type: s.agent_type.clone(),
                     activity: s.activity.clone().unwrap_or_else(|| s.description.clone()),
                     started_at_ms: s.started_ms?,
-                    tokens: (s.input + s.output + 500) / 1000 * 1000,
+                    tokens: s.input + s.output,
                     called_tools: s.called_tools,
                 })
             })
@@ -360,7 +360,7 @@ impl Seen {
                     }
                 }
             }
-            Some("user") => {
+            Some("user") if v["isCompactSummary"] != true => {
                 let content = &m["content"];
                 let blocks = content.as_array().map(Vec::as_slice).unwrap_or_default();
                 if blocks.iter().any(|b| b["type"] == "tool_result") {
@@ -374,11 +374,12 @@ impl Seen {
                 };
                 if text.starts_with("[Request interrupted by user") {
                     self.finished = true;
-                } else if v["isMeta"] != true
-                    || matches!(
-                        v["origin"]["kind"].as_str(),
-                        Some("coordinator" | "peer" | "human")
-                    )
+                } else if (self.finished || self.started_ms.is_none())
+                    && (v["isMeta"] != true
+                        || matches!(
+                            v["origin"]["kind"].as_str(),
+                            Some("coordinator" | "peer" | "human")
+                        ))
                 {
                     self.finished = false;
                     self.called_tools = false;
@@ -561,13 +562,13 @@ mod tests {
         let working = s.running(&mut live);
         assert_eq!(working.len(), 1);
         assert_eq!(working[0].activity, "Reading pairing.rs");
-        assert_eq!(working[0].tokens, 42_000);
+        assert_eq!(working[0].tokens, 42_084);
         assert!(working[0].called_tools);
         assert_eq!(working[0].started_at_ms, started[0].started_at_ms);
         append(&file, &lines[5..7].concat());
         let running = s.running(&mut live);
         assert_eq!(running[0].activity, "Running Check for unwraps");
-        assert_eq!(running[0].tokens, 44_000);
+        assert_eq!(running[0].tokens, 44_446);
         append(&file, &lines[7..].concat());
         assert!(s.running(&mut live).is_empty());
     }
@@ -580,6 +581,9 @@ mod tests {
         let mut live = Live::default();
         assert!(s.running(&mut live).is_empty());
         let file = s.sub.join(format!("agent-{AGENT}.jsonl"));
+        let compact = r#"{"type":"user","isCompactSummary":true,"sessionId":"3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","timestamp":"2026-10-13T21:55:00.000Z","message":{"role":"user","content":"Summary."}}"#;
+        append(&file, &format!("{compact}\n"));
+        assert!(s.running(&mut live).is_empty());
         let follow_up = r#"{"type":"user","isMeta":true,"origin":{"kind":"coordinator"},"sessionId":"3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","timestamp":"2026-10-13T22:00:00.000Z","message":{"role":"user","content":"Also check the retry loop."}}"#;
         append(&file, &format!("{follow_up}\n"));
         let resumed = s.running(&mut live);
@@ -593,6 +597,25 @@ mod tests {
         let interrupted = r#"{"type":"user","sessionId":"3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","timestamp":"2026-10-13T22:02:00.000Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
         append(&file, &format!("{interrupted}\n"));
         assert!(s.running(&mut live).is_empty());
+    }
+
+    #[test]
+    fn a_coordinator_message_mid_run_keeps_the_run() {
+        let lines = fixture();
+        let s = setup(&lines[..4].concat());
+        let mut live = Live::default();
+        let before = s.running(&mut live);
+        let file = s.sub.join(format!("agent-{AGENT}.jsonl"));
+        let message = r#"{"type":"user","isMeta":true,"origin":{"kind":"coordinator"},"sessionId":"3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","timestamp":"2026-10-13T21:44:07.800Z","message":{"role":"user","content":[{"type":"text","text":"Also check the retry loop."}]}}"#;
+        append(&file, &format!("{message}\n"));
+        assert_eq!(s.running(&mut live), before);
+        append(&file, &lines[4..7].concat());
+        let running = s.running(&mut live);
+        assert_eq!(running[0].started_at_ms, before[0].started_at_ms);
+        assert_eq!(
+            (running[0].activity.as_str(), running[0].tokens),
+            ("Running Check for unwraps", 44_446)
+        );
     }
 
     #[test]
@@ -704,7 +727,7 @@ mod tests {
         let first = s.running(&mut live);
         assert_eq!(
             (first[0].activity.as_str(), first[0].tokens),
-            ("Check the pairing code", 0),
+            ("Check the pairing code", 5),
             "only the tail is read, not the Read call before it"
         );
         assert_eq!(first[0].started_at_ms, 1_791_927_845_000);
@@ -792,7 +815,7 @@ mod tests {
         append(&file, &[lines[5], &big].concat());
         let running = s.running(&mut live);
         assert_eq!(running[0].activity, "Running Check for unwraps");
-        assert_eq!(running[0].tokens, 44_000);
+        assert_eq!(running[0].tokens, 44_446);
         append(&file, &lines[6][..20]);
         assert_eq!(s.running(&mut live), running);
         append(&file, &lines[6][20..]);

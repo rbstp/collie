@@ -337,8 +337,9 @@ impl Baseline {
         }
     }
 
-    /// Keeps the previous subagents in `next` when only their tokens or arrow changed and
-    /// the last subagent change went out less than `SUBAGENT_TOKENS_EVERY` ago.
+    /// Keeps the previous subagents in `next` when their tokens moved by less than a rounded
+    /// 1,000, or when only their tokens or arrow changed and the last subagent change went
+    /// out less than `SUBAGENT_TOKENS_EVERY` ago.
     pub fn hold(&self, next: &mut Self, now: Instant) {
         if !(self.read && next.read) {
             return;
@@ -346,6 +347,11 @@ impl Baseline {
         let key = |v: &[Subagent]| {
             v.iter()
                 .map(|s| (s.agent_type.clone(), s.activity.clone(), s.started_at_ms))
+                .collect::<Vec<_>>()
+        };
+        let rounded = |v: &[Subagent]| {
+            v.iter()
+                .map(|s| (s.called_tools, (s.tokens + 500) / 1000))
                 .collect::<Vec<_>>()
         };
         for (id, (_, said, _)) in &mut next.agents {
@@ -357,7 +363,8 @@ impl Baseline {
             let sent = if prev.3 == said.3 {
                 last
             } else if key(&prev.3) == key(&said.3)
-                && last.is_some_and(|t| now.duration_since(t) < SUBAGENT_TOKENS_EVERY)
+                && (rounded(&prev.3) == rounded(&said.3)
+                    || last.is_some_and(|t| now.duration_since(t) < SUBAGENT_TOKENS_EVERY))
             {
                 said.3 = prev.3.clone();
                 last
@@ -782,16 +789,20 @@ mod tests {
         prev.hold(&mut next, t0 + Duration::from_secs(1));
         assert!(prev.diff(&next).0.is_empty());
         prev = next;
-        let mut next = base(vec![sub("Reading a.rs", 3000)]);
+        let mut next = base(vec![sub("Reading a.rs", 3_499)]);
         prev.hold(&mut next, t0 + Duration::from_secs(5));
         assert_eq!(prev.diff(&next).0, ["t"]);
         prev = next;
+        let mut next = base(vec![sub("Reading a.rs", 3_420)]);
+        prev.hold(&mut next, t0 + Duration::from_secs(20));
+        assert!(prev.diff(&next).0.is_empty());
+        prev = next;
         let mut next = base(vec![sub("Reading b.rs", 4000)]);
-        prev.hold(&mut next, t0 + Duration::from_secs(6));
+        prev.hold(&mut next, t0 + Duration::from_secs(21));
         assert_eq!(prev.diff(&next).0, ["t"]);
         prev = next;
         let mut next = base(Vec::new());
-        prev.hold(&mut next, t0 + Duration::from_secs(7));
+        prev.hold(&mut next, t0 + Duration::from_secs(22));
         assert_eq!(prev.diff(&next).0, ["t"]);
     }
 
