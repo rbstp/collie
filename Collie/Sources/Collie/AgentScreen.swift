@@ -745,7 +745,7 @@ private struct PromptBar: View {
                             model.keysShown.toggle()
                         } label: {
                             Image(systemName: model.keysShown ? "arrowkeys.fill" : "arrowkeys")
-                                .font(.system(size: 20))
+                                .font(.system(size: 16))
                                 .frame(width: 28, height: 28)
                         }
                         .buttonStyle(.glass)
