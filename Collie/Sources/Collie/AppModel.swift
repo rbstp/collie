@@ -193,7 +193,7 @@ final class AppModel {
         SeenAgents.forget(machineId: machine.id, file: SeenAgents.file)
         SnoozedAgents.forget(machineId: machine.id, file: SnoozedAgents.file)
         GitViewed.forget(machineId: machine.id, file: GitViewed.file)
-        DevicePrefs.forgetTaskBase(machineId: machine.id, in: DevicePrefs.file)
+        DevicePrefs.forgetMachine(machineId: machine.id, in: DevicePrefs.file)
         if !(core?.machines() ?? []).contains(where: { $0.nodeId == machine.nodeId }) {
             NotificationKey.delete(nodeId: machine.nodeId)
         }

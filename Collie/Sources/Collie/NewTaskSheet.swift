@@ -219,6 +219,9 @@ struct NewTaskSheet: View {
                                 ForEach(agents, id: \.self) { AgentKindLabel(kind: $0).tag($0) }
                             }
                             .tint(.primary)
+                            if model.agent == "claude" {
+                                Toggle("Ultracode", isOn: $model.ultracode)
+                            }
                         } else if model.optionsError == nil {
                             ProgressView()
                         }

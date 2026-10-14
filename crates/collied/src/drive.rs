@@ -1050,6 +1050,12 @@ impl Driver {
         if p.prompt.is_none() && p.resume.is_none() {
             return (fail(ErrorCode::InvalidParams, "empty prompt"), None);
         }
+        if p.ultracode && p.agent.as_str() != "claude" {
+            return (
+                fail(ErrorCode::InvalidParams, "ultracode needs Claude Code"),
+                None,
+            );
+        }
         let made = if p.clone.is_some() {
             Some("cloned")
         } else {
@@ -1360,7 +1366,14 @@ impl Driver {
             )
         };
         let name = self
-            .start_agent(pane, &p.agent, p.resume.as_ref(), retry_busy, auth)
+            .start_agent(
+                pane,
+                &p.agent,
+                p.resume.as_ref(),
+                p.ultracode,
+                retry_busy,
+                auth,
+            )
             .await
             .map_err(left_open)?;
         let current = herdr::agent_get(&self.herdr, &name)
@@ -1369,6 +1382,11 @@ impl Driver {
         self.started_check(&current, pane, &name, &p.agent)
             .await
             .map_err(left_open)?;
+        if p.ultracode {
+            self.ultracode_shown(&pane.pane_id)
+                .await
+                .map_err(left_open)?;
+        }
         if let Some(text) = &p.prompt {
             // herdr may not rule another kind's startup prompt `blocked`, and the prompt's
             // Enter would answer it.
@@ -1390,6 +1408,25 @@ impl Driver {
         })
     }
 
+    async fn ultracode_shown(&self, pane_id: &str) -> Result<(), Fail> {
+        let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
+        loop {
+            let screen = herdr::detection_text(&self.herdr, pane_id)
+                .await
+                .map_err(herdr_fail)?;
+            if prompt::ultracode_on(&screen) {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return fail(
+                    ErrorCode::AgentNotReady,
+                    "ultracode could not be enabled; nothing was sent",
+                );
+            }
+            tokio::time::sleep(SCREEN_POLL).await;
+        }
+    }
+
     // Readiness rules follow herdr's own `herdr agent start` CLI (0.9.4). The busy retry
     // gets 30 s instead of the CLI's 2 s and, unlike the CLI, does not require the shell
     // in the foreground: the CLI targets any pane, this one was just created.
@@ -1398,6 +1435,7 @@ impl Driver {
         pane: &PaneInfo,
         kind: &AgentKind,
         resume: Option<&SessionId>,
+        ultracode: bool,
         retry_busy: bool,
         auth: &Authorized,
     ) -> Result<String, Fail> {
@@ -1406,7 +1444,15 @@ impl Driver {
         let name = agent_name()?;
         let started = loop {
             authorized(auth)?;
-            match herdr::agent_start(&self.herdr, &name, kind.as_str(), &pane.pane_id, resume).await
+            match herdr::agent_start(
+                &self.herdr,
+                &name,
+                kind.as_str(),
+                &pane.pane_id,
+                resume,
+                ultracode,
+            )
+            .await
             {
                 Ok(a) => break a,
                 // Retried while the pane still holds the terminal created for this task: what

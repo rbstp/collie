@@ -189,6 +189,22 @@ pub fn codex_update(text: &str) -> bool {
             .any(|l| option_line(l).is_some_and(|(_, _, label)| label.starts_with("Update now")))
 }
 
+/// Whether Claude Code shows ultracode on: the rule directly above its last `❯` row, the
+/// input box's top rule, carries the `ultracode` tag (`─── ultracode ─` in 2.1.299).
+pub fn ultracode_on(text: &str) -> bool {
+    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    lines
+        .iter()
+        .rposition(|l| l.starts_with('❯'))
+        .and_then(|i| i.checked_sub(1))
+        .is_some_and(|top| {
+            let rule = lines[top];
+            rule.starts_with('─')
+                && is_rule(rule)
+                && rule.split_whitespace().any(|w| w == "ultracode")
+        })
+}
+
 fn grants(label: &str) -> bool {
     classify(label).is_some() || label.to_lowercase().starts_with("yes")
 }
@@ -961,6 +977,17 @@ pub mod fixtures {
         picker!("usage-credits"),
     ];
     pub const EFFORT_SET: &str = picker!("effort-set");
+
+    // Claude Code 2.1.299 in tmux (200 columns, the working directory and branch renamed),
+    // checked with `herdr agent explain --file` (herdr 0.9.4): a new session, `idle`, started
+    // without and with `--settings '{"ultracode":true}'`, then its `/effort` picker, `blocked`
+    // under live_blocked_form.
+    pub const IDLE_299: &str = include_str!("../tests/fixtures/claude-2.1.299/idle.tmux.txt");
+    pub const IDLE_ULTRACODE_299: &str =
+        include_str!("../tests/fixtures/claude-2.1.299/idle-ultracode.tmux.txt");
+    pub const EFFORT_299: &str = include_str!("../tests/fixtures/claude-2.1.299/effort.tmux.txt");
+    pub const EFFORT_ULTRACODE_299: &str =
+        include_str!("../tests/fixtures/claude-2.1.299/effort-ultracode.tmux.txt");
 
     // Codex CLI and GitHub Copilot CLI permission, folder trust and update prompts, each
     // checked with `herdr agent explain --file` (herdr 0.9.4, codex manifest 2026.10.11.1,
@@ -2027,6 +2054,19 @@ me@mac app % codex
                 !settings_picker("claude", form, &time.replacen(from, to, 1)),
                 "{to}"
             );
+        }
+    }
+
+    #[test]
+    fn ultracode_shows_on_the_input_box_rule() {
+        assert!(ultracode_on(IDLE_ULTRACODE_299));
+        for screen in [IDLE_299, EFFORT_299, EFFORT_ULTRACODE_299, EFFORT_SET] {
+            assert!(!ultracode_on(screen), "{screen}");
+        }
+        let hint_only = IDLE_ULTRACODE_299.replacen("─ ultracode ─", "────────────", 1);
+        assert!(!ultracode_on(&hint_only));
+        for screen in [EFFORT_299, EFFORT_ULTRACODE_299] {
+            assert!(settings_picker("claude", Some("live_blocked_form"), screen));
         }
     }
 }

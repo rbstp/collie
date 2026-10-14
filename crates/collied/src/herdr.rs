@@ -581,13 +581,20 @@ pub async fn agent_start(
     kind: &str,
     pane_id: &str,
     resume: Option<&str>,
+    ultracode: bool,
 ) -> Result<AgentInfo, Error> {
     let mut params = json!({ "name": name, "kind": kind, "pane_id": pane_id });
-    match (kind, resume) {
-        ("claude", Some(id)) => params["args"] = json!(["--resume", id]),
-        ("codex", Some(id)) => params["args"] = json!(["resume", id, "--no-daemon"]),
-        ("codex", None) => params["args"] = json!(["--no-daemon"]),
-        _ => {}
+    let mut args = match (kind, resume) {
+        ("claude", Some(id)) => vec!["--resume", id],
+        ("codex", Some(id)) => vec!["resume", id, "--no-daemon"],
+        ("codex", None) => vec!["--no-daemon"],
+        _ => vec![],
+    };
+    if kind == "claude" && ultracode {
+        args.extend(["--settings", r#"{"ultracode":true}"#]);
+    }
+    if !args.is_empty() {
+        params["args"] = json!(args);
     }
     let AgentStartedResult::AgentStarted { agent } = call(socket, "agent.start", params).await?;
     Ok(agent)
