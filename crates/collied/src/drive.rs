@@ -561,7 +561,8 @@ impl Driver {
         self.prompt_agent(p, auth, false).await
     }
 
-    /// `idle_only` refuses an agent that the fresh read finds working.
+    /// `idle_only` refuses an agent that the fresh read finds working, or that is not Claude
+    /// Code, the only kind whose input box is checked before the paste.
     pub(crate) async fn prompt_agent(
         &self,
         p: AgentPromptParams,
@@ -571,10 +572,11 @@ impl Driver {
         let _box = self.box_writes.lock().await;
         let a = self.ready_agent(&p.terminal_id).await?;
         if idle_only
-            && !matches!(
-                flock::status(&a.agent_status),
-                AgentStatus::Idle | AgentStatus::Done
-            )
+            && (a.agent.as_deref() != Some("claude")
+                || !matches!(
+                    flock::status(&a.agent_status),
+                    AgentStatus::Idle | AgentStatus::Done
+                ))
         {
             return fail(ErrorCode::AgentNotReady, "the agent is busy");
         }

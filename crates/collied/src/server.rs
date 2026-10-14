@@ -700,7 +700,6 @@ async fn read_pulls(
 /// pending wake is tried on every tick until the agent takes it.
 async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     let mut interval = tokio::time::interval(WATCH_EVERY);
-    let mut read_at: HashMap<String, Instant> = HashMap::new();
     loop {
         tokio::select! {
             _ = interval.tick() => {}
@@ -720,19 +719,17 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             ended |= pulls.watches.retain_paired(|by| peers.get(by).is_some());
         }
         let watches = lock(&state.pulls).watches.list();
-        read_at.retain(|t, _| watches.iter().any(|(w, _)| w == t));
         for (terminal_id, watch) in &watches {
-            if !watch.due(read_at.get(terminal_id).copied(), Instant::now()) {
+            if !watch.due(Instant::now()) {
                 continue;
             }
-            read_at.insert(terminal_id.clone(), Instant::now());
             let read = match drive::gh() {
                 Some(gh) => pr_watch::fetch(gh, &watch.url, &state.cfg.data_dir).await,
                 None => None,
             };
             ended |= lock(&state.pulls)
                 .watches
-                .update(terminal_id, &watch.url, |w| w.observe(read))
+                .update(terminal_id, &watch.url, |w| w.read(read, Instant::now()))
                 .is_some();
         }
         let pending: Vec<(String, Watch)> = lock(&state.pulls)

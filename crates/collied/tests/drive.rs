@@ -761,6 +761,14 @@ async fn a_pull_request_wake_waits_for_an_idle_agent_on_its_branch_with_an_empty
         "listed idle, read working right before the write"
     );
     assert!(herdr.mutations().is_empty());
+    herdr.with(|h| h.snapshot["agents"][0]["agent"] = json!("codex"));
+    assert_eq!(
+        pr_watch::wake(&drive, &agent, &watch, text(), &yes()).await,
+        Err((ErrorCode::AgentNotReady, "the agent is busy".to_owned())),
+        "listed as Claude Code, read as Codex right before the write"
+    );
+    assert!(herdr.mutations().is_empty());
+    herdr.with(|h| h.snapshot["agents"][0]["agent"] = json!("claude"));
     assert_eq!(
         pr_watch::wake(&drive, &agent, &watch, text(), &no())
             .await

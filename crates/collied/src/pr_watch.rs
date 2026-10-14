@@ -28,6 +28,10 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
       state
       mergeable
       headRefOid
+      baseRef {
+        branchProtectionRule { requiredStatusChecks { context } }
+        rules(first: 100) { nodes { parameters { ... on RequiredStatusChecksParameters { requiredStatusChecks { context } } } } }
+      }
       commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes {
         __typename
         ... on CheckRun { name status conclusion isRequired(pullRequestNumber: $number) }
@@ -114,6 +118,9 @@ pub struct Watch {
     failed_reads: u32,
     #[serde(default)]
     pending: Vec<Change>,
+    /// Never saved: a new, restarted or restored watch is read at once.
+    #[serde(skip)]
+    read_at: Option<Instant>,
 }
 
 #[derive(Deserialize)]
@@ -149,9 +156,34 @@ struct Pull {
     state: String,
     mergeable: String,
     head_ref_oid: String,
+    base_ref: Option<BaseRef>,
     commits: Nodes<CommitNode>,
     comments: Nodes<Remark>,
     reviews: Nodes<Remark>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BaseRef {
+    branch_protection_rule: Option<RequiredChecks>,
+    rules: Option<Nodes<Rule>>,
+}
+
+#[derive(Deserialize)]
+struct Rule {
+    parameters: Option<RequiredChecks>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RequiredChecks {
+    #[serde(default)]
+    required_status_checks: Option<Vec<RequiredCheck>>,
+}
+
+#[derive(Deserialize)]
+struct RequiredCheck {
+    context: String,
 }
 
 #[derive(Deserialize)]
@@ -288,11 +320,16 @@ impl Watch {
         }
     }
 
-    pub fn due(&self, read_at: Option<Instant>, now: Instant) -> bool {
-        read_at.is_none_or(|at| {
+    pub fn due(&self, now: Instant) -> bool {
+        self.read_at.is_none_or(|at| {
             now.saturating_duration_since(at)
                 >= Duration::from_secs(u64::from(self.every_minutes) * 60)
         })
+    }
+
+    pub fn read(&mut self, read: Option<Read>, now: Instant) -> Option<Stop> {
+        self.read_at = Some(now);
+        self.observe(read)
     }
 
     pub fn observe(&mut self, read: Option<Read>) -> Option<Stop> {
@@ -322,6 +359,18 @@ impl Watch {
             .filter_map(|n| n.commit.status_check_rollup)
             .collect();
         let rollup: Vec<Option<String>> = rollups.iter().map(|r| r.state.clone()).collect();
+        let mut required: Vec<String> = pull
+            .base_ref
+            .into_iter()
+            .flat_map(|b| {
+                let rules = b.rules.into_iter().flat_map(|r| r.nodes).flatten();
+                b.branch_protection_rule
+                    .into_iter()
+                    .chain(rules.filter_map(|r| r.parameters))
+            })
+            .flat_map(|r| r.required_status_checks.unwrap_or_default())
+            .map(|r| clean(&r.context))
+            .collect();
         let checks: Vec<(String, bool, Outcome)> = rollups
             .into_iter()
             .flat_map(|r| r.contexts.nodes.into_iter().flatten())
@@ -343,19 +392,31 @@ impl Watch {
             self.pending
                 .retain(|c| !matches!(c, Change::CheckFailed { name } if !failed.contains(name)));
             self.failed = failed;
-            let required = checks.iter().any(|(_, required, _)| *required);
-            // A rollup still waiting with every listed check done waits on a required check
-            // that has not reported yet.
-            let unreported = rollup.iter().any(|state| match state.as_deref() {
-                Some("EXPECTED") => true,
-                Some("PENDING") => !checks.iter().any(|(_, _, o)| *o == Outcome::Pending),
-                _ => false,
-            });
-            let passed = !unreported
-                && checks
+            for (name, is_required, _) in &checks {
+                if *is_required && !required.contains(name) {
+                    required.push(name.clone());
+                }
+            }
+            let waiting = |states: &[&str]| {
+                rollup
                     .iter()
-                    .filter(|(_, r, _)| *r || !required)
-                    .all(|(_, _, outcome)| *outcome == Outcome::Pass);
+                    .any(|s| s.as_deref().is_some_and(|s| states.contains(&s)))
+            };
+            // A required check that has not reported is missing from `checks`: each required
+            // name must be listed and pass. With none required, every listed check must pass
+            // and the rollup must not still wait on one.
+            let passed = if required.is_empty() {
+                !waiting(&["PENDING", "EXPECTED"])
+                    && checks
+                        .iter()
+                        .all(|(_, _, outcome)| *outcome == Outcome::Pass)
+            } else {
+                !waiting(&["EXPECTED"])
+                    && required.iter().all(|name| {
+                        let mut runs = checks.iter().filter(|(n, ..)| n == name).peekable();
+                        runs.peek().is_some() && runs.all(|(_, _, o)| *o == Outcome::Pass)
+                    })
+            };
             if passed && !self.passed {
                 changes.push(Change::ChecksPassed);
             }
@@ -737,7 +798,7 @@ mod tests {
         watch.observe(read(&fixture("watch-required-missing.json")));
         assert!(
             watch.pending.is_empty(),
-            "a required check that has not reported holds the pass"
+            "an expected required check holds the pass"
         );
         let running = passing.replace(
             UBUNTU_PASSED,
@@ -746,11 +807,12 @@ mod tests {
         assert_ne!(running, passing);
         watch.observe(read(&running));
         assert!(watch.pending.is_empty());
-        let waiting = passing.replace(ROLLUP_PASSED, r#""statusCheckRollup":{"state":"PENDING""#);
+        let unmarked = passing.replace(r#""isRequired":true"#, r#""isRequired":false"#);
+        let waiting = unmarked.replace(ROLLUP_PASSED, r#""statusCheckRollup":{"state":"PENDING""#);
         watch.observe(read(&waiting));
         assert!(
             watch.pending.is_empty(),
-            "a pending rollup with every listed check done waits on an unlisted one"
+            "with none required, a pending rollup waits on an unlisted check"
         );
         watch.observe(read(&passing));
         assert_eq!(watch.pending, vec![Change::ChecksPassed]);
@@ -762,6 +824,55 @@ mod tests {
         let empty = passing.replace(&passing[start..end], r#""contexts":{"nodes":["#);
         watch.observe(read(&empty));
         assert!(watch.pending.is_empty() && watch.passed);
+    }
+
+    #[test]
+    fn a_required_check_named_by_the_base_branch_must_report_and_pass() {
+        let running = fixture("watch-required-running.json");
+        let ios = r#"{"__typename":"CheckRun","name":"ios","status":"IN_PROGRESS","conclusion":null,"isRequired":true},"#;
+        let go = r#""name":"Analyze (go)","status":"COMPLETED","conclusion":"SUCCESS""#;
+        assert!(running.contains(ios) && running.contains(go));
+        let url = "https://github.com/rbstp/collie/pull/277";
+        let mut watch = Watch::new(url, 277);
+        watch.observe(read(&running));
+        assert!(watch.pending.is_empty(), "ios is still running");
+        let unreported = running.replace(ios, "");
+        let optional_failed = unreported
+            .replace(
+                go,
+                r#""name":"Analyze (go)","status":"COMPLETED","conclusion":"FAILURE""#,
+            )
+            .replace(
+                r#""statusCheckRollup":{"state":"PENDING""#,
+                r#""statusCheckRollup":{"state":"FAILURE""#,
+            );
+        watch.observe(read(&optional_failed));
+        assert_eq!(
+            watch.pending,
+            vec![failed("Analyze (go)")],
+            "ios is required by the ruleset but has not reported"
+        );
+        watch.woke();
+        let optional_running = unreported.replace(
+            go,
+            r#""name":"Analyze (go)","status":"IN_PROGRESS","conclusion":null"#,
+        );
+        watch.observe(read(&optional_running));
+        assert!(
+            watch.pending.is_empty(),
+            "a pending rollup with an optional check running still waits for ios"
+        );
+        let ios_passed = optional_failed.replace(
+            r#"{"__typename":"CheckRun","name":"rust""#,
+            r#"{"__typename":"CheckRun","name":"ios","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true},{"__typename":"CheckRun","name":"rust""#,
+        );
+        assert_ne!(ios_passed, optional_failed);
+        watch.observe(read(&ios_passed));
+        assert_eq!(
+            watch.pending,
+            vec![failed("Analyze (go)"), Change::ChecksPassed],
+            "an optional check failing does not hold the required checks' pass"
+        );
     }
 
     #[test]
@@ -939,16 +1050,35 @@ mod tests {
         let now = Instant::now();
         let mut watch = Watch::new(URL, 14673);
         watch.every_minutes = 15;
-        assert!(
-            watch.due(None, now),
-            "a new or restored watch is read at once"
-        );
-        assert!(!watch.due(Some(now), now + Duration::from_secs(14 * 60 + 59)));
-        assert!(watch.due(Some(now), now + Duration::from_secs(15 * 60)));
+        assert!(watch.due(now), "a new or restored watch is read at once");
+        watch.read(None, now);
+        assert!(!watch.due(now + Duration::from_secs(14 * 60 + 59)));
+        assert!(watch.due(now + Duration::from_secs(15 * 60)));
         watch.every_minutes = 2;
-        assert!(!watch.due(Some(now), now + Duration::from_secs(119)));
-        assert!(watch.due(Some(now), now + Duration::from_secs(120)));
+        assert!(!watch.due(now + Duration::from_secs(119)));
+        assert!(watch.due(now + Duration::from_secs(120)));
         assert_eq!(EVERY_MINUTES, [2, 5, 15, 30]);
+
+        let mut watches = Watches::default();
+        watches.start("t1", Watch::new(URL, 14673));
+        watches.update("t1", URL, |w| w.read(None, now));
+        assert!(!watches.list()[0].1.due(now));
+        watches.start("t1", Watch::new(URL, 14673));
+        assert!(
+            !watches.list()[0].1.due(now),
+            "watching the same pull request again keeps its schedule"
+        );
+        watches.stop("t1");
+        watches.start("t1", Watch::new(URL, 14673));
+        assert!(
+            watches.list()[0].1.due(now),
+            "a watch started again is read at once"
+        );
+        watches.start("t1", Watch::new("https://github.com/cli/cli/pull/1", 1));
+        assert!(
+            watches.list()[0].1.due(now),
+            "a new pull request on the terminal is read at once"
+        );
     }
 
     #[test]
