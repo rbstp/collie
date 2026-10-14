@@ -61,6 +61,7 @@ pub struct Transcripts {
     usage: Usage,
     live: subagents::Live,
     panes: HashMap<String, live::Pane>,
+    resolved: HashMap<String, live::Resolved>,
     /// The live session last logged per terminal, so a mismatch with herdr is logged once.
     noted: HashMap<String, String>,
 }
@@ -75,6 +76,7 @@ impl Transcripts {
             usage: Usage::default(),
             live: subagents::Live::default(),
             panes: HashMap::new(),
+            resolved: HashMap::new(),
             noted: HashMap::new(),
         }
     }
@@ -106,13 +108,17 @@ impl Transcripts {
     }
 
     pub fn retain(&mut self, agents: &[AgentInfo]) {
-        let ids: Vec<String> = agents.iter().filter_map(|a| self.live_id(a)).collect();
+        let ids: Vec<String> = agents
+            .iter()
+            .filter_map(|a| self.resolve(a, false))
+            .collect();
         let live = |id: &String| ids.contains(id);
         self.cache.retain(|id, _| live(id));
         self.missed.retain(&live);
         self.live.retain(live);
         let open = |t: &String| agents.iter().any(|a| &a.terminal_id == t);
         self.panes.retain(|t, _| open(t));
+        self.resolved.retain(|t, _| open(t));
         self.noted.retain(|t, _| open(t));
     }
 
@@ -124,7 +130,7 @@ impl Transcripts {
             "codex" => Kind::Codex,
             _ => return None,
         };
-        let id = self.live_id(a)?;
+        let id = self.resolve(a, relocate)?;
         if session_id(a) != Some(id.as_str())
             && self
                 .noted

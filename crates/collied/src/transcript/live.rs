@@ -1,6 +1,6 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 
@@ -22,6 +22,17 @@ pub(super) struct Pane {
     pane_id: String,
     at: Instant,
     pids: Vec<i32>,
+}
+
+/// Rebuilt when herdr's id or the pane's pids are refreshed; followed again when the
+/// starting transcript's size or mtime moves.
+pub(super) struct Resolved {
+    herdr: Option<String>,
+    pane_at: Option<Instant>,
+    start: Option<String>,
+    path: Option<PathBuf>,
+    stamp: Option<(u64, SystemTime)>,
+    id: Option<String>,
 }
 
 struct Claim {
@@ -50,12 +61,21 @@ impl Transcripts {
             .collect()
     }
 
-    pub fn set_pane(&mut self, terminal_id: String, pane_id: String, pids: Vec<u32>) {
-        let pids = pids
-            .into_iter()
-            .filter_map(|p| i32::try_from(p).ok())
-            .take(MAX_PIDS)
-            .collect();
+    /// `None` when herdr could not list them: the pids last listed for this pane stand.
+    pub fn set_pane(&mut self, terminal_id: String, pane_id: String, pids: Option<Vec<u32>>) {
+        let kept = self
+            .panes
+            .remove(&terminal_id)
+            .filter(|p| p.pane_id == pane_id)
+            .map(|p| p.pids);
+        let pids = match pids {
+            Some(pids) => pids
+                .into_iter()
+                .filter_map(|p| i32::try_from(p).ok())
+                .take(MAX_PIDS)
+                .collect(),
+            None => kept.unwrap_or_default(),
+        };
         self.panes.insert(
             terminal_id,
             Pane {
@@ -69,18 +89,69 @@ impl Transcripts {
     /// For Claude Code, the session a process in the pane reports, else herdr's, then where
     /// that session's own transcript says the conversation went.
     pub(super) fn live_id(&self, a: &AgentInfo) -> Option<String> {
+        if a.agent.as_deref() != Some("claude") {
+            return session_id(a).map(str::to_owned);
+        }
+        let (start, path) = self.start(a, true);
+        self.follow(start, path.as_deref())
+    }
+
+    /// `live_id`, cached per terminal.
+    pub(super) fn resolve(&mut self, a: &AgentInfo, relocate: bool) -> Option<String> {
         let herdr = session_id(a).map(str::to_owned);
         if a.agent.as_deref() != Some("claude") {
             return herdr;
         }
-        let sessions = self.sessions_dir();
-        let id = sessions
+        let pane_at = self
+            .panes
+            .get(&a.terminal_id)
+            .filter(|p| p.pane_id == a.pane_id)
+            .map(|p| p.at);
+        let (mut r, fresh) = match self.resolved.remove(&a.terminal_id) {
+            Some(r)
+                if r.herdr == herdr && r.pane_at == pane_at && (r.path.is_some() || !relocate) =>
+            {
+                (r, false)
+            }
+            _ => {
+                let (start, path) = self.start(a, relocate);
+                let r = Resolved {
+                    herdr,
+                    pane_at,
+                    start,
+                    path,
+                    stamp: None,
+                    id: None,
+                };
+                (r, true)
+            }
+        };
+        let stamp = r.path.as_deref().and_then(stamp);
+        if fresh || stamp != r.stamp {
+            r.stamp = stamp;
+            r.id = self.follow(r.start.clone(), r.path.as_deref());
+        }
+        let id = r.id.clone();
+        self.resolved.insert(a.terminal_id.clone(), r);
+        id
+    }
+
+    fn start(&self, a: &AgentInfo, relocate: bool) -> (Option<String>, Option<PathBuf>) {
+        let start = self
+            .sessions_dir()
+            .and_then(|s| self.pane_session(&s, a))
+            .or_else(|| session_id(a).map(str::to_owned));
+        let path = start
             .as_deref()
-            .and_then(|s| self.pane_session(s, a))
-            .or(herdr)?;
-        match self.locate(Kind::Claude, &id, a) {
-            Some(path) => Some(follow(&path, id, sessions.as_deref())),
-            None => Some(id),
+            .filter(|id| relocate || !self.missed.contains(*id))
+            .and_then(|id| self.locate(Kind::Claude, id, a));
+        (start, path)
+    }
+
+    fn follow(&self, start: Option<String>, path: Option<&Path>) -> Option<String> {
+        match path {
+            Some(path) => Some(follow(path, start?, self.sessions_dir().as_deref())),
+            None => start,
         }
     }
 
@@ -107,6 +178,11 @@ impl Transcripts {
         let first = found.next()?;
         found.all(|s| s == first).then_some(first)
     }
+}
+
+fn stamp(path: &Path) -> Option<(u64, SystemTime)> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
 }
 
 /// Trusted only while that pid is alive and started before the file says it did, so a file
@@ -205,7 +281,7 @@ fn moved_to(path: &Path, id: &str, dir: &Path, sessions: Option<&Path>) -> Optio
 fn background_job(content: &str) -> Option<&str> {
     let rest = content.strip_suffix(")</local-command-stdout>")?;
     let job = rest.get(rest.len().checked_sub(8)?..)?;
-    (rest[..rest.len() - 8].ends_with(" (")
+    (rest[..rest.len() - 8].ends_with("running in the background (")
         && job
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
@@ -386,7 +462,7 @@ mod tests {
         t.set_pane(
             "term_1".into(),
             "w1:p1".into(),
-            pids.iter().map(|p| *p as u32).collect(),
+            Some(pids.iter().map(|p| *p as u32).collect()),
         );
     }
 
@@ -431,7 +507,7 @@ mod tests {
 
     #[test]
     fn untrusted_pid_files_keep_herdr_id() {
-        let (_dir, mut t, project, sessions) = setup();
+        let (dir, mut t, project, sessions) = setup();
         transcript(&project, OLD, &reply(OLD, "Old reply."));
         transcript(&project, LIVE, CLAUDE);
         let a = agent(OLD);
@@ -461,14 +537,50 @@ mod tests {
         pane(&mut t, &[pid, other]);
         assert_eq!(t.live_id(&a).as_deref(), Some(OLD), "two sessions");
 
+        let elsewhere = dir.path().join("elsewhere.json");
+        pid_file(dir.path(), pid, LIVE, CWD, started, "");
+        std::fs::rename(dir.path().join(format!("{pid}.json")), &elsewhere).unwrap();
         std::fs::remove_file(sessions.join(format!("{pid}.json"))).unwrap();
-        std::os::unix::fs::symlink(
-            sessions.join(format!("{other}.json")),
-            sessions.join(format!("{pid}.json")),
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(&elsewhere, sessions.join(format!("{pid}.json"))).unwrap();
         pane(&mut t, &[pid]);
         assert_eq!(t.live_id(&a).as_deref(), Some(OLD), "symlink");
+        std::fs::remove_file(sessions.join(format!("{pid}.json"))).unwrap();
+        std::fs::copy(&elsewhere, sessions.join(format!("{pid}.json"))).unwrap();
+        assert_eq!(
+            t.live_id(&a).as_deref(),
+            Some(LIVE),
+            "the same file in place"
+        );
+    }
+
+    #[test]
+    fn resolution_is_cached_until_the_pids_or_the_transcript_move() {
+        let (_dir, mut t, project, sessions) = setup();
+        transcript(&project, OLD, &reply(OLD, "Old reply."));
+        transcript(&project, LIVE, CLAUDE);
+        let a = agent(OLD);
+        let (pid, started) = own();
+        pid_file(&sessions, pid, LIVE, CWD, started, "");
+        pane(&mut t, &[pid]);
+        assert_eq!(t.resolve(&a, false).as_deref(), Some(LIVE));
+
+        let file = sessions.join(format!("{pid}.json"));
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(t.resolve(&a, false).as_deref(), Some(LIVE), "cached");
+
+        t.set_pane("term_1".into(), "w1:p1".into(), None);
+        assert_eq!(t.panes["term_1"].pids, [pid], "kept on a herdr error");
+        assert_eq!(t.resolve(&a, false).as_deref(), Some(OLD), "refreshed");
+        pid_file(&sessions, pid, LIVE, CWD, started, "");
+        t.set_pane("term_1".into(), "w1:p1".into(), None);
+        assert_eq!(t.resolve(&a, false).as_deref(), Some(LIVE));
+
+        transcript(&project, LIVE, &(CLAUDE.to_owned() + &continued(LIVE, OLD)));
+        assert_eq!(
+            t.resolve(&a, false).as_deref(),
+            Some(OLD),
+            "transcript moved"
+        );
     }
 
     #[test]
@@ -586,10 +698,12 @@ mod tests {
             Some("1a2b3c4d")
         );
         for bad in [
-            "<local-command-stdout>Opening \"x\" (1a2b3c4d)!</local-command-stdout>",
-            "<local-command-stdout>Opening (1A2B3C4D)</local-command-stdout>",
-            "<local-command-stdout>Opening (1a2b3c4)</local-command-stdout>",
-            "<local-command-stdout>Opening(1a2b3c4d)</local-command-stdout>",
+            "<local-command-stdout>Opening \"x\", running in the background (1a2b3c4d)!</local-command-stdout>",
+            "<local-command-stdout>running in the background (1A2B3C4D)</local-command-stdout>",
+            "<local-command-stdout>running in the background (1a2b3c4)</local-command-stdout>",
+            "<local-command-stdout>running in the background(1a2b3c4d)</local-command-stdout>",
+            "<local-command-stdout>Opening \"x (1a2b3c4d)\"</local-command-stdout>",
+            "<local-command-stdout>Resumed \"x\" (1a2b3c4d)</local-command-stdout>",
             "(1a2b3c4d)</local-command-stdout>",
         ] {
             assert_eq!(background_job(bad), None, "{bad}");
