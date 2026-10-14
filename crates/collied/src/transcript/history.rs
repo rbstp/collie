@@ -1580,7 +1580,7 @@ mod tests {
         assert_eq!(p.messages[1].text, "/effort high");
         assert_eq!(p.messages[2].text, "/review pr 12");
         let long = &p.messages[3].text;
-        assert!(long.starts_with("/plan do[31m it now xx"), "{long}");
+        assert!(long.starts_with("/plan do[31m it now xx"));
         assert_eq!(long.chars().count(), 120);
         for (query, hits) in [("exit", 2), ("effort", 0), ("review", 0), ("no content", 0)] {
             let search = t.history(&a, &params(None, None, Some(query)));
