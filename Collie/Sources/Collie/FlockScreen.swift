@@ -17,6 +17,7 @@ struct FlockScreen: View {
     @State private var previews = PreviewModel()
     @State private var layout = DevicePrefs.load(from: DevicePrefs.file).agentsLayout
     @State private var seen = SeenAgents.load(from: SeenAgents.file)
+    @State private var snoozed = SnoozedAgents.load(from: SnoozedAgents.file)
     @State private var gridOrder = GridOrder.load(from: GridOrder.file)
     @State private var showsUsage = false
     @State private var dragging: GridDrag?
@@ -116,6 +117,9 @@ struct FlockScreen: View {
                             let previous = seen.markers.count
                             seen.prune(model.entries)
                             if seen.markers.count != previous { seen.save(to: SeenAgents.file) }
+                            let snoozes = snoozed.snoozes.count
+                            snoozed.prune(model.entries, now: .now)
+                            if snoozed.snoozes.count != snoozes { snoozed.save(to: SnoozedAgents.file) }
                         }
                     }
                     follows?.sync()
@@ -167,7 +171,7 @@ struct FlockScreen: View {
         case .inbox:
             AgentInbox(
                 entries: model.entries, notice: model.closeNotice, follows: follows,
-                seen: seen, markUnseen: markUnseen, menu: menu
+                seen: seen, markSeen: markSeen, snoozed: snoozed, snooze: snooze, menu: menu
             )
         case .list:
             TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -238,9 +242,22 @@ struct FlockScreen: View {
         try? core?.reconnect(machineId: entry.id)
     }
 
-    private func markUnseen(_ agent: AgentSummary, route: AgentRoute) {
-        seen.markUnseen(agent, route: route)
+    private func markSeen(_ agent: AgentSummary, route: AgentRoute, seen isSeen: Bool) {
+        if isSeen {
+            seen.markOpened(agent, route: route, nowMs: Date().unixMs)
+        } else {
+            seen.markUnseen(agent, route: route)
+        }
         seen.save(to: SeenAgents.file)
+    }
+
+    private func snooze(_ agent: AgentSummary, route: AgentRoute, until wake: Date?) {
+        if let wake {
+            snoozed.snooze(agent, route: route, until: wake)
+        } else {
+            snoozed.wakeNow(route)
+        }
+        snoozed.save(to: SnoozedAgents.file)
     }
 
     @ViewBuilder
