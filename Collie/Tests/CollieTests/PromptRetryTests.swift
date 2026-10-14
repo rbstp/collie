@@ -263,21 +263,33 @@ private func waitingModel(
 @MainActor
 @Test func aPromptTheAgentAlreadyShowsIsNotResent() async {
     let core = FakeCore()
-    core.state.withLock {
-        $0.link = .connecting
-        $0.lastPrompt = "run the tests"
-    }
-    let (model, send) = await waitingModel(core)
-    core.state.withLock {
-        $0.lastPrompt = "fix the build"
-        $0.link = .connected
-    }
-    model.poll()
+    core.state.withLock { $0.lastPrompt = "run the tests" }
+    let resends = PromptResends()
+    let (model, send) = await waitingModel(core, resends: resends)
+    core.state.withLock { $0.lastPrompt = "fix the build" }
+    resends.wake(route("term_1"))
     await send.value
     #expect(core.snapshot.prompts == ["fix the build"])
     #expect(core.snapshot.resends.isEmpty)
     #expect(model.draft.isEmpty)
     #expect(model.promptError == nil)
+}
+
+/// While the link is down the agent's last prompt can be stale, so it is not compared.
+@MainActor
+@Test func aLastPromptSeenWhileUnlinkedIsNotCompared() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.lastPrompt = "run the tests"
+        $0.link = .connecting
+    }
+    let resends = PromptResends()
+    let (_, send) = await waitingModel(core, resends: resends)
+    core.set(error: nil)
+    core.state.withLock { $0.lastPrompt = "fix the build" }
+    resends.wake(route("term_1"))
+    await send.value
+    #expect(core.snapshot.resends == ["fix the build"])
 }
 
 @MainActor
@@ -427,4 +439,104 @@ private func leave(_ model: AgentModel) async {
     #expect(resends.entries.isEmpty)
     #expect(core.snapshot.prompts == ["fix the build"])
     #expect(!model.retrying)
+}
+
+@MainActor
+@Test func comingBackToTheTabRelinksTheScreen() async {
+    let core = FakeCore()
+    let resends = PromptResends()
+    let (model, send) = await waitingModel(core, resends: resends)
+    await leave(model)
+    #expect(resends.entries[route("term_1")]?.viewer == nil)
+    let run = Task { await model.run() }
+    await poll { resends.entries[route("term_1")]?.viewer === model }
+    core.set(error: nil)
+    resends.wake(route("term_1"))
+    await send.value
+    run.cancel()
+    await run.value
+    #expect(model.draft.isEmpty)
+    #expect(model.promptError == nil)
+}
+
+@MainActor
+@Test func aSendClearsANoteLeftForALaterScreen() async {
+    let core = FakeCore()
+    let resends = PromptResends()
+    let (model, send) = await waitingModel(core, resends: resends)
+    await leave(model)
+    resends.stop(route("term_1"))
+    await send.value
+    core.set(error: nil)
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["fix the build", "fix the build"])
+    let reopened = AgentModel(core: core, route: route("term_1"), prefsFile: nil, resends: resends)
+    #expect(reopened.promptError == nil)
+}
+
+@MainActor
+@Test func aScreenOpenedDuringTheFirstAttemptShowsIt() async {
+    let core = FakeCore()
+    let resends = PromptResends()
+    let first = await retryingModel(core, TestClock(), resends: resends) { _ in }
+    first.draft = "fix the build"
+    core.set(hold: true)
+    let send = Task { await first.sendPrompt() }
+    await core.waitHeld(1)
+    await leave(first)
+    let second = await retryingModel(core, TestClock(), resends: resends) { _ in }
+    #expect(second.draft == "fix the build")
+    #expect(second.sendingPrompt)
+    #expect(!second.retrying)
+    core.release()
+    await send.value
+    await poll { !second.sendingPrompt }
+    #expect(second.draft.isEmpty)
+    #expect(core.snapshot.prompts == ["fix the build"])
+}
+
+@MainActor
+@Test func aSecondScreenSendingDuringTheFirstAttemptWaitsForIt() async {
+    let core = FakeCore()
+    let resends = PromptResends()
+    let first = await retryingModel(core, TestClock(), resends: resends) { _ in }
+    first.draft = "fix the build"
+    core.set(hold: true, error: unreachable)
+    let firstSend = Task { await first.sendPrompt() }
+    await core.waitHeld(1)
+    let second = AgentModel(core: core, route: route("term_1"), prefsFile: nil, resends: resends)
+    second.draft = "something else"
+    let secondSend = Task { await second.sendPrompt() }
+    await poll { resends.entries[route("term_1")]?.stopped == true }
+    #expect(core.snapshot.prompts == ["fix the build"], "nothing else is sent while the first is in flight")
+    core.set(error: nil)
+    core.release()
+    await firstSend.value
+    await secondSend.value
+    #expect(core.snapshot.prompts == ["fix the build", "something else"])
+    #expect(core.snapshot.resends.isEmpty)
+}
+
+@MainActor
+@Test func aFieldFilledFromTheMacStillShowsThePendingPrompt() async {
+    let core = FakeCore()
+    let resends = PromptResends()
+    core.state.withLock { $0.macDraft = "typed on the Mac" }
+    let other = AgentModel(core: core, route: route("term_1"), prefsFile: nil, resends: resends)
+    core.state.withLock { $0.kind = "claude" }
+    other.poll()
+    await other.loadMacDraft()
+    #expect(other.draft == "typed on the Mac")
+    let first = AgentModel(core: core, route: route("term_1"), prefsFile: nil, resends: resends)
+    first.poll()
+    first.draft = "fix the build"
+    core.set(hold: true)
+    let send = Task { await first.sendPrompt() }
+    await core.waitHeld(1)
+    await leave(first)
+    other.poll()
+    #expect(other.draft == "fix the build")
+    #expect(other.sendingPrompt)
+    core.release()
+    await send.value
 }

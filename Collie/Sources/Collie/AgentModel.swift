@@ -56,9 +56,10 @@ final class AgentModel {
     @ObservationIgnored private var seenPrompt: String?
     @ObservationIgnored private(set) var sentMacDraftCheck: Task<Void, Never>?
     private(set) var sendingPrompt = false
-    var retrying: Bool { sendingPrompt && resends.entries[route].map { !$0.stopped } == true }
-    @ObservationIgnored private var left = false
-    /// The resend ended with another screen, or none, which keeps the draft instead.
+    var retrying: Bool { sendingPrompt && resends.entries[route].map { $0.retrying && !$0.stopped } == true }
+    /// The prompt this model sent or took over, while it is in flight.
+    @ObservationIgnored private var resend: PromptResends.Entry?
+    /// The prompt ended with another screen, or none, which keeps the draft instead.
     @ObservationIgnored private var draftElsewhere = false
     /// The Mac's input box holds text the mirror did not put there; it waits for the next send.
     private var mirrorPaused = false
@@ -270,7 +271,7 @@ final class AgentModel {
     }
 
     func run() async {
-        left = false
+        if let resend, resends.entries[route] === resend, resend.viewer == nil { resend.viewer = self }
         Self.watchers[route.machineId] = ObjectIdentifier(self)
         watch(route.terminalId)
         var loading: Task<Void, Never>?
@@ -281,8 +282,7 @@ final class AgentModel {
             }
             try? await Task.sleep(for: .milliseconds(isTerminal ? 100 : 250))
         }
-        left = true
-        resends.leave(route, self)
+        if resend?.stopped == false { resends.leave(route, self) }
         if Self.watchers[route.machineId] == ObjectIdentifier(self) {
             Self.watchers[route.machineId] = nil
             watch(nil)
@@ -397,7 +397,7 @@ final class AgentModel {
 
     func poll() {
         adoptResend()
-        if retrying, draft != resends.entries[route]?.sent { stopRetry() }
+        if let resend, draft != resend.sent { stopRetry() }
         guard let view = core.agentView(machineId: route.machineId, terminalId: route.terminalId, afterRevision: revision) else { return }
         if link != view.link {
             link = view.link
@@ -552,12 +552,8 @@ final class AgentModel {
         }
         sendingPrompt = true
         promptError = nil
+        _ = resends.takeUnseen(route)
         defer { sendingPrompt = false }
-        if let pending = resends.entries[route] {
-            pending.viewer = self
-            resends.stop(route)
-            _ = await pending.outcome.value
-        }
         saveDraft("", [])
         do {
             try await prompt(text, sent: sent, files: files)
@@ -597,37 +593,45 @@ final class AgentModel {
         PromptRetry.retries(error) ? "May not have been sent: machine unreachable" : message(for: error)
     }
 
-    /// The first attempt mints the op_id; retries go to the app's `PromptResends`, which only resends it.
+    /// A prompt still in flight for this agent, from a screen that did not take it over, ends first, so
+    /// prompts arrive in order. The last prompt counts only when the link was up, so it is not stale.
     private func prompt(_ text: String, sent: String, files: [AttachedFile]) async throws {
-        let expected = macDraft
-        let before = agent?.lastPrompt
-        let linked = link == .connected
-        let retry = PromptRetry(started: now())
-        do {
-            try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: expected)
-        } catch {
-            guard draft == sent, retry.next(after: error) != nil else { throw error }
+        while true {
+            if let pending = resends.entries[route] {
+                pending.viewer = self
+                resends.stop(route)
+                _ = await pending.outcome.value
+                continue
+            }
+            let linked = link == .connected
             let send = PromptResends.Send(
-                core: core, route: route, text: text, expected: expected, before: before, draftsFile: draftsFile, now: now, sleep: sleep
+                core: core, route: route, text: text, expected: macDraft, before: linked ? agent?.lastPrompt : nil,
+                draftsFile: draftsFile, now: now, sleep: sleep
             )
-            let entry = resends.start(send, sent: sent, files: files, retry: retry, error: error, linked: linked, viewer: left ? nil : self)
+            guard let entry = resends.start(send, sent: sent, files: files, linked: linked, viewer: self) else { continue }
+            resend = entry
             let outcome = await entry.outcome.value
+            resend = nil
             draftElsewhere = entry.viewer !== self
             if let outcome { throw outcome }
+            return
         }
     }
 
     /// A screen that opens while its agent's prompt is being resent shows it, as if it never left.
     private func adoptResend() {
-        guard !sendingPrompt, let entry = resends.entries[route], entry.viewer == nil, !entry.stopped,
-            draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, attachments.isEmpty
+        guard !sendingPrompt, let entry = resends.entries[route], entry.viewer == nil, !entry.stopped, attachments.isEmpty,
+            draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft == loadedMacDraft
         else { return }
         entry.viewer = self
+        resend = entry
+        loadedMacDraft = nil
         draft = entry.sent
         attachments = entry.files
         sendingPrompt = true
         Task {
             let outcome = await entry.outcome.value
+            resend = nil
             if entry.viewer === self {
                 finish(entry.sent, files: entry.files, error: outcome)
                 sendingPrompt = false
@@ -639,7 +643,7 @@ final class AgentModel {
     }
 
     func stopRetry() {
-        if retrying { resends.stop(route) }
+        if let resend, resends.entries[route] === resend { resends.stop(route) }
     }
 
     /// One line, then Enter, into the shell; a locked terminal is unlocked first, in the same action.

@@ -51,9 +51,10 @@ struct PromptRetry {
     }
 }
 
-/// One pending resend per agent, owned by the app so it goes on after the agent screen closes, for as long
-/// as the process runs (nothing is kept across launches). A screen that opens shows the pending prompt.
-/// With no screen at the end, a prompt that may not have arrived goes back to the agent's draft.
+/// One prompt in flight per agent, from its first attempt, owned by the app so its resends go on after the
+/// agent screen closes, for as long as the process runs (nothing is kept across launches). A screen that
+/// opens shows it, and a different prompt waits for it to end. With no screen at the end, a prompt that may
+/// not have arrived goes back to the agent's draft. Not detected: a new agent started in the same pane.
 @MainActor
 @Observable
 final class PromptResends {
@@ -75,6 +76,7 @@ final class PromptResends {
         let sent: String
         let files: [AttachedFile]
         fileprivate(set) var stopped = false
+        fileprivate(set) var retrying = false
         @ObservationIgnored weak var viewer: AgentModel?
         @ObservationIgnored fileprivate var wait: Task<Void, any Error>?
         /// Nil once the prompt arrived.
@@ -89,11 +91,12 @@ final class PromptResends {
     private(set) var entries: [AgentRoute: Entry] = [:]
     @ObservationIgnored private var unseen: [AgentRoute: String] = [:]
 
-    func start(_ send: Send, sent: String, files: [AttachedFile], retry: PromptRetry, error: any Error, linked: Bool, viewer: AgentModel?) -> Entry {
+    func start(_ send: Send, sent: String, files: [AttachedFile], linked: Bool, viewer: AgentModel) -> Entry? {
+        guard entries[send.route] == nil else { return nil }
         let entry = Entry(sent: sent, files: files)
         entry.viewer = viewer
         entries[send.route] = entry
-        entry.outcome = Task { await self.run(send, entry, retry: retry, error: error, linked: linked) }
+        entry.outcome = Task { await self.run(send, entry, linked: linked) }
         return entry
     }
 
@@ -123,8 +126,8 @@ final class PromptResends {
         unseen.removeValue(forKey: route)
     }
 
-    private func run(_ send: Send, _ entry: Entry, retry: PromptRetry, error: any Error, linked: Bool) async -> (any Error)? {
-        let outcome = await resend(send, entry, retry: retry, error: error, linked: linked)
+    private func run(_ send: Send, _ entry: Entry, linked: Bool) async -> (any Error)? {
+        let outcome = await resend(send, entry, linked: linked)
         guard entries[send.route] === entry else { return outcome }
         entries[send.route] = nil
         if let outcome, entry.viewer == nil {
@@ -140,13 +143,23 @@ final class PromptResends {
         return outcome
     }
 
-    private func resend(_ send: Send, _ entry: Entry, retry: PromptRetry, error: any Error, linked: Bool) async -> (any Error)? {
-        var retry = retry
-        var error = error
+    /// The first attempt mints the op_id; every later one is a resend, which only sends it again.
+    private func resend(_ send: Send, _ entry: Entry, linked: Bool) async -> (any Error)? {
+        var retry = PromptRetry(started: send.now())
         var linked = linked
+        var error: any Error
+        do {
+            try await send.core.prompt(
+                machineId: send.route.machineId, terminalId: send.route.terminalId, text: send.text, expectedDraft: send.expected
+            )
+            return nil
+        } catch let failure {
+            error = failure
+        }
         let view = { send.core.agentView(machineId: send.route.machineId, terminalId: send.route.terminalId, afterRevision: .max) }
         while true {
             guard !entry.stopped, let at = retry.next(after: error) else { return error }
+            entry.retrying = true
             if linked || view()?.link != .connected {
                 let delay = at - send.now()
                 let wait = Task { try await send.sleep(delay) }
