@@ -81,6 +81,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "subagents": {
+          "description": "Claude Code subagents running now, from their own transcripts.",
+          "items": {
+            "$ref": "#/$defs/Subagent"
+          },
+          "type": "array"
+        },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"
         },
@@ -1553,6 +1560,38 @@
     "SessionId": {
       "pattern": "^[0-9a-f][0-9a-f-]{35}$",
       "type": "string"
+    },
+    "Subagent": {
+      "properties": {
+        "activity": {
+          "type": "string"
+        },
+        "agent_type": {
+          "type": "string"
+        },
+        "called_tools": {
+          "description": "Claude Code's panel shows the tokens with ↓ once the subagent has called a tool, ↑ before.",
+          "type": "boolean"
+        },
+        "started_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agent_type",
+        "activity",
+        "started_at_ms",
+        "tokens",
+        "called_tools"
+      ],
+      "type": "object"
     },
     "TaskOptions": {
       "properties": {

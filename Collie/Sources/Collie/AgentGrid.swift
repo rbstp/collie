@@ -231,6 +231,10 @@ private struct AgentCard: View {
                             Text(verbatim: "·")
                         }
                         StatusAge(agent: agent, now: now).fixedSize()
+                        if !agent.subagents.isEmpty {
+                            Text(verbatim: "·")
+                            Text(agent.subagents.count == 1 ? "1 subagent" : "\(agent.subagents.count) subagents").fixedSize()
+                        }
                         if let pullRequest = agent.pullRequest {
                             PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch, compact: true)
                         }

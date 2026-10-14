@@ -1,4 +1,5 @@
 mod history;
+mod subagents;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -33,6 +34,7 @@ pub struct Derived {
     pub last_line: Option<String>,
     pub last_prompt: Option<String>,
     pub last_activity_ms: Option<u64>,
+    pub subagents: Vec<protocol::Subagent>,
 }
 
 #[derive(Clone, Copy)]
@@ -56,6 +58,7 @@ pub struct Transcripts {
     cache: HashMap<String, Cached>,
     missed: HashSet<String>,
     usage: Usage,
+    live: subagents::Live,
 }
 
 impl Transcripts {
@@ -66,6 +69,7 @@ impl Transcripts {
             cache: HashMap::new(),
             missed: HashSet::new(),
             usage: Usage::default(),
+            live: subagents::Live::default(),
         }
     }
 
@@ -98,7 +102,8 @@ impl Transcripts {
     pub fn retain(&mut self, agents: &[AgentInfo]) {
         let live = |id: &String| agents.iter().any(|a| session_id(a) == Some(id.as_str()));
         self.cache.retain(|id, _| live(id));
-        self.missed.retain(live);
+        self.missed.retain(&live);
+        self.live.retain(live);
     }
 
     /// Cached by size and mtime, so an unchanged transcript costs one open and fstat. A
@@ -127,19 +132,29 @@ impl Transcripts {
             return None;
         };
         self.missed.remove(id);
-        let window = match kind {
+        let (window, subagents) = match kind {
             Kind::Claude => {
                 self.usage.refresh();
-                self.usage.window(id)
+                {
+                    let sessions = self.claude_projects.as_deref().and_then(Path::parent);
+                    let sessions = sessions.map(|d| d.join("sessions"));
+                    (
+                        self.usage.window(id),
+                        self.live.running(sessions.as_deref(), &path, id),
+                    )
+                }
             }
-            Kind::Codex => None,
+            Kind::Codex => (None, Vec::new()),
         };
         if let Some(c) = self
             .cache
             .get(id)
             .filter(|c| c.len == len && c.modified == modified && c.window == window)
         {
-            return Some(c.derived.clone());
+            return Some(Derived {
+                subagents,
+                ..c.derived.clone()
+            });
         }
         let text = tail(file, len).ok()?;
         let mut derived = match kind {
@@ -152,6 +167,7 @@ impl Transcripts {
             derived.last_line = derived.last_line.or_else(|| prev.last_line.clone());
             derived.last_prompt = derived.last_prompt.or_else(|| prev.last_prompt.clone());
         }
+        derived.subagents = subagents;
         derived.last_activity_ms = modified
             .duration_since(UNIX_EPOCH)
             .ok()
@@ -930,6 +946,39 @@ mod tests {
         assert_eq!(t.cache.len(), 1);
         assert!(t.cache.contains_key(CODEX_ID));
         assert!(t.missed.is_empty());
+    }
+
+    #[test]
+    fn subagents_refresh_while_the_main_transcript_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = roots(dir.path());
+        let project = dir.path().join("claude/projects/-Users-me-src-collie");
+        write(&project.join(format!("{CLAUDE_ID}.jsonl")), CLAUDE);
+        let a = agent("claude", CLAUDE_ID, "/Users/me/src/collie");
+        assert!(t.derive(&a, false).unwrap().subagents.is_empty());
+        let sub = project.join(CLAUDE_ID).join("subagents");
+        let lines = include_str!("../tests/fixtures/transcripts/claude-live-agent.jsonl")
+            .split_inclusive('\n')
+            .collect::<Vec<_>>();
+        write(
+            &sub.join("agent-a1.meta.json"),
+            include_str!("../tests/fixtures/transcripts/claude-live-agent.meta.json"),
+        );
+        write(&sub.join("agent-a1.jsonl"), &lines[..4].concat());
+        assert!(t.derive(&a, false).unwrap().subagents.is_empty());
+        let pid = std::process::id();
+        write(
+            &dir.path().join(format!("claude/sessions/{pid}.json")),
+            &format!(
+                r#"{{"pid":{pid},"sessionId":"{CLAUDE_ID}","startedAt":{}}}"#,
+                crate::now_ms() - 60_000
+            ),
+        );
+        let d = t.derive(&a, false).unwrap();
+        assert_eq!(d.subagents.len(), 1);
+        assert_eq!(d.subagents[0].activity, "Reading pairing.rs");
+        write(&sub.join("agent-a1.jsonl"), &lines.concat());
+        assert!(t.derive(&a, false).unwrap().subagents.is_empty());
     }
 
     #[test]

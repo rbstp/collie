@@ -344,6 +344,8 @@ pub struct AgentSummary {
     pub last_prompt: Option<String>,
     #[uniffi(default = None)]
     pub last_activity_ms: Option<u64>,
+    #[uniffi(default = [])]
+    pub subagents: Vec<SubagentSummary>,
     #[uniffi(default = None)]
     pub pull_request: Option<PullRequestSummary>,
     #[uniffi(default = None)]
@@ -381,6 +383,16 @@ pub enum PullChecks {
     Pending,
     NoChecks,
     Unknown,
+}
+
+/// A Claude Code subagent running in the agent's session.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SubagentSummary {
+    pub agent_type: String,
+    pub activity: String,
+    pub started_at_ms: u64,
+    pub tokens: u64,
+    pub called_tools: bool,
 }
 
 /// The subscription's plan usage on the machine; `recorded_ms` dates it.
@@ -3019,6 +3031,17 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
         context_left: a.context_left,
         last_prompt: a.last_prompt.clone(),
         last_activity_ms: a.last_activity_ms,
+        subagents: a
+            .subagents
+            .iter()
+            .map(|s| SubagentSummary {
+                agent_type: s.agent_type.clone(),
+                activity: s.activity.clone(),
+                started_at_ms: s.started_at_ms,
+                tokens: s.tokens,
+                called_tools: s.called_tools,
+            })
+            .collect(),
         pull_request: a.pull_request.as_ref().map(|pr| PullRequestSummary {
             number: pr.number,
             state: match pr.state {
@@ -3327,6 +3350,22 @@ mod tests {
                 url: "https://github.com/o/r/pull/6".into(),
                 every_minutes: 30,
             })
+        );
+        assert!(s.subagents.is_empty());
+        let running = newer.replace(
+            r#""last_activity_ms":9"#,
+            r#""last_activity_ms":9,"subagents":[{"agent_type":"Explore","activity":"Reading lib.rs","started_at_ms":3,"tokens":1500,"called_tools":true}]"#,
+        );
+        let s = agent_summary(&serde_json::from_str(&running).unwrap());
+        assert_eq!(
+            s.subagents,
+            [SubagentSummary {
+                agent_type: "Explore".into(),
+                activity: "Reading lib.rs".into(),
+                started_at_ms: 3,
+                tokens: 1500,
+                called_tools: true,
+            }]
         );
     }
 
@@ -4228,6 +4267,7 @@ mod tailnet_tests {
                 context_left: None,
                 last_prompt: None,
                 last_activity_ms: None,
+                subagents: Vec::new(),
                 pull_request: None,
                 pr_watch: None,
             }],

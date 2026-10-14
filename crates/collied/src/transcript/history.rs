@@ -286,12 +286,12 @@ fn named(
     out
 }
 
-fn agent_id(id: &str) -> bool {
+pub(super) fn agent_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 /// Only real directories under this session's own directory.
-fn subagent_dir(transcript: &Path, session: &str) -> Option<std::path::PathBuf> {
+pub(super) fn subagent_dir(transcript: &Path, session: &str) -> Option<std::path::PathBuf> {
     let mut dir = transcript.parent()?.to_path_buf();
     for part in [session, "subagents"] {
         dir.push(part);

@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use protocol::{
-    Agent, AgentStatus, Flock, MachineInfo, Terminal, TerminalId, Workspace, WorkspaceId,
+    Agent, AgentStatus, Flock, MachineInfo, Subagent, Terminal, TerminalId, Workspace, WorkspaceId,
 };
 
 use crate::herdr::{AgentInfo, PaneInfo, SessionSnapshot, WorkspaceInfo};
@@ -195,6 +196,7 @@ pub fn map_agent(
         context_left: derived.context_left,
         last_prompt: derived.last_prompt,
         last_activity_ms: derived.last_activity_ms,
+        subagents: derived.subagents,
         pull_request: None,
         pr_watch: None,
     })
@@ -284,13 +286,18 @@ pub fn map_flock(
 
 /// What the phone shows of an agent, so that a change to any of it sends `agent.status`.
 type Shown = (u64, AgentStatus, [Option<String>; 4]);
-/// Context left, last line and last prompt. The activity time is left out: it moves on
-/// every transcript write, and the events and snapshots that are sent carry it anyway.
-type Said = Option<(Option<u8>, Option<String>, Option<String>)>;
+/// Context left, last line, last prompt and running subagents. The activity time is left
+/// out: it moves on every transcript write, and the events and snapshots that are sent carry it anyway.
+type Said = Option<(Option<u8>, Option<String>, Option<String>, Vec<Subagent>)>;
+
+/// Token counts move on almost every subagent write.
+const SUBAGENT_TOKENS_EVERY: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Baseline {
     agents: BTreeMap<String, (Shown, Said, String)>,
+    /// When a subagent change was last let through, by terminal id.
+    sent: BTreeMap<String, Instant>,
     workspaces: Vec<(String, String, u32)>,
     /// `Said` is compared only between two baselines that read transcripts, so a phone
     /// connecting or leaving sends nothing.
@@ -317,7 +324,7 @@ impl Baseline {
                     let said = transcripts
                         .as_deref_mut()
                         .and_then(|t| t.derive(a, false))
-                        .map(|d| (d.context_left, d.last_line, d.last_prompt));
+                        .map(|d| (d.context_left, d.last_line, d.last_prompt, d.subagents));
                     (a.terminal_id.clone(), (shown, said, a.workspace_id.clone()))
                 })
                 .collect(),
@@ -325,7 +332,48 @@ impl Baseline {
                 .iter()
                 .map(|w| (w.workspace_id.clone(), w.label.clone(), w.number))
                 .collect(),
+            sent: BTreeMap::new(),
             read,
+        }
+    }
+
+    /// Keeps the previous subagents in `next` when their tokens moved by less than a rounded
+    /// 1,000, or when only their tokens or arrow changed and the last subagent change went
+    /// out less than `SUBAGENT_TOKENS_EVERY` ago.
+    pub fn hold(&self, next: &mut Self, now: Instant) {
+        if !(self.read && next.read) {
+            return;
+        }
+        let key = |v: &[Subagent]| {
+            v.iter()
+                .map(|s| (s.agent_type.clone(), s.activity.clone(), s.started_at_ms))
+                .collect::<Vec<_>>()
+        };
+        let rounded = |v: &[Subagent]| {
+            v.iter()
+                .map(|s| (s.called_tools, (s.tokens + 500) / 1000))
+                .collect::<Vec<_>>()
+        };
+        for (id, (_, said, _)) in &mut next.agents {
+            let Some((Some(prev), Some(said))) = self.agents.get(id).map(|a| (&a.1, said.as_mut()))
+            else {
+                continue;
+            };
+            let last = self.sent.get(id).copied();
+            let sent = if prev.3 == said.3 {
+                last
+            } else if key(&prev.3) == key(&said.3)
+                && (rounded(&prev.3) == rounded(&said.3)
+                    || last.is_some_and(|t| now.duration_since(t) < SUBAGENT_TOKENS_EVERY))
+            {
+                said.3 = prev.3.clone();
+                last
+            } else {
+                Some(now)
+            };
+            if let Some(t) = sent {
+                next.sent.insert(id.clone(), t);
+            }
         }
     }
 
@@ -708,6 +756,54 @@ mod tests {
             diff(|a| a.title = Some("other".into())),
             (vec!["term_0a1b2c3d4e5f60".to_owned()], false)
         );
+    }
+
+    #[test]
+    fn subagent_token_changes_are_held_for_five_seconds() {
+        let sub = |activity: &str, tokens: u64| Subagent {
+            agent_type: "general-purpose".into(),
+            activity: activity.into(),
+            started_at_ms: 1,
+            tokens,
+            called_tools: true,
+        };
+        let base = |subagents: Vec<Subagent>| Baseline {
+            agents: BTreeMap::from([(
+                "t".to_owned(),
+                (
+                    (1, AgentStatus::Working, Default::default()),
+                    Some((None, None, None, subagents)),
+                    "w".to_owned(),
+                ),
+            )]),
+            read: true,
+            ..Baseline::default()
+        };
+        let t0 = Instant::now();
+        let mut prev = base(vec![sub("Reading a.rs", 1000)]);
+        let mut next = base(vec![sub("Reading a.rs", 2000)]);
+        prev.hold(&mut next, t0);
+        assert_eq!(prev.diff(&next).0, ["t"]);
+        prev = next;
+        let mut next = base(vec![sub("Reading a.rs", 3000)]);
+        prev.hold(&mut next, t0 + Duration::from_secs(1));
+        assert!(prev.diff(&next).0.is_empty());
+        prev = next;
+        let mut next = base(vec![sub("Reading a.rs", 3_499)]);
+        prev.hold(&mut next, t0 + Duration::from_secs(5));
+        assert_eq!(prev.diff(&next).0, ["t"]);
+        prev = next;
+        let mut next = base(vec![sub("Reading a.rs", 3_420)]);
+        prev.hold(&mut next, t0 + Duration::from_secs(20));
+        assert!(prev.diff(&next).0.is_empty());
+        prev = next;
+        let mut next = base(vec![sub("Reading b.rs", 4000)]);
+        prev.hold(&mut next, t0 + Duration::from_secs(21));
+        assert_eq!(prev.diff(&next).0, ["t"]);
+        prev = next;
+        let mut next = base(Vec::new());
+        prev.hold(&mut next, t0 + Duration::from_secs(22));
+        assert_eq!(prev.diff(&next).0, ["t"]);
     }
 
     #[test]
