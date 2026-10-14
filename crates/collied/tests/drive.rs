@@ -74,6 +74,23 @@ const SCROLLED_DIALOG: &str =
     include_str!("fixtures/claude-2.1.293/scrolled-dialog-hidden.detection.txt");
 const NEW_MESSAGE: &str = include_str!("fixtures/claude-2.1.293/new-message.detection.txt");
 const BOTTOM: &str = include_str!("fixtures/claude-2.1.293/bottom-idle.detection.txt");
+
+/// A 2.1.293 detection read above with its banner drawn as Claude Code 2.1.299 draws it on a
+/// visible read (protocol's captured fixtures).
+fn drawn(screen: &str) -> String {
+    let start = ["Jump to bottom", "1 new message"]
+        .iter()
+        .find_map(|label| screen.find(label))
+        .unwrap();
+    let end = start + screen[start..].find('\n').unwrap();
+    format!(
+        "{}\u{1b}[0m\u{1b}[38;2;255;255;255m\u{1b}[48;2;55;55;55m {} \u{1b}[0m{}",
+        &screen[..start - 1],
+        &screen[start..end],
+        &screen[end..]
+    )
+}
+
 // Claude Code 2.1.293 notices above the input box; .ansi.txt are visible reads, where the
 // placeholder is dim.
 const SURVEY: &str = include_str!("fixtures/claude-2.1.293/survey.ansi.txt");
@@ -614,10 +631,7 @@ async fn prompt_rechecks_the_agent_before_writing() {
     );
     assert_eq!(
         herdr.params("pane.read"),
-        vec![
-            json!({"pane_id": "w6:p1", "source": "detection", "format": "text"}),
-            json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"})
-        ]
+        vec![json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"}); 2]
     );
     assert_eq!(
         herdr.params("agent.prompt"),
@@ -1122,7 +1136,7 @@ async fn scroll_bottom_sends_ctrl_end_only_while_claude_shows_the_banner() {
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
     for screen in [SCROLLED, SCROLLED_DIALOG, NEW_MESSAGE] {
-        herdr.with(|h| h.text = screen.into());
+        herdr.with(|h| h.text = drawn(screen));
         assert_eq!(
             drive.scroll_bottom(&tid(CLAUDE), &yes()).await,
             Ok(Response::Ok)
@@ -1134,8 +1148,14 @@ async fn scroll_bottom_sends_ctrl_end_only_while_claude_shows_the_banner() {
     );
     assert_eq!(
         herdr.params("pane.read")[0],
-        json!({"pane_id": "w6:p1", "source": "detection", "format": "text"})
+        json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"})
     );
+    herdr.with(|h| h.text = SCROLLED.into());
+    assert_eq!(
+        drive.scroll_bottom(&tid(CLAUDE), &yes()).await,
+        Err((ErrorCode::AgentNotReady, "already at the bottom".into()))
+    );
+    herdr.with(|h| h.text = drawn(SCROLLED));
 
     let mut blocked = herdr.with(|h| h.snapshot["agents"][0].clone());
     blocked["agent_status"] = json!("blocked");
@@ -1151,7 +1171,7 @@ async fn scroll_bottom_sends_ctrl_end_only_while_claude_shows_the_banner() {
         code(drive.scroll_bottom(&tid(CLAUDE), &yes()).await),
         ErrorCode::AgentNotReady
     );
-    herdr.with(|h| h.text = SCROLLED.into());
+    herdr.with(|h| h.text = drawn(SCROLLED));
     assert_eq!(
         drive.scroll_bottom(&tid(CODEX_BLOCKED), &yes()).await,
         Err((ErrorCode::AgentNotReady, "not a Claude Code agent".into()))
@@ -1271,11 +1291,7 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
                 "pane.send_text",
                 "pane.read",
             ];
-            let mut reads = vec![
-                json!({"pane_id": "w6:p1", "source": "detection", "format": "text"}),
-                json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"}),
-            ];
-            reads.push(reads[1].clone());
+            let reads = vec![json!({"pane_id": "w6:p1", "source": "visible", "format": "ansi"}); 3];
             assert_eq!(herdr.methods(), methods, "{label}");
             assert_eq!(herdr.params("pane.read"), reads, "{label}");
             sent.extend(herdr.params("pane.send_text"));
@@ -1320,7 +1336,7 @@ async fn answer_notice_sends_one_digit_only_while_claude_shows_the_notice() {
         (SURVEY_NARROW, 1, "Bad", none),
         (BOTTOM, 1, "Bad", none),
         (SURVEY_TYPED, 0, "Dismiss", typed),
-        (SURVEY_SCROLLED, 1, "Bad", scrolled),
+        (drawn(SURVEY_SCROLLED).as_str(), 1, "Bad", scrolled),
     ] {
         herdr.with(|h| h.text = screen.into());
         assert_eq!(
@@ -1497,10 +1513,7 @@ async fn slash_draft_pastes_the_command_into_an_empty_box_only() {
         .into_iter()
         .map(|p| p["source"].clone())
         .collect();
-    assert_eq!(
-        reads,
-        ["detection", "visible", "detection", "visible", "visible"]
-    );
+    assert_eq!(reads, ["visible"; 5]);
     assert_eq!(
         herdr.params("pane.send_text"),
         [json!({"pane_id": "w6:p1", "text": "\u{1b}[200~/s\u{1b}[201~"})]
@@ -1698,7 +1711,7 @@ async fn slash_draft_refusals_write_nothing() {
         );
     }
     let scrolled = "scrolled up on the machine; jump to the bottom first";
-    herdr.with(|h| h.text = SCROLLED.into());
+    herdr.with(|h| h.text = drawn(SCROLLED));
     assert_eq!(
         drive.slash_draft(slash(CLAUDE, "/s", None), &yes()).await,
         Err((ErrorCode::AgentNotReady, scrolled.into()))
@@ -1735,7 +1748,7 @@ async fn slash_draft_refusals_write_nothing() {
         ]
     };
     let mut banner = cleared().to_vec();
-    banner.push(SCROLLED.into());
+    banner.push(drawn(SCROLLED));
     let mut refilled = cleared().to_vec();
     refilled.extend([screen(PLACEHOLDER), screen("❯ /s")]);
     let mut dialog = cleared().to_vec();
@@ -1823,7 +1836,7 @@ async fn idle_claude_scroll_safeguards_do_not_restrict_approval_keys() {
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
     for screen in [SCROLLED, SCROLLED_DIALOG, NEW_MESSAGE] {
-        herdr.with(|h| h.text = screen.into());
+        herdr.with(|h| h.text = drawn(screen));
         let (reply, target) = drive.send_keys(keys(CLAUDE), &yes()).await;
         assert_eq!(code(reply), ErrorCode::AgentNotReady);
         assert_eq!(target, None);
@@ -1837,7 +1850,7 @@ async fn idle_claude_scroll_safeguards_do_not_restrict_approval_keys() {
     for screen in [SCROLLED, SCROLLED_DIALOG, NEW_MESSAGE] {
         herdr.with(|h| {
             h.snapshot["agents"][0]["agent_status"] = json!("idle");
-            h.text = screen.into();
+            h.text = drawn(screen);
         });
         assert_eq!(
             drive.prompt(prompt(CLAUDE), &yes()).await,
@@ -4192,8 +4205,13 @@ async fn typed_answers_keep_idle_claude_scroll_and_slash_safeguards() {
     let drive = herdr.driver(&["claude"], &base);
     herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("idle"));
 
-    for screen in [SCROLLED, SCROLLED_DIALOG, NEW_MESSAGE, SLASH_STA] {
-        herdr.with(|h| h.text = screen.into());
+    for screen in [
+        drawn(SCROLLED),
+        drawn(SCROLLED_DIALOG),
+        drawn(NEW_MESSAGE),
+        SLASH_STA.into(),
+    ] {
+        herdr.with(|h| h.text = screen.clone());
         assert_eq!(
             code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
             ErrorCode::AgentNotReady,
@@ -4258,7 +4276,7 @@ async fn typed_text_is_pasted_and_submitted_without_prompt_parsing() {
     assert_eq!(herdr.params("pane.send_input").len(), 8);
     let reads = herdr.params("pane.read");
     assert_eq!(reads.len(), 2);
-    assert_eq!(reads[0]["source"], "detection");
+    assert_eq!(reads[0]["source"], "visible");
     assert_eq!(reads[1]["source"], "visible");
 }
 

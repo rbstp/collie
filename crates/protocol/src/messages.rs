@@ -683,10 +683,26 @@ pub enum Key {
     Tab,
     #[serde(rename = "shift+tab")]
     ShiftTab,
+    #[serde(rename = "backspace")]
+    Backspace,
     #[serde(rename = "ctrl+c")]
     CtrlC,
     #[serde(rename = "ctrl+enter")]
     CtrlEnter,
+    #[serde(rename = "ctrl+a")]
+    CtrlA,
+    #[serde(rename = "ctrl+b")]
+    CtrlB,
+    #[serde(rename = "ctrl+e")]
+    CtrlE,
+    #[serde(rename = "ctrl+k")]
+    CtrlK,
+    #[serde(rename = "ctrl+l")]
+    CtrlL,
+    #[serde(rename = "ctrl+u")]
+    CtrlU,
+    #[serde(rename = "ctrl+w")]
+    CtrlW,
 }
 
 impl Key {
@@ -701,8 +717,16 @@ impl Key {
             Self::Right => "right",
             Self::Tab => "tab",
             Self::ShiftTab => "shift+tab",
+            Self::Backspace => "backspace",
             Self::CtrlC => "ctrl+c",
             Self::CtrlEnter => "ctrl+enter",
+            Self::CtrlA => "ctrl+a",
+            Self::CtrlB => "ctrl+b",
+            Self::CtrlE => "ctrl+e",
+            Self::CtrlK => "ctrl+k",
+            Self::CtrlL => "ctrl+l",
+            Self::CtrlU => "ctrl+u",
+            Self::CtrlW => "ctrl+w",
         }
     }
 }
@@ -1286,7 +1310,7 @@ pub struct TerminalRead {
 
 impl TerminalRead {
     /// `ansi` with the rows in `wraps` and `splits` joined onto the row above; `None` when
-    /// there are none. For Copilot, a space joining shaded rows keeps their shade, and a sent
+    /// there are none. A space joining shaded rows keeps their shade, and for Copilot a sent
     /// prompt's timestamp follows the joined prompt.
     pub fn reflowed(&self) -> Option<String> {
         if self.wraps.is_empty() && self.splits.is_empty() {
@@ -1324,7 +1348,7 @@ impl TerminalRead {
                     let line = out.rfind('\n').map_or(0, |n| n + 1);
                     let mut kept = trim_line_end(&out[line..]);
                     let bare = before_sgr(&kept).len();
-                    let at = if self.copilot_scrollbar && kept[bare..].contains("\u{1b}[48;") {
+                    let at = if kept[bare..].contains("\u{1b}[48;") {
                         bare
                     } else {
                         kept.len()
@@ -1978,7 +2002,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 24);
+        assert_eq!(crate::PROTOCOL_VERSION, 25);
     }
 
     #[test]
@@ -2705,9 +2729,16 @@ mod tests {
             ))
         };
         assert!(keys(r#"["ctrl+c"]"#).is_ok());
+        assert!(keys(r#"["backspace","ctrl+a","ctrl+e","ctrl+u","ctrl+w"]"#).is_ok());
         for bad in [
             r#"["ctrl+d"]"#.to_owned(),
             r#"["ctrl+z"]"#.to_owned(),
+            r#"["ctrl+r"]"#.to_owned(),
+            r#"["ctrl+o"]"#.to_owned(),
+            r#"["ctrl+t"]"#.to_owned(),
+            r#"["ctrl+j"]"#.to_owned(),
+            r#"["ctrl+m"]"#.to_owned(),
+            r#"["shift+enter"]"#.to_owned(),
             "[]".to_owned(),
             serde_json::to_string(&vec!["enter"; 17]).unwrap(),
         ] {
@@ -2945,8 +2976,8 @@ mod tests {
         );
         let unmoved = read_with(&ansi, &[1, 2], &[]).reflowed().unwrap();
         assert!(unmoved.starts_with(&format!(
-            "{}\u{1b}[0m ",
-            &ansi[..ansi.find("  \u{1b}[0m\r").unwrap()]
+            "{} \u{1b}[0m{shade}\u{1b}[0m",
+            &ansi[..ansi.find("10:19").unwrap() + 5]
         )));
         let prose = format!(" ● The meeting is at {clock}\r\n   noon.");
         let read = TerminalRead {

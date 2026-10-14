@@ -1,18 +1,101 @@
+use unicode_width::UnicodeWidthStr;
+
 use crate::{Label, NoticeDigit};
 
 const JUMP: &str = "Jump to bottom";
 const NEW: &str = " new message";
 
-/// Whether Claude Code's fullscreen transcript is scrolled up on the machine: a row of
-/// `screen` (plain text or SGR) ends with its "Jump to bottom" or "N new messages" banner.
-/// Any row, on purpose: a missed banner lets keys reach a dialog scrolled out of view. The
-/// banner is always the last thing on its row, which keeps prose quoting it from matching.
+/// Whether Claude Code's fullscreen transcript is scrolled up on the machine: `screen` (SGR)
+/// shows its "Jump to bottom" or "N new messages" banner. Any row, on purpose: a missed banner
+/// lets keys reach a dialog scrolled out of view. Claude Code draws the banner over whatever
+/// row is there, centered, as a run on a background color padded by a space on each side. Over
+/// a prompt's text, drawn in the same style, no escape separates them, so the banner is then
+/// found inside the run, by its padding and its column. Replies quoting it have no background;
+/// prompt text matches when a run of it is exactly a banner with a space on each side, or when
+/// it holds one, so padded, centered on a row as wide as the screen. Columns are display
+/// widths, as the terminal lays them out.
 pub fn jump_banner(screen: &str) -> bool {
     screen.split('\n').any(|row| {
-        let row = strip_sgr(row);
-        let row = row.trim();
-        labels(row).any(|(start, end)| (start == 0 && end == row.len()) || hint(&row[end..]))
+        let row = row.strip_suffix('\r').unwrap_or(row);
+        let width = runs(row).map(|(_, run)| run.width()).sum();
+        let mut column = 0;
+        runs(row).any(|(background, run)| {
+            let at = column;
+            column += run.width();
+            background && (banner(run) || centered(run, at, width))
+        })
     })
+}
+
+fn banner(run: &str) -> bool {
+    let Some(text) = run.strip_prefix(' ').and_then(|r| r.strip_suffix(' ')) else {
+        return false;
+    };
+    let text = text.trim();
+    labels(text).any(|(start, end)| start == 0 && (end == text.len() || hint(&text[end..])))
+}
+
+/// A label and its hint inside `run`, which starts at column `at`, padded by a space on each
+/// side and centered on a row `width` columns wide.
+fn centered(run: &str, at: usize, width: usize) -> bool {
+    labels(run).any(|(start, end)| {
+        let rest = &run[end..];
+        let Some(stop) = [" \u{2193}", " to scroll"]
+            .iter()
+            .filter_map(|tail| rest.find(tail).map(|i| end + i + tail.len()))
+            .find(|&stop| hint(&run[end..stop]))
+        else {
+            return false;
+        };
+        let column = at + run[..start].width();
+        let len = run[start..stop].width();
+        run[..start].ends_with(' ')
+            && run[stop..].starts_with(' ')
+            && (2 * column + len).abs_diff(width) <= 1
+    })
+}
+
+/// The row's text between escape sequences, each with whether an SGR background is set.
+fn runs(row: &str) -> impl Iterator<Item = (bool, &str)> {
+    let mut background = false;
+    row.split('\u{1b}').enumerate().map(move |(i, part)| {
+        let Some(params) = part.strip_prefix('[').filter(|_| i > 0) else {
+            return (background, part);
+        };
+        let end = params
+            .find(|c: char| !(c.is_ascii_digit() || c == ';' || c == ':'))
+            .unwrap_or(params.len());
+        match params[end..].strip_prefix('m') {
+            Some(text) => {
+                background = sets_background(&params[..end], background);
+                (background, text)
+            }
+            None => (background, &params[end..]),
+        }
+    })
+}
+
+fn sets_background(params: &str, mut background: bool) -> bool {
+    let mut ps = params.split(';');
+    while let Some(p) = ps.next() {
+        let code = p.split(':').next().unwrap_or_default();
+        match code {
+            "" | "0" | "49" => background = false,
+            "38" | "48" | "58" => {
+                // The color's own parameters, which would otherwise read as codes.
+                if !p.contains(':') {
+                    match ps.next() {
+                        Some("5") => _ = ps.next(),
+                        Some("2") => _ = ps.nth(2),
+                        _ => {}
+                    }
+                }
+                background |= code == "48";
+            }
+            _ => background |= matches!(code.parse::<u8>(), Ok(40..=47 | 100..=107)),
+        }
+    }
+    background
 }
 
 fn labels(row: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
@@ -209,44 +292,137 @@ mod tests {
         format!("  95\r\n{row}\r\n\r\n────────\r\n❯ \r\n────────\r\n")
     }
 
+    // How Claude Code 2.1.299 draws the banner, from the captures below.
+    const STYLE: &str = "\u{1b}[0m\u{1b}[38;2;255;255;255m\u{1b}[48;2;55;55;55m";
+    const PROMPT_ROW: &str = "\u{1b}[48;2;55;55;55m";
+
     #[test]
-    fn every_banner_matches_only_at_the_end_of_its_row() {
+    fn every_banner_matches_wherever_claude_code_draws_it_on_its_row() {
         for banner in BANNERS {
-            for row in [
-                format!("{:>60}", banner),
+            let drawn = format!("{STYLE} {banner} \u{1b}[0m");
+            for (i, row) in [
+                format!("{:40}{drawn}", ""),
+                format!("  96      {drawn}"),
+                format!("  48. Overcast skies can feel gloomy, w{drawn}persist for days"),
+                format!("{STYLE}  {banner}  \u{1b}[0m"),
                 format!(
-                    "                    \u{1b}[0m\u{1b}[38;2;255;255;255m\u{1b}[48;2;55;55;55m {banner} \u{1b}[0m"
+                    "\u{1b}[0m{PROMPT_ROW}  {STYLE}Then shows.\u{1b}[0m{PROMPT_ROW}   {drawn}{PROMPT_ROW}   \u{1b}[0m"
                 ),
+                format!("\u{1b}[1;38;5;4;100m {banner} \u{1b}[m"),
+                format!("\u{1b}[48:2::55:55:55m {banner} \u{1b}[0m"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert!(jump_banner(&screen(&row)), "{i}");
+            }
+            for (i, row) in [
+                format!("{:>60}", banner),
                 format!("  96      {banner}"),
                 format!("  ⏺ The build passed {banner}  "),
-            ] {
-                assert!(jump_banner(&screen(&row)), "{row:?}");
-            }
-            for row in [
-                format!("  96      {banner}      more output"),
-                format!("  ⏺ The build passed {banner} and the tests ran"),
-                format!("+        \"{banner}\","),
-            ] {
-                assert!(!jump_banner(&screen(&row)), "{row:?}");
+                format!("{STYLE}{banner}\u{1b}[0m"),
+                format!(
+                    "\u{1b}[0m{PROMPT_ROW}  {STYLE}{banner}\u{1b}[0m{PROMPT_ROW}      \u{1b}[0m"
+                ),
+                format!("\u{1b}[38;2;177;185;249m {banner} \u{1b}[0m"),
+                format!("\u{1b}[38;2;48;0;0m {banner} \u{1b}[0m"),
+                format!("{PROMPT_ROW}\u{1b}[49m {banner} "),
+                format!("{STYLE} {banner} and more \u{1b}[0m"),
+                format!("{STYLE} the {banner} \u{1b}[0m"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert!(!jump_banner(&screen(&row)), "{i}");
             }
         }
     }
 
     #[test]
-    fn a_bare_label_matches_only_alone_on_its_row() {
+    fn a_bare_label_matches_only_alone_in_its_run() {
         for label in ["Jump to bottom", "1 new message", "12 new messages"] {
-            assert!(
-                jump_banner(&screen(&format!("          {label}  "))),
-                "{label}"
-            );
             assert!(jump_banner(&screen(&format!(
-                "\u{1b}[7m {label} \u{1b}[0m"
+                "          {STYLE} {label} \u{1b}[0m"
             ))));
-            assert!(
-                !jump_banner(&screen(&format!("  the {label} label"))),
-                "{label}"
-            );
+            assert!(!jump_banner(&screen(&format!("          {label}  "))));
+            assert!(!jump_banner(&screen(&format!(
+                "  {STYLE} the {label} label \u{1b}[0m"
+            ))));
         }
+    }
+
+    macro_rules! captured {
+        ($name:literal) => {
+            include_str!(concat!(
+                "../../collied/tests/fixtures/claude-2.1.299/",
+                $name
+            ))
+        };
+    }
+
+    #[test]
+    fn a_captured_banner_matches_on_any_row_and_quoted_banners_do_not() {
+        // Visible reads, scrolled up with Page Up or the mouse wheel: the banner on a blank
+        // row, at the end of a short row, in the middle of a long row, over a prompt row
+        // apart from its text, right after its text, and with its text on both sides, and a
+        // new message banner.
+        for (i, screen) in [
+            captured!("jump-blank.ansi.txt"),
+            captured!("jump-end-of-row.ansi.txt"),
+            captured!("jump-mid-row.ansi.txt"),
+            captured!("jump-over-prompt.ansi.txt"),
+            captured!("jump-prompt-left.ansi.txt"),
+            captured!("jump-prompt-both.ansi.txt"),
+            captured!("new-message.ansi.txt"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert!(jump_banner(screen), "{i}");
+            assert!(jump_banner(&screen.replace('\n', "\r\n")), "{i}");
+            assert!(!jump_banner(&strip_sgr(screen)), "{i}");
+        }
+        // Columns are display widths: wide and combining characters around it keep it centered.
+        for (i, swaps) in [
+            vec![("read these", "\u{8aad}\u{6e56}\u{6e56}hese")],
+            vec![("bered lines", "\u{6e56}\u{6e56}d lines")],
+            vec![
+                ("lines, th Jump", "lines, \u{1f30a} Jump"),
+                ("about lakes.", "\u{1f30a}\u{1f30a}\u{1f30a}lakes."),
+            ],
+            vec![("read these", "re\u{301}ad the\u{301}se")],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let screen = swaps.into_iter().fold(
+                captured!("jump-prompt-both.ansi.txt").to_owned(),
+                |s, (from, to)| s.replacen(from, to, 1),
+            );
+            assert_ne!(screen, captured!("jump-prompt-both.ansi.txt"), "{i}");
+            assert!(jump_banner(&screen), "{i}");
+        }
+        // Inside prompt text, only centered and padded.
+        for (i, (from, to)) in [
+            ("read these lines", "xxread these lines"),
+            (
+                " Jump to bottom (click) \u{2193} ",
+                "-Jump to bottom (click) \u{2193} ",
+            ),
+            (
+                " Jump to bottom (click) \u{2193} ",
+                " Jump to bottom (click) \u{2193}-",
+            ),
+            ("(click) \u{2193}", "(click)  \u{2193}"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let screen = captured!("jump-prompt-both.ansi.txt").replacen(from, to, 1);
+            assert!(!jump_banner(&screen), "{i}");
+        }
+        // At the bottom, a prompt and its reply quoting each banner, on rows of their own.
+        assert!(!jump_banner(captured!("quoted.ansi.txt")));
     }
 
     #[test]

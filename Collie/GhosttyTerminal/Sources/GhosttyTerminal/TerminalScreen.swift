@@ -228,13 +228,14 @@ final class TerminalScreen {
             var indent = 0
             var hang = 0
             var hangRun = 0
-            var codexInput = false
+            var shadedStart = false
             var blanks = 0
             var padded = false
             var upperBorder = false
             var lowerBorder = false
             var background: [Unicode.Scalar]?
             var uniformBackground = true
+            var reshaded = false
             runs.removeAll(keepingCapacity: true)
             var i = rowStart
             while i < rowEnd {
@@ -248,10 +249,10 @@ final class TerminalScreen {
                     i = end
                     continue
                 }
+                if width == 0 { shadedStart = background != nil }
                 switch (hang, scalars[i]) {
                 case (0, " "), (0, "\t"): break
                 case (0, let first):
-                    codexInput = width == 0 && first == "›"
                     indent = width
                     hang = first.properties.isAlphabetic || first.properties.numericType != nil ? 3 : 1
                 case (1, let next): hang = next == " " ? 2 : 3
@@ -262,6 +263,7 @@ final class TerminalScreen {
                 if scalars[i] == " " || scalars[i] == "\t" {
                     uniform = uniform && (fill ?? trailingSGR.count) == trailingSGR.count
                     fill = fill ?? trailingSGR.count
+                    reshaded = trailingSGR.last.map { scalars[$0].elementsEqual(background ?? []) } ?? false
                 }
                 if scalars[i] == " " {
                     if hang != 0 { blanks += 1 }
@@ -295,6 +297,10 @@ final class TerminalScreen {
                 }
                 i += 1
             }
+            let shadedRow = shadedStart && uniformBackground
+            // Claude Code ends a row it wrapped with a space in the text's style, then pads it after
+            // a reset that sets the row's background again.
+            if shadedRow && reshaded { uniform = true }
             let clip = boxOnly && sawBox
             let shade = shadedBox && uniformBackground && columns > 1 ? background : nil
             let collapse = !clip && contentWidth > columns && (sawBox && padded || runs.contains { $0 >= columns })
@@ -325,7 +331,7 @@ final class TerminalScreen {
             } else if !clip && contentWidth > columns {
                 let broken = Self.appendBrokenAtWords(
                     scalars, rowStart..<contentEnd, keepingPadding: collapse ? keep : nil, indent: indent < columns / 2 ? indent : 0,
-                    filling: fill != nil && uniform, paintIndent: codexInput, shade: shade, columns: columns, into: &out
+                    filling: fill != nil && uniform, paintIndent: shadedRow, shade: shade, columns: columns, into: &out
                 )
                 (height, end) = (height + broken.breaks, broken.column)
             } else {
@@ -404,9 +410,7 @@ final class TerminalScreen {
             newRow += Array("\u{1B}[49m\u{1B}[1C".unicodeScalars) + shade + Array("\u{1B}[K".unicodeScalars)
             if indent > 1 { newRow += Array("\u{1B}[\(indent - 1)C".unicodeScalars) }
         } else if indent > 0 {
-            newRow += paintIndent && filling
-                ? Array(String(repeating: " ", count: indent).unicodeScalars)
-                : Array("\u{1B}[\(indent)C".unicodeScalars)
+            newRow += (paintIndent && filling ? Array("\u{1B}[K".unicodeScalars) : []) + Array("\u{1B}[\(indent)C".unicodeScalars)
         }
         var breaks = 0
         var column = 0

@@ -1,0 +1,62 @@
+[0m[38;2;80;80;80m[48;2;55;55;55m❯ Without using any tools, reply with OK.[0m[48;2;55;55;55m                                                                                                                                                                    [0m
+  26. The Ganges is sacred to millions of people.
+  27. The Danube flows through ten countries.
+  28. The Rhine is a major European shipping route.
+  29. The St. Lawrence links the Great Lakes to the Atlantic.
+  30. The Mekong supports huge inland fisheries.
+  31. Waterfalls form where hard rock overlies soft rock.
+  32. Rapids mark shallow, rocky, fast stretches. 
+  33. Canyons are carved by rivers over long time spans.
+  34. The Grand Canyon was cut largely by the Colorado.
+  35. Gorges are narrow, steep river valleys.
+  36. V-shaped valleys are typical of young rivers.
+  37. Braided rivers split into many shifting channels.
+  38. Seasonal rivers flow only part of the year.
+  39. Rivers move sand, silt, clay and dissolved minerals.
+  40. Suspended load clouds the water. 
+  41. Bed load rolls and bounces along the bottom.
+  42. Discharge is the volume of water passing per second.
+  43. Floods happen when discharge exceeds channel capacity.
+  44. Dams store water and generate electricity.
+  45. Dams also trap sediment and block fish.
+  46. Locks let boats climb or descend along a river.
+  47. Canals often connect rivers to one another.
+  48. Early cities grew along fertile river valleys.
+  49. Mesopotamia lay between the Tigris and Euphrates.
+  50. Rivers have long served as trade routes.
+  51. Many borders follow river courses.
+  52. Bridges have shaped how cities grow around rivers.
+  53. Salmon swim upstream to spawn.
+  54. River dolphins live in some large rivers.
+  55. Riparian zones are the lands along riverbanks.
+  56. Wetlands beside rivers absorb floodwater.
+  57. Beavers build dams that reshape small streams.
+  58. Rivers supply drinking water to billions.
+  59. Irrigation draws heavily on river flow.
+  60. Some rivers no longer reach the sea most years.
+  61. Pollution from farms and cities harms river life.
+  62. Restoration projects remove old dams and reopen channels.
+  63. Ice can freeze rivers solid in cold climates.
+  64. Ice jams can cause sudden floods in spring.
+  65. Underground rivers flow through caves in limestone.
+  66. Rivers recharge and draw from groundwater.
+  67. Satellites now track river flow and flooding.
+  68. Rivers appear constantly in poetry and song.
+  69. Heraclitus said no one steps in the same river twice.
+  70. Every river eventually returns its water to the cycle.
+
+[0m[38;2;153;153;153m✻ Sautéed for 16s · done 12:08 PM[0m
+
+[0m[38;2;153;153;153m[48;2;55;55;55m❯ [0m[38;2;255;255;255m[48;2;55;55;55mWithout using any tools and without reading or modifying any files, read these lines, then reply with 70 short numbered lines about lakes.[0m[48;2;55;55;55m                                                                 [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mRivers carry water from high ground to the sea and shape valleys, deltas and plains along the way, Rivers carry water from high ground to the sea and shape valleys, deltas and plains along the way, [0m[48;2;55;55;55m     [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mRivers carry water from high ground to the sea and shape valleys, deltas and plains along the way, Rivers carry water from high ground to the sea and shape valleys, deltas and plains along the way, [0m[48;2;55;55;55m     [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mRivers carry water from high ground to the sea and shape valleys, deltas and plains along the way, Rivers carry water from high ground to the sea and shape valleys, deltas and plains along the way, [0m[48;2;55;55;55m     [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mRivers carry water from high ground to the sea and shape valleys, deltas and plains along the way, Rivers carry water from high ground to the sea and shape valleys, deltas and plains along the way, [0m[48;2;55;55;55m     [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mRivers carry water from high ground to the sea and shape valleys, deltas and plains along the way,[0m[48;2;55;55;55m                                                                                                         [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55mLine A is a sentence written so that its last word lands in the middle of the banner are Jump to bottom (click) ↓ [0m[48;2;55;55;55m                                                                                         [0m
+
+[0m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+❯ 
+[0m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[1m[38;5;4mOpus 5.5[0m[38;2;153;153;153m high [0m[38;2;118;159;240m[48;2;57;66;96m  master $ [0m[38;2;153;153;153m [0m[1m[38;5;2m▒░░░░6% [0m[1m[38;5;4m2m39s[0m[38;2;153;153;153m | 5h [0m[1m[38;5;2m16%[0m[38;2;153;153;153m (4h18m) · 7d [0m[1m[38;5;2m44%[0m[38;2;153;153;153m | Est. usage: $0.43[0m
+  [0m[38;2;153;153;153m⏸ manual mode on · ← for agents[0m

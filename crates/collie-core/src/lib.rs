@@ -562,8 +562,16 @@ pub enum AgentKey {
     Right,
     Tab,
     ShiftTab,
+    Backspace,
     CtrlC,
     CtrlEnter,
+    CtrlA,
+    CtrlB,
+    CtrlE,
+    CtrlK,
+    CtrlL,
+    CtrlU,
+    CtrlW,
 }
 
 impl From<AgentKey> for Key {
@@ -578,8 +586,16 @@ impl From<AgentKey> for Key {
             AgentKey::Right => Self::Right,
             AgentKey::Tab => Self::Tab,
             AgentKey::ShiftTab => Self::ShiftTab,
+            AgentKey::Backspace => Self::Backspace,
             AgentKey::CtrlC => Self::CtrlC,
             AgentKey::CtrlEnter => Self::CtrlEnter,
+            AgentKey::CtrlA => Self::CtrlA,
+            AgentKey::CtrlB => Self::CtrlB,
+            AgentKey::CtrlE => Self::CtrlE,
+            AgentKey::CtrlK => Self::CtrlK,
+            AgentKey::CtrlL => Self::CtrlL,
+            AgentKey::CtrlU => Self::CtrlU,
+            AgentKey::CtrlW => Self::CtrlW,
         }
     }
 }

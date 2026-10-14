@@ -80,6 +80,8 @@ final class AgentModel {
     var blocked: BlockedInput?
     private(set) var notice: String?
     private(set) var keyTaps = 0
+    /// Shift or Control waiting for the next key; at most one, so a combination is never more than two keys.
+    var modifier: KeyModifier?
     private(set) var quotes = 0
     private enum Input {
         case key(AgentKey)
@@ -101,6 +103,13 @@ final class AgentModel {
 
     var wrapLines: Bool {
         didSet { DevicePrefs.update(in: prefsFile) { $0.wrapLines = wrapLines } }
+    }
+
+    var keysShown: Bool {
+        didSet {
+            DevicePrefs.update(in: prefsFile) { $0.keysShown = keysShown }
+            if !keysShown { modifier = nil }
+        }
     }
 
     var fontSize: Double
@@ -147,6 +156,7 @@ final class AgentModel {
         let prefs = DevicePrefs.load(from: prefsFile)
         dictation = DictationModel(engine: dictationEngine, language: prefs.dictationLanguage, prefsFile: prefsFile)
         wrapLines = prefs.wrapLines
+        keysShown = prefs.keysShown
         fontSize = prefs.fontSize
         gestures = prefs.gestures
         if let saved = AgentDrafts.load(from: draftsFile).drafts[route] {
@@ -199,14 +209,23 @@ final class AgentModel {
         isTerminal ? !unlocking : answering || !jumpBanner
     }
 
-    var keyStrip: [AgentKey] {
-        isTerminal ? AgentKey.terminalStrip : agent?.kind == "codex" ? AgentKey.codexStrip : AgentKey.strip
-    }
-
     func accepts(_ key: AgentKey) -> Bool {
         if key == .shiftLeft { return agent?.kind == "codex" }
         return acceptsKeys
     }
+
+    func canTap(_ key: AgentKey) -> Bool {
+        accepts(key) && !(commandShown && (key == .enter || key == .ctrlEnter))
+    }
+
+    /// With a modifier selected, only keys it combines with stay on.
+    func canPress(_ key: AgentKey) -> Bool {
+        guard let modifier else { return canTap(key) }
+        return key.with(modifier).map(canTap) ?? false
+    }
+
+    /// The pane's kind as shortcuts name it: "terminal" for a shell.
+    var shortcutKind: String? { isTerminal ? "terminal" : agent?.kind }
 
     var codexQuestionQueued: Bool {
         guard agent?.kind == "codex" else { return false }
@@ -647,8 +666,9 @@ final class AgentModel {
     }
 
     /// One line, then Enter, into the shell; a locked terminal is unlocked first, in the same action.
-    private func sendCommand() async {
-        let sent = draft
+    /// A shortcut's command leaves the draft alone.
+    private func sendCommand(_ shortcut: String? = nil) async {
+        let sent = shortcut ?? draft
         guard !sendingPrompt, !sent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         if sent.contains(where: \.isNewline) {
             promptError = "One command at a time"
@@ -657,11 +677,11 @@ final class AgentModel {
         sendingPrompt = true
         promptError = nil
         defer { sendingPrompt = false }
-        saveDraft("", attachments)
+        if shortcut == nil { saveDraft("", attachments) }
         guard await unlock() else { return }
         do {
             try await core.terminalRun(machineId: route.machineId, terminalId: route.terminalId, text: sent)
-            if draft.hasPrefix(sent) {
+            if shortcut == nil, draft.hasPrefix(sent) {
                 draft = String(draft.dropFirst(sent.count))
             }
         } catch {
@@ -714,33 +734,39 @@ final class AgentModel {
                                  root: root, path: file.path, section: file.section)
     }
 
-    var canSendGitFeedback: Bool {
+    /// Text sent apart from the draft: review feedback and text shortcuts.
+    var canSendText: Bool {
         agent != nil && !isTerminal && !answering && !sendingPrompt && !dictation.isActive
             && blocked == nil && agent?.status != .blocked && !codexQuestionQueued && !jumpBanner
     }
 
     func sendGitFeedback(_ text: String) async -> String? {
-        guard canSendGitFeedback else { return "The agent cannot accept review feedback right now." }
+        guard canSendText else { return "The agent cannot accept review feedback right now." }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Write feedback before sending." }
         guard text.utf8.count <= 32 * 1024 else { return "Feedback is too long. Shorten the comments or select less text." }
-        mirrorDelay?.cancel()
-        await mirroring?.value
-        guard canSendGitFeedback else { return "The agent cannot accept review feedback right now." }
-        sendingPrompt = true
-        loadedMacDraft = nil
-        defer { sendingPrompt = false; saveDraft() }
         do {
-            try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: "")
-            if macDraft != nil { macDraft = "" }
-            mirrored = ""
-            menuMoved = false
-            return nil
+            return try await sendAlone(text) ? nil : "The agent cannot accept review feedback right now."
         } catch {
             if case .DraftChanged = error as? CoreError {
                 return "The agent’s input box has unsent text. Send or clear it in the session before sending this feedback."
             }
             return Self.message(for: error)
         }
+    }
+
+    /// With `expected_draft` "", collied never replaces unsent text in a Claude Code input box. False when it can no longer send.
+    private func sendAlone(_ text: String) async throws -> Bool {
+        mirrorDelay?.cancel()
+        await mirroring?.value
+        guard canSendText else { return false }
+        sendingPrompt = true
+        loadedMacDraft = nil
+        defer { sendingPrompt = false; saveDraft() }
+        try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: "")
+        if macDraft != nil { macDraft = "" }
+        mirrored = ""
+        menuMoved = false
+        return true
     }
 
     private static let tooLong = "The prompt would be longer than 32 KiB."
@@ -859,9 +885,63 @@ final class AgentModel {
 
     @discardableResult
     func tap(_ key: AgentKey) -> Task<Void, Never>? {
-        guard accepts(key), !(commandShown && (key == .enter || key == .ctrlEnter)) else { return nil }
+        guard canTap(key) else { return nil }
         keyTaps += 1
         return enqueue(.key(key))
+    }
+
+    func select(_ modifier: KeyModifier) {
+        self.modifier = self.modifier == modifier ? nil : modifier
+    }
+
+    /// A key from the strip: with a modifier selected, the two go out together and the modifier clears.
+    @discardableResult
+    func press(_ key: AgentKey) -> Task<Void, Never>? {
+        guard let modifier else { return tap(key) }
+        self.modifier = nil
+        return key.with(modifier).flatMap(tap)
+    }
+
+    /// A selected modifier applies to the next edit only. With Control, a listed letter typed on the
+    /// keyboard goes out as Control and that letter instead of into the field; false for anything else.
+    func controlTyped(from old: String, to new: String) -> Bool {
+        guard let selected = modifier, new != old else { return false }
+        modifier = nil
+        guard selected == .control, new.count == old.count + 1 else { return false }
+        let at = zip(old, new).prefix { $0 == $1 }.count
+        var rest = new
+        let letter = rest.remove(at: rest.index(rest.startIndex, offsetBy: at))
+        guard rest == old, let key = AgentKey.control(letter), canTap(key) else { return false }
+        tap(key)
+        return true
+    }
+
+    func canRun(_ shortcut: StripShortcut) -> Bool {
+        guard shortcut.applies(to: shortcutKind) else { return false }
+        if let key = shortcut.agentKey { return canTap(key) }
+        return isTerminal ? !sendingPrompt && !unlocking : canSendText
+    }
+
+    /// A text shortcut goes out on its own, as a command in a shell; collied refuses it while a
+    /// Claude Code input box holds unsent text.
+    @discardableResult
+    func run(_ shortcut: StripShortcut) -> Task<Void, Never>? {
+        modifier = nil
+        guard canRun(shortcut) else { return nil }
+        if let key = shortcut.agentKey { return tap(key) }
+        if isTerminal { return Task { await sendCommand(shortcut.text) } }
+        promptError = nil
+        return Task {
+            do {
+                _ = try await sendAlone(shortcut.text)
+            } catch {
+                if case .DraftChanged = error as? CoreError {
+                    promptError = "The agent’s input box has unsent text. Send or clear it, then tap the shortcut again."
+                } else {
+                    promptError = Self.message(for: error)
+                }
+            }
+        }
     }
 
     @discardableResult
@@ -1088,10 +1168,73 @@ struct CloseConfirmation: Equatable {
     }
 }
 
+enum KeyModifier: CaseIterable {
+    case shift, control
+
+    var symbol: String {
+        switch self {
+        case .shift: "⇧"
+        case .control: "⌃"
+        }
+    }
+
+    var accessibilityName: String {
+        switch self {
+        case .shift: "Shift"
+        case .control: "Control"
+        }
+    }
+}
+
 extension AgentKey {
-    static let strip: [AgentKey] = [.esc, .left, .up, .down, .right, .tab, .shiftTab, .enter, .ctrlEnter]
-    static let codexStrip: [AgentKey] = [.esc, .left, .up, .down, .right, .shiftLeft, .shiftTab, .enter, .ctrlEnter]
-    static let terminalStrip: [AgentKey] = [.esc, .tab, .ctrlC, .left, .up, .down, .right, .enter]
+    static let strip: [AgentKey] = [.esc, .left, .up, .down, .right, .tab, .backspace, .enter]
+    static let combos: [AgentKey] = [.shiftTab, .ctrlEnter, .shiftLeft, .ctrlC]
+    static let controlLetters: [AgentKey] = [.ctrlA, .ctrlB, .ctrlC, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW]
+    static let all: [AgentKey] = strip + combos.filter { $0 != .ctrlC } + controlLetters
+
+    /// The combination with a modifier; nil when collied has no such key.
+    func with(_ modifier: KeyModifier) -> AgentKey? {
+        switch (modifier, self) {
+        case (.shift, .tab): .shiftTab
+        case (.shift, .left): .shiftLeft
+        case (.control, .enter): .ctrlEnter
+        default: nil
+        }
+    }
+
+    static func control(_ letter: Character) -> AgentKey? {
+        controlLetters.first { $0.name == "ctrl+\(letter.lowercased())" }
+    }
+
+    init?(name: String) {
+        guard let key = Self.all.first(where: { $0.name == name }) else { return nil }
+        self = key
+    }
+
+    /// collied's name for the key.
+    var name: String {
+        switch self {
+        case .esc: "esc"
+        case .enter: "enter"
+        case .up: "up"
+        case .down: "down"
+        case .left: "left"
+        case .shiftLeft: "shift+left"
+        case .right: "right"
+        case .tab: "tab"
+        case .shiftTab: "shift+tab"
+        case .backspace: "backspace"
+        case .ctrlC: "ctrl+c"
+        case .ctrlEnter: "ctrl+enter"
+        case .ctrlA: "ctrl+a"
+        case .ctrlB: "ctrl+b"
+        case .ctrlE: "ctrl+e"
+        case .ctrlK: "ctrl+k"
+        case .ctrlL: "ctrl+l"
+        case .ctrlU: "ctrl+u"
+        case .ctrlW: "ctrl+w"
+        }
+    }
 
     var symbol: String {
         switch self {
@@ -1104,8 +1247,9 @@ extension AgentKey {
         case .right: "→"
         case .tab: "⇥"
         case .shiftTab: "⇧⇥"
-        case .ctrlC: "^C"
+        case .backspace: "⌫"
         case .ctrlEnter: "⌃⏎"
+        case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW: "^" + name.dropFirst(5).uppercased()
         }
     }
 
@@ -1120,8 +1264,9 @@ extension AgentKey {
         case .right: "Right arrow"
         case .tab: "Tab"
         case .shiftTab: "Shift Tab"
-        case .ctrlC: "Control C"
+        case .backspace: "Backspace"
         case .ctrlEnter: "Control Return"
+        case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW: "Control " + name.dropFirst(5).uppercased()
         }
     }
 }
