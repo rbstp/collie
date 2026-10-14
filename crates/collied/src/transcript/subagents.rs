@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use protocol::Subagent;
 use serde_json::Value;
@@ -12,10 +12,10 @@ use crate::prompt;
 
 const TAIL_BYTES: u64 = 64 * 1024;
 const MAX_FILES: usize = 8;
-/// A subagent of a Claude Code process that ended never writes its end.
-const STALE: Duration = Duration::from_secs(30 * 60);
 const ACTIVITY_CHARS: usize = 120;
 const TYPE_CHARS: usize = 64;
+/// Calls that end a subagent's run: a hand-back, or a workflow agent's result.
+const ENDS: [&str; 2] = ["SubagentHandback", "StructuredOutput"];
 
 #[derive(Clone, Default)]
 struct Seen {
@@ -30,45 +30,72 @@ struct Seen {
     called_tools: bool,
 }
 
-/// By session id, then by agent id.
+/// A `sessions/<pid>.json` file Claude Code keeps while that process runs.
+struct Process {
+    len: u64,
+    modified: SystemTime,
+    session: Option<(String, i32, u64)>,
+}
+
+/// Subagents by session id, then by path under `subagents/`; Claude Code processes by file name.
 #[derive(Default)]
-pub struct Live(HashMap<String, HashMap<String, Seen>>);
+pub struct Live {
+    seen: HashMap<String, HashMap<String, Seen>>,
+    processes: HashMap<String, Process>,
+}
 
 impl Live {
     pub fn retain(&mut self, live: impl Fn(&String) -> bool) {
-        self.0.retain(|id, _| live(id));
+        self.seen.retain(|id, _| live(id));
     }
 
-    /// Only the most recently written files are opened, each read again only when its size
-    /// or mtime moved, and then only its tail.
-    pub fn running(&mut self, transcript: &Path, session: &str) -> Vec<Subagent> {
-        let Some(dir) = subagent_dir(transcript, session) else {
-            self.0.remove(session);
+    /// Only for a live Claude Code process of this session, and only files written since it
+    /// started. Files known to have finished are skipped unopened; at most `MAX_FILES` others
+    /// are opened, each read again only when its size or mtime moved, and then only its tail.
+    pub fn running(
+        &mut self,
+        sessions: Option<&Path>,
+        transcript: &Path,
+        session: &str,
+    ) -> Vec<Subagent> {
+        let started = sessions.and_then(|d| self.process_start(d, session));
+        let (Some(dir), Some(started)) = (subagent_dir(transcript, session), started) else {
+            self.seen.remove(session);
             return Vec::new();
         };
-        let now = SystemTime::now();
-        let mut recent = std::fs::read_dir(&dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().into_string().ok()?;
-                let agent = name.strip_prefix("agent-")?.strip_suffix(".jsonl")?;
-                agent_id(agent).then_some(())?;
-                let modified = e.metadata().ok().filter(|m| m.is_file())?.modified().ok()?;
-                (now.duration_since(modified).unwrap_or_default() < STALE)
-                    .then(|| (modified, agent.to_owned()))
-            })
+        let since = UNIX_EPOCH + Duration::from_millis(started);
+        let mut files = agent_files(&dir, "");
+        let workflows = dir.join("workflows");
+        let real = std::fs::symlink_metadata(&workflows).is_ok_and(|m| m.is_dir());
+        let mut flows = entries(&workflows)
+            .filter(|(name, meta)| real && meta.is_dir() && workflow_id(name))
+            .filter_map(|(name, meta)| Some((meta.modified().ok()?, name)))
             .collect::<Vec<_>>();
-        recent.sort_by_key(|a| std::cmp::Reverse(a.0));
-        recent.truncate(MAX_FILES);
-        let old = self.0.remove(session).unwrap_or_default();
-        let seen = recent
-            .into_iter()
-            .filter_map(|(_, agent)| {
-                Some((agent.clone(), read(&dir, session, &agent, old.get(&agent))?))
-            })
-            .collect::<HashMap<_, _>>();
+        flows.sort_by_key(|f| std::cmp::Reverse(f.0));
+        for (_, flow) in flows.into_iter().take(MAX_FILES) {
+            files.extend(agent_files(&workflows.join(&flow), &format!("{flow}/")));
+        }
+        files.retain(|f| f.1 >= since);
+        files.sort_by_key(|f| std::cmp::Reverse(f.1));
+        let old = self.seen.remove(session).unwrap_or_default();
+        let mut seen = HashMap::new();
+        let mut opened = 0;
+        for (key, modified, len, path) in files {
+            let prev = old.get(&key);
+            if let Some(p) =
+                prev.filter(|p| p.finished && p.len == len && p.modified == Some(modified))
+            {
+                seen.insert(key, p.clone());
+                continue;
+            }
+            if opened == MAX_FILES {
+                break;
+            }
+            opened += 1;
+            if let Some(s) = read(&path, session, prev) {
+                seen.insert(key, s);
+            }
+        }
         let mut out = seen
             .values()
             .filter(|s| !s.finished)
@@ -77,25 +104,118 @@ impl Live {
                     agent_type: s.agent_type.clone(),
                     activity: s.activity.clone().unwrap_or_else(|| s.description.clone()),
                     started_at_ms: s.started_ms?,
-                    tokens: s.tokens,
+                    tokens: (s.tokens + 500) / 1000 * 1000,
                     called_tools: s.called_tools,
                 })
             })
             .collect::<Vec<_>>();
         out.sort_by(|a, b| (a.started_at_ms, &a.activity).cmp(&(b.started_at_ms, &b.activity)));
-        self.0.insert(session.to_owned(), seen);
+        self.seen.insert(session.to_owned(), seen);
         out
+    }
+
+    /// The latest start of a running Claude Code process that reports this session.
+    fn process_start(&mut self, sessions: &Path, session: &str) -> Option<u64> {
+        if !std::fs::symlink_metadata(sessions).ok()?.is_dir() {
+            return None;
+        }
+        let mut next = HashMap::new();
+        for (name, meta) in entries(sessions) {
+            let Some(pid) = name
+                .strip_suffix(".json")
+                .filter(|p| p.bytes().all(|b| b.is_ascii_digit()))
+            else {
+                continue;
+            };
+            let (Ok(modified), true) = (meta.modified(), meta.is_file()) else {
+                continue;
+            };
+            let process = match self.processes.remove(&name) {
+                Some(p) if p.len == meta.len() && p.modified == modified => p,
+                _ => Process {
+                    len: meta.len(),
+                    modified,
+                    session: process(&sessions.join(&name), pid),
+                },
+            };
+            next.insert(name, process);
+        }
+        self.processes = next;
+        self.processes
+            .values()
+            .filter_map(|p| p.session.as_ref())
+            .filter(|(id, pid, _)| id == session && alive(*pid))
+            .map(|(_, _, started)| *started)
+            .max()
     }
 }
 
-fn read(dir: &Path, session: &str, agent: &str, prev: Option<&Seen>) -> Option<Seen> {
-    let (mut file, len, modified) = open(&dir.join(format!("agent-{agent}.jsonl")))?;
+fn entries(dir: &Path) -> impl Iterator<Item = (String, std::fs::Metadata)> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| Some((e.file_name().into_string().ok()?, e.metadata().ok()?)))
+}
+
+/// `(key, mtime, size, path)` of each `agent-<id>.jsonl` that is a regular file.
+fn agent_files(dir: &Path, prefix: &str) -> Vec<(String, SystemTime, u64, PathBuf)> {
+    entries(dir)
+        .filter_map(|(name, meta)| {
+            let agent = name.strip_prefix("agent-")?.strip_suffix(".jsonl")?;
+            (agent_id(agent) && meta.is_file()).then_some(())?;
+            Some((
+                format!("{prefix}{agent}"),
+                meta.modified().ok()?,
+                meta.len(),
+                dir.join(&name),
+            ))
+        })
+        .collect()
+}
+
+fn workflow_id(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && !name.starts_with('-')
+}
+
+fn process(path: &Path, pid: &str) -> Option<(String, i32, u64)> {
+    let (file, _, _) = open(path)?;
+    let mut bytes = Vec::new();
+    file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
+    let v = serde_json::from_slice::<Value>(&bytes).ok()?;
+    let pid = pid
+        .parse::<i32>()
+        .ok()
+        .filter(|p| *p > 0 && v["pid"] == *p)?;
+    Some((
+        v["sessionId"].as_str()?.to_owned(),
+        pid,
+        v["startedAt"].as_u64()?,
+    ))
+}
+
+fn alive(pid: i32) -> bool {
+    rustix::process::Pid::from_raw(pid).is_some_and(|p| {
+        !matches!(
+            rustix::process::test_kill_process(p),
+            Err(rustix::io::Errno::SRCH)
+        )
+    })
+}
+
+fn read(path: &Path, session: &str, prev: Option<&Seen>) -> Option<Seen> {
+    let (mut file, len, modified) = open(path)?;
     if let Some(p) = prev.filter(|p| p.len == len && p.modified == Some(modified)) {
         return Some(p.clone());
     }
     let mut s = match prev {
         Some(p) => p.clone(),
-        None => meta(dir, agent)?,
+        None => meta(&path.with_extension("meta.json"))?,
     };
     // One byte early, so a window that starts on a record keeps it.
     let start = len.saturating_sub(TAIL_BYTES).saturating_sub(1);
@@ -106,8 +226,10 @@ fn read(dir: &Path, session: &str, agent: &str, prev: Option<&Seen>) -> Option<S
     if start > 0 {
         lines.next();
     }
+    let mut earliest = None;
     for line in lines {
         if let Ok(v) = serde_json::from_slice::<Value>(line) {
+            earliest = earliest.or_else(|| v["timestamp"].as_str().and_then(timestamp_ms));
             s.apply(&v, session);
         }
     }
@@ -115,17 +237,19 @@ fn read(dir: &Path, session: &str, agent: &str, prev: Option<&Seen>) -> Option<S
         let mut head = Vec::new();
         file.seek(SeekFrom::Start(0)).ok()?;
         file.take(TAIL_BYTES).read_to_end(&mut head).ok()?;
-        let first = head.split(|b| *b == b'\n').next()?;
-        let v = serde_json::from_slice::<Value>(first).ok()?;
-        s.started_ms = v["timestamp"].as_str().and_then(timestamp_ms);
+        let first = head.split(|b| *b == b'\n').next().unwrap_or_default();
+        s.started_ms = serde_json::from_slice::<Value>(first)
+            .ok()
+            .and_then(|v| v["timestamp"].as_str().and_then(timestamp_ms))
+            .or(earliest);
     }
     s.len = len;
     s.modified = Some(modified);
     Some(s)
 }
 
-fn meta(dir: &Path, agent: &str) -> Option<Seen> {
-    let (file, _, _) = open(&dir.join(format!("agent-{agent}.meta.json")))?;
+fn meta(path: &Path) -> Option<Seen> {
+    let (file, _, _) = open(path)?;
     let mut bytes = Vec::new();
     file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
     let meta = serde_json::from_slice::<Value>(&bytes).ok()?;
@@ -165,7 +289,7 @@ impl Seen {
                         continue;
                     }
                     let name = b["name"].as_str().unwrap_or_default();
-                    if name == "SubagentHandback" {
+                    if ENDS.contains(&name) {
                         self.finished = true;
                         continue;
                     }
@@ -270,20 +394,53 @@ mod tests {
 
     const SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     const AGENT: &str = "a3f9c2e1d4b5a6978";
+    const META: &str = include_str!("../../tests/fixtures/transcripts/claude-live-agent.meta.json");
 
-    fn setup(records: &str) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    struct Setup {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        transcript: PathBuf,
+        sessions: PathBuf,
+        sub: PathBuf,
+        started: u64,
+    }
+
+    impl Setup {
+        fn running(&self, live: &mut Live) -> Vec<Subagent> {
+            live.running(Some(&self.sessions), &self.transcript, SESSION)
+        }
+
+        fn process(&self, pid: u32, started: u64) {
+            std::fs::write(
+                self.sessions.join(format!("{pid}.json")),
+                format!(r#"{{"pid":{pid},"sessionId":"{SESSION}","startedAt":{started},"kind":"interactive"}}"#),
+            )
+            .unwrap();
+        }
+    }
+
+    fn setup(records: &str) -> Setup {
         let dir = tempfile::tempdir().unwrap();
-        let transcript = dir.path().join(format!("{SESSION}.jsonl"));
+        let root = dir.path().to_path_buf();
+        let transcript = root.join(format!("{SESSION}.jsonl"));
         std::fs::write(&transcript, "").unwrap();
-        let sub = dir.path().join(SESSION).join("subagents");
+        let sub = root.join(SESSION).join("subagents");
         std::fs::create_dir_all(&sub).unwrap();
-        std::fs::write(
-            sub.join(format!("agent-{AGENT}.meta.json")),
-            include_str!("../../tests/fixtures/transcripts/claude-live-agent.meta.json"),
-        )
-        .unwrap();
+        std::fs::write(sub.join(format!("agent-{AGENT}.meta.json")), META).unwrap();
         std::fs::write(sub.join(format!("agent-{AGENT}.jsonl")), records).unwrap();
-        (dir, transcript, sub)
+        let sessions = root.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let started = crate::now_ms() - 60_000;
+        let s = Setup {
+            _dir: dir,
+            root,
+            transcript,
+            sessions,
+            sub,
+            started,
+        };
+        s.process(std::process::id(), started);
+        s
     }
 
     fn fixture() -> Vec<&'static str> {
@@ -302,12 +459,28 @@ mod tests {
             .unwrap();
     }
 
+    fn set_modified(path: &Path, ms: u64) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_millis(ms))
+            .unwrap();
+    }
+
+    fn agent(sub: &Path, agent: &str, records: &str) -> PathBuf {
+        std::fs::write(sub.join(format!("agent-{agent}.meta.json")), META).unwrap();
+        let file = sub.join(format!("agent-{agent}.jsonl"));
+        std::fs::write(&file, records).unwrap();
+        file
+    }
+
     #[test]
     fn a_running_subagent_reports_its_activity_start_and_tokens() {
         let lines = fixture();
-        let (_dir, transcript, sub) = setup(lines[0]);
+        let s = setup(lines[0]);
         let mut live = Live::default();
-        let started = live.running(&transcript, SESSION);
+        let started = s.running(&mut live);
         assert_eq!(
             started,
             [Subagent {
@@ -318,51 +491,140 @@ mod tests {
                 called_tools: false,
             }]
         );
-        let file = sub.join(format!("agent-{AGENT}.jsonl"));
+        let file = s.sub.join(format!("agent-{AGENT}.jsonl"));
         append(&file, &lines[1..5].concat());
-        let working = live.running(&transcript, SESSION);
+        let working = s.running(&mut live);
         assert_eq!(working.len(), 1);
         assert_eq!(working[0].activity, "Reading pairing.rs");
-        assert_eq!(working[0].tokens, 2 + 24_616 + 17_458 + 8);
+        assert_eq!(working[0].tokens, 42_000);
         assert!(working[0].called_tools);
         assert_eq!(working[0].started_at_ms, started[0].started_at_ms);
         append(&file, &lines[5..7].concat());
-        let running = live.running(&transcript, SESSION);
+        let running = s.running(&mut live);
         assert_eq!(running[0].activity, "Running Check for unwraps");
-        assert_eq!(running[0].tokens, 2 + 1_297 + 43_123 + 16);
+        assert_eq!(running[0].tokens, 44_000);
         append(&file, &lines[7..].concat());
-        assert!(live.running(&transcript, SESSION).is_empty());
+        assert!(s.running(&mut live).is_empty());
     }
 
     #[test]
     fn finished_interrupted_and_resumed_subagents() {
         let lines = fixture();
         let end = r#"{"type":"assistant","sessionId":"3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","timestamp":"2026-10-13T21:50:00.000Z","message":{"model":"claude-opus-5-5","stop_reason":"end_turn","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":1,"output_tokens":1}}}"#;
-        let (_dir, transcript, sub) =
-            setup(&[lines[..5].concat(), end.into(), "\n".into()].concat());
+        let s = setup(&[lines[..5].concat(), end.into(), "\n".into()].concat());
         let mut live = Live::default();
-        assert!(live.running(&transcript, SESSION).is_empty());
-        let file = sub.join(format!("agent-{AGENT}.jsonl"));
+        assert!(s.running(&mut live).is_empty());
+        let file = s.sub.join(format!("agent-{AGENT}.jsonl"));
         let follow_up = r#"{"type":"user","isMeta":true,"origin":{"kind":"coordinator"},"sessionId":"3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","timestamp":"2026-10-13T22:00:00.000Z","message":{"role":"user","content":"Also check the retry loop."}}"#;
         append(&file, &format!("{follow_up}\n"));
-        let resumed = live.running(&transcript, SESSION);
+        let resumed = s.running(&mut live);
         assert_eq!(resumed.len(), 1);
         assert_eq!(resumed[0].started_at_ms, 1_791_928_800_000);
         assert_eq!(resumed[0].activity, "Check the pairing code");
         assert!(!resumed[0].called_tools);
         let reminder = r#"{"type":"user","isMeta":true,"sessionId":"3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","timestamp":"2026-10-13T22:01:00.000Z","message":{"role":"user","content":"<system-reminder>x</system-reminder>"}}"#;
         append(&file, &format!("{reminder}\n"));
-        assert_eq!(live.running(&transcript, SESSION), resumed);
+        assert_eq!(s.running(&mut live), resumed);
         let interrupted = r#"{"type":"user","sessionId":"3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","timestamp":"2026-10-13T22:02:00.000Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
         append(&file, &format!("{interrupted}\n"));
-        assert!(live.running(&transcript, SESSION).is_empty());
+        assert!(s.running(&mut live).is_empty());
     }
 
     #[test]
-    fn reads_are_bounded_and_refuse_symlinks_and_stale_files() {
+    fn workflow_agents_are_listed_until_their_result() {
         let lines = fixture();
-        let (dir, transcript, sub) = setup(&lines[..5].concat());
-        let file = sub.join(format!("agent-{AGENT}.jsonl"));
+        let s = setup(&lines[..7].concat());
+        std::fs::remove_file(s.sub.join(format!("agent-{AGENT}.jsonl"))).unwrap();
+        let flow = s.sub.join("workflows").join("wf_1f732cde-9b9");
+        std::fs::create_dir_all(&flow).unwrap();
+        std::fs::write(
+            flow.join("agent-w1.meta.json"),
+            r#"{"agentType":"workflow-subagent","description":"review:correctness","workflowPhase":"Review"}"#,
+        )
+        .unwrap();
+        let file = flow.join("agent-w1.jsonl");
+        std::fs::write(&file, lines[0]).unwrap();
+        let mut live = Live::default();
+        let running = s.running(&mut live);
+        assert_eq!(running.len(), 1);
+        assert_eq!(
+            (running[0].agent_type.as_str(), running[0].activity.as_str()),
+            ("workflow-subagent", "review:correctness")
+        );
+        let result = r#"{"type":"assistant","message":{"model":"m","stop_reason":"tool_use","content":[{"type":"tool_use","name":"StructuredOutput","input":{}}],"usage":{"input_tokens":1}}}"#;
+        append(&file, &format!("{result}\n"));
+        assert!(s.running(&mut live).is_empty());
+
+        std::fs::write(&file, lines[0]).unwrap();
+        assert_eq!(s.running(&mut live).len(), 1);
+        let elsewhere = s.root.join("flow");
+        std::fs::rename(&flow, &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &flow).unwrap();
+        assert!(s.running(&mut live).is_empty());
+        std::fs::remove_file(&flow).unwrap();
+        std::fs::rename(&elsewhere, &flow).unwrap();
+        let workflows = s.sub.join("workflows");
+        std::fs::rename(&workflows, s.root.join("workflows")).unwrap();
+        std::os::unix::fs::symlink(s.root.join("workflows"), &workflows).unwrap();
+        assert!(s.running(&mut live).is_empty());
+    }
+
+    #[test]
+    fn only_while_the_claude_process_runs_and_only_records_since_it_started() {
+        let lines = fixture();
+        let s = setup(lines[0]);
+        let mut live = Live::default();
+        assert_eq!(s.running(&mut live).len(), 1);
+        assert!(live.running(None, &s.transcript, SESSION).is_empty());
+
+        let file = s.sub.join(format!("agent-{AGENT}.jsonl"));
+        set_modified(&file, s.started - 1000);
+        assert!(s.running(&mut live).is_empty());
+        set_modified(&file, s.started + 1000);
+        assert_eq!(s.running(&mut live).len(), 1);
+
+        std::fs::remove_file(s.sessions.join(format!("{}.json", std::process::id()))).unwrap();
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        s.process(dead, s.started);
+        assert!(s.running(&mut live).is_empty());
+
+        let real = s.root.join("real.json");
+        std::fs::write(
+            &real,
+            format!(
+                r#"{{"pid":{},"sessionId":"{SESSION}","startedAt":{}}}"#,
+                std::process::id(),
+                s.started
+            ),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            &real,
+            s.sessions.join(format!("{}.json", std::process::id())),
+        )
+        .unwrap();
+        assert!(s.running(&mut live).is_empty());
+        std::fs::remove_file(s.sessions.join(format!("{}.json", std::process::id()))).unwrap();
+        s.process(std::process::id() + 1_000_000, s.started);
+        std::fs::rename(
+            s.sessions
+                .join(format!("{}.json", std::process::id() + 1_000_000)),
+            s.sessions.join(format!("{}.json", std::process::id())),
+        )
+        .unwrap();
+        assert!(
+            s.running(&mut live).is_empty(),
+            "the pid inside must match the file name"
+        );
+    }
+
+    #[test]
+    fn reads_are_bounded_and_refuse_symlinks() {
+        let lines = fixture();
+        let s = setup(&lines[..5].concat());
+        let file = s.sub.join(format!("agent-{AGENT}.jsonl"));
         let filler = format!(
             "{{\"type\":\"user\",\"message\":{{\"content\":[{{\"type\":\"tool_result\",\"content\":\"{}\"}}]}}}}\n",
             "x".repeat(TAIL_BYTES as usize)
@@ -373,49 +635,40 @@ mod tests {
         );
         append(&file, &format!("{filler}{long}\n"));
         let mut live = Live::default();
-        let running = live.running(&transcript, SESSION);
+        let running = s.running(&mut live);
         assert_eq!(running[0].started_at_ms, 1_791_927_845_000);
-        assert_eq!(running[0].tokens, 5);
+        assert_eq!(running[0].tokens, 0);
         assert_eq!(running[0].activity.chars().count(), ACTIVITY_CHARS);
         assert!(
             running[0].activity.starts_with("Running éé") && running[0].activity.ends_with('…')
         );
         assert!(!running[0].activity.contains('\u{1b}'));
 
-        for n in 0..MAX_FILES + 2 {
-            let agent = format!("b{n}");
-            std::fs::copy(
-                sub.join(format!("agent-{AGENT}.meta.json")),
-                sub.join(format!("agent-{agent}.meta.json")),
-            )
-            .unwrap();
-            std::fs::write(sub.join(format!("agent-{agent}.jsonl")), lines[0]).unwrap();
-        }
-        assert_eq!(live.running(&transcript, SESSION).len(), MAX_FILES);
+        let big_first = format!(
+            r#"{{"type":"user","message":{{"content":"{}"}},"timestamp":"2026-10-13T21:00:00.000Z"}}"#,
+            "p".repeat(TAIL_BYTES as usize)
+        );
+        let late = r#"{"type":"attachment","timestamp":"2026-10-13T21:30:00.000Z"}"#;
+        let b = agent(&s.sub, "big", &format!("{big_first}\n{late}\n"));
+        let shown = s.running(&mut live);
+        assert_eq!(shown.len(), 2);
+        assert!(shown.iter().any(|a| a.started_at_ms == 1_791_927_000_000));
+        std::fs::remove_file(b).unwrap();
 
-        let stale = SystemTime::now() - STALE - Duration::from_secs(1);
-        for e in std::fs::read_dir(&sub).unwrap().flatten() {
-            if e.file_name().to_str().unwrap().ends_with(".jsonl")
-                && e.file_name() != *format!("agent-{AGENT}.jsonl")
-            {
-                std::fs::File::options()
-                    .write(true)
-                    .open(e.path())
-                    .unwrap()
-                    .set_modified(stale)
-                    .unwrap();
-            }
-        }
-        assert_eq!(live.running(&transcript, SESSION).len(), 1);
-
-        let target = dir.path().join("elsewhere.jsonl");
+        let target = s.root.join("elsewhere.jsonl");
         std::fs::rename(&file, &target).unwrap();
         std::os::unix::fs::symlink(&target, &file).unwrap();
-        assert!(live.running(&transcript, SESSION).is_empty());
+        assert!(s.running(&mut live).is_empty());
 
-        let session = dir.path().join(SESSION);
-        let outside = dir.path().join("outside");
+        let session = s.root.join(SESSION);
+        let outside = s.root.join("outside");
         std::fs::rename(&session, &outside).unwrap();
+        std::fs::remove_file(
+            outside
+                .join("subagents")
+                .join(format!("agent-{AGENT}.jsonl")),
+        )
+        .unwrap();
         std::fs::rename(
             &target,
             outside
@@ -424,8 +677,27 @@ mod tests {
         )
         .unwrap();
         std::os::unix::fs::symlink(&outside, &session).unwrap();
-        assert!(live.running(&transcript, SESSION).is_empty());
-        assert!(live.0.is_empty());
+        assert!(s.running(&mut live).is_empty());
+        assert!(live.seen.is_empty());
+    }
+
+    #[test]
+    fn finished_files_are_skipped_and_the_rest_capped() {
+        let lines = fixture();
+        let s = setup(lines[0]);
+        let older = s.started + 1000;
+        set_modified(&s.sub.join(format!("agent-{AGENT}.jsonl")), older);
+        for n in 0..MAX_FILES {
+            agent(&s.sub, &format!("f{n}"), &lines.concat());
+        }
+        let mut live = Live::default();
+        assert!(s.running(&mut live).is_empty());
+        assert_eq!(s.running(&mut live).len(), 1);
+
+        for n in 0..MAX_FILES + 2 {
+            agent(&s.sub, &format!("r{n}"), lines[0]);
+        }
+        assert_eq!(s.running(&mut live).len(), MAX_FILES);
     }
 
     #[test]

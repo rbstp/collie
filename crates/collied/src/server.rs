@@ -2396,7 +2396,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         };
         delay = RECONCILE_EVERY;
         let phones = state.events.receiver_count() > 0;
-        let next = {
+        let mut next = {
             let mut transcripts = lock(&state.transcripts);
             Baseline::new(&agents, &workspaces, phones.then_some(&mut *transcripts))
         };
@@ -2407,6 +2407,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             }
             None => {}
             Some(prev) => {
+                prev.hold(&mut next, Instant::now());
                 let (changed, shape) = prev.diff(&next);
                 let mut tracker = lock(&state.tracker);
                 let mut transcripts = lock(&state.transcripts);

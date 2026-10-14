@@ -135,7 +135,14 @@ impl Transcripts {
         let (window, subagents) = match kind {
             Kind::Claude => {
                 self.usage.refresh();
-                (self.usage.window(id), self.live.running(&path, id))
+                {
+                    let sessions = self.claude_projects.as_deref().and_then(Path::parent);
+                    let sessions = sessions.map(|d| d.join("sessions"));
+                    (
+                        self.usage.window(id),
+                        self.live.running(sessions.as_deref(), &path, id),
+                    )
+                }
             }
             Kind::Codex => (None, Vec::new()),
         };
@@ -958,6 +965,15 @@ mod tests {
             include_str!("../tests/fixtures/transcripts/claude-live-agent.meta.json"),
         );
         write(&sub.join("agent-a1.jsonl"), &lines[..4].concat());
+        assert!(t.derive(&a, false).unwrap().subagents.is_empty());
+        let pid = std::process::id();
+        write(
+            &dir.path().join(format!("claude/sessions/{pid}.json")),
+            &format!(
+                r#"{{"pid":{pid},"sessionId":"{CLAUDE_ID}","startedAt":{}}}"#,
+                crate::now_ms() - 60_000
+            ),
+        );
         let d = t.derive(&a, false).unwrap();
         assert_eq!(d.subagents.len(), 1);
         assert_eq!(d.subagents[0].activity, "Reading pairing.rs");
