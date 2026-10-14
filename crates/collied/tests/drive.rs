@@ -1949,7 +1949,7 @@ fn resume(cwd: &Path, agent: &str, id: &str) -> TaskNewParams {
 }
 
 #[tokio::test]
-async fn task_sessions_lists_the_folders_sessions_and_resume_refusals_start_nothing() {
+async fn task_sessions_lists_the_folders_closed_sessions_and_resume_refusals_start_nothing() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let (_store, drive) = sessions_driver(&herdr, &base);
@@ -1975,7 +1975,6 @@ async fn task_sessions_lists_the_folders_sessions_and_resume_refusals_start_noth
     assert_eq!(
         listed,
         [
-            ("claude", OPEN_SESSION, "fix the flaky approval test"),
             ("claude", CLAUDE_SESSION, "fix the flaky approval test"),
             (
                 "codex",

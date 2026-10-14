@@ -938,12 +938,19 @@ impl Driver {
         let cwd = resolve_cwd(p.cwd.as_str(), &self.roots).map_err(invalid)?;
         let allowed = |kind: &str| self.agents.iter().any(|a| a.as_str() == kind);
         let (claude, codex) = (allowed("claude"), allowed("codex"));
+        let open: Vec<String> = herdr::agent_list(&self.herdr)
+            .await
+            .map_err(herdr_fail)?
+            .into_iter()
+            .filter_map(|a| a.agent_session.map(|s| s.value))
+            .collect();
         let reader = self.transcripts.history_reader();
         let sessions =
             tokio::task::spawn_blocking(move || reader.sessions(cwd.as_str(), claude, codex))
                 .await
                 .map_err(|_| (ErrorCode::Internal, "session listing failed".to_owned()))?
                 .into_iter()
+                .filter(|s| !open.contains(&s.id))
                 .filter_map(|s| {
                     Some(TaskSessionInfo {
                         agent: AgentKind::new(s.agent).ok()?,
