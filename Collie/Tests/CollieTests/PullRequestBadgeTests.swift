@@ -43,3 +43,27 @@ private func pullRequest(
         #expect(PullRequestBadge.url(pullRequest(.open, .passing, url: url)) == nil, "\(url)")
     }
 }
+
+@MainActor
+@Test func sessionMenuOffersWatchForAnOpenPullRequestAndStopWhileWatching() async {
+    #expect(PullRequestBadge.watchItem(nil) == nil)
+    #expect(PullRequestBadge.watchItem(pullRequest(.open, .pending))?.title == "Watch PR")
+    #expect(PullRequestBadge.watchItem(pullRequest(.draft, .noChecks))?.watch == true)
+    #expect(PullRequestBadge.watchItem(pullRequest(.merged, .passing)) == nil)
+    #expect(PullRequestBadge.watchItem(pullRequest(.closed, .failing)) == nil)
+    var watched = pullRequest(.open, .failing)
+    watched.watching = true
+    #expect(PullRequestBadge.watchItem(watched)?.title == "Stop watching")
+    #expect(PullRequestBadge.watchItem(watched)?.watch == false)
+    #expect(PullRequestBadge.spoken(watched) == "Pull request 264, open, checks failing, watching")
+
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    await model.watchPullRequest(true)
+    await model.watchPullRequest(false)
+    #expect(core.snapshot.prWatches == ["m1 term_1 true", "m1 term_1 false"])
+    core.set(error: .Rejected(message: "the agent has no linked pull request"))
+    await model.watchPullRequest(true)
+    #expect(model.notice != nil)
+}

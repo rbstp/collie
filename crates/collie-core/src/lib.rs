@@ -19,13 +19,13 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{
     ActivityId, AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStarParams, AgentTarget, AgentTypeTextParams, AgentWatchParams,
-    ApprovalId, CloneSource, Cwd, DraftText, Empty, ErrorCode, FolderName, Key, Label, NoticeDigit,
-    NotificationKey, OpId, PairCompleteParams, PairingInvite, PaneCloseParams, PromptText,
-    PushActivityEndParams, PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams,
-    ReadSource, Request, Response, SessionId, Signature, SlashCommand, TaskArchiveParams,
-    TaskFoldersParams, TaskNewParams, TaskSessionsParams, TaskWorktree, TaskWorktreesParams,
-    TerminalGrantParams, TerminalId, TerminalKey, TerminalRead, TerminalRunParams,
-    TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
+    AgentWatchPullRequestParams, ApprovalId, CloneSource, Cwd, DraftText, Empty, ErrorCode,
+    FolderName, Key, Label, NoticeDigit, NotificationKey, OpId, PairCompleteParams, PairingInvite,
+    PaneCloseParams, PromptText, PushActivityEndParams, PushActivityTokenParams,
+    PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response, SessionId, Signature,
+    SlashCommand, TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskSessionsParams,
+    TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId, TerminalKey, TerminalRead,
+    TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -354,6 +354,8 @@ pub struct PullRequestSummary {
     pub state: PullState,
     pub checks: PullChecks,
     pub url: String,
+    #[uniffi(default = false)]
+    pub watching: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -1628,6 +1630,21 @@ impl CollieCore {
             }
         }
         Ok(())
+    }
+
+    /// The machine watches the agent's linked pull request and prompts the agent when it
+    /// needs attention; the next snapshot shows it.
+    pub async fn watch_pull_request(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        watching: bool,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentWatchPullRequest(AgentWatchPullRequestParams {
+            terminal_id: terminal(terminal_id)?,
+            watching,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
     }
 
     pub async fn task_options(&self, machine_id: String) -> Result<TaskOptions, CoreError> {
@@ -3011,6 +3028,7 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
                 protocol::PullChecks::Unknown => PullChecks::Unknown,
             },
             url: pr.url.clone(),
+            watching: pr.watching,
         }),
     }
 }
@@ -3282,8 +3300,15 @@ mod tests {
                 state: PullState::Merged,
                 checks: PullChecks::NoChecks,
                 url: "https://github.com/o/r/pull/7".into(),
+                watching: false,
             })
         );
+        let watched = linked.replace(
+            r#""url":"https://github.com/o/r/pull/7""#,
+            r#""url":"https://github.com/o/r/pull/7","watching":true"#,
+        );
+        let s = agent_summary(&serde_json::from_str(&watched).unwrap());
+        assert!(s.pull_request.unwrap().watching);
     }
 
     #[test]

@@ -241,6 +241,23 @@
       },
       "type": "object"
     },
+    "AgentWatchPullRequestParams": {
+      "additionalProperties": false,
+      "description": "Watching needs the agent's linked pull request, open or a draft.",
+      "properties": {
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "watching": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "watching"
+      ],
+      "type": "object"
+    },
     "ApnsEnvironment": {
       "enum": [
         "sandbox",
@@ -1290,6 +1307,22 @@
         },
         "params": {
           "$ref": "#/$defs/AgentStarParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.watch_pull_request",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentWatchPullRequestParams"
         }
       },
       "required": [

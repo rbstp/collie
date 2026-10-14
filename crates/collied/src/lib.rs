@@ -22,6 +22,7 @@ pub mod hooks;
 pub mod keychain;
 pub mod pairing;
 pub mod peers;
+pub mod pr_watch;
 pub mod prompt;
 pub mod pulls;
 pub mod push;

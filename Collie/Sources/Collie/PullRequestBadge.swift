@@ -16,6 +16,10 @@ struct PullRequestBadge: View {
                 if let check = Self.check(pullRequest) {
                     Image(systemName: check.symbol).foregroundStyle(check.color)
                 }
+                if pullRequest.watching {
+                    Image(systemName: "eye")
+                    Text("Watching")
+                }
             }
             .font(.caption2.weight(.medium))
             .foregroundStyle(Self.color(pullRequest.state))
@@ -73,7 +77,15 @@ struct PullRequestBadge: View {
         case .closed: "closed"
         case .unknown: "state unknown"
         }
-        return (["Pull request \(pullRequest.number)", state] + [check(pullRequest)?.spoken].compactMap { $0 })
+        return (["Pull request \(pullRequest.number)", state] + [check(pullRequest)?.spoken, pullRequest.watching ? "watching" : nil].compactMap { $0 })
             .joined(separator: ", ")
+    }
+
+    /// The session menu's item: watch an open or draft pull request, or stop watching.
+    static func watchItem(_ pullRequest: PullRequestSummary?) -> (title: String, symbol: String, watch: Bool)? {
+        guard let pullRequest else { return nil }
+        if pullRequest.watching { return ("Stop watching", "eye.slash", false) }
+        guard pullRequest.state == .open || pullRequest.state == .draft else { return nil }
+        return ("Watch PR", "eye", true)
     }
 }

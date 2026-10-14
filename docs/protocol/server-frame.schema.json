@@ -1109,6 +1109,10 @@
         },
         "url": {
           "type": "string"
+        },
+        "watching": {
+          "description": "collied watches it and prompts the agent when it needs attention.",
+          "type": "boolean"
         }
       },
       "required": [

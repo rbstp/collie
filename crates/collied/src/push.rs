@@ -294,10 +294,14 @@ pub fn approval_clear(node_id: &str, approval_id: &ApprovalId) -> Alert {
 
 /// Labels only, like an approval alert, and no `enc`: nothing about the turn is sent.
 pub fn done_alert(terminal_id: &TerminalId, title: &str, workspace: &str, node_id: &str) -> Alert {
+    agent_alert(terminal_id, title, &format!("Done in {workspace}"), node_id)
+}
+
+pub fn agent_alert(terminal_id: &TerminalId, title: &str, body: &str, node_id: &str) -> Alert {
     Alert {
         payload: json!({
             "aps": {
-                "alert": {"title": title, "body": format!("Done in {workspace}")},
+                "alert": {"title": title, "body": body},
                 "thread-id": terminal_id.as_str(),
             },
             "node_id": node_id,

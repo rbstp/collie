@@ -848,6 +848,15 @@ final class AgentModel {
         }
     }
 
+    func watchPullRequest(_ watching: Bool) async {
+        do {
+            try await core.watchPullRequest(machineId: route.machineId, terminalId: route.terminalId, watching: watching)
+            notice = nil
+        } catch {
+            notice = Self.message(for: error)
+        }
+    }
+
     func jumpToBottom() async {
         screenBanner = false
         do {

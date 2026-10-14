@@ -12,10 +12,10 @@ use collie_tls::rustls::sign::CertifiedKey;
 use collie_tls::server::TlsStream;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
-    AgentStarParams, AgentWatchParams, AttachmentChunkParams, ErrorBody, ErrorCode, Event,
-    HelloResult, KeyPin, MachineInfo, MethodClass, PairCompleteParams, PairingCode, PairingInvite,
-    PullRequest, Request, Response, ServerFrame, TerminalGrantParams, TerminalId, TerminalKey,
-    TerminalWatchParams,
+    AgentStarParams, AgentWatchParams, AgentWatchPullRequestParams, AttachmentChunkParams,
+    ErrorBody, ErrorCode, Event, HelloResult, KeyPin, MachineInfo, MethodClass, PairCompleteParams,
+    PairingCode, PairingInvite, PullRequest, PullState, Request, Response, ServerFrame,
+    TerminalGrantParams, TerminalId, TerminalKey, TerminalWatchParams,
 };
 use serde::{Deserialize, Serialize};
 use tailnet::{Accepted, BackendState, Node, WhoIs};
@@ -41,6 +41,7 @@ use crate::flock::{self, Baseline, Stars, StatusTracker};
 use crate::gate::{self, Decision};
 use crate::pairing::{Attempt, Pairing};
 use crate::peers::{self, Peer, Store};
+use crate::pr_watch::{self, Watch, Watches};
 use crate::pulls::{self, Pulls};
 use crate::push::{self, ActivityError, Push};
 use crate::terminal::{self, Grants};
@@ -59,6 +60,7 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 const RECONCILE_EVERY: Duration = Duration::from_secs(1);
 const RECONCILE_MAX_BACKOFF: Duration = Duration::from_secs(30);
 const PULLS_EVERY: Duration = Duration::from_secs(30);
+const WATCH_EVERY: Duration = Duration::from_secs(30);
 const RATE_PER_SEC: f64 = 20.0;
 const RATE_BURST: f64 = 40.0;
 const REJECT_AUDIT_PER_SEC: f64 = 1.0;
@@ -548,6 +550,7 @@ pub async fn start_with(
         Transcripts::from_env().with_usage(cfg.data_dir.join(crate::usage::USAGE_FILE));
     let tracker = StatusTracker::load(cfg.data_dir.join(config::STATUS_FILE));
     let stars = Stars::load(cfg.data_dir.join(config::STARS_FILE));
+    let watches = Watches::load(cfg.data_dir.join(config::WATCHES_FILE));
 
     let state = Arc::new(State {
         machine: MachineInfo {
@@ -574,7 +577,7 @@ pub async fn start_with(
         transcripts: Mutex::new(transcripts),
         live: Mutex::new(activity::Live::default()),
         turns: Mutex::new(Turns::default()),
-        pulls: Mutex::new(Pulls::default()),
+        pulls: Mutex::new(Pulls::new(watches)),
         events,
         drive,
         approvals,
@@ -593,6 +596,7 @@ pub async fn start_with(
         tokio::spawn(upkeep(state.attachments.clone(), rx.clone())),
         tokio::spawn(codex_usage(state.clone(), rx.clone())),
         tokio::spawn(pull_requests(state.clone(), rx.clone())),
+        tokio::spawn(pr_watches(state.clone(), rx.clone())),
         tokio::spawn(reconcile(state.clone(), rx)),
     ];
     tracing::info!(host = %state.dns_name, port = state.cfg.port, "listening on the tailnet");
@@ -687,6 +691,82 @@ async fn read_pulls(
         seen.insert(key);
     }
     Some((linked, seen))
+}
+
+/// Each watched pull request is read every `pr_watch::POLL`, with or without a phone, and a
+/// pending wake is tried on every tick until the agent takes it.
+async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
+    let mut interval = tokio::time::interval(WATCH_EVERY);
+    let mut read_at: HashMap<String, Instant> = HashMap::new();
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = shutdown.changed() => return,
+        }
+        let watches = lock(&state.pulls).watches.list();
+        read_at.retain(|t, _| watches.iter().any(|(w, _)| w == t));
+        let mut ended = false;
+        for (terminal_id, watch) in &watches {
+            if read_at
+                .get(terminal_id)
+                .is_some_and(|at| at.elapsed() < pr_watch::POLL)
+            {
+                continue;
+            }
+            read_at.insert(terminal_id.clone(), Instant::now());
+            let read = match drive::gh() {
+                Some(gh) => pr_watch::fetch(gh, &watch.url, &state.cfg.data_dir).await,
+                None => None,
+            };
+            ended |= lock(&state.pulls)
+                .watches
+                .update(terminal_id, &watch.url, |w| w.observe(read))
+                .is_some();
+        }
+        let pending: Vec<(String, Watch)> = lock(&state.pulls)
+            .watches
+            .list()
+            .into_iter()
+            .filter(|(_, w)| w.prompt().is_some())
+            .collect();
+        if !pending.is_empty()
+            && let Ok(agents) = herdr::agent_list(&state.herdr).await
+        {
+            for (terminal_id, watch) in pending {
+                let (Some(agent), Some(text)) = (
+                    agents.iter().find(|a| a.terminal_id == terminal_id),
+                    watch.prompt(),
+                ) else {
+                    continue;
+                };
+                if pr_watch::wake(&state.drive, agent, text).await.is_err() {
+                    continue;
+                }
+                let summary = watch.summary();
+                state.audit.log(
+                    "collied",
+                    "pr.wake",
+                    Some(&terminal_id),
+                    &format!("{summary} {}", watch.url),
+                );
+                if let Ok(t) = TerminalId::new(terminal_id.clone()) {
+                    state.push.notify_done(push::agent_alert(
+                        &t,
+                        &format!("Woke {}", approvals::alert_title(agent)),
+                        &summary,
+                        &state.machine.node_id,
+                    ));
+                }
+                ended |= lock(&state.pulls)
+                    .watches
+                    .update(&terminal_id, &watch.url, Watch::woke)
+                    .is_some();
+            }
+        }
+        if ended {
+            let _ = state.events.send(Event::FlockChanged {});
+        }
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -1284,6 +1364,7 @@ impl Session<'_> {
             Request::AgentAnswerNotice(p) => (drive.answer_notice(&p, &auth).await, None),
             Request::AgentSlashDraft(p) => (drive.slash_draft(p, &auth).await, None),
             Request::AgentStar(p) => (self.star(p).await, None),
+            Request::AgentWatchPullRequest(p) => (self.watch_pull_request(p), None),
             // Starting an agent takes up to 30 s; the session keeps serving meanwhile.
             Request::TaskNew(_) if !self.tasks.is_empty() => (
                 err(ErrorCode::RateLimited, "a task is already starting"),
@@ -1769,6 +1850,37 @@ impl Session<'_> {
         Ok(Response::Ok)
     }
 
+    fn watch_pull_request(&self, p: AgentWatchPullRequestParams) -> Reply {
+        let terminal_id = p.terminal_id.as_str();
+        let mut pulls = lock(&self.state.pulls);
+        if p.watching {
+            let Some(pr) = pulls.get(terminal_id) else {
+                return err(
+                    ErrorCode::InvalidParams,
+                    "the agent has no linked pull request",
+                );
+            };
+            if !matches!(pr.state, PullState::Open | PullState::Draft) {
+                return err(
+                    ErrorCode::InvalidParams,
+                    "the pull request is merged or closed",
+                );
+            }
+            if !pr_watch::supported(&pr.url) {
+                return err(
+                    ErrorCode::InvalidParams,
+                    "the pull request's URL is not supported",
+                );
+            }
+            pulls.watches.start(terminal_id, &pr.url, pr.number);
+        } else {
+            pulls.watches.stop(terminal_id);
+        }
+        drop(pulls);
+        let _ = self.state.events.send(Event::FlockChanged {});
+        Ok(Response::Ok)
+    }
+
     async fn pair_complete(&self, window: u64, p: PairCompleteParams) -> Reply {
         let who = &self.peer.who;
         // A buggy or instrumented app could send its TLS key, which signs without Face ID.
@@ -1966,6 +2078,13 @@ fn audit_target(request: &Request) -> Option<String> {
         }
         Request::AgentSlashDraft(p) => p.terminal_id.as_str(),
         Request::AgentStar(p) => p.terminal_id.as_str(),
+        Request::AgentWatchPullRequest(p) => {
+            return Some(format!(
+                "{} watching={}",
+                p.terminal_id.as_str(),
+                p.watching
+            ));
+        }
         Request::PaneClose(p) => p.terminal_id.as_str(),
         Request::WorkspaceClose(p) => p.workspace_id.as_str(),
         Request::TaskNew(p) => {
@@ -2361,6 +2480,7 @@ mod tests {
             state: protocol::PullState::Open,
             checks: protocol::PullChecks::Failing,
             url: "https://github.com/o/r/pull/7".into(),
+            watching: false,
         };
         pulls.link(
             HashMap::from([(agent.terminal_id.clone(), pr.clone())]),

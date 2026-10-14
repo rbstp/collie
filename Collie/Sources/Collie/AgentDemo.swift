@@ -190,6 +190,10 @@ final class DemoAgentCore: ActivityCore {
         }
     }
 
+    func watchPullRequest(machineId: String, terminalId: String, watching: Bool) async throws {
+        throw CoreError.NotImplemented
+    }
+
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
         throw CoreError.NotImplemented
     }

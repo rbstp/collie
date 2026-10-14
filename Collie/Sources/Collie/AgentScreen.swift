@@ -154,6 +154,11 @@ struct AgentScreen: View {
                         if let follows {
                             FollowMenuItem(follows: follows, route: model.route)
                         }
+                        if let item = PullRequestBadge.watchItem(model.agent?.pullRequest) {
+                            Button(item.title, systemImage: item.symbol) {
+                                Task { await model.watchPullRequest(item.watch) }
+                            }
+                        }
                     }
                     Divider()
                     Button("Close pane", systemImage: "xmark.square", role: .destructive) {

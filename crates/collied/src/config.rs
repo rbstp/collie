@@ -159,6 +159,7 @@ pub const PEERS_FILE: &str = "peers.json";
 pub const PUSH_FILE: &str = "push.json";
 pub const STATUS_FILE: &str = "status.json";
 pub const STARS_FILE: &str = "stars.json";
+pub const WATCHES_FILE: &str = "pr-watches.json";
 pub const TLS_KEY_FILE: &str = "tls-key.json";
 pub const NODE_LOCK: &str = "node.lock";
 pub const PEERS_LOCK: &str = "peers.lock";

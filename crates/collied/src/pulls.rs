@@ -7,8 +7,10 @@ use serde::Deserialize;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+use crate::pr_watch::Watches;
+
 pub const REFRESH: Duration = Duration::from_secs(120);
-const GH_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const GH_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_URL_BYTES: usize = 512;
 
 pub type Key = (String, String);
@@ -71,14 +73,14 @@ struct View {
 }
 
 #[derive(Deserialize)]
-struct Check {
+pub(crate) struct Check {
     status: Option<String>,
     conclusion: Option<String>,
     state: Option<String>,
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-enum Outcome {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Outcome {
     Pass,
     Pending,
     Fail,
@@ -93,13 +95,7 @@ fn parse(json: &[u8]) -> Option<PullRequest> {
         ("CLOSED", _) => PullState::Closed,
         _ => return None,
     };
-    if !view.url.starts_with("https://")
-        || view.url.len() > MAX_URL_BYTES
-        || view
-            .url
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control())
-    {
+    if !valid_url(&view.url) {
         return None;
     }
     Some(PullRequest {
@@ -107,12 +103,19 @@ fn parse(json: &[u8]) -> Option<PullRequest> {
         state,
         checks: checks(&view.status_check_rollup.unwrap_or_default()),
         url: view.url,
+        watching: false,
     })
+}
+
+pub(crate) fn valid_url(url: &str) -> bool {
+    url.starts_with("https://")
+        && url.len() <= MAX_URL_BYTES
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// A status context has a `state`; a check run a `status`, and a `conclusion` once it
 /// completed.
-fn outcome(check: &Check) -> Outcome {
+pub(crate) fn outcome(check: &Check) -> Outcome {
     match (
         check.state.as_deref(),
         check.status.as_deref(),
@@ -141,11 +144,21 @@ fn checks(rollup: &[Check]) -> PullChecks {
 pub struct Pulls {
     cache: HashMap<Key, (Instant, Option<PullRequest>, bool)>,
     linked: HashMap<String, PullRequest>,
+    pub watches: Watches,
 }
 
 impl Pulls {
+    pub fn new(watches: Watches) -> Self {
+        Self {
+            watches,
+            ..Self::default()
+        }
+    }
+
     pub fn get(&self, terminal_id: &str) -> Option<PullRequest> {
-        self.linked.get(terminal_id).cloned()
+        let mut pr = self.linked.get(terminal_id).cloned()?;
+        pr.watching = self.watches.watching(terminal_id, &pr.url);
+        Some(pr)
     }
 
     pub fn cached(&self, key: &Key, now: Instant) -> Option<Option<PullRequest>> {
@@ -255,6 +268,7 @@ mod tests {
             state: PullState::Open,
             checks: PullChecks::Pending,
             url: format!("https://github.com/o/r/pull/{number}"),
+            watching: false,
         }
     }
 
