@@ -735,6 +735,24 @@ async fn scenario(
         Response::Ok
     );
 
+    println!("archive on merge is kept per phone");
+    for params in [json!({}), json!({"enabled": true, "terminal_id": "term_1"})] {
+        assert_error(
+            &call(&mut ws, "task.archive_on_merge", params).await,
+            ErrorCode::InvalidParams,
+        );
+    }
+    assert_eq!(
+        result(call(&mut ws, "task.archive_on_merge", json!({"enabled": true})).await),
+        Response::Ok
+    );
+    let archive_on_merge = || -> Vec<String> {
+        serde_json::from_slice(&std::fs::read(data_dir.join("archive-on-merge.json")).unwrap())
+            .unwrap()
+    };
+    assert_eq!(archive_on_merge().len(), 1);
+    assert_eq!(mode(&data_dir.join("archive-on-merge.json")), 0o600);
+
     println!("the reconcile drops the star of a closed pane with no snapshot asked");
     let shell = "term_ffffffffffff01";
     assert_eq!(
@@ -901,6 +919,7 @@ async fn scenario(
     for s in &mut extra {
         assert_closed(s).await;
     }
+    assert!(archive_on_merge().is_empty());
     herdr.set_snapshot_delay(Duration::ZERO);
     assert!(
         connect(
@@ -950,6 +969,7 @@ async fn scenario(
         "\"result\":\"paired\"",
         "\"result\":\"wrong code\"",
         "\"method\":\"peers.revoke\"",
+        "\"method\":\"task.archive_on_merge\",\"target\":\"enabled=true\"",
         "\"method\":\"agent.focus\"",
         "\"method\":\"agent.scroll_bottom\"",
         "\"result\":\"agent_not_ready: already at the bottom\"",

@@ -15,6 +15,7 @@ struct PullRequestBadge: View {
             HStack(spacing: 3) {
                 Image(systemName: Self.symbol(pullRequest.state))
                 Text(verbatim: "#\(pullRequest.number)").monospacedDigit()
+                if pullRequest.state == .merged && !compact { Text("Merged") }
                 if let check = Self.check(pullRequest) {
                     Image(systemName: check.symbol).foregroundStyle(check.color)
                 }
@@ -89,6 +90,10 @@ struct PullRequestBadge: View {
     }
 
     static let intervals: [UInt32] = [2, 5, 15, 30]
+
+    static func archiveFirst(_ agent: AgentSummary?) -> Bool {
+        agent?.pullRequest?.state == .merged
+    }
 
     /// The session menu's item: watch a Claude Code agent's open or draft pull request, or
     /// stop any watch on the terminal, linked or not.

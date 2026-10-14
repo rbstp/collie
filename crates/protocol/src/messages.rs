@@ -201,6 +201,8 @@ pub enum Request {
     TaskSessions(TaskSessionsParams),
     #[serde(rename = "task.archive")]
     TaskArchive(TaskArchiveParams),
+    #[serde(rename = "task.archive_on_merge")]
+    TaskArchiveOnMerge(TaskArchiveOnMergeParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseParams),
     #[serde(rename = "pane.close")]
@@ -269,6 +271,7 @@ impl Request {
         "task.worktrees",
         "task.sessions",
         "task.archive",
+        "task.archive_on_merge",
         "workspace.close",
         "pane.close",
         "approval.list",
@@ -316,6 +319,7 @@ impl Request {
             Self::TaskWorktrees(_) => "task.worktrees",
             Self::TaskSessions(_) => "task.sessions",
             Self::TaskArchive(_) => "task.archive",
+            Self::TaskArchiveOnMerge(_) => "task.archive_on_merge",
             Self::WorkspaceClose(_) => "workspace.close",
             Self::PaneClose(_) => "pane.close",
             Self::ApprovalList(_) => "approval.list",
@@ -363,6 +367,7 @@ impl Request {
             | Self::TaskWorktrees(_)
             | Self::TaskSessions(_)
             | Self::TaskArchive(_)
+            | Self::TaskArchiveOnMerge(_)
             | Self::WorkspaceClose(_)
             | Self::PaneClose(_)
             | Self::AttachmentBegin(_)
@@ -798,6 +803,14 @@ pub struct TaskArchiveParams {
     pub terminal_id: TerminalId,
     #[serde(default)]
     pub confirm: bool,
+}
+
+/// The phone's "Archive when the PR merges" setting, sent on every connection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TaskArchiveOnMergeParams {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1939,7 +1952,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 22);
+        assert_eq!(crate::PROTOCOL_VERSION, 23);
     }
 
     #[test]
@@ -2118,6 +2131,26 @@ mod tests {
             panic!("not archive")
         };
         assert!(!params.confirm);
+    }
+
+    #[test]
+    fn archive_on_merge_takes_one_flag() {
+        let json = r#"{"id":1,"method":"task.archive_on_merge","params":{"enabled":true}}"#;
+        let frame = parse(json).unwrap();
+        assert_eq!(
+            frame.request,
+            Request::TaskArchiveOnMerge(TaskArchiveOnMergeParams { enabled: true })
+        );
+        assert_eq!(frame.request.class(), MethodClass::Drive);
+        assert_eq!(serde_json::to_string(&frame).unwrap(), json);
+        for params in ["{}", r#"{"enabled":"yes"}"#, r#"{"enabled":true,"x":1}"#] {
+            let bad = format!(r#"{{"id":1,"method":"task.archive_on_merge","params":{params}}}"#);
+            assert_eq!(
+                parse(&bad).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{params}"
+            );
+        }
     }
 
     #[test]

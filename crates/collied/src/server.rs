@@ -12,7 +12,7 @@ use collie_tls::rustls::sign::CertifiedKey;
 use collie_tls::server::TlsStream;
 use futures_util::{SinkExt, StreamExt};
 use protocol::{
-    AgentStarParams, AgentWatchParams, AgentWatchPullRequestParams, AttachmentChunkParams,
+    AgentStarParams, AgentWatchParams, AgentWatchPullRequestParams, AttachmentChunkParams, Cwd,
     ErrorBody, ErrorCode, Event, HelloResult, KeyPin, MachineInfo, MethodClass, PairCompleteParams,
     PairingCode, PairingInvite, PullRequest, PullState, Request, Response, ServerFrame,
     TerminalGrantParams, TerminalId, TerminalKey, TerminalWatchParams,
@@ -309,6 +309,7 @@ impl State {
         if lock(&self.pulls).watches.forget(&peer.stable_id) {
             let _ = self.events.send(Event::FlockChanged {});
         }
+        lock(&self.pulls).archive.forget(&peer.stable_id);
         self.audit.log(
             &peer.label,
             "peers.revoke",
@@ -316,6 +317,17 @@ impl State {
             &format!("{how}, {closed} session(s) closed"),
         );
         Ok((peer, closed))
+    }
+
+    fn archives_on_merge(&self) -> bool {
+        let peers = self.peers();
+        lock(&self.pulls)
+            .archive
+            .enabled(|by| peers.get(by).is_some())
+    }
+
+    fn reads_pulls(&self) -> bool {
+        self.events.receiver_count() > 0 || self.archives_on_merge()
     }
 
     pub(crate) async fn status_info(&self) -> StatusInfo {
@@ -554,6 +566,7 @@ pub async fn start_with(
     let tracker = StatusTracker::load(cfg.data_dir.join(config::STATUS_FILE));
     let stars = Stars::load(cfg.data_dir.join(config::STARS_FILE));
     let watches = Watches::load(cfg.data_dir.join(config::WATCHES_FILE));
+    let archive = pulls::ArchiveOnMerge::load(cfg.data_dir.join(config::ARCHIVE_ON_MERGE_FILE));
 
     let state = Arc::new(State {
         machine: MachineInfo {
@@ -580,7 +593,7 @@ pub async fn start_with(
         transcripts: Mutex::new(transcripts),
         live: Mutex::new(activity::Live::default()),
         turns: Mutex::new(Turns::default()),
-        pulls: Mutex::new(Pulls::new(watches)),
+        pulls: Mutex::new(Pulls::new(watches, archive)),
         events,
         drive,
         approvals,
@@ -626,8 +639,9 @@ async fn codex_usage(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     }
 }
 
-/// Only while a phone is connected, and `gh` runs at most once per `pulls::REFRESH` for
-/// each checkout and branch.
+/// While a phone is connected, or with none while a paired phone has "Archive when the PR
+/// merges" on, then only for the agents it could archive and without changing what a phone
+/// is shown. `gh` runs at most once per `pulls::REFRESH` for each checkout and branch.
 async fn pull_requests(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     let mut interval = tokio::time::interval(PULLS_EVERY);
     loop {
@@ -635,7 +649,7 @@ async fn pull_requests(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             _ = interval.tick() => {}
             _ = shutdown.changed() => return,
         }
-        if state.events.receiver_count() == 0 {
+        if !state.reads_pulls() {
             continue;
         }
         let Some(gh) = drive::gh() else {
@@ -644,25 +658,42 @@ async fn pull_requests(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             }
             continue;
         };
-        let Ok(agents) = herdr::agent_list(&state.herdr).await else {
+        let Ok(mut agents) = herdr::agent_list(&state.herdr).await else {
             continue;
         };
-        if let Some((linked, seen)) = read_pulls(&state, gh, &agents).await
-            && lock(&state.pulls).link(linked, &seen)
-        {
+        let phone = state.events.receiver_count() > 0;
+        if !phone {
+            let Ok(snapshot) = herdr::session_snapshot(&state.herdr).await else {
+                continue;
+            };
+            let quiet = |a: &herdr::AgentInfo| lock(&state.transcripts).quiet(a);
+            agents.retain(|a| drive::worktree_settled(&snapshot, &a.terminal_id, &quiet));
+        }
+        let Some((linked, seen, merged)) = read_pulls(&state, gh, &agents).await else {
+            continue;
+        };
+        if phone && lock(&state.pulls).link(linked, &seen) {
             let _ = state.events.send(Event::FlockChanged {});
+        }
+        for (agent, root, number) in &merged {
+            archive_merged(&state, gh, agent, root, *number).await;
         }
     }
 }
 
+type Merged = Vec<(herdr::AgentInfo, Cwd, u64)>;
+
+/// `Merged` lists the agents whose pull request a fresh read found merged, only while
+/// automatic archive is on.
 async fn read_pulls(
     state: &State,
     gh: &str,
     agents: &[herdr::AgentInfo],
-) -> Option<(HashMap<String, PullRequest>, HashSet<pulls::Key>)> {
+) -> Option<(HashMap<String, PullRequest>, HashSet<pulls::Key>, Merged)> {
     let roots = state.drive.roots();
     let mut linked = HashMap::new();
     let mut seen = HashSet::new();
+    let mut merged = Vec::new();
     for a in agents {
         let Ok(cwd) = state.drive.checkout(a) else {
             continue;
@@ -675,7 +706,7 @@ async fn read_pulls(
         let pr = match cached {
             Some(pr) => pr,
             None => {
-                if state.events.receiver_count() == 0 {
+                if !state.reads_pulls() {
                     return None;
                 }
                 let read = pulls::fetch(gh, &root).await;
@@ -685,6 +716,9 @@ async fn read_pulls(
                 if !same {
                     continue;
                 }
+                if let Some(number) = pulls::merged_number(&read, || state.archives_on_merge()) {
+                    merged.push((a.clone(), root.clone(), number));
+                }
                 lock(&state.pulls).store(key.clone(), Instant::now(), read)
             }
         };
@@ -693,7 +727,47 @@ async fn read_pulls(
         }
         seen.insert(key);
     }
-    Some((linked, seen))
+    Some((linked, seen, merged))
+}
+
+/// A task that fails a check before the archive starts is left for the next read and not
+/// audited.
+async fn archive_merged(
+    state: &Arc<State>,
+    gh: &str,
+    agent: &herdr::AgentInfo,
+    root: &Cwd,
+    number: u64,
+) {
+    let auth: Authorized = {
+        let state = state.clone();
+        Arc::new(move || state.archives_on_merge())
+    };
+    let quiet = |a: &herdr::AgentInfo| lock(&state.transcripts).quiet(a);
+    let Some(reply) = state
+        .drive
+        .archive_if_merged(gh, agent, root, number, &quiet, &auth)
+        .await
+    else {
+        return;
+    };
+    state.audit.log(
+        "collied",
+        "task.archive",
+        Some(&agent.terminal_id),
+        &format!("PR #{number} merged: {}", outcome(&reply)),
+    );
+    if reply.is_ok()
+        && let Ok(terminal_id) = TerminalId::new(agent.terminal_id.clone())
+    {
+        state.push.notify_done(push::agent_alert(
+            &terminal_id,
+            &format!("Archived {}", approvals::alert_title(agent)),
+            &format!("PR #{number} merged"),
+            &state.machine.node_id,
+        ));
+        let _ = state.events.send(Event::FlockChanged {});
+    }
 }
 
 /// Each watched pull request is read on its own interval, with or without a phone, and a
@@ -1463,6 +1537,14 @@ impl Session<'_> {
                 });
                 return Flow::Continue;
             }
+            Request::TaskArchiveOnMerge(_) if !auth() => (
+                err(ErrorCode::NotPaired, "peer is no longer authorized"),
+                None,
+            ),
+            Request::TaskArchiveOnMerge(p) => {
+                lock(&self.state.pulls).archive.set(&peer, p.enabled);
+                (Ok(Response::Ok), None)
+            }
             Request::WorkspaceClose(p) => (drive.workspace_close(p, &auth).await, None),
             Request::PaneClose(p) => (drive.pane_close(p, &auth).await, None),
             Request::ApprovalList(_) => (
@@ -2177,6 +2259,7 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::TaskWorktrees(p) => p.cwd.as_str(),
         Request::TaskSessions(p) => p.cwd.as_str(),
         Request::TaskArchive(p) => p.terminal_id.as_str(),
+        Request::TaskArchiveOnMerge(p) => return Some(format!("enabled={}", p.enabled)),
         Request::PushActivityToken(p) => {
             return Some(activity::target(&p.terminal_id, &p.activity_id));
         }

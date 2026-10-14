@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -48,11 +48,18 @@ struct Process {
 pub struct Live {
     seen: HashMap<String, HashMap<String, Seen>>,
     processes: HashMap<String, Process>,
+    /// Sessions whose last scan left out workflow directories or files never read.
+    truncated: HashSet<String>,
 }
 
 impl Live {
     pub fn retain(&mut self, live: impl Fn(&String) -> bool) {
         self.seen.retain(|id, _| live(id));
+        self.truncated.retain(|id| live(id));
+    }
+
+    pub fn truncated(&self, session: &str) -> bool {
+        self.truncated.contains(session)
     }
 
     /// Only for a live Claude Code process of this session, and only files written since it
@@ -65,6 +72,7 @@ impl Live {
         session: &str,
     ) -> Vec<Subagent> {
         let started = sessions.and_then(|d| self.process_start(d, session));
+        self.truncated.remove(session);
         let (Some(dir), Some(started)) = (subagent_dir(transcript, session), started) else {
             self.seen.remove(session);
             return Vec::new();
@@ -78,6 +86,7 @@ impl Live {
             .filter_map(|(name, meta)| Some((meta.modified().ok()?, name)))
             .collect::<Vec<_>>();
         flows.sort_by_key(|f| std::cmp::Reverse(f.0));
+        let mut truncated = flows.len() > MAX_FILES;
         for (_, flow) in flows.into_iter().take(MAX_FILES) {
             files.extend(agent_files(&workflows.join(&flow), &format!("{flow}/")));
         }
@@ -93,8 +102,11 @@ impl Live {
                 continue;
             }
             if opened == MAX_FILES {
-                if let Some(p) = prev {
-                    seen.insert(key, p.clone());
+                match prev {
+                    Some(p) => {
+                        seen.insert(key, p.clone());
+                    }
+                    None => truncated = true,
                 }
                 continue;
             }
@@ -118,6 +130,9 @@ impl Live {
             .collect::<Vec<_>>();
         out.sort_by(|a, b| (a.started_at_ms, &a.activity).cmp(&(b.started_at_ms, &b.activity)));
         self.seen.insert(session.to_owned(), seen);
+        if truncated {
+            self.truncated.insert(session.to_owned());
+        }
         out
     }
 
@@ -789,6 +804,8 @@ mod tests {
         assert!(s.running(&mut live).is_empty());
         assert_eq!(s.running(&mut live).len(), 1);
 
+        assert!(!live.truncated(SESSION));
+
         for n in 0..MAX_FILES + 2 {
             agent(&s.sub, &format!("r{n}"), lines[0]);
         }
@@ -797,8 +814,27 @@ mod tests {
             MAX_FILES + 1,
             "8 opened, the unchanged one kept from the last read"
         );
+        assert!(live.truncated(SESSION), "2 files never read");
         assert_eq!(s.running(&mut live).len(), MAX_FILES + 3);
+        assert!(!live.truncated(SESSION));
         assert_eq!(s.running(&mut live).len(), MAX_FILES + 3);
+    }
+
+    #[test]
+    fn more_workflows_than_are_read_count_as_truncated() {
+        let lines = fixture();
+        let s = setup(&lines.concat());
+        let mut live = Live::default();
+        for n in 0..MAX_FILES {
+            std::fs::create_dir_all(s.sub.join(format!("workflows/wf_{n}"))).unwrap();
+        }
+        assert!(s.running(&mut live).is_empty());
+        assert!(!live.truncated(SESSION));
+        std::fs::create_dir_all(s.sub.join("workflows/wf_extra")).unwrap();
+        assert!(s.running(&mut live).is_empty());
+        assert!(live.truncated(SESSION));
+        live.retain(|_| false);
+        assert!(!live.truncated(SESSION));
     }
 
     #[test]

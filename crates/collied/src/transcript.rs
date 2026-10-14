@@ -36,6 +36,8 @@ pub struct Derived {
     pub last_prompt: Option<String>,
     pub last_activity_ms: Option<u64>,
     pub subagents: Vec<protocol::Subagent>,
+    /// The subagent scan left some out, so more may be running.
+    pub subagents_truncated: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -122,6 +124,15 @@ impl Transcripts {
         self.noted.retain(|t, _| open(t));
     }
 
+    /// No subagent running; a Claude Code agent whose transcript cannot be read, or whose
+    /// subagent scan left some out, counts as busy.
+    pub fn quiet(&mut self, a: &AgentInfo) -> bool {
+        a.agent.as_deref() != Some("claude")
+            || self
+                .derive(a, true)
+                .is_some_and(|d| d.subagents.is_empty() && !d.subagents_truncated)
+    }
+
     /// Cached by size and mtime, so an unchanged transcript costs one open and fstat. A
     /// transcript not found is looked for again only when `relocate`.
     pub fn derive(&mut self, a: &AgentInfo, relocate: bool) -> Option<Derived> {
@@ -174,6 +185,7 @@ impl Transcripts {
             }
             Kind::Codex => (None, Vec::new()),
         };
+        let subagents_truncated = self.live.truncated(id);
         if let Some(c) = self
             .cache
             .get(id)
@@ -181,6 +193,7 @@ impl Transcripts {
         {
             return Some(Derived {
                 subagents,
+                subagents_truncated,
                 ..c.derived.clone()
             });
         }
@@ -196,6 +209,7 @@ impl Transcripts {
             derived.last_prompt = derived.last_prompt.or_else(|| prev.last_prompt.clone());
         }
         derived.subagents = subagents;
+        derived.subagents_truncated = subagents_truncated;
         derived.last_activity_ms = modified
             .duration_since(UNIX_EPOCH)
             .ok()
@@ -1029,7 +1043,18 @@ mod tests {
         let project = dir.path().join("claude/projects/-Users-me-src-collie");
         write(&project.join(format!("{CLAUDE_ID}.jsonl")), CLAUDE);
         let a = agent("claude", CLAUDE_ID, "/Users/me/src/collie");
+        assert!(!t.quiet(&agent(
+            "claude",
+            "9f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "/Users/me/src/collie"
+        )));
+        assert!(t.quiet(&agent(
+            "copilot",
+            "9f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "/Users/me/src/collie"
+        )));
         assert!(t.derive(&a, false).unwrap().subagents.is_empty());
+        assert!(t.quiet(&a));
         let sub = project.join(CLAUDE_ID).join("subagents");
         let lines = include_str!("../tests/fixtures/transcripts/claude-live-agent.jsonl")
             .split_inclusive('\n')
@@ -1051,8 +1076,15 @@ mod tests {
         let d = t.derive(&a, false).unwrap();
         assert_eq!(d.subagents.len(), 1);
         assert_eq!(d.subagents[0].activity, "Reading pairing.rs");
+        assert!(!t.quiet(&a));
         write(&sub.join("agent-a1.jsonl"), &lines.concat());
         assert!(t.derive(&a, false).unwrap().subagents.is_empty());
+        assert!(t.quiet(&a));
+        for n in 0..9 {
+            std::fs::create_dir_all(sub.join(format!("workflows/wf_{n}"))).unwrap();
+        }
+        assert!(t.derive(&a, false).unwrap().subagents.is_empty());
+        assert!(!t.quiet(&a), "a truncated scan counts as busy");
     }
 
     #[test]
