@@ -959,6 +959,11 @@ async fn scenario(
 
     println!("no kernel TCP listener, private files, read-only herdr use");
     assert_eq!(kernel_tcp_listeners(), Vec::<String>::new());
+    let udp = tailnet::udp_listeners().unwrap();
+    assert!(
+        !udp.is_empty() && udp.iter().all(|a| a.ip().is_loopback()),
+        "tailnet UDP sockets must be on loopback only: {udp:?}"
+    );
     let audit_path = data_dir.join("audit.log");
     assert_eq!(mode(&audit_path), 0o600);
     let audit = std::fs::read_to_string(&audit_path).unwrap();

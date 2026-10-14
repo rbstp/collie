@@ -14,7 +14,7 @@ use tokio::io::unix::AsyncFd;
 use zeroize::Zeroizing;
 
 mod listeners;
-pub use listeners::kernel_tcp_listeners;
+pub use listeners::{kernel_tcp_listeners, udp_listeners};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

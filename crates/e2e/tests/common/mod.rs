@@ -128,6 +128,14 @@ pub fn kernel_tcp_listeners() -> Vec<String> {
     tailnet::kernel_tcp_listeners(std::process::id()).expect("kernel TCP listeners")
 }
 
+pub fn assert_udp_on_loopback() {
+    let udp = tailnet::udp_listeners().expect("UDP sockets");
+    assert!(
+        !udp.is_empty() && udp.iter().all(|a| a.ip().is_loopback()),
+        "tailnet UDP sockets must be on loopback only: {udp:?}"
+    );
+}
+
 pub struct Net {
     _control: TestControl,
     pub key: String,

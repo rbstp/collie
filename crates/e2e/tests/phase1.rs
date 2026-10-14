@@ -336,6 +336,7 @@ async fn scenario(
 
     println!("no kernel TCP listener, private audit log, read-only herdr use");
     assert_eq!(kernel_tcp_listeners(), Vec::<String>::new());
+    assert_udp_on_loopback();
     let mode = std::fs::metadata(&audit).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
     let called = herdr_calls.lock().unwrap().clone();
