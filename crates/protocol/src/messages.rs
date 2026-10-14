@@ -1099,6 +1099,9 @@ pub struct Agent {
     /// When the transcript last changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_activity_ms: Option<u64>,
+    /// Claude Code subagents running now, from their own transcripts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagents: Vec<Subagent>,
     /// The pull request of the agent's branch, as `gh` on the machine last read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<PullRequest>,
@@ -1147,6 +1150,17 @@ pub enum PullChecks {
     None,
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct Subagent {
+    pub agent_type: String,
+    pub activity: String,
+    pub started_at_ms: u64,
+    pub tokens: u64,
+    /// Claude Code's panel shows the tokens with ↓ once the subagent has called a tool, ↑ before.
+    pub called_tools: bool,
 }
 
 /// From Claude Code's status line input, as `collied statusline` last recorded it.
@@ -2144,11 +2158,18 @@ mod tests {
             context_left: Some(100),
             last_prompt: Some("go".into()),
             last_activity_ms: Some(7),
+            subagents: vec![Subagent {
+                agent_type: "general-purpose".into(),
+                activity: "Reading lib.rs".into(),
+                started_at_ms: 5,
+                tokens: 500,
+                called_tools: true,
+            }],
             ..a
         };
         let json = serde_json::to_string(&full).unwrap();
         assert!(json.ends_with(
-            r#""last_line":"Done.","context_left":100,"last_prompt":"go","last_activity_ms":7}"#
+            r#""last_line":"Done.","context_left":100,"last_prompt":"go","last_activity_ms":7,"subagents":[{"agent_type":"general-purpose","activity":"Reading lib.rs","started_at_ms":5,"tokens":500,"called_tools":true}]}"#
         ));
         assert_eq!(serde_json::from_str::<Agent>(&json).unwrap(), full);
         let linked = Agent {

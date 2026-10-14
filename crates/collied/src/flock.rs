@@ -195,6 +195,7 @@ pub fn map_agent(
         context_left: derived.context_left,
         last_prompt: derived.last_prompt,
         last_activity_ms: derived.last_activity_ms,
+        subagents: derived.subagents,
         pull_request: None,
         pr_watch: None,
     })
@@ -284,9 +285,14 @@ pub fn map_flock(
 
 /// What the phone shows of an agent, so that a change to any of it sends `agent.status`.
 type Shown = (u64, AgentStatus, [Option<String>; 4]);
-/// Context left, last line and last prompt. The activity time is left out: it moves on
-/// every transcript write, and the events and snapshots that are sent carry it anyway.
-type Said = Option<(Option<u8>, Option<String>, Option<String>)>;
+/// Context left, last line, last prompt and running subagents. The activity time is left
+/// out: it moves on every transcript write, and the events and snapshots that are sent carry it anyway.
+type Said = Option<(
+    Option<u8>,
+    Option<String>,
+    Option<String>,
+    Vec<protocol::Subagent>,
+)>;
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Baseline {
@@ -317,7 +323,7 @@ impl Baseline {
                     let said = transcripts
                         .as_deref_mut()
                         .and_then(|t| t.derive(a, false))
-                        .map(|d| (d.context_left, d.last_line, d.last_prompt));
+                        .map(|d| (d.context_left, d.last_line, d.last_prompt, d.subagents));
                     (a.terminal_id.clone(), (shown, said, a.workspace_id.clone()))
                 })
                 .collect(),
