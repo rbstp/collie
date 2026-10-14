@@ -982,7 +982,7 @@ struct DictationButton: View {
             }
             .tint(.primary)
         } label: {
-            Image(systemName: dictation.isActive ? "mic.fill" : "mic")
+            Image(systemName: "waveform")
                 .font(.system(size: 20))
                 .frame(width: 28, height: 28)
         } primaryAction: {
