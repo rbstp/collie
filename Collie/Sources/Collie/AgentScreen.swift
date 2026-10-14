@@ -686,6 +686,7 @@ private struct PromptBar: View {
     @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
     @State private var pickingPrompt = false
+    @State private var droppingLetter: String?
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private func typed(_ text: String) {
@@ -694,9 +695,10 @@ private struct PromptBar: View {
             model.typed(text)
             return
         }
-        // The field keeps showing the letter until the bound value changes, so it takes the letter, then drops it.
+        // The field keeps showing the letter until the bound value changes: it takes the letter, and the
+        // update that saw it drops it again (onChange), so the two writes never land in one update.
         model.draft = text
-        Task { model.draft = old }
+        droppingLetter = old
     }
 
     private var expanded: Bool {
@@ -881,6 +883,12 @@ private struct PromptBar: View {
         .onChange(of: model.quotes) {
             selection = TextSelection(insertionPoint: model.draft.endIndex)
             editing = true
+        }
+        .onChange(of: model.draft) {
+            if let draft = droppingLetter {
+                droppingLetter = nil
+                model.draft = draft
+            }
         }
         .onChange(of: model.draft.isEmpty) { _, empty in
             if empty && !model.dictation.isActive { dictationExpanded = false }
