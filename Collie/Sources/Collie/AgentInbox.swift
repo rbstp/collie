@@ -37,16 +37,19 @@ struct AgentInbox<Menu: View>: View {
                     if entries.isEmpty {
                         NoMachines()
                     }
-                    inbox(items.filter { filter.includes($0, seen: seen, now: context.date) && $0.matches(query) }, now: context.date)
+                    inbox(items.filter { $0.matches(query) }, now: context.date)
                 }
             }
         }
         .searchable(text: $query, prompt: "Search agents")
         .confirmationDialog("Snooze until", isPresented: Binding { snoozing != nil } set: { if !$0 { snoozing = nil } },
                             titleVisibility: .visible, presenting: snoozing) { item in
+            let morning = SnoozedAgents.nextMorning(after: .now)
             Button("1 hour") { snooze(item.agent, item.route, .now.addingTimeInterval(3600)) }
             Button("4 hours") { snooze(item.agent, item.route, .now.addingTimeInterval(4 * 3600)) }
-            Button("Tomorrow 9:00") { snooze(item.agent, item.route, SnoozedAgents.tomorrowMorning(after: .now)) }
+            Button(Calendar.current.isDateInToday(morning) ? "Today 8:00" : "Tomorrow 8:00") {
+                snooze(item.agent, item.route, morning)
+            }
             Button("Custom") {
                 customWake = .now.addingTimeInterval(3600)
                 custom = item
@@ -77,7 +80,7 @@ struct AgentInbox<Menu: View>: View {
 
     @ViewBuilder
     private func inbox(_ items: [InboxItem], now: Date) -> some View {
-        let active = items.filter { snoozed.wake(of: $0.agent, route: $0.route, now: now) == nil }
+        let active = items.filter { snoozed.wake(of: $0.agent, route: $0.route, now: now) == nil && filter.includes($0, seen: seen, now: now) }
         let asleep = items.compactMap { item in snoozed.wake(of: item.agent, route: item.route, now: now).map { (item, $0) } }
             .sorted { ($0.1, $0.0.route.terminalId) < ($1.1, $1.0.route.terminalId) }
         let groups = InboxSection.grouped(active, now: now)
@@ -110,7 +113,7 @@ struct AgentInbox<Menu: View>: View {
                 .accessibilityValue(showsSnoozed ? "Expanded" : "Collapsed")
             }
         }
-        if items.isEmpty && (entries.contains { $0.flock?.details != nil } || !query.isEmpty || filter != .all) {
+        if active.isEmpty && (asleep.isEmpty || filter != .all) && (entries.contains { $0.flock?.details != nil } || !query.isEmpty || filter != .all) {
             Text(query.isEmpty && filter == .inactive ? "No inactive agents"
                  : query.isEmpty && filter == .all ? "No agents running" : "No matching agents")
                 .foregroundStyle(.secondary)
@@ -148,8 +151,10 @@ struct AgentInbox<Menu: View>: View {
             }
         }
         .swipeActions(edge: .trailing) {
-            Button("Snooze", systemImage: "moon.zzz") { snoozing = item }
-                .tint(.indigo)
+            if item.agent.status != .blocked {
+                Button("Snooze", systemImage: "moon.zzz") { snoozing = item }
+                    .tint(.indigo)
+            }
         }
         .opacity(item.linkDown ? 0.5 : 1)
     }

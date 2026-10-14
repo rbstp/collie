@@ -134,8 +134,8 @@ private func entry(
     #expect(snoozed.wake(of: agent("a", .done, activity: nowMs, since: 5), route: route, now: now) == wake)
     #expect(snoozed.wake(of: agent("a", .done, activity: nowMs, since: 9), route: route, now: now) == nil)
     snoozed.snooze(agent("a", .blocked, activity: nowMs, since: 5), route: route, until: wake)
-    #expect(snoozed.wake(of: agent("a", .blocked, activity: nowMs, since: 5), route: route, now: now) == wake)
-    #expect(snoozed.wake(of: agent("a", .blocked, activity: nowMs, since: 9), route: route, now: now) == nil)
+    #expect(snoozed.wake(of: agent("a", .blocked, activity: nowMs, since: 5), route: route, now: now) == nil)
+    #expect(snoozed.wake(of: agent("a", .working, activity: nowMs, since: 9), route: route, now: now) == wake)
 }
 
 @Test func anEarlyWakeIsFinal() {
@@ -178,18 +178,22 @@ private func entry(
     #expect(SnoozedAgents.load(from: file).snoozes.isEmpty)
 }
 
-@Test func tomorrowMorningIsNineOnTheNextCalendarDay() throws {
+@Test func nextMorningIsTheNextEightOClock() throws {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = try #require(TimeZone(identifier: "America/Toronto"))
     func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) throws -> Date {
         try #require(calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute)))
     }
-    #expect(SnoozedAgents.tomorrowMorning(after: try date(2026, 10, 13, 15), calendar: calendar) == (try date(2026, 10, 14, 9)))
-    #expect(SnoozedAgents.tomorrowMorning(after: try date(2026, 10, 13, 0, 30), calendar: calendar) == (try date(2026, 10, 14, 9)))
-    #expect(SnoozedAgents.tomorrowMorning(after: try date(2026, 12, 31, 23, 59), calendar: calendar) == (try date(2027, 1, 1, 9)))
-    let fallBack = SnoozedAgents.tomorrowMorning(after: try date(2026, 10, 31, 22), calendar: calendar)
-    #expect(fallBack == (try date(2026, 11, 1, 9)))
-    #expect(fallBack.timeIntervalSince(try date(2026, 10, 31, 22)) == 12 * 3600)
+    #expect(SnoozedAgents.nextMorning(after: try date(2026, 10, 13, 15), calendar: calendar) == (try date(2026, 10, 14, 8)))
+    #expect(SnoozedAgents.nextMorning(after: try date(2026, 10, 13, 1), calendar: calendar) == (try date(2026, 10, 13, 8)))
+    #expect(SnoozedAgents.nextMorning(after: try date(2026, 10, 13, 8), calendar: calendar) == (try date(2026, 10, 14, 8)))
+    #expect(SnoozedAgents.nextMorning(after: try date(2026, 12, 31, 23, 59), calendar: calendar) == (try date(2027, 1, 1, 8)))
+    let fallBack = SnoozedAgents.nextMorning(after: try date(2026, 10, 31, 22), calendar: calendar)
+    #expect(fallBack == (try date(2026, 11, 1, 8)))
+    #expect(fallBack.timeIntervalSince(try date(2026, 10, 31, 22)) == 11 * 3600)
+    let springForward = SnoozedAgents.nextMorning(after: try date(2027, 3, 14, 1), calendar: calendar)
+    #expect(springForward == (try date(2027, 3, 14, 8)))
+    #expect(springForward.timeIntervalSince(try date(2027, 3, 14, 1)) == 6 * 3600)
 }
 
 @Test func inboxScheduleAddsWakeTimesBetweenMinutes() {

@@ -7,7 +7,7 @@ struct SnoozedAgents: StateFile {
         let statusSinceMs: UInt64
 
         func ended(by agent: AgentSummary) -> Bool {
-            statusSinceMs != agent.statusSinceMs && (agent.status == .blocked || agent.status == .done)
+            agent.status == .blocked || (agent.status == .done && statusSinceMs != agent.statusSinceMs)
         }
     }
 
@@ -52,8 +52,9 @@ struct SnoozedAgents: StateFile {
         saved.save(to: file)
     }
 
-    static func tomorrowMorning(after now: Date, calendar: Calendar = .current) -> Date {
+    static func nextMorning(after now: Date, calendar: Calendar = .current) -> Date {
+        if let today = calendar.date(bySettingHour: 8, minute: 0, second: 0, of: now), today > now { return today }
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now.addingTimeInterval(24 * 3600)
-        return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) ?? tomorrow
+        return calendar.date(bySettingHour: 8, minute: 0, second: 0, of: tomorrow) ?? tomorrow
     }
 }
