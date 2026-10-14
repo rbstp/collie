@@ -63,7 +63,8 @@ const DRIVE_TIMEOUT: Duration = Duration::from_secs(30);
 /// herdr's `agent.start` waits up to 30 s for the agent before collied prompts it.
 const TASK_NEW_TIMEOUT: Duration = Duration::from_secs(90);
 const TASK_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(150);
-/// collied's 75 s clone or pull request fetch, then `TASK_NEW_TIMEOUT`.
+/// collied's 75 s clone, or its 75 s budget for a pull request's gh read, checks and fetch,
+/// then `TASK_NEW_TIMEOUT`.
 const TASK_CLONE_TIMEOUT: Duration = Duration::from_secs(165);
 /// An unanswered mutation's `op_id` is reused for an identical retry within this window.
 /// Longer than any mutation timeout, shorter than collied's 600 s outcome cache.
@@ -2011,6 +2012,12 @@ impl CollieCore {
         label: Option<String>,
         ultracode: bool,
     ) -> Result<TaskStarted, CoreError> {
+        if !(1..=u64::from(u32::MAX)).contains(&number) {
+            return Err(invalid(
+                "number",
+                "enter a pull request number from 1 to 4294967295",
+            ));
+        }
         task_new_inner(
             self,
             machine_id,

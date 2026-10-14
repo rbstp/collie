@@ -1210,10 +1210,12 @@ impl Driver {
                 "herdr returned another source checkout",
             );
         }
+        let deadline = tokio::time::Instant::now() + CLONE_TIMEOUT;
         let pulled;
         let (worktree, head) = match worktree {
             TaskWorktree::PullRequest { number } => {
-                let head = pull_request_head(&checkout, *number).await?;
+                authorized(auth)?;
+                let head = within(deadline, pull_request_head(&checkout, *number)).await?;
                 pulled = TaskWorktree::Create {
                     branch: head.branch.clone(),
                 };
@@ -1253,7 +1255,7 @@ impl Driver {
         };
         if let Some((number, head)) = &head {
             authorized(auth)?;
-            fetch_pull_request(&checkout, *number, head).await?;
+            fetch_pull_request(&checkout, *number, head, deadline).await?;
         }
         authorized(auth)?;
         let result = match worktree {
@@ -1985,7 +1987,30 @@ async fn checked_branch(checkout: &Cwd, branch: &str) -> Result<(), Fail> {
     Ok(())
 }
 
-async fn fetch_pull_request(checkout: &Cwd, number: u64, head: &pulls::Head) -> Result<(), Fail> {
+/// gh, the checks and the fetch share one budget, within the phone's `TASK_CLONE_TIMEOUT`.
+async fn within<T>(
+    deadline: tokio::time::Instant,
+    work: impl Future<Output = Result<T, Fail>>,
+) -> Result<T, Fail> {
+    tokio::time::timeout_at(deadline, work)
+        .await
+        .unwrap_or_else(|_| {
+            fail(
+                ErrorCode::InvalidParams,
+                format!(
+                    "reading the pull request timed out after {} s",
+                    CLONE_TIMEOUT.as_secs()
+                ),
+            )
+        })
+}
+
+async fn fetch_pull_request(
+    checkout: &Cwd,
+    number: u64,
+    head: &pulls::Head,
+    deadline: tokio::time::Instant,
+) -> Result<(), Fail> {
     let branch = head.branch.as_str();
     let mut command = Command::new("git");
     command.current_dir(checkout.as_str()).args([
@@ -1997,17 +2022,16 @@ async fn fetch_pull_request(checkout: &Cwd, number: u64, head: &pulls::Head) -> 
         "--",
         &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}"),
     ]);
-    run_clone(
-        network(command),
-        tokio::time::Instant::now() + CLONE_TIMEOUT,
-    )
-    .await
-    .map_err(|(_, message)| invalid(&format!("fetching {branch} from origin failed: {message}")))?;
-    track_pull_request(checkout, number, head).await
+    run_clone(network(command), deadline)
+        .await
+        .map_err(|(_, message)| {
+            invalid(&format!("fetching {branch} from origin failed: {message}"))
+        })?;
+    within(deadline, track_pull_request(checkout, number, head)).await
 }
 
-/// `origin/<branch>` must be the pull request's head. The local branch is created tracking
-/// it unless one exists, which is left as it is.
+/// `origin/<branch>` and any local branch of that name must be the pull request's head, so
+/// the agent never works on other code. A missing local branch is created tracking it.
 async fn track_pull_request(checkout: &Cwd, number: u64, head: &pulls::Head) -> Result<(), Fail> {
     let branch = head.branch.as_str();
     let remote = format!("refs/remotes/origin/{branch}");
@@ -2027,10 +2051,21 @@ async fn track_pull_request(checkout: &Cwd, number: u64, head: &pulls::Head) -> 
             format!("origin's {branch} is not the head of pull request #{number}; try again"),
         );
     }
-    if commit(format!("refs/heads/{branch}")).await?.is_none()
-        && git::line(checkout, &["branch", "--track", "--", branch, &remote])
-            .await?
-            .is_none()
+    match commit(format!("refs/heads/{branch}")).await? {
+        Some(local) if local == head.oid => return Ok(()),
+        Some(_) => {
+            return fail(
+                ErrorCode::InvalidParams,
+                format!(
+                    "a local branch {branch} exists at another commit than pull request #{number}; open it with Open or delete it"
+                ),
+            );
+        }
+        None => {}
+    }
+    if git::line(checkout, &["branch", "--track", "--", branch, &remote])
+        .await?
+        .is_none()
     {
         return fail(
             ErrorCode::InvalidParams,
@@ -3270,7 +3305,8 @@ mod tests {
             oid: oid.into(),
         };
         git(&["remote", "add", "origin", root.to_str().unwrap()]);
-        let refused = fetch_pull_request(&checkout, 7, &head("main", &second))
+        let deadline = tokio::time::Instant::now() + CLONE_TIMEOUT;
+        let refused = fetch_pull_request(&checkout, 7, &head("main", &second), deadline)
             .await
             .unwrap_err();
         assert!(
@@ -3295,12 +3331,20 @@ mod tests {
             git(&["rev-parse", "--abbrev-ref", "feature@{upstream}"]),
             "origin/feature"
         );
-        git(&["update-ref", "refs/heads/feature", &first]);
         track("feature", &second).await.unwrap();
+        git(&["update-ref", "refs/heads/feature", &first]);
+        let stale = track("feature", &second).await.unwrap_err();
+        assert!(
+            stale
+                .1
+                .contains("a local branch feature exists at another commit"),
+            "{}",
+            stale.1
+        );
         assert_eq!(
             git(&["rev-parse", "refs/heads/feature"]),
             first,
-            "a local branch is left as it is"
+            "never moved"
         );
     }
 
