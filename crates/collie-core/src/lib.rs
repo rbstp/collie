@@ -565,8 +565,6 @@ pub enum AgentKey {
     CtrlE,
     CtrlK,
     CtrlL,
-    CtrlO,
-    CtrlT,
     CtrlU,
     CtrlW,
 }
@@ -591,8 +589,6 @@ impl From<AgentKey> for Key {
             AgentKey::CtrlE => Self::CtrlE,
             AgentKey::CtrlK => Self::CtrlK,
             AgentKey::CtrlL => Self::CtrlL,
-            AgentKey::CtrlO => Self::CtrlO,
-            AgentKey::CtrlT => Self::CtrlT,
             AgentKey::CtrlU => Self::CtrlU,
             AgentKey::CtrlW => Self::CtrlW,
         }

@@ -662,7 +662,7 @@ final class AgentModel {
         }
     }
 
-    /// Only into an empty input box, so unsent text there is never replaced. False when it can no longer send.
+    /// With `expected_draft` "", collied never replaces unsent text in a Claude Code input box. False when it can no longer send.
     private func sendAlone(_ text: String) async throws -> Bool {
         mirrorDelay?.cancel()
         await mirroring?.value
@@ -809,30 +809,33 @@ final class AgentModel {
         return key.with(modifier).flatMap(tap)
     }
 
-    /// With Control selected, a letter typed on the keyboard goes out as Control and that letter
-    /// instead of into the field. False when the edit is anything else.
+    /// A selected modifier applies to the next edit only. With Control, a listed letter typed on the
+    /// keyboard goes out as Control and that letter instead of into the field; false for anything else.
     func controlTyped(from old: String, to new: String) -> Bool {
-        guard modifier == .control, new.count == old.count + 1 else { return false }
+        guard let selected = modifier, new != old else { return false }
+        modifier = nil
+        guard selected == .control, new.count == old.count + 1 else { return false }
         let at = zip(old, new).prefix { $0 == $1 }.count
         var rest = new
         let letter = rest.remove(at: rest.index(rest.startIndex, offsetBy: at))
-        guard rest == old, let key = AgentKey.control(letter) else { return false }
-        modifier = nil
+        guard rest == old, let key = AgentKey.control(letter), canTap(key) else { return false }
         tap(key)
         return true
     }
 
     func canRun(_ shortcut: StripShortcut) -> Bool {
+        guard shortcut.applies(to: shortcutKind) else { return false }
         if let key = shortcut.agentKey { return canTap(key) }
         return isTerminal ? !sendingPrompt && !unlocking : canSendText
     }
 
-    /// A text shortcut goes out on its own, as a command in a shell; to an agent only into an empty input box.
+    /// A text shortcut goes out on its own, as a command in a shell; collied refuses it while a
+    /// Claude Code input box holds unsent text.
     @discardableResult
     func run(_ shortcut: StripShortcut) -> Task<Void, Never>? {
         modifier = nil
-        if let key = shortcut.agentKey { return tap(key) }
         guard canRun(shortcut) else { return nil }
+        if let key = shortcut.agentKey { return tap(key) }
         if isTerminal { return Task { await sendCommand(shortcut.text) } }
         promptError = nil
         return Task {
@@ -1093,7 +1096,7 @@ enum KeyModifier: CaseIterable {
 extension AgentKey {
     static let strip: [AgentKey] = [.esc, .left, .up, .down, .right, .tab, .backspace, .enter]
     static let combos: [AgentKey] = [.shiftTab, .ctrlEnter, .shiftLeft, .ctrlC]
-    static let controlLetters: [AgentKey] = [.ctrlA, .ctrlB, .ctrlC, .ctrlE, .ctrlK, .ctrlL, .ctrlO, .ctrlT, .ctrlU, .ctrlW]
+    static let controlLetters: [AgentKey] = [.ctrlA, .ctrlB, .ctrlC, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW]
     static let all: [AgentKey] = strip + combos.filter { $0 != .ctrlC } + controlLetters
 
     /// The combination with a modifier; nil when collied has no such key.
@@ -1135,8 +1138,6 @@ extension AgentKey {
         case .ctrlE: "ctrl+e"
         case .ctrlK: "ctrl+k"
         case .ctrlL: "ctrl+l"
-        case .ctrlO: "ctrl+o"
-        case .ctrlT: "ctrl+t"
         case .ctrlU: "ctrl+u"
         case .ctrlW: "ctrl+w"
         }
@@ -1155,7 +1156,7 @@ extension AgentKey {
         case .shiftTab: "⇧⇥"
         case .backspace: "⌫"
         case .ctrlEnter: "⌃⏎"
-        case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlO, .ctrlT, .ctrlU, .ctrlW: "^" + name.dropFirst(5).uppercased()
+        case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW: "^" + name.dropFirst(5).uppercased()
         }
     }
 
@@ -1172,7 +1173,7 @@ extension AgentKey {
         case .shiftTab: "Shift Tab"
         case .backspace: "Backspace"
         case .ctrlEnter: "Control Return"
-        case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlO, .ctrlT, .ctrlU, .ctrlW: "Control " + name.dropFirst(5).uppercased()
+        case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW: "Control " + name.dropFirst(5).uppercased()
         }
     }
 }

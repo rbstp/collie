@@ -3102,8 +3102,6 @@ mod tests {
             (Key::CtrlE, "ctrl+e"),
             (Key::CtrlK, "ctrl+k"),
             (Key::CtrlL, "ctrl+l"),
-            (Key::CtrlO, "ctrl+o"),
-            (Key::CtrlT, "ctrl+t"),
             (Key::CtrlU, "ctrl+u"),
             (Key::CtrlW, "ctrl+w"),
         ];

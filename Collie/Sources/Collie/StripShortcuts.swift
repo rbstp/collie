@@ -18,7 +18,11 @@ struct StripShortcut: Codable, Identifiable, Equatable {
         return agentKey?.symbol ?? text
     }
 
-    func applies(to kind: String?) -> Bool { self.kind == nil || self.kind == kind }
+    /// A key name the app no longer knows is never sent as text, and text runs in a shell only from a Terminal shortcut.
+    func applies(to kind: String?) -> Bool {
+        if key != nil { return agentKey != nil && (self.kind == nil || self.kind == kind) }
+        return kind == "terminal" ? self.kind == "terminal" : self.kind == nil || self.kind == kind
+    }
 
     static let kinds: [(String, String?)] = [
         ("All", nil), ("Claude Code", "claude"), ("Codex", "codex"), ("Copilot CLI", "copilot"), ("Terminal", "terminal"),
@@ -131,7 +135,7 @@ private struct StripShortcutEditor: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 } footer: {
-                    Text("Sent at once, only while the agent’s input box is empty. In a terminal, it runs as a command.")
+                    Text("Sent at once. Claude Code refuses it while its input box holds unsent text; Codex and Copilot CLI take it after any text there. It runs as a command in a terminal only when Agents is Terminal.")
                 }
             }
             Picker("Agents", selection: $shortcut.kind) {

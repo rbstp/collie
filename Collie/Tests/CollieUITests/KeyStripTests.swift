@@ -25,6 +25,8 @@ final class KeyStripTests: XCTestCase {
         keys.tap()
         XCTAssertTrue(escape.appears(within: 5), app.debugDescription)
         XCTAssertTrue(keys.isSelected, app.debugDescription)
+        // Shortcuts are kept on the simulator, so an earlier failed run may have left some.
+        removeShortcuts(app)
 
         let shift = app.buttons["Shift"]
         shift.tap()
@@ -77,20 +79,23 @@ final class KeyStripTests: XCTestCase {
         custom.tap()
         effort.tap()
 
-        app.buttons["Edit key shortcuts"].tap()
-        XCTAssertTrue(addShortcut.appears(within: 5), app.debugDescription)
-        for label in ["/effort high", "⇧⇥"] {
-            let row = app.cells.containing(NSPredicate(format: "label == %@", label)).firstMatch
-            XCTAssertTrue(row.appears(within: 5), app.debugDescription)
-            row.swipeLeft()
-            app.buttons["Delete"].tap()
-            XCTAssertTrue(row.disappears(within: 5), app.debugDescription)
-        }
-        app.buttons["Done"].tap()
+        removeShortcuts(app)
         XCTAssertTrue(effort.disappears(within: 5), app.debugDescription)
 
         keys.tap()
         XCTAssertTrue(escape.disappears(within: 5), app.debugDescription)
         XCTAssertFalse(keys.isSelected, app.debugDescription)
+    }
+
+    private func removeShortcuts(_ app: XCUIApplication) {
+        app.buttons["Edit key shortcuts"].tap()
+        let empty = app.staticTexts["No key shortcuts"]
+        for _ in 0..<20 where !empty.appears(within: 2) {
+            let row = app.cells.firstMatch
+            row.swipeLeft()
+            app.buttons["Delete"].tap()
+        }
+        XCTAssertTrue(empty.exists, app.debugDescription)
+        app.buttons["Done"].tap()
     }
 }

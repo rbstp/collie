@@ -753,7 +753,7 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     #expect(Set(names).count == names.count)
     #expect(names.allSatisfy { !$0.isEmpty })
     #expect(AgentKey.all.allSatisfy { AgentKey(name: $0.name) == $0 })
-    #expect(AgentKey.all.count == 21)
+    #expect(AgentKey.all.count == 19)
 }
 
 @MainActor
@@ -2985,11 +2985,17 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     let model = agentModel(core)
     model.poll()
     #expect(!model.controlTyped(from: "ab", to: "abc"))
+    for edit in ["abcd", "abd", "ab1", "a"] {
+        model.select(.control)
+        #expect(!model.controlTyped(from: "ab", to: edit))
+        #expect(model.modifier == nil)
+    }
+    #expect(!model.controlTyped(from: "abd", to: "abdc"))
+    model.select(.shift)
+    #expect(!model.controlTyped(from: "ab", to: "abc"))
+    #expect(model.modifier == nil)
     model.select(.control)
-    #expect(!model.controlTyped(from: "ab", to: "abcd"))
-    #expect(!model.controlTyped(from: "ab", to: "abd"))
-    #expect(!model.controlTyped(from: "ab", to: "ab1"))
-    #expect(model.modifier == .control)
+    #expect(!model.controlTyped(from: "ab", to: "ab"))
     #expect(model.controlTyped(from: "ab", to: "aCb"))
     #expect(model.modifier == nil)
     #expect(!model.controlTyped(from: "ab", to: "abu"))
@@ -2998,6 +3004,23 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     await poll { core.snapshot.keys.joined().count == 2 }
     #expect(Array(core.snapshot.keys.joined()) == [.ctrlC, .ctrlU])
     #expect(AgentKey.control("d") == nil && AgentKey.control("j") == nil && AgentKey.control("m") == nil)
+    #expect(AgentKey.control("o") == nil && AgentKey.control("t") == nil)
+}
+
+@MainActor
+@Test func controlLetsTheLetterThroughWhileKeysAreOff() {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "Jump to bottom ↓", truncated: false, jumpBanner: true)
+    }
+    let model = agentModel(core)
+    model.poll()
+    #expect(!model.acceptsKeys)
+    model.select(.control)
+    #expect(!model.controlTyped(from: "", to: "c"))
+    #expect(model.modifier == nil)
+    #expect(core.snapshot.keys.isEmpty)
 }
 
 @MainActor
@@ -3055,17 +3078,23 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     let model = terminalModel(core, FakeUnlocker(signs: true))
     model.poll()
     model.draft = "ls"
-    await model.run(StripShortcut(text: "git status"))?.value
+    #expect(model.run(StripShortcut(text: "git status")) == nil)
+    await model.run(StripShortcut(text: "git status", kind: "terminal"))?.value
     #expect(core.snapshot.commands == ["git status"])
     #expect(model.draft == "ls")
 }
 
 @Test func shortcutsApplyToTheirKindAndAreKeptInOrder() throws {
     let file = try makeTemporaryDirectory().appending(path: "strip-shortcuts.json")
-    let all = StripShortcut(key: AgentKey.ctrlO.name)
+    let all = StripShortcut(key: AgentKey.ctrlL.name)
     let codex = StripShortcut(name: "Review", text: "/review", kind: "codex")
     #expect(all.applies(to: "terminal") && all.applies(to: "claude"))
     #expect(codex.applies(to: "codex") && !codex.applies(to: "claude"))
+    let text = StripShortcut(text: "git status")
+    #expect(text.applies(to: "claude") && !text.applies(to: "terminal"))
+    #expect(StripShortcut(text: "ls", kind: "terminal").applies(to: "terminal"))
+    let unknown = StripShortcut(key: "ctrl+o")
+    #expect(unknown.agentKey == nil && !unknown.applies(to: "claude"))
     StripShortcuts(items: [codex, all]).save(to: file)
     #expect(StripShortcuts.load(from: file).items == [codex, all])
 }

@@ -699,10 +699,6 @@ pub enum Key {
     CtrlK,
     #[serde(rename = "ctrl+l")]
     CtrlL,
-    #[serde(rename = "ctrl+o")]
-    CtrlO,
-    #[serde(rename = "ctrl+t")]
-    CtrlT,
     #[serde(rename = "ctrl+u")]
     CtrlU,
     #[serde(rename = "ctrl+w")]
@@ -729,8 +725,6 @@ impl Key {
             Self::CtrlE => "ctrl+e",
             Self::CtrlK => "ctrl+k",
             Self::CtrlL => "ctrl+l",
-            Self::CtrlO => "ctrl+o",
-            Self::CtrlT => "ctrl+t",
             Self::CtrlU => "ctrl+u",
             Self::CtrlW => "ctrl+w",
         }
@@ -2740,6 +2734,8 @@ mod tests {
             r#"["ctrl+d"]"#.to_owned(),
             r#"["ctrl+z"]"#.to_owned(),
             r#"["ctrl+r"]"#.to_owned(),
+            r#"["ctrl+o"]"#.to_owned(),
+            r#"["ctrl+t"]"#.to_owned(),
             r#"["ctrl+j"]"#.to_owned(),
             r#"["ctrl+m"]"#.to_owned(),
             r#"["shift+enter"]"#.to_owned(),
