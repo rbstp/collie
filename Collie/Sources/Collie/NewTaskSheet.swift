@@ -148,7 +148,7 @@ struct NewTaskSheet: View {
                                 } label: {
                                     HStack {
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(session.firstPrompt).lineLimit(2)
+                                            Text(session.firstPrompt.isEmpty ? "Prompt not shown" : session.firstPrompt).lineLimit(2)
                                             HStack {
                                                 AgentKindLabel(kind: session.agent)
                                                 Text(Date(timeIntervalSince1970: Double(session.modifiedMs) / 1000), format: .relative(presentation: .named))

@@ -1496,7 +1496,7 @@
           "$ref": "#/$defs/AgentKind"
         },
         "first_prompt": {
-          "description": "The first line of the session's first prompt, at most 160 characters.",
+          "description": "The first line of the session's first prompt, at most 160 characters; empty when it\nis not in the first 256 KiB of the transcript.",
           "type": "string"
         },
         "modified_ms": {

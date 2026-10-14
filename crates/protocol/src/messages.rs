@@ -1351,7 +1351,8 @@ pub struct TaskWorktreeInfo {
 pub struct TaskSessionInfo {
     pub agent: AgentKind,
     pub session_id: SessionId,
-    /// The first line of the session's first prompt, at most 160 characters.
+    /// The first line of the session's first prompt, at most 160 characters; empty when it
+    /// is not in the first 256 KiB of the transcript.
     pub first_prompt: String,
     pub modified_ms: u64,
 }

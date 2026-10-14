@@ -269,7 +269,7 @@ impl Transcripts {
             .collect();
         recent("claude", files, |file, _| {
             let text = head(file, HEAD_BYTES)?;
-            claude_first_prompt(&String::from_utf8_lossy(&text))
+            Some(claude_first_prompt(&String::from_utf8_lossy(&text)))
         })
     }
 
@@ -305,7 +305,7 @@ impl Transcripts {
             }
             file.seek(SeekFrom::Start(0)).ok()?;
             let text = head(file, HEAD_BYTES)?;
-            codex_first_prompt(&String::from_utf8_lossy(&text))
+            Some(codex_first_prompt(&String::from_utf8_lossy(&text)))
         })
     }
 }
@@ -318,11 +318,13 @@ pub struct Session {
     pub modified_ms: u64,
 }
 
-/// Newest first by mtime; only the `MAX_CANDIDATES` newest are opened.
+/// Newest first by mtime; only the `MAX_CANDIDATES` newest are opened. A transcript longer
+/// than its head without a prompt found there is listed with an empty one: the prompt may
+/// sit in a line the head cuts (an inline image) or after it.
 fn recent(
     agent: &'static str,
     files: Vec<(PathBuf, String)>,
-    prompt: impl Fn(&mut File, &str) -> Option<String>,
+    prompt: impl Fn(&mut File, &str) -> Option<Option<String>>,
 ) -> Vec<Session> {
     let mut dated: Vec<(SystemTime, PathBuf, String)> = files
         .into_iter()
@@ -338,8 +340,9 @@ fn recent(
         .into_iter()
         .take(MAX_CANDIDATES)
         .filter_map(|(_, path, id)| {
-            let (mut file, _, modified) = open(&path)?;
-            let first_prompt = prompt(&mut file, &id)?;
+            let (mut file, len, modified) = open(&path)?;
+            let first_prompt =
+                prompt(&mut file, &id)?.or_else(|| (len > HEAD_BYTES).then(String::new))?;
             Some(Session {
                 agent,
                 modified_ms: modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64,
@@ -1121,5 +1124,60 @@ mod tests {
         assert!(!t.has_session("claude", cwd, &uuid(2)));
         assert!(!t.has_session("copilot", cwd, CLAUDE_ID));
         assert!(!t.has_session("claude", cwd, "../-Users-me-src-other/x"));
+    }
+
+    #[test]
+    fn a_prompt_past_or_across_the_head_lists_the_session_without_its_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = roots(dir.path());
+        let cwd = "/Users/me/src/collie";
+        let project = dir.path().join("claude/projects/-Users-me-src-collie");
+        let big = "A".repeat(HEAD_BYTES as usize + 1000);
+        let human = |text: &str| {
+            format!(
+                r#"{{"type":"user","isSidechain":false,"origin":{{"kind":"human"}},"message":{{"role":"user","content":[{{"type":"image","source":{{"data":"{big}"}}}},{{"type":"text","text":"{text}"}}]}}}}"#
+            )
+        };
+        let late = format!(
+            "{{\"type\":\"attachment\",\"data\":\"{big}\"}}\n{}",
+            r#"{"type":"user","isSidechain":false,"origin":{"kind":"human"},"message":{"role":"user","content":"look later"}}"#
+        );
+        aged(
+            &project.join(format!("{}.jsonl", uuid(1))),
+            &human("look at this"),
+            30,
+        );
+        aged(&project.join(format!("{}.jsonl", uuid(2))), &late, 20);
+
+        let day = dir.path().join("codex/sessions/2026/10/05");
+        let meta = |id: &str, source: &str| {
+            format!(
+                r#"{{"type":"session_meta","payload":{{"id":"{id}","cwd":"{cwd}","source":"{source}"}}}}"#
+            )
+        };
+        let image = format!(
+            r#"{{"type":"event_msg","payload":{{"type":"item_completed","item":{{"type":"UserMessage","content":[{{"type":"image","url":"data:image/png;base64,{big}"}},{{"type":"text","text":"fix it"}}]}}}}}}"#
+        );
+        for (n, source) in [(3, "cli"), (4, "exec")] {
+            aged(
+                &day.join(format!("rollout-x-{}.jsonl", uuid(n))),
+                &format!("{}\n{image}\n", meta(&uuid(n), source)),
+                10,
+            );
+        }
+
+        let listed: Vec<(&str, String, String)> = t
+            .sessions(cwd, true, true)
+            .into_iter()
+            .map(|s| (s.agent, s.id, s.first_prompt))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("claude", uuid(1), String::new()),
+                ("claude", uuid(2), String::new()),
+                ("codex", uuid(3), String::new()),
+            ]
+        );
     }
 }
