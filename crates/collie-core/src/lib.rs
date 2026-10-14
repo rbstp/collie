@@ -38,8 +38,8 @@ pub use approvals::{
 };
 pub use attachments::UploadProgress;
 use conn::{
-    Conn, ConnectError, FOREGROUND_RECONNECT, IdentitySlot, LinkPhase, NodeSlot, PushSlot, Pushes,
-    Registrations, RequestError, blocking,
+    Conn, ConnectError, FOREGROUND_RECONNECT, IdentitySlot, Link, LinkPhase, NodeSlot, PushSlot,
+    Pushes, Registrations, RequestError, blocking,
 };
 pub use identity::IdentitySigner;
 use pin::PinError;
@@ -1114,7 +1114,7 @@ impl CollieCore {
                     c.machine.label,
                     link.phase,
                     link.last_dial.elapsed().as_secs(),
-                    link.last_error
+                    link_error(c, &link)
                 );
                 (c.machine.node_id.clone(), line)
             })
@@ -1301,7 +1301,7 @@ impl CollieCore {
         let conn = lock(&self.inner.conns).get(&machine_id).cloned()?;
         let (link, last_error) = {
             let link = lock(&conn.shared.link);
-            (link.phase, link.last_error.clone())
+            (link.phase, link_error(&conn, &link))
         };
         let state = lock(&conn.shared.flock);
         let flock = state.flock.as_ref();
@@ -3111,15 +3111,22 @@ fn request_error(conn: &Conn, e: RequestError) -> CoreError {
     }
 }
 
+fn link_error(conn: &Conn, link: &Link) -> Option<String> {
+    match link.version_mismatch {
+        Some(collied) => Some(version_mismatch(collied, &lock(&conn.shared.label))),
+        None => link.last_error.clone(),
+    }
+}
+
 fn view(conn: &Conn) -> MachineFlock {
-    let label = lock(&conn.shared.label).clone();
-    let (link, last_error, mismatch) = {
+    let (link, last_error, version_mismatch) = {
         let link = lock(&conn.shared.link);
-        let mismatch = link.version_mismatch.map(|v| version_mismatch(v, &label));
-        (link.phase, link.last_error.clone(), mismatch)
+        (
+            link.phase,
+            link_error(conn, &link),
+            link.version_mismatch.is_some(),
+        )
     };
-    let version_mismatch = mismatch.is_some();
-    let last_error = mismatch.or(last_error);
     let guard = lock(&conn.shared.flock);
     let state = &*guard;
     let last_error = last_error.or_else(|| {
@@ -5387,6 +5394,8 @@ mod tailnet_tests {
         let update = "Update collied on Studio: run just collied-install there.";
         assert!(stopped.version_mismatch);
         assert_eq!(stopped.last_error.as_deref(), Some(update));
+        let agent = core.agent_view(id(), t1(), 0).unwrap();
+        assert_eq!(agent.last_error.as_deref(), Some(update));
         let asked = Instant::now();
         let err = rt
             .block_on(core.prompt(id(), t1(), "parked".into(), None))
