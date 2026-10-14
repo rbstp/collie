@@ -54,6 +54,9 @@ pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
 pub const LOCKED: &str = "the terminal is locked; unlock it again";
 const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
 const COMMAND_SHOWN: &str = "a slash command shows in the input box; send it as a prompt";
+const STARTUP_PROMPT: &str = "the agent is blocked on a startup prompt; answer it in the terminal";
+pub const CODEX_UPDATE: &str = "Codex is asking to update. Answer it in Terminal.";
+pub const TOO_LONG: &str = "The line is longer than the terminal accepts before its shell prompt shows. Wait for the prompt and try again.";
 const MAX_FOLDERS: usize = 500;
 const MAX_FOLDERS_SCANNED: usize = 10_000;
 /// Within the phone's `TASK_CLONE_TIMEOUT`, before the agent start's own budget.
@@ -76,16 +79,27 @@ const UF_HIDDEN: u32 = 0x8000;
 /// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
 const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
 
+fn startup_prompt(kind: &AgentKind, screen: Option<&str>) -> &'static str {
+    if kind.as_str() == "codex" && screen.is_some_and(prompt::codex_update) {
+        CODEX_UPDATE
+    } else {
+        STARTUP_PROMPT
+    }
+}
+
 pub(crate) fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, Fail> {
     Err((code, message.into()))
 }
 
 pub fn herdr_fail(e: herdr::Error) -> Fail {
     tracing::debug!(error = %e, "herdr call failed");
-    let herdr::Error::Herdr { code, .. } = &e else {
+    let herdr::Error::Herdr { code, message } = &e else {
         return (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned());
     };
     let (code, message) = match code.as_str() {
+        "agent_start_input_failed" | "pane_send_failed" if canonical_limit(message) => {
+            (ErrorCode::TooLarge, TOO_LONG)
+        }
         "agent_blocked" => (ErrorCode::AgentBlocked, BLOCKED),
         "agent_not_ready" | "agent_not_running" | "agent_launch_pending" => {
             (ErrorCode::AgentNotReady, "agent is not ready")
@@ -126,12 +140,23 @@ fn granted(auth: &Authorized) -> Result<(), Fail> {
     }
 }
 
-/// herdr's error message may quote the input, so only its code is kept.
+/// herdr 0.9.4 on macOS refuses a line longer than the terminal's canonical input limit
+/// while its shell starts, instead of cutting it.
+fn canonical_limit(message: &str) -> bool {
+    message.contains("terminal is in canonical mode")
+}
+
+/// herdr's error message may quote the input, so only its code is kept, or the fact that
+/// the line was too long.
 fn quiet_fail(e: herdr::Error) -> Fail {
     match e {
-        herdr::Error::Herdr { code, .. } => herdr_fail(herdr::Error::Herdr {
+        herdr::Error::Herdr { code, message } => herdr_fail(herdr::Error::Herdr {
             code,
-            message: String::new(),
+            message: if canonical_limit(&message) {
+                message
+            } else {
+                String::new()
+            },
         }),
         other => herdr_fail(other),
     }
@@ -1347,16 +1372,12 @@ impl Driver {
         if let Some(text) = &p.prompt {
             // herdr may not rule another kind's startup prompt `blocked`, and the prompt's
             // Enter would answer it.
-            if p.agent.as_str() != "claude"
-                && herdr::detection_text(&self.herdr, &pane.pane_id)
-                    .await
-                    .map_or(true, |t| prompt::shows_dialog(&t))
-            {
-                return Err(left_open((
-                    ErrorCode::AgentBlocked,
-                    "the agent is blocked on a startup prompt; answer it in the terminal"
-                        .to_owned(),
-                )));
+            if p.agent.as_str() != "claude" {
+                let screen = herdr::detection_text(&self.herdr, &pane.pane_id).await.ok();
+                if screen.as_deref().is_none_or(prompt::shows_dialog) {
+                    let message = startup_prompt(&p.agent, screen.as_deref());
+                    return Err(left_open((ErrorCode::AgentBlocked, message.to_owned())));
+                }
             }
             authorized(auth).map_err(left_open)?;
             herdr::agent_prompt(&self.herdr, &name, text.as_str())
@@ -1369,7 +1390,7 @@ impl Driver {
         })
     }
 
-    // Readiness rules follow herdr's own `herdr agent start` CLI (0.9.3). The busy retry
+    // Readiness rules follow herdr's own `herdr agent start` CLI (0.9.4). The busy retry
     // gets 30 s instead of the CLI's 2 s and, unlike the CLI, does not require the shell
     // in the foreground: the CLI targets any pane, this one was just created.
     async fn start_agent(
@@ -1458,8 +1479,11 @@ impl Driver {
         if flock::status(&a.agent_status) != AgentStatus::Blocked {
             return Ok(());
         }
-        let message = if kind.as_str() != "claude" {
-            "the agent is blocked on a startup prompt; answer it in the terminal"
+        let message = if kind.as_str() == "codex" {
+            let screen = herdr::detection_text(&self.herdr, &pane.pane_id).await.ok();
+            startup_prompt(kind, screen.as_deref())
+        } else if kind.as_str() != "claude" {
+            STARTUP_PROMPT
         } else if herdr::detection_text(&self.herdr, &pane.pane_id)
             .await
             .is_ok_and(|t| prompt::Menu::parse(&t).is_some_and(|m| m.is_trust_prompt()))

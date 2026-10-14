@@ -119,7 +119,7 @@ pub enum CoreError {
         message: String,
     },
     #[error("the agent is waiting for an approval")]
-    AgentBlocked,
+    AgentBlocked { message: String },
     #[error("the agent is not ready for input")]
     AgentNotReady,
     #[error("this needs confirmation")]
@@ -234,7 +234,7 @@ impl From<SessionError> for CoreError {
                 ErrorCode::ApprovalNotFound => Self::ApprovalNotFound,
                 ErrorCode::ApprovalExpired => Self::ApprovalExpired,
                 ErrorCode::ApprovalAlreadyResolved => Self::ApprovalAlreadyResolved,
-                ErrorCode::AgentBlocked => Self::AgentBlocked,
+                ErrorCode::AgentBlocked => Self::AgentBlocked { message },
                 ErrorCode::AgentNotReady => Self::AgentNotReady,
                 ErrorCode::ConfirmRequired => Self::ConfirmRequired,
                 ErrorCode::NotFound => Self::NotFound,
@@ -3230,7 +3230,7 @@ mod tests {
     #[test]
     fn server_errors_map_to_readable_variants() {
         let e = server(ErrorCode::AgentBlocked, "agent is blocked");
-        assert!(matches!(e, CoreError::AgentBlocked));
+        assert!(matches!(&e, CoreError::AgentBlocked { message } if message == "agent is blocked"));
         assert_eq!(e.to_string(), "the agent is waiting for an approval");
         assert!(matches!(
             server(ErrorCode::AgentNotReady, ""),
@@ -4906,7 +4906,7 @@ mod tailnet_tests {
         let err = rt
             .block_on(core.send_keys(id(), t1(), vec![AgentKey::ShiftTab, AgentKey::Down]))
             .unwrap_err();
-        assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
+        assert!(matches!(err, CoreError::AgentBlocked { .. }), "{err:?}");
         rt.block_on(core.type_text(id(), t1(), "DuckDB\n\tRedis".into()))
             .unwrap();
         let options = rt.block_on(core.task_options(id())).unwrap();

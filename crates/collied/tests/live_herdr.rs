@@ -406,6 +406,38 @@ async fn scenario(session: &HerdrSession) {
         assert!(Instant::now() < deadline, "the command never ran");
     }
     drop(watcher);
+
+    // A line past the canonical input limit while `cat` reads in canonical mode: herdr
+    // 0.9.4 refuses it on macOS instead of cutting it.
+    let cat = TerminalRunParams {
+        op_id: OpId::new("C".repeat(22)).unwrap(),
+        terminal_id: terminal.clone(),
+        text: PromptText::new("cat").unwrap(),
+    };
+    assert_eq!(drive.terminal_run(cat, &yes).await, Ok(Response::Ok));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let long = TerminalRunParams {
+        op_id: OpId::new("L".repeat(22)).unwrap(),
+        terminal_id: terminal.clone(),
+        text: PromptText::new(format!("#{}", "x".repeat(2000))).unwrap(),
+    };
+    let reply = drive.terminal_run(long, &yes).await;
+    if cfg!(target_os = "macos") {
+        assert_eq!(
+            reply,
+            Err((ErrorCode::TooLarge, collied::drive::TOO_LONG.to_owned()))
+        );
+    }
+    let interrupt = AgentSendKeysParams {
+        op_id: OpId::new("I".repeat(22)).unwrap(),
+        terminal_id: terminal.clone(),
+        keys: vec![Key::CtrlC],
+    };
+    assert_eq!(
+        drive.terminal_send_keys(interrupt, &yes).await,
+        Ok(Response::Ok)
+    );
+
     let prompt = AgentPromptParams {
         op_id: OpId::new("P".repeat(22)).unwrap(),
         terminal_id: terminal.clone(),

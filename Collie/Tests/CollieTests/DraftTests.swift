@@ -74,7 +74,7 @@ private func entry(
     let model = screen(core, file)
     model.draft = "continue"
     model.saveDraft()
-    core.set(error: .AgentBlocked)
+    core.set(error: .AgentBlocked(message: ""))
     await model.sendPrompt()
     #expect(screen(core, file).draft == "continue")
 
@@ -190,7 +190,7 @@ private func entry(
     #expect(AgentDrafts.load(from: file).drafts.isEmpty)
 
     model.draft = "deploy again"
-    core.set(hold: true, error: .AgentBlocked)
+    core.set(hold: true, error: .AgentBlocked(message: ""))
     let failed = Task { await model.sendPrompt() }
     await core.waitHeld(1)
     #expect(screen(core, file).draft.isEmpty)

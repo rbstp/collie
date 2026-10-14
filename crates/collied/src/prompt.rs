@@ -170,11 +170,23 @@ pub fn amend(decision: Decision) -> Option<(&'static str, &'static str)> {
 }
 
 /// Whether the screen shows a numbered option (`❯` or `›` cursor or none) or folder trust
-/// wording. Codex 0.160.0's update notice is `unknown` to herdr (codex manifest
-/// 2026.10.01.1), and a prompt and Enter would pick "Update now".
+/// wording. herdr does not rule every startup prompt `blocked`, and a prompt and Enter
+/// would answer it.
 pub fn shows_dialog(text: &str) -> bool {
     text.lines()
         .any(|l| trust_wording(l) || option_line(l.trim_start().trim_start_matches('›')).is_some())
+}
+
+/// Codex's startup update picker, legacy or 0.159+: an "Update available" heading and an
+/// "Update now" option. The passive update notice in the history has no option.
+pub fn codex_update(text: &str) -> bool {
+    let lines = || {
+        text.lines()
+            .map(|l| l.trim_start().trim_start_matches(['✨', '›']).trim_start())
+    };
+    lines().any(|l| l.starts_with("Update available"))
+        && lines()
+            .any(|l| option_line(l).is_some_and(|(_, _, label)| label.starts_with("Update now")))
 }
 
 fn grants(label: &str) -> bool {
@@ -950,12 +962,16 @@ pub mod fixtures {
     ];
     pub const EFFORT_SET: &str = picker!("effort-set");
 
-    // Codex CLI and GitHub Copilot CLI permission and folder trust prompts, each checked
-    // with `herdr agent explain --file` (herdr 0.9.3, codex manifest 2026.10.01.1, copilot
-    // manifest 2026.08.29.1) to be `blocked` under the rule named. Codex's trust prompt and
-    // update notice are captured from codex 0.160.0 (`tmux capture-pane`); the others are
-    // reconstructed.
-    pub const CODEX_UPDATE: &str = include_str!("../tests/fixtures/codex/update.detection.txt");
+    // Codex CLI and GitHub Copilot CLI permission, folder trust and update prompts, each
+    // checked with `herdr agent explain --file` (herdr 0.9.4, codex manifest 2026.10.11.1,
+    // copilot manifest 2026.08.29.1) to be `blocked` under the rule named (`startup_update`
+    // for both update pickers). Codex's trust prompt and update picker are captured from
+    // codex 0.160.0 (`tmux capture-pane`); the legacy update picker (before 0.159) and the
+    // others are reconstructed.
+    pub const CODEX_UPDATES: [&str; 2] = [
+        include_str!("../tests/fixtures/codex/update.detection.txt"),
+        include_str!("../tests/fixtures/codex/update-legacy.detection.txt"),
+    ];
     pub const CODEX: [(&str, &str); 3] = [
         (
             "live_strong_blocker",
@@ -1814,7 +1830,15 @@ mod tests {
         for (_, screen) in CODEX.iter().chain(&COPILOT) {
             assert!(shows_dialog(screen), "{screen}");
         }
-        assert!(shows_dialog(CODEX_UPDATE));
+        for screen in CODEX_UPDATES {
+            assert!(shows_dialog(screen) && codex_update(screen), "{screen}");
+        }
+        for (_, screen) in CODEX.iter().chain(&COPILOT) {
+            assert!(!codex_update(screen), "{screen}");
+        }
+        assert!(!codex_update(
+            "  ✨ Update available! 0.158.0 -> 0.160.1\n  Run npm install -g @openai/codex to update.\n"
+        ));
         let idle = "\
 me@mac app % codex
 ╭──────────────────────────────────────────────╮
@@ -1830,7 +1854,7 @@ me@mac app % codex
 
   100% context left · ? for shortcuts
 ";
-        assert!(!shows_dialog(idle));
+        assert!(!shows_dialog(idle) && !codex_update(idle));
     }
 
     #[test]
