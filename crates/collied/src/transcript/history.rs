@@ -474,6 +474,10 @@ fn normalize(
         Kind::Claude => {
             if (parent.is_none() && v["isSidechain"] == true)
                 || (parent.is_some() && v["isMeta"] == true && v["origin"].is_null())
+                || (parent.is_none()
+                    && (v["isMeta"] == true
+                        || v["isCompactSummary"] == true
+                        || v["origin"]["kind"] == "task-notification"))
                 || v["sessionId"].as_str().is_some_and(|s| s != session)
                 || v["message"]["model"] == "<synthetic>"
             {
@@ -1055,14 +1059,14 @@ mod tests {
         );
         append(&path, &main[3..].concat());
         let handed = t.history(&a, &params(None, launched.after, None));
-        assert_eq!(handed.messages.len(), 9);
+        assert_eq!(handed.messages.len(), 8);
         assert!(
-            handed.messages[1..8]
+            handed.messages[..7]
                 .iter()
                 .all(|m| m.parent_call_id.is_some())
         );
         let page = t.history(&a, &params(None, None, None));
-        assert_eq!(page.messages.len(), 12);
+        assert_eq!(page.messages.len(), 11);
         let steps = page
             .messages
             .iter()
@@ -1103,13 +1107,13 @@ mod tests {
         let target = dir.join("elsewhere.jsonl");
         std::fs::rename(&file, &target).unwrap();
         std::os::unix::fs::symlink(&target, &file).unwrap();
-        assert_eq!(t.history(&a, &params(None, None, None)).messages.len(), 5);
+        assert_eq!(t.history(&a, &params(None, None, None)).messages.len(), 4);
         let session = path.with_extension("");
         std::fs::remove_dir_all(&session).unwrap();
         let outside = session.with_extension("outside");
         subagent_files(&outside.join("x"), AGENT, meta, &records.concat());
         std::os::unix::fs::symlink(&outside, &session).unwrap();
-        assert_eq!(t.history(&a, &params(None, None, None)).messages.len(), 5);
+        assert_eq!(t.history(&a, &params(None, None, None)).messages.len(), 4);
     }
 
     #[test]
@@ -1168,13 +1172,7 @@ mod tests {
             .iter()
             .map(|m| m.text.as_str())
             .collect::<Vec<_>>();
-        for text in [
-            "All done",
-            "Handed back",
-            "launched",
-            "Subagent prompt",
-            "Subagent reply",
-        ] {
+        for text in ["All done", "launched", "Subagent prompt", "Subagent reply"] {
             assert!(texts.contains(&text), "{text}");
         }
         assert!(p.omitted && fits(&p));
@@ -1194,7 +1192,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let mut expected = (0..50).map(|n| format!("u{n}:0")).collect::<Vec<_>>();
-        expected.extend(["call:0", "launch:0", "handback:0", "done:0"].map(String::from));
+        expected.extend(["call:0", "launch:0", "done:0"].map(String::from));
         assert_eq!(main(&back), expected);
         let mut cursor = initial.after;
         let mut forward = vec![];
@@ -1331,5 +1329,58 @@ mod tests {
             "{texts:?}"
         );
         assert!(texts.contains(&"First in window"), "{texts:?}");
+    }
+
+    #[test]
+    fn harness_injected_user_records_stay_out_of_chat_and_search() {
+        let user = |uuid: &str, extra: Value, content: Value| {
+            let mut v = json!({"type":"user","uuid":uuid,"sessionId":CLAUDE,
+                "message":{"role":"user","content":content}});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            line(v)
+        };
+        let content = [
+            user(
+                "typed",
+                json!({"origin":{"kind":"human"},"promptSource":"typed"}),
+                json!("injected? no, typed"),
+            ),
+            user(
+                "handback",
+                json!({"isMeta":true,"origin":{"kind":"peer","from":AGENT,"handback":true}}),
+                json!("injected hand-back"),
+            ),
+            user(
+                "notice",
+                json!({"origin":{"kind":"task-notification"},"promptSource":"system"}),
+                json!("<task-notification>injected</task-notification>"),
+            ),
+            user(
+                "skill",
+                json!({"isMeta":true}),
+                json!([{"type":"text","text":"injected skill"}]),
+            ),
+            user(
+                "summary",
+                json!({"isCompactSummary":true,"isVisibleInTranscriptOnly":true}),
+                json!("injected summary"),
+            ),
+            user(
+                "interrupt",
+                json!({}),
+                json!([{"type":"text","text":"[Request interrupted by user]"}]),
+            ),
+            user("bash", json!({}), json!("<bash-input>ls</bash-input>")),
+        ]
+        .concat();
+        let (_dir, t, a, _) = setup("claude", &content);
+        let p = t.history(&a, &params(None, None, None));
+        let ids = p.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>();
+        assert_eq!(ids, ["typed:0", "interrupt:0", "bash:0"]);
+        let search = t.history(&a, &params(None, None, Some("injected")));
+        assert_eq!(search.messages.len(), 1);
+        assert_eq!(search.messages[0].id, "typed:0");
     }
 }
