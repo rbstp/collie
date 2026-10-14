@@ -119,6 +119,7 @@ fn machines_side_by_side() {
     assert_eq!(linux_flock.agents.len(), 2, "the last flock is kept");
 
     assert_eq!(kernel_tcp_listeners(), Vec::<String>::new());
+    assert_udp_on_loopback();
     rt.block_on(mac_server.shutdown());
     drop(core);
     drop(rt);

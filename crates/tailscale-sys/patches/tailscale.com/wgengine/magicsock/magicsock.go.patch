@@ -1,0 +1,30 @@
+--- magicsock.orig.go
++++ magicsock.go
+@@ -3731,6 +3731,11 @@
+ 	}
+ }
+ 
++// collie: the test processes set this so their UDP sockets bind loopback only.
++// A socket on every interface makes the macOS application firewall prompt for
++// each newly built, unsigned test binary. collied and the app never set it.
++var bindLoopback = envknob.RegisterBool("TS_DEBUG_MAGICSOCK_BIND_LOOPBACK")
++
+ // listenPacket opens a packet listener.
+ // The network must be "udp4" or "udp6".
+ func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, error) {
+@@ -3740,7 +3745,14 @@
+ 	} else {
+ 		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP6, c.logf)
+ 	}
+-	addr := net.JoinHostPort("", fmt.Sprint(port))
++	host := ""
++	if bindLoopback() {
++		host = "127.0.0.1"
++		if network == "udp6" {
++			host = "::1"
++		}
++	}
++	addr := net.JoinHostPort(host, fmt.Sprint(port))
+ 	if c.testOnlyPacketListener != nil {
+ 		return nettype.MakePacketListenerWithNetIP(c.testOnlyPacketListener).ListenPacket(ctx, network, addr)
+ 	}

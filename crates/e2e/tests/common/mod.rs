@@ -23,7 +23,10 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, header};
 use zeroize::Zeroizing;
 
-pub const KNOBS: [(&str, &str); 1] = [("TS_DISABLE_PORTMAPPER", "1")];
+pub const KNOBS: [(&str, &str); 2] = [
+    ("TS_DISABLE_PORTMAPPER", "1"),
+    ("TS_DEBUG_MAGICSOCK_BIND_LOOPBACK", "1"),
+];
 pub const PORT: u16 = protocol::DEFAULT_PORT;
 pub const WATCHDOG: Duration = Duration::from_secs(240);
 pub const LABEL: &str = "E2E iPhone";
@@ -123,6 +126,14 @@ pub fn audit_lines(path: &Path) -> Vec<Value> {
 
 pub fn kernel_tcp_listeners() -> Vec<String> {
     tailnet::kernel_tcp_listeners(std::process::id()).expect("kernel TCP listeners")
+}
+
+pub fn assert_udp_on_loopback() {
+    let udp = tailnet::udp_listeners().expect("UDP sockets");
+    assert!(
+        !udp.is_empty() && udp.iter().all(|a| a.ip().is_loopback()),
+        "tailnet UDP sockets must be on loopback only: {udp:?}"
+    );
 }
 
 pub struct Net {

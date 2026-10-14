@@ -12,7 +12,10 @@ use tailnet::{Accepted, BackendState, Config, Error, Node, Status};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use zeroize::Zeroizing;
 
-const KNOBS: [(&str, &str); 1] = [("TS_DISABLE_PORTMAPPER", "1")];
+const KNOBS: [(&str, &str); 2] = [
+    ("TS_DISABLE_PORTMAPPER", "1"),
+    ("TS_DEBUG_MAGICSOCK_BIND_LOOPBACK", "1"),
+];
 const PORT: u16 = 7000;
 const REUSE_PORT: u16 = 7001;
 const DIALERS: [&str; 2] = ["it-dialer-a", "it-dialer-b"];
@@ -34,10 +37,11 @@ type Owners = HashMap<String, (String, Vec<IpAddr>)>;
 #[test]
 fn end_to_end() {
     // libtailscale's Go runtime reads TS_* knobs once when the library loads, so
-    // they must be set before this process starts. Without this one every node
-    // probes the LAN gateway with UPnP/NAT-PMP/PCP. TS_DEBUG_ALWAYS_USE_DERP is
-    // not usable: on rebind it swaps its blocking UDP conn without closing the
-    // old one, so tailscale_close then hangs forever (tailscale v1.104.0).
+    // they must be set before this process starts. Without TS_DISABLE_PORTMAPPER
+    // every node probes the LAN gateway with UPnP/NAT-PMP/PCP.
+    // TS_DEBUG_ALWAYS_USE_DERP is not usable: on rebind it swaps its blocking UDP
+    // conn without closing the old one, so tailscale_close then hangs forever
+    // (tailscale v1.104.0).
     if KNOBS
         .iter()
         .any(|(k, v)| std::env::var(k).as_deref() != Ok(*v))
@@ -91,6 +95,11 @@ fn end_to_end() {
         kernel_tcp_listeners(),
         Vec::<String>::new(),
         "tailnet nodes must not listen on any kernel interface"
+    );
+    let udp = tailnet::udp_listeners().unwrap();
+    assert!(
+        !udp.is_empty() && udp.iter().all(|a| a.ip().is_loopback()),
+        "tailnet UDP sockets must be on loopback only: {udp:?}"
     );
 
     let listener_self = listener_st.self_node.clone().unwrap();

@@ -893,6 +893,7 @@ async fn after_restart(rig: &Rig, core: &Arc<CollieCore>, m: &str, phone_id: &st
         ["agent.send_keys", "agent.send_keys", "agent.send_keys"]
     );
     assert_eq!(kernel_tcp_listeners(), Vec::<String>::new());
+    assert_udp_on_loopback();
 }
 
 async fn start_collied(

@@ -1,10 +1,70 @@
+use std::ffi::c_int;
 use std::io;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 /// Kernel TCP sockets in LISTEN state held by `pid`, one line each. Empty means the
 /// process listens only through the tailnet. Any read error is an error, never empty.
 pub fn kernel_tcp_listeners(pid: u32) -> io::Result<Vec<String>> {
     alive(pid)?;
     imp::listeners(pid)
+}
+
+/// Local addresses of this process's unconnected UDP sockets, the ones that take
+/// datagrams from anyone. Read with getsockname on each open fd, so any OS with /dev/fd.
+pub fn udp_listeners() -> io::Result<Vec<SocketAddr>> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir("/dev/fd")? {
+        let Some(fd) = entry?
+            .file_name()
+            .to_str()
+            .and_then(|n| n.parse::<c_int>().ok())
+        else {
+            continue;
+        };
+        let mut ty: c_int = 0;
+        let mut len = size_of::<c_int>() as libc::socklen_t;
+        let mut local: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+        let mut local_len = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        let mut peer: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+        let mut peer_len = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        // SAFETY: each buffer is valid for the length passed with it. An fd closed or
+        // reused since the listing only makes a call fail or describe the new socket.
+        let unconnected_dgram = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_TYPE,
+                (&raw mut ty).cast(),
+                &mut len,
+            ) == 0
+                && ty == libc::SOCK_DGRAM
+                && libc::getsockname(fd, (&raw mut local).cast(), &mut local_len) == 0
+                && libc::getpeername(fd, (&raw mut peer).cast(), &mut peer_len) != 0
+        };
+        if !unconnected_dgram {
+            continue;
+        }
+        match c_int::from(local.ss_family) {
+            libc::AF_INET => {
+                // SAFETY: an AF_INET address is a sockaddr_in.
+                let a = unsafe { *(&raw const local).cast::<libc::sockaddr_in>() };
+                found.push(SocketAddr::from((
+                    Ipv4Addr::from(u32::from_be(a.sin_addr.s_addr)),
+                    u16::from_be(a.sin_port),
+                )));
+            }
+            libc::AF_INET6 => {
+                // SAFETY: an AF_INET6 address is a sockaddr_in6.
+                let a = unsafe { *(&raw const local).cast::<libc::sockaddr_in6>() };
+                found.push(SocketAddr::from((
+                    Ipv6Addr::from(a.sin6_addr.s6_addr),
+                    u16::from_be(a.sin6_port),
+                )));
+            }
+            _ => {}
+        }
+    }
+    Ok(found)
 }
 
 fn alive(pid: u32) -> io::Result<()> {

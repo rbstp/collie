@@ -641,6 +641,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         ]
     );
     assert_eq!(kernel_tcp_listeners(), Vec::<String>::new());
+    assert_udp_on_loopback();
     handle.shutdown().await;
 }
 

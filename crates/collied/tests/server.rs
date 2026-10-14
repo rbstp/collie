@@ -23,7 +23,10 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, header};
 use zeroize::Zeroizing;
 
-const KNOBS: [(&str, &str); 1] = [("TS_DISABLE_PORTMAPPER", "1")];
+const KNOBS: [(&str, &str); 2] = [
+    ("TS_DISABLE_PORTMAPPER", "1"),
+    ("TS_DEBUG_MAGICSOCK_BIND_LOOPBACK", "1"),
+];
 const PORT: u16 = protocol::DEFAULT_PORT;
 const NOTIFY_KEY: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
 const ACTIVITY: &str = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
@@ -956,6 +959,11 @@ async fn scenario(
 
     println!("no kernel TCP listener, private files, read-only herdr use");
     assert_eq!(kernel_tcp_listeners(), Vec::<String>::new());
+    let udp = tailnet::udp_listeners().unwrap();
+    assert!(
+        !udp.is_empty() && udp.iter().all(|a| a.ip().is_loopback()),
+        "tailnet UDP sockets must be on loopback only: {udp:?}"
+    );
     let audit_path = data_dir.join("audit.log");
     assert_eq!(mode(&audit_path), 0o600);
     let audit = std::fs::read_to_string(&audit_path).unwrap();
