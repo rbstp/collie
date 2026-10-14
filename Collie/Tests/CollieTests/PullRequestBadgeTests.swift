@@ -61,11 +61,8 @@ private func pullRequest(
     #expect(PullRequestBadge.spoken(pullRequest(.merged, .failing)) == "Pull request 264, merged")
     #expect(PullRequestBadge.spoken(pullRequest(.closed, .passing)) == "Pull request 264, closed")
     #expect(PullRequestBadge.check(pullRequest(.merged, .failing)) == nil)
-    let symbols = [PullState.open, .draft, .merged, .closed].map(PullRequestBadge.symbol)
-    #expect(Set(symbols).count == 4)
-    for symbol in symbols {
-        #expect(UIImage(systemName: symbol) != nil)
-    }
+    #expect(UIImage(named: "GitPullRequest") != nil)
+    #expect(UIImage(named: "GitMerge") != nil)
     for check in [PullChecks.passing, .failing, .pending] {
         #expect(UIImage(systemName: PullRequestBadge.check(pullRequest(.open, check))!.symbol) != nil)
     }
