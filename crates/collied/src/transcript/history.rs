@@ -127,6 +127,7 @@ impl Transcripts {
                 _ => Vec::new(),
             };
             let mut found = Vec::new();
+            let mut cut = false;
             let mut deferred = false;
             for agent in named {
                 if !attached.insert(agent.clone()) {
@@ -141,7 +142,9 @@ impl Transcripts {
                 }
                 let read = sub_len.min(budget);
                 budget -= read;
-                found.extend(steps(file, sub_len, read, id, &agent, &parent, &query));
+                let (more, partial) = steps(file, sub_len, read, id, &agent, &parent, &query);
+                found.extend(more);
+                cut |= partial;
             }
             if deferred {
                 break;
@@ -161,7 +164,7 @@ impl Transcripts {
             if size + batch_size > PAGE_BYTES || messages.len() + batch.len() > 40 {
                 break;
             }
-            omitted |= trimmed;
+            omitted |= trimmed || cut;
             consumed = true;
             low = low.min(start + a as u64);
             if forward {
@@ -332,25 +335,25 @@ fn steps(
     agent: &str,
     parent: &str,
     query: &str,
-) -> Vec<HistoryMessage> {
-    let start = len - read;
+) -> (Vec<HistoryMessage>, bool) {
+    let start = (len - read).saturating_sub(1);
     let mut head = vec![0; len.min(65536) as usize];
-    let mut bytes = vec![0; read as usize];
-    if start > 0 && file.read_exact(&mut head).is_err()
+    let mut bytes = vec![0; (len - start) as usize];
+    if len > read && file.read_exact(&mut head).is_err()
         || file.seek(SeekFrom::Start(start)).is_err()
         || file.read_exact(&mut bytes).is_err()
     {
-        return Vec::new();
+        return (Vec::new(), false);
     }
     let mut lines = Vec::new();
-    if start > 0 {
+    if len > read {
         lines.extend(
             head.iter()
                 .position(|b| *b == b'\n')
                 .map(|n| (0, &head[..n])),
         );
     }
-    let mut at = if start == 0 {
+    let mut at = if len == read {
         0
     } else {
         bytes
@@ -362,7 +365,7 @@ fn steps(
         lines.push((start + at as u64, &bytes[at..at + n]));
         at += n + 1;
     }
-    lines
+    let steps = lines
         .into_iter()
         .filter_map(|(offset, line)| {
             let v = serde_json::from_slice::<Value>(line).ok()?;
@@ -378,7 +381,8 @@ fn steps(
             ))
         })
         .flatten()
-        .collect()
+        .collect();
+    (steps, len > read)
 }
 
 /// A subagent larger than the room left keeps its first step and its latest ones.
@@ -1241,7 +1245,7 @@ mod tests {
             texts.contains(&"Prompt") && texts.contains(&"Reply"),
             "{texts:?}"
         );
-        assert!(p.before.is_none());
+        assert!(p.before.is_none() && p.omitted);
     }
 
     #[test]
@@ -1284,5 +1288,48 @@ mod tests {
         assert!(texts(&older).contains(&"Prompt 0".into()));
         assert!(texts(&older).contains(&"Reply 0".into()));
         assert!(older.before.is_none());
+    }
+
+    #[test]
+    fn a_tail_window_starting_on_a_record_keeps_that_record() {
+        let (_dir, t, a, path) = setup("claude", "");
+        let prompt = sub_line("prompt", "user", json!("Prompt"));
+        let big = sub_line("big", "user", json!("z".repeat(SCAN_BYTES as usize)));
+        let next = sub_line(
+            "next",
+            "assistant",
+            json!([{"type":"text","text":"First in window"}]),
+        );
+        let reply = sub_line(
+            "reply",
+            "assistant",
+            json!([{"type":"text","text":"Reply"}]),
+        );
+        let pad = SCAN_BYTES as usize - next.len() - reply.len();
+        let filler = sub_line(
+            "filler",
+            "user",
+            json!("w".repeat(pad - sub_line("filler", "user", json!("")).len())),
+        );
+        let tail = [next, filler, reply].concat();
+        assert_eq!(tail.len(), SCAN_BYTES as usize);
+        subagent_files(
+            &path,
+            AGENT,
+            r#"{"toolUseId":"call1"}"#,
+            &[prompt, big, tail].concat(),
+        );
+        append(&path, &agent_call("call", "call1"));
+        let p = t.history(&a, &params(None, None, None));
+        let texts = p
+            .messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            texts.contains(&"Prompt") && texts.contains(&"Reply"),
+            "{texts:?}"
+        );
+        assert!(texts.contains(&"First in window"), "{texts:?}");
     }
 }
