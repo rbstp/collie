@@ -419,6 +419,9 @@ impl Driver {
         {
             read.ansi = reflow::without_copilot_scrollbar(&read.ansi, width);
         }
+        if kind == "claude" {
+            read.ansi = reflow::without_claude_black(&read.ansi);
+        }
         cols.is_ok()
     }
 

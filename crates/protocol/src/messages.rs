@@ -1286,7 +1286,7 @@ pub struct TerminalRead {
 
 impl TerminalRead {
     /// `ansi` with the rows in `wraps` and `splits` joined onto the row above; `None` when
-    /// there are none. For Copilot, a space joining shaded rows keeps their shade, and a sent
+    /// there are none. A space joining shaded rows keeps their shade, and for Copilot a sent
     /// prompt's timestamp follows the joined prompt.
     pub fn reflowed(&self) -> Option<String> {
         if self.wraps.is_empty() && self.splits.is_empty() {
@@ -1324,7 +1324,7 @@ impl TerminalRead {
                     let line = out.rfind('\n').map_or(0, |n| n + 1);
                     let mut kept = trim_line_end(&out[line..]);
                     let bare = before_sgr(&kept).len();
-                    let at = if self.copilot_scrollbar && kept[bare..].contains("\u{1b}[48;") {
+                    let at = if kept[bare..].contains("\u{1b}[48;") {
                         bare
                     } else {
                         kept.len()
@@ -2945,8 +2945,8 @@ mod tests {
         );
         let unmoved = read_with(&ansi, &[1, 2], &[]).reflowed().unwrap();
         assert!(unmoved.starts_with(&format!(
-            "{}\u{1b}[0m ",
-            &ansi[..ansi.find("  \u{1b}[0m\r").unwrap()]
+            "{} \u{1b}[0m{shade}\u{1b}[0m",
+            &ansi[..ansi.find("10:19").unwrap() + 5]
         )));
         let prose = format!(" ● The meeting is at {clock}\r\n   noon.");
         let read = TerminalRead {

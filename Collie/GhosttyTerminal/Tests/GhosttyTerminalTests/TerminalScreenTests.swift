@@ -305,7 +305,7 @@ private struct SplitMix64: RandomNumberGenerator {
         ),
         (
             "\u{1B}[48;5;1m> alpha beta gamma delta epsilon zeta eta theta iota kappa" + pad(60) + "\u{1B}[0m",
-            "\u{1B}[48;5;1m> alpha beta gamma delta epsilon zeta \u{1B}[K\u{1B}E\u{1B}[2Ceta theta iota kappa\u{1B}[K\u{1B}[0m"
+            "\u{1B}[48;5;1m> alpha beta gamma delta epsilon zeta \u{1B}[K\u{1B}E\u{1B}[K\u{1B}[2Ceta theta iota kappa\u{1B}[K\u{1B}[0m"
         ),
         ("x \u{1B}[48;5;1m tag \u{1B}[0m  ", "x \u{1B}[48;5;1m tag\u{1B}[0m"),
         ("a\u{1B}[0m" + pad(50) + "\u{1B}[48;5;1m" + pad(10) + "\u{1B}[0m", "a\u{1B}[0m\u{1B}[48;5;1m\u{1B}[0m"),
@@ -459,6 +459,45 @@ private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB
         for row in 0..<frame.rows {
             #expect(painted(frame, row: row, TerminalRGB(42, 42, 50)) == 0..<50, "\(row)")
         }
+    }
+}
+
+@Test func claudesSentMultilinePromptKeepsItsShadedIndent() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let snapshot = try capture("claude-2.1.299/sent-multiline", rows: 2...5)
+    for columns in [30, 40, 50] {
+        let frame = screen.render(ansiSnapshot: snapshot, wrapColumns: columns)
+        #expect(frame.rows > 6)
+        for row in 0..<frame.rows {
+            #expect(painted(frame, row: row, TerminalRGB(55, 55, 55)) == 0..<columns, "\(columns), \(row)")
+        }
+        let selection = TerminalSelection(TerminalCell(row: 0, column: 0), TerminalCell(row: frame.rows - 1, column: columns - 1))
+        #expect(selection.text(in: frame) == """
+            ❯ Without using any tools, reply with just OK. This first line is long enough to wrap on a phone.
+              The second line follows a single typed newline and also wraps on the phone.
+
+              A third paragraph after a blank line.
+            """)
+    }
+}
+
+@Test func claudesPromptWrappedOnTheMacStaysShadedToBothEdges() throws {
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    let url = URL(filePath: #filePath).deletingLastPathComponent()
+        .appending(path: "../../../../crates/collied/tests/fixtures/claude-2.1.293/heads-up.ansi.txt")
+    let snapshot = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")[5...6].joined(separator: "\r\n")
+    let frame = screen.render(ansiSnapshot: snapshot, wrapColumns: 40)
+    #expect(frame.rows > 6)
+    for row in 0..<frame.rows {
+        #expect(painted(frame, row: row, TerminalRGB(55, 55, 55)) == 0..<40, "\(row)")
+    }
+    let padding = String(repeating: " ", count: 60)
+    for (chip, color, end) in [
+        ("\u{1B}[48;2;200;40;40m ERROR \u{1B}[0m", TerminalRGB(200, 40, 40), 6),
+        ("\u{1B}[48;2;99;168;248m tag \u{1B}[0m\u{1B}[48;2;99;168;248m \u{1B}[0m", TerminalRGB(99, 168, 248), 4),
+    ] {
+        let frame = screen.render(ansiSnapshot: chip + padding, wrapColumns: 30)
+        #expect(painted(frame, row: 0, color) == 0..<end, "\(chip.debugDescription)")
     }
 }
 
