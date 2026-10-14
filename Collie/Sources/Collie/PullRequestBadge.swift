@@ -7,6 +7,7 @@ struct PullRequestBadge: View {
     var compact = false
     var fill: ((String) -> Void)?
     @Environment(\.openURL) private var openURL
+    @ScaledMetric(relativeTo: .caption2) private var iconSize = 11.0
 
     var body: some View {
         let url = Self.url(pullRequest)
@@ -39,7 +40,7 @@ struct PullRequestBadge: View {
 
     private var label: some View {
         HStack(spacing: 3) {
-            Image(systemName: Self.symbol(pullRequest.state))
+            Self.icon(pullRequest.state).resizable().scaledToFit().frame(width: iconSize, height: iconSize)
             Text(verbatim: "#\(pullRequest.number)").monospacedDigit()
             if pullRequest.state == .merged && !compact { Text("Merged") }
             if let check = Self.check(pullRequest) {
@@ -91,12 +92,13 @@ struct PullRequestBadge: View {
         return url
     }
 
-    static func symbol(_ state: PullState) -> String {
+    /// Octicons from GitHub (MIT, Resources/Octicons-LICENSE.txt) for the states GitHub draws with them.
+    static func icon(_ state: PullState) -> Image {
         switch state {
-        case .open, .unknown: "arrow.triangle.pull"
-        case .draft: "circle.dashed"
-        case .merged: "arrow.triangle.merge"
-        case .closed: "xmark.circle"
+        case .open, .unknown: Image("GitPullRequest")
+        case .draft: Image(systemName: "circle.dashed")
+        case .merged: Image("GitMerge")
+        case .closed: Image(systemName: "xmark.circle")
         }
     }
 

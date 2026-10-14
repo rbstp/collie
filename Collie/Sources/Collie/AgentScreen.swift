@@ -1013,7 +1013,7 @@ struct DictationButton: View {
             }
             .tint(.primary)
         } label: {
-            Image(systemName: dictation.isActive ? "mic.fill" : "mic")
+            Image(systemName: "waveform")
                 .font(.system(size: 20))
                 .frame(width: 28, height: 28)
         } primaryAction: {
@@ -1060,7 +1060,10 @@ struct DictationBar: View {
                 .accessibilityLabel("Dictation language, \(dictation.language.label)")
                 .accessibilityHint("Switches to \(dictation.language.other.label)")
             Button(action: dictation.stop) {
-                Image(systemName: "stop.circle.fill").font(.title3).foregroundStyle(.red)
+                Image(systemName: "waveform")
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+                    .symbolEffect(.breathe, isActive: dictation.phase != .finishing)
             }
             .buttonStyle(.plain)
             .disabled(dictation.phase == .finishing)
