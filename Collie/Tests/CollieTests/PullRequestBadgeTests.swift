@@ -6,9 +6,44 @@ import Testing
 @testable import Collie
 
 private func pullRequest(
-    _ state: PullState, _ checks: PullChecks, url: String = "https://github.com/rbstp/collie/pull/264"
+    _ state: PullState, _ checks: PullChecks, url: String = "https://github.com/rbstp/collie/pull/264",
+    failing: [String] = [], remarks: UInt32 = 0, conflicting: Bool = false
 ) -> PullRequestSummary {
-    PullRequestSummary(number: 264, state: state, checks: checks, url: url)
+    PullRequestSummary(
+        number: 264, state: state, checks: checks, url: url, failingChecks: failing, remarks: remarks, conflicting: conflicting
+    )
+}
+
+@MainActor
+@Test func badgeMenuOffersOnlyThePromptsThatMatchThePullRequest() {
+    let url = "https://github.com/rbstp/collie/pull/264"
+    let titles = { (pr: PullRequestSummary) in PullRequestBadge.prompts(pr).map(\.title) }
+    #expect(titles(pullRequest(.open, .passing)) == ["Explain this PR"])
+    #expect(titles(pullRequest(.open, .failing, failing: ["lint"], remarks: 2, conflicting: true))
+            == ["Fix failing checks", "Address review comments", "Resolve conflicts", "Explain this PR"])
+    #expect(titles(pullRequest(.draft, .pending, remarks: 1)) == ["Address review comments", "Explain this PR"])
+    #expect(titles(pullRequest(.merged, .failing, failing: ["lint"], remarks: 2, conflicting: true)) == ["Explain this PR"])
+    #expect(titles(pullRequest(.closed, .passing, conflicting: true)) == ["Explain this PR"])
+
+    let prompts = PullRequestBadge.prompts(pullRequest(.open, .failing, failing: ["lint", "ios test"], remarks: 2, conflicting: true))
+    #expect(prompts.map(\.text) == [
+        "Fix the failing checks of pull request \(url): \"lint\", \"ios test\".",
+        "Address the review comments on pull request \(url).",
+        "Resolve the merge conflicts of pull request \(url) with its base branch.",
+        "Explain pull request \(url).",
+    ])
+    #expect(PullRequestBadge.prompts(pullRequest(.open, .failing)).first?.text == "Fix the failing checks of pull request \(url).")
+}
+
+@MainActor
+@Test func aBadgePromptFillsTheComposerWithoutSending() {
+    let core = FakeCore()
+    let model = agentModel(core)
+    model.draft = "first"
+    let text = PullRequestBadge.prompts(pullRequest(.open, .passing)).last!.text
+    #expect(model.insert(PromptShortcut(text: text)))
+    #expect(model.draft == "first\n\nExplain pull request https://github.com/rbstp/collie/pull/264.")
+    #expect(core.snapshot.prompts.isEmpty)
 }
 
 @MainActor

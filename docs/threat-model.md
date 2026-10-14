@@ -263,6 +263,16 @@ Manual keys and text intentionally have no approval-specific restrictions for Cl
 | Residual | The user's own git config still applies otherwise: `url.<base>.insteadOf` may send a source to another HTTPS or SSH host the user configured, and credential helpers, `core.sshCommand` and hooks from `init.templateDir` or `core.hooksPath` run as configured. A GUI credential helper or SSH askpass could show a prompt on the Mac until the timeout. A clone that times out leaves its partial folder in place; the error names it. The cloned repository is untrusted content the agent then works in (prompt injection, as with any repository). |
 | Phase | Built |
 
+### Task on a pull request's branch
+
+| | |
+|---|---|
+| Assets | The user's account on the computer; the repository's branches; git and SSH credentials |
+| Attack | A paired phone (or a stolen, unlocked one) sends a pull request number that reaches `gh` as something else; a pull request whose head branch name git reads as an option or a revision expression, or that turns into a checkout path outside `.worktree/`; a fork's branch, whose project settings an agent would load; an `origin` that is not the pull request's repository, so another commit is checked out; a fetch that hangs or prompts. |
+| Mitigations | Same gate as a worktree `task.new`: paired full session, one task at a time, an `op_id`, authorization re-checked before `gh`, before the fetch and before herdr's `worktree.create`, and an audit line with the number (built). The number is an integer from 1 to 2^32 - 1, checked when the frame is parsed, and reaches `gh pr view` as decimal digits. `gh` runs as for linked pull requests. A cross-repository pull request is refused. The head branch name passes the typed branch rules (ASCII letters, digits, `/._-`, no `..`, no leading `-`, no trailing `/`) and `git check-ref-format --branch`; the checkout folder is the name with `/` as `-`, must be a `FolderName` and must not exist under `.worktree/`, and herdr's answer must name that path. The fetch takes only `+refs/heads/<branch>:refs/remotes/origin/<branch>` after `--`, without tags, submodules or `FETCH_HEAD`, in the clone's environment (HTTPS and SSH only, no prompts, no inherited `GIT_*`, own process group); the gh read, the checks and the fetch share one 75 s budget. `origin/<branch>` must then be exactly the head commit `gh` named. A local branch of that name is never moved and must be at that commit, or the task is refused; a missing one is created tracking `origin/<branch>`. |
+| Residual | `gh` picks the repository from the checkout's remotes, and the fetch always uses `origin`; a checkout whose `origin` is a fork of the pull request's repository fails the commit check. The branch is the repository's own code, which the agent then works in (prompt injection, as with any repository). If herdr then fails, the new local branch stays; the error says so. |
+| Phase | Built |
+
 ### Task resume from the phone
 
 | | |
@@ -289,7 +299,7 @@ Manual keys and text intentionally have no approval-specific restrictions for Cl
 |---|---|
 | Assets | The user's `gh` login; the repository and branch of each agent's checkout |
 | Attack | A crafted checkout or GitHub response makes collied run `gh` somewhere it should not, with a token it should not use, or makes the phone open a hostile link. |
-| Mitigations | collied runs `gh pr view` only while a phone is connected or a paired phone has "Archive when the PR merges" on (then only for agents it could archive), only in checkouts that resolve inside the task roots, with no argument taken from the checkout, a fixed binary path, `GH_PROMPT_DISABLED=1`, `GH_TOKEN`, `GITHUB_TOKEN` and the enterprise token variables removed, null stdin, a 30 s timeout and `kill_on_drop`. Only the number, state, check outcome and an `https://` URL without whitespace or control characters reach the phone, which opens only `https` links. Nothing from `gh` is logged. |
+| Mitigations | collied runs `gh pr view` only while a phone is connected or a paired phone has "Archive when the PR merges" on (then only for agents it could archive), only in checkouts that resolve inside the task roots, with no argument taken from the checkout, a fixed binary path, `GH_PROMPT_DISABLED=1`, `GH_TOKEN`, `GITHUB_TOKEN` and the enterprise token variables removed, null stdin, a 30 s timeout and `kill_on_drop`. Only the number, state, check outcome, an `https://` URL without whitespace or control characters, up to 10 failing check names (no control, format characters or quotes, 100 characters each), the count of reviews and comments (counted inside `gh` by `--jq`, so no text reaches collied) and whether it conflicts reach the phone, which opens only `https` links. The prompts the badge menu fills hold only the URL and those check names, and are sent only when the user taps Send. Nothing from `gh` is logged. |
 | Residual | `gh` reads the checkout's git config and remotes, as `gh poi` does. A repository whose remote points at another GitHub repository shows that repository's pull request. |
 | Phase | Built |
 

@@ -1479,6 +1479,9 @@ impl Session<'_> {
                     protocol::TaskWorktree::Open { path } => {
                         format!("open path={:?}", path.as_str())
                     }
+                    protocol::TaskWorktree::PullRequest { number } => {
+                        format!("pull_request={number}")
+                    }
                 });
                 let op = self.audited(method, target.clone(), async move {
                     let (reply, cwd) = d.task_new(p, &auth).await;
@@ -2240,6 +2243,9 @@ fn audit_target(request: &Request) -> Option<String> {
                     protocol::TaskWorktree::Open { path } => {
                         format!("{} open path={:?}", p.cwd.as_str(), path.as_str())
                     }
+                    protocol::TaskWorktree::PullRequest { number } => {
+                        format!("{} pull_request={number}", p.cwd.as_str())
+                    }
                 });
             }
             if let Some(source) = &p.clone {
@@ -2631,6 +2637,9 @@ mod tests {
             state: protocol::PullState::Open,
             checks: protocol::PullChecks::Failing,
             url: "https://github.com/o/r/pull/7".into(),
+            failing_checks: Vec::new(),
+            remarks: 0,
+            conflicting: false,
         };
         pulls.link(
             HashMap::from([(agent.terminal_id.clone(), pr.clone())]),

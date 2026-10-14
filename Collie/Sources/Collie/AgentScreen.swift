@@ -352,7 +352,9 @@ private struct AgentHeader: View {
                     .fixedSize()
                     .frame(maxWidth: .infinity, alignment: .leading)
                     if let pullRequest = agent.pullRequest {
-                        PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch)
+                        PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch) { text in
+                            model.insert(PromptShortcut(text: text))
+                        }
                     }
                     if let kind = agent.kind {
                         AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)

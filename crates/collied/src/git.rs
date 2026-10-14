@@ -123,6 +123,18 @@ async fn git_command(
     .map_err(|_| error("Git took too long; try again"))?
 }
 
+/// The first line of a short answer, or none when git fails.
+pub(crate) async fn line(cwd: &Cwd, args: &[&str]) -> Result<Option<String>, Fail> {
+    let (out, ok, truncated) = git_command(cwd, args, 4096, &[]).await?;
+    Ok((ok && !truncated).then(|| {
+        String::from_utf8_lossy(&out)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    }))
+}
+
 async fn root(cwd: &Cwd, roots: &[PathBuf]) -> Result<Option<Cwd>, Fail> {
     let (out, ok, truncated) = git(cwd, &["rev-parse", "--show-toplevel"], 4096).await?;
     if !ok {

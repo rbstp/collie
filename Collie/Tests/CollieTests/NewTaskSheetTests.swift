@@ -151,6 +151,38 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertEqual(core.snapshot.taskNews.last, "/Users/me/app -", "only Claude Code gets ultracode")
     }
 
+    func testPullRequestTakesANumberAndStartsOnItsBranch() async throws {
+        let core = FakeCore()
+        let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil)
+        await model.loadOptions()
+        model.prompt = "fix it"
+        model.location = .worktree
+        model.worktreeAction = .pullRequest
+        model.source = "/Users/me/app"
+        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [machine]) { _ in })
+        try await hosting(host) { _ in
+            let field = try await waitFor("pull request number field") {
+                host.view.layoutIfNeeded()
+                return descendants(host.view).compactMap { $0 as? UITextField }.first { $0.placeholder == "Pull request number" }
+            }
+            XCTAssertEqual(field.keyboardType, .numberPad)
+            for bad in ["", "0", "-3", "+3", "3.5", "12a", "٣", "4294967296"] {
+                model.pullRequestNumber = bad
+                XCTAssertNil(model.pullRequest, bad)
+                XCTAssertFalse(model.canStart, bad)
+            }
+            model.pullRequestNumber = " 282 "
+            XCTAssertEqual(model.pullRequest, 282)
+            XCTAssertTrue(model.canStart)
+            core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+            let route = await model.start()
+            XCTAssertEqual(route, AgentRoute(machineId: "m1", terminalId: "term_new"))
+            XCTAssertEqual(core.snapshot.worktreeCalls, ["list /Users/me/app", "pull_request /Users/me/app 282 codex"])
+            XCTAssertEqual(core.snapshot.taskPrompts, ["fix it"])
+        }
+    }
+
     private func controllers(_ controller: UIViewController) -> [UIViewController] {
         [controller] + controller.children.flatMap(controllers)
     }

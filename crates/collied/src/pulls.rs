@@ -13,6 +13,8 @@ use crate::pr_watch::Watches;
 pub const REFRESH: Duration = Duration::from_secs(120);
 pub(crate) const GH_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_URL_BYTES: usize = 512;
+const MAX_NAME_CHARS: usize = 100;
+const MAX_FAILING_CHECKS: usize = 10;
 
 pub type Key = (String, String);
 
@@ -44,7 +46,8 @@ pub async fn signed_in(gh: &str) -> bool {
 }
 
 /// With no argument gh finds the current branch itself, so no branch name reaches its
-/// command line.
+/// command line. Reviews and comments are reduced to their count inside gh, so their text
+/// never reaches collied.
 pub async fn fetch(gh: &str, checkout: &Cwd) -> Result<Option<PullRequest>, &'static str> {
     let mut command = gh_command(gh);
     command
@@ -52,7 +55,9 @@ pub async fn fetch(gh: &str, checkout: &Cwd) -> Result<Option<PullRequest>, &'st
             "pr",
             "view",
             "--json",
-            "number,state,isDraft,url,statusCheckRollup",
+            "number,state,isDraft,url,statusCheckRollup,mergeable,reviews,comments",
+            "--jq",
+            ".reviews |= length | .comments |= length",
         ])
         .current_dir(checkout.as_str())
         .stdout(Stdio::piped())
@@ -160,6 +165,71 @@ impl ArchiveOnMerge {
     }
 }
 
+pub struct Head {
+    pub branch: String,
+    pub oid: String,
+}
+
+/// The head of pull request `number` of the repository gh finds for `checkout`. A pull
+/// request from a fork is refused: its branch is someone else's code.
+pub async fn head(gh: &str, checkout: &Cwd, number: u64) -> Result<Head, String> {
+    let mut command = gh_command(gh);
+    command
+        .args(["pr", "view", &number.to_string(), "--json"])
+        .arg("headRefName,headRefOid,isCrossRepository")
+        .current_dir(checkout.as_str())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = timeout(GH_TIMEOUT, command.output())
+        .await
+        .map_err(|_| "gh timed out".to_owned())?
+        .map_err(|_| "gh is unavailable".to_owned())?;
+    if output.status.code() == Some(4) {
+        return Err("gh is not signed in; run `gh auth login` on the machine".to_owned());
+    }
+    if !output.status.success() {
+        let text: String = String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .filter(|&c| !c.is_control() && !protocol::is_format(c))
+            .take(200)
+            .collect();
+        return Err(format!(
+            "gh could not read pull request #{number}: {}",
+            text.trim()
+        ));
+    }
+    parse_head(&output.stdout).map_err(|e| format!("pull request #{number} {e}"))
+}
+
+fn parse_head(json: &[u8]) -> Result<Head, &'static str> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct View {
+        head_ref_name: String,
+        head_ref_oid: String,
+        is_cross_repository: bool,
+    }
+    let view: View = serde_json::from_slice(json).map_err(|_| "could not be read")?;
+    if view.is_cross_repository {
+        return Err("comes from a fork, which New task does not check out");
+    }
+    if !matches!(view.head_ref_oid.len(), 40 | 64)
+        || !view
+            .head_ref_oid
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err("has an invalid head commit");
+    }
+    Ok(Head {
+        branch: view.head_ref_name,
+        oid: view.head_ref_oid,
+    })
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct View {
@@ -168,7 +238,21 @@ struct View {
     is_draft: bool,
     url: String,
     #[serde(default)]
-    status_check_rollup: Option<Vec<Check>>,
+    status_check_rollup: Option<Vec<Named>>,
+    #[serde(default)]
+    mergeable: Option<String>,
+    #[serde(default)]
+    reviews: u32,
+    #[serde(default)]
+    comments: u32,
+}
+
+#[derive(Deserialize)]
+struct Named {
+    name: Option<String>,
+    context: Option<String>,
+    #[serde(flatten)]
+    check: Check,
 }
 
 #[derive(Deserialize)]
@@ -197,12 +281,43 @@ fn parse(json: &[u8]) -> Option<PullRequest> {
     if !valid_url(&view.url) {
         return None;
     }
+    let rollup = view.status_check_rollup.unwrap_or_default();
+    let mut failing_checks = Vec::new();
+    for named in &rollup {
+        let name = clean(
+            named
+                .name
+                .as_deref()
+                .or(named.context.as_deref())
+                .unwrap_or_default(),
+        );
+        if outcome(&named.check) == Outcome::Fail
+            && !name.is_empty()
+            && !failing_checks.contains(&name)
+            && failing_checks.len() < MAX_FAILING_CHECKS
+        {
+            failing_checks.push(name);
+        }
+    }
     Some(PullRequest {
         number: view.number,
         state,
-        checks: checks(&view.status_check_rollup.unwrap_or_default()),
+        checks: checks(rollup.iter().map(|n| &n.check)),
         url: view.url,
+        failing_checks,
+        remarks: view.reviews.saturating_add(view.comments),
+        conflicting: view.mergeable.as_deref() == Some("CONFLICTING"),
     })
+}
+
+pub(crate) fn clean(name: &str) -> String {
+    let name: String = name
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .filter(|&c| !c.is_control() && !protocol::is_format(c) && c != '"')
+        .take(MAX_NAME_CHARS)
+        .collect();
+    name.trim().to_owned()
 }
 
 pub(crate) fn valid_url(url: &str) -> bool {
@@ -229,8 +344,8 @@ pub(crate) fn outcome(check: &Check) -> Outcome {
     }
 }
 
-fn checks(rollup: &[Check]) -> PullChecks {
-    match rollup.iter().map(outcome).max() {
+fn checks<'a>(rollup: impl Iterator<Item = &'a Check>) -> PullChecks {
+    match rollup.map(outcome).max() {
         None => PullChecks::None,
         Some(Outcome::Pass) => PullChecks::Passing,
         Some(Outcome::Pending) => PullChecks::Pending,
@@ -410,12 +525,87 @@ mod tests {
         }
     }
 
+    #[test]
+    fn failing_check_names_remarks_and_conflicts_reach_the_phone_bounded() {
+        let failing = parse(&fixture("pr-view-failing.json")).unwrap();
+        assert_eq!(failing.failing_checks, ["govulncheck"]);
+        assert_eq!((failing.remarks, failing.conflicting), (0, false));
+        let check = |name: &str| {
+            format!(
+                r#"{{"__typename":"CheckRun","name":"{name}","status":"COMPLETED","conclusion":"FAILURE"}}"#
+            )
+        };
+        let mut rollup: Vec<String> = (0..12).map(|i| check(&format!("job {i}"))).collect();
+        rollup.insert(0, check("job 0"));
+        rollup.insert(
+            0,
+            check(&format!(r#"evil\u001b[2J\"quoted\"\n{}"#, "x".repeat(200))),
+        );
+        rollup.insert(
+            0,
+            r#"{"__typename":"StatusContext","context":"ci/legacy","state":"ERROR"}"#.into(),
+        );
+        rollup.insert(
+            0,
+            r#"{"__typename":"StatusContext","context":"ci/ok","state":"SUCCESS"}"#.into(),
+        );
+        let json = format!(
+            r#"{{"number":1,"state":"OPEN","isDraft":false,"url":"https://github.com/o/r/pull/1","mergeable":"CONFLICTING","reviews":2,"comments":3,"statusCheckRollup":[{}]}}"#,
+            rollup.join(",")
+        );
+        let pr = parse(json.as_bytes()).unwrap();
+        assert_eq!(pr.failing_checks.len(), MAX_FAILING_CHECKS);
+        assert_eq!(pr.failing_checks[0], "ci/legacy");
+        assert_eq!(
+            pr.failing_checks[1],
+            format!("evil[2Jquoted {}", "x".repeat(86))
+        );
+        assert_eq!(pr.failing_checks[2..4], ["job 0", "job 1"]);
+        assert_eq!((pr.remarks, pr.conflicting), (5, true));
+        let merged = String::from_utf8(fixture("pr-view-merged.json")).unwrap();
+        let unknown = merged.replacen('{', r#"{"mergeable":"UNKNOWN","#, 1);
+        assert!(!parse(unknown.as_bytes()).unwrap().conflicting);
+    }
+
+    #[test]
+    fn a_pull_request_head_is_its_own_repository_branch_and_a_full_commit_id() {
+        let oid = "a18a9899873c3b2eb6d15dd500e9c219b329c001";
+        let view = |name: &str, oid: &str, fork: bool| {
+            format!(r#"{{"headRefName":"{name}","headRefOid":"{oid}","isCrossRepository":{fork}}}"#)
+        };
+        let head = parse_head(view("feat/265-pr-watch", oid, false).as_bytes()).unwrap();
+        assert_eq!(
+            (head.branch.as_str(), head.oid.as_str()),
+            ("feat/265-pr-watch", oid)
+        );
+        assert_eq!(
+            parse_head(view("main", oid, true).as_bytes()).err(),
+            Some("comes from a fork, which New task does not check out")
+        );
+        for bad in [
+            &oid[..39],
+            &oid.to_uppercase(),
+            "HEAD",
+            "-a18a9899873c3b2eb6d15dd500e9c219b329c00",
+        ] {
+            assert_eq!(
+                parse_head(view("main", bad, false).as_bytes()).err(),
+                Some("has an invalid head commit"),
+                "{bad}"
+            );
+        }
+        assert!(parse_head(b"no pull requests found").is_err());
+    }
+
     fn pr(number: u64) -> PullRequest {
         PullRequest {
             number,
             state: PullState::Open,
             checks: PullChecks::Pending,
             url: format!("https://github.com/o/r/pull/{number}"),
+            failing_checks: Vec::new(),
+            remarks: 0,
+            conflicting: false,
         }
     }
 

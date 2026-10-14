@@ -189,6 +189,13 @@ struct NewTaskSheet: View {
                                     Text("Create \(model.createBranch) at \(path)")
                                         .font(.footnote)
                                 }
+                            } else if model.worktreeAction == .pullRequest {
+                                TextField("Pull request number", text: $model.pullRequestNumber)
+                                    .keyboardType(.numberPad)
+                                if let number = model.pullRequest {
+                                    Text("Check out the branch of #\(number) under \(listed.source)/.worktree/")
+                                        .font(.footnote)
+                                }
                             } else {
                                 ForEach(listed.worktrees, id: \.path) { checkout in
                                     Button {
