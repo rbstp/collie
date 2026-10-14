@@ -3092,6 +3092,14 @@ mod tests {
             (Key::ShiftTab, "shift+tab"),
             (Key::CtrlC, "ctrl+c"),
             (Key::CtrlEnter, "ctrl+enter"),
+            (Key::Backspace, "backspace"),
+            (Key::CtrlA, "ctrl+a"),
+            (Key::CtrlB, "ctrl+b"),
+            (Key::CtrlE, "ctrl+e"),
+            (Key::CtrlK, "ctrl+k"),
+            (Key::CtrlL, "ctrl+l"),
+            (Key::CtrlU, "ctrl+u"),
+            (Key::CtrlW, "ctrl+w"),
         ];
         for (key, name) in all {
             assert_eq!(key.herdr_name(), name);

@@ -746,11 +746,14 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
 }
 
 @Test func keyStripIsTheAllowlistInOrder() {
-    #expect(AgentKey.strip == [.esc, .left, .up, .down, .right, .tab, .shiftTab, .enter, .ctrlEnter])
-    #expect(AgentKey.strip.map(\.symbol) == ["E", "←", "↑", "↓", "→", "⇥", "⇧⇥", "⏎", "⌃⏎"])
-    let names = AgentKey.strip.map(\.accessibilityName)
+    #expect(AgentKey.strip == [.esc, .left, .up, .down, .right, .tab, .backspace, .enter])
+    #expect(AgentKey.strip.map(\.symbol) == ["E", "←", "↑", "↓", "→", "⇥", "⌫", "⏎"])
+    #expect(AgentKey.combos.map(\.symbol) == ["⇧⇥", "⌃⏎", "⇧←", "^C"])
+    let names = AgentKey.all.map(\.accessibilityName)
     #expect(Set(names).count == names.count)
     #expect(names.allSatisfy { !$0.isEmpty })
+    #expect(AgentKey.all.allSatisfy { AgentKey(name: $0.name) == $0 })
+    #expect(AgentKey.all.count == 19)
 }
 
 @MainActor
@@ -1790,11 +1793,10 @@ func agentApprovalAllowsEveryTerminalButton(kind: String) async {
     model.poll()
     model.blocked = .terminal
 
-    let strip = kind == "codex" ? AgentKey.codexStrip : AgentKey.strip
-    #expect(model.keyStrip == strip)
+    let strip = AgentKey.strip + AgentKey.combos.filter { $0 != .shiftLeft || kind == "codex" }
     #expect(model.acceptsKeys && model.answering)
     #expect(model.accepts(.shiftLeft) == (kind == "codex"))
-    for key in model.keyStrip {
+    for key in strip {
         #expect(model.accepts(key))
         await model.tap(key)?.value
     }
@@ -1803,7 +1805,7 @@ func agentApprovalAllowsEveryTerminalButton(kind: String) async {
 
     for blocked in [BlockedInput.optionsOnly, .keys, .keysAndText] {
         model.blocked = blocked
-        #expect(model.keyStrip.allSatisfy { model.accepts($0) })
+        #expect(strip.allSatisfy { model.accepts($0) })
         #expect(model.answering)
     }
 
@@ -2028,8 +2030,8 @@ private func noticeShown(
     let model = agentModel(core)
     model.poll()
     #expect(model.codexQuestionQueued && !model.answering && !model.canSendPrompt)
-    #expect(model.keyStrip[5] == .shiftLeft)
-    #expect(model.keyStrip.allSatisfy { model.accepts($0) })
+    #expect(model.accepts(.shiftLeft))
+    #expect(AgentKey.strip.allSatisfy { model.accepts($0) })
     model.typed("other input")
     #expect(model.canSendPrompt)
     core.set(error: .AgentBlocked(message: ""))
@@ -2149,7 +2151,7 @@ private func noticeShown(
     }
     model.poll()
     #expect(!model.codexQuestionOpen && model.answering)
-    #expect(model.keyStrip.allSatisfy { model.accepts($0) })
+    #expect(AgentKey.strip.allSatisfy { model.accepts($0) })
     model.draft = "yes"
     #expect(model.canSendPrompt)
     await model.sendPrompt()
@@ -2162,7 +2164,7 @@ private func noticeShown(
     core.state.withLock { $0.kind = "claude" }
     let model = agentModel(core)
     model.poll()
-    #expect(model.keyStrip[5] == .tab)
+    #expect(model.canPress(.tab))
     #expect(!model.accepts(.shiftLeft))
 }
 
@@ -2283,7 +2285,6 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
     #expect(model.promptError == "One command at a time")
     #expect(core.snapshot.challenges == 0)
     #expect(core.snapshot.commands.isEmpty)
-    #expect(AgentKey.terminalStrip == [.esc, .tab, .ctrlC, .left, .up, .down, .right, .enter])
 }
 
 @MainActor
@@ -2937,4 +2938,163 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     try await Task.sleep(for: .seconds(1.3))
     #expect(model.archiveNotice == "Archive complete\nSome branches could not be cleaned up.")
     await poll { model.archiveNotice == nil }
+}
+
+@MainActor
+@Test func aModifierCombinesWithTheNextKeyOnly() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    model.select(.shift)
+    #expect(model.modifier == .shift)
+    #expect(model.canPress(.tab) && !model.canPress(.up) && !model.canPress(.left) && !model.canPress(.enter))
+    await model.press(.tab)?.value
+    #expect(model.modifier == nil)
+    await model.press(.tab)?.value
+    model.select(.shift)
+    model.select(.control)
+    #expect(model.modifier == .control)
+    await model.press(.enter)?.value
+    model.select(.control)
+    #expect(model.press(.up) == nil)
+    #expect(model.modifier == nil)
+    model.select(.shift)
+    model.select(.shift)
+    #expect(model.modifier == nil)
+    for _ in 0..<3 { await model.press(.down)?.value }
+    #expect(core.snapshot.keys == [[.shiftTab], [.tab], [.ctrlEnter], [.down], [.down], [.down]])
+}
+
+@MainActor
+@Test func shiftLeftCombinesOnlyForCodex() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "codex" }
+    let model = agentModel(core)
+    model.poll()
+    model.select(.shift)
+    #expect(model.canPress(.left))
+    await model.press(.left)?.value
+    #expect(core.snapshot.keys == [[.shiftLeft]])
+}
+
+@MainActor
+@Test func controlTakesTheNextLetterTypedOnTheKeyboard() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    #expect(!model.controlTyped(from: "ab", to: "abc"))
+    for edit in ["abcd", "abd", "ab1", "a"] {
+        model.select(.control)
+        #expect(!model.controlTyped(from: "ab", to: edit))
+        #expect(model.modifier == nil)
+    }
+    #expect(!model.controlTyped(from: "abd", to: "abdc"))
+    model.select(.shift)
+    #expect(!model.controlTyped(from: "ab", to: "abc"))
+    #expect(model.modifier == nil)
+    model.select(.control)
+    #expect(!model.controlTyped(from: "ab", to: "ab"))
+    #expect(model.controlTyped(from: "ab", to: "aCb"))
+    #expect(model.modifier == nil)
+    #expect(!model.controlTyped(from: "ab", to: "abu"))
+    model.select(.control)
+    #expect(model.controlTyped(from: "", to: "u"))
+    await poll { core.snapshot.keys.joined().count == 2 }
+    #expect(Array(core.snapshot.keys.joined()) == [.ctrlC, .ctrlU])
+    #expect(AgentKey.control("d") == nil && AgentKey.control("j") == nil && AgentKey.control("m") == nil)
+    #expect(AgentKey.control("o") == nil && AgentKey.control("t") == nil)
+}
+
+@MainActor
+@Test func controlLetsTheLetterThroughWhileKeysAreOff() {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "Jump to bottom ↓", truncated: false, jumpBanner: true)
+    }
+    let model = agentModel(core)
+    model.poll()
+    #expect(!model.acceptsKeys)
+    model.select(.control)
+    #expect(!model.controlTyped(from: "", to: "c"))
+    #expect(model.modifier == nil)
+    #expect(core.snapshot.keys.isEmpty)
+}
+
+@MainActor
+@Test func hidingTheKeysClearsTheModifierAndIsRemembered() throws {
+    let prefs = try makeTemporaryDirectory().appending(path: "prefs.json")
+    let model = AgentModel(core: FakeCore(), route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: prefs)
+    #expect(!model.keysShown)
+    model.keysShown = true
+    model.select(.shift)
+    model.keysShown = false
+    #expect(model.modifier == nil)
+    model.keysShown = true
+    #expect(AgentModel(core: FakeCore(), route: AgentRoute(machineId: "m1", terminalId: "term_2"), prefsFile: prefs).keysShown)
+}
+
+@MainActor
+@Test func aKeyShortcutSendsItsCombinationInOneTap() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    model.select(.control)
+    let shortcut = StripShortcut(key: AgentKey.shiftTab.name)
+    #expect(shortcut.agentKey == .shiftTab && shortcut.label == "⇧⇥")
+    await model.run(shortcut)?.value
+    #expect(model.modifier == nil)
+    #expect(core.snapshot.keys == [[.shiftTab]])
+}
+
+@MainActor
+@Test func aTextShortcutSendsOnlyIntoAnEmptyInputBox() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    model.typed("draft stays")
+    let shortcut = StripShortcut(name: "Effort", text: "/effort high")
+    #expect(model.canRun(shortcut))
+    await model.run(shortcut)?.value
+    #expect(core.snapshot.prompts == ["/effort high"])
+    #expect(core.snapshot.expectedDrafts == [""])
+    #expect(model.draft == "draft stays")
+    core.set(error: .DraftChanged(current: "typed on the Mac"))
+    await model.run(shortcut)?.value
+    #expect(model.promptError?.contains("unsent text") == true)
+    model.blocked = .keys
+    #expect(!model.canRun(shortcut))
+    #expect(model.run(shortcut) == nil)
+}
+
+@MainActor
+@Test func aTextShortcutRunsAsACommandInAShell() async {
+    let core = FakeCore()
+    core.state.withLock { $0.shell = shellPane }
+    let model = terminalModel(core, FakeUnlocker(signs: true))
+    model.poll()
+    model.draft = "ls"
+    #expect(model.run(StripShortcut(text: "git status")) == nil)
+    await model.run(StripShortcut(text: "git status", kind: "terminal"))?.value
+    #expect(core.snapshot.commands == ["git status"])
+    #expect(model.draft == "ls")
+}
+
+@Test func shortcutsApplyToTheirKindAndAreKeptInOrder() throws {
+    let file = try makeTemporaryDirectory().appending(path: "strip-shortcuts.json")
+    let all = StripShortcut(key: AgentKey.ctrlL.name)
+    let codex = StripShortcut(name: "Review", text: "/review", kind: "codex")
+    #expect(all.applies(to: "terminal") && all.applies(to: "claude"))
+    #expect(codex.applies(to: "codex") && !codex.applies(to: "claude"))
+    let text = StripShortcut(text: "git status")
+    #expect(text.applies(to: "claude") && !text.applies(to: "terminal"))
+    #expect(StripShortcut(text: "ls", kind: "terminal").applies(to: "terminal"))
+    let unknown = StripShortcut(key: "ctrl+o")
+    #expect(unknown.agentKey == nil && !unknown.applies(to: "claude"))
+    StripShortcuts(items: [codex, all]).save(to: file)
+    #expect(StripShortcuts.load(from: file).items == [codex, all])
 }

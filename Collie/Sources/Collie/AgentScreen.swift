@@ -144,8 +144,8 @@ struct AgentScreen: View {
             }
             GlassEffectContainer(spacing: 4) {
                 VStack(spacing: 0) {
-                    if !showingChat || model.isTerminal { KeyStrip(model: model) }
-                    PromptBar(model: model)
+                    if model.keysShown && (!showingChat || model.isTerminal) { KeyStrip(model: model) }
+                    PromptBar(model: model, keysAvailable: !showingChat || model.isTerminal)
                 }
             }
         }
@@ -597,34 +597,87 @@ private struct PaneCard: View {
 
 private struct KeyStrip: View {
     let model: AgentModel
+    @State private var shortcuts = StripShortcuts.load(from: StripShortcuts.file)
+    @State private var editingShortcuts = false
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(model.keyStrip, id: \.self) { key in
-                Button {
-                    model.tap(key)
-                } label: {
-                    Text(key.symbol)
-                        .font(.callout.monospaced())
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                        .frame(maxWidth: .infinity, minHeight: 22)
+        VStack(spacing: 6) {
+            HStack(spacing: 4) {
+                ForEach(KeyModifier.allCases, id: \.self) { modifier in
+                    let selected = model.modifier == modifier
+                    StripButton(title: modifier.symbol, selected: selected) { model.select(modifier) }
+                        .accessibilityLabel(modifier.accessibilityName)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                        .disabled(!model.acceptsKeys)
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.roundedRectangle(radius: 8))
-                .controlSize(.small)
-                .accessibilityLabel(key.accessibilityName)
-                .disabled(!model.accepts(key) || model.commandShown && (key == .enter || key == .ctrlEnter))
+                ForEach(AgentKey.strip, id: \.self) { key in
+                    StripButton(title: key.symbol) { model.press(key) }
+                        .accessibilityLabel(key.accessibilityName)
+                        .disabled(!model.canPress(key))
+                }
             }
+            ScrollView(.horizontal) {
+                HStack(spacing: 4) {
+                    ForEach(AgentKey.combos, id: \.self) { key in
+                        StripButton(title: key.symbol, fill: false) { model.run(StripShortcut(key: key.name)) }
+                            .accessibilityLabel(key.accessibilityName)
+                            .disabled(!model.canTap(key))
+                    }
+                    ForEach(shortcuts.items.filter { $0.applies(to: model.shortcutKind) }) { shortcut in
+                        StripButton(title: shortcut.label, fill: false) { model.run(shortcut) }
+                            .disabled(!model.canRun(shortcut))
+                    }
+                    Button("Edit key shortcuts", systemImage: "plus") { editingShortcuts = true }
+                        .labelStyle(.iconOnly)
+                        .frame(minHeight: 22)
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.roundedRectangle(radius: 8))
+                        .controlSize(.small)
+                }
+            }
+            .scrollIndicators(.hidden)
         }
         .padding(.horizontal)
         .padding(.top, 8)
         .sensoryFeedback(.impact(weight: .light), trigger: model.keyTaps)
+        .onDisappear { model.modifier = nil }
+        .sheet(isPresented: $editingShortcuts, onDismiss: { shortcuts = StripShortcuts.load(from: StripShortcuts.file) }) {
+            NavigationStack {
+                StripShortcutsView { editingShortcuts = false }
+            }
+        }
+    }
+}
+
+private struct StripButton: View {
+    let title: String
+    var selected = false
+    var fill = true
+    let action: () -> Void
+
+    var body: some View {
+        let label = Text(title)
+            .font(.callout.monospaced())
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(maxWidth: fill ? .infinity : nil, minHeight: 22)
+        if selected {
+            Button(action: action) { label }
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.roundedRectangle(radius: 8))
+                .controlSize(.small)
+        } else {
+            Button(action: action) { label }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.roundedRectangle(radius: 8))
+                .controlSize(.small)
+        }
     }
 }
 
 private struct PromptBar: View {
     @Bindable var model: AgentModel
+    let keysAvailable: Bool
     @FocusState private var editing: Bool
     @State private var typingCommand = false
     @State private var dictationExpanded = false
@@ -633,7 +686,20 @@ private struct PromptBar: View {
     @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
     @State private var pickingPrompt = false
+    @State private var droppingLetter: String?
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private func typed(_ text: String) {
+        let old = model.draft
+        guard model.controlTyped(from: old, to: text) else {
+            model.typed(text)
+            return
+        }
+        // The field keeps showing the letter until the bound value changes: it takes the letter, and the
+        // update that saw it drops it again (onChange), so the two writes never land in one update.
+        model.draft = text
+        droppingLetter = old
+    }
 
     private var expanded: Bool {
         editing || typingCommand || model.dictation.isActive || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
@@ -662,7 +728,7 @@ private struct PromptBar: View {
                 .scrollIndicators(.hidden)
             }
             PromptInputLayout(expanded: expanded && (verticalSizeClass != .compact || model.dictation.isActive), showsStatus: model.dictation.isActive) {
-                ZStack {
+                HStack(spacing: 8) {
                     if !model.answering && !model.isTerminal {
                         AttachmentMenu(
                             savedPromptsEnabled: !model.dictation.isActive && !model.sendingPrompt,
@@ -676,16 +742,30 @@ private struct PromptBar: View {
                         }
                         .disabled(model.upload != nil || model.sendingPrompt)
                     }
+                    if keysAvailable {
+                        Button {
+                            model.keysShown.toggle()
+                        } label: {
+                            Image(systemName: model.keysShown ? "arrowkeys.fill" : "arrowkeys")
+                                .font(.system(size: 16))
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .controlSize(.small)
+                        .accessibilityLabel("Keys")
+                        .accessibilityAddTraits(model.keysShown ? .isSelected : [])
+                    }
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .bottom, spacing: 8) {
                         if model.isTerminal {
-                            CommandField(text: $model.draft, editing: $typingCommand) {
+                            CommandField(text: $model.draft, editing: $typingCommand, controlTyped: model.controlTyped(from:to:)) {
                                 Task { await model.sendPrompt() }
                             }
                         } else {
                             TextField(
-                                model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: { model.typed($0) }),
+                                model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: typed),
                                 selection: $selection, axis: .vertical
                             )
                                 .lineLimit(expanded ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
@@ -804,6 +884,12 @@ private struct PromptBar: View {
             selection = TextSelection(insertionPoint: model.draft.endIndex)
             editing = true
         }
+        .onChange(of: model.draft) {
+            if let draft = droppingLetter {
+                droppingLetter = nil
+                model.draft = draft
+            }
+        }
         .onChange(of: model.draft.isEmpty) { _, empty in
             if empty && !model.dictation.isActive { dictationExpanded = false }
         }
@@ -819,6 +905,7 @@ private struct PromptBar: View {
 private struct CommandField: UIViewRepresentable {
     @Binding var text: String
     @Binding var editing: Bool
+    let controlTyped: @MainActor (String, String) -> Bool
     let submit: () -> Void
 
     func makeUIView(context: Context) -> UITextField {
@@ -838,7 +925,14 @@ private struct CommandField: UIViewRepresentable {
         field.setContentHuggingPriority(.required, for: .vertical)
         let coordinator = context.coordinator
         field.delegate = coordinator
-        field.addAction(UIAction { [weak field] _ in coordinator.parent.text = field?.text ?? "" }, for: .editingChanged)
+        field.addAction(UIAction { [weak field] _ in
+            guard let field else { return }
+            if coordinator.parent.controlTyped(coordinator.parent.text, field.text ?? "") {
+                field.text = coordinator.parent.text
+            } else {
+                coordinator.parent.text = field.text ?? ""
+            }
+        }, for: .editingChanged)
         return field
     }
 

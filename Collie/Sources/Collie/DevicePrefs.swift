@@ -5,6 +5,7 @@ import SwiftUI
 struct DevicePrefs: StateFile, Equatable {
     var wrapLines = true
     var keepKeyboard = false
+    var keysShown = false
     var gestures = TerminalGestures()
     var fontSize = 11.0
     var dictationLanguage = DictationLanguage.english
@@ -56,6 +57,7 @@ extension DevicePrefs {
         let defaults = DevicePrefs()
         wrapLines = (try? container.decodeIfPresent(Bool.self, forKey: .wrapLines)) ?? defaults.wrapLines
         keepKeyboard = (try? container.decodeIfPresent(Bool.self, forKey: .keepKeyboard)) ?? defaults.keepKeyboard
+        keysShown = (try? container.decodeIfPresent(Bool.self, forKey: .keysShown)) ?? defaults.keysShown
         gestures = (try? container.decodeIfPresent(TerminalGestures.self, forKey: .gestures)) ?? defaults.gestures
         fontSize = (try? container.decodeIfPresent(Double.self, forKey: .fontSize)) ?? defaults.fontSize
         dictationLanguage = (try? container.decodeIfPresent(DictationLanguage.self, forKey: .dictationLanguage)) ?? defaults.dictationLanguage
