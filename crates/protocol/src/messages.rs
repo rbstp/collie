@@ -117,6 +117,8 @@ pub struct HistoryMessage {
     pub tool: Option<String>,
     pub call_id: Option<String>,
     pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2743,6 +2745,24 @@ mod tests {
         let json = serde_json::to_string(&with).unwrap();
         assert!(json.ends_with(r#""wraps":[1],"splits":[2]}"#), "{json}");
         assert_eq!(serde_json::from_str::<TerminalRead>(&json).unwrap(), with);
+    }
+
+    #[test]
+    fn history_parent_call_id_is_additive() {
+        let older = r#"{"id":"u1:0","role":"tool","text":"ok","tool":"Read","call_id":"c1","truncated":false}"#;
+        let m: HistoryMessage = serde_json::from_str(older).unwrap();
+        assert_eq!(m.parent_call_id, None);
+        assert_eq!(serde_json::to_string(&m).unwrap(), older);
+        let nested = HistoryMessage {
+            parent_call_id: Some("task1".into()),
+            ..m
+        };
+        let json = serde_json::to_string(&nested).unwrap();
+        assert!(json.ends_with(r#""parent_call_id":"task1"}"#), "{json}");
+        assert_eq!(
+            serde_json::from_str::<HistoryMessage>(&json).unwrap(),
+            nested
+        );
     }
 
     #[test]

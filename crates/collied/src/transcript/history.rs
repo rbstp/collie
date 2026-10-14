@@ -1,6 +1,8 @@
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 
 use protocol::{HistoryMessage, HistoryPage, HistoryParams};
 use serde_json::Value;
@@ -106,19 +108,74 @@ impl Transcripts {
         if !forward {
             positions.reverse();
         }
+        let mut budget = SCAN_BYTES;
+        let mut attached = HashSet::new();
+        let mut calls = None;
+        let mut consumed = false;
         for (a, b) in positions {
             let record = serde_json::from_slice::<Value>(&bytes[a..b]);
-            let mut batch = match record {
-                Ok(v) => normalize(&v, kind, id, modern, start + a as u64, &query),
+            let fallback = (start + a as u64).to_string();
+            let mut batch = match &record {
+                Ok(v) => normalize(v, kind, id, modern, fallback, &query, None),
                 Err(_) => {
                     omitted = true;
                     Vec::new()
                 }
             };
+            if let (Some(m), Ok(v)) = (batch.first_mut(), &record)
+                && m.role == "event"
+                && v["origin"]["kind"] == "peer"
+                && let Some(text) = v["origin"]["from"]
+                    .as_str()
+                    .filter(|a| agent_id(a))
+                    .and_then(|a| finished(&path, id, a))
+            {
+                m.text = text;
+            }
+            let named = match (kind, &record) {
+                (Kind::Claude, Ok(v)) => named(v, id, forward, &path, &mut calls),
+                _ => Vec::new(),
+            };
+            let mut found = Vec::new();
+            let mut cut = false;
+            let mut deferred = false;
+            for agent in named {
+                if !attached.insert(agent.clone()) {
+                    continue;
+                }
+                let Some((parent, file, sub_len)) = subagent(&path, id, &agent) else {
+                    continue;
+                };
+                if sub_len > budget && budget < SCAN_BYTES && consumed {
+                    deferred = true;
+                    break;
+                }
+                let read = sub_len.min(budget);
+                budget -= read;
+                let (more, partial) = steps(file, sub_len, read, id, &agent, &parent, &query);
+                found.extend(more);
+                cut |= partial;
+            }
+            if deferred {
+                break;
+            }
+            let main_size = serde_json::to_vec(&batch).ok()?.len();
+            let any = !found.is_empty();
+            let (kept, trimmed) = fit(
+                found,
+                40usize.saturating_sub(messages.len() + batch.len()),
+                PAGE_BYTES.saturating_sub(size + main_size),
+            );
+            if any && kept.is_empty() && !messages.is_empty() {
+                break;
+            }
+            batch.extend(kept);
             let batch_size = serde_json::to_vec(&batch).ok()?.len();
             if size + batch_size > PAGE_BYTES || messages.len() + batch.len() > 40 {
                 break;
             }
+            omitted |= trimmed || cut;
+            consumed = true;
             low = low.min(start + a as u64);
             if forward {
                 high = start + b as u64;
@@ -198,6 +255,190 @@ fn cursor_offset(file: &mut std::fs::File, session: &str, value: &str, len: u64)
     (digest(file, offset)? == hash.parse::<u64>().ok()?).then_some(offset)
 }
 
+/// Claude Code links a subagent to its Agent call in `agent-<id>.meta.json`; a hand-back names it by id.
+fn named(
+    v: &Value,
+    session: &str,
+    forward: bool,
+    transcript: &Path,
+    calls: &mut Option<HashMap<String, String>>,
+) -> Vec<String> {
+    if v["isSidechain"] == true || v["sessionId"].as_str().is_some_and(|s| s != session) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if forward
+        && v["origin"]["kind"] == "peer"
+        && let Some(from) = v["origin"]["from"].as_str()
+    {
+        out.push(from.to_owned());
+    }
+    for b in v["message"]["content"].as_array().into_iter().flatten() {
+        if b["type"] == "tool_use"
+            && matches!(b["name"].as_str(), Some("Agent" | "Task"))
+            && let Some(call) = b["id"].as_str()
+        {
+            let calls = calls.get_or_insert_with(|| subagent_calls(transcript, session));
+            out.extend(calls.get(call).cloned());
+        }
+    }
+    out.retain(|a| agent_id(a));
+    out
+}
+
+fn agent_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Only real directories under this session's own directory.
+fn subagent_dir(transcript: &Path, session: &str) -> Option<std::path::PathBuf> {
+    let mut dir = transcript.parent()?.to_path_buf();
+    for part in [session, "subagents"] {
+        dir.push(part);
+        if !std::fs::symlink_metadata(&dir).ok()?.is_dir() {
+            return None;
+        }
+    }
+    Some(dir)
+}
+
+fn meta(dir: &Path, agent: &str) -> Option<Value> {
+    let (meta, _, _) = open(&dir.join(format!("agent-{agent}.meta.json")))?;
+    let mut bytes = Vec::new();
+    meta.take(65536).read_to_end(&mut bytes).ok()?;
+    serde_json::from_slice::<Value>(&bytes).ok()
+}
+
+fn meta_parent(dir: &Path, agent: &str) -> Option<String> {
+    meta(dir, agent)?["toolUseId"]
+        .as_str()
+        .filter(|s| !s.is_empty() && s.len() <= 128)
+        .map(str::to_owned)
+}
+
+fn finished(transcript: &Path, session: &str, agent: &str) -> Option<String> {
+    let meta = meta(&subagent_dir(transcript, session)?, agent)?;
+    let label = meta["description"]
+        .as_str()
+        .or(meta["agentType"].as_str())?
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>();
+    Some(
+        format!("Subagent finished: {}", label.trim())
+            .chars()
+            .take(120)
+            .collect(),
+    )
+}
+
+fn subagent_calls(transcript: &Path, session: &str) -> HashMap<String, String> {
+    let Some(dir) = subagent_dir(transcript, session) else {
+        return HashMap::new();
+    };
+    std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let agent = name.strip_prefix("agent-")?.strip_suffix(".meta.json")?;
+            agent_id(agent).then_some(())?;
+            Some((meta_parent(&dir, agent)?, agent.to_owned()))
+        })
+        .collect()
+}
+
+fn subagent(transcript: &Path, session: &str, agent: &str) -> Option<(String, std::fs::File, u64)> {
+    let dir = subagent_dir(transcript, session)?;
+    let parent = meta_parent(&dir, agent)?;
+    let (file, len, _) = open(&dir.join(format!("agent-{agent}.jsonl")))?;
+    Some((parent, file, len))
+}
+
+fn steps(
+    mut file: std::fs::File,
+    len: u64,
+    read: u64,
+    session: &str,
+    agent: &str,
+    parent: &str,
+    query: &str,
+) -> (Vec<HistoryMessage>, bool) {
+    let start = (len - read).saturating_sub(1);
+    let mut head = vec![0; len.min(65536) as usize];
+    let mut bytes = vec![0; (len - start) as usize];
+    if len > read && file.read_exact(&mut head).is_err()
+        || file.seek(SeekFrom::Start(start)).is_err()
+        || file.read_exact(&mut bytes).is_err()
+    {
+        return (Vec::new(), false);
+    }
+    let mut lines = Vec::new();
+    if len > read {
+        lines.extend(
+            head.iter()
+                .position(|b| *b == b'\n')
+                .map(|n| (0, &head[..n])),
+        );
+    }
+    let mut at = if len == read {
+        0
+    } else {
+        bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(bytes.len(), |i| i + 1)
+    };
+    while let Some(n) = bytes[at..].iter().position(|b| *b == b'\n') {
+        lines.push((start + at as u64, &bytes[at..at + n]));
+        at += n + 1;
+    }
+    let steps = lines
+        .into_iter()
+        .filter_map(|(offset, line)| {
+            let v = serde_json::from_slice::<Value>(line).ok()?;
+            let fallback = format!("{agent}:{offset}");
+            Some(normalize(
+                &v,
+                Kind::Claude,
+                session,
+                false,
+                fallback,
+                query,
+                Some(parent),
+            ))
+        })
+        .flatten()
+        .collect();
+    (steps, len > read)
+}
+
+/// A subagent larger than the room left keeps its first step and its latest ones.
+fn fit(
+    steps: Vec<HistoryMessage>,
+    mut count: usize,
+    mut bytes: usize,
+) -> (Vec<HistoryMessage>, bool) {
+    let mut keep = vec![false; steps.len()];
+    for i in (0..steps.len().min(1)).chain((1..steps.len()).rev()) {
+        let size = serde_json::to_vec(&steps[i]).map_or(usize::MAX, |v| v.len().saturating_add(1));
+        if count == 0 || size > bytes {
+            break;
+        }
+        keep[i] = true;
+        count -= 1;
+        bytes -= size;
+    }
+    let trimmed = keep.contains(&false);
+    let kept = steps
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(m, k)| k.then_some(m))
+        .collect();
+    (kept, trimmed)
+}
+
 fn text(value: &Value) -> String {
     if let Some(s) = value.as_str() {
         return s.to_owned();
@@ -229,8 +470,9 @@ fn normalize(
     kind: Kind,
     session: &str,
     modern: bool,
-    offset: u64,
+    fallback: String,
     query: &str,
+    parent: Option<&str>,
 ) -> Vec<HistoryMessage> {
     let mut out = Vec::new();
     let base = match kind {
@@ -241,7 +483,7 @@ fn normalize(
     }
     .filter(|s| s.len() <= 128)
     .map(str::to_owned)
-    .unwrap_or_else(|| offset.to_string());
+    .unwrap_or(fallback);
     let mut add = |role: &str, body: String, tool: Option<&str>, call_id: Option<&str>| {
         if body.is_empty() && tool.is_none() {
             return;
@@ -254,15 +496,41 @@ fn normalize(
             tool: tool.map(|s| s.chars().take(80).collect()),
             call_id: call_id.map(|s| s.chars().take(128).collect()),
             truncated: false,
+            parent_call_id: parent.map(str::to_owned),
         });
     };
     match kind {
         Kind::Claude => {
-            if v["isSidechain"] == true
+            if (parent.is_none() && v["isSidechain"] == true)
+                || (parent.is_some() && v["isMeta"] == true && v["origin"].is_null())
                 || v["sessionId"].as_str().is_some_and(|s| s != session)
                 || v["message"]["model"] == "<synthetic>"
             {
                 return out;
+            }
+            let notice = v["origin"]["kind"] == "task-notification";
+            if parent.is_none()
+                && v["type"] == "user"
+                && (v["isMeta"] == true || v["isCompactSummary"] == true || notice)
+            {
+                let event = if v["isMeta"] == true && v["origin"]["kind"] == "peer" {
+                    Some("Subagent finished")
+                } else {
+                    notice.then_some("Background task finished")
+                };
+                return event
+                    .filter(|_| query.is_empty())
+                    .map(|text| HistoryMessage {
+                        id: format!("{base}:0"),
+                        role: "event".into(),
+                        text: text.into(),
+                        tool: None,
+                        call_id: None,
+                        truncated: false,
+                        parent_call_id: None,
+                    })
+                    .into_iter()
+                    .collect();
             }
             let role = match v["type"].as_str() {
                 Some(r @ ("user" | "assistant")) => r,
@@ -783,5 +1051,412 @@ mod tests {
         std::fs::rename(&path, &target).unwrap();
         std::os::unix::fs::symlink(target, path).unwrap();
         assert!(!t.history(&a, &params(None, None, None)).available);
+    }
+
+    const AGENT: &str = "a3f9c2e1d4b5a6978";
+
+    fn subagent_files(path: &Path, agent: &str, meta: &str, records: &str) -> PathBuf {
+        let dir = path.with_extension("").join("subagents");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("agent-{agent}.meta.json")), meta).unwrap();
+        std::fs::write(dir.join(format!("agent-{agent}.jsonl")), records).unwrap();
+        dir
+    }
+
+    fn line(v: Value) -> String {
+        v.to_string() + "\n"
+    }
+
+    fn agent_call(uuid: &str, call: &str) -> String {
+        line(
+            json!({"type":"assistant","uuid":uuid,"sessionId":CLAUDE,"message":{"content":
+            [{"type":"tool_use","id":call,"name":"Agent","input":{"prompt":"go"}}]}}),
+        )
+    }
+
+    fn sub_line(uuid: &str, role: &str, content: Value) -> String {
+        line(
+            json!({"type":role,"uuid":uuid,"isSidechain":true,"sessionId":CLAUDE,
+            "message":{"role":role,"content":content}}),
+        )
+    }
+
+    #[test]
+    fn claude_subagent_steps_are_tagged_with_their_agent_call() {
+        let main = include_str!("../../tests/fixtures/transcripts/claude-subagent.jsonl");
+        let meta = include_str!("../../tests/fixtures/transcripts/claude-subagent-agent.meta.json");
+        let records = include_str!("../../tests/fixtures/transcripts/claude-subagent-agent.jsonl");
+        let main = main.split_inclusive('\n').collect::<Vec<_>>();
+        let records = records.split_inclusive('\n').collect::<Vec<_>>();
+        let (_dir, t, a, path) = setup("claude", "");
+        let initial = t.history(&a, &params(None, None, None));
+        append(&path, &main[..3].concat());
+        let dir = subagent_files(&path, AGENT, meta, records[0]);
+        let launched = t.history(&a, &params(None, initial.after, None));
+        assert_eq!(launched.messages.len(), 4);
+        assert_eq!(
+            launched.messages[1].call_id.as_deref(),
+            Some("toolu_01AgentCall")
+        );
+        assert_eq!(
+            launched.messages[2].parent_call_id.as_deref(),
+            Some("toolu_01AgentCall")
+        );
+        append(
+            &dir.join(format!("agent-{AGENT}.jsonl")),
+            &records[1..].concat(),
+        );
+        append(&path, &main[3..].concat());
+        let handed = t.history(&a, &params(None, launched.after, None));
+        assert_eq!(handed.messages.len(), 9);
+        assert_eq!(handed.messages[0].role, "event");
+        assert_eq!(handed.messages[0].text, "Subagent finished: Review pairing");
+        assert!(
+            handed.messages[1..8]
+                .iter()
+                .all(|m| m.parent_call_id.is_some())
+        );
+        let page = t.history(&a, &params(None, None, None));
+        assert_eq!(page.messages.len(), 12);
+        let steps = page
+            .messages
+            .iter()
+            .filter(|m| m.parent_call_id.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(steps.len(), 7);
+        assert_eq!(
+            page.messages[1].call_id.as_deref(),
+            Some("toolu_01AgentCall")
+        );
+        assert!(
+            page.messages[2..9]
+                .iter()
+                .all(|m| m.parent_call_id.as_deref() == Some("toolu_01AgentCall"))
+        );
+        assert_eq!(steps[0].role, "user");
+        assert_eq!(steps[0].text, "Read pairing.rs and list risky unwraps.");
+        assert_eq!(steps[1].tool.as_deref(), Some("Read"));
+        assert_eq!(steps[2].role, "tool");
+        assert_eq!(steps[1].call_id, steps[2].call_id);
+        assert_eq!(steps[3].tool.as_deref(), Some("Grep"));
+        assert!(steps[5].text.ends_with("Also check the retry loop."));
+        assert_eq!(steps[6].text, "One risky unwrap: line 42 of pairing.rs.");
+        assert!(
+            !page
+                .messages
+                .iter()
+                .any(|m| m.text.contains("system-reminder") || m.text.contains("Deferred tools"))
+        );
+        let search = t.history(&a, &params(None, None, Some("TOKEN.UNWRAP()")));
+        assert_eq!(search.messages.len(), 1);
+        assert_eq!(search.messages[0].id, "s6:0");
+        assert_eq!(
+            search.messages[0].parent_call_id.as_deref(),
+            Some("toolu_01AgentCall")
+        );
+        let file = dir.join(format!("agent-{AGENT}.jsonl"));
+        let target = dir.join("elsewhere.jsonl");
+        std::fs::rename(&file, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &file).unwrap();
+        assert_eq!(t.history(&a, &params(None, None, None)).messages.len(), 5);
+        let session = path.with_extension("");
+        std::fs::remove_dir_all(&session).unwrap();
+        let outside = session.with_extension("outside");
+        subagent_files(&outside.join("x"), AGENT, meta, &records.concat());
+        std::os::unix::fs::symlink(&outside, &session).unwrap();
+        assert_eq!(t.history(&a, &params(None, None, None)).messages.len(), 5);
+    }
+
+    #[test]
+    fn large_subagents_are_trimmed_to_the_page_and_every_older_page_brings_new_records() {
+        let (_dir, t, a, path) = setup("claude", "");
+        let initial = t.history(&a, &params(None, None, None));
+        let mut records = sub_line("prompt", "user", json!("Subagent prompt"));
+        for n in 0..60 {
+            records.push_str(&sub_line(
+                &format!("use{n}"),
+                "assistant",
+                json!([{"type":"tool_use",
+                "id":format!("c{n}"),"name":"Read","input":{"file_path":"x".repeat(500)}}]),
+            ));
+            records.push_str(&sub_line(
+                &format!("result{n}"),
+                "user",
+                json!([{"type":"tool_result",
+                "tool_use_id":format!("c{n}"),"content":"y".repeat(500)}]),
+            ));
+        }
+        records.push_str(&sub_line(
+            "reply",
+            "assistant",
+            json!([{"type":"text","text":"Subagent reply"}]),
+        ));
+        subagent_files(&path, AGENT, r#"{"toolUseId":"call1"}"#, &records);
+        for n in 0..50 {
+            append(&path, &row(n, &format!("message {n}")));
+        }
+        append(&path, &agent_call("call", "call1"));
+        append(
+            &path,
+            &line(json!({"type":"user","uuid":"launch","sessionId":CLAUDE,
+            "message":{"content":[{"type":"tool_result","tool_use_id":"call1","content":"launched"}]},
+            "toolUseResult":{"agentId":AGENT,"status":"async_launched"}})),
+        );
+        append(
+            &path,
+            &line(
+                json!({"type":"user","uuid":"handback","isMeta":true,"sessionId":CLAUDE,
+            "origin":{"kind":"peer","from":AGENT},"message":{"content":"Handed back"}}),
+            ),
+        );
+        append(
+            &path,
+            &line(json!({"type":"assistant","uuid":"done","sessionId":CLAUDE,
+            "message":{"content":[{"type":"text","text":"All done"}]}})),
+        );
+        let fits = |p: &HistoryPage| {
+            p.messages.len() <= 40 && serde_json::to_vec(&p.messages).unwrap().len() <= PAGE_BYTES
+        };
+        let mut p = t.history(&a, &params(None, None, None));
+        let texts = p
+            .messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect::<Vec<_>>();
+        for text in ["All done", "launched", "Subagent prompt", "Subagent reply"] {
+            assert!(texts.contains(&text), "{text}");
+        }
+        assert!(p.omitted && fits(&p));
+        let mut back = p.messages.clone();
+        while p.before.is_some() {
+            p = t.history(&a, &params(p.before, None, None));
+            assert!(!p.messages.is_empty() && fits(&p));
+            back.splice(0..0, p.messages.clone());
+        }
+        let ids = back.iter().map(|m| m.id.clone()).collect::<HashSet<_>>();
+        assert_eq!(ids.len(), back.len());
+        let main = |messages: &[HistoryMessage]| {
+            messages
+                .iter()
+                .filter(|m| m.parent_call_id.is_none())
+                .map(|m| m.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut expected = (0..50).map(|n| format!("u{n}:0")).collect::<Vec<_>>();
+        expected.extend(["call:0", "launch:0", "handback:0", "done:0"].map(String::from));
+        assert_eq!(main(&back), expected);
+        let mut cursor = initial.after;
+        let mut forward = vec![];
+        loop {
+            let p = t.history(&a, &params(None, cursor, None));
+            assert!(fits(&p));
+            cursor = p.after;
+            forward.extend(p.messages);
+            if !p.more {
+                break;
+            }
+        }
+        assert_eq!(main(&forward), expected);
+    }
+
+    #[test]
+    fn subagents_beyond_the_window_keep_their_prompt_without_empty_pages() {
+        let (_dir, t, a, path) = setup("claude", "");
+        let records = [
+            sub_line("prompt", "user", json!("Prompt")),
+            sub_line(
+                "big",
+                "user",
+                json!("z".repeat(SCAN_BYTES as usize * 5 / 4)),
+            ),
+            sub_line(
+                "reply",
+                "assistant",
+                json!([{"type":"text","text":"Reply"}]),
+            ),
+        ]
+        .concat();
+        subagent_files(&path, AGENT, r#"{"toolUseId":"call1"}"#, &records);
+        append(&path, &agent_call("call", "call1"));
+        for n in 0..5 {
+            append(
+                &path,
+                &line(json!({"type":"system","uuid":format!("sys{n}"),"sessionId":CLAUDE})),
+            );
+        }
+        let p = t.history(&a, &params(None, None, None));
+        let texts = p
+            .messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            texts.contains(&"Prompt") && texts.contains(&"Reply"),
+            "{texts:?}"
+        );
+        assert!(p.before.is_none() && p.omitted);
+    }
+
+    #[test]
+    fn subagent_reads_share_one_window_and_defer_to_the_next_page() {
+        let (_dir, t, a, path) = setup("claude", "");
+        for n in 0..2 {
+            let agent = format!("agent{n}");
+            let records = [
+                sub_line(&format!("prompt{n}"), "user", json!(format!("Prompt {n}"))),
+                sub_line(
+                    &format!("big{n}"),
+                    "user",
+                    json!("z".repeat(SCAN_BYTES as usize * 3 / 4)),
+                ),
+                sub_line(
+                    &format!("reply{n}"),
+                    "assistant",
+                    json!([{"type":"text","text":format!("Reply {n}")}]),
+                ),
+            ]
+            .concat();
+            subagent_files(
+                &path,
+                &agent,
+                &format!(r#"{{"toolUseId":"call{n}"}}"#),
+                &records,
+            );
+            append(&path, &agent_call(&format!("task{n}"), &format!("call{n}")));
+        }
+        let first = t.history(&a, &params(None, None, None));
+        let texts = |p: &HistoryPage| {
+            p.messages
+                .iter()
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(texts(&first).contains(&"Prompt 1".into()));
+        assert!(!texts(&first).iter().any(|s| s.ends_with(" 0")));
+        let older = t.history(&a, &params(first.before, None, None));
+        assert!(texts(&older).contains(&"Prompt 0".into()));
+        assert!(texts(&older).contains(&"Reply 0".into()));
+        assert!(older.before.is_none());
+    }
+
+    #[test]
+    fn a_tail_window_starting_on_a_record_keeps_that_record() {
+        let (_dir, t, a, path) = setup("claude", "");
+        let prompt = sub_line("prompt", "user", json!("Prompt"));
+        let big = sub_line("big", "user", json!("z".repeat(SCAN_BYTES as usize)));
+        let next = sub_line(
+            "next",
+            "assistant",
+            json!([{"type":"text","text":"First in window"}]),
+        );
+        let reply = sub_line(
+            "reply",
+            "assistant",
+            json!([{"type":"text","text":"Reply"}]),
+        );
+        let pad = SCAN_BYTES as usize - next.len() - reply.len();
+        let filler = sub_line(
+            "filler",
+            "user",
+            json!("w".repeat(pad - sub_line("filler", "user", json!("")).len())),
+        );
+        let tail = [next, filler, reply].concat();
+        assert_eq!(tail.len(), SCAN_BYTES as usize);
+        subagent_files(
+            &path,
+            AGENT,
+            r#"{"toolUseId":"call1"}"#,
+            &[prompt, big, tail].concat(),
+        );
+        append(&path, &agent_call("call", "call1"));
+        let p = t.history(&a, &params(None, None, None));
+        let texts = p
+            .messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            texts.contains(&"Prompt") && texts.contains(&"Reply"),
+            "{texts:?}"
+        );
+        assert!(texts.contains(&"First in window"), "{texts:?}");
+    }
+
+    #[test]
+    fn harness_injected_user_records_show_only_bounded_markers() {
+        let user = |uuid: &str, extra: Value, content: Value| {
+            let mut v = json!({"type":"user","uuid":uuid,"sessionId":CLAUDE,
+                "message":{"role":"user","content":content}});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            line(v)
+        };
+        let content = [
+            user(
+                "typed",
+                json!({"origin":{"kind":"human"},"promptSource":"typed"}),
+                json!("injected? no, typed"),
+            ),
+            user(
+                "handback",
+                json!({"isMeta":true,"origin":{"kind":"peer","from":AGENT,"handback":true}}),
+                json!("injected hand-back"),
+            ),
+            user(
+                "notice",
+                json!({"origin":{"kind":"task-notification"},"promptSource":"system"}),
+                json!("<task-notification>injected</task-notification>"),
+            ),
+            user(
+                "skill",
+                json!({"isMeta":true}),
+                json!([{"type":"text","text":"injected skill"}]),
+            ),
+            user(
+                "summary",
+                json!({"isCompactSummary":true,"isVisibleInTranscriptOnly":true}),
+                json!("injected summary"),
+            ),
+            user(
+                "interrupt",
+                json!({}),
+                json!([{"type":"text","text":"[Request interrupted by user]"}]),
+            ),
+            user("bash", json!({}), json!("<bash-input>ls</bash-input>")),
+        ]
+        .concat();
+        let (_dir, t, a, path) = setup("claude", &content);
+        let p = t.history(&a, &params(None, None, None));
+        let ids = p.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            ["typed:0", "handback:0", "notice:0", "interrupt:0", "bash:0"]
+        );
+        assert_eq!(p.messages[1].role, "event");
+        assert_eq!(p.messages[1].text, "Subagent finished");
+        assert_eq!(p.messages[2].role, "event");
+        assert_eq!(p.messages[2].text, "Background task finished");
+        let label = format!("Fix\u{1b}[31m the\nbug {}", "x".repeat(300));
+        subagent_files(&path, AGENT, &json!({"description": label}).to_string(), "");
+        let p = t.history(&a, &params(None, None, None));
+        let text = &p.messages[1].text;
+        assert!(
+            text.starts_with("Subagent finished: Fix[31m thebug x"),
+            "{text}"
+        );
+        assert_eq!(text.chars().count(), 120);
+        std::fs::write(
+            path.with_extension("")
+                .join(format!("subagents/agent-{AGENT}.meta.json")),
+            r#"{"agentType":"general-purpose"}"#,
+        )
+        .unwrap();
+        let p = t.history(&a, &params(None, None, None));
+        assert_eq!(p.messages[1].text, "Subagent finished: general-purpose");
+        for query in ["injected", "finished"] {
+            let search = t.history(&a, &params(None, None, Some(query)));
+            assert_eq!(search.messages.len(), usize::from(query == "injected"));
+        }
     }
 }
