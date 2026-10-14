@@ -9,10 +9,12 @@ import Synchronization
 /// `--terminal-demo <file>`: the Agents list over fake agents, each agent screen showing the
 /// first "text" string of a herdr JSON response (or the raw file), with no Mac. Debug builds only.
 /// `--follow-demo <terminal id>` also follows that agent, which starts its Live Activity, and
-/// gives a blocked one the approval fields collied would push.
+/// gives a blocked one the approval fields collied would push. `--approval-demo` shows that
+/// approval's card on the blocked agent's screen.
 struct AgentDemo: View {
     let core: DemoAgentCore
     private let followed: String?
+    @State private var approvals: ApprovalsModel?
     @State private var follows: FollowModel
     @State private var opening: AgentRoute?
 
@@ -25,6 +27,7 @@ struct AgentDemo: View {
             snapshot: json.flatMap(Self.firstText) ?? String(decoding: data, as: UTF8.self),
             connectionError: ProcessInfo.processInfo.environment["COLLIE_DEMO_CONNECTION_ERROR"]
         )
+        _approvals = State(initialValue: arguments.contains("--approval-demo") ? ApprovalsModel(core: core, dismissResolved: { _, _ in }) : nil)
         _follows = State(initialValue: FollowModel(core: core, approvals: nil, file: nil))
         followed = arguments.firstIndex(of: "--follow-demo").flatMap { $0 + 1 < arguments.count ? arguments[$0 + 1] : nil }
     }
@@ -32,7 +35,7 @@ struct AgentDemo: View {
     var body: some View {
         TabView {
             Tab("Agents", systemImage: "square.grid.2x2") {
-                FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: nil, follows: follows, opening: $opening)
+                FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: approvals, follows: follows, opening: $opening)
             }
             Tab("Approvals", systemImage: "checkmark.shield") { Color.clear }
             Tab("Machines", systemImage: "desktopcomputer") {
@@ -53,6 +56,7 @@ struct AgentDemo: View {
             Tab("Settings", systemImage: "gearshape") { Color.clear }
         }
         .task {
+            approvals?.poll()
             follows.foreground()
             if let followed {
                 follows.follow(AgentRoute(machineId: DemoAgentCore.machine.id, terminalId: followed))
@@ -89,7 +93,7 @@ struct AgentDemo: View {
     }
 }
 
-final class DemoAgentCore: ActivityCore {
+final class DemoAgentCore: ActivityCore, ApprovalCore {
     static let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO", kind: .mac, key: "")
 
     let snapshot: String
@@ -169,6 +173,37 @@ final class DemoAgentCore: ActivityCore {
     func agentChanges(machineId: String, terminalId: String, root: String?, branch: Bool) async throws -> GitChanges { throw CoreError.NotImplemented }
     func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff { throw CoreError.NotImplemented }
     func agentDraft(machineId: String, terminalId: String) async throws -> String? { nil }
+
+    func approvalFeed(machineId: String) -> ApprovalFeed? {
+        let now = Date.now.unixMs
+        return ApprovalFeed(link: .connected, pending: [
+            PendingApproval(
+                approvalId: "ap_demo", terminalId: "term_2", agentLabel: "Codex", workspaceLabel: "collie",
+                snippet: (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n"),
+                toolName: "Bash", toolSummary: "cargo test -p collied --test approvals -- --nocapture",
+                options: [.approve, .approveAlways, .deny], choices: [], acceptsInput: true, hasTextField: false,
+                supportsNote: true, createdAtMs: now, expiresAtMs: now + 600_000
+            ),
+        ])
+    }
+
+    func decide(machineId: String, approvalId: String, decision: ApprovalDecision, note: String?) async throws -> DecisionOutcome {
+        throw CoreError.NotImplemented
+    }
+
+    func agentHistory(machineId: String, terminalId: String, before: String?, after: String?, query: String?) async throws -> HistoryPage {
+        let messages = after == nil && before == nil ? (1...20).flatMap { turn in
+            [
+                HistoryMessage(id: "u\(turn)", role: "user", text: "Run the approval tests again, round \(turn).", tool: nil, callId: nil, truncated: false, parentCallId: nil),
+                HistoryMessage(
+                    id: "a\(turn)", role: "assistant",
+                    text: "Round \(turn): all 18 approval tests pass. The fixed 200 ms wait is now a poll on the approval state with a five second deadline, so a slow run still passes and a real hang still fails.",
+                    tool: nil, callId: nil, truncated: false, parentCallId: nil
+                ),
+            ]
+        } : []
+        return HistoryPage(session: "demo", available: true, unavailableReason: nil, reset: false, messages: messages, before: nil, after: "end", more: false, omitted: false)
+    }
 
     func prompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws {
         try await Task.sleep(for: .milliseconds(500))

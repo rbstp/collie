@@ -123,7 +123,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
         gesturesChanged()
         panGestureRecognizer.addTarget(self, action: #selector(panned(_:)))
         scrollEnd.ended = { [weak self] in
-            if self?.renderDeferred == true { self?.render() }
+            guard let self else { return }
+            followsBottom = atBottom
+            if renderDeferred { render() }
         }
         delegate = scrollEnd
         for handle in [startHandle, endHandle] {
@@ -192,7 +194,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private func prepare() {
         guard let frameData else { return }
         if bounds.height > 0 {
-            followsBottom = contentOffset.y >= contentSize.height + adjustedContentInset.bottom - bounds.height - 1
+            followsBottom = atBottom
         }
         canvas.prepare(frameData)
         let m = canvas.metrics
@@ -212,7 +214,21 @@ public final class GhosttyTerminalUIView: UIScrollView {
         if pinShortContent() || bounds.size != laidOutSize {
             laidOutSize = bounds.size
             if followsBottom { scrollToBottom() }
-            if wraps && wrapColumns != renderedColumns { render() }
+            if wraps && wrapColumns != renderedColumns {
+                let (old, offset, follows) = (contentSize.height, contentOffset.y, followsBottom)
+                render()
+                // render() measures the bottom against the old content in the new bounds.
+                followsBottom = follows
+                if follows {
+                    scrollToBottom()
+                } else if old > 0 {
+                    let inset = adjustedContentInset
+                    contentOffset.y = TerminalFontSize.pinchedOffset(
+                        offset + inset.top, offset: offset, from: old, to: contentSize.height,
+                        viewport: bounds.height, leading: inset.top, trailing: inset.bottom
+                    )
+                }
+            }
         }
         if canvas.frame != bounds {
             canvas.frame = bounds
@@ -473,6 +489,10 @@ public final class GhosttyTerminalUIView: UIScrollView {
         guard abs(gap - contentInset.top) > 0.5 else { return false }
         contentInset.top = gap
         return true
+    }
+
+    private var atBottom: Bool {
+        contentOffset.y >= contentSize.height + adjustedContentInset.bottom - bounds.height - 1
     }
 
     private func scrollToBottom() {

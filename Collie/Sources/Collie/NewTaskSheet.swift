@@ -16,6 +16,7 @@ struct NewTaskSheet: View {
     @FocusState private var editingPrompt: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var expandedPrompt: Bool {
         editingPrompt || model.dictation.isActive || !model.attachments.isEmpty || (dictationExpanded && !model.prompt.isEmpty)
@@ -262,7 +263,7 @@ struct NewTaskSheet: View {
                         .scrollIndicators(.hidden)
                     }
                     GlassEffectContainer(spacing: 4) {
-                        PromptInputLayout(expanded: expandedPrompt, showsStatus: model.dictation.isActive) {
+                        PromptInputLayout(expanded: expandedPrompt && (verticalSizeClass != .compact || model.dictation.isActive), showsStatus: model.dictation.isActive) {
                             ZStack {
                                 AttachmentMenu(
                                     savedPromptsEnabled: !model.dictation.isActive,
@@ -278,7 +279,7 @@ struct NewTaskSheet: View {
                             }
                             HStack(alignment: .bottom, spacing: 8) {
                                 TextField("What should the agent do?", text: $model.prompt, selection: $selection, axis: .vertical)
-                                    .lineLimit(expandedPrompt ? 1...5 : 1...1)
+                                    .lineLimit(expandedPrompt ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
                                     .focused($editingPrompt)
                                     .disabled(model.dictation.isActive)
                                 if expandedPrompt && !model.prompt.isEmpty {
@@ -328,6 +329,7 @@ struct NewTaskSheet: View {
                             }
                         }
                     }
+                    .id(KeepsPromptVisible.id)
                 }
 
                 Section {
@@ -361,6 +363,7 @@ struct NewTaskSheet: View {
                 }
             }
             .safeAreaPadding(.bottom, editingPrompt ? 48 : 0)
+            .modifier(KeepsPromptVisible(editing: editingPrompt && verticalSizeClass == .compact))
             .safeAreaInset(edge: .top) {
                 if let repository = model.cloning {
                     HStack(spacing: 10) {
@@ -489,6 +492,21 @@ struct NewTaskSheet: View {
             .foregroundStyle(.primary)
         }
     }
+}
+
+/// A rotation moves the keyboard without scrolling the focused prompt back above it.
+private struct KeepsPromptVisible: ViewModifier {
+    let editing: Bool
+
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content.onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { _ in
+                if editing { withAnimation { proxy.scrollTo(KeepsPromptVisible.id, anchor: .bottom) } }
+            }
+        }
+    }
+
+    static let id = "prompt"
 }
 
 private struct FolderBrowser: View {
