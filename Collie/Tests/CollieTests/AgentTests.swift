@@ -1568,6 +1568,22 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 }
 
 @MainActor
+@Test func clearingTheBaseKeepsUltracodeAndRemovingTheMachineDropsBoth() throws {
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    DevicePrefs.update(in: file) {
+        $0.taskBases = ["m1": "/Users/me/git", "m2": "/Users/me"]
+        $0.taskUltracode = ["m1": true, "m2": true]
+    }
+    DevicePrefs.forgetTaskBase(machineId: "m1", in: file)
+    #expect(DevicePrefs.load(from: file).taskBases == ["m2": "/Users/me"])
+    #expect(DevicePrefs.load(from: file).taskUltracode == ["m1": true, "m2": true])
+    DevicePrefs.forgetMachine(machineId: "m2", in: file)
+    #expect(DevicePrefs.load(from: file).taskBases.isEmpty)
+    #expect(DevicePrefs.load(from: file).taskUltracode == ["m1": true])
+}
+
+@MainActor
 @Test func cancelledNewTaskNeverNavigates() async {
     let core = FakeCore()
     core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }

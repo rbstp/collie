@@ -76,6 +76,11 @@ extension DevicePrefs {
     }
 
     static func forgetTaskBase(machineId: String, in file: URL?) {
+        guard load(from: file).taskBases[machineId] != nil else { return }
+        update(in: file) { $0.taskBases[machineId] = nil }
+    }
+
+    static func forgetMachine(machineId: String, in file: URL?) {
         let prefs = load(from: file)
         guard prefs.taskBases[machineId] != nil || prefs.taskUltracode[machineId] != nil else { return }
         update(in: file) {
