@@ -65,9 +65,11 @@ final class AttachmentMenuTests: XCTestCase {
         }
         // Cancel remote pickers before another presentation or terminating their host app.
         XCTAssertTrue(picker.appears(within: choice == "Saved prompts" ? 5 : 30), app.debugDescription)
-        let cancel = picker.buttons["Cancel"]
-        XCTAssertTrue(cancel.appears(within: 5), app.debugDescription)
-        cancel.tap()
+        let cancel = picker.buttons.matching(identifier: "Cancel")
+        XCTAssertTrue(cancel.firstMatch.appears(within: 5), app.debugDescription)
+        let hittableCancel = cancel.allElementsBoundByIndex.first(where: \.isHittable)
+        XCTAssertNotNil(hittableCancel, app.debugDescription)
+        hittableCancel?.tap()
         XCTAssertTrue(picker.disappears(within: 5), app.debugDescription)
     }
 }
