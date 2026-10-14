@@ -628,10 +628,15 @@ async fn pull_requests(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             _ = interval.tick() => {}
             _ = shutdown.changed() => return,
         }
-        let Some(gh) = drive::gh() else { continue };
         if state.events.receiver_count() == 0 {
             continue;
         }
+        let Some(gh) = drive::gh() else {
+            if lock(&state.pulls).link(HashMap::new(), &HashSet::new()) {
+                let _ = state.events.send(Event::FlockChanged {});
+            }
+            continue;
+        };
         let Ok(agents) = herdr::agent_list(&state.herdr).await else {
             continue;
         };

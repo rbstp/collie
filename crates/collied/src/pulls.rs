@@ -139,7 +139,7 @@ fn checks(rollup: &[Check]) -> PullChecks {
 
 #[derive(Default)]
 pub struct Pulls {
-    cache: HashMap<Key, (Instant, Option<PullRequest>)>,
+    cache: HashMap<Key, (Instant, Option<PullRequest>, bool)>,
     linked: HashMap<String, PullRequest>,
 }
 
@@ -151,22 +151,26 @@ impl Pulls {
     pub fn cached(&self, key: &Key, now: Instant) -> Option<Option<PullRequest>> {
         self.cache
             .get(key)
-            .filter(|(at, _)| now.saturating_duration_since(*at) < REFRESH)
-            .map(|(_, pr)| pr.clone())
+            .filter(|(at, ..)| now.saturating_duration_since(*at) < REFRESH)
+            .map(|(_, pr, _)| pr.clone())
     }
 
-    /// A failed read keeps what the last good one found until the next refresh.
+    /// A failed read keeps what the last good one found for one refresh, then shows none.
     pub fn store(
         &mut self,
         key: Key,
         now: Instant,
         read: Result<Option<PullRequest>, &str>,
     ) -> Option<PullRequest> {
+        let failed = read.is_err();
         let pr = match read {
             Ok(pr) => pr,
-            Err(_) => self.cache.get(&key).and_then(|(_, pr)| pr.clone()),
+            Err(_) => match self.cache.get(&key) {
+                Some((_, pr, false)) => pr.clone(),
+                _ => None,
+            },
         };
-        self.cache.insert(key, (now, pr.clone()));
+        self.cache.insert(key, (now, pr.clone(), failed));
         pr
     }
 
@@ -255,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_refreshes_every_two_minutes_and_keeps_the_last_read_on_failure() {
+    fn cache_refreshes_every_two_minutes_and_keeps_the_last_read_through_one_failure() {
         let mut pulls = Pulls::default();
         let key = ("/repo".to_owned(), "feature".to_owned());
         let start = Instant::now();
@@ -275,6 +279,14 @@ mod tests {
             Some(pr(1))
         );
         assert_eq!(pulls.cached(&key, later), Some(Some(pr(1))));
+        let again = later + REFRESH;
+        assert_eq!(pulls.store(key.clone(), again, Err("command failed")), None);
+        assert_eq!(pulls.store(key.clone(), again, Err("command failed")), None);
+        assert_eq!(pulls.cached(&key, again), Some(None));
+        assert_eq!(
+            pulls.store(key.clone(), later, Ok(Some(pr(1)))),
+            Some(pr(1))
+        );
         assert_eq!(pulls.store(key.clone(), later, Ok(None)), None);
         assert_eq!(pulls.cached(&key, later), Some(None));
         assert_eq!(pulls.store(key.clone(), later, Err("command failed")), None);

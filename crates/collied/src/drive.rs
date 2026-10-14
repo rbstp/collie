@@ -1802,19 +1802,8 @@ async fn run_clone(
 }
 
 async fn run_poi(repo: &Cwd) -> Result<(), &'static str> {
-    let gh = gh().unwrap_or("gh");
-    let path = tool_path();
-    let mut command = Command::new(gh);
-    command
-        .arg("poi")
-        .current_dir(repo.as_str())
-        .env("PATH", path)
-        .env_remove("GH_TOKEN")
-        .env("GH_PROMPT_DISABLED", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
+    let mut command = crate::pulls::gh_command(gh().unwrap_or("gh"));
+    command.arg("poi").current_dir(repo.as_str());
     let output = timeout(Duration::from_secs(60), command.output())
         .await
         .map_err(|_| "timed out")?

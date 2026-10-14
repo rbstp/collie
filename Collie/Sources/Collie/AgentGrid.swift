@@ -247,8 +247,10 @@ private struct AgentCard: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityAction(named: "Open pull request") {
-            if let url = agent.pullRequest.flatMap(PullRequestBadge.url) { openURL(url) }
+        .accessibilityActions {
+            if let url = agent.pullRequest.flatMap(PullRequestBadge.url) {
+                Button("Open pull request") { openURL(url) }
+            }
         }
     }
 }
