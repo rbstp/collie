@@ -363,6 +363,24 @@ enum PaneLayoutResult {
     PaneLayout { layout: PaneLayout },
 }
 
+/// Only the pids are kept: `argv` and `cmdline` can hold secrets.
+#[derive(Deserialize)]
+struct PaneProcess {
+    pid: u32,
+}
+
+#[derive(Deserialize)]
+struct PaneProcesses {
+    #[serde(default)]
+    foreground_processes: Vec<PaneProcess>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PaneProcessInfoResult {
+    PaneProcessInfo { process_info: PaneProcesses },
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct MatchedRule {
     pub id: String,
@@ -657,6 +675,17 @@ pub async fn workspace_close(socket: &Path, workspace_id: &str) -> Result<(), Er
     Ok(())
 }
 
+/// The pids of the pane's foreground process group.
+pub async fn pane_pids(socket: &Path, pane_id: &str) -> Result<Vec<u32>, Error> {
+    let PaneProcessInfoResult::PaneProcessInfo { process_info } =
+        call(socket, "pane.process_info", json!({ "pane_id": pane_id })).await?;
+    Ok(process_info
+        .foreground_processes
+        .into_iter()
+        .map(|p| p.pid)
+        .collect())
+}
+
 pub async fn pane_close(socket: &Path, pane_id: &str) -> Result<(), Error> {
     let OkResult::Ok {} = call(socket, "pane.close", json!({ "pane_id": pane_id })).await?;
     Ok(())
@@ -839,5 +868,16 @@ mod tests {
         .unwrap();
         let AgentListResult::AgentList { agents } = list.result.unwrap();
         assert_eq!(agents[0].state_change_seq, 0);
+        let info: Response<PaneProcessInfoResult> = serde_json::from_str(
+            r#"{"id":"x","result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p1","shell_pid":10,"foreground_process_group_id":12,"foreground_processes":[{"argv":["claude"],"argv0":"claude","cmdline":"claude","cwd":"/a","name":"2.1.299","pid":12},{"name":"node","pid":13}]}}}"#,
+        )
+        .unwrap();
+        let PaneProcessInfoResult::PaneProcessInfo { process_info } = info.result.unwrap();
+        let pids: Vec<u32> = process_info
+            .foreground_processes
+            .iter()
+            .map(|p| p.pid)
+            .collect();
+        assert_eq!(pids, [12, 13]);
     }
 }

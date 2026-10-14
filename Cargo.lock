@@ -568,6 +568,7 @@ dependencies = [
  "core-foundation",
  "futures-util",
  "getrandom 0.4.3",
+ "libc",
  "protocol",
  "qrcode",
  "rustix",

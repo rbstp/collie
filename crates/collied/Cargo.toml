@@ -18,7 +18,7 @@ futures-util.workspace = true
 getrandom.workspace = true
 protocol.workspace = true
 qrcode = { version = "0.14.1", default-features = false }
-rustix = { version = "1.1.5", features = ["fs", "process", "system", "termios"] }
+rustix = { version = "1.1.5", features = ["fs", "param", "process", "system", "termios"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -35,6 +35,7 @@ zeroize.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"
+libc = "0.2.190"
 security-framework = "3.7.0"
 security-framework-sys = "2.17.0"
 
