@@ -6,13 +6,22 @@ const NEW: &str = " new message";
 /// Whether Claude Code's fullscreen transcript is scrolled up on the machine: `screen` (SGR)
 /// shows its "Jump to bottom" or "N new messages" banner. Any row, on purpose: a missed banner
 /// lets keys reach a dialog scrolled out of view. Claude Code draws the banner over whatever
-/// row is there, mid-row included, as a run of its own on a background color padded by a space
-/// on each side. Replies quoting it have no background; a prompt's text is drawn on one, but
-/// matches only where a run of it is exactly a banner with a space on each side.
+/// row is there, centered, as a run on a background color padded by a space on each side. Over
+/// a prompt's text, drawn in the same style, no escape separates them, so the banner is then
+/// found inside the run, by its padding and its column. Replies quoting it have no background;
+/// prompt text matches when a run of it is exactly a banner with a space on each side, or when
+/// it holds one, so padded, centered on a row as wide as the screen.
 pub fn jump_banner(screen: &str) -> bool {
-    screen
-        .split('\n')
-        .any(|row| runs(row).any(|(background, run)| background && banner(run)))
+    screen.split('\n').any(|row| {
+        let row = row.strip_suffix('\r').unwrap_or(row);
+        let width = runs(row).map(|(_, run)| run.chars().count()).sum();
+        let mut column = 0;
+        runs(row).any(|(background, run)| {
+            let at = column;
+            column += run.chars().count();
+            background && (banner(run) || centered(run, at, width))
+        })
+    })
 }
 
 fn banner(run: &str) -> bool {
@@ -21,6 +30,26 @@ fn banner(run: &str) -> bool {
     };
     let text = text.trim();
     labels(text).any(|(start, end)| start == 0 && (end == text.len() || hint(&text[end..])))
+}
+
+/// A label and its hint inside `run`, which starts at column `at`, padded by a space on each
+/// side and centered on a row `width` columns wide.
+fn centered(run: &str, at: usize, width: usize) -> bool {
+    labels(run).any(|(start, end)| {
+        let rest = &run[end..];
+        let Some(stop) = [" \u{2193}", " to scroll"]
+            .iter()
+            .filter_map(|tail| rest.find(tail).map(|i| end + i + tail.len()))
+            .find(|&stop| hint(&run[end..stop]))
+        else {
+            return false;
+        };
+        let column = at + run[..start].chars().count();
+        let len = run[start..stop].chars().count();
+        run[..start].ends_with(' ')
+            && run[stop..].starts_with(' ')
+            && (2 * column + len).abs_diff(width) <= 1
+    })
 }
 
 /// The row's text between escape sequences, each with whether an SGR background is set.
@@ -331,20 +360,43 @@ mod tests {
     #[test]
     fn a_captured_banner_matches_on_any_row_and_quoted_banners_do_not() {
         // Visible reads, scrolled up with Page Up or the mouse wheel: the banner on a blank
-        // row, at the end of a short row, in the middle of a long row, over a prompt that
-        // quotes it, and a new message banner.
+        // row, at the end of a short row, in the middle of a long row, over a prompt row
+        // apart from its text, right after its text, and with its text on both sides, and a
+        // new message banner.
         for (i, screen) in [
             captured!("jump-blank.ansi.txt"),
             captured!("jump-end-of-row.ansi.txt"),
             captured!("jump-mid-row.ansi.txt"),
             captured!("jump-over-prompt.ansi.txt"),
+            captured!("jump-prompt-left.ansi.txt"),
+            captured!("jump-prompt-both.ansi.txt"),
             captured!("new-message.ansi.txt"),
         ]
         .into_iter()
         .enumerate()
         {
             assert!(jump_banner(screen), "{i}");
+            assert!(jump_banner(&screen.replace('\n', "\r\n")), "{i}");
             assert!(!jump_banner(&strip_sgr(screen)), "{i}");
+        }
+        // Inside prompt text, only centered and padded.
+        for (i, (from, to)) in [
+            ("read these lines", "xxread these lines"),
+            (
+                " Jump to bottom (click) \u{2193} ",
+                "-Jump to bottom (click) \u{2193} ",
+            ),
+            (
+                " Jump to bottom (click) \u{2193} ",
+                " Jump to bottom (click) \u{2193}-",
+            ),
+            ("(click) \u{2193}", "(click)  \u{2193}"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let screen = captured!("jump-prompt-both.ansi.txt").replacen(from, to, 1);
+            assert!(!jump_banner(&screen), "{i}");
         }
         // At the bottom, a prompt and its reply quoting each banner, on rows of their own.
         assert!(!jump_banner(captured!("quoted.ansi.txt")));
