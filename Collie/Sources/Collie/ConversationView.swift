@@ -279,7 +279,9 @@ struct ConversationRowView: View {
 
     var body: some View {
         Group {
-            if let message = row.message {
+            if let message = row.message, row.event {
+                Text(verbatim: message.text).font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+            } else if let message = row.message {
                 ConversationMessage(message: message, query: query)
             } else {
                 ConversationActivity(tools: row.tools, steps: row.subagentSteps)

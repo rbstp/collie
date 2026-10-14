@@ -18,6 +18,8 @@ struct ConversationRow: Identifiable {
 
     var recordIDs: [String] { message.map { [$0.id] } ?? tools.flatMap { ($0.records + $0.steps).map(\.id) } }
 
+    var event: Bool { message?.role == "event" }
+
     var subagentSteps: Int { tools.reduce(0) { $0 + $1.subagent.count } }
 
     static func group(_ records: [HistoryMessage]) -> [ConversationTool] {

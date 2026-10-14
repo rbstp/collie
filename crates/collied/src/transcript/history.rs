@@ -122,6 +122,16 @@ impl Transcripts {
                     Vec::new()
                 }
             };
+            if let (Some(m), Ok(v)) = (batch.first_mut(), &record)
+                && m.role == "event"
+                && v["origin"]["kind"] == "peer"
+                && let Some(text) = v["origin"]["from"]
+                    .as_str()
+                    .filter(|a| agent_id(a))
+                    .and_then(|a| finished(&path, id, a))
+            {
+                m.text = text;
+            }
             let named = match (kind, &record) {
                 (Kind::Claude, Ok(v)) => named(v, id, forward, &path, &mut calls),
                 _ => Vec::new(),
@@ -292,15 +302,34 @@ fn subagent_dir(transcript: &Path, session: &str) -> Option<std::path::PathBuf> 
     Some(dir)
 }
 
-fn meta_parent(dir: &Path, agent: &str) -> Option<String> {
+fn meta(dir: &Path, agent: &str) -> Option<Value> {
     let (meta, _, _) = open(&dir.join(format!("agent-{agent}.meta.json")))?;
     let mut bytes = Vec::new();
     meta.take(65536).read_to_end(&mut bytes).ok()?;
-    let meta = serde_json::from_slice::<Value>(&bytes).ok()?;
-    meta["toolUseId"]
+    serde_json::from_slice::<Value>(&bytes).ok()
+}
+
+fn meta_parent(dir: &Path, agent: &str) -> Option<String> {
+    meta(dir, agent)?["toolUseId"]
         .as_str()
         .filter(|s| !s.is_empty() && s.len() <= 128)
         .map(str::to_owned)
+}
+
+fn finished(transcript: &Path, session: &str, agent: &str) -> Option<String> {
+    let meta = meta(&subagent_dir(transcript, session)?, agent)?;
+    let label = meta["description"]
+        .as_str()
+        .or(meta["agentType"].as_str())?
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>();
+    Some(
+        format!("Subagent finished: {}", label.trim())
+            .chars()
+            .take(120)
+            .collect(),
+    )
 }
 
 fn subagent_calls(transcript: &Path, session: &str) -> HashMap<String, String> {
@@ -474,14 +503,34 @@ fn normalize(
         Kind::Claude => {
             if (parent.is_none() && v["isSidechain"] == true)
                 || (parent.is_some() && v["isMeta"] == true && v["origin"].is_null())
-                || (parent.is_none()
-                    && (v["isMeta"] == true
-                        || v["isCompactSummary"] == true
-                        || v["origin"]["kind"] == "task-notification"))
                 || v["sessionId"].as_str().is_some_and(|s| s != session)
                 || v["message"]["model"] == "<synthetic>"
             {
                 return out;
+            }
+            let notice = v["origin"]["kind"] == "task-notification";
+            if parent.is_none()
+                && v["type"] == "user"
+                && (v["isMeta"] == true || v["isCompactSummary"] == true || notice)
+            {
+                let event = if v["isMeta"] == true && v["origin"]["kind"] == "peer" {
+                    Some("Subagent finished")
+                } else {
+                    notice.then_some("Background task finished")
+                };
+                return event
+                    .filter(|_| query.is_empty())
+                    .map(|text| HistoryMessage {
+                        id: format!("{base}:0"),
+                        role: "event".into(),
+                        text: text.into(),
+                        tool: None,
+                        call_id: None,
+                        truncated: false,
+                        parent_call_id: None,
+                    })
+                    .into_iter()
+                    .collect();
             }
             let role = match v["type"].as_str() {
                 Some(r @ ("user" | "assistant")) => r,
@@ -1059,14 +1108,16 @@ mod tests {
         );
         append(&path, &main[3..].concat());
         let handed = t.history(&a, &params(None, launched.after, None));
-        assert_eq!(handed.messages.len(), 8);
+        assert_eq!(handed.messages.len(), 9);
+        assert_eq!(handed.messages[0].role, "event");
+        assert_eq!(handed.messages[0].text, "Subagent finished: Review pairing");
         assert!(
-            handed.messages[..7]
+            handed.messages[1..8]
                 .iter()
                 .all(|m| m.parent_call_id.is_some())
         );
         let page = t.history(&a, &params(None, None, None));
-        assert_eq!(page.messages.len(), 11);
+        assert_eq!(page.messages.len(), 12);
         let steps = page
             .messages
             .iter()
@@ -1107,13 +1158,13 @@ mod tests {
         let target = dir.join("elsewhere.jsonl");
         std::fs::rename(&file, &target).unwrap();
         std::os::unix::fs::symlink(&target, &file).unwrap();
-        assert_eq!(t.history(&a, &params(None, None, None)).messages.len(), 4);
+        assert_eq!(t.history(&a, &params(None, None, None)).messages.len(), 5);
         let session = path.with_extension("");
         std::fs::remove_dir_all(&session).unwrap();
         let outside = session.with_extension("outside");
         subagent_files(&outside.join("x"), AGENT, meta, &records.concat());
         std::os::unix::fs::symlink(&outside, &session).unwrap();
-        assert_eq!(t.history(&a, &params(None, None, None)).messages.len(), 4);
+        assert_eq!(t.history(&a, &params(None, None, None)).messages.len(), 5);
     }
 
     #[test]
@@ -1192,7 +1243,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let mut expected = (0..50).map(|n| format!("u{n}:0")).collect::<Vec<_>>();
-        expected.extend(["call:0", "launch:0", "done:0"].map(String::from));
+        expected.extend(["call:0", "launch:0", "handback:0", "done:0"].map(String::from));
         assert_eq!(main(&back), expected);
         let mut cursor = initial.after;
         let mut forward = vec![];
@@ -1332,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn harness_injected_user_records_stay_out_of_chat_and_search() {
+    fn harness_injected_user_records_show_only_bounded_markers() {
         let user = |uuid: &str, extra: Value, content: Value| {
             let mut v = json!({"type":"user","uuid":uuid,"sessionId":CLAUDE,
                 "message":{"role":"user","content":content}});
@@ -1375,12 +1426,37 @@ mod tests {
             user("bash", json!({}), json!("<bash-input>ls</bash-input>")),
         ]
         .concat();
-        let (_dir, t, a, _) = setup("claude", &content);
+        let (_dir, t, a, path) = setup("claude", &content);
         let p = t.history(&a, &params(None, None, None));
         let ids = p.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>();
-        assert_eq!(ids, ["typed:0", "interrupt:0", "bash:0"]);
-        let search = t.history(&a, &params(None, None, Some("injected")));
-        assert_eq!(search.messages.len(), 1);
-        assert_eq!(search.messages[0].id, "typed:0");
+        assert_eq!(
+            ids,
+            ["typed:0", "handback:0", "notice:0", "interrupt:0", "bash:0"]
+        );
+        assert_eq!(p.messages[1].role, "event");
+        assert_eq!(p.messages[1].text, "Subagent finished");
+        assert_eq!(p.messages[2].role, "event");
+        assert_eq!(p.messages[2].text, "Background task finished");
+        let label = format!("Fix\u{1b}[31m the\nbug {}", "x".repeat(300));
+        subagent_files(&path, AGENT, &json!({"description": label}).to_string(), "");
+        let p = t.history(&a, &params(None, None, None));
+        let text = &p.messages[1].text;
+        assert!(
+            text.starts_with("Subagent finished: Fix[31m thebug x"),
+            "{text}"
+        );
+        assert_eq!(text.chars().count(), 120);
+        std::fs::write(
+            path.with_extension("")
+                .join(format!("subagents/agent-{AGENT}.meta.json")),
+            r#"{"agentType":"general-purpose"}"#,
+        )
+        .unwrap();
+        let p = t.history(&a, &params(None, None, None));
+        assert_eq!(p.messages[1].text, "Subagent finished: general-purpose");
+        for query in ["injected", "finished"] {
+            let search = t.history(&a, &params(None, None, Some(query)));
+            assert_eq!(search.messages.len(), usize::from(query == "injected"));
+        }
     }
 }

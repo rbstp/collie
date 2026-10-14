@@ -163,6 +163,15 @@ private func step(_ id: String, role: String = "assistant", tool: String? = nil,
     #expect(rows[1].subagentSteps == 4)
 }
 
+@Test func conversationShowsHarnessEventsAsTheirOwnMarkerRow() {
+    let event = HistoryMessage(id: "done", role: "event", text: "Subagent finished: Review", tool: nil, callId: nil, truncated: false, parentCallId: nil)
+    let rows = ConversationRow.build([tool("t", call: "task"), event, step("late", tool: "Grep", call: "r2"), message("after")])
+    #expect(rows.map(\.id) == ["activity:t", "message:done", "message:after"])
+    #expect(rows[1].event)
+    #expect(!rows[2].event)
+    #expect(rows[0].tools[0].steps.map(\.id) == ["late"])
+}
+
 @MainActor
 @Test func conversationNestsStepsOnceTheirAgentCallLoadsFromAnOlderPage() {
     let model = ConversationModel()
