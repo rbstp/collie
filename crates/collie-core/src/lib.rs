@@ -67,8 +67,9 @@ const TASK_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(150);
 /// then `TASK_NEW_TIMEOUT`.
 const TASK_CLONE_TIMEOUT: Duration = Duration::from_secs(165);
 /// An unanswered mutation's `op_id` is reused for an identical retry within this window.
-/// Longer than any mutation timeout, shorter than collied's 600 s outcome cache.
-const OP_REUSE_WINDOW: Duration = Duration::from_secs(180);
+/// Longer than any mutation timeout and the app's prompt resends (270 s), shorter than
+/// collied's 600 s outcome cache.
+const OP_REUSE_WINDOW: Duration = Duration::from_secs(300);
 /// collied waits for the agent to leave `blocked` before it answers `approval.decide`.
 const DECIDE_TIMEOUT: Duration = Duration::from_secs(20);
 /// Of the roughly 25 s iOS gives a background action, leaving time to post a fallback.
@@ -2452,7 +2453,12 @@ impl CollieCore {
             if answered && let Some(key) = key {
                 lock(&inner.ops).remove(&key);
             }
-            result.map_err(|e| request_error(&conn, e))
+            result.map_err(|e| match request_error(&conn, e) {
+                // The app resends a prompt on Unreachable, which is only safe while the
+                // op_id is kept: collied then replays an attempt that did arrive.
+                CoreError::Unreachable { message } if answered => CoreError::Internal { message },
+                e => e,
+            })
         })
         .await
     }
@@ -3236,10 +3242,13 @@ fn prompt_text(text: String) -> Result<PromptText, CoreError> {
     })
 }
 
+/// Not `Unreachable`: collied answered, so a mutation's op_id is spent.
 fn expect_ok(response: Response) -> Result<(), CoreError> {
     match response {
         Response::Ok => Ok(()),
-        other => Err(unexpected(&other).into()),
+        other => Err(CoreError::Internal {
+            message: unexpected(&other).to_string(),
+        }),
     }
 }
 

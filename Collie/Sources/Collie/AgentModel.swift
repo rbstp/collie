@@ -16,6 +16,7 @@ final class AgentModel {
     private let unlocker: any TerminalUnlocker
     private let machineLabel: String?
     @ObservationIgnored private let now: () -> ContinuousClock.Instant
+    @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
 
     private(set) var agent: AgentSummary?
     private(set) var terminal: TerminalSummary?
@@ -54,6 +55,10 @@ final class AgentModel {
     @ObservationIgnored private var seenPrompt: String?
     @ObservationIgnored private(set) var sentMacDraftCheck: Task<Void, Never>?
     private(set) var sendingPrompt = false
+    /// The machine was unreachable; the prompt is sent again until it arrives, is edited or stopped.
+    private(set) var retrying = false
+    @ObservationIgnored private var retryWait: Task<Void, any Error>?
+    @ObservationIgnored private var retryStopped = false
     /// The Mac's input box holds text the mirror did not put there; it waits for the next send.
     private var mirrorPaused = false
     /// The draft as the keyboard last left it; dictation, paste and restore never reach the Mac.
@@ -123,10 +128,12 @@ final class AgentModel {
         core: any AgentCore, route: AgentRoute, prefsFile: URL? = DevicePrefs.file, draftsFile: URL? = nil, viewedFile: URL? = nil,
         dictationEngine: any DictationEngine = SpeechDictationEngine(),
         unlocker: any TerminalUnlocker = SecureEnclaveUnlocker(), machineLabel: String? = nil,
-        now: @escaping () -> ContinuousClock.Instant = { .now }
+        now: @escaping () -> ContinuousClock.Instant = { .now },
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         self.core = core
         self.now = now
+        self.sleep = sleep
         self.route = route
         self.unlocker = unlocker
         self.machineLabel = machineLabel
@@ -299,7 +306,10 @@ final class AgentModel {
 
     /// Keyboard typing in the prompt field: only this mirrors the draft's slash command to the Mac.
     func typed(_ text: String) {
-        if text != draft { loadedMacDraft = nil }
+        if text != draft {
+            loadedMacDraft = nil
+            stopRetry()
+        }
         draft = text
         typedDraft = text
         mirrorDelay?.cancel()
@@ -380,7 +390,10 @@ final class AgentModel {
 
     func poll() {
         guard let view = core.agentView(machineId: route.machineId, terminalId: route.terminalId, afterRevision: revision) else { return }
-        if link != view.link { link = view.link }
+        if link != view.link {
+            link = view.link
+            if link == .connected { retryWait?.cancel() }
+        }
         if linkError != view.lastError { linkError = view.lastError }
         if agent != view.agent {
             if loadedMacDraft != nil, let prompt = view.agent?.lastPrompt, prompt != seenPrompt {
@@ -531,7 +544,7 @@ final class AgentModel {
         defer { sendingPrompt = false }
         saveDraft("", [])
         do {
-            try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: macDraft)
+            try await prompt(text, sent: sent)
             if macDraft != nil { macDraft = "" }
             mirrorPaused = false
             mirrored = ""
@@ -553,6 +566,36 @@ final class AgentModel {
                 promptError = Self.message(for: error)
             }
         }
+    }
+
+    /// Resends the identical request, so the core reuses its op_id, a minute after the last attempt or as soon
+    /// as the machine is back, while the field still holds `sent`; throws the last error.
+    private func prompt(_ text: String, sent: String) async throws {
+        let expected = macDraft
+        var retry = PromptRetry(started: now())
+        retryStopped = false
+        defer { retrying = false }
+        while true {
+            do {
+                return try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: expected)
+            } catch {
+                guard !retryStopped, draft == sent, let at = retry.next(after: error) else { throw error }
+                retrying = true
+                let delay = at - now()
+                let wait = Task { try await self.sleep(delay) }
+                retryWait = wait
+                _ = try? await wait.value
+                retryWait = nil
+                guard !retryStopped, draft == sent, retry.begin(at: now()) else { throw error }
+            }
+        }
+    }
+
+    /// An attempt in flight still completes; no other starts.
+    func stopRetry() {
+        guard retrying else { return }
+        retryStopped = true
+        retryWait?.cancel()
     }
 
     /// One line, then Enter, into the shell; a locked terminal is unlocked first, in the same action.
@@ -604,6 +647,7 @@ final class AgentModel {
     }
 
     private func dropInput() {
+        stopRetry()
         dictation.cancel()
         cancelUpload()
         draft = ""
@@ -675,6 +719,7 @@ final class AgentModel {
     func paste(_ text: String?) {
         guard let text, !dictation.isActive else { return }
         loadedMacDraft = nil
+        stopRetry()
         draft += text
     }
 

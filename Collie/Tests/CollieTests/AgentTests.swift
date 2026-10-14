@@ -82,6 +82,7 @@ final class FakeCore: AgentCore {
         var machines: [Machine] = []
         var cachedFlock: MachineFlock?
         var flocks = 0
+        var link = LinkPhase.connected
     }
 
     let state = Mutex(State())
@@ -153,7 +154,7 @@ final class FakeCore: AgentCore {
             terminalId: terminalId, workspaceId: "w1", kind: kind, name: nil, title: nil,
             status: s.status, statusSinceMs: 0, cwd: nil, lastLine: nil, lastPrompt: s.lastPrompt
         )
-        return AgentView(link: .connected, lastError: nil, agent: agent, output: nil, outputRevision: 0)
+        return AgentView(link: s.link, lastError: nil, agent: agent, output: nil, outputRevision: 0)
     }
     func watchAgent(machineId: String, terminalId: String?, lines: UInt16) async throws {
         state.withLock {

@@ -633,6 +633,7 @@ private struct PromptBar: View {
     @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
     @State private var pickingPrompt = false
+    @State private var copiedAt: Date?
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var expanded: Bool {
@@ -643,6 +644,9 @@ private struct PromptBar: View {
         VStack(alignment: .leading, spacing: 4) {
             if let error = model.promptError {
                 Text(error).font(.footnote).foregroundStyle(.red)
+            }
+            if model.retrying {
+                Text("Unreachable, retrying…").font(.footnote).foregroundStyle(.secondary)
             }
             if let upload = model.upload {
                 UploadChip(upload: upload) { model.cancelUpload() }
@@ -691,6 +695,22 @@ private struct PromptBar: View {
                                 .lineLimit(expanded ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
                                 .focused($editing)
                                 .disabled(model.dictation.isActive)
+                                .overlay(alignment: .trailing) {
+                                    if !editing && !model.draft.isEmpty && !model.dictation.isActive {
+                                        Color.clear
+                                            .contentShape(Rectangle())
+                                            .onTapGesture { editing = true }
+                                            .onLongPressGesture {
+                                                UIPasteboard.general.string = model.draft
+                                                copiedAt = .now
+                                            }
+                                            .accessibilityHidden(true)
+                                    }
+                                    if copiedAt != nil {
+                                        CopyIcon(label: "Copy prompt", copiedAt: $copiedAt)
+                                            .allowsHitTesting(false)
+                                    }
+                                }
                         }
                         if expanded && !model.draft.isEmpty {
                             Button {
@@ -743,6 +763,10 @@ private struct PromptBar: View {
                         .accessibilityLabel("Hide keyboard")
                     }
                     Button {
+                        if model.retrying {
+                            model.stopRetry()
+                            return
+                        }
                         if !model.keepsKeyboard {
                             editing = false
                             typingCommand = false
@@ -758,8 +782,8 @@ private struct PromptBar: View {
                     .buttonStyle(.glassProminent)
                     .buttonBorderShape(.circle)
                     .controlSize(.small)
-                    .disabled(!model.canSendPrompt)
-                    .accessibilityLabel(model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
+                    .disabled(!model.canSendPrompt && !model.retrying)
+                    .accessibilityLabel(model.retrying ? "Stop retrying" : model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
                 }
             }
         }
