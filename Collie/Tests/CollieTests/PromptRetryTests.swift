@@ -27,14 +27,15 @@ private final class TestClock: Sendable {
 
 @MainActor
 private func retryingModel(
-    _ core: FakeCore, _ clock: TestClock, sleep: @escaping @Sendable (Duration) async throws -> Void
+    _ core: FakeCore, _ clock: TestClock, resends: PromptResends = PromptResends(), draftsFile: URL? = nil,
+    sleep: @escaping @Sendable (Duration) async throws -> Void
 ) async -> AgentModel {
     core.state.withLock {
         $0.kind = "claude"
         $0.macDraft = ""
     }
     let model = AgentModel(
-        core: core, route: route("term_1"), prefsFile: nil, now: { clock.now }, sleep: sleep
+        core: core, route: route("term_1"), prefsFile: nil, draftsFile: draftsFile, now: { clock.now }, sleep: sleep, resends: resends
     )
     model.poll()
     await model.loadMacDraft()
@@ -148,9 +149,11 @@ private func retryingModel(
 }
 
 @MainActor
-private func waitingModel(_ core: FakeCore) async -> (AgentModel, Task<Void, Never>) {
+private func waitingModel(
+    _ core: FakeCore, resends: PromptResends = PromptResends(), draftsFile: URL? = nil
+) async -> (AgentModel, Task<Void, Never>) {
     core.set(error: unreachable)
-    let model = await retryingModel(core, TestClock()) { try await Task.sleep(for: $0) }
+    let model = await retryingModel(core, TestClock(), resends: resends, draftsFile: draftsFile) { try await Task.sleep(for: $0) }
     model.draft = "fix the build"
     let send = Task { await model.sendPrompt() }
     await poll { model.retrying }
@@ -236,26 +239,6 @@ private func waitingModel(_ core: FakeCore) async -> (AgentModel, Task<Void, Nev
     #expect(model.draft == "fix the build")
 }
 
-/// Another screen sent the same text, which answered and freed its op_id: the first screen's
-/// resend must not mint a new one, or collied would type the prompt again.
-@MainActor
-@Test func aPromptSentFromAnotherScreenEndsTheRetry() async {
-    let core = FakeCore()
-    core.state.withLock { $0.link = .connecting }
-    let (first, send) = await waitingModel(core)
-    core.set(error: nil)
-    let second = await retryingModel(core, TestClock()) { _ in }
-    second.draft = "fix the build"
-    await second.sendPrompt()
-    core.state.withLock { $0.link = .connected }
-    first.poll()
-    await send.value
-    #expect(core.snapshot.prompts == ["fix the build", "fix the build"])
-    #expect(core.snapshot.resends.isEmpty)
-    #expect(first.promptError == CoreError.NotResent.description)
-    #expect(!first.retrying)
-}
-
 /// A second Send of the same text reuses the first series' op_id; once the core lets it go,
 /// the retries stop instead of sending under a new one.
 @MainActor
@@ -275,19 +258,6 @@ private func waitingModel(_ core: FakeCore) async -> (AgentModel, Task<Void, Nev
     #expect(core.snapshot.resends.isEmpty)
     #expect(model.promptError == CoreError.NotResent.description)
     #expect(model.draft == "fix the build")
-}
-
-@MainActor
-@Test func leavingTheScreenStopsTheRetry() async {
-    let core = FakeCore()
-    let (model, send) = await waitingModel(core)
-    let run = Task { await model.run() }
-    try? await Task.sleep(for: .milliseconds(50))
-    run.cancel()
-    await run.value
-    await send.value
-    #expect(core.snapshot.prompts == ["fix the build"])
-    #expect(!model.retrying)
 }
 
 @MainActor
@@ -342,25 +312,119 @@ private func waitingModel(_ core: FakeCore) async -> (AgentModel, Task<Void, Nev
 }
 
 @MainActor
-@Test func leavingDuringTheFirstAttemptNeverRetries() async {
-    let core = FakeCore()
-    let model = await retryingModel(core, TestClock()) { try await Task.sleep(for: $0) }
+private func leave(_ model: AgentModel) async {
     let run = Task { await model.run() }
+    try? await Task.sleep(for: .milliseconds(20))
+    run.cancel()
+    await run.value
+}
+
+@MainActor
+@Test func leavingTheScreenKeepsResendingUntilItArrives() async throws {
+    let core = FakeCore()
+    let drafts = try makeTemporaryDirectory().appending(path: "drafts.json")
+    let resends = PromptResends()
+    let (model, send) = await waitingModel(core, resends: resends, draftsFile: drafts)
+    await leave(model)
+    core.set(error: nil)
+    resends.wake(route("term_1"))
+    await send.value
+    #expect(core.snapshot.resends == ["fix the build"])
+    #expect(resends.entries.isEmpty)
+    #expect(AgentDrafts.load(from: drafts).drafts.isEmpty, "the delivered prompt is not kept as a draft")
+}
+
+@MainActor
+@Test func leavingDuringTheFirstAttemptStillResends() async {
+    let core = FakeCore()
+    let resends = PromptResends()
+    let clock = TestClock()
+    let model = await retryingModel(core, clock, resends: resends) { [core] in
+        clock.sleep($0)
+        core.set(error: nil)
+    }
     model.draft = "fix the build"
     core.set(hold: true, error: unreachable)
     let send = Task { await model.sendPrompt() }
     await core.waitHeld(1)
-    run.cancel()
-    await run.value
+    await leave(model)
     core.release()
     await send.value
-    #expect(core.snapshot.prompts == ["fix the build"])
-    #expect(core.snapshot.resends.isEmpty)
-    #expect(!model.retrying)
-    #expect(model.promptError == notSent)
+    #expect(core.snapshot.prompts == ["fix the build", "fix the build"])
+    #expect(core.snapshot.resends == ["fix the build"])
+}
 
-    model.draft = "again"
-    core.set(error: unreachable)
-    await model.sendPrompt()
-    #expect(core.snapshot.prompts == ["fix the build", "again"], "a send after leaving is not retried either")
+@MainActor
+@Test func aReopenedScreenShowsThePendingPrompt() async {
+    let core = FakeCore()
+    let resends = PromptResends()
+    let (first, send) = await waitingModel(core, resends: resends)
+    await leave(first)
+    let second = await retryingModel(core, TestClock(), resends: resends) { _ in }
+    #expect(second.draft == "fix the build")
+    #expect(second.sendingPrompt)
+    #expect(second.retrying)
+
+    core.set(error: nil)
+    resends.wake(route("term_1"))
+    await send.value
+    await poll { !second.sendingPrompt }
+    #expect(second.draft.isEmpty)
+    #expect(second.promptError == nil)
+    #expect(core.snapshot.resends == ["fix the build"])
+}
+
+@MainActor
+@Test func newTextFromAReopenedScreenStopsThePendingPromptFirst() async {
+    let core = FakeCore()
+    let resends = PromptResends()
+    let (first, send) = await waitingModel(core, resends: resends)
+    await leave(first)
+    core.set(error: nil)
+    let second = AgentModel(core: core, route: route("term_1"), prefsFile: nil, resends: resends)
+    second.draft = "something else"
+    second.poll()
+    #expect(!second.retrying, "a field with text does not take the pending prompt")
+    await second.sendPrompt()
+    await send.value
+    #expect(core.snapshot.prompts == ["fix the build", "something else"])
+    #expect(core.snapshot.resends.isEmpty)
+    #expect(resends.entries.isEmpty)
+    #expect(second.promptError == nil)
+}
+
+@MainActor
+@Test func aFinalFailureWithNoScreenRestoresTheDraftOnce() async throws {
+    let core = FakeCore()
+    let drafts = try makeTemporaryDirectory().appending(path: "drafts.json")
+    let resends = PromptResends()
+    let clock = TestClock()
+    let model = await retryingModel(core, clock, resends: resends, draftsFile: drafts) { clock.sleep($0) }
+    model.draft = "fix the build"
+    core.set(hold: true, error: unreachable)
+    let send = Task { await model.sendPrompt() }
+    await core.waitHeld(1)
+    await leave(model)
+    core.release()
+    await send.value
+    #expect(core.snapshot.prompts.count == 5)
+    #expect(AgentDrafts.load(from: drafts).drafts[route("term_1")]?.text == "fix the build")
+
+    let reopened = AgentModel(core: core, route: route("term_1"), prefsFile: nil, draftsFile: drafts, resends: resends)
+    #expect(reopened.draft == "fix the build")
+    #expect(reopened.promptError == notSent)
+    let again = AgentModel(core: core, route: route("term_1"), prefsFile: nil, draftsFile: drafts, resends: resends)
+    #expect(again.promptError == nil)
+}
+
+@MainActor
+@Test func removingTheMachineDropsItsResends() async {
+    let core = FakeCore()
+    let resends = PromptResends()
+    let (model, send) = await waitingModel(core, resends: resends)
+    resends.stop(machineId: "m1")
+    await send.value
+    #expect(resends.entries.isEmpty)
+    #expect(core.snapshot.prompts == ["fix the build"])
+    #expect(!model.retrying)
 }
