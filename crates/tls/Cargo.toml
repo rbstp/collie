@@ -11,7 +11,7 @@ publish = false
 base64.workspace = true
 protocol.workspace = true
 ring = "0.17.14"
-rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 sha2.workspace = true
 tokio.workspace = true
 tokio-rustls = { version = "0.26.6", default-features = false }
