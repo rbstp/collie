@@ -403,9 +403,13 @@ private struct ConversationToolRecord: View {
                 Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
                     .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
             }
-            ScrollView(.horizontal) {
-                Text(ConversationMarkdown.highlighted(AttributedString(message.text), query: query))
-                    .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            if message.tool == nil {
+                ConversationMarkdown(text: message.text, query: query)
+            } else {
+                ScrollView(.horizontal) {
+                    Text(ConversationMarkdown.highlighted(AttributedString(message.text), query: query))
+                        .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                }
             }
             ConversationTruncation(truncated: message.truncated)
         }
