@@ -145,6 +145,12 @@ fn check_hooks() -> (Status, String) {
 
 /// herdr 0.9.4 reports a `--no-daemon` Codex's turns through its hook from version 9.
 fn check_codex_hook(codex_home: &Path) -> (Status, String) {
+    if !codex_home.is_dir() {
+        return (
+            Status::Ok,
+            format!("skipped: no {} (Codex not set up)", codex_home.display()),
+        );
+    }
     let path = codex_home.join("herdr-agent-state.sh");
     let fix = "run `herdr integration install codex`";
     let Ok(script) = std::fs::read_to_string(&path) else {
@@ -738,8 +744,10 @@ mod tests {
     }
 
     #[test]
-    fn warns_on_a_missing_or_outdated_codex_hook() {
+    fn warns_on_a_missing_or_outdated_codex_hook_once_codex_is_set_up() {
         let dir = tempfile::tempdir().unwrap();
+        let (s, d) = check_codex_hook(&dir.path().join("absent"));
+        assert!(s == Status::Ok && d.starts_with("skipped"), "{d}");
         let (s, d) = check_codex_hook(dir.path());
         assert!(s == Status::Warn && d.contains("not installed"), "{d}");
         let hook = dir.path().join("herdr-agent-state.sh");
