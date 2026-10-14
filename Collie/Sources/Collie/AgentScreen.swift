@@ -154,10 +154,21 @@ struct AgentScreen: View {
                         if let follows {
                             FollowMenuItem(follows: follows, route: model.route)
                         }
-                        if let item = PullRequestBadge.watchItem(model.agent?.pullRequest) {
-                            Button(item.title, systemImage: item.symbol) {
-                                Task { await model.watchPullRequest(item.watch) }
+                        switch PullRequestBadge.watchMenu(model.agent) {
+                        case .watch:
+                            Menu("Watch PR", systemImage: "eye") {
+                                ForEach(PullRequestBadge.intervals, id: \.self) { minutes in
+                                    Button("Every \(minutes) minutes") {
+                                        Task { await model.watchPullRequest(everyMinutes: minutes) }
+                                    }
+                                }
                             }
+                        case .stop(let title):
+                            Button(title, systemImage: "eye.slash") {
+                                Task { await model.watchPullRequest(everyMinutes: nil) }
+                            }
+                        case nil:
+                            EmptyView()
                         }
                     }
                     Divider()
@@ -331,7 +342,7 @@ private struct AgentHeader: View {
                     .fixedSize()
                     .frame(maxWidth: .infinity, alignment: .leading)
                     if let pullRequest = agent.pullRequest {
-                        PullRequestBadge(pullRequest: pullRequest)
+                        PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch)
                     }
                     if let kind = agent.kind {
                         AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)

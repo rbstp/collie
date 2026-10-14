@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use protocol::{AgentPromptParams, AgentStatus, ErrorCode, OpId, PromptText, TerminalId};
+use protocol::{AgentPromptParams, AgentStatus, ErrorCode, OpId, PrWatch, PromptText, TerminalId};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
@@ -15,7 +14,7 @@ use crate::herdr::AgentInfo;
 use crate::pulls::{self, Check, Outcome};
 use crate::{flock, peers};
 
-pub const POLL: Duration = Duration::from_secs(120);
+pub const EVERY_MINUTES: [u32; 4] = [2, 5, 15, 30];
 const COMMENT_WAKES: u32 = 10;
 const FAILED_READS: u32 = 8;
 const LISTED: usize = 10;
@@ -29,13 +28,13 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
       state
       mergeable
       headRefOid
-      commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+      commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes {
         __typename
         ... on CheckRun { name status conclusion isRequired(pullRequestNumber: $number) }
         ... on StatusContext { context state isRequired(pullRequestNumber: $number) }
       } } } } } }
-      comments(last: 20) { nodes { author { login } url } }
-      reviews(last: 20) { nodes { author { login } url } }
+      comments(last: 20) { nodes { author { login } url createdAt } }
+      reviews(last: 20) { nodes { author { login } url submittedAt } }
     }
   }
 }";
@@ -89,6 +88,12 @@ pub enum Stop {
 pub struct Watch {
     pub url: String,
     pub number: u64,
+    pub every_minutes: u32,
+    /// The paired phone that started it: revoking that phone ends the watch.
+    pub by: String,
+    /// The checkout and branch whose pull request this is: the agent is woken only there.
+    pub checkout: String,
+    pub branch: String,
     #[serde(default)]
     head: Option<String>,
     #[serde(default)]
@@ -97,9 +102,12 @@ pub struct Watch {
     passed: bool,
     #[serde(default)]
     conflicting: bool,
-    /// `None` until the first read, which only records what is already there.
+    /// The newest comment or review time seen, `None` until the first read, which only
+    /// records what is already there; `at_since` holds the URLs at that time.
     #[serde(default)]
-    seen: Option<Vec<String>>,
+    since: Option<String>,
+    #[serde(default)]
+    at_since: Vec<String>,
     #[serde(default)]
     comment_wakes: u32,
     #[serde(default)]
@@ -159,6 +167,7 @@ struct Commit {
 
 #[derive(Deserialize)]
 struct Rollup {
+    state: Option<String>,
     contexts: Nodes<Context>,
 }
 
@@ -174,9 +183,12 @@ struct Context {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Remark {
     author: Option<Author>,
     url: String,
+    #[serde(alias = "submittedAt")]
+    created_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -271,8 +283,16 @@ impl Watch {
         Self {
             url: url.to_owned(),
             number,
+            every_minutes: EVERY_MINUTES[0],
             ..Self::default()
         }
+    }
+
+    pub fn due(&self, read_at: Option<Instant>, now: Instant) -> bool {
+        read_at.is_none_or(|at| {
+            now.saturating_duration_since(at)
+                >= Duration::from_secs(u64::from(self.every_minutes) * 60)
+        })
     }
 
     pub fn observe(&mut self, read: Option<Read>) -> Option<Stop> {
@@ -294,12 +314,18 @@ impl Watch {
             self.pending
                 .retain(|c| !matches!(c, Change::CheckFailed { .. } | Change::ChecksPassed));
         }
-        let checks: Vec<(String, bool, Outcome)> = pull
+        let rollups: Vec<Rollup> = pull
             .commits
             .nodes
             .into_iter()
             .flatten()
             .filter_map(|n| n.commit.status_check_rollup)
+            .collect();
+        let rolled_up = rollups
+            .iter()
+            .any(|r| r.state.as_deref() == Some("SUCCESS"));
+        let checks: Vec<(String, bool, Outcome)> = rollups
+            .into_iter()
             .flat_map(|r| r.contexts.nodes.into_iter().flatten())
             .map(|c| {
                 let name = clean(c.name.or(c.context).as_deref().unwrap_or_default());
@@ -320,16 +346,22 @@ impl Watch {
                 .retain(|c| !matches!(c, Change::CheckFailed { name } if !failed.contains(name)));
             self.failed = failed;
             let required = checks.iter().any(|(_, required, _)| *required);
-            let passed = checks
-                .iter()
-                .filter(|(_, r, _)| *r || !required)
-                .all(|(_, _, outcome)| *outcome == Outcome::Pass);
+            // The rollup also counts a required check that has not reported yet.
+            let passed = rolled_up
+                && checks
+                    .iter()
+                    .filter(|(_, r, _)| *r || !required)
+                    .all(|(_, _, outcome)| *outcome == Outcome::Pass);
             if passed && !self.passed {
                 changes.push(Change::ChecksPassed);
             }
+            if !passed && self.pending.contains(&Change::ChecksPassed) {
+                self.pending.retain(|c| *c != Change::ChecksPassed);
+                self.passed = false;
+            }
             self.passed |= passed;
         }
-        let remarks: Vec<(bool, Remark)> = (pull.reviews.nodes.into_iter().flatten())
+        let remarks: Vec<(bool, Remark, String)> = (pull.reviews.nodes.into_iter().flatten())
             .map(|r| (true, r))
             .chain(
                 pull.comments
@@ -339,14 +371,20 @@ impl Watch {
                     .map(|r| (false, r)),
             )
             .filter(|(_, r)| pulls::valid_url(&r.url))
+            .filter_map(|(review, r)| {
+                let at = r.created_at.clone()?;
+                Some((review, r, at))
+            })
             .collect();
-        if let Some(seen) = &self.seen {
-            for (review, r) in &remarks {
+        let newest = remarks.iter().map(|(.., at)| at.clone()).max();
+        if let Some(since) = &self.since {
+            for (review, r, at) in &remarks {
                 let own = r
                     .author
                     .as_ref()
                     .is_some_and(|a| a.login.eq_ignore_ascii_case(&viewer));
-                if own || seen.contains(&r.url) {
+                let seen = at < since || (at == since && self.at_since.contains(&r.url));
+                if own || seen {
                     continue;
                 }
                 let url = r.url.clone();
@@ -357,7 +395,25 @@ impl Watch {
                 });
             }
         }
-        self.seen = Some(remarks.into_iter().map(|(_, r)| r.url).collect());
+        let since = self.since.take().unwrap_or_default();
+        match newest {
+            Some(newest) if newest > since => {
+                self.at_since = remarks
+                    .iter()
+                    .filter(|(.., at)| *at == newest)
+                    .map(|(_, r, _)| r.url.clone())
+                    .collect();
+                self.since = Some(newest);
+            }
+            _ => {
+                for (_, r, at) in &remarks {
+                    if *at == since && !self.at_since.contains(&r.url) {
+                        self.at_since.push(r.url.clone());
+                    }
+                }
+                self.since = Some(since);
+            }
+        }
         match pull.mergeable.as_str() {
             "CONFLICTING" => {
                 if !self.conflicting {
@@ -446,18 +502,44 @@ impl Watches {
         self.watches.get(terminal_id).is_some_and(|w| w.url == url)
     }
 
-    pub fn start(&mut self, terminal_id: &str, url: &str, number: u64) {
-        if !self.watching(terminal_id, url) {
-            self.watches
-                .insert(terminal_id.to_owned(), Watch::new(url, number));
-            self.save();
-        }
+    pub fn shown(&self, terminal_id: &str) -> Option<PrWatch> {
+        self.watches.get(terminal_id).map(|w| PrWatch {
+            number: w.number,
+            url: w.url.clone(),
+            every_minutes: w.every_minutes,
+        })
     }
 
-    pub fn stop(&mut self, terminal_id: &str) {
-        if self.watches.remove(terminal_id).is_some() {
+    /// Watching the same pull request again only changes who asked and how often.
+    pub fn start(&mut self, terminal_id: &str, watch: Watch) {
+        match self.watches.get_mut(terminal_id) {
+            Some(w) if w.url == watch.url => {
+                w.every_minutes = watch.every_minutes;
+                w.by = watch.by;
+            }
+            _ => {
+                self.watches.insert(terminal_id.to_owned(), watch);
+            }
+        }
+        self.save();
+    }
+
+    pub fn stop(&mut self, terminal_id: &str) -> bool {
+        let stopped = self.watches.remove(terminal_id).is_some();
+        if stopped {
             self.save();
         }
+        stopped
+    }
+
+    pub fn forget(&mut self, by: &str) -> bool {
+        let before = self.watches.len();
+        self.watches.retain(|_, w| w.by != by);
+        let forgot = self.watches.len() != before;
+        if forgot {
+            self.save();
+        }
+        forgot
     }
 
     pub fn list(&self) -> Vec<(String, Watch)> {
@@ -485,15 +567,33 @@ impl Watches {
     }
 }
 
-/// Only an idle or done agent is woken, through `Driver::prompt` and every one of its
-/// guards: with no `expected_draft`, a box holding text refuses the prompt and is never
-/// cleared.
-pub async fn wake(drive: &Driver, agent: &AgentInfo, text: PromptText) -> Result<(), Fail> {
-    if !matches!(
-        flock::status(&agent.agent_status),
-        AgentStatus::Idle | AgentStatus::Done
-    ) {
+/// Only an idle or done Claude Code agent still on the watched branch is woken, through
+/// `Driver::prompt` and every one of its guards: with no `expected_draft`, a box holding
+/// text refuses the prompt and is never cleared. `auth` is checked right before the write.
+pub async fn wake(
+    drive: &Driver,
+    agent: &AgentInfo,
+    watch: &Watch,
+    text: PromptText,
+    auth: &Authorized,
+) -> Result<(), Fail> {
+    if agent.agent.as_deref() != Some("claude")
+        || !matches!(
+            flock::status(&agent.agent_status),
+            AgentStatus::Idle | AgentStatus::Done
+        )
+    {
         return fail(ErrorCode::AgentNotReady, "the agent is busy");
+    }
+    let checkout = drive.checkout(agent)?;
+    match crate::git::branch(&checkout, drive.roots()).await? {
+        Some((root, branch)) if root.as_str() == watch.checkout && branch == watch.branch => {}
+        _ => {
+            return fail(
+                ErrorCode::AgentNotReady,
+                "the agent left the watched branch",
+            );
+        }
     }
     let terminal_id = TerminalId::new(agent.terminal_id.clone())
         .map_err(|_| (ErrorCode::InvalidParams, "invalid terminal id".to_owned()))?;
@@ -501,14 +601,13 @@ pub async fn wake(drive: &Driver, agent: &AgentInfo, text: PromptText) -> Result
     getrandom::fill(&mut op).map_err(|_| (ErrorCode::Internal, "no randomness".to_owned()))?;
     let op_id = OpId::new(URL_SAFE_NO_PAD.encode(op))
         .map_err(|_| (ErrorCode::Internal, "invalid op id".to_owned()))?;
-    let always: Authorized = Arc::new(|| true);
     let params = AgentPromptParams {
         op_id,
         terminal_id,
         text,
         expected_draft: None,
     };
-    drive.prompt(params, &always).await.map(drop)
+    drive.prompt(params, auth).await.map(drop)
 }
 
 #[cfg(test)]
@@ -516,6 +615,10 @@ mod tests {
     use super::*;
 
     const URL: &str = "https://github.com/cli/cli/pull/14673";
+    const ROLLUP_FAILED: &str = r#""statusCheckRollup":{"state":"FAILURE""#;
+    const ROLLUP_PASSED: &str = r#""statusCheckRollup":{"state":"SUCCESS""#;
+    const UBUNTU_PASSED: &str =
+        r#""build (ubuntu-latest)","status":"COMPLETED","conclusion":"SUCCESS""#;
 
     fn fixture(name: &str) -> String {
         std::fs::read_to_string(
@@ -530,12 +633,27 @@ mod tests {
         Some(parse(json.as_bytes()).unwrap())
     }
 
-    fn review(json: &str, login: &str, url: &str) -> String {
+    fn remark(json: &str, list: &str, login: &str, url: &str, at: &str) -> String {
+        let field = if list == "reviews" {
+            "submittedAt"
+        } else {
+            "createdAt"
+        };
         json.replace(
-            r#""reviews":{"nodes":["#,
-            &format!(r#""reviews":{{"nodes":[{{"author":{{"login":"{login}"}},"url":"{url}"}},"#),
+            &format!(r#""{list}":{{"nodes":["#),
+            &format!(
+                r#""{list}":{{"nodes":[{{"author":{{"login":"{login}"}},"url":"{url}","{field}":"{at}"}},"#
+            ),
         )
         .replace(",]", "]")
+    }
+
+    fn review(json: &str, login: &str, url: &str, at: &str) -> String {
+        remark(json, "reviews", login, url, at)
+    }
+
+    fn failed(name: &str) -> Change {
+        Change::CheckFailed { name: name.into() }
     }
 
     #[test]
@@ -543,22 +661,12 @@ mod tests {
         let failing = fixture("watch-failing.json");
         let mut watch = Watch::new(URL, 14673);
         assert_eq!(watch.observe(read(&failing)), None);
+        assert_eq!(watch.pending, vec![failed("govulncheck")]);
         assert_eq!(
-            watch.pending,
-            vec![
-                Change::CheckFailed {
-                    name: "govulncheck".into()
-                },
-                Change::ChecksPassed
-            ],
-            "govulncheck is not required; the three required builds passed"
+            watch.prompt().unwrap().as_str(),
+            "Pull request #14673 (https://github.com/cli/cli/pull/14673) changed: check \"govulncheck\" failed."
         );
-        let prompt = watch.prompt().unwrap();
-        assert_eq!(
-            prompt.as_str(),
-            "Pull request #14673 (https://github.com/cli/cli/pull/14673) changed: check \"govulncheck\" failed; all required checks passed."
-        );
-        assert_eq!(watch.summary(), "CI failed, checks passed on #14673");
+        assert_eq!(watch.summary(), "CI failed on #14673");
         assert_eq!(watch.woke(), None);
         assert_eq!(watch.observe(read(&failing)), None);
         assert_eq!(watch.prompt(), None, "nothing new on the same head");
@@ -566,61 +674,76 @@ mod tests {
         let pushed = failing.replace("866284b5d31b7eed80ae7266cb6e3f764e1db2c3", "0123456");
         watch.observe(read(&pushed));
         assert_eq!(
-            watch.pending.len(),
-            2,
+            watch.pending,
+            vec![failed("govulncheck")],
             "a new head reports its checks again"
         );
-        let rerun = pushed.replace(r#""conclusion":"FAILURE""#, r#""conclusion":"SUCCESS""#);
+        let rerun = pushed
+            .replace(r#""conclusion":"FAILURE""#, r#""conclusion":"SUCCESS""#)
+            .replace(ROLLUP_FAILED, ROLLUP_PASSED);
         watch.observe(read(&rerun));
         assert_eq!(
             watch.pending,
             vec![Change::ChecksPassed],
             "a failure fixed before the agent was woken is not told"
         );
+        let required = rerun
+            .replace(
+                UBUNTU_PASSED,
+                r#""build (ubuntu-latest)","status":"COMPLETED","conclusion":"FAILURE""#,
+            )
+            .replace(ROLLUP_PASSED, ROLLUP_FAILED);
+        watch.observe(read(&required));
+        assert_eq!(
+            watch.pending,
+            vec![failed("build (ubuntu-latest)")],
+            "a queued pass is dropped when a required check then fails"
+        );
+        watch.observe(read(&rerun));
+        assert_eq!(watch.pending, vec![Change::ChecksPassed]);
         watch.woke();
         watch.observe(read(&pushed));
         assert_eq!(
             watch.pending,
-            vec![Change::CheckFailed {
-                name: "govulncheck".into()
-            }],
+            vec![failed("govulncheck")],
             "a check that fails again after a rerun wakes again"
         );
     }
 
     #[test]
-    fn pending_and_required_checks_hold_the_passed_wake() {
-        let failing = fixture("watch-failing.json");
-        let pending = failing.replace(
-            r#""name":"build (macos-latest)","status":"COMPLETED","conclusion":"SUCCESS""#,
-            r#""name":"build (macos-latest)","status":"IN_PROGRESS","conclusion":null"#,
+    fn checks_pass_once_every_required_check_reported_and_passed() {
+        let passing = fixture("watch-passing.json");
+        let url = "https://github.com/cli/cli/pull/14566";
+        let mut watch = Watch::new(url, 14566);
+        watch.observe(read(&fixture("watch-required-missing.json")));
+        assert!(
+            watch.pending.is_empty(),
+            "a required check that has not reported holds the pass"
         );
-        assert_ne!(pending, failing);
-        let mut watch = Watch::new(URL, 14673);
-        watch.observe(read(&pending));
-        assert_eq!(
-            watch.pending,
-            vec![Change::CheckFailed {
-                name: "govulncheck".into()
-            }]
+        let running = passing.replace(
+            UBUNTU_PASSED,
+            r#""build (ubuntu-latest)","status":"IN_PROGRESS","conclusion":null"#,
         );
-        watch.woke();
-        watch.observe(read(&failing));
+        assert_ne!(running, passing);
+        watch.observe(read(&running));
+        assert!(watch.pending.is_empty());
+        watch.observe(read(&passing));
         assert_eq!(watch.pending, vec![Change::ChecksPassed]);
-        let empty = failing.replace(
-            &failing[failing.find(r#""contexts":{"nodes":["#).unwrap()
-                ..failing.find(r#"]}}}}]},"comments""#).unwrap()],
-            r#""contexts":{"nodes":["#,
-        );
         watch.woke();
+        watch.observe(read(&passing));
+        assert!(watch.pending.is_empty(), "once per head commit");
+        let start = passing.find(r#""contexts":{"nodes":["#).unwrap();
+        let end = passing.find(r#"]}}}}]},"comments""#).unwrap();
+        let empty = passing.replace(&passing[start..end], r#""contexts":{"nodes":["#);
         watch.observe(read(&empty));
-        assert!(watch.pending.is_empty() && watch.passed && watch.failed.len() == 1);
+        assert!(watch.pending.is_empty() && watch.passed);
     }
 
     #[test]
     fn a_new_review_or_comment_from_someone_else_wakes_once_with_its_url() {
         let remarks = fixture("watch-remarks.json");
-        let mut watch = Watch::new("https://github.com/cli/cli/pull/14580", 14580);
+        let url = "https://github.com/cli/cli/pull/14580";
+        let mut watch = Watch::new(url, 14580);
         watch.observe(read(&remarks));
         assert!(
             !watch.pending.iter().any(Change::remark),
@@ -630,18 +753,20 @@ mod tests {
         let reviewed = review(
             &remarks,
             "octocat",
-            "https://github.com/cli/cli/pull/14580#pullrequestreview-1",
+            &format!("{url}#pullrequestreview-1"),
+            "2026-10-14T00:00:01Z",
         );
         let own = review(
             &reviewed,
             "RBSTP",
-            "https://github.com/cli/cli/pull/14580#pullrequestreview-2",
+            &format!("{url}#pullrequestreview-2"),
+            "2026-10-14T00:00:01Z",
         );
         watch.observe(read(&own));
         assert_eq!(
             watch.pending,
             vec![Change::Review {
-                url: "https://github.com/cli/cli/pull/14580#pullrequestreview-1".into()
+                url: format!("{url}#pullrequestreview-1")
             }]
         );
         assert!(
@@ -649,22 +774,55 @@ mod tests {
                 .prompt()
                 .unwrap()
                 .as_str()
-                .ends_with("new review https://github.com/cli/cli/pull/14580#pullrequestreview-1.")
+                .ends_with(&format!("new review {url}#pullrequestreview-1."))
         );
         assert_eq!(watch.summary(), "new review on #14580");
         watch.woke();
         watch.observe(read(&own));
         assert_eq!(watch.prompt(), None);
-        let commented = own.replace(
+        let same_second = review(
+            &own,
+            "hubot",
+            &format!("{url}#pullrequestreview-3"),
+            "2026-10-14T00:00:01Z",
+        );
+        let commented = remark(
+            &same_second,
+            "comments",
+            "x",
+            "javascript:alert(1)",
+            "2026-10-14T00:00:02Z",
+        )
+        .replace(
             r#""comments":{"nodes":["#,
-            r#""comments":{"nodes":[{"author":null,"url":"https://github.com/cli/cli/pull/14580#issuecomment-9"},{"author":{"login":"x"},"url":"javascript:alert(1)"},"#,
+            &format!(
+                r#""comments":{{"nodes":[{{"author":null,"url":"{url}#issuecomment-9","createdAt":"2026-10-14T00:00:02Z"}},"#
+            ),
         );
         watch.observe(read(&commented));
         assert_eq!(
             watch.pending,
-            vec![Change::Comment {
-                url: "https://github.com/cli/cli/pull/14580#issuecomment-9".into()
-            }]
+            vec![
+                Change::Review {
+                    url: format!("{url}#pullrequestreview-3")
+                },
+                Change::Comment {
+                    url: format!("{url}#issuecomment-9")
+                }
+            ]
+        );
+        watch.woke();
+        let older = remark(
+            &own,
+            "comments",
+            "octocat",
+            &format!("{url}#issuecomment-1"),
+            "2026-10-01T00:00:00Z",
+        );
+        watch.observe(read(&older));
+        assert!(
+            watch.pending.is_empty(),
+            "an older comment sliding into the window after a deletion is not new"
         );
     }
 
@@ -695,7 +853,7 @@ mod tests {
         let mut watch = Watch::new("https://github.com/rbstp/collie/pull/275", 275);
         let merged = fixture("watch-merged.json");
         assert_eq!(watch.observe(read(&merged)), Some(Stop::Merged));
-        let closed = merged.replace("MERGED", "CLOSED");
+        let closed = merged.replace(r#""state":"MERGED""#, r#""state":"CLOSED""#);
         assert_eq!(watch.observe(read(&closed)), Some(Stop::Closed));
 
         let open = fixture("watch-failing.json");
@@ -717,8 +875,16 @@ mod tests {
         watch.observe(read(&open));
         assert_eq!(watch.woke(), None);
         let mut json = open.clone();
+        let add = |json: &str, i: u32| {
+            review(
+                json,
+                "octocat",
+                &format!("{URL}#pullrequestreview-{i}"),
+                &format!("2026-10-14T00:00:{i:02}Z"),
+            )
+        };
         for i in 0..9 {
-            json = review(&json, "octocat", &format!("{URL}#pullrequestreview-{i}"));
+            json = add(&json, i);
             watch.observe(read(&json));
             assert_eq!(watch.woke(), None);
         }
@@ -730,17 +896,34 @@ mod tests {
             "a wake that is not only remarks resets the count"
         );
         for i in 9..18 {
-            json = review(&json, "octocat", &format!("{URL}#pullrequestreview-{i}"));
+            json = add(&json, i);
             watch.observe(read(&json));
             assert_eq!(watch.woke(), None);
         }
-        json = review(&json, "octocat", &format!("{URL}#pullrequestreview-18"));
+        json = add(&json, 18);
         watch.observe(read(&json));
         assert_eq!(
             watch.woke(),
             Some(Stop::Comments),
             "the 10th remark-only wake in a row"
         );
+    }
+
+    #[test]
+    fn a_watch_is_read_on_its_own_interval() {
+        let now = Instant::now();
+        let mut watch = Watch::new(URL, 14673);
+        watch.every_minutes = 15;
+        assert!(
+            watch.due(None, now),
+            "a new or restored watch is read at once"
+        );
+        assert!(!watch.due(Some(now), now + Duration::from_secs(14 * 60 + 59)));
+        assert!(watch.due(Some(now), now + Duration::from_secs(15 * 60)));
+        watch.every_minutes = 2;
+        assert!(!watch.due(Some(now), now + Duration::from_secs(119)));
+        assert!(watch.due(Some(now), now + Duration::from_secs(120)));
+        assert_eq!(EVERY_MINUTES, [2, 5, 15, 30]);
     }
 
     #[test]
@@ -763,21 +946,37 @@ mod tests {
     }
 
     #[test]
-    fn watches_survive_a_restart_and_follow_their_url() {
+    fn watches_survive_a_restart_follow_their_url_and_end_with_their_phone() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pr-watches.json");
         let mut watches = Watches::load(path.clone());
-        watches.start("t1", URL, 14673);
+        let mut watch = Watch::new(URL, 14673);
+        watch.by = "nPHONE".into();
+        watches.start("t1", watch.clone());
         assert!(watches.watching("t1", URL));
         assert!(!watches.watching("t1", "https://github.com/cli/cli/pull/1"));
+        assert_eq!(
+            watches.shown("t1"),
+            Some(PrWatch {
+                number: 14673,
+                url: URL.into(),
+                every_minutes: 2
+            })
+        );
         let failing = fixture("watch-failing.json");
         assert_eq!(
             watches.update("t1", URL, |w| w.observe(read(&failing))),
             None
         );
+        watch.every_minutes = 30;
+        watches.start("t1", watch.clone());
+        assert_eq!(watches.shown("t1").unwrap().every_minutes, 30);
+        assert!(
+            watches.list()[0].1.prompt().is_some(),
+            "a new interval keeps what is queued"
+        );
         let restarted = Watches::load(path.clone());
         assert_eq!(restarted.list(), watches.list());
-        assert!(restarted.list()[0].1.prompt().is_some());
         assert_eq!(
             watches.update("t1", "https://github.com/cli/cli/pull/1", |_| Some(
                 Stop::Closed
@@ -790,8 +989,15 @@ mod tests {
             Some(Stop::Merged)
         );
         assert!(Watches::load(path.clone()).list().is_empty());
-        watches.start("t2", URL, 14673);
-        watches.stop("t2");
+        watches.start("t2", watch.clone());
+        let mut other = watch.clone();
+        other.by = "nOTHER".into();
+        watches.start("t3", other);
+        assert!(!watches.forget("nNOBODY"));
+        assert!(watches.forget("nPHONE"));
+        assert_eq!(watches.shown("t2"), None);
+        assert!(watches.shown("t3").is_some());
+        assert!(watches.stop("t3"));
         assert!(Watches::load(path).list().is_empty());
     }
 }

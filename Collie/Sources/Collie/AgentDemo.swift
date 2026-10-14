@@ -190,7 +190,7 @@ final class DemoAgentCore: ActivityCore {
         }
     }
 
-    func watchPullRequest(machineId: String, terminalId: String, watching: Bool) async throws {
+    func watchPullRequest(machineId: String, terminalId: String, everyMinutes: UInt32?) async throws {
         throw CoreError.NotImplemented
     }
 

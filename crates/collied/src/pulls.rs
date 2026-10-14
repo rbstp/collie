@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use protocol::{Cwd, PullChecks, PullRequest, PullState};
+use protocol::{Agent, Cwd, PullChecks, PullRequest, PullState};
 use serde::Deserialize;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -31,6 +31,15 @@ pub fn gh_command(gh: &str) -> Command {
         .stderr(Stdio::null())
         .kill_on_drop(true);
     command
+}
+
+pub async fn signed_in(gh: &str) -> bool {
+    let mut command = gh_command(gh);
+    command.args(["auth", "status"]);
+    matches!(
+        timeout(Duration::from_secs(15), command.status()).await,
+        Ok(Ok(status)) if status.success()
+    )
 }
 
 /// With no argument gh finds the current branch itself, so no branch name reaches its
@@ -103,7 +112,6 @@ fn parse(json: &[u8]) -> Option<PullRequest> {
         state,
         checks: checks(&view.status_check_rollup.unwrap_or_default()),
         url: view.url,
-        watching: false,
     })
 }
 
@@ -156,9 +164,12 @@ impl Pulls {
     }
 
     pub fn get(&self, terminal_id: &str) -> Option<PullRequest> {
-        let mut pr = self.linked.get(terminal_id).cloned()?;
-        pr.watching = self.watches.watching(terminal_id, &pr.url);
-        Some(pr)
+        self.linked.get(terminal_id).cloned()
+    }
+
+    pub fn fill(&self, agent: &mut Agent) {
+        agent.pull_request = self.get(agent.terminal_id.as_str());
+        agent.pr_watch = self.watches.shown(agent.terminal_id.as_str());
     }
 
     pub fn cached(&self, key: &Key, now: Instant) -> Option<Option<PullRequest>> {
@@ -268,7 +279,6 @@ mod tests {
             state: PullState::Open,
             checks: PullChecks::Pending,
             url: format!("https://github.com/o/r/pull/{number}"),
-            watching: false,
         }
     }
 

@@ -306,6 +306,9 @@ impl State {
         if let Err(e) = self.push.forget(&peer.stable_id) {
             tracing::error!(error = %e, "could not drop the revoked phone's APNs token");
         }
+        if lock(&self.pulls).watches.forget(&peer.stable_id) {
+            let _ = self.events.send(Event::FlockChanged {});
+        }
         self.audit.log(
             &peer.label,
             "peers.revoke",
@@ -693,7 +696,7 @@ async fn read_pulls(
     Some((linked, seen))
 }
 
-/// Each watched pull request is read every `pr_watch::POLL`, with or without a phone, and a
+/// Each watched pull request is read on its own interval, with or without a phone, and a
 /// pending wake is tried on every tick until the agent takes it.
 async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     let mut interval = tokio::time::interval(WATCH_EVERY);
@@ -703,14 +706,26 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             _ = interval.tick() => {}
             _ = shutdown.changed() => return,
         }
+        if lock(&state.pulls).watches.list().is_empty() {
+            continue;
+        }
+        let mut ended = false;
+        let agents = herdr::agent_list(&state.herdr).await.ok();
+        // herdr answers before it restores its panes, so a list with none is not trusted.
+        if let Some(agents) = agents.as_ref().filter(|a| !a.is_empty()) {
+            for (terminal_id, _) in lock(&state.pulls).watches.list() {
+                if !agents.iter().any(|a| a.terminal_id == terminal_id)
+                    && lock(&state.pulls).watches.stop(&terminal_id)
+                {
+                    tracing::info!(terminal_id, "stopped watching a pull request: agent gone");
+                    ended = true;
+                }
+            }
+        }
         let watches = lock(&state.pulls).watches.list();
         read_at.retain(|t, _| watches.iter().any(|(w, _)| w == t));
-        let mut ended = false;
         for (terminal_id, watch) in &watches {
-            if read_at
-                .get(terminal_id)
-                .is_some_and(|at| at.elapsed() < pr_watch::POLL)
-            {
+            if !watch.due(read_at.get(terminal_id).copied(), Instant::now()) {
                 continue;
             }
             read_at.insert(terminal_id.clone(), Instant::now());
@@ -729,39 +744,50 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             .into_iter()
             .filter(|(_, w)| w.prompt().is_some())
             .collect();
-        if !pending.is_empty()
-            && let Ok(agents) = herdr::agent_list(&state.herdr).await
-        {
-            for (terminal_id, watch) in pending {
-                let (Some(agent), Some(text)) = (
-                    agents.iter().find(|a| a.terminal_id == terminal_id),
-                    watch.prompt(),
-                ) else {
-                    continue;
-                };
-                if pr_watch::wake(&state.drive, agent, text).await.is_err() {
-                    continue;
-                }
-                let summary = watch.summary();
-                state.audit.log(
-                    "collied",
-                    "pr.wake",
-                    Some(&terminal_id),
-                    &format!("{summary} {}", watch.url),
-                );
-                if let Ok(t) = TerminalId::new(terminal_id.clone()) {
-                    state.push.notify_done(push::agent_alert(
-                        &t,
-                        &format!("Woke {}", approvals::alert_title(agent)),
-                        &summary,
-                        &state.machine.node_id,
-                    ));
-                }
-                ended |= lock(&state.pulls)
-                    .watches
-                    .update(&terminal_id, &watch.url, Watch::woke)
-                    .is_some();
+        for (terminal_id, watch) in pending {
+            let (Some(agent), Some(text)) = (
+                agents
+                    .iter()
+                    .flatten()
+                    .find(|a| a.terminal_id == terminal_id),
+                watch.prompt(),
+            ) else {
+                continue;
+            };
+            let auth: Authorized = {
+                let (state, terminal_id, url) =
+                    (state.clone(), terminal_id.clone(), watch.url.clone());
+                let by = watch.by.clone();
+                Arc::new(move || {
+                    lock(&state.pulls).watches.watching(&terminal_id, &url)
+                        && lock(&state.peers).get(&by).is_some()
+                })
+            };
+            if pr_watch::wake(&state.drive, agent, &watch, text, &auth)
+                .await
+                .is_err()
+            {
+                continue;
             }
+            let summary = watch.summary();
+            state.audit.log(
+                "collied",
+                "pr.wake",
+                Some(&terminal_id),
+                &format!("{summary} {}", watch.url),
+            );
+            if let Ok(t) = TerminalId::new(terminal_id.clone()) {
+                state.push.notify_done(push::agent_alert(
+                    &t,
+                    &format!("Woke {}", approvals::alert_title(agent)),
+                    &summary,
+                    &state.machine.node_id,
+                ));
+            }
+            ended |= lock(&state.pulls)
+                .watches
+                .update(&terminal_id, &watch.url, Watch::woke)
+                .is_some();
         }
         if ended {
             let _ = state.events.send(Event::FlockChanged {});
@@ -1364,7 +1390,7 @@ impl Session<'_> {
             Request::AgentAnswerNotice(p) => (drive.answer_notice(&p, &auth).await, None),
             Request::AgentSlashDraft(p) => (drive.slash_draft(p, &auth).await, None),
             Request::AgentStar(p) => (self.star(p).await, None),
-            Request::AgentWatchPullRequest(p) => (self.watch_pull_request(p), None),
+            Request::AgentWatchPullRequest(p) => (self.watch_pull_request(p).await, None),
             // Starting an agent takes up to 30 s; the session keeps serving meanwhile.
             Request::TaskNew(_) if !self.tasks.is_empty() => (
                 err(ErrorCode::RateLimited, "a task is already starting"),
@@ -1827,7 +1853,7 @@ impl Session<'_> {
         );
         let pulls = lock(&self.state.pulls);
         for agent in &mut flock.agents {
-            agent.pull_request = pulls.get(agent.terminal_id.as_str());
+            pulls.fill(agent);
         }
         drop(pulls);
         flock.approvals = self.state.approvals.pending();
@@ -1850,33 +1876,75 @@ impl Session<'_> {
         Ok(Response::Ok)
     }
 
-    fn watch_pull_request(&self, p: AgentWatchPullRequestParams) -> Reply {
+    async fn watch_pull_request(&self, p: AgentWatchPullRequestParams) -> Reply {
         let terminal_id = p.terminal_id.as_str();
-        let mut pulls = lock(&self.state.pulls);
-        if p.watching {
-            let Some(pr) = pulls.get(terminal_id) else {
+        if !p.watching {
+            if p.every_minutes.is_some() {
                 return err(
                     ErrorCode::InvalidParams,
-                    "the agent has no linked pull request",
-                );
-            };
-            if !matches!(pr.state, PullState::Open | PullState::Draft) {
-                return err(
-                    ErrorCode::InvalidParams,
-                    "the pull request is merged or closed",
+                    "every_minutes is for watching only",
                 );
             }
-            if !pr_watch::supported(&pr.url) {
-                return err(
-                    ErrorCode::InvalidParams,
-                    "the pull request's URL is not supported",
-                );
-            }
-            pulls.watches.start(terminal_id, &pr.url, pr.number);
-        } else {
-            pulls.watches.stop(terminal_id);
+            lock(&self.state.pulls).watches.stop(terminal_id);
+            let _ = self.state.events.send(Event::FlockChanged {});
+            return Ok(Response::Ok);
         }
-        drop(pulls);
+        let Some(every_minutes) = p
+            .every_minutes
+            .filter(|m| pr_watch::EVERY_MINUTES.contains(m))
+        else {
+            return err(
+                ErrorCode::InvalidParams,
+                "every_minutes must be 2, 5, 15 or 30",
+            );
+        };
+        let agent = self.state.drive.find_agent(&p.terminal_id).await?;
+        if agent.agent.as_deref() != Some("claude") {
+            return err(
+                ErrorCode::InvalidParams,
+                "only a Claude Code agent can watch its pull request",
+            );
+        }
+        let Some(pr) = lock(&self.state.pulls).get(terminal_id) else {
+            return err(
+                ErrorCode::InvalidParams,
+                "the agent has no linked pull request",
+            );
+        };
+        if !matches!(pr.state, PullState::Open | PullState::Draft) {
+            return err(
+                ErrorCode::InvalidParams,
+                "the pull request is merged or closed",
+            );
+        }
+        if !pr_watch::supported(&pr.url) {
+            return err(
+                ErrorCode::InvalidParams,
+                "the pull request's URL is not supported",
+            );
+        }
+        let Some(gh) = drive::gh() else {
+            return err(
+                ErrorCode::InvalidParams,
+                "gh is not installed on the machine",
+            );
+        };
+        if !pulls::signed_in(gh).await {
+            return err(
+                ErrorCode::InvalidParams,
+                "gh is not signed in; run `gh auth login` on the machine",
+            );
+        }
+        let checkout = self.state.drive.checkout(&agent)?;
+        let Some((root, branch)) = git::branch(&checkout, self.state.drive.roots()).await? else {
+            return err(ErrorCode::InvalidParams, "the agent is not on a branch");
+        };
+        let mut watch = Watch::new(&pr.url, pr.number);
+        watch.every_minutes = every_minutes;
+        watch.by = self.peer.who.node.stable_id.clone();
+        watch.checkout = root.as_str().to_owned();
+        watch.branch = branch;
+        lock(&self.state.pulls).watches.start(terminal_id, watch);
         let _ = self.state.events.send(Event::FlockChanged {});
         Ok(Response::Ok)
     }
@@ -2300,7 +2368,7 @@ fn observe_agent(
     if let Some(mut agent) = flock::map_agent(agent, tracker, now_ms, derived)
         && phones
     {
-        agent.pull_request = pulls.get(agent.terminal_id.as_str());
+        pulls.fill(&mut agent);
         let _ = events.send(Event::AgentStatus { agent });
     }
 }
@@ -2480,7 +2548,6 @@ mod tests {
             state: protocol::PullState::Open,
             checks: protocol::PullChecks::Failing,
             url: "https://github.com/o/r/pull/7".into(),
-            watching: false,
         };
         pulls.link(
             HashMap::from([(agent.terminal_id.clone(), pr.clone())]),

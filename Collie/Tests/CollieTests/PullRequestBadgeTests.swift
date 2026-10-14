@@ -44,26 +44,42 @@ private func pullRequest(
     }
 }
 
+private func agent(kind: String = "claude", pullRequest: PullRequestSummary?, watch: PrWatchSummary? = nil) -> AgentSummary {
+    AgentSummary(
+        terminalId: "term_1", workspaceId: "w1", kind: kind, name: nil, title: nil, status: .idle, statusSinceMs: 0,
+        cwd: nil, lastLine: nil, pullRequest: pullRequest, prWatch: watch
+    )
+}
+
 @MainActor
-@Test func sessionMenuOffersWatchForAnOpenPullRequestAndStopWhileWatching() async {
-    #expect(PullRequestBadge.watchItem(nil) == nil)
-    #expect(PullRequestBadge.watchItem(pullRequest(.open, .pending))?.title == "Watch PR")
-    #expect(PullRequestBadge.watchItem(pullRequest(.draft, .noChecks))?.watch == true)
-    #expect(PullRequestBadge.watchItem(pullRequest(.merged, .passing)) == nil)
-    #expect(PullRequestBadge.watchItem(pullRequest(.closed, .failing)) == nil)
-    var watched = pullRequest(.open, .failing)
-    watched.watching = true
-    #expect(PullRequestBadge.watchItem(watched)?.title == "Stop watching")
-    #expect(PullRequestBadge.watchItem(watched)?.watch == false)
-    #expect(PullRequestBadge.spoken(watched) == "Pull request 264, open, checks failing, watching")
+@Test func sessionMenuOffersWatchForAClaudePullRequestAndStopForAnyWatch() async {
+    #expect(PullRequestBadge.watchMenu(nil) == nil)
+    #expect(PullRequestBadge.watchMenu(agent(pullRequest: nil)) == nil)
+    #expect(PullRequestBadge.watchMenu(agent(pullRequest: pullRequest(.open, .pending))) == .watch)
+    #expect(PullRequestBadge.watchMenu(agent(pullRequest: pullRequest(.draft, .noChecks))) == .watch)
+    #expect(PullRequestBadge.watchMenu(agent(kind: "codex", pullRequest: pullRequest(.open, .pending))) == nil)
+    #expect(PullRequestBadge.watchMenu(agent(pullRequest: pullRequest(.merged, .passing))) == nil)
+    #expect(PullRequestBadge.watchMenu(agent(pullRequest: pullRequest(.closed, .failing))) == nil)
+    #expect(PullRequestBadge.intervals == [2, 5, 15, 30])
+
+    let watch = PrWatchSummary(number: 264, url: "https://github.com/rbstp/collie/pull/264", everyMinutes: 15)
+    #expect(PullRequestBadge.watchMenu(agent(pullRequest: pullRequest(.open, .failing), watch: watch))
+            == .stop("Stop watching #264, every 15 min"))
+    let older = PrWatchSummary(number: 200, url: "https://github.com/rbstp/collie/pull/200", everyMinutes: 2)
+    #expect(PullRequestBadge.watchMenu(agent(pullRequest: pullRequest(.open, .failing), watch: older))
+            == .stop("Stop watching #200, every 2 min"), "a watch on another pull request can still be stopped")
+    #expect(PullRequestBadge.watchMenu(agent(pullRequest: nil, watch: older)) == .stop("Stop watching #200, every 2 min"))
+    #expect(PullRequestBadge.spoken(pullRequest(.open, .failing), watch: watch)
+            == "Pull request 264, open, checks failing, watching every 15 minutes")
+    #expect(!PullRequestBadge.watching(pullRequest(.open, .failing), older))
 
     let core = FakeCore()
     core.state.withLock { $0.kind = "claude" }
     let model = agentModel(core)
-    await model.watchPullRequest(true)
-    await model.watchPullRequest(false)
-    #expect(core.snapshot.prWatches == ["m1 term_1 true", "m1 term_1 false"])
-    core.set(error: .Rejected(message: "the agent has no linked pull request"))
-    await model.watchPullRequest(true)
+    await model.watchPullRequest(everyMinutes: 15)
+    await model.watchPullRequest(everyMinutes: nil)
+    #expect(core.snapshot.prWatches == ["m1 term_1 15", "m1 term_1 stop"])
+    core.set(error: .Rejected(message: "gh is not signed in; run `gh auth login` on the machine"))
+    await model.watchPullRequest(everyMinutes: 2)
     #expect(model.notice != nil)
 }

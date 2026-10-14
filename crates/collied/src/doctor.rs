@@ -143,14 +143,13 @@ async fn check_gh() -> (Status, String) {
                 .to_owned(),
         );
     };
-    let mut command = crate::pulls::gh_command(gh);
-    command.args(["auth", "status"]);
-    match tokio::time::timeout(std::time::Duration::from_secs(15), command.status()).await {
-        Ok(Ok(status)) if status.success() => (Status::Ok, format!("{gh}, signed in")),
-        _ => (
+    if crate::pulls::signed_in(gh).await {
+        (Status::Ok, format!("{gh}, signed in"))
+    } else {
+        (
             Status::Warn,
             format!("{gh} is not signed in (gh auth login); agents show no pull request"),
-        ),
+        )
     }
 }
 

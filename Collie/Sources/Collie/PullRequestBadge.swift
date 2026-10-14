@@ -3,6 +3,7 @@ import SwiftUI
 
 struct PullRequestBadge: View {
     let pullRequest: PullRequestSummary
+    let watch: PrWatchSummary?
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -16,7 +17,7 @@ struct PullRequestBadge: View {
                 if let check = Self.check(pullRequest) {
                     Image(systemName: check.symbol).foregroundStyle(check.color)
                 }
-                if pullRequest.watching {
+                if Self.watching(pullRequest, watch) {
                     Image(systemName: "eye")
                     Text("Watching")
                 }
@@ -30,7 +31,7 @@ struct PullRequestBadge: View {
         .buttonStyle(.borderless)
         .fixedSize()
         .disabled(url == nil)
-        .accessibilityLabel(Self.spoken(pullRequest))
+        .accessibilityLabel(Self.spoken(pullRequest, watch: watch))
         .accessibilityHint("Opens the pull request")
     }
 
@@ -69,7 +70,11 @@ struct PullRequestBadge: View {
         }
     }
 
-    static func spoken(_ pullRequest: PullRequestSummary) -> String {
+    static func watching(_ pullRequest: PullRequestSummary, _ watch: PrWatchSummary?) -> Bool {
+        watch?.url == pullRequest.url
+    }
+
+    static func spoken(_ pullRequest: PullRequestSummary, watch: PrWatchSummary? = nil) -> String {
         let state = switch pullRequest.state {
         case .open: "open"
         case .draft: "draft"
@@ -77,15 +82,25 @@ struct PullRequestBadge: View {
         case .closed: "closed"
         case .unknown: "state unknown"
         }
-        return (["Pull request \(pullRequest.number)", state] + [check(pullRequest)?.spoken, pullRequest.watching ? "watching" : nil].compactMap { $0 })
+        let watched = watching(pullRequest, watch) ? watch.map { "watching every \($0.everyMinutes) minutes" } : nil
+        return (["Pull request \(pullRequest.number)", state] + [check(pullRequest)?.spoken, watched].compactMap { $0 })
             .joined(separator: ", ")
     }
 
-    /// The session menu's item: watch an open or draft pull request, or stop watching.
-    static func watchItem(_ pullRequest: PullRequestSummary?) -> (title: String, symbol: String, watch: Bool)? {
-        guard let pullRequest else { return nil }
-        if pullRequest.watching { return ("Stop watching", "eye.slash", false) }
-        guard pullRequest.state == .open || pullRequest.state == .draft else { return nil }
-        return ("Watch PR", "eye", true)
+    static let intervals: [UInt32] = [2, 5, 15, 30]
+
+    /// The session menu's item: watch a Claude Code agent's open or draft pull request, or
+    /// stop any watch on the terminal, linked or not.
+    static func watchMenu(_ agent: AgentSummary?) -> WatchMenu? {
+        guard let agent else { return nil }
+        if let watch = agent.prWatch { return .stop("Stop watching #\(watch.number), every \(watch.everyMinutes) min") }
+        guard agent.kind == "claude", let pullRequest = agent.pullRequest,
+              pullRequest.state == .open || pullRequest.state == .draft else { return nil }
+        return .watch
+    }
+
+    enum WatchMenu: Equatable {
+        case watch
+        case stop(String)
     }
 }

@@ -232,7 +232,7 @@ private struct AgentCard: View {
                         }
                         StatusAge(agent: agent, now: now).fixedSize()
                         if let pullRequest = agent.pullRequest {
-                            PullRequestBadge(pullRequest: pullRequest)
+                            PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch)
                         }
                     }
                     .font(.caption)

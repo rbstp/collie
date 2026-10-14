@@ -52,6 +52,16 @@
             "null"
           ]
         },
+        "pr_watch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PrWatch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pull_request": {
           "anyOf": [
             {
@@ -1084,6 +1094,30 @@
       ],
       "type": "object"
     },
+    "PrWatch": {
+      "description": "The pull request collied watches for this terminal, whether or not it is still the\nagent's linked one.",
+      "properties": {
+        "every_minutes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "number": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "url",
+        "every_minutes"
+      ],
+      "type": "object"
+    },
     "PullChecks": {
       "enum": [
         "passing",
@@ -1109,10 +1143,6 @@
         },
         "url": {
           "type": "string"
-        },
-        "watching": {
-          "description": "collied watches it and prompts the agent when it needs attention.",
-          "type": "boolean"
         }
       },
       "required": [

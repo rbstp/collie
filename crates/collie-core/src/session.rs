@@ -630,6 +630,7 @@ mod tests {
             last_prompt: None,
             last_activity_ms: None,
             pull_request: None,
+            pr_watch: None,
         }
     }
 

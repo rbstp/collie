@@ -243,8 +243,16 @@
     },
     "AgentWatchPullRequestParams": {
       "additionalProperties": false,
-      "description": "Watching needs the agent's linked pull request, open or a draft.",
+      "description": "Watching needs a Claude Code agent's linked pull request, open or a draft, and\n`every_minutes` of 2, 5, 15 or 30; stopping takes no `every_minutes`.",
       "properties": {
+        "every_minutes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"
         },

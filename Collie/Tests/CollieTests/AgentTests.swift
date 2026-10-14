@@ -231,8 +231,8 @@ final class FakeCore: AgentCore {
     func star(machineId: String, terminalId: String, starred: Bool) async throws {
         try await call { $0.stars.append("\(machineId) \(terminalId) \(starred)") }
     }
-    func watchPullRequest(machineId: String, terminalId: String, watching: Bool) async throws {
-        try await call { $0.prWatches.append("\(machineId) \(terminalId) \(watching)") }
+    func watchPullRequest(machineId: String, terminalId: String, everyMinutes: UInt32?) async throws {
+        try await call { $0.prWatches.append("\(machineId) \(terminalId) \(everyMinutes.map(String.init) ?? "stop")") }
     }
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
         try await call { $0.closes.append("workspace \(workspaceId) confirm=\(confirm)") }

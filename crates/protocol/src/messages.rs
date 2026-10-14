@@ -559,13 +559,16 @@ pub struct AgentStarParams {
     pub starred: bool,
 }
 
-/// Watching needs the agent's linked pull request, open or a draft.
+/// Watching needs a Claude Code agent's linked pull request, open or a draft, and
+/// `every_minutes` of 2, 5, 15 or 30; stopping takes no `every_minutes`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AgentWatchPullRequestParams {
     pub terminal_id: TerminalId,
     pub watching: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every_minutes: Option<u32>,
 }
 
 /// `signature` is over [`terminal_grant_message`] for the challenge this session was given.
@@ -1099,6 +1102,8 @@ pub struct Agent {
     /// The pull request of the agent's branch, as `gh` on the machine last read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<PullRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_watch: Option<PrWatch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1108,9 +1113,16 @@ pub struct PullRequest {
     pub state: PullState,
     pub checks: PullChecks,
     pub url: String,
-    /// collied watches it and prompts the agent when it needs attention.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub watching: bool,
+}
+
+/// The pull request collied watches for this terminal, whether or not it is still the
+/// agent's linked one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct PrWatch {
+    pub number: u64,
+    pub url: String,
+    pub every_minutes: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1910,7 +1922,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 20);
+        assert_eq!(crate::PROTOCOL_VERSION, 21);
     }
 
     #[test]
@@ -2145,13 +2157,23 @@ mod tests {
                 state: PullState::Draft,
                 checks: PullChecks::None,
                 url: "https://github.com/o/r/pull/12".into(),
-                watching: false,
             }),
             ..full.clone()
         };
         let json = serde_json::to_string(&linked).unwrap();
         assert!(json.ends_with(
             r#""pull_request":{"number":12,"state":"draft","checks":"none","url":"https://github.com/o/r/pull/12"}}"#
+        ));
+        let watched = Agent {
+            pr_watch: Some(PrWatch {
+                number: 11,
+                url: "https://github.com/o/r/pull/11".into(),
+                every_minutes: 15,
+            }),
+            ..linked.clone()
+        };
+        assert!(serde_json::to_string(&watched).unwrap().ends_with(
+            r#""pr_watch":{"number":11,"url":"https://github.com/o/r/pull/11","every_minutes":15}}"#
         ));
         let newer = json.replace(r#""draft","checks":"none""#, r#""queued","checks":"stale""#);
         let parsed = serde_json::from_str::<Agent>(&newer)
@@ -2205,13 +2227,14 @@ mod tests {
 
     #[test]
     fn watch_pull_request_takes_a_terminal_and_a_flag() {
-        let json = r#"{"id":2,"method":"agent.watch_pull_request","params":{"terminal_id":"term_1","watching":true}}"#;
+        let json = r#"{"id":2,"method":"agent.watch_pull_request","params":{"terminal_id":"term_1","watching":true,"every_minutes":15}}"#;
         let frame = parse(json).unwrap();
         assert_eq!(
             frame.request,
             Request::AgentWatchPullRequest(AgentWatchPullRequestParams {
                 terminal_id: TerminalId::new("term_1").unwrap(),
                 watching: true,
+                every_minutes: Some(15),
             })
         );
         assert_eq!(frame.request.class(), MethodClass::Drive);
