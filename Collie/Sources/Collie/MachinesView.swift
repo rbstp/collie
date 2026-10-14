@@ -141,7 +141,6 @@ private struct MachineConnectionDetails: View {
     }
 }
 
-/// The clipboard icon, a check for 3 seconds after a copy.
 struct CopyIcon: View {
     let label: String
     @Binding var copiedAt: Date?

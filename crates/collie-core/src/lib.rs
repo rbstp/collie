@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::time::{Duration, Instant, SystemTime};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -66,9 +66,11 @@ const TASK_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(150);
 /// collied's 75 s clone, or its 75 s budget for a pull request's gh read, checks and fetch,
 /// then `TASK_NEW_TIMEOUT`.
 const TASK_CLONE_TIMEOUT: Duration = Duration::from_secs(165);
-/// An unanswered mutation's `op_id` is reused for an identical retry within this window.
-/// Longer than any mutation timeout and the app's prompt resends (270 s), shorter than
-/// collied's 600 s outcome cache.
+/// An unanswered mutation's `op_id` is reused for an identical retry within this window,
+/// in wall time so a sleeping phone does not stretch it. Longer than any mutation timeout
+/// and the app's prompt resends (270 s), shorter than collied's 600 s outcome cache. That
+/// cache counts on the Mac from the first arrival and is in memory: a collied restart
+/// forgets it, which the app's last-prompt check only partly covers.
 const OP_REUSE_WINDOW: Duration = Duration::from_secs(300);
 /// collied waits for the agent to leave `blocked` before it answers `approval.decide`.
 const DECIDE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -167,6 +169,8 @@ pub enum CoreError {
     Storage { message: String },
     #[error("internal: {message}")]
     Internal { message: String },
+    #[error("Not sent: check the session before sending again.")]
+    NotResent,
 }
 
 impl From<tailnet::Error> for CoreError {
@@ -861,7 +865,7 @@ struct Inner {
     login_name: Mutex<Option<String>>,
     push: PushSlot,
     reach: Arc<Reachability>,
-    ops: Mutex<HashMap<String, (OpId, Instant)>>,
+    ops: Mutex<HashMap<String, (OpId, SystemTime)>>,
     uploads: Mutex<HashMap<u64, (String, watch::Sender<bool>)>>,
     next_upload: AtomicU64,
     suspended: watch::Sender<bool>,
@@ -1535,6 +1539,31 @@ impl CollieCore {
                 .map_err(|_| invalid("expected_draft", "invalid draft"))?,
         });
         expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
+    }
+
+    /// For the app's automatic resends: only an `op_id` that an unanswered identical prompt
+    /// still holds is sent, so collied can replay that prompt but never run it a second time.
+    /// With none held (answered, expired, or a restarted core) nothing is sent: `NotResent`.
+    pub async fn resend_prompt(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        text: String,
+        expected_draft: Option<String>,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentPrompt(AgentPromptParams {
+            op_id: new_op_id(),
+            terminal_id: terminal(terminal_id)?,
+            text: prompt_text(text)?,
+            expected_draft: expected_draft
+                .map(DraftText::new)
+                .transpose()
+                .map_err(|_| invalid("expected_draft", "invalid draft"))?,
+        });
+        expect_ok(
+            self.mutate_op(&machine_id, request, DRIVE_TIMEOUT, false)
+                .await?,
+        )
     }
 
     pub async fn send_keys(
@@ -2436,12 +2465,31 @@ impl CollieCore {
     async fn mutate(
         &self,
         machine_id: &str,
-        mut request: Request,
+        request: Request,
         timeout: Duration,
     ) -> Result<Response, CoreError> {
+        self.mutate_op(machine_id, request, timeout, true).await
+    }
+
+    async fn mutate_op(
+        &self,
+        machine_id: &str,
+        mut request: Request,
+        timeout: Duration,
+        mint: bool,
+    ) -> Result<Response, CoreError> {
+        let held = if mint {
+            None
+        } else {
+            let key = self.inner.held_op(machine_id, &mut request);
+            Some(key.ok_or(CoreError::NotResent)?)
+        };
         let conn = self.conn(machine_id)?;
         let _busy = Busy::new(&self.inner);
-        let key = self.inner.claim_op(machine_id, &mut request);
+        let key = match held {
+            Some(key) => Some(key),
+            None => self.inner.claim_op(machine_id, &mut request),
+        };
         let inner = self.inner.clone();
         self.run(async move {
             let result = conn.mutate(request, timeout).await;
@@ -2453,12 +2501,7 @@ impl CollieCore {
             if answered && let Some(key) = key {
                 lock(&inner.ops).remove(&key);
             }
-            result.map_err(|e| match request_error(&conn, e) {
-                // The app resends a prompt on Unreachable, which is only safe while the
-                // op_id is kept: collied then replays an attempt that did arrive.
-                CoreError::Unreachable { message } if answered => CoreError::Internal { message },
-                e => e,
-            })
+            result.map_err(|e| mutation_error(request_error(&conn, e), answered))
         })
         .await
     }
@@ -2543,23 +2586,35 @@ impl Inner {
     }
 
     fn claim_op(&self, machine_id: &str, request: &mut Request) -> Option<String> {
-        let mut probe = request.clone();
-        *op_id_mut(&mut probe)? = OpId::new("A".repeat(22)).expect("valid op_id");
-        let key = format!(
-            "{machine_id}\n{}",
-            serde_json::to_string(&probe).expect("requests serialize")
-        );
-        let mut ops = lock(&self.ops);
-        let now = Instant::now();
-        ops.retain(|_, (_, at)| now.duration_since(*at) < OP_REUSE_WINDOW);
+        let key = op_key(machine_id, request)?;
+        let mut ops = self.live_ops();
         let op_id = op_id_mut(request)?;
         match ops.get(&key) {
             Some((reused, _)) => op_id.clone_from(reused),
             None => {
-                ops.insert(key.clone(), (op_id.clone(), now));
+                ops.insert(key.clone(), (op_id.clone(), SystemTime::now()));
             }
         }
         Some(key)
+    }
+
+    fn held_op(&self, machine_id: &str, request: &mut Request) -> Option<String> {
+        let key = op_key(machine_id, request)?;
+        let ops = self.live_ops();
+        let (held, _) = ops.get(&key)?;
+        op_id_mut(request)?.clone_from(held);
+        Some(key)
+    }
+
+    /// A clock set back expires every entry rather than stretching the window.
+    fn live_ops(&self) -> MutexGuard<'_, HashMap<String, (OpId, SystemTime)>> {
+        let mut ops = lock(&self.ops);
+        let now = SystemTime::now();
+        ops.retain(|_, (_, at)| {
+            now.duration_since(*at)
+                .is_ok_and(|age| age < OP_REUSE_WINDOW)
+        });
+        ops
     }
 
     fn config(&self, auth_key: Option<Zeroizing<String>>) -> Config {
@@ -3242,6 +3297,24 @@ fn prompt_text(text: String) -> Result<PromptText, CoreError> {
     })
 }
 
+/// The app resends a prompt on `Unreachable`, so it must mean the op_id is still held:
+/// an answered request spent it.
+fn mutation_error(e: CoreError, answered: bool) -> CoreError {
+    match e {
+        CoreError::Unreachable { message } if answered => CoreError::Internal { message },
+        e => e,
+    }
+}
+
+fn op_key(machine_id: &str, request: &Request) -> Option<String> {
+    let mut probe = request.clone();
+    *op_id_mut(&mut probe)? = OpId::new("A".repeat(22)).expect("valid op_id");
+    Some(format!(
+        "{machine_id}\n{}",
+        serde_json::to_string(&probe).expect("requests serialize")
+    ))
+}
+
 /// Not `Unreachable`: collied answered, so a mutation's op_id is spent.
 fn expect_ok(response: Response) -> Result<(), CoreError> {
     match response {
@@ -3546,6 +3619,77 @@ mod tests {
         assert!(matches!(
             server(ErrorCode::ApprovalNonceMismatch, ""),
             CoreError::Rejected { .. }
+        ));
+    }
+
+    #[test]
+    fn a_resend_only_sends_a_held_op_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = CollieCore::new(dir.path().join("s").to_string_lossy().into()).unwrap();
+        let prompt = |text: &str| {
+            Request::AgentPrompt(AgentPromptParams {
+                op_id: new_op_id(),
+                terminal_id: TerminalId::new("term_1").unwrap(),
+                text: PromptText::new(text).unwrap(),
+                expected_draft: None,
+            })
+        };
+        let op = |r: &mut Request| op_id_mut(r).unwrap().clone();
+        let resend = |text: &str| {
+            core.runtime.block_on(core.resend_prompt(
+                "m1".into(),
+                "term_1".into(),
+                text.into(),
+                None,
+            ))
+        };
+        let mut again = prompt("run the tests");
+        assert_eq!(core.inner.held_op("m1", &mut again), None);
+        assert!(matches!(resend("run the tests"), Err(CoreError::NotResent)));
+        assert!(lock(&core.inner.ops).is_empty(), "a resend never claims");
+
+        let mut first = prompt("run the tests");
+        let sent = op(&mut first);
+        let key = core.inner.claim_op("m1", &mut first).unwrap();
+        assert_eq!(core.inner.held_op("m1", &mut again), Some(key.clone()));
+        assert_eq!(op(&mut again), sent, "the held op_id is sent again");
+        assert!(
+            matches!(resend("run the tests"), Err(CoreError::MachineNotFound)),
+            "held: goes on to the machine"
+        );
+        assert!(matches!(
+            resend("something else"),
+            Err(CoreError::NotResent)
+        ));
+
+        lock(&core.inner.ops).get_mut(&key).unwrap().1 -= OP_REUSE_WINDOW;
+        assert!(
+            matches!(resend("run the tests"), Err(CoreError::NotResent)),
+            "expired"
+        );
+        assert!(lock(&core.inner.ops).is_empty());
+    }
+
+    #[test]
+    fn only_an_unanswered_mutation_reads_as_unreachable() {
+        let unreachable = || CoreError::Unreachable {
+            message: "timed out waiting for the machine".into(),
+        };
+        assert!(matches!(
+            mutation_error(unreachable(), false),
+            CoreError::Unreachable { .. }
+        ));
+        assert!(matches!(
+            mutation_error(unreachable(), true),
+            CoreError::Internal { .. }
+        ));
+        assert!(matches!(
+            mutation_error(CoreError::AgentNotReady, true),
+            CoreError::AgentNotReady
+        ));
+        assert!(matches!(
+            expect_ok(Response::Draft { text: None }),
+            Err(CoreError::Internal { .. })
         ));
     }
 

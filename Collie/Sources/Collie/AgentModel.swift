@@ -55,7 +55,6 @@ final class AgentModel {
     @ObservationIgnored private var seenPrompt: String?
     @ObservationIgnored private(set) var sentMacDraftCheck: Task<Void, Never>?
     private(set) var sendingPrompt = false
-    /// The machine was unreachable; the prompt is sent again until it arrives, is edited or stopped.
     private(set) var retrying = false
     @ObservationIgnored private var retryWait: Task<Void, any Error>?
     @ObservationIgnored private var retryStopped = false
@@ -276,6 +275,7 @@ final class AgentModel {
             }
             try? await Task.sleep(for: .milliseconds(isTerminal ? 100 : 250))
         }
+        stopRetry()
         if Self.watchers[route.machineId] == ObjectIdentifier(self) {
             Self.watchers[route.machineId] = nil
             watch(nil)
@@ -556,37 +556,52 @@ final class AgentModel {
                 draft = String(draft.dropFirst(sent.count).drop(while: \.isWhitespace))
             }
         } catch {
+            if isTerminal { return }
             if case .DraftChanged(let current) = error as? CoreError {
                 let mine = Self.slashToken(draft)
                 if !mine.isEmpty, Self.boxToken(current)?.hasPrefix(mine) == true { adopt(current) } else { macDraft = current }
             }
             if case .AgentBlocked = error as? CoreError, codexQuestionQueued {
                 promptError = "Tap ⇧← to view and answer the pending question."
+            } else if PromptRetry.retries(error) {
+                promptError = "Not sent: machine unreachable"
             } else {
                 promptError = Self.message(for: error)
             }
         }
     }
 
-    /// Resends the identical request, so the core reuses its op_id, a minute after the last attempt or as soon
-    /// as the machine is back, while the field still holds `sent`; throws the last error.
+    /// Retries go through `resendPrompt`, so only the user's Send can mint an op_id. An agent whose last
+    /// prompt became this one got it, which also covers collied forgetting the op_id in a restart.
     private func prompt(_ text: String, sent: String) async throws {
         let expected = macDraft
+        let before = agent?.lastPrompt
         var retry = PromptRetry(started: now())
+        var resend = false
         retryStopped = false
         defer { retrying = false }
         while true {
+            let linked = link == .connected
             do {
-                return try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: expected)
+                if resend {
+                    try await core.resendPrompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: expected)
+                } else {
+                    try await core.prompt(machineId: route.machineId, terminalId: route.terminalId, text: text, expectedDraft: expected)
+                }
+                return
             } catch {
                 guard !retryStopped, draft == sent, let at = retry.next(after: error) else { throw error }
                 retrying = true
-                let delay = at - now()
-                let wait = Task { try await self.sleep(delay) }
-                retryWait = wait
-                _ = try? await wait.value
-                retryWait = nil
+                if linked || link != .connected {
+                    let delay = at - now()
+                    let wait = Task { try await self.sleep(delay) }
+                    retryWait = wait
+                    _ = try? await wait.value
+                    retryWait = nil
+                }
                 guard !retryStopped, draft == sent, retry.begin(at: now()) else { throw error }
+                if PromptRetry.arrived(text, lastPrompt: agent?.lastPrompt, before: before) { return }
+                resend = true
             }
         }
     }
@@ -595,6 +610,7 @@ final class AgentModel {
     func stopRetry() {
         guard retrying else { return }
         retryStopped = true
+        retrying = false
         retryWait?.cancel()
     }
 

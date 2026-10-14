@@ -636,6 +636,12 @@ private struct PromptBar: View {
     @State private var copiedAt: Date?
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
+    private func copyPrompt() {
+        guard !model.draft.isEmpty else { return }
+        UIPasteboard.general.string = model.draft
+        copiedAt = .now
+    }
+
     private var expanded: Bool {
         editing || typingCommand || model.dictation.isActive || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
     }
@@ -700,10 +706,7 @@ private struct PromptBar: View {
                                         Color.clear
                                             .contentShape(Rectangle())
                                             .onTapGesture { editing = true }
-                                            .onLongPressGesture {
-                                                UIPasteboard.general.string = model.draft
-                                                copiedAt = .now
-                                            }
+                                            .onLongPressGesture(perform: copyPrompt)
                                             .accessibilityHidden(true)
                                     }
                                     if copiedAt != nil {
@@ -711,6 +714,7 @@ private struct PromptBar: View {
                                             .allowsHitTesting(false)
                                     }
                                 }
+                                .accessibilityAction(named: "Copy prompt", copyPrompt)
                         }
                         if expanded && !model.draft.isEmpty {
                             Button {

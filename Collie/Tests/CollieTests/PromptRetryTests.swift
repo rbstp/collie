@@ -6,6 +6,7 @@ import Testing
 @testable import Collie
 
 private let unreachable = CoreError.Unreachable(message: "timed out waiting for the machine")
+private let notSent = "Not sent: machine unreachable"
 
 private final class TestClock: Sendable {
     private let state = Mutex((now: ContinuousClock.now, sleeps: [Duration]()))
@@ -101,8 +102,9 @@ private func retryingModel(
     await model.sendPrompt()
     #expect(core.snapshot.prompts == Array(repeating: "fix the build", count: 5))
     #expect(core.snapshot.expectedDrafts == Array(repeating: "", count: 5))
+    #expect(core.snapshot.resends == Array(repeating: "fix the build", count: 4), "only the tap mints an op_id")
     #expect(clock.sleeps == Array(repeating: .seconds(60), count: 4))
-    #expect(model.promptError == unreachable.description)
+    #expect(model.promptError == notSent)
     #expect(model.draft == "fix the build")
     #expect(!model.retrying)
     #expect(!model.sendingPrompt)
@@ -165,7 +167,7 @@ private func waitingModel(_ core: FakeCore) async -> (AgentModel, Task<Void, Nev
     #expect(core.snapshot.prompts == ["fix the build"])
     #expect(model.draft == "fix the build")
     #expect(!model.retrying)
-    #expect(model.promptError == unreachable.description)
+    #expect(model.promptError == notSent)
 }
 
 @MainActor
@@ -191,4 +193,130 @@ private func waitingModel(_ core: FakeCore) async -> (AgentModel, Task<Void, Nev
     #expect(core.snapshot.prompts == ["fix the build", "fix the build"])
     #expect(model.draft.isEmpty)
     #expect(model.promptError == nil)
+}
+
+@Test func aChangedLastPromptMeansTheResendArrived() {
+    #expect(PromptRetry.arrived("  fix the build\nand the tests", lastPrompt: "fix the build", before: nil))
+    #expect(!PromptRetry.arrived("fix the build", lastPrompt: "fix the build", before: "fix the build"))
+    #expect(!PromptRetry.arrived("fix the build", lastPrompt: nil, before: "older"))
+    #expect(!PromptRetry.arrived("fix the build", lastPrompt: "fix the tests", before: nil))
+    let long = String(repeating: "a", count: 200)
+    #expect(PromptRetry.arrived(long, lastPrompt: String(repeating: "a", count: 159) + "…", before: nil))
+}
+
+@MainActor
+@Test func theMachineBackDuringAnAttemptSendsAgainAtOnce() async {
+    let core = FakeCore()
+    core.state.withLock { $0.link = .connecting }
+    let clock = TestClock()
+    let model = await retryingModel(core, clock) { clock.sleep($0) }
+    model.draft = "fix the build"
+    core.set(hold: true, error: unreachable)
+    let send = Task { await model.sendPrompt() }
+    await core.waitHeld(1)
+    core.state.withLock { $0.link = .connected }
+    model.poll()
+    core.release()
+    await send.value
+    #expect(core.snapshot.prompts.count == 5)
+    #expect(clock.sleeps.count == 3, "no wait after the first attempt")
+}
+
+@MainActor
+@Test func aSuspensionPastTheWindowStopsTheRetry() async {
+    let core = FakeCore()
+    core.set(error: unreachable)
+    let clock = TestClock()
+    let model = await retryingModel(core, clock) { clock.sleep($0 + .seconds(240)) }
+    model.draft = "fix the build"
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["fix the build"])
+    #expect(model.promptError == notSent)
+    #expect(model.draft == "fix the build")
+}
+
+/// Another screen sent the same text, which answered and freed its op_id: the first screen's
+/// resend must not mint a new one, or collied would type the prompt again.
+@MainActor
+@Test func aPromptSentFromAnotherScreenEndsTheRetry() async {
+    let core = FakeCore()
+    core.state.withLock { $0.link = .connecting }
+    let (first, send) = await waitingModel(core)
+    core.set(error: nil)
+    let second = await retryingModel(core, TestClock()) { _ in }
+    second.draft = "fix the build"
+    await second.sendPrompt()
+    core.state.withLock { $0.link = .connected }
+    first.poll()
+    await send.value
+    #expect(core.snapshot.prompts == ["fix the build", "fix the build"])
+    #expect(core.snapshot.resends.isEmpty)
+    #expect(first.promptError == CoreError.NotResent.description)
+    #expect(!first.retrying)
+}
+
+/// A second Send of the same text reuses the first series' op_id; once the core lets it go,
+/// the retries stop instead of sending under a new one.
+@MainActor
+@Test func aSecondSeriesNeverMintsAnOpIdForItsRetries() async {
+    let core = FakeCore()
+    core.state.withLock { $0.link = .connecting }
+    let (model, first) = await waitingModel(core)
+    model.stopRetry()
+    await first.value
+    let second = Task { await model.sendPrompt() }
+    await poll { model.retrying }
+    core.state.withLock { $0.heldOps.removeAll() }
+    core.state.withLock { $0.link = .connected }
+    model.poll()
+    await second.value
+    #expect(core.snapshot.prompts == ["fix the build", "fix the build"])
+    #expect(core.snapshot.resends.isEmpty)
+    #expect(model.promptError == CoreError.NotResent.description)
+    #expect(model.draft == "fix the build")
+}
+
+@MainActor
+@Test func leavingTheScreenStopsTheRetry() async {
+    let core = FakeCore()
+    let (model, send) = await waitingModel(core)
+    let run = Task { await model.run() }
+    try? await Task.sleep(for: .milliseconds(50))
+    run.cancel()
+    await run.value
+    await send.value
+    #expect(core.snapshot.prompts == ["fix the build"])
+    #expect(!model.retrying)
+}
+
+@MainActor
+@Test func aPromptTheAgentAlreadyShowsIsNotResent() async {
+    let core = FakeCore()
+    core.state.withLock { $0.link = .connecting }
+    let (model, send) = await waitingModel(core)
+    core.state.withLock {
+        $0.lastPrompt = "fix the build"
+        $0.link = .connected
+    }
+    model.poll()
+    await send.value
+    #expect(core.snapshot.prompts == ["fix the build"])
+    #expect(core.snapshot.resends.isEmpty)
+    #expect(model.draft.isEmpty)
+    #expect(model.promptError == nil)
+}
+
+@MainActor
+@Test func anAgentExitingMidRetryLeavesNoError() async {
+    let core = FakeCore()
+    let (model, send) = await waitingModel(core)
+    core.state.withLock {
+        $0.kind = nil
+        $0.shell = TerminalSummary(terminalId: "term_1", workspaceId: "w1", workspaceLabel: "collie", label: nil, cwd: nil, locked: true)
+    }
+    model.poll()
+    await send.value
+    #expect(model.isTerminal)
+    #expect(model.promptError == nil)
+    #expect(model.draft.isEmpty)
 }

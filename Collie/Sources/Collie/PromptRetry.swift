@@ -1,13 +1,12 @@
 import CollieCore
 
-/// Resends a prompt only while the machine is unreachable. The core then keeps the prompt's
-/// op_id for an identical request (same text and expected draft) for 300 s, so collied replays
-/// an attempt that did arrive instead of typing the prompt twice. Any answer from collied ends it.
+/// Only an unreachable machine is retried, and every retry is a core resend, which sends only
+/// under the op_id an unanswered identical prompt still holds: collied then replays a prompt that
+/// arrived instead of typing it twice. Any answer from collied ends it.
 struct PromptRetry {
     static let attempts = 5
     static let interval: Duration = .seconds(60)
-    /// Under the core's 300 s reuse window. The continuous clock counts while the phone sleeps,
-    /// which the core's clock does not.
+    /// A second limit under the core's 300 s op_id window.
     static let window: Duration = .seconds(270)
 
     let started: ContinuousClock.Instant
@@ -26,17 +25,25 @@ struct PromptRetry {
         }
     }
 
-    /// When to send again after `error`, or nil to give up.
     func next(after error: any Error) -> ContinuousClock.Instant? {
         guard Self.retries(error), attempt < Self.attempts else { return nil }
         return last + Self.interval
     }
 
-    /// Counts an attempt starting `now`, which is early when the machine came back.
     mutating func begin(at now: ContinuousClock.Instant) -> Bool {
         guard attempt < Self.attempts, now - started <= Self.window else { return false }
         attempt += 1
         last = now
         return true
+    }
+
+    /// collied's last prompt is the first non-empty line, cut to 160 characters with "…". It must
+    /// have changed since the send started, so a prompt sent twice on purpose is not taken as arrived.
+    static func arrived(_ text: String, lastPrompt: String?, before: String?) -> Bool {
+        guard let lastPrompt, lastPrompt != before else { return false }
+        let line = text.split(whereSeparator: \.isNewline).lazy
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty } ?? ""
+        return lastPrompt.hasSuffix("…") ? line.hasPrefix(lastPrompt.dropLast()) : line == lastPrompt
     }
 }
