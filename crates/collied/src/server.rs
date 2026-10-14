@@ -709,11 +709,17 @@ async fn read_pulls(
                 if !state.reads_pulls() {
                     return None;
                 }
-                let head = git::line(&root, &["rev-parse", "--verify", "--quiet", "HEAD"]).await;
-                let kept = head
-                    .ok()
-                    .flatten()
-                    .and_then(|head| lock(&state.pulls).kept(&key, &head));
+                let kept = lock(&state.pulls).kept(&key, Instant::now());
+                let kept = match kept {
+                    Some(pull) => git::line(&root, &["rev-parse", "--verify", "--quiet", "HEAD"])
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|head| head == pull.1)
+                        .then_some(pull),
+                    None => None,
+                };
+                let is_kept = kept.is_some();
                 let read = match kept {
                     Some(kept) => Ok(Some(kept)),
                     None => pulls::fetch(gh, &root).await,
@@ -727,7 +733,7 @@ async fn read_pulls(
                 if let Some(number) = pulls::merged_number(&read, || state.archives_on_merge()) {
                     merged.push((a.clone(), root.clone(), number));
                 }
-                lock(&state.pulls).store(key.clone(), Instant::now(), read)
+                lock(&state.pulls).store(key.clone(), Instant::now(), read, is_kept)
             }
         };
         if let Some(pr) = pr {

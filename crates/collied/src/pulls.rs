@@ -11,6 +11,7 @@ use tokio::time::timeout;
 use crate::pr_watch::Watches;
 
 pub const REFRESH: Duration = Duration::from_secs(120);
+pub const MERGED_REFRESH: Duration = Duration::from_secs(30 * 60);
 pub(crate) const GH_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_URL_BYTES: usize = 512;
 const MAX_NAME_CHARS: usize = 100;
@@ -358,9 +359,16 @@ fn checks<'a>(rollup: impl Iterator<Item = &'a Check>) -> PullChecks {
     }
 }
 
+struct Entry {
+    at: Instant,
+    fetched: Instant,
+    pull: Option<Pull>,
+    failed: bool,
+}
+
 #[derive(Default)]
 pub struct Pulls {
-    cache: HashMap<Key, (Instant, Option<Pull>, bool)>,
+    cache: HashMap<Key, Entry>,
     linked: HashMap<String, PullRequest>,
     pub watches: Watches,
     pub archive: ArchiveOnMerge,
@@ -387,16 +395,23 @@ impl Pulls {
     pub fn cached(&self, key: &Key, now: Instant) -> Option<Option<PullRequest>> {
         self.cache
             .get(key)
-            .filter(|(at, ..)| now.saturating_duration_since(*at) < REFRESH)
-            .map(|(_, pr, _)| pr.as_ref().map(|(pr, _)| pr.clone()))
+            .filter(|e| now.saturating_duration_since(e.at) < REFRESH)
+            .map(|e| e.pull.as_ref().map(|(pr, _)| pr.clone()))
     }
 
-    /// A merged pull request cannot change, so its last good read is kept while the
-    /// checkout's `head` is still its head commit.
-    pub fn kept(&self, key: &Key, head: &str) -> Option<Pull> {
+    /// A merged pull request cannot change, so its last good read can be kept while the
+    /// checkout's `HEAD` is still its head commit. It is read again every
+    /// `MERGED_REFRESH`, for a new pull request opened from that same commit.
+    pub fn kept(&self, key: &Key, now: Instant) -> Option<Pull> {
         match self.cache.get(key) {
-            Some((_, Some((pr, oid)), false))
-                if pr.state == PullState::Merged && !oid.is_empty() && oid == head =>
+            Some(Entry {
+                fetched,
+                pull: Some((pr, oid)),
+                failed: false,
+                ..
+            }) if pr.state == PullState::Merged
+                && !oid.is_empty()
+                && now.saturating_duration_since(*fetched) < MERGED_REFRESH =>
             {
                 Some((pr.clone(), oid.clone()))
             }
@@ -410,17 +425,35 @@ impl Pulls {
         key: Key,
         now: Instant,
         read: Result<Option<Pull>, &str>,
+        kept: bool,
     ) -> Option<PullRequest> {
         let failed = read.is_err();
-        let pr = match read {
-            Ok(pr) => pr,
-            Err(_) => match self.cache.get(&key) {
-                Some((_, pr, false)) => pr.clone(),
+        let previous = self.cache.get(&key);
+        let fetched = match previous {
+            Some(e) if kept => e.fetched,
+            _ => now,
+        };
+        let pull = match read {
+            Ok(pull) => pull,
+            Err(_) => match previous {
+                Some(Entry {
+                    pull,
+                    failed: false,
+                    ..
+                }) => pull.clone(),
                 _ => None,
             },
         };
-        let shown = pr.as_ref().map(|(pr, _)| pr.clone());
-        self.cache.insert(key, (now, pr, failed));
+        let shown = pull.as_ref().map(|(pr, _)| pr.clone());
+        self.cache.insert(
+            key,
+            Entry {
+                at: now,
+                fetched,
+                pull,
+                failed,
+            },
+        );
         shown
     }
 
@@ -647,7 +680,7 @@ mod tests {
         let start = Instant::now();
         assert_eq!(pulls.cached(&key, start), None);
         assert_eq!(
-            pulls.store(key.clone(), start, Ok(Some((pr(1), OID.into())))),
+            pulls.store(key.clone(), start, Ok(Some((pr(1), OID.into()))), false),
             Some(pr(1))
         );
         assert_eq!(
@@ -657,21 +690,30 @@ mod tests {
         assert_eq!(pulls.cached(&key, start + REFRESH), None);
         let later = start + REFRESH;
         assert_eq!(
-            pulls.store(key.clone(), later, Err("command failed")),
+            pulls.store(key.clone(), later, Err("command failed"), false),
             Some(pr(1))
         );
         assert_eq!(pulls.cached(&key, later), Some(Some(pr(1))));
         let again = later + REFRESH;
-        assert_eq!(pulls.store(key.clone(), again, Err("command failed")), None);
-        assert_eq!(pulls.store(key.clone(), again, Err("command failed")), None);
+        assert_eq!(
+            pulls.store(key.clone(), again, Err("command failed"), false),
+            None
+        );
+        assert_eq!(
+            pulls.store(key.clone(), again, Err("command failed"), false),
+            None
+        );
         assert_eq!(pulls.cached(&key, again), Some(None));
         assert_eq!(
-            pulls.store(key.clone(), later, Ok(Some((pr(1), OID.into())))),
+            pulls.store(key.clone(), later, Ok(Some((pr(1), OID.into()))), false),
             Some(pr(1))
         );
-        assert_eq!(pulls.store(key.clone(), later, Ok(None)), None);
+        assert_eq!(pulls.store(key.clone(), later, Ok(None), false), None);
         assert_eq!(pulls.cached(&key, later), Some(None));
-        assert_eq!(pulls.store(key.clone(), later, Err("command failed")), None);
+        assert_eq!(
+            pulls.store(key.clone(), later, Err("command failed"), false),
+            None
+        );
     }
 
     #[test]
@@ -680,8 +722,8 @@ mod tests {
         let now = Instant::now();
         let a = ("/a".to_owned(), "x".to_owned());
         let b = ("/b".to_owned(), "y".to_owned());
-        pulls.store(a.clone(), now, Ok(Some((pr(1), OID.into()))));
-        pulls.store(b.clone(), now, Ok(None));
+        pulls.store(a.clone(), now, Ok(Some((pr(1), OID.into()))), false);
+        pulls.store(b.clone(), now, Ok(None), false);
         let linked = HashMap::from([("t1".to_owned(), pr(1))]);
         let seen = HashSet::from([a.clone()]);
         assert!(pulls.link(linked.clone(), &seen));
@@ -695,7 +737,7 @@ mod tests {
     }
 
     #[test]
-    fn a_merged_pull_request_is_kept_while_the_checkout_head_is_its_head_commit() {
+    fn a_merged_pull_request_is_kept_and_read_again_every_thirty_minutes() {
         let json = String::from_utf8(fixture("pr-view-merged.json"))
             .unwrap()
             .replacen('{', &format!(r#"{{"headRefOid":"{OID}","#), 1);
@@ -704,25 +746,38 @@ mod tests {
         let key = ("/repo".to_owned(), "feature".to_owned());
         let start = Instant::now();
         let merged = read(PullState::Merged, 7, OID);
-        pulls.store(key.clone(), start, Ok(Some(merged.clone())));
+        pulls.store(key.clone(), start, Ok(Some(merged.clone())), false);
         assert_eq!(pulls.cached(&key, start + REFRESH), None);
-        assert_eq!(pulls.kept(&key, OID), Some(merged.clone()));
+        assert_eq!(pulls.kept(&key, start + REFRESH), Some(merged.clone()));
         let later = start + REFRESH;
         assert_eq!(
-            pulls.store(key.clone(), later, Ok(Some(merged.clone()))),
+            pulls.store(key.clone(), later, Ok(Some(merged.clone())), true),
             Some(merged.0.clone())
         );
-        assert_eq!(pulls.kept(&key, OID), Some(merged.clone()));
+        assert_eq!(pulls.cached(&key, later), Some(Some(merged.0.clone())));
+        let bound = start + MERGED_REFRESH;
         assert_eq!(
-            pulls.kept(&("/repo".to_owned(), "other".to_owned()), OID),
+            pulls.kept(&key, bound - Duration::from_secs(1)),
+            Some(merged.clone())
+        );
+        assert_eq!(pulls.kept(&key, bound), None);
+        pulls.store(key.clone(), bound, Ok(Some(merged.clone())), false);
+        assert_eq!(pulls.kept(&key, bound + REFRESH), Some(merged.clone()));
+        assert_eq!(
+            pulls.kept(&("/repo".to_owned(), "other".to_owned()), bound),
             None
         );
-        pulls.store(key.clone(), later, Ok(Some(read(PullState::Merged, 7, ""))));
-        assert_eq!(pulls.kept(&key, ""), None);
+        pulls.store(
+            key.clone(),
+            bound,
+            Ok(Some(read(PullState::Merged, 7, ""))),
+            false,
+        );
+        assert_eq!(pulls.kept(&key, bound), None);
     }
 
     #[test]
-    fn a_new_commit_or_pull_request_on_the_branch_is_read_again() {
+    fn a_new_pull_request_on_the_branch_is_read_again() {
         let mut pulls = Pulls::default();
         let key = ("/repo".to_owned(), "feature".to_owned());
         let start = Instant::now();
@@ -730,17 +785,30 @@ mod tests {
             key.clone(),
             start,
             Ok(Some(read(PullState::Merged, 7, OID))),
+            false,
         );
         let moved = "1123456789abcdef0123456789abcdef01234567";
-        assert_eq!(pulls.kept(&key, moved), None);
-        let later = start + REFRESH;
         let reopened = read(PullState::Open, 8, moved);
+        let later = start + REFRESH;
         assert_eq!(
-            pulls.store(key.clone(), later, Ok(Some(reopened.clone()))),
+            pulls.store(key.clone(), later, Ok(Some(reopened.clone())), false),
             Some(reopened.0)
         );
-        assert_eq!(pulls.kept(&key, moved), None);
-        assert_eq!(pulls.kept(&key, OID), None);
+        assert_eq!(pulls.kept(&key, later), None);
+        let bound = start + MERGED_REFRESH;
+        pulls.store(
+            key.clone(),
+            start,
+            Ok(Some(read(PullState::Merged, 7, OID))),
+            false,
+        );
+        assert_eq!(pulls.kept(&key, bound), None);
+        let backport = read(PullState::Open, 9, OID);
+        assert_eq!(
+            pulls.store(key.clone(), bound, Ok(Some(backport.clone())), false),
+            Some(backport.0)
+        );
+        assert_eq!(pulls.kept(&key, bound), None);
     }
 
     #[test]
@@ -750,20 +818,21 @@ mod tests {
         let start = Instant::now();
         for state in [PullState::Open, PullState::Draft, PullState::Closed] {
             let pr = read(state, 7, OID);
-            pulls.store(key.clone(), start, Ok(Some(pr.clone())));
+            pulls.store(key.clone(), start, Ok(Some(pr.clone())), false);
             assert_eq!(
                 pulls.cached(&key, start + REFRESH - Duration::from_secs(1)),
                 Some(Some(pr.0))
             );
             assert_eq!(pulls.cached(&key, start + REFRESH), None);
-            assert_eq!(pulls.kept(&key, OID), None, "{state:?}");
+            assert_eq!(pulls.kept(&key, start + REFRESH), None, "{state:?}");
         }
         pulls.store(
             key.clone(),
             start,
             Ok(Some(read(PullState::Merged, 7, OID))),
+            false,
         );
-        pulls.store(key.clone(), start + REFRESH, Err("command failed"));
-        assert_eq!(pulls.kept(&key, OID), None);
+        pulls.store(key.clone(), start + REFRESH, Err("command failed"), false);
+        assert_eq!(pulls.kept(&key, start + REFRESH), None);
     }
 }
