@@ -778,12 +778,14 @@ private struct PromptBar: View {
                         Task { await model.sendPrompt() }
                     } label: {
                         if model.sendingPrompt {
-                            ProgressView().frame(width: 28, height: 28)
+                            ProgressView().tint(.accentColor).frame(width: 28, height: 28)
                         } else {
                             Image(systemName: "paperplane.fill").frame(width: 28, height: 28)
                         }
                     }
                     .buttonStyle(.glassProminent)
+                    // Enabled only so a tap stops the retry, so it keeps the look of a send in progress.
+                    .tint(model.retrying ? Color(.systemGray4) : nil)
                     .buttonBorderShape(.circle)
                     .controlSize(.small)
                     .disabled(!model.canSendPrompt && !model.retrying)
