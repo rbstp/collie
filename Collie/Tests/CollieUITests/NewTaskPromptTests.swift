@@ -16,7 +16,14 @@ final class NewTaskPromptTests: XCTestCase {
         XCTAssertTrue(prompt.appears(within: 5), app.debugDescription)
         prompt.tap()
         XCTAssertTrue(app.keyboards.firstMatch.appears(within: 5), app.debugDescription)
-        prompt.typeText("keep this prompt")
+        let text = "keep this prompt"
+        prompt.typeText(text)
+        let preservedPrompt = app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", text)).firstMatch
+        for _ in 0..<3 where !preservedPrompt.appears(within: 10) {
+            app.buttons["Clear text"].tap()
+            prompt.typeText(text)
+        }
+        XCTAssertTrue(preservedPrompt.appears(within: 10), app.debugDescription)
         let collapse = app.buttons["Hide keyboard"]
         XCTAssertTrue(collapse.appears(within: 5), app.debugDescription)
         XCTAssertTrue(collapse.isHittable, app.debugDescription)
@@ -26,7 +33,6 @@ final class NewTaskPromptTests: XCTestCase {
         add(screenshot)
         collapse.tap()
         XCTAssertTrue(app.keyboards.firstMatch.disappears(within: 5), app.debugDescription)
-        let preservedPrompt = app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", "keep this prompt")).firstMatch
         XCTAssertTrue(preservedPrompt.appears(within: 5), app.debugDescription)
         preservedPrompt.tap()
         XCTAssertTrue(app.keyboards.firstMatch.appears(within: 5), app.debugDescription)
