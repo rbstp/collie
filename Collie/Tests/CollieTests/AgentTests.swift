@@ -2932,6 +2932,12 @@ private func caretAt(_ model: AgentModel, _ offset: Int) {
     let end = model.pickMention("README.md")
     #expect(model.draft == "see @README.md ")
     #expect(end == model.draft.endIndex)
+
+    model.typed("see @REA\nnext")
+    caretAt(model, 8)
+    let lineEnd = model.pickMention("README.md")
+    #expect(model.draft == "see @README.md \nnext")
+    #expect(lineEnd.map { model.draft[..<$0] } == "see @README.md ")
 }
 
 @MainActor

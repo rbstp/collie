@@ -355,7 +355,7 @@ final class AgentModel {
 
     func pickMention(_ path: String) -> String.Index? {
         guard !sendingPrompt, !dictation.isActive, let range = mentionWord else { return nil }
-        let following = range.upperBound < draft.endIndex && draft[range.upperBound].isWhitespace ? draft[range.upperBound] : nil
+        let following = range.upperBound < draft.endIndex && " \t".contains(draft[range.upperBound]) ? draft[range.upperBound] : nil
         let inserted = "@\(path)" + (following == nil ? " " : "")
         var next = draft
         next.replaceSubrange(range, with: inserted)
