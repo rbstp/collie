@@ -11,7 +11,7 @@ struct SettingsView: View {
     @State private var historyLines = DevicePrefs.load(from: DevicePrefs.file).historyLines
     @State private var watchDecisions = DevicePrefs.load(from: DevicePrefs.file).watchDecisions
     @State private var doneAlerts = DevicePrefs.load(from: DevicePrefs.file).doneAlerts
-    @State private var archiveOnMerge = DevicePrefs.load(from: DevicePrefs.file).archiveOnMerge
+    @State private var archiveOnMerge = DevicePrefs.load(from: DevicePrefs.file).archiveOnMerge ?? false
     private let build = buildInfo()
 
     var body: some View {

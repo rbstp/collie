@@ -419,7 +419,7 @@ pub async fn branch(cwd: &Cwd, roots: &[PathBuf]) -> Result<Option<(Cwd, String)
 /// No uncommitted or untracked file, in the checkout or a submodule, and no submodule off
 /// its recorded commit, whatever the repository's config says. A file whose changes `git
 /// status` would not look at (assume-unchanged, as `core.ignoreStat` sets, or
-/// skip-worktree) also counts as a change.
+/// skip-worktree), in the checkout or a submodule, also counts as a change.
 pub async fn clean(root: &Cwd) -> Result<bool, Fail> {
     let (out, ok, truncated) = git(
         root,
@@ -436,7 +436,12 @@ pub async fn clean(root: &Cwd) -> Result<bool, Fail> {
     if !ok || truncated || !out.is_empty() {
         return Ok(false);
     }
-    let (out, ok, truncated) = git(root, &["ls-files", "-v", "-z"], 16 * 1024 * 1024).await?;
+    let (out, ok, truncated) = git(
+        root,
+        &["ls-files", "-v", "-z", "--recurse-submodules"],
+        16 * 1024 * 1024,
+    )
+    .await?;
     Ok(ok
         && !truncated
         && out
@@ -825,10 +830,9 @@ mod tests {
         assert!(clean(&cwd).await.unwrap());
 
         let (_sub_dir, sub, _) = repo();
-        run(
-            Path::new(sub.as_str()),
-            &["commit", "--allow-empty", "-m", "sub"],
-        );
+        std::fs::write(Path::new(sub.as_str()).join("s.txt"), "s\n").unwrap();
+        run(Path::new(sub.as_str()), &["add", "s.txt"]);
+        run(Path::new(sub.as_str()), &["commit", "-qm", "sub"]);
         run(
             root,
             &[
@@ -850,6 +854,13 @@ mod tests {
         std::fs::write(root.join("lib/new.txt"), "x").unwrap();
         assert!(!clean(&cwd).await.unwrap());
         std::fs::remove_file(root.join("lib/new.txt")).unwrap();
+        let lib = root.join("lib");
+        run(&lib, &["update-index", "--assume-unchanged", "s.txt"]);
+        std::fs::write(lib.join("s.txt"), "hidden\n").unwrap();
+        assert!(!clean(&cwd).await.unwrap());
+        run(&lib, &["update-index", "--no-assume-unchanged", "s.txt"]);
+        run(&lib, &["checkout", "--", "s.txt"]);
+        assert!(clean(&cwd).await.unwrap());
         run(
             &root.join("lib"),
             &["commit", "--allow-empty", "-m", "not recorded"],

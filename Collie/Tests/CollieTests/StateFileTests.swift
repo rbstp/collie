@@ -54,14 +54,19 @@ func prefsWithOneWrongTypedFieldKeepTheOthers(_ wrong: String) throws {
     #expect(DevicePrefs.load(from: file) == DevicePrefs(keepKeyboard: true, accent: .red))
 }
 
-@Test func archiveOnMergeIsOffUntilTurnedOn() throws {
-    #expect(!(try JSONDecoder().decode(DevicePrefs.self, from: Data(#"{"wrapLines":false,"doneAlerts":true}"#.utf8)).archiveOnMerge))
-    #expect(!DevicePrefs.load(from: nil).archiveOnMerge)
+@Test func archiveOnMergeIsUnsetUntilTheUserPicksIt() throws {
+    #expect(try JSONDecoder().decode(DevicePrefs.self, from: Data(#"{"wrapLines":false,"doneAlerts":true}"#.utf8)).archiveOnMerge == nil)
+    #expect(DevicePrefs.load(from: nil).archiveOnMerge == nil)
     let dir = try makeTemporaryDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let file = dir.appending(path: "prefs.json")
-    DevicePrefs.update(in: file) { $0.archiveOnMerge = true }
-    #expect(DevicePrefs.load(from: file).archiveOnMerge)
+    DevicePrefs.update(in: file) { $0.keepKeyboard = true }
+    #expect(DevicePrefs.load(from: file).archiveOnMerge == nil)
+    #expect(try object(Data(contentsOf: file))["archiveOnMerge"] == nil)
+    for on in [true, false] {
+        DevicePrefs.update(in: file) { $0.archiveOnMerge = on }
+        #expect(DevicePrefs.load(from: file).archiveOnMerge == on)
+    }
 }
 
 @Test func prefsFromBeforeDoneAlertsKeepThemOn() throws {

@@ -49,7 +49,9 @@ final class AppModel {
             let identity = try Identity.load()
             try core.setIdentity(publicKey: identity.publicKey, signer: identity.signer)
             core.setLog(log: CoreLogRelay())
-            core.setArchiveOnMerge(enabled: DevicePrefs.load(from: DevicePrefs.file).archiveOnMerge)
+            if let on = DevicePrefs.load(from: DevicePrefs.file).archiveOnMerge {
+                core.setArchiveOnMerge(enabled: on)
+            }
             self.core = core
         } catch {
             core = nil

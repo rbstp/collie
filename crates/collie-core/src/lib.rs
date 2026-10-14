@@ -3770,15 +3770,6 @@ mod tests {
             seed.into_iter().map(|(r, _)| r).collect()
         };
         assert!(seed().is_empty());
-        for enabled in [true, false] {
-            core.set_archive_on_merge(enabled);
-            assert_eq!(
-                seed(),
-                [Request::TaskArchiveOnMerge(TaskArchiveOnMergeParams {
-                    enabled
-                })]
-            );
-        }
         core.register_push(
             "m1".into(),
             "ab".repeat(32),
@@ -3787,8 +3778,16 @@ mod tests {
             false,
         )
         .unwrap();
-        let methods: Vec<&str> = seed().iter().map(Request::method).collect();
-        assert_eq!(methods, ["push.register", "task.archive_on_merge"]);
+        let methods = || -> Vec<&str> { seed().iter().map(Request::method).collect() };
+        assert_eq!(methods(), ["push.register"], "unset, nothing is sent");
+        for enabled in [true, false] {
+            core.set_archive_on_merge(enabled);
+            assert_eq!(
+                seed()[1],
+                Request::TaskArchiveOnMerge(TaskArchiveOnMergeParams { enabled })
+            );
+        }
+        assert_eq!(methods(), ["push.register", "task.archive_on_merge"]);
     }
 
     #[test]
