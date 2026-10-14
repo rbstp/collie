@@ -517,7 +517,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         "{err:?}"
     );
     assert_eq!(herdr.mutations(), before, "a changed draft got input");
-    herdr.with(|h| h.screens = [typed, input_box(PLACEHOLDER)].into());
+    herdr.with(|h| h.screens = [typed.clone(), typed, input_box(PLACEHOLDER)].into());
     core.prompt(m.clone(), CLAUDE.into(), "replace it".into(), draft)
         .await
         .unwrap();
