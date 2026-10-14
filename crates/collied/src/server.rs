@@ -309,7 +309,7 @@ impl State {
         if lock(&self.pulls).watches.forget(&peer.stable_id) {
             let _ = self.events.send(Event::FlockChanged {});
         }
-        lock(&self.pulls).archive.set(&peer.stable_id, false);
+        lock(&self.pulls).archive.forget(&peer.stable_id);
         self.audit.log(
             &peer.label,
             "peers.revoke",
@@ -666,7 +666,8 @@ async fn pull_requests(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             let Ok(snapshot) = herdr::session_snapshot(&state.herdr).await else {
                 continue;
             };
-            agents.retain(|a| drive::worktree_settled(&snapshot, &a.terminal_id));
+            let quiet = |a: &herdr::AgentInfo| lock(&state.transcripts).quiet(a);
+            agents.retain(|a| drive::worktree_settled(&snapshot, &a.terminal_id, &quiet));
         }
         let Some((linked, seen, merged)) = read_pulls(&state, gh, &agents).await else {
             continue;
@@ -715,11 +716,8 @@ async fn read_pulls(
                 if !same {
                     continue;
                 }
-                if let Ok(Some(pr)) = &read
-                    && pr.state == PullState::Merged
-                    && state.archives_on_merge()
-                {
-                    merged.push((a.clone(), root.clone(), pr.number));
+                if let Some(number) = pulls::merged_number(&read, || state.archives_on_merge()) {
+                    merged.push((a.clone(), root.clone(), number));
                 }
                 lock(&state.pulls).store(key.clone(), Instant::now(), read)
             }
@@ -732,9 +730,8 @@ async fn read_pulls(
     Some((linked, seen, merged))
 }
 
-/// Each condition is read fresh here, the pull request from `gh` again, and the archive
-/// checks the workspace and the checkout once more right before the removal. A task that
-/// fails a check here is left for the next read and not audited.
+/// A task that fails a check before the archive starts is left for the next read and not
+/// audited.
 async fn archive_merged(
     state: &Arc<State>,
     gh: &str,
@@ -742,39 +739,27 @@ async fn archive_merged(
     root: &Cwd,
     number: u64,
 ) {
-    let Ok(terminal_id) = TerminalId::new(agent.terminal_id.clone()) else {
-        return;
-    };
-    let settled = herdr::session_snapshot(&state.herdr)
-        .await
-        .is_ok_and(|s| drive::worktree_settled(&s, terminal_id.as_str()));
-    if !settled || !git::clean(root).await.unwrap_or(false) {
-        return;
-    }
-    let Some((merged, head)) = pulls::merged_head(gh, root).await else {
-        return;
-    };
-    if merged != number || !git::contains(root, &head).await.unwrap_or(false) {
-        return;
-    }
     let auth: Authorized = {
         let state = state.clone();
         Arc::new(move || state.archives_on_merge())
     };
-    if !auth() {
-        return;
-    }
-    let reply = state
+    let quiet = |a: &herdr::AgentInfo| lock(&state.transcripts).quiet(a);
+    let Some(reply) = state
         .drive
-        .archive_merged(&terminal_id, root, &head, &auth)
-        .await;
+        .archive_if_merged(gh, agent, root, number, &quiet, &auth)
+        .await
+    else {
+        return;
+    };
     state.audit.log(
         "collied",
         "task.archive",
-        Some(terminal_id.as_str()),
+        Some(&agent.terminal_id),
         &format!("PR #{number} merged: {}", outcome(&reply)),
     );
-    if reply.is_ok() {
+    if reply.is_ok()
+        && let Ok(terminal_id) = TerminalId::new(agent.terminal_id.clone())
+    {
         state.push.notify_done(push::agent_alert(
             &terminal_id,
             &format!("Archived {}", approvals::alert_title(agent)),

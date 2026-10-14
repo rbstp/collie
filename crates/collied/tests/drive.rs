@@ -3033,113 +3033,234 @@ async fn archive_codex_refuses_to_create_a_group_shell_outside_task_roots() {
     assert!(herdr.mutations().is_empty());
 }
 
-#[tokio::test]
-async fn automatic_archive_needs_an_idle_clean_worktree_inside_the_merged_head() {
+struct Merged {
+    herdr: Mock,
+    _dir: tempfile::TempDir,
+    source: PathBuf,
+    checkout: PathBuf,
+    head: String,
+    drive: Arc<Driver>,
+}
+
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=Collie Test",
+            "-c",
+            "user.email=collie@example.invalid",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{args:?}");
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+/// A linked worktree with one commit of work, its workspace holding only an idle agent.
+fn merged_worktree() -> Merged {
     let herdr = Mock::start();
-    let (_dir, base) = root();
+    let (dir, base) = root();
     let source = base.join("root/a");
     let checkout = source.join(".worktree/feature");
-    let git = |dir: &Path, args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args([
-                "-c",
-                "user.name=Collie Test",
-                "-c",
-                "user.email=collie@example.invalid",
-            ])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "{args:?}");
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
-    };
-    git(&source, &["init", "-q"]);
-    git(&source, &["commit", "-q", "--allow-empty", "-m", "initial"]);
-    git(
-        &source,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "feature",
-            checkout.to_str().unwrap(),
-        ],
-    );
-    git(&checkout, &["commit", "-q", "--allow-empty", "-m", "work"]);
-    let head = git(&checkout, &["rev-parse", "HEAD"]);
+    git_in(&source, &["init", "-q"]);
+    git_in(&source, &["commit", "-q", "--allow-empty", "-m", "initial"]);
+    let path = checkout.to_str().unwrap();
+    git_in(&source, &["worktree", "add", "-q", "-b", "feature", path]);
+    git_in(&checkout, &["commit", "-q", "--allow-empty", "-m", "work"]);
+    let head = git_in(&checkout, &["rev-parse", "HEAD"]);
     herdr.with(|h| {
-        h.worktree_path = Some(checkout.to_str().unwrap().into());
+        h.worktree_path = Some(path.into());
         h.worktree_open = true;
         h.worktree_workspace_id = Some("w7".into());
         h.snapshot["workspaces"][1]["worktree"] = json!({
             "repo_root": source, "checkout_path": checkout, "is_linked_worktree": true
         });
         h.snapshot["panes"][1]["cwd"] = json!(checkout);
-        h.snapshot["agents"][1]["agent_status"] = json!("idle");
-    });
-    let drive = herdr.driver(&["codex"], &base.join("root"));
-    let cwd = |path: &Path| Cwd::new(path.to_str().unwrap()).unwrap();
-    let refused = async |code: ErrorCode| {
-        let error = drive
-            .archive_merged(&tid(CODEX_BLOCKED), &cwd(&checkout), &head, &yes())
-            .await
-            .unwrap_err();
-        assert_eq!(error.0, code, "{}", error.1);
-        assert!(herdr.mutations().is_empty());
-    };
-
-    refused(ErrorCode::AgentNotReady).await;
-    herdr.with(|h| {
         h.snapshot["panes"]
             .as_array_mut()
             .unwrap()
             .retain(|pane| pane["terminal_id"] != SHELL);
-        h.snapshot["agents"][1]["agent_status"] = json!("working");
+        h.snapshot["agents"][1]["agent_status"] = json!("idle");
     });
-    refused(ErrorCode::AgentNotReady).await;
-    herdr.with(|h| {
-        h.snapshot["agents"][1]["agent_status"] = json!("done");
-        h.snapshot["workspaces"][1]["worktree"]["is_linked_worktree"] = json!(false);
-    });
-    refused(ErrorCode::AgentNotReady).await;
-    herdr.with(|h| h.snapshot["workspaces"][1]["worktree"]["is_linked_worktree"] = json!(true));
+    let drive = herdr.driver(&["codex"], &base.join("root"));
+    Merged {
+        herdr,
+        _dir: dir,
+        source,
+        checkout,
+        head,
+        drive,
+    }
+}
 
-    std::fs::write(checkout.join("notes.txt"), "keep me").unwrap();
-    refused(ErrorCode::InvalidParams).await;
-    git(&checkout, &["add", "notes.txt"]);
-    refused(ErrorCode::InvalidParams).await;
-    git(
-        &checkout,
+fn cwd(path: &Path) -> Cwd {
+    Cwd::new(path.to_str().unwrap()).unwrap()
+}
+
+/// True for `allowed` calls, then false: an authorization that ends partway.
+fn ends_after(allowed: usize) -> Authorized {
+    let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    Arc::new(move || checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < allowed)
+}
+
+#[tokio::test]
+async fn automatic_archive_needs_an_idle_quiet_clean_worktree_inside_the_merged_head() {
+    let m = merged_worktree();
+    let quiet = |_: &collied::herdr::AgentInfo| true;
+    let refused = async |code: ErrorCode, quiet: &collied::drive::Quiet<'_>| {
+        let error = m
+            .drive
+            .archive_merged(
+                &tid(CODEX_BLOCKED),
+                &cwd(&m.checkout),
+                &m.head,
+                quiet,
+                &yes(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.0, code, "{}", error.1);
+        assert!(m.herdr.mutations().is_empty());
+    };
+
+    m.herdr
+        .with(|h| h.snapshot["agents"][1]["agent_status"] = json!("working"));
+    refused(ErrorCode::AgentNotReady, &quiet).await;
+    m.herdr
+        .with(|h| h.snapshot["agents"][1]["agent_status"] = json!("done"));
+    refused(ErrorCode::AgentNotReady, &|_| false).await;
+    m.herdr
+        .with(|h| h.snapshot["workspaces"][1]["worktree"]["is_linked_worktree"] = json!(false));
+    refused(ErrorCode::AgentNotReady, &quiet).await;
+    m.herdr
+        .with(|h| h.snapshot["workspaces"][1]["worktree"]["is_linked_worktree"] = json!(true));
+
+    std::fs::write(m.checkout.join("notes.txt"), "keep me").unwrap();
+    refused(ErrorCode::InvalidParams, &quiet).await;
+    git_in(&m.checkout, &["add", "notes.txt"]);
+    refused(ErrorCode::InvalidParams, &quiet).await;
+    git_in(
+        &m.checkout,
         &["commit", "-q", "-m", "not in the pull request"],
     );
-    refused(ErrorCode::InvalidParams).await;
-    git(&checkout, &["reset", "-q", "--hard", &head]);
-    let error = drive
-        .archive_merged(&tid(CODEX_BLOCKED), &cwd(&source), &head, &yes())
+    refused(ErrorCode::InvalidParams, &quiet).await;
+    git_in(&m.checkout, &["reset", "-q", "--hard", &m.head]);
+    let error = m
+        .drive
+        .archive_merged(
+            &tid(CODEX_BLOCKED),
+            &cwd(&m.source),
+            &m.head,
+            &quiet,
+            &yes(),
+        )
         .await
         .unwrap_err();
     assert_eq!(error.0, ErrorCode::InvalidParams, "{}", error.1);
-    assert!(herdr.mutations().is_empty());
+    assert!(m.herdr.mutations().is_empty());
 
-    let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let auth: Authorized = {
-        let checks = checks.clone();
-        std::sync::Arc::new(move || checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2)
-    };
-    let Response::TaskArchived { message } = drive
-        .archive_merged(&tid(CODEX_BLOCKED), &cwd(&checkout), &head, &auth)
+    let Response::TaskArchived { message } = m
+        .drive
+        .archive_merged(
+            &tid(CODEX_BLOCKED),
+            &cwd(&m.checkout),
+            &m.head,
+            &quiet,
+            &yes(),
+        )
         .await
         .unwrap()
     else {
         panic!("unexpected response");
     };
     assert!(message.contains("Removed worktree checkout"), "{message}");
+    assert!(
+        message.contains("gh poi is left to a manual archive"),
+        "{message}"
+    );
     assert_eq!(
-        herdr.params("worktree.remove"),
+        m.herdr.params("worktree.remove"),
         vec![json!({"workspace_id": "w7", "force": true})]
+    );
+}
+
+#[tokio::test]
+async fn automatic_archive_reads_the_pull_request_again_and_stops_with_the_setting() {
+    use std::os::unix::fs::PermissionsExt;
+    let m = merged_worktree();
+    let bin = tempfile::tempdir().unwrap();
+    let (gh, answer, calls) = (
+        bin.path().join("gh"),
+        bin.path().join("answer.json"),
+        bin.path().join("calls"),
+    );
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\ncat '{}'\n",
+            calls.display(),
+            answer.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let answer_with = |number: u64, state: &str, head: &str| {
+        std::fs::write(
+            &answer,
+            format!(r#"{{"number":{number},"state":"{state}","headRefOid":"{head}"}}"#),
+        )
+        .unwrap();
+    };
+    let calls = || std::fs::read_to_string(&calls).unwrap_or_default();
+    let agent: collied::herdr::AgentInfo =
+        serde_json::from_value(m.herdr.with(|h| h.snapshot["agents"][1].clone())).unwrap();
+    let quiet = |_: &collied::herdr::AgentInfo| true;
+    let gh = gh.to_str().unwrap();
+    let root = cwd(&m.checkout);
+    let archive = async |number: u64, quiet: &collied::drive::Quiet<'_>, auth: &Authorized| {
+        m.drive
+            .archive_if_merged(gh, &agent, &root, number, quiet, auth)
+            .await
+    };
+
+    answer_with(7, "MERGED", &m.head);
+    assert!(archive(7, &quiet, &no()).await.is_none(), "setting off");
+    assert!(archive(7, &|_| false, &yes()).await.is_none(), "subagents");
+    std::fs::write(m.checkout.join("notes.txt"), "keep me").unwrap();
+    assert!(archive(7, &quiet, &yes()).await.is_none(), "dirty");
+    std::fs::remove_file(m.checkout.join("notes.txt")).unwrap();
+    assert_eq!(calls(), "", "gh runs only once the local checks pass");
+
+    answer_with(8, "MERGED", &m.head);
+    assert!(archive(7, &quiet, &yes()).await.is_none(), "another number");
+    answer_with(7, "OPEN", &m.head);
+    assert!(archive(7, &quiet, &yes()).await.is_none(), "reopened");
+    answer_with(7, "MERGED", &"0".repeat(40));
+    assert!(archive(7, &quiet, &yes()).await.is_none(), "head not local");
+    assert_eq!(calls().lines().count(), 3);
+    assert!(m.herdr.mutations().is_empty());
+
+    answer_with(7, "MERGED", &m.head);
+    let revoked = archive(7, &quiet, &ends_after(1)).await.unwrap();
+    assert_eq!(revoked.unwrap_err().0, ErrorCode::NotPaired);
+    assert!(m.herdr.mutations().is_empty());
+    let late = archive(7, &quiet, &ends_after(2)).await.unwrap();
+    assert_eq!(late.unwrap_err().0, ErrorCode::NotPaired);
+    assert!(m.herdr.mutations().is_empty());
+
+    let Response::TaskArchived { message } = archive(7, &quiet, &yes()).await.unwrap().unwrap()
+    else {
+        panic!("unexpected response");
+    };
+    assert!(message.contains("Removed worktree checkout"), "{message}");
+    assert_eq!(m.herdr.params("worktree.remove").len(), 1);
+    assert!(
+        calls()
+            .lines()
+            .all(|c| c.starts_with("pr view --json number,state,headRefOid"))
     );
 }
 

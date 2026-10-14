@@ -86,6 +86,17 @@ pub async fn merged_head(gh: &str, checkout: &Cwd) -> Option<(u64, String)> {
     merged(&output.stdout)
 }
 
+/// The number of a pull request a fresh read found merged, only while `enabled`.
+pub fn merged_number(
+    read: &Result<Option<PullRequest>, &str>,
+    enabled: impl FnOnce() -> bool,
+) -> Option<u64> {
+    match read {
+        Ok(Some(pr)) if pr.state == PullState::Merged && enabled() => Some(pr.number),
+        _ => None,
+    }
+}
+
 fn merged(json: &[u8]) -> Option<(u64, String)> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -118,13 +129,26 @@ impl ArchiveOnMerge {
         }
     }
 
+    /// Any phone turning it off turns it off, so a `StableID` the phone no longer uses
+    /// (a reinstall) cannot keep it on.
     pub fn set(&mut self, by: &str, enabled: bool) {
-        let changed = if enabled {
-            self.by.insert(by.to_owned())
+        let before = self.by.clone();
+        if enabled {
+            self.by.insert(by.to_owned());
         } else {
-            self.by.remove(by)
-        };
-        if let (true, Some(path)) = (changed, &self.path)
+            self.by.clear();
+        }
+        self.save(before);
+    }
+
+    pub fn forget(&mut self, by: &str) {
+        let before = self.by.clone();
+        self.by.remove(by);
+        self.save(before);
+    }
+
+    fn save(&self, before: BTreeSet<String>) {
+        if let (true, Some(path)) = (before != self.by, &self.path)
             && let Err(e) = crate::peers::replace_json(path, &self.by)
         {
             tracing::warn!(error = %e, "could not save the archive on merge setting");
@@ -342,11 +366,27 @@ mod tests {
         assert!(!setting.enabled(|_| true));
         setting.set("a", true);
         setting.set("b", true);
-        setting.set("b", false);
-        let setting = ArchiveOnMerge::load(path);
+        setting.forget("b");
+        let mut setting = ArchiveOnMerge::load(path.clone());
         assert!(setting.enabled(|by| by == "a"));
         assert!(!setting.enabled(|by| by == "b"));
         assert!(!setting.enabled(|_| false));
+        setting.set("b", true);
+        setting.set("c", false);
+        assert!(!ArchiveOnMerge::load(path).enabled(|_| true));
+    }
+
+    #[test]
+    fn only_a_fresh_merged_read_with_the_setting_on_is_a_candidate() {
+        let merged = Ok(Some(PullRequest {
+            state: PullState::Merged,
+            ..pr(7)
+        }));
+        assert_eq!(merged_number(&merged, || true), Some(7));
+        assert_eq!(merged_number(&merged, || false), None);
+        assert_eq!(merged_number(&Ok(Some(pr(7))), || true), None);
+        assert_eq!(merged_number(&Ok(None), || true), None);
+        assert_eq!(merged_number(&Err("command failed"), || true), None);
     }
 
     #[test]

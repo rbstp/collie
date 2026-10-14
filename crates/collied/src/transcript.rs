@@ -122,6 +122,12 @@ impl Transcripts {
         self.noted.retain(|t, _| open(t));
     }
 
+    /// No subagent running; a Claude Code agent whose transcript cannot be read counts as busy.
+    pub fn quiet(&mut self, a: &AgentInfo) -> bool {
+        a.agent.as_deref() != Some("claude")
+            || self.derive(a, true).is_some_and(|d| d.subagents.is_empty())
+    }
+
     /// Cached by size and mtime, so an unchanged transcript costs one open and fstat. A
     /// transcript not found is looked for again only when `relocate`.
     pub fn derive(&mut self, a: &AgentInfo, relocate: bool) -> Option<Derived> {
@@ -983,7 +989,18 @@ mod tests {
         let project = dir.path().join("claude/projects/-Users-me-src-collie");
         write(&project.join(format!("{CLAUDE_ID}.jsonl")), CLAUDE);
         let a = agent("claude", CLAUDE_ID, "/Users/me/src/collie");
+        assert!(!t.quiet(&agent(
+            "claude",
+            "9f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "/Users/me/src/collie"
+        )));
+        assert!(t.quiet(&agent(
+            "copilot",
+            "9f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "/Users/me/src/collie"
+        )));
         assert!(t.derive(&a, false).unwrap().subagents.is_empty());
+        assert!(t.quiet(&a));
         let sub = project.join(CLAUDE_ID).join("subagents");
         let lines = include_str!("../tests/fixtures/transcripts/claude-live-agent.jsonl")
             .split_inclusive('\n')
@@ -1005,8 +1022,10 @@ mod tests {
         let d = t.derive(&a, false).unwrap();
         assert_eq!(d.subagents.len(), 1);
         assert_eq!(d.subagents[0].activity, "Reading pairing.rs");
+        assert!(!t.quiet(&a));
         write(&sub.join("agent-a1.jsonl"), &lines.concat());
         assert!(t.derive(&a, false).unwrap().subagents.is_empty());
+        assert!(t.quiet(&a));
     }
 
     #[test]

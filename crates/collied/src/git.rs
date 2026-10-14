@@ -417,7 +417,9 @@ pub async fn branch(cwd: &Cwd, roots: &[PathBuf]) -> Result<Option<(Cwd, String)
 }
 
 /// No uncommitted or untracked file, in the checkout or a submodule, and no submodule off
-/// its recorded commit, whatever the repository's config says.
+/// its recorded commit, whatever the repository's config says. A file whose changes `git
+/// status` would not look at (assume-unchanged, as `core.ignoreStat` sets, or
+/// skip-worktree) also counts as a change.
 pub async fn clean(root: &Cwd) -> Result<bool, Fail> {
     let (out, ok, truncated) = git(
         root,
@@ -431,7 +433,16 @@ pub async fn clean(root: &Cwd) -> Result<bool, Fail> {
         4096,
     )
     .await?;
-    Ok(ok && !truncated && out.is_empty())
+    if !ok || truncated || !out.is_empty() {
+        return Ok(false);
+    }
+    let (out, ok, truncated) = git(root, &["ls-files", "-v", "-z"], 16 * 1024 * 1024).await?;
+    Ok(ok
+        && !truncated
+        && out
+            .split(|b| *b == 0)
+            .filter_map(|entry| entry.first())
+            .all(|tag| !tag.is_ascii_lowercase() && *tag != b'S'))
 }
 
 /// `HEAD` holds no commit that `commit`'s history does not.
@@ -786,6 +797,32 @@ mod tests {
         for bad in [&"0".repeat(40), "--all", "HEAD", &merged[..12]] {
             assert!(!contains(&cwd, bad).await.unwrap(), "{bad}");
         }
+
+        for (flag, set, unset) in [
+            (
+                "--assume-unchanged",
+                "update-index",
+                "--no-assume-unchanged",
+            ),
+            ("--skip-worktree", "update-index", "--no-skip-worktree"),
+        ] {
+            run(root, &[set, flag, "a.txt"]);
+            std::fs::write(root.join("a.txt"), "hidden\n").unwrap();
+            assert!(!clean(&cwd).await.unwrap(), "{flag}");
+            run(root, &[set, unset, "a.txt"]);
+            run(root, &["checkout", "--", "a.txt"]);
+            assert!(clean(&cwd).await.unwrap(), "{flag}");
+        }
+        run(root, &["config", "core.ignoreStat", "true"]);
+        std::fs::write(root.join("b.txt"), "b\n").unwrap();
+        run(root, &["add", "b.txt"]);
+        run(root, &["commit", "-qm", "b"]);
+        std::fs::write(root.join("b.txt"), "hidden\n").unwrap();
+        assert!(!clean(&cwd).await.unwrap());
+        run(root, &["config", "core.ignoreStat", "false"]);
+        run(root, &["update-index", "--no-assume-unchanged", "b.txt"]);
+        run(root, &["checkout", "--", "b.txt"]);
+        assert!(clean(&cwd).await.unwrap());
 
         let (_sub_dir, sub, _) = repo();
         run(
