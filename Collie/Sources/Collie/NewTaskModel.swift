@@ -21,6 +21,9 @@ final class NewTaskModel {
         case startedNotVisible
     }
 
+    /// collied's `drive::CODEX_UPDATE`, at the end of its `agent_blocked` message.
+    static let codexUpdate = "Codex is asking to update. Answer it in Terminal."
+
     private let core: any AgentCore
     private let prefsFile: URL?
     var machineId: String? {
@@ -346,7 +349,11 @@ final class NewTaskModel {
                 )
             }
         } catch {
-            self.error = AgentModel.message(for: error)
+            if case .AgentBlocked(let message) = error as? CoreError, message.hasSuffix(Self.codexUpdate) {
+                self.error = Self.codexUpdate
+            } else {
+                self.error = AgentModel.message(for: error)
+            }
             // A folder made or cloned before the agent failed to start stays; start in it next time.
             let made = location == .clone ? cloneFolder : location == .folder && newFolder ? trimmed(folderName) : nil
             if let name = made, let cwd = newFolderParent,

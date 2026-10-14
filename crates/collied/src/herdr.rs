@@ -61,7 +61,7 @@ impl SocketEnv {
     }
 }
 
-// Mirrors herdr 0.9.3 session::configure_from_args + active_api_socket_path and
+// Mirrors herdr 0.9.4 session::configure_from_args + active_api_socket_path and
 // config::io::config_dir (release build, app dir "herdr").
 pub fn resolve_socket_path(
     session: Option<&str>,

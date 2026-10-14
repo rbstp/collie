@@ -457,7 +457,7 @@ private func attach(_ model: AgentModel, _ core: FakeCore, _ names: String...) a
     let model = agentModel(core)
     await attach(model, core, "a.png")
     model.draft = "look"
-    core.set(error: .AgentBlocked)
+    core.set(error: .AgentBlocked(message: ""))
     await model.sendPrompt()
     #expect(model.attachments.map(\.name) == ["a.png"])
     #expect(model.draft == "look")
@@ -501,7 +501,7 @@ private func attach(_ model: AgentModel, _ core: FakeCore, _ names: String...) a
 @MainActor
 @Test func blockedPromptKeepsDraftAndExplainsApprovals() async {
     let core = FakeCore()
-    core.set(error: .AgentBlocked)
+    core.set(error: .AgentBlocked(message: ""))
     let model = agentModel(core)
     model.draft = "continue"
     await model.sendPrompt()
@@ -875,7 +875,7 @@ func answersStayBetweenEarlierAndLaterTerminalKeys(first: AgentKey) async {
 @MainActor
 @Test func failedKeysDropTheQueueAndShowTheError() async {
     let core = FakeCore()
-    core.set(error: .AgentBlocked)
+    core.set(error: .AgentBlocked(message: ""))
     let model = agentModel(core)
     await model.tap(.down)?.value
     #expect(model.notice?.contains("approval") == true)
@@ -945,7 +945,7 @@ func answersStayBetweenEarlierAndLaterTerminalKeys(first: AgentKey) async {
 @Test(arguments: [false, true])
 func archiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
     let core = FakeCore()
-    core.set(hold: true, error: fails ? .AgentBlocked : nil)
+    core.set(hold: true, error: fails ? .AgentBlocked(message: "") : nil)
     let model = agentModel(core)
     model.close.begin(.archive)
     #expect(!model.archiving)
@@ -969,7 +969,7 @@ func archiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
 @Test(arguments: [false, true])
 func listArchiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
     let core = FakeCore()
-    core.set(hold: true, error: fails ? .AgentBlocked : nil)
+    core.set(hold: true, error: fails ? .AgentBlocked(message: "") : nil)
     let model = FlockModel()
     let route = AgentRoute(machineId: "m1", terminalId: "term_2")
     model.beginClose(.archive, route: route)
@@ -1012,7 +1012,7 @@ func listArchiveProgressLastsUntilTheRequestFinishes(fails: Bool) async {
     #expect(await model.performClose(core: core) == false)
     #expect(core.snapshot.closes.count == 1)
 
-    core.set(error: .AgentBlocked)
+    core.set(error: .AgentBlocked(message: ""))
     model.beginClose(.workspace(id: "w7"), route: route)
     model.close.advance()
     #expect(await model.performClose(core: core) == false)
@@ -1426,6 +1426,23 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
         "/Users/me/git clone=git@github.com:owner/brand-new.git", "/Users/me/git clone=owner/collie",
         "/Users/me/git clone=https://github.com/owner/collie", "/Users/me/git clone=https://github.com/owner/collie",
     ])
+}
+
+@MainActor
+@Test func aCodexUpdatePickerNamesItselfInNewTask() async {
+    let core = FakeCore()
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
+    await model.loadOptions()
+    model.prompt = "set it up"
+    model.cwd = "/Users/me/git/collie"
+    let update = "workspace w9 was created and left open: Codex is asking to update. Answer it in Terminal."
+    core.set(error: .AgentBlocked(message: update))
+    #expect(await model.start() == nil)
+    #expect(model.error == "Codex is asking to update. Answer it in Terminal.")
+    core.set(error: .AgentBlocked(message: "workspace w9 was created and left open: the agent is blocked on a startup prompt; answer it in the terminal"))
+    #expect(await model.start() == nil)
+    #expect(model.error == AgentModel.message(for: CoreError.AgentBlocked(message: "")))
 }
 
 @MainActor
@@ -1961,7 +1978,7 @@ private func noticeShown(
     #expect(model.attachments.map(\.name) == ["a.png"])
 
     model.draft = "again"
-    core.set(error: .AgentBlocked)
+    core.set(error: .AgentBlocked(message: ""))
     await model.sendPrompt()
     #expect(model.draft == "again")
     #expect(model.promptError?.contains("approval") == true)
@@ -1991,7 +2008,7 @@ private func noticeShown(
     #expect(model.keyStrip.allSatisfy { model.accepts($0) })
     model.typed("other input")
     #expect(model.canSendPrompt)
-    core.set(error: .AgentBlocked)
+    core.set(error: .AgentBlocked(message: ""))
     await model.sendPrompt()
     #expect(model.promptError?.contains("⇧←") == true)
     core.set()

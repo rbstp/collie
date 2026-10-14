@@ -116,7 +116,7 @@ What is and is not covered: [docs/threat-model.md](docs/threat-model.md).
 
 **To run:**
 
-- An Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager, running [herdr](https://github.com/herdrdev/herdr) 0.9.3 (the version `collied` is tested against). Intel Macs are not supported. On Linux, `collied` is built and tested on Arch Linux; aarch64 is mapped in the build but not built or tested, and the encrypted APNs key needs systemd 256 or later (`systemd-creds --user`), older versions fall back to a 0600 file.
+- An Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager, running [herdr](https://github.com/herdrdev/herdr) 0.9.4 (the version `collied` is tested against). For Codex, install herdr's hook with `herdr integration install codex`, and again after updating herdr: from 0.9.4 it reports when Codex's turns start and end, which drives Codex's status and done alerts. `collied doctor` warns when it is missing or older, once Codex has its `~/.codex` folder (or `$CODEX_HOME`). Intel Macs are not supported. On Linux, `collied` is built and tested on Arch Linux; aarch64 is mapped in the build but not built or tested, and the encrypted APNs key needs systemd 256 or later (`systemd-creds --user`), older versions fall back to a 0600 file.
 - An iPhone on iOS 26 or later, and optionally an Apple Watch on watchOS 26 or later.
 - A Tailscale account whose policy file you can edit.
 - An Apple Developer account with a Developer ID Application certificate (`collied` is always signed on macOS, never on Linux) and an APNs key for push notifications.
@@ -146,7 +146,7 @@ The justfile and `Collie/project.yml` are set to the maintainer's Apple team ID 
 
    - `collied login`: sign in as the tag owner. The node becomes `tag:collie-mac` on macOS, `tag:collie-linux` on Linux.
    - `collied service install`: the launchd agent that runs `collied` at login on macOS, the systemd user unit on Linux. It is installed again, restarting `collied`, when it points at another binary or config, is stopped, or runs an older binary than the installed one.
-   - `collied doctor`: setup stops on a fail line. Warn lines for peers, apns, hooks and plan usage are expected on a new machine, and one for reach until your phone is signed in to Tailscale (step 3); setup then prints the policy entries in case the grant is missing.
+   - `collied doctor`: setup stops on a fail line. Warn lines for peers, apns, hooks, codex hook and plan usage are expected on a new machine, and one for reach until your phone is signed in to Tailscale (step 3); setup then prints the policy entries in case the grant is missing.
    - Push notifications, when `[apns]` is not configured yet: offered, and skippable (step 5).
    - `collied pair`: offered at the end (step 4).
 

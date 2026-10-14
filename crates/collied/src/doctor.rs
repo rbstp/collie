@@ -108,6 +108,14 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     }
     let (s, d) = check_hooks();
     r.line(s, "hooks", d);
+    let codex = match std::env::var_os("CODEX_HOME") {
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => config::home_dir().ok().map(|h| h.join(".codex")),
+    };
+    if let Some(codex) = codex {
+        let (s, d) = check_codex_hook(&codex);
+        r.line(s, "codex hook", d);
+    }
     let (s, d) = check_usage(&data_dir, crate::now_ms());
     r.line(s, "plan usage", d);
     let (s, d) = check_gh().await;
@@ -132,6 +140,38 @@ fn check_hooks() -> (Status, String) {
         )
     } else {
         (Status::Warn, missing.to_owned())
+    }
+}
+
+/// herdr 0.9.4 reports a `--no-daemon` Codex's turns through its hook from version 9.
+fn check_codex_hook(codex_home: &Path) -> (Status, String) {
+    if !codex_home.is_dir() {
+        return (
+            Status::Ok,
+            format!("skipped: no {} (Codex not set up)", codex_home.display()),
+        );
+    }
+    let path = codex_home.join("herdr-agent-state.sh");
+    let fix = "run `herdr integration install codex`";
+    let Ok(script) = std::fs::read_to_string(&path) else {
+        return (
+            Status::Warn,
+            format!("{} not installed; {fix}", path.display()),
+        );
+    };
+    let version = script
+        .lines()
+        .find_map(|l| l.strip_prefix("# HERDR_INTEGRATION_VERSION="))
+        .and_then(|v| v.trim().parse::<u32>().ok());
+    match version {
+        Some(v) if v >= 9 => (Status::Ok, format!("v{v} in {}", path.display())),
+        _ => (
+            Status::Warn,
+            format!(
+                "{} predates herdr 0.9.4's turn reports; {fix}",
+                path.display()
+            ),
+        ),
     }
 }
 
@@ -701,5 +741,29 @@ mod tests {
         let (s, d) = check_usage(&data, 240_000);
         assert!(s == Status::Ok);
         assert_eq!(d, "recorded 3 min ago (5h, 7d), windows for 1 session(s)");
+    }
+
+    #[test]
+    fn warns_on_a_missing_or_outdated_codex_hook_once_codex_is_set_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, d) = check_codex_hook(&dir.path().join("absent"));
+        assert!(s == Status::Ok && d.starts_with("skipped"), "{d}");
+        let (s, d) = check_codex_hook(dir.path());
+        assert!(s == Status::Warn && d.contains("not installed"), "{d}");
+        let hook = dir.path().join("herdr-agent-state.sh");
+        for (version, want) in [("8", Status::Warn), ("9", Status::Ok), ("10", Status::Ok)] {
+            let script = format!(
+                "#!/bin/sh\n# HERDR_INTEGRATION_ID=codex\n# HERDR_INTEGRATION_VERSION={version}\n"
+            );
+            std::fs::write(&hook, script).unwrap();
+            let (s, d) = check_codex_hook(dir.path());
+            assert!(s == want, "{version}: {d}");
+        }
+        std::fs::write(&hook, "#!/bin/sh\n").unwrap();
+        let (s, d) = check_codex_hook(dir.path());
+        assert!(
+            s == Status::Warn && d.contains("herdr integration install codex"),
+            "{d}"
+        );
     }
 }

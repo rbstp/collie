@@ -747,7 +747,7 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     #expect(core.state.withLock { $0.typed }.isEmpty)
 
     model.drafts[plan.id] = "  use echo instead \n"
-    core.state.withLock { $0.error = .AgentBlocked }
+    core.state.withLock { $0.error = .AgentBlocked(message: "") }
     await model.sendFeedback(plan)
     #expect(model.drafts[plan.id] == "  use echo instead \n")
     #expect(model.steps.isEmpty)

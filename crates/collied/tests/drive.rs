@@ -189,7 +189,10 @@ impl Mock {
                     let mut resp = json!({ "id": req["id"] });
                     match body {
                         Ok(result) => resp["result"] = result,
-                        Err(code) => resp["error"] = json!({ "code": code, "message": "mock" }),
+                        Err(error) => {
+                            let (code, message) = error.split_once(' ').unwrap_or((&error, "mock"));
+                            resp["error"] = json!({ "code": code, "message": message })
+                        }
                     }
                     let _ = w.write_all(format!("{resp}\n").as_bytes()).await;
                 });
@@ -2589,8 +2592,77 @@ async fn codex_and_copilot_startup_prompts_are_left_to_the_terminal() {
         assert!(message.contains("answer it in the terminal"), "{message}");
         assert_eq!(herdr.params("agent.start")[0]["kind"], kind);
         assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
-        assert!(herdr.params("pane.read").is_empty());
+        assert_eq!(
+            herdr.params("pane.read").len(),
+            usize::from(kind == "codex")
+        );
     }
+}
+
+#[tokio::test]
+async fn a_codex_update_picker_fails_the_task_with_its_own_message() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["codex"], &base.join("root"));
+    for (status, text) in [
+        (
+            "blocked",
+            include_str!("fixtures/codex/update.detection.txt"),
+        ),
+        (
+            "blocked",
+            include_str!("fixtures/codex/update-legacy.detection.txt"),
+        ),
+        (
+            "unknown",
+            include_str!("fixtures/codex/update.detection.txt"),
+        ),
+    ] {
+        let mut agent = started_agent(status, true, false);
+        agent["agent"] = json!("codex");
+        herdr.with(|h| {
+            h.calls.clear();
+            h.text = text.into();
+            h.gets.extend([agent.clone(), agent]);
+        });
+        let (code, message) = drive
+            .task_new(task(&base.join("root/a"), "codex"), &yes())
+            .await
+            .0
+            .unwrap_err();
+        assert_eq!(code, ErrorCode::AgentBlocked);
+        assert_eq!(
+            message,
+            format!(
+                "workspace w9 was created and left open: {}",
+                collied::drive::CODEX_UPDATE
+            )
+        );
+        assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
+    }
+}
+
+#[tokio::test]
+async fn a_launch_line_too_long_for_a_starting_shell_is_refused() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["codex"], &base.join("root"));
+    let refusal = CANONICAL_LIMIT.replacen("pane_send_failed", "agent_start_input_failed", 1);
+    herdr.fail_next("agent.start", &[&refusal]);
+    let (code, message) = drive
+        .task_new(task(&base.join("root/a"), "codex"), &yes())
+        .await
+        .0
+        .unwrap_err();
+    assert_eq!(code, ErrorCode::TooLarge);
+    assert_eq!(
+        message,
+        format!(
+            "workspace w9 was created and left open: {}",
+            collied::drive::TOO_LONG
+        )
+    );
+    assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
 }
 
 #[tokio::test]
@@ -2610,7 +2682,7 @@ async fn a_codex_startup_prompt_herdr_does_not_rule_blocked_gets_no_prompt() {
         .0
         .unwrap_err();
     assert_eq!(code, ErrorCode::AgentBlocked);
-    assert!(message.contains("answer it in the terminal"), "{message}");
+    assert!(message.ends_with(collied::drive::CODEX_UPDATE), "{message}");
     assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
 
     herdr.with(|h| {
@@ -3262,7 +3334,24 @@ async fn terminal_input_reaches_a_shell_pane_only() {
         ErrorCode::Internal,
         Some("herdr refused: pane_input_failed"),
     );
+    herdr.fail_next(
+        "pane.send_input",
+        &[CANONICAL_LIMIT, "pane_send_failed secret"],
+    );
+    refused(
+        drive.terminal_run(run(SHELL, "secret"), &yes()).await,
+        ErrorCode::TooLarge,
+        Some(collied::drive::TOO_LONG),
+    );
+    refused(
+        drive.terminal_run(run(SHELL, "secret"), &yes()).await,
+        ErrorCode::Internal,
+        Some("herdr refused: pane_send_failed"),
+    );
 }
+
+// herdr 0.9.4's refusal on macOS (`validate_pty_submission`), as `pane.send_input` sends it.
+const CANONICAL_LIMIT: &str = "pane_send_failed input contains a 1100-byte line but the terminal is in canonical mode with a 1024-byte limit; wait for the shell prompt and retry";
 
 /// The op cache is per phone, not per session: a retry from the phone's next session
 /// replays the first attempt, which still checks the grant of the session that sent it.

@@ -228,7 +228,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             .prompt(m.clone(), terminal.into(), "yes".into(), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, CoreError::AgentBlocked), "{err:?}");
+        assert!(matches!(err, CoreError::AgentBlocked { .. }), "{err:?}");
     }
     herdr.with(|h| h.blocked_on = Some(BASH.into()));
     core.send_keys(m.clone(), CLAUDE.into(), vec![AgentKey::Enter])
