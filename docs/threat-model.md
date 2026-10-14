@@ -263,6 +263,16 @@ Manual keys and text intentionally have no approval-specific restrictions for Cl
 | Residual | The user's own git config still applies otherwise: `url.<base>.insteadOf` may send a source to another HTTPS or SSH host the user configured, and credential helpers, `core.sshCommand` and hooks from `init.templateDir` or `core.hooksPath` run as configured. A GUI credential helper or SSH askpass could show a prompt on the Mac until the timeout. A clone that times out leaves its partial folder in place; the error names it. The cloned repository is untrusted content the agent then works in (prompt injection, as with any repository). |
 | Phase | Built |
 
+### File mentions from the phone
+
+| | |
+|---|---|
+| Assets | Names of files in an agent's checkout; programs a repository's config names |
+| Attack | A paired phone (or a stolen, unlocked one) sends an `agent.files` query that git would read as an option or pathspec, or tries to list files outside the agent's checkout, inside `.git`, `.ssh` or another hidden folder, or ignored files such as build output and secrets; a partial clone makes the listing fetch from its remote. |
+| Mitigations | Same gate as `agent.changes`: paired full session, the method allowlist with params that deny unknown fields, authorization re-checked after the listing, and an audit line naming the terminal (built). The folder is the agent's live folder resolved under the roots, and its checkout's top level and Git directories must resolve under the roots too. git gets fixed arguments (`ls-files --cached --others --exclude-standard`, no pathspec) with `--no-lazy-fetch`, `core.fsmonitor=false`, null stdin, no inherited `GIT_*` variables, 2 MiB of output and an 8 s timeout with `kill_on_drop`; the query only filters collied's copy of the output. Paths with a control character or inside a folder whose name starts with a dot are dropped, at most 50 are returned, and no file is read (built, tested). |
+| Residual | The names of tracked and non-ignored files in the agent's folder reach the paired phone, which could already have the agent list them. Ignore rules come from the repository, which the agent can edit, and a hidden file directly in a listed folder (`.env` when not ignored) is listed. In a sparse partial clone, a skipped folder's `.gitignore` that is not on disk is not applied. |
+| Phase | Built |
+
 ### Task archive from the phone
 
 | | |

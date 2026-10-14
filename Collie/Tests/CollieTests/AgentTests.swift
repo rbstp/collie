@@ -20,6 +20,8 @@ final class FakeCore: AgentCore {
         var gitBase: String?
         var gitPatch = "@@ -1 +1 @@\n-old\n+new\n"
         var gitDiffDelay: Duration = .zero
+        var mentionFiles: [String] = []
+        var fileQueries: [String] = []
         var prompts: [String] = []
         var expectedDrafts: [String?] = []
         var kind: String?
@@ -179,6 +181,10 @@ final class FakeCore: AgentCore {
         state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)") }
         try await Task.sleep(for: snapshot.gitDiffDelay)
         return GitDiff(patch: snapshot.gitPatch, truncated: false)
+    }
+    func agentFiles(machineId: String, terminalId: String, query: String) async throws -> [String] {
+        try await call { $0.fileQueries.append(query) }
+        return snapshot.mentionFiles.filter { $0.localizedCaseInsensitiveContains(query) || query.isEmpty }
     }
     func agentDraft(machineId: String, terminalId: String) async throws -> String? {
         state.withLock { s in
@@ -2875,4 +2881,84 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     try await Task.sleep(for: .seconds(1.3))
     #expect(model.archiveNotice == "Archive complete\nSome branches could not be cleaned up.")
     await poll { model.archiveNotice == nil }
+}
+
+@MainActor
+@Test func theMentionIsTheWordAroundTheCaretWhenItStartsWithAnAt() {
+    func word(_ marked: String) -> String? {
+        let offset = marked.distance(from: marked.startIndex, to: marked.firstIndex(of: "|")!)
+        let text = marked.replacingOccurrences(of: "|", with: "")
+        return AgentModel.mentionRange(in: text, at: text.index(text.startIndex, offsetBy: offset)).map { String(text[$0]) }
+    }
+    #expect(word("@|") == "@")
+    #expect(word("@conf|") == "@conf")
+    #expect(word("fix @co|nf now") == "@conf")
+    #expect(word("one\n@src/a.rs| two") == "@src/a.rs")
+    #expect(word("/review @x|") == "@x")
+    #expect(word("|@conf") == nil)
+    #expect(word("@conf |") == nil)
+    #expect(word("mail@conf|") == nil)
+    #expect(word("(@conf|") == nil)
+    #expect(word("conf|") == nil)
+}
+
+@MainActor
+private func caretAt(_ model: AgentModel, _ offset: Int) {
+    model.moveCaret(TextSelection(insertionPoint: model.draft.index(model.draft.startIndex, offsetBy: offset)))
+}
+
+@MainActor
+@Test func anAtWordMidTextSuggestsFilesAndPickingReplacesIt() async {
+    let core = FakeCore()
+    core.state.withLock { $0.mentionFiles = ["Config.toml", "README.md", "src/config.rs"] }
+    let model = openedAgent(core, kind: "codex", macDraft: nil)
+    model.typed("fix @CONF in place")
+    caretAt(model, 9)
+    await poll { !model.mentionChoices.isEmpty }
+    #expect(core.snapshot.fileQueries == ["CONF"], "debounced, matched by collied")
+    #expect(model.mentionChoices == ["Config.toml", "src/config.rs"])
+
+    let caret = model.pickMention("src/config.rs")
+    #expect(model.draft == "fix @src/config.rs  in place")
+    #expect(caret.map { model.draft[..<$0] } == "fix @src/config.rs ")
+    #expect(model.mentionChoices.isEmpty)
+    model.moveCaret(caret.map { TextSelection(insertionPoint: $0) })
+    try? await Task.sleep(for: .milliseconds(300))
+    #expect(core.snapshot.fileQueries == ["CONF"])
+    #expect(model.mentionChoices.isEmpty)
+}
+
+@MainActor
+@Test func onlyTheLatestMentionWordsReplyIsShown() async {
+    let core = FakeCore()
+    core.state.withLock { $0.mentionFiles = ["a.txt", "ab.txt", "b.txt"] }
+    let model = openedAgent(core, macDraft: nil)
+    core.set(hold: true)
+    model.typed("@a")
+    caretAt(model, 2)
+    await core.waitHeld(1)
+    model.typed("@ab")
+    caretAt(model, 3)
+    await core.waitHeld(2)
+    let held = core.state.withLock { s in
+        s.hold = false
+        defer { s.held = [] }
+        return s.held
+    }
+    held[1].resume()
+    await poll { !model.mentionChoices.isEmpty }
+    held[0].resume()
+    try? await Task.sleep(for: .milliseconds(100))
+    #expect(core.snapshot.fileQueries == ["a", "ab"])
+    #expect(model.mentionChoices == ["ab.txt"])
+
+    model.paste("c")
+    #expect(model.mentionChoices.isEmpty, "a reply only shows for the word it answered")
+    model.typed("@ab")
+    #expect(model.mentionChoices == ["ab.txt"])
+    model.typed("@ab ")
+    caretAt(model, 4)
+    #expect(model.mentionChoices.isEmpty, "hidden as soon as the word ends")
+    model.typed("")
+    #expect(model.mentionChoices.isEmpty)
 }

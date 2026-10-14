@@ -552,6 +552,13 @@ private struct PromptBar: View {
                 .disabled(model.sendingPrompt)
                 .scrollIndicators(.hidden)
             }
+            if editing && !model.mentionChoices.isEmpty {
+                MentionList(paths: model.mentionChoices) { path in
+                    if let caret = model.pickMention(path) {
+                        selection = TextSelection(insertionPoint: caret)
+                    }
+                }
+            }
             PromptInputLayout(expanded: expanded, showsStatus: model.dictation.isActive) {
                 ZStack {
                     if !model.answering && !model.isTerminal {
@@ -691,6 +698,7 @@ private struct PromptBar: View {
                 model.attachFailed(error)
             }
         }
+        .onChange(of: selection) { model.moveCaret(selection) }
         .onChange(of: model.quotes) {
             selection = TextSelection(insertionPoint: model.draft.endIndex)
             editing = true
@@ -702,6 +710,35 @@ private struct PromptBar: View {
             if !active && model.draft.isEmpty { dictationExpanded = false }
         }
         .onDisappear { dictationExpanded = false }
+    }
+}
+
+private struct MentionList: View {
+    let paths: [String]
+    let pick: (String) -> Void
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(paths, id: \.self) { path in
+                    Button {
+                        pick(path)
+                    } label: {
+                        Text(verbatim: path)
+                            .font(.callout.monospaced())
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(maxHeight: min(CGFloat(paths.count), 5) * 36)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
     }
 }
 

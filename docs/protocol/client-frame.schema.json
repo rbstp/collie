@@ -75,6 +75,23 @@
       ],
       "type": "object"
     },
+    "AgentFilesParams": {
+      "additionalProperties": false,
+      "description": "Matched in collied with a case-insensitive substring match; never passed to git.",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "query"
+      ],
+      "type": "object"
+    },
     "AgentKind": {
       "pattern": "^[a-z][a-z0-9_-]{0,31}$",
       "type": "string"
@@ -1112,6 +1129,22 @@
         },
         "params": {
           "$ref": "#/$defs/AgentDiffParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.files",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentFilesParams"
         }
       },
       "required": [

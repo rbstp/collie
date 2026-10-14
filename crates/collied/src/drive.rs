@@ -277,6 +277,13 @@ impl Driver {
         Ok(Response::GitChanges(changes))
     }
 
+    pub async fn git_files(&self, p: protocol::AgentFilesParams, auth: &Authorized) -> Reply {
+        let cwd = self.git_checkout(&p.terminal_id, auth).await?;
+        let paths = crate::git::files(&cwd, &self.roots, &p.query).await?;
+        authorized(auth)?;
+        Ok(Response::Files { paths })
+    }
+
     pub async fn git_diff(&self, p: protocol::AgentDiffParams, auth: &Authorized) -> Reply {
         let cwd = self.git_checkout(&p.terminal_id, auth).await?;
         let diff = crate::git::diff(&cwd, &self.roots, &p).await?;

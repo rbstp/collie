@@ -49,6 +49,15 @@ pub struct AgentDiffParams {
     pub section: GitSection,
 }
 
+/// Matched in collied with a case-insensitive substring match; never passed to git.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentFilesParams {
+    pub terminal_id: TerminalId,
+    pub query: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct GitChanges {
@@ -168,6 +177,8 @@ pub enum Request {
     AgentChanges(AgentChangesParams),
     #[serde(rename = "agent.diff")]
     AgentDiff(AgentDiffParams),
+    #[serde(rename = "agent.files")]
+    AgentFiles(AgentFilesParams),
     #[serde(rename = "agent.draft")]
     AgentDraft(AgentTarget),
 
@@ -248,6 +259,7 @@ impl Request {
         "task.options",
         "agent.changes",
         "agent.diff",
+        "agent.files",
         "agent.draft",
         "agent.prompt",
         "agent.send_keys",
@@ -293,6 +305,7 @@ impl Request {
             Self::TaskOptions(_) => "task.options",
             Self::AgentChanges(_) => "agent.changes",
             Self::AgentDiff(_) => "agent.diff",
+            Self::AgentFiles(_) => "agent.files",
             Self::AgentDraft(_) => "agent.draft",
             Self::AgentPrompt(_) => "agent.prompt",
             Self::AgentSendKeys(_) => "agent.send_keys",
@@ -337,6 +350,7 @@ impl Request {
             | Self::TaskOptions(_)
             | Self::AgentChanges(_)
             | Self::AgentDiff(_)
+            | Self::AgentFiles(_)
             | Self::AgentDraft(_)
             | Self::ApprovalList(_) => MethodClass::Read,
             Self::AgentPrompt(_)
@@ -938,6 +952,10 @@ pub enum Response {
     TaskOptions(TaskOptions),
     GitChanges(GitChanges),
     GitDiff(GitDiff),
+    /// Paths relative to the agent's folder, sorted.
+    Files {
+        paths: Vec<String>,
+    },
     History(HistoryPage),
     TaskWorktrees {
         source: Cwd,
@@ -1816,7 +1834,31 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 19);
+        assert_eq!(crate::PROTOCOL_VERSION, 20);
+    }
+
+    #[test]
+    fn agent_files_takes_a_query() {
+        let files = |params: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"agent.files","params":{params}}}"#
+            ))
+        };
+        let frame = files(r#"{"terminal_id":"t","query":"conf"}"#).unwrap();
+        assert_eq!(frame.request.class(), MethodClass::Read);
+        assert_eq!(frame.request.method(), "agent.files");
+        let json = serde_json::to_string(&frame).unwrap();
+        assert_eq!(parse(&json).unwrap(), frame);
+        for params in [
+            r#"{"terminal_id":"t"}"#,
+            r#"{"terminal_id":"t","query":"a","root":"/a"}"#,
+        ] {
+            assert_eq!(
+                files(params).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{params}"
+            );
+        }
     }
 
     #[test]

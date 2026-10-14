@@ -1771,6 +1771,23 @@ impl CollieCore {
         }
     }
 
+    pub async fn agent_files(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        query: String,
+    ) -> Result<Vec<String>, CoreError> {
+        let request = Request::AgentFiles(protocol::AgentFilesParams {
+            terminal_id: TerminalId::new(terminal_id)
+                .map_err(|_| invalid("terminal_id", "invalid terminal"))?,
+            query,
+        });
+        match self.call(&machine_id, request, CALL_TIMEOUT).await? {
+            Response::Files { paths } => Ok(paths),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
     pub async fn agent_diff(
         &self,
         machine_id: String,

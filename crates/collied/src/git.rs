@@ -19,6 +19,7 @@ const FILE_LIMIT: u64 = 1024 * 1024;
 const RESPONSE_LIMIT: usize = 48 * 1024;
 const MAX_FILES: usize = 200;
 const MAX_WORKTREES: usize = 20;
+const MAX_MENTIONS: usize = 50;
 
 fn error(message: &str) -> Fail {
     (ErrorCode::InvalidParams, message.into())
@@ -524,6 +525,52 @@ pub async fn changes(
         changes.truncated = true;
     }
     Ok(changes)
+}
+
+/// `--no-lazy-fetch`: in a sparse partial clone, reading a skipped `.gitignore` would
+/// otherwise fetch it from the promisor remote and run its transport and maintenance.
+pub async fn files(cwd: &Cwd, roots: &[PathBuf], query: &str) -> Result<Vec<String>, Fail> {
+    if root(cwd, roots).await?.is_none() {
+        return Ok(Vec::new());
+    }
+    let (out, ok, _) = git(
+        cwd,
+        &[
+            "--no-lazy-fetch",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+        OUTPUT_LIMIT,
+    )
+    .await?;
+    if !ok {
+        return Err(error("Could not list files"));
+    }
+    let query = query.to_lowercase();
+    let mut paths: Vec<String> = out
+        .split_inclusive(|b| *b == 0)
+        .filter_map(|s| s.strip_suffix(&[0]))
+        .filter_map(|name| path(name).ok())
+        .filter(|name| {
+            !name.split('/').rev().skip(1).any(|c| c.starts_with('.'))
+                && !name.chars().any(char::is_control)
+                && name.to_lowercase().contains(&query)
+        })
+        .collect();
+    paths.sort_unstable();
+    paths.dedup();
+    paths.truncate(MAX_MENTIONS);
+    while serde_json::to_vec(&paths)
+        .map_err(|_| error("Could not encode files"))?
+        .len()
+        > RESPONSE_LIMIT
+    {
+        paths.pop();
+    }
+    Ok(paths)
 }
 
 pub async fn diff(cwd: &Cwd, roots: &[PathBuf], p: &AgentDiffParams) -> Result<GitDiff, Fail> {
@@ -1132,6 +1179,123 @@ mod tests {
         let list = branch().await;
         assert_eq!(list.base.as_deref(), Some("origin/trunk"));
         assert_eq!(list.files.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn files_match_the_query_without_ignored_or_hidden_folders() {
+        let (_dir, cwd, roots) = repo();
+        let root = Path::new(cwd.as_str());
+        for dir in ["src", ".github", ".hidden", "target", "docs"] {
+            std::fs::create_dir(root.join(dir)).unwrap();
+        }
+        for (name, value) in [
+            ("Config.toml", "tracked\n"),
+            ("src/config.rs", "tracked\n"),
+            (".github/config.yml", "hidden folder\n"),
+            (".gitignore", "target/\n*.log\n"),
+        ] {
+            std::fs::write(root.join(name), value).unwrap();
+        }
+        run(root, &["add", "."]);
+        run(root, &["commit", "-m", "base"]);
+        for name in [
+            "docs/conf.md",
+            ".hidden/conf",
+            "target/conf",
+            "conf.log",
+            ".conf",
+            "conf\u{1b}[2J",
+        ] {
+            std::fs::write(root.join(name), "untracked\n").unwrap();
+        }
+        assert_eq!(
+            files(&cwd, &roots, "CONF").await.unwrap(),
+            [".conf", "Config.toml", "docs/conf.md", "src/config.rs"]
+        );
+        assert_eq!(
+            files(&cwd, &roots, "").await.unwrap(),
+            [
+                ".conf",
+                ".gitignore",
+                "Config.toml",
+                "docs/conf.md",
+                "src/config.rs"
+            ]
+        );
+        for query in ["*", ":(top)", "--others", "-z"] {
+            assert!(
+                files(&cwd, &roots, query).await.unwrap().is_empty(),
+                "{query}"
+            );
+        }
+        let src = Cwd::new(root.join("src").to_str().unwrap()).unwrap();
+        assert_eq!(files(&src, &roots, "").await.unwrap(), ["config.rs"]);
+        for index in 0..60 {
+            std::fs::write(root.join(format!("conf{index:02}")), "").unwrap();
+        }
+        let many = files(&cwd, &roots, "conf").await.unwrap();
+        assert_eq!(many.len(), MAX_MENTIONS);
+        assert_eq!(many[0], ".conf");
+
+        let outside = tempfile::tempdir().unwrap();
+        let outside = outside.path().canonicalize().unwrap();
+        std::fs::write(outside.join("conf"), "").unwrap();
+        let outside_cwd = Cwd::new(outside.to_str().unwrap()).unwrap();
+        assert!(
+            files(&outside_cwd, std::slice::from_ref(&outside), "")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(files(&cwd, &[outside], "").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn files_never_fetch_missing_objects() {
+        let (_dir, cwd, roots) = repo();
+        let source = Path::new(cwd.as_str());
+        std::fs::create_dir(source.join("kept")).unwrap();
+        std::fs::create_dir(source.join("skipped")).unwrap();
+        std::fs::write(source.join("kept/file"), "kept\n").unwrap();
+        std::fs::write(source.join("skipped/.gitignore"), "secret\n").unwrap();
+        run(source, &["add", "."]);
+        run(source, &["commit", "-m", "base"]);
+        run(source, &["config", "uploadpack.allowFilter", "true"]);
+        run(source, &["config", "uploadpack.allowAnySHA1InWant", "true"]);
+        let url = format!("file://{}", source.display());
+        run(
+            source,
+            &[
+                "clone",
+                "-q",
+                "--filter=blob:none",
+                "--no-checkout",
+                &url,
+                "clone",
+            ],
+        );
+        let clone = source.join("clone");
+        run(&clone, &["sparse-checkout", "set", "--cone", "kept"]);
+        run(&clone, &["checkout", "-q", "main"]);
+        std::fs::create_dir(clone.join("skipped")).unwrap();
+        std::fs::write(clone.join("skipped/secret"), "").unwrap();
+        let missing = || {
+            let out = std::process::Command::new("git")
+                .current_dir(&clone)
+                .args(["rev-list", "--objects", "--missing=print", "--all"])
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            out.stdout
+                .split(|b| *b == b'\n')
+                .filter(|l| l.starts_with(b"?"))
+                .count()
+        };
+        let before = missing();
+        assert!(before > 0);
+        let clone_cwd = Cwd::new(clone.to_str().unwrap()).unwrap();
+        files(&clone_cwd, &roots, "").await.unwrap();
+        assert_eq!(missing(), before);
     }
 
     #[tokio::test]

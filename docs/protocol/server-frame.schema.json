@@ -1171,6 +1171,26 @@
           "type": "object"
         },
         {
+          "description": "Paths relative to the agent's folder, sorted.",
+          "properties": {
+            "paths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "files",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "paths"
+          ],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/HistoryPage",
           "properties": {
             "type": {

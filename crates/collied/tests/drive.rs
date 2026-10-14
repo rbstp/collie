@@ -3802,6 +3802,20 @@ async fn git_changes_use_live_agent_checkout_and_existing_authorization() {
         panic!()
     };
     assert!(diff.patch.contains("+feedback"));
+    let files = protocol::AgentFilesParams {
+        terminal_id: tid(CLAUDE),
+        query: "TEST".into(),
+    };
+    assert_eq!(
+        drive.git_files(files.clone(), &yes()).await.unwrap(),
+        Response::Files {
+            paths: vec!["test.txt".into()]
+        }
+    );
+    assert_eq!(
+        drive.git_files(files.clone(), &no()).await.unwrap_err().0,
+        ErrorCode::NotPaired
+    );
     assert_eq!(
         drive
             .git_changes(target.clone(), &no())
@@ -3825,5 +3839,6 @@ async fn git_changes_use_live_agent_checkout_and_existing_authorization() {
     });
     assert!(drive.git_changes(target, &yes()).await.is_err());
     assert!(drive.git_diff(params, &yes()).await.is_err());
+    assert!(drive.git_files(files, &yes()).await.is_err());
     assert!(herdr.mutations().is_empty());
 }

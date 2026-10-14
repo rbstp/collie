@@ -65,6 +65,9 @@ final class AgentModel {
     @ObservationIgnored private var codexFooter: (ansi: String, open: Bool)?
     /// ↑ or ↓ moved Claude Code's highlight off what the box holds; ⇥ takes it.
     @ObservationIgnored private var menuMoved = false
+    private var mentions: (query: String, paths: [String])?
+    @ObservationIgnored private var caret: TextSelection?
+    @ObservationIgnored private var mentionLookup: Task<Void, Never>?
     private(set) var promptError: String?
     private(set) var upload: AttachmentUpload?
     private var uploadTask: Task<Void, Never>?
@@ -308,6 +311,64 @@ final class AgentModel {
             guard !Task.isCancelled else { return }
             await self?.flushMirror()
         }
+        lookUpMentions()
+    }
+
+    func moveCaret(_ selection: TextSelection?) {
+        caret = selection
+        lookUpMentions()
+    }
+
+    var mentionChoices: [String] {
+        guard mode == .agent, !dictation.isActive, !sendingPrompt, let mentions, mentions.query == mentionQuery else { return [] }
+        return mentions.paths
+    }
+
+    private var mentionWord: Range<String.Index>? {
+        guard case .selection(let range) = caret?.indices, range.isEmpty,
+            let index = String.Index(range.lowerBound, within: draft)
+        else { return nil }
+        return Self.mentionRange(in: draft, at: index)
+    }
+
+    private var mentionQuery: String? { mentionWord.map { String(draft[$0].dropFirst()) } }
+
+    static func mentionRange(in text: String, at caret: String.Index) -> Range<String.Index>? {
+        let start = text[..<caret].lastIndex(where: \.isWhitespace).map(text.index(after:)) ?? text.startIndex
+        guard start < caret, text[start] == "@" else { return nil }
+        return start..<(text[caret...].firstIndex(where: \.isWhitespace) ?? text.endIndex)
+    }
+
+    /// The caret can arrive after the text it belongs to, so the word is read once the 150 ms pass,
+    /// and a reply is kept only for the word still at the caret.
+    private func lookUpMentions() {
+        mentionLookup?.cancel()
+        if let mentions, mentions.query != mentionQuery { self.mentions = nil }
+        mentionLookup = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self, mode == .agent, let query = mentionQuery else { return }
+            let paths = try? await core.agentFiles(machineId: route.machineId, terminalId: route.terminalId, query: query)
+            guard !Task.isCancelled, query == mentionQuery else { return }
+            mentions = (query, paths ?? [])
+        }
+    }
+
+    func pickMention(_ path: String) -> String.Index? {
+        guard !sendingPrompt, !dictation.isActive, let range = mentionWord else { return nil }
+        let inserted = "@\(path) "
+        var next = draft
+        next.replaceSubrange(range, with: inserted)
+        guard next.utf8.count <= 32 * 1024 else {
+            promptError = Self.tooLong
+            return nil
+        }
+        let end = next.utf8.index(next.startIndex, offsetBy: draft.utf8.distance(from: draft.startIndex, to: range.lowerBound) + inserted.utf8.count)
+        mentionLookup?.cancel()
+        mentions = nil
+        loadedMacDraft = nil
+        draft = next
+        caret = TextSelection(insertionPoint: end)
+        return end
     }
 
     /// Runs the mirror now, or waits for the one in flight, which follows the latest draft.
