@@ -683,10 +683,30 @@ pub enum Key {
     Tab,
     #[serde(rename = "shift+tab")]
     ShiftTab,
+    #[serde(rename = "backspace")]
+    Backspace,
     #[serde(rename = "ctrl+c")]
     CtrlC,
     #[serde(rename = "ctrl+enter")]
     CtrlEnter,
+    #[serde(rename = "ctrl+a")]
+    CtrlA,
+    #[serde(rename = "ctrl+b")]
+    CtrlB,
+    #[serde(rename = "ctrl+e")]
+    CtrlE,
+    #[serde(rename = "ctrl+k")]
+    CtrlK,
+    #[serde(rename = "ctrl+l")]
+    CtrlL,
+    #[serde(rename = "ctrl+o")]
+    CtrlO,
+    #[serde(rename = "ctrl+t")]
+    CtrlT,
+    #[serde(rename = "ctrl+u")]
+    CtrlU,
+    #[serde(rename = "ctrl+w")]
+    CtrlW,
 }
 
 impl Key {
@@ -701,8 +721,18 @@ impl Key {
             Self::Right => "right",
             Self::Tab => "tab",
             Self::ShiftTab => "shift+tab",
+            Self::Backspace => "backspace",
             Self::CtrlC => "ctrl+c",
             Self::CtrlEnter => "ctrl+enter",
+            Self::CtrlA => "ctrl+a",
+            Self::CtrlB => "ctrl+b",
+            Self::CtrlE => "ctrl+e",
+            Self::CtrlK => "ctrl+k",
+            Self::CtrlL => "ctrl+l",
+            Self::CtrlO => "ctrl+o",
+            Self::CtrlT => "ctrl+t",
+            Self::CtrlU => "ctrl+u",
+            Self::CtrlW => "ctrl+w",
         }
     }
 }
@@ -1978,7 +2008,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 24);
+        assert_eq!(crate::PROTOCOL_VERSION, 25);
     }
 
     #[test]
@@ -2705,9 +2735,14 @@ mod tests {
             ))
         };
         assert!(keys(r#"["ctrl+c"]"#).is_ok());
+        assert!(keys(r#"["backspace","ctrl+a","ctrl+e","ctrl+u","ctrl+w"]"#).is_ok());
         for bad in [
             r#"["ctrl+d"]"#.to_owned(),
             r#"["ctrl+z"]"#.to_owned(),
+            r#"["ctrl+r"]"#.to_owned(),
+            r#"["ctrl+j"]"#.to_owned(),
+            r#"["ctrl+m"]"#.to_owned(),
+            r#"["shift+enter"]"#.to_owned(),
             "[]".to_owned(),
             serde_json::to_string(&vec!["enter"; 17]).unwrap(),
         ] {

@@ -465,7 +465,7 @@ private struct GitReviewBar: View {
                 Text(error).font(.footnote).foregroundStyle(.red)
                     .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 12))
             }
-            if !agent.canSendGitFeedback && !review.sending {
+            if !agent.canSendText && !review.sending {
                 Text("Feedback stays here until the agent can accept a prompt.").font(.footnote).foregroundStyle(.secondary)
                     .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 12))
             }
@@ -477,7 +477,7 @@ private struct GitReviewBar: View {
             }
             .buttonStyle(.glassProminent)
             .controlSize(.large)
-            .disabled(review.sending || !review.ready || !agent.canSendGitFeedback)
+            .disabled(review.sending || !review.ready || !agent.canSendText)
         }
         .padding(12)
         .frame(maxWidth: .infinity)

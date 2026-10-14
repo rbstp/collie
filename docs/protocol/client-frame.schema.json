@@ -523,8 +523,18 @@
         "right",
         "tab",
         "shift+tab",
+        "backspace",
         "ctrl+c",
-        "ctrl+enter"
+        "ctrl+enter",
+        "ctrl+a",
+        "ctrl+b",
+        "ctrl+e",
+        "ctrl+k",
+        "ctrl+l",
+        "ctrl+o",
+        "ctrl+t",
+        "ctrl+u",
+        "ctrl+w"
       ],
       "type": "string"
     },
