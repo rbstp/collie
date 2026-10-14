@@ -654,8 +654,12 @@ fn claude(text: &str, known_window: Option<u64>) -> Derived {
             }
             Some("user") if main && d.last_prompt.is_none() && v["origin"]["kind"] == "human" => {
                 let content = &v["message"]["content"];
+                let local = history::local(&v);
+                if local.is_some_and(|s| s.starts_with("<local-command-stdout>")) {
+                    continue;
+                }
                 d.last_prompt = match content.as_str() {
-                    Some(s) => first_line(s),
+                    Some(s) => local.and_then(history::command).or_else(|| first_line(s)),
                     None => blocks_line(content, "text"),
                 };
             }
@@ -813,6 +817,25 @@ mod tests {
                 .last_prompt
                 .as_deref(),
             Some("older")
+        );
+    }
+
+    #[test]
+    fn claude_slash_commands_give_their_marker_and_output_never_becomes_the_prompt() {
+        let human = r#"{"type":"user","isSidechain":false,"origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"ship it"}}"#;
+        let skill = r#"{"type":"user","isSidechain":false,"origin":{"kind":"human"},"message":{"role":"user","content":"<command-message>review</command-message>\n<command-name>/review</command-name>\n<command-args>pr\u001b 12</command-args>"}}"#;
+        let builtin = r#"{"type":"user","isSidechain":false,"message":{"role":"user","content":"<command-name>/exit</command-name>\n<command-message>exit</command-message>\n<command-args></command-args>"}}"#;
+        let stdout = r#"{"type":"user","isSidechain":false,"origin":{"kind":"human"},"message":{"role":"user","content":"<local-command-stdout>human</local-command-stdout>"}}"#;
+        let typed = r#"{"type":"user","isSidechain":false,"origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"<command-name>/exit</command-name> typed"}}"#;
+        let prompt = |lines: &[&str]| claude(&lines.join("\n"), None).last_prompt;
+        assert_eq!(prompt(&[human, skill]).as_deref(), Some("/review pr 12"));
+        assert_eq!(
+            prompt(&[human, builtin, stdout]).as_deref(),
+            Some("ship it")
+        );
+        assert_eq!(
+            prompt(&[skill, typed]).as_deref(),
+            Some("<command-name>/exit</command-name> typed")
         );
     }
 

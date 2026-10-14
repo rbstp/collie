@@ -469,7 +469,13 @@ fn text(value: &Value) -> String {
     }
 }
 
-fn command(s: &str) -> Option<String> {
+pub(super) fn local(v: &Value) -> Option<&str> {
+    v["message"]["content"]
+        .as_str()
+        .filter(|_| v["promptSource"].is_null() && v["isMeta"] != true)
+}
+
+pub(super) fn command(s: &str) -> Option<String> {
     if !s.starts_with("<command-name>") && !s.starts_with("<command-message>") {
         return None;
     }
@@ -533,9 +539,7 @@ fn normalize(
                 return out;
             }
             let notice = v["origin"]["kind"] == "task-notification";
-            let local = v["message"]["content"]
-                .as_str()
-                .filter(|_| v["promptSource"].is_null() && v["isMeta"] != true);
+            let local = local(v);
             let slash = local.and_then(command);
             if parent.is_none()
                 && v["type"] == "user"
