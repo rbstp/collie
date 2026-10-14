@@ -711,16 +711,13 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         }
         let mut ended = false;
         let agents = herdr::agent_list(&state.herdr).await.ok();
-        // herdr answers before it restores its panes, so a list with none is not trusted.
-        if let Some(agents) = agents.as_ref().filter(|a| !a.is_empty()) {
-            for (terminal_id, _) in lock(&state.pulls).watches.list() {
-                if !agents.iter().any(|a| a.terminal_id == terminal_id)
-                    && lock(&state.pulls).watches.stop(&terminal_id)
-                {
-                    tracing::info!(terminal_id, "stopped watching a pull request: agent gone");
-                    ended = true;
-                }
+        let peers = state.peers();
+        {
+            let mut pulls = lock(&state.pulls);
+            if let Some(agents) = &agents {
+                ended |= pulls.watches.retain_listed(agents);
             }
+            ended |= pulls.watches.retain_paired(|by| peers.get(by).is_some());
         }
         let watches = lock(&state.pulls).watches.list();
         read_at.retain(|t, _| watches.iter().any(|(w, _)| w == t));
@@ -759,8 +756,8 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                     (state.clone(), terminal_id.clone(), watch.url.clone());
                 let by = watch.by.clone();
                 Arc::new(move || {
-                    lock(&state.pulls).watches.watching(&terminal_id, &url)
-                        && lock(&state.peers).get(&by).is_some()
+                    let watching = lock(&state.pulls).watches.watching(&terminal_id, &url);
+                    watching && lock(&state.peers).get(&by).is_some()
                 })
             };
             if pr_watch::wake(&state.drive, agent, &watch, text, &auth)

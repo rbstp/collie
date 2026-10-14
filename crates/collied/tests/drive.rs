@@ -696,6 +696,7 @@ async fn a_pull_request_wake_waits_for_an_idle_agent_on_its_branch_with_an_empty
         )
         .unwrap()
     };
+    herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("idle"));
     let mut agent: collied::herdr::AgentInfo =
         serde_json::from_value(herdr.with(|h| h.snapshot["agents"][0].clone())).unwrap();
     assert_eq!(agent.terminal_id, CLAUDE);
@@ -751,6 +752,15 @@ async fn a_pull_request_wake_waits_for_an_idle_agent_on_its_branch_with_an_empty
         ErrorCode::AgentBlocked
     );
     herdr.with(|h| h.text = screen(PLACEHOLDER));
+    let mut working_now = herdr.with(|h| h.snapshot["agents"][0].clone());
+    working_now["agent_status"] = json!("working");
+    herdr.with(|h| h.gets.push_back(working_now));
+    assert_eq!(
+        pr_watch::wake(&drive, &agent, &watch, text(), &yes()).await,
+        Err((ErrorCode::AgentNotReady, "the agent is busy".to_owned())),
+        "listed idle, read working right before the write"
+    );
+    assert!(herdr.mutations().is_empty());
     assert_eq!(
         pr_watch::wake(&drive, &agent, &watch, text(), &no())
             .await

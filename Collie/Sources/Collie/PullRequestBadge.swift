@@ -4,6 +4,7 @@ import SwiftUI
 struct PullRequestBadge: View {
     let pullRequest: PullRequestSummary
     let watch: PrWatchSummary?
+    var compact = false
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -19,7 +20,7 @@ struct PullRequestBadge: View {
                 }
                 if Self.watching(pullRequest, watch) {
                     Image(systemName: "eye")
-                    Text("Watching")
+                    if !compact { Text("Watching") }
                 }
             }
             .font(.caption2.weight(.medium))

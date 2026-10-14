@@ -321,9 +321,7 @@ impl Watch {
             .flatten()
             .filter_map(|n| n.commit.status_check_rollup)
             .collect();
-        let rolled_up = rollups
-            .iter()
-            .any(|r| r.state.as_deref() == Some("SUCCESS"));
+        let rollup: Vec<Option<String>> = rollups.iter().map(|r| r.state.clone()).collect();
         let checks: Vec<(String, bool, Outcome)> = rollups
             .into_iter()
             .flat_map(|r| r.contexts.nodes.into_iter().flatten())
@@ -346,8 +344,14 @@ impl Watch {
                 .retain(|c| !matches!(c, Change::CheckFailed { name } if !failed.contains(name)));
             self.failed = failed;
             let required = checks.iter().any(|(_, required, _)| *required);
-            // The rollup also counts a required check that has not reported yet.
-            let passed = rolled_up
+            // A rollup still waiting with every listed check done waits on a required check
+            // that has not reported yet.
+            let unreported = rollup.iter().any(|state| match state.as_deref() {
+                Some("EXPECTED") => true,
+                Some("PENDING") => !checks.iter().any(|(_, _, o)| *o == Outcome::Pending),
+                _ => false,
+            });
+            let passed = !unreported
                 && checks
                     .iter()
                     .filter(|(_, r, _)| *r || !required)
@@ -532,14 +536,31 @@ impl Watches {
         stopped
     }
 
-    pub fn forget(&mut self, by: &str) -> bool {
+    /// Ends the watches of terminals missing from `agents`; a list with none is not trusted,
+    /// since herdr answers before it restores its panes.
+    pub fn retain_listed(&mut self, agents: &[AgentInfo]) -> bool {
+        if agents.is_empty() {
+            return false;
+        }
+        self.retain(|terminal_id, _| agents.iter().any(|a| a.terminal_id == terminal_id))
+    }
+
+    pub fn retain_paired(&mut self, paired: impl Fn(&str) -> bool) -> bool {
+        self.retain(|_, w| paired(&w.by))
+    }
+
+    fn retain(&mut self, keep: impl Fn(&str, &Watch) -> bool) -> bool {
         let before = self.watches.len();
-        self.watches.retain(|_, w| w.by != by);
-        let forgot = self.watches.len() != before;
-        if forgot {
+        self.watches.retain(|t, w| keep(t, w));
+        let ended = self.watches.len() != before;
+        if ended {
             self.save();
         }
-        forgot
+        ended
+    }
+
+    pub fn forget(&mut self, by: &str) -> bool {
+        self.retain_paired(|w| w != by)
     }
 
     pub fn list(&self) -> Vec<(String, Watch)> {
@@ -569,7 +590,8 @@ impl Watches {
 
 /// Only an idle or done Claude Code agent still on the watched branch is woken, through
 /// `Driver::prompt` and every one of its guards: with no `expected_draft`, a box holding
-/// text refuses the prompt and is never cleared. `auth` is checked right before the write.
+/// text refuses the prompt and is never cleared. The status is read again right before the
+/// write, and `auth` is checked then too.
 pub async fn wake(
     drive: &Driver,
     agent: &AgentInfo,
@@ -607,7 +629,7 @@ pub async fn wake(
         text,
         expected_draft: None,
     };
-    drive.prompt(params, auth).await.map(drop)
+    drive.prompt_agent(params, auth, true).await.map(drop)
 }
 
 #[cfg(test)]
@@ -615,7 +637,6 @@ mod tests {
     use super::*;
 
     const URL: &str = "https://github.com/cli/cli/pull/14673";
-    const ROLLUP_FAILED: &str = r#""statusCheckRollup":{"state":"FAILURE""#;
     const ROLLUP_PASSED: &str = r#""statusCheckRollup":{"state":"SUCCESS""#;
     const UBUNTU_PASSED: &str =
         r#""build (ubuntu-latest)","status":"COMPLETED","conclusion":"SUCCESS""#;
@@ -661,12 +682,16 @@ mod tests {
         let failing = fixture("watch-failing.json");
         let mut watch = Watch::new(URL, 14673);
         assert_eq!(watch.observe(read(&failing)), None);
-        assert_eq!(watch.pending, vec![failed("govulncheck")]);
+        assert_eq!(
+            watch.pending,
+            vec![failed("govulncheck"), Change::ChecksPassed],
+            "govulncheck is not required; the three required builds passed"
+        );
         assert_eq!(
             watch.prompt().unwrap().as_str(),
-            "Pull request #14673 (https://github.com/cli/cli/pull/14673) changed: check \"govulncheck\" failed."
+            "Pull request #14673 (https://github.com/cli/cli/pull/14673) changed: check \"govulncheck\" failed; all required checks passed."
         );
-        assert_eq!(watch.summary(), "CI failed on #14673");
+        assert_eq!(watch.summary(), "CI failed, checks passed on #14673");
         assert_eq!(watch.woke(), None);
         assert_eq!(watch.observe(read(&failing)), None);
         assert_eq!(watch.prompt(), None, "nothing new on the same head");
@@ -675,32 +700,26 @@ mod tests {
         watch.observe(read(&pushed));
         assert_eq!(
             watch.pending,
-            vec![failed("govulncheck")],
+            vec![failed("govulncheck"), Change::ChecksPassed],
             "a new head reports its checks again"
         );
-        let rerun = pushed
-            .replace(r#""conclusion":"FAILURE""#, r#""conclusion":"SUCCESS""#)
-            .replace(ROLLUP_FAILED, ROLLUP_PASSED);
+        let required = pushed.replace(
+            UBUNTU_PASSED,
+            r#""build (ubuntu-latest)","status":"COMPLETED","conclusion":"FAILURE""#,
+        );
+        watch.observe(read(&required));
+        assert_eq!(
+            watch.pending,
+            vec![failed("govulncheck"), failed("build (ubuntu-latest)")],
+            "a queued pass is dropped when a required check then fails"
+        );
+        let rerun = pushed.replace(r#""conclusion":"FAILURE""#, r#""conclusion":"SUCCESS""#);
         watch.observe(read(&rerun));
         assert_eq!(
             watch.pending,
             vec![Change::ChecksPassed],
-            "a failure fixed before the agent was woken is not told"
+            "failures fixed before the agent was woken are not told"
         );
-        let required = rerun
-            .replace(
-                UBUNTU_PASSED,
-                r#""build (ubuntu-latest)","status":"COMPLETED","conclusion":"FAILURE""#,
-            )
-            .replace(ROLLUP_PASSED, ROLLUP_FAILED);
-        watch.observe(read(&required));
-        assert_eq!(
-            watch.pending,
-            vec![failed("build (ubuntu-latest)")],
-            "a queued pass is dropped when a required check then fails"
-        );
-        watch.observe(read(&rerun));
-        assert_eq!(watch.pending, vec![Change::ChecksPassed]);
         watch.woke();
         watch.observe(read(&pushed));
         assert_eq!(
@@ -727,6 +746,12 @@ mod tests {
         assert_ne!(running, passing);
         watch.observe(read(&running));
         assert!(watch.pending.is_empty());
+        let waiting = passing.replace(ROLLUP_PASSED, r#""statusCheckRollup":{"state":"PENDING""#);
+        watch.observe(read(&waiting));
+        assert!(
+            watch.pending.is_empty(),
+            "a pending rollup with every listed check done waits on an unlisted one"
+        );
         watch.observe(read(&passing));
         assert_eq!(watch.pending, vec![Change::ChecksPassed]);
         watch.woke();
@@ -999,5 +1024,33 @@ mod tests {
         assert!(watches.shown("t3").is_some());
         assert!(watches.stop("t3"));
         assert!(Watches::load(path).list().is_empty());
+    }
+
+    #[test]
+    fn a_watch_ends_with_its_terminal_or_its_phone() {
+        let mut watches = Watches::default();
+        for (terminal_id, by) in [("t1", "nA"), ("t2", "nA"), ("t3", "nB")] {
+            let mut watch = Watch::new(URL, 14673);
+            watch.by = by.into();
+            watches.start(terminal_id, watch);
+        }
+        let agent = |terminal_id: &str| -> AgentInfo {
+            serde_json::from_value(serde_json::json!({
+                "terminal_id": terminal_id, "workspace_id": "w1", "pane_id": "w1:p1",
+                "agent_status": "idle", "agent": "claude",
+            }))
+            .unwrap()
+        };
+        assert!(!watches.retain_listed(&[]), "an empty list is not trusted");
+        assert!(!watches.retain_listed(&[agent("t1"), agent("t2"), agent("t3")]));
+        assert!(watches.retain_listed(&[agent("t1"), agent("t3"), agent("t9")]));
+        assert_eq!(watches.shown("t2"), None);
+        assert!(!watches.retain_paired(|by| by == "nA" || by == "nB"));
+        assert!(
+            watches.retain_paired(|by| by == "nB"),
+            "a phone revoked offline"
+        );
+        assert_eq!(watches.shown("t1"), None);
+        assert!(watches.shown("t3").is_some());
     }
 }

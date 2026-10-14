@@ -558,8 +558,26 @@ impl Driver {
     }
 
     pub async fn prompt(&self, p: AgentPromptParams, auth: &Authorized) -> Reply {
+        self.prompt_agent(p, auth, false).await
+    }
+
+    /// `idle_only` refuses an agent that the fresh read finds working.
+    pub(crate) async fn prompt_agent(
+        &self,
+        p: AgentPromptParams,
+        auth: &Authorized,
+        idle_only: bool,
+    ) -> Reply {
         let _box = self.box_writes.lock().await;
         let a = self.ready_agent(&p.terminal_id).await?;
+        if idle_only
+            && !matches!(
+                flock::status(&a.agent_status),
+                AgentStatus::Idle | AgentStatus::Done
+            )
+        {
+            return fail(ErrorCode::AgentNotReady, "the agent is busy");
+        }
         // herdr pastes a prompt after whatever is in Claude Code's input box.
         if a.agent.as_deref() == Some("claude") {
             // herdr ends a prompt with Enter, which would confirm a dialog scrolled out of view.
