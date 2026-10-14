@@ -47,6 +47,18 @@ pub enum SessionError {
         "the machine does not accept this phone's key: run collied peers revoke for this phone there, then pair again"
     )]
     KeyRefused,
+    #[error("{}", version_mismatch(*.collied, "the machine"))]
+    VersionMismatch { collied: Option<u32> },
+}
+
+pub fn version_mismatch(collied: Option<u32>, machine: &str) -> String {
+    match collied.map(|v| v.cmp(&PROTOCOL_VERSION)) {
+        Some(std::cmp::Ordering::Less) => {
+            format!("Update collied on {machine}: run just collied-install there.")
+        }
+        Some(std::cmp::Ordering::Greater) => "Update the app.".to_owned(),
+        _ => format!("This app and collied on {machine} use different versions. Update both."),
+    }
 }
 
 impl SessionError {
@@ -55,9 +67,7 @@ impl SessionError {
         match self {
             Self::NotPaired | Self::KeyRefused => true,
             Self::Refused(code) => matches!(code, 401 | 403),
-            Self::Server { code, .. } => {
-                matches!(code, ErrorCode::NotPaired | ErrorCode::UnsupportedProtocol)
-            }
+            Self::Server { code, .. } => *code == ErrorCode::NotPaired,
             _ => false,
         }
     }
@@ -97,6 +107,9 @@ impl From<ErrorBody> for SessionError {
     fn from(e: ErrorBody) -> Self {
         match (e.code, e.draft) {
             (ErrorCode::DraftChanged, Some(current)) => Self::DraftChanged { current },
+            (ErrorCode::UnsupportedProtocol, _) => Self::VersionMismatch {
+                collied: e.protocol_version,
+            },
             _ => Self::Server {
                 code: e.code,
                 message: e.message,
@@ -1147,6 +1160,7 @@ mod tests {
                         code: ErrorCode::PairingFailed,
                         message: "pairing window closed".into(),
                         draft: None,
+                        protocol_version: None,
                     },
                 },
             )
@@ -1174,6 +1188,48 @@ mod tests {
         ));
         assert!(!err.is_auth());
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn version_mismatch_says_which_side_to_update() {
+        for (collied, message) in [
+            (
+                Some(PROTOCOL_VERSION - 1),
+                "Update collied on Mac mini: run just collied-install there.",
+            ),
+            (Some(PROTOCOL_VERSION + 1), "Update the app."),
+            (
+                None,
+                "This app and collied on Mac mini use different versions. Update both.",
+            ),
+        ] {
+            let (session, server) = pair_of(Some(WS_SUBPROTOCOL)).await;
+            let (mut session, mut ws) = (session.unwrap(), server.unwrap());
+            let server = tokio::spawn(async move {
+                let hello = read(&mut ws).await;
+                write(
+                    &mut ws,
+                    ServerFrame::Error {
+                        id: Some(hello.id),
+                        error: ErrorBody {
+                            code: ErrorCode::UnsupportedProtocol,
+                            message: "unsupported protocol version".into(),
+                            draft: None,
+                            protocol_version: collied,
+                        },
+                    },
+                )
+                .await;
+            });
+            let err = session.hello().await.unwrap_err();
+            let SessionError::VersionMismatch { collied: got } = err else {
+                panic!("{err:?}")
+            };
+            assert_eq!(got, collied);
+            assert!(!err.is_auth(), "an update fixes it, not pairing again");
+            assert_eq!(version_mismatch(got, "Mac mini"), message);
+            server.await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -1219,6 +1275,7 @@ mod tests {
                         code: ErrorCode::NotFound,
                         message: "no such agent".into(),
                         draft: None,
+                        protocol_version: None,
                     },
                 },
             )
@@ -1264,6 +1321,7 @@ mod tests {
                         code: ErrorCode::NotPaired,
                         message: "not paired".into(),
                         draft: None,
+                        protocol_version: None,
                     },
                 },
             )
@@ -1334,6 +1392,7 @@ mod tests {
                         code: ErrorCode::HerdrUnavailable,
                         message: "herdr unavailable".into(),
                         draft: None,
+                        protocol_version: None,
                     },
                 },
             )
@@ -1364,6 +1423,7 @@ mod tests {
                         code: ErrorCode::NotPaired,
                         message: "not paired".into(),
                         draft: None,
+                        protocol_version: None,
                     },
                 },
             )
@@ -1415,6 +1475,7 @@ mod tests {
                         code: ErrorCode::NotImplemented,
                         message: "not implemented".into(),
                         draft: None,
+                        protocol_version: None,
                     },
                 },
             )

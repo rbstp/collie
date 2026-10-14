@@ -438,6 +438,15 @@
         },
         "message": {
           "type": "string"
+        },
+        "protocol_version": {
+          "description": "With `unsupported_protocol`: collied's protocol version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [

@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::pin::{self, PinError};
 use crate::reach::{Reachability, now_ms};
-use crate::session::{FlockState, Reply, Seed, Session, SessionError, lock};
+use crate::session::{FlockState, Reply, Seed, Session, SessionError, lock, version_mismatch};
 use crate::store::{Machine, MachineKind, write_atomic};
 
 const BACKOFF: [Duration; 6] = [
@@ -554,7 +554,8 @@ impl Conn {
     /// no session left to probe.
     pub fn resume(self: &Arc<Self>, background: Duration, suspended: bool) {
         let waiting = self.shared.resume(Instant::now());
-        if waiting || suspended || background >= FOREGROUND_RECONNECT {
+        let stopped = lock(&self.shared.link).phase == LinkPhase::Stopped;
+        if waiting || stopped || suspended || background >= FOREGROUND_RECONNECT {
             self.reconnect_now();
             return;
         }
@@ -716,6 +717,13 @@ async fn supervise(
             }
             Err(e) => e,
         };
+        // Only an update fixes it: wait for a resume or pull to refresh, then dial again.
+        if let ConnectError::Session(SessionError::VersionMismatch { collied }) = err {
+            let message = version_mismatch(collied, &machine.label);
+            shared.set(LinkPhase::Stopped, Some(message));
+            wake.notified().await;
+            continue;
+        }
         let Some(delay) = backoff.failed(&shared, &err, Instant::now()) else {
             return;
         };
@@ -1193,6 +1201,40 @@ mod tests {
                 "a later wait is not cut short ({phase:?})"
             );
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn resume_redials_a_stopped_link() {
+        let (_suspend, suspended) = watch::channel(true);
+        let machine = Machine {
+            id: "m".into(),
+            label: "m".into(),
+            host: "m".into(),
+            port: 0,
+            node_id: "n".into(),
+            kind: MachineKind::Mac,
+            key: String::new(),
+            terminal_key: String::new(),
+            default_label: None,
+        };
+        let conn = Arc::new(Conn::spawn(
+            &tokio::runtime::Handle::current(),
+            machine,
+            NodeSlot::default(),
+            IdentitySlot::default(),
+            PushSlot::default(),
+            Arc::default(),
+            suspended,
+        ));
+        lock(&conn.shared.link).phase = LinkPhase::Stopped;
+        let wake = conn.wake.clone();
+        let parked = tokio::spawn(async move { wake.notified().await });
+        tokio::task::yield_now().await;
+        conn.resume(Duration::ZERO, false);
+        tokio::time::timeout(PROBE_TIMEOUT / 2, parked)
+            .await
+            .expect("a short resume wakes a parked supervisor at once")
+            .unwrap();
     }
 
     #[tokio::test]

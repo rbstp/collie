@@ -3584,6 +3584,7 @@ mod tests {
                 code: ErrorCode::DraftChanged,
                 message: "the Mac's input box has unsent text".into(),
                 draft: draft.map(Into::into),
+                protocol_version: None,
             }))
         };
         let e = changed(Some("typed on the Mac"));
@@ -4963,6 +4964,7 @@ mod tailnet_tests {
                                 code,
                                 message: "fake".into(),
                                 draft: None,
+                                protocol_version: None,
                             },
                         },
                     };
