@@ -1,3 +1,5 @@
+use unicode_width::UnicodeWidthStr;
+
 use crate::{Label, NoticeDigit};
 
 const JUMP: &str = "Jump to bottom";
@@ -10,15 +12,16 @@ const NEW: &str = " new message";
 /// a prompt's text, drawn in the same style, no escape separates them, so the banner is then
 /// found inside the run, by its padding and its column. Replies quoting it have no background;
 /// prompt text matches when a run of it is exactly a banner with a space on each side, or when
-/// it holds one, so padded, centered on a row as wide as the screen.
+/// it holds one, so padded, centered on a row as wide as the screen. Columns are display
+/// widths, as the terminal lays them out.
 pub fn jump_banner(screen: &str) -> bool {
     screen.split('\n').any(|row| {
         let row = row.strip_suffix('\r').unwrap_or(row);
-        let width = runs(row).map(|(_, run)| run.chars().count()).sum();
+        let width = runs(row).map(|(_, run)| run.width()).sum();
         let mut column = 0;
         runs(row).any(|(background, run)| {
             let at = column;
-            column += run.chars().count();
+            column += run.width();
             background && (banner(run) || centered(run, at, width))
         })
     })
@@ -44,8 +47,8 @@ fn centered(run: &str, at: usize, width: usize) -> bool {
         else {
             return false;
         };
-        let column = at + run[..start].chars().count();
-        let len = run[start..stop].chars().count();
+        let column = at + run[..start].width();
+        let len = run[start..stop].width();
         run[..start].ends_with(' ')
             && run[stop..].starts_with(' ')
             && (2 * column + len).abs_diff(width) <= 1
@@ -378,6 +381,26 @@ mod tests {
             assert!(jump_banner(screen), "{i}");
             assert!(jump_banner(&screen.replace('\n', "\r\n")), "{i}");
             assert!(!jump_banner(&strip_sgr(screen)), "{i}");
+        }
+        // Columns are display widths: wide and combining characters around it keep it centered.
+        for (i, swaps) in [
+            vec![("read these", "\u{8aad}\u{6e56}\u{6e56}hese")],
+            vec![("bered lines", "\u{6e56}\u{6e56}d lines")],
+            vec![
+                ("lines, th Jump", "lines, \u{1f30a} Jump"),
+                ("about lakes.", "\u{1f30a}\u{1f30a}\u{1f30a}lakes."),
+            ],
+            vec![("read these", "re\u{301}ad the\u{301}se")],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let screen = swaps.into_iter().fold(
+                captured!("jump-prompt-both.ansi.txt").to_owned(),
+                |s, (from, to)| s.replacen(from, to, 1),
+            );
+            assert_ne!(screen, captured!("jump-prompt-both.ansi.txt"), "{i}");
+            assert!(jump_banner(&screen), "{i}");
         }
         // Inside prompt text, only centered and padded.
         for (i, (from, to)) in [

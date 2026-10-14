@@ -1539,6 +1539,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "unicode-width",
 ]
 
 [[package]]
