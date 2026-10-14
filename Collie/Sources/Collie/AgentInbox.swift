@@ -7,9 +7,15 @@ struct AgentInbox<Menu: View>: View {
     let follows: FollowModel?
     let seen: SeenAgents
     let markUnseen: (AgentSummary, AgentRoute) -> Void
+    let snoozed: SnoozedAgents
+    let snooze: (AgentSummary, AgentRoute, Date?) -> Void
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
     @State private var query = ""
     @State private var filter = InboxFilter.all
+    @State private var showsSnoozed = false
+    @State private var snoozing: InboxItem?
+    @State private var custom: InboxItem?
+    @State private var customWake = Date.now
 
     var body: some View {
         let items = InboxItem.items(in: entries)
@@ -21,7 +27,7 @@ struct AgentInbox<Menu: View>: View {
                     .padding(.vertical, 8)
             }
             .scrollIndicators(.hidden)
-            TimelineView(.periodic(from: .now, by: 60)) { context in
+            TimelineView(InboxSchedule(wakes: snoozed.snoozes.values.map(\.wake))) { context in
                 List {
                     if let notice {
                         Label(notice, systemImage: "exclamationmark.triangle")
@@ -31,41 +37,132 @@ struct AgentInbox<Menu: View>: View {
                     if entries.isEmpty {
                         NoMachines()
                     }
-                    inbox(items.filter { filter.includes($0, seen: seen, now: context.date) && $0.matches(query) }, now: context.date)
+                    inbox(items.filter { $0.matches(query) }, now: context.date)
                 }
             }
         }
         .searchable(text: $query, prompt: "Search agents")
+        .confirmationDialog("Snooze until", isPresented: Binding { snoozing != nil } set: { if !$0 { snoozing = nil } },
+                            titleVisibility: .visible, presenting: snoozing) { item in
+            let morning = SnoozedAgents.nextMorning(after: .now)
+            Button("1 hour") { snooze(item.agent, item.route, .now.addingTimeInterval(3600)) }
+            Button("4 hours") { snooze(item.agent, item.route, .now.addingTimeInterval(4 * 3600)) }
+            Button(Calendar.current.isDateInToday(morning) ? "Today 8:00" : "Tomorrow 8:00") {
+                snooze(item.agent, item.route, morning)
+            }
+            Button("Custom") {
+                customWake = .now.addingTimeInterval(3600)
+                custom = item
+            }
+        }
+        .sheet(item: $custom) { item in
+            NavigationStack {
+                Form {
+                    DatePicker("Wake at", selection: $customWake, in: Date.now..., displayedComponents: [.date, .hourAndMinute])
+                }
+                .navigationTitle("Snooze")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { custom = nil }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Snooze") {
+                            snooze(item.agent, item.route, customWake)
+                            custom = nil
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
     }
 
     @ViewBuilder
     private func inbox(_ items: [InboxItem], now: Date) -> some View {
-        let groups = InboxSection.grouped(items, now: now)
+        let active = items.filter { snoozed.wake(of: $0.agent, route: $0.route, now: now) == nil && filter.includes($0, seen: seen, now: now) }
+        let asleep = items.compactMap { item in snoozed.wake(of: item.agent, route: item.route, now: now).map { (item, $0) } }
+            .sorted { ($0.1, $0.0.route.terminalId) < ($1.1, $1.0.route.terminalId) }
+        let groups = InboxSection.grouped(active, now: now)
         ForEach(InboxSection.allCases, id: \.self) { section in
             if let rows = groups[section] {
                 Section(section.title) {
-                    ForEach(rows) { item in
-                        NavigationLink(value: item.route) {
-                            InboxRow(item: item, followed: follows?.isFollowing(item.route) == true,
-                                     unseen: item.agent.status == .done && !seen.isSeen(item.agent, route: item.route), now: now)
-                        }
-                        .contextMenu {
-                            if seen.isSeen(item.agent, route: item.route) {
-                                Button("Mark unseen", systemImage: "circle.fill") { markUnseen(item.agent, item.route) }
-                                    .tint(.primary)
-                                Divider()
-                            }
-                            menu(item.agent, item.route)
-                        }
-                        .opacity(item.linkDown ? 0.5 : 1)
-                    }
+                    ForEach(rows) { row($0, wake: nil, now: now) }
                 }
             }
         }
-        if items.isEmpty && (entries.contains { $0.flock?.details != nil } || !query.isEmpty || filter != .all) {
+        if !asleep.isEmpty {
+            Section {
+                if showsSnoozed {
+                    ForEach(asleep, id: \.0.id) { row($0.0, wake: $0.1, now: now) }
+                }
+            } header: {
+                Button {
+                    showsSnoozed.toggle()
+                } label: {
+                    HStack {
+                        Text("Snoozed (\(asleep.count))")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .rotationEffect(.degrees(showsSnoozed ? 90 : 0))
+                            .accessibilityHidden(true)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(showsSnoozed ? "Expanded" : "Collapsed")
+            }
+        }
+        if active.isEmpty && (asleep.isEmpty || filter != .all) && (entries.contains { $0.flock?.details != nil } || !query.isEmpty || filter != .all) {
             Text(query.isEmpty && filter == .inactive ? "No inactive agents"
                  : query.isEmpty && filter == .all ? "No agents running" : "No matching agents")
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private func row(_ item: InboxItem, wake: Date?, now: Date) -> some View {
+        let isSeen = seen.isSeen(item.agent, route: item.route)
+        return NavigationLink(value: item.route) {
+            InboxRow(item: item, followed: follows?.isFollowing(item.route) == true,
+                     unseen: item.agent.status == .done && !isSeen, wake: wake, now: now)
+        }
+        .contextMenu {
+            if wake != nil {
+                Button("Wake now", systemImage: "alarm") { snooze(item.agent, item.route, nil) }
+                    .tint(.primary)
+                Divider()
+            }
+            if isSeen {
+                Button("Mark unseen", systemImage: "circle.fill") { markUnseen(item.agent, item.route) }
+                    .tint(.primary)
+                Divider()
+            }
+            menu(item.agent, item.route)
+        }
+        .swipeActions(edge: .leading) {
+            if item.agent.status != .blocked {
+                Button("Snooze", systemImage: "moon.zzz") { snoozing = item }
+                    .tint(.indigo)
+            }
+        }
+        .opacity(item.linkDown ? 0.5 : 1)
+    }
+}
+
+/// Every minute for the elapsed times, plus each wake time so a snoozed agent returns on time.
+struct InboxSchedule: TimelineSchedule {
+    let wakes: [Date]
+
+    func entries(from startDate: Date, mode: TimelineScheduleMode) -> AnyIterator<Date> {
+        var minute = startDate
+        var wakes = wakes.filter { $0 > startDate }.sorted()
+        return AnyIterator {
+            if let wake = wakes.first, wake < minute {
+                wakes.removeFirst()
+                return wake
+            }
+            defer { minute += 60 }
+            return minute
         }
     }
 }
@@ -163,6 +260,7 @@ private struct InboxRow: View {
     let item: InboxItem
     let followed: Bool
     let unseen: Bool
+    let wake: Date?
     let now: Date
 
     var body: some View {
@@ -215,10 +313,19 @@ private struct InboxRow: View {
                         .foregroundStyle(.tint)
                         .accessibilityLabel("Unseen completion")
                 }
-                Text(Elapsed.compact(sinceMs: item.agent.inboxActivityMs, now: now))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("\(Elapsed.spoken(sinceMs: item.agent.inboxActivityMs, now: now)) ago")
+                if let wake {
+                    let format: Date.FormatStyle = Calendar.current.isDate(wake, inSameDayAs: now)
+                        ? .dateTime.hour().minute() : .dateTime.month(.abbreviated).day().hour().minute()
+                    Text(wake.formatted(format))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Snoozed until \(wake.formatted(date: .abbreviated, time: .shortened))")
+                } else {
+                    Text(Elapsed.compact(sinceMs: item.agent.inboxActivityMs, now: now))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("\(Elapsed.spoken(sinceMs: item.agent.inboxActivityMs, now: now)) ago")
+                }
                 if let left = agent.contextLeft {
                     ContextRing(left: left)
                 }

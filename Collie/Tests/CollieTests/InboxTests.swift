@@ -91,6 +91,104 @@ private func entry(
     #expect(seen.markers.isEmpty)
 }
 
+@Test func snoozeLastsUntilItsWakeTimeAndSurvivesReload() {
+    let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: file) }
+    let route = AgentRoute(machineId: "m1", terminalId: "a")
+    let working = agent("a", .working, activity: nowMs, since: 5)
+    let wake = now.addingTimeInterval(3600)
+    var snoozed = SnoozedAgents()
+    snoozed.snooze(working, route: route, until: wake)
+    snoozed.save(to: file)
+    snoozed = SnoozedAgents.load(from: file)
+    #expect(snoozed.wake(of: working, route: route, now: now) == wake)
+    #expect(snoozed.wake(of: working, route: route, now: wake.addingTimeInterval(-1)) == wake)
+    #expect(snoozed.wake(of: working, route: route, now: wake) == nil)
+    #expect(snoozed.wake(of: working, route: AgentRoute(machineId: "m2", terminalId: "a"), now: now) == nil)
+    snoozed.wakeNow(route)
+    #expect(snoozed.wake(of: working, route: route, now: now) == nil)
+}
+
+@Test func snoozeWakesWhenTheAgentBlocksOrFinishesANewTurn() {
+    let route = AgentRoute(machineId: "m1", terminalId: "a")
+    let wake = now.addingTimeInterval(3600)
+    var snoozed = SnoozedAgents()
+    snoozed.snooze(agent("a", .working, activity: nowMs, since: 5), route: route, until: wake)
+    #expect(snoozed.wake(of: agent("a", .idle, activity: nowMs, since: 9), route: route, now: now) == wake)
+    #expect(snoozed.wake(of: agent("a", .blocked, activity: nowMs, since: 9), route: route, now: now) == nil)
+    #expect(snoozed.wake(of: agent("a", .done, activity: nowMs, since: 9), route: route, now: now) == nil)
+    snoozed.snooze(agent("a", .done, activity: nowMs, since: 5), route: route, until: wake)
+    #expect(snoozed.wake(of: agent("a", .done, activity: nowMs, since: 5), route: route, now: now) == wake)
+    #expect(snoozed.wake(of: agent("a", .done, activity: nowMs, since: 9), route: route, now: now) == nil)
+    snoozed.snooze(agent("a", .blocked, activity: nowMs, since: 5), route: route, until: wake)
+    #expect(snoozed.wake(of: agent("a", .blocked, activity: nowMs, since: 5), route: route, now: now) == nil)
+    #expect(snoozed.wake(of: agent("a", .working, activity: nowMs, since: 9), route: route, now: now) == wake)
+}
+
+@Test func anEarlyWakeIsFinal() {
+    let route = AgentRoute(machineId: "m1", terminalId: "a")
+    let wake = now.addingTimeInterval(3600)
+    var snoozed = SnoozedAgents()
+    for woke in [agent("a", .blocked, activity: nowMs, since: 7), agent("a", .done, activity: nowMs, since: 7)] {
+        snoozed.snooze(agent("a", .working, activity: nowMs, since: 5), route: route, until: wake)
+        snoozed.endWoken([entry("m1", [agent("a", .working, activity: nowMs, since: 5)], link: .offline)])
+        #expect(snoozed.wake(of: agent("a", .working, activity: nowMs, since: 5), route: route, now: now) == wake)
+        snoozed.endWoken([entry("m1", [woke], link: .offline)])
+        #expect(snoozed.snoozes.isEmpty)
+        #expect(snoozed.wake(of: agent("a", .working, activity: nowMs, since: 9), route: route, now: now) == nil)
+    }
+    snoozed.snooze(agent("a", .working, activity: nowMs, since: 5), route: route, until: wake)
+    let first = snoozed.wakeNow(route)
+    let second = snoozed.wakeNow(route)
+    #expect(first && !second)
+}
+
+@Test func snoozesArePrunedWhenGoneWokenOrExpired() {
+    let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: file) }
+    let wake = now.addingTimeInterval(3600)
+    var snoozed = SnoozedAgents()
+    for id in ["kept", "closed", "woken", "expired"] {
+        snoozed.snooze(agent(id, .working, activity: nil, since: 5), route: AgentRoute(machineId: "m1", terminalId: id),
+                       until: id == "expired" ? now : wake)
+    }
+    snoozed.snooze(agent("a", .working, activity: nil, since: 5), route: AgentRoute(machineId: "m2", terminalId: "a"), until: wake)
+    snoozed.prune([entry("m1", [], link: .offline), entry("m2", [])], now: now)
+    #expect(Set(snoozed.snoozes.keys.map(\.terminalId)) == Set(["kept", "closed", "woken", "a"]))
+    let loaded = entry("m1", [agent("kept", .working, activity: nil, since: 5), agent("woken", .blocked, activity: nil, since: 9)], loaded: true)
+    snoozed.prune([loaded, entry("m2", [])], now: now)
+    #expect(Set(snoozed.snoozes.keys.map(\.terminalId)) == Set(["kept", "a"]))
+    snoozed.prune([loaded], now: now)
+    #expect(Array(snoozed.snoozes.keys) == [AgentRoute(machineId: "m1", terminalId: "kept")])
+    snoozed.save(to: file)
+    SnoozedAgents.forget(machineId: "m1", file: file)
+    #expect(SnoozedAgents.load(from: file).snoozes.isEmpty)
+}
+
+@Test func nextMorningIsTheNextEightOClock() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try #require(TimeZone(identifier: "America/Toronto"))
+    func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) throws -> Date {
+        try #require(calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute)))
+    }
+    #expect(SnoozedAgents.nextMorning(after: try date(2026, 10, 13, 15), calendar: calendar) == (try date(2026, 10, 14, 8)))
+    #expect(SnoozedAgents.nextMorning(after: try date(2026, 10, 13, 1), calendar: calendar) == (try date(2026, 10, 13, 8)))
+    #expect(SnoozedAgents.nextMorning(after: try date(2026, 10, 13, 8), calendar: calendar) == (try date(2026, 10, 14, 8)))
+    #expect(SnoozedAgents.nextMorning(after: try date(2026, 12, 31, 23, 59), calendar: calendar) == (try date(2027, 1, 1, 8)))
+    let fallBack = SnoozedAgents.nextMorning(after: try date(2026, 10, 31, 22), calendar: calendar)
+    #expect(fallBack == (try date(2026, 11, 1, 8)))
+    #expect(fallBack.timeIntervalSince(try date(2026, 10, 31, 22)) == 11 * 3600)
+    let springForward = SnoozedAgents.nextMorning(after: try date(2027, 3, 14, 1), calendar: calendar)
+    #expect(springForward == (try date(2027, 3, 14, 8)))
+    #expect(springForward.timeIntervalSince(try date(2027, 3, 14, 1)) == 6 * 3600)
+}
+
+@Test func inboxScheduleAddsWakeTimesBetweenMinutes() {
+    let schedule = InboxSchedule(wakes: [now.addingTimeInterval(90), now.addingTimeInterval(-10), now.addingTimeInterval(30)])
+    let entries = Array(AnySequence { schedule.entries(from: now, mode: .normal) }.prefix(5))
+    #expect(entries == [0, 30, 60, 90, 120].map { now.addingTimeInterval($0) })
+}
+
 @Test func inboxSectionsFollowStatusAndLastActivity() {
     let hour: UInt64 = 3_600_000
     #expect(InboxSection.of(agent("a", .working, activity: nil), now: now) == .working)
