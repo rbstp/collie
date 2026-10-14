@@ -469,6 +469,26 @@ fn text(value: &Value) -> String {
     }
 }
 
+fn command(s: &str) -> Option<String> {
+    if !s.starts_with("<command-name>") && !s.starts_with("<command-message>") {
+        return None;
+    }
+    let tag = |t: &str| {
+        s.split_once(&format!("<{t}>"))?
+            .1
+            .split_once(&format!("</{t}>"))
+            .map(|(x, _)| x)
+    };
+    let name = tag("command-name").filter(|n| n.starts_with('/'))?;
+    let line = format!("{name} {}", tag("command-args").unwrap_or(""))
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .filter(|c| !c.is_control())
+        .take(120)
+        .collect::<String>();
+    Some(line.trim().to_owned())
+}
+
 fn normalize(
     v: &Value,
     kind: Kind,
@@ -513,21 +533,31 @@ fn normalize(
                 return out;
             }
             let notice = v["origin"]["kind"] == "task-notification";
+            let local = v["message"]["content"]
+                .as_str()
+                .filter(|_| v["promptSource"].is_null() && v["isMeta"] != true);
+            let slash = local.and_then(command);
             if parent.is_none()
                 && v["type"] == "user"
-                && (v["isMeta"] == true || v["isCompactSummary"] == true || notice)
+                && (v["isMeta"] == true
+                    || v["isCompactSummary"] == true
+                    || notice
+                    || slash.is_some()
+                    || local.is_some_and(|s| s.starts_with("<local-command-stdout>")))
             {
                 let event = if v["isMeta"] == true && v["origin"]["kind"] == "peer" {
-                    Some("Subagent finished")
+                    Some("Subagent finished".into())
+                } else if notice {
+                    Some("Background task finished".into())
                 } else {
-                    notice.then_some("Background task finished")
+                    slash
                 };
                 return event
                     .filter(|_| query.is_empty())
                     .map(|text| HistoryMessage {
                         id: format!("{base}:0"),
                         role: "event".into(),
-                        text: text.into(),
+                        text,
                         tool: None,
                         call_id: None,
                         truncated: false,
@@ -1461,6 +1491,96 @@ mod tests {
         for query in ["injected", "finished"] {
             let search = t.history(&a, &params(None, None, Some(query)));
             assert_eq!(search.messages.len(), usize::from(query == "injected"));
+        }
+    }
+
+    #[test]
+    fn slash_commands_show_as_markers_and_hide_their_output() {
+        let user = |uuid: &str, extra: Value, content: Value| {
+            let mut v = json!({"type":"user","uuid":uuid,"sessionId":CLAUDE,
+                "message":{"role":"user","content":content}});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            line(v)
+        };
+        let invoke = |name: &str, args: &str| {
+            format!(
+                "<command-name>{name}</command-name>\n            <command-message>{}</command-message>\n            <command-args>{args}</command-args>",
+                &name[1..]
+            )
+        };
+        let stdout = |text: &str| {
+            json!(format!(
+                "<local-command-stdout>{text}</local-command-stdout>"
+            ))
+        };
+        let content = [
+            user("exit", json!({}), json!(invoke("/exit", ""))),
+            user("exit-out", json!({}), stdout("(no content)")),
+            user("effort", json!({}), json!(invoke("/effort", "high"))),
+            user("effort-out", json!({}), stdout("Set effort level to high")),
+            user(
+                "skill",
+                json!({"origin":{"kind":"human"}}),
+                json!("<command-message>review</command-message>\n<command-name>/review</command-name>\n<command-args>pr 12</command-args>"),
+            ),
+            user(
+                "skill-body",
+                json!({"isMeta":true}),
+                json!([{"type":"text","text":"<command-message>review</command-message>\n<command-name>review</command-name>\n<skill-format>true</skill-format>\nskill body"}]),
+            ),
+            user(
+                "long",
+                json!({}),
+                json!(invoke("/plan", &format!("do\u{1b}[31m it\nnow {}", "x".repeat(300)))),
+            ),
+            line(json!({"type":"system","subtype":"local_command","uuid":"sys","sessionId":CLAUDE,
+                "isMeta":false,"level":"info","content":invoke("/model", "")})),
+            line(json!({"type":"system","subtype":"local_command","uuid":"sys-out","sessionId":CLAUDE,
+                "isMeta":false,"level":"info","content":"<local-command-stdout></local-command-stdout>",
+                "commandRun":{"command":"model","args":""}})),
+            user(
+                "typed",
+                json!({"origin":{"kind":"human"},"promptSource":"typed"}),
+                json!(invoke("/exit", "typed")),
+            ),
+            user(
+                "typed-out",
+                json!({"origin":{"kind":"human"},"promptSource":"typed"}),
+                stdout("typed"),
+            ),
+            user("angle", json!({}), json!("<div>typed exit</div>")),
+        ]
+        .concat();
+        let (_dir, t, a, _path) = setup("claude", &content);
+        let p = t.history(&a, &params(None, None, None));
+        let shown = p
+            .messages
+            .iter()
+            .map(|m| (m.id.as_str(), m.role.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shown,
+            [
+                ("exit:0", "event"),
+                ("effort:0", "event"),
+                ("skill:0", "event"),
+                ("long:0", "event"),
+                ("typed:0", "user"),
+                ("typed-out:0", "user"),
+                ("angle:0", "user"),
+            ]
+        );
+        assert_eq!(p.messages[0].text, "/exit");
+        assert_eq!(p.messages[1].text, "/effort high");
+        assert_eq!(p.messages[2].text, "/review pr 12");
+        let long = &p.messages[3].text;
+        assert!(long.starts_with("/plan do[31m it now xx"), "{long}");
+        assert_eq!(long.chars().count(), 120);
+        for (query, hits) in [("exit", 2), ("effort", 0), ("review", 0), ("no content", 0)] {
+            let search = t.history(&a, &params(None, None, Some(query)));
+            assert_eq!(search.messages.len(), hits, "{query}");
         }
     }
 }
