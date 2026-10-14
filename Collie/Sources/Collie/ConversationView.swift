@@ -242,9 +242,16 @@ struct ConversationView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .scrollPosition(id: $visibleID, anchor: .top)
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
-                .onScrollGeometryChange(for: Bool.self) { geo in
-                    geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 60
-                } action: { _, bottom in atBottom = bottom }
+                .onScrollGeometryChange(for: ScrollEdge.self) { geo in
+                    ScrollEdge(size: geo.containerSize, atBottom: geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 60)
+                } action: { old, new in
+                    // The position follows the top row, so a rotation or the keyboard would leave the latest messages out of view.
+                    if old.atBottom && old.size != new.size && submitted.isEmpty {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    } else {
+                        atBottom = new.atBottom
+                    }
+                }
                 .onChange(of: model.session) { _, _ in
                     visibleID = nil
                     selectedMatch = nil
@@ -271,6 +278,11 @@ struct ConversationView: View {
         selectedMatch = model.messages[index].id
         proxy.scrollTo("message:\(model.messages[index].id)", anchor: .top)
     }
+}
+
+private struct ScrollEdge: Equatable {
+    let size: CGSize
+    let atBottom: Bool
 }
 
 struct ConversationRowView: View {

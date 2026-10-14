@@ -18,8 +18,11 @@ struct AgentScreen: View {
     @State private var showingChanges = false
     @State private var showingChat = DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat
     @State private var searchingChat = false
+    @State private var keyboardShown = false
+    @State private var height: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     init(
         core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel?, follows: FollowModel?,
@@ -58,17 +61,29 @@ struct AgentScreen: View {
         .disabled(model.archiving)
     }
 
+    private var typingInLandscape: Bool { keyboardShown && verticalSizeClass == .compact }
+
     var body: some View {
         VStack(spacing: 0) {
-            AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil, showingChat: $showingChat)
+            if !typingInLandscape {
+                AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil, showingChat: $showingChat)
+            }
             if let notice = model.paneNotice {
                 PaneCard(model: model, notice: notice)
             }
             if let approvals {
-                ForEach(approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)) { item in
+                let cards = ForEach(approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)) { item in
                     ApprovalCard(model: approvals, item: item, sendAnswer: model.typeAnswer)
                         .padding(.horizontal)
                         .background(Color.red.opacity(0.08))
+                }
+                if verticalSizeClass == .compact {
+                    // The cards would push the composer off screen, so they scroll within part of the height.
+                    ScrollView { VStack(spacing: 0) { cards } }
+                        .frame(maxHeight: height / (typingInLandscape ? 3 : 2))
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    cards
                 }
                 if let notice = approvals.notice {
                     Text(notice).font(.footnote).padding(.horizontal).frame(maxWidth: .infinity, alignment: .leading)
@@ -134,9 +149,11 @@ struct AgentScreen: View {
                 }
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
+        .toolbar(typingInLandscape ? .hidden : .automatic, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) { SessionTitle(title: title) }
                 .sharedBackgroundVisibility(.hidden)
@@ -222,6 +239,12 @@ struct AgentScreen: View {
             if closed { dismiss() }
         }
         .task { await model.run() }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+            // A hardware keyboard shows only its shortcut bar, or a frame off screen.
+            guard let screen = note.object as? UIScreen, let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            keyboardShown = frame.intersection(screen.bounds).height > 100
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardShown = false }
         .onAppear { model.reloadGestures() }
         .onChange(of: scenePhase) { _, phase in
             model.dictation.scenePhaseChanged(to: phase)
@@ -610,6 +633,7 @@ private struct PromptBar: View {
     @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
     @State private var pickingPrompt = false
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var expanded: Bool {
         editing || typingCommand || model.dictation.isActive || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
@@ -637,7 +661,7 @@ private struct PromptBar: View {
                 .disabled(model.sendingPrompt)
                 .scrollIndicators(.hidden)
             }
-            PromptInputLayout(expanded: expanded, showsStatus: model.dictation.isActive) {
+            PromptInputLayout(expanded: expanded && (verticalSizeClass != .compact || model.dictation.isActive), showsStatus: model.dictation.isActive) {
                 ZStack {
                     if !model.answering && !model.isTerminal {
                         AttachmentMenu(
@@ -664,7 +688,7 @@ private struct PromptBar: View {
                                 model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: { model.typed($0) }),
                                 selection: $selection, axis: .vertical
                             )
-                                .lineLimit(expanded ? 1...5 : 1...1)
+                                .lineLimit(expanded ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
                                 .focused($editing)
                                 .disabled(model.dictation.isActive)
                         }

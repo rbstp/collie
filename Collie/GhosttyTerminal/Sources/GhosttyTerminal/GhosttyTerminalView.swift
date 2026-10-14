@@ -51,7 +51,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private var snapshot: String?
     private var renderDeferred = false
     private let scrollEnd = ScrollEnd()
-    private var frameData: TerminalFrame?
+    private(set) var frameData: TerminalFrame?
     private var renderedColumns: Int?
     private var followsBottom = true
     private var laidOutSize = CGSize.zero
@@ -123,7 +123,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
         gesturesChanged()
         panGestureRecognizer.addTarget(self, action: #selector(panned(_:)))
         scrollEnd.ended = { [weak self] in
-            if self?.renderDeferred == true { self?.render() }
+            guard let self else { return }
+            followsBottom = atBottom
+            if renderDeferred { render() }
         }
         delegate = scrollEnd
         for handle in [startHandle, endHandle] {
@@ -192,7 +194,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private func prepare() {
         guard let frameData else { return }
         if bounds.height > 0 {
-            followsBottom = contentOffset.y >= contentSize.height + adjustedContentInset.bottom - bounds.height - 1
+            followsBottom = atBottom
         }
         canvas.prepare(frameData)
         let m = canvas.metrics
@@ -212,7 +214,17 @@ public final class GhosttyTerminalUIView: UIScrollView {
         if pinShortContent() || bounds.size != laidOutSize {
             laidOutSize = bounds.size
             if followsBottom { scrollToBottom() }
-            if wraps && wrapColumns != renderedColumns { render() }
+            if wraps && wrapColumns != renderedColumns {
+                let (old, height, offset, follows) = (frameData, contentSize.height, contentOffset.y, followsBottom)
+                render()
+                // render() measures the bottom against the old content in the new bounds.
+                followsBottom = follows
+                if follows {
+                    scrollToBottom()
+                } else if let old, height > 0 {
+                    keepTopLine(of: old, height: height, offset: offset)
+                }
+            }
         }
         if canvas.frame != bounds {
             canvas.frame = bounds
@@ -475,6 +487,30 @@ public final class GhosttyTerminalUIView: UIScrollView {
         return true
     }
 
+    /// Keeps the line at the top of the viewport there across a rewrap, or its proportional place when soft wraps are unknown.
+    private func keepTopLine(of old: TerminalFrame, height: CGFloat, offset: CGFloat) {
+        guard let new = frameData else { return }
+        let (m, inset) = (canvas.metrics, adjustedContentInset)
+        guard !old.wrapsUnknown && !new.wrapsUnknown else {
+            contentOffset.y = TerminalFontSize.pinchedOffset(
+                offset + inset.top, offset: offset, from: height, to: contentSize.height,
+                viewport: bounds.height, leading: inset.top, trailing: inset.bottom
+            )
+            return
+        }
+        let top = min(max(Int((offset + inset.top - m.inset) / m.height), 0), max(old.rows - 1, 0))
+        let line = (0...top).count { !old.wrapContinuations.contains($0) } - 1
+        let starts = (0..<new.rows).filter { !new.wrapContinuations.contains($0) }
+        guard !starts.isEmpty else { return }
+        let row = starts[min(max(line, 0), starts.count - 1)]
+        let bottom = max(contentSize.height + inset.bottom - bounds.height, -inset.top)
+        contentOffset.y = min(max(offset + CGFloat(row - top) * m.height, -inset.top), bottom)
+    }
+
+    private var atBottom: Bool {
+        contentOffset.y >= contentSize.height + adjustedContentInset.bottom - bounds.height - 1
+    }
+
     private func scrollToBottom() {
         contentOffset.y = max(contentSize.height + adjustedContentInset.bottom - bounds.height, -adjustedContentInset.top)
     }
@@ -513,6 +549,10 @@ private final class ScrollEnd: NSObject, UIScrollViewDelegate {
     }
 
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        ended?()
+    }
+
+    func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
         ended?()
     }
 }
