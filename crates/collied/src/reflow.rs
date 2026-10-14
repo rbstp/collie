@@ -110,6 +110,12 @@ pub fn soft_wraps_for(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32
     }
 }
 
+/// Claude Code draws its logo on true black, which matches a dark terminal on the Mac but not
+/// the phone's. Only the standalone escape is replaced; herdr writes each attribute apart.
+pub fn without_claude_black(ansi: &str) -> String {
+    ansi.replace("\u{1b}[48;2;0;0;0m", "\u{1b}[49m")
+}
+
 pub fn without_copilot_scrollbar(ansi: &str, cols: usize) -> String {
     let mut plain = String::new();
     ansi.split('\n')
@@ -859,6 +865,17 @@ mod tests {
         assert!(joined.contains("6) run python3 -c \u{1b}[0m\u{1b}[48;2;55;55;55m\u{1b}[0m\u{1b}[0m\u{1b}[48;2;55;55;55m\u{1b}[0m\u{1b}[38;2;255;255;255m\u{1b}[48;2;55;55;55m'print(round"));
         let typed = include_str!("../tests/fixtures/claude-2.1.299/sent-multiline.ansi.txt");
         assert_eq!(soft_wraps(typed, 182), (vec![8], vec![]));
+    }
+
+    #[test]
+    fn claude_logo_loses_only_its_true_black_background() {
+        let screen = include_str!("../tests/fixtures/claude-2.1.293/heads-up.ansi.txt");
+        let cleaned = without_claude_black(screen);
+        assert!(screen.contains("\u{1b}[48;2;0;0;0m▛███▛█   \u{1b}[0m"));
+        assert!(cleaned.contains("\u{1b}[49m▛███▛█   \u{1b}[0m"));
+        assert!(!cleaned.contains("48;2;0;0;0"));
+        let combined = "\u{1b}[1;48;2;0;0;0mx\u{1b}[38;2;0;0;0mx";
+        assert_eq!(without_claude_black(combined), combined);
     }
 
     #[test]

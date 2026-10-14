@@ -491,6 +491,14 @@ private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB
     for row in 0..<frame.rows {
         #expect(painted(frame, row: row, TerminalRGB(55, 55, 55)) == 0..<40, "\(row)")
     }
+    let padding = String(repeating: " ", count: 60)
+    for (chip, color, end) in [
+        ("\u{1B}[48;2;200;40;40m ERROR \u{1B}[0m", TerminalRGB(200, 40, 40), 6),
+        ("\u{1B}[48;2;99;168;248m tag \u{1B}[0m\u{1B}[48;2;99;168;248m \u{1B}[0m", TerminalRGB(99, 168, 248), 4),
+    ] {
+        let frame = screen.render(ansiSnapshot: chip + padding, wrapColumns: 30)
+        #expect(painted(frame, row: 0, color) == 0..<end, "\(chip.debugDescription)")
+    }
 }
 
 @Test func paddedPanelsKeepOneRowPerLine() throws {
@@ -532,15 +540,4 @@ private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB
     #expect(TerminalScreen.wrapColumns(width: 3, cellWidth: 6.6) == 1)
     #expect(TerminalScreen.wrapColumns(width: 100_000, cellWidth: 6.6) == Int(TerminalScreen.maxColumns))
     #expect(TerminalScreen.wrapColumns(width: 377, cellWidth: 0) == 1)
-}
-
-@Test func claudesLogoShowsNoBlackBlock() throws {
-    let url = URL(filePath: #filePath).deletingLastPathComponent()
-        .appending(path: "../../../../crates/collied/tests/fixtures/claude-2.1.293/heads-up.ansi.txt")
-    let logo = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")[0...2].joined(separator: "\r\n")
-    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
-    for frame in [screen.render(ansiSnapshot: logo), screen.render(ansiSnapshot: logo, wrapColumns: 40)] {
-        #expect(frame.runs.contains { $0.text.contains("▛███▛█") })
-        #expect(!frame.runs.contains { $0.style.background == TerminalRGB(0, 0, 0) })
-    }
 }

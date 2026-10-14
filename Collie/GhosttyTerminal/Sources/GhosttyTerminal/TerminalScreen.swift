@@ -235,6 +235,7 @@ final class TerminalScreen {
             var lowerBorder = false
             var background: [Unicode.Scalar]?
             var uniformBackground = true
+            var reshaded = false
             runs.removeAll(keepingCapacity: true)
             var i = rowStart
             while i < rowEnd {
@@ -262,6 +263,7 @@ final class TerminalScreen {
                 if scalars[i] == " " || scalars[i] == "\t" {
                     uniform = uniform && (fill ?? trailingSGR.count) == trailingSGR.count
                     fill = fill ?? trailingSGR.count
+                    reshaded = trailingSGR.last.map { scalars[$0].elementsEqual(background ?? []) } ?? false
                 }
                 if scalars[i] == " " {
                     if hang != 0 { blanks += 1 }
@@ -296,8 +298,9 @@ final class TerminalScreen {
                 i += 1
             }
             let shadedRow = shadedStart && uniformBackground
-            // Claude Code ends a row it wrapped with a space in the text's style before its padding.
-            if shadedRow { uniform = true }
+            // Claude Code ends a row it wrapped with a space in the text's style, then pads it after
+            // a reset that sets the row's background again.
+            if shadedRow && reshaded { uniform = true }
             let clip = boxOnly && sawBox
             let shade = shadedBox && uniformBackground && columns > 1 ? background : nil
             let collapse = !clip && contentWidth > columns && (sawBox && padded || runs.contains { $0 >= columns })
@@ -644,8 +647,7 @@ final class TerminalScreen {
             foreground = TerminalRGB(fg)
         }
         if ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &bg) == GHOSTTY_SUCCESS {
-            // Claude Code draws its logo on true black, a dark terminal's background on the Mac.
-            background = TerminalRGB(bg) == TerminalRGB(0, 0, 0) ? nil : TerminalRGB(bg)
+            background = TerminalRGB(bg)
         }
         var styled = false
         ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING, &styled)
