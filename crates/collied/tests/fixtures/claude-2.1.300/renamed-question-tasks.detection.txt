@@ -1,0 +1,62 @@
+
+ ▐▛███▛█   Claude Code v2.1.300
+▝▜██████▀  Opus 5.5 with high effort · Claude Team
+ ▝▝   ▝▝   ~/src/app
+
+
+❯ Use your task tool (TaskCreate or TodoWrite) to create three tasks: Pick a color, Pick a size, Pick a shape. Mark Pick a color as in progress. Use no other tools.
+
+⏺ I created three tasks: #1 Pick a color (now in progress), #2 Pick a size and #3 Pick a shape (both pending). I also used ToolSearch once, because the task tools had to be loaded before I could call them.
+
+✻ Sautéed for 9s · done 11:28 AM
+
+❯ /rename demo-session
+  ⎿  Session renamed to: demo-session
+
+❯ Use AskUserQuestion to ask me which color I prefer (Red, Green, Blue). Use no other tools and do not change the tasks.
+
+⏺ Which color do you prefer?
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color do you prefer?
+
+❯ 1. Red
+     Pick red
+  2. Green
+     Pick green
+  3. Blue
+     Pick blue
+  4. Type something.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── demo-session ─
+
+  3 tasks (0 done, 1 in progress, 2 open)
+  ◼ Pick a color
+  ◻ Pick a size
+  ◻ Pick a shape

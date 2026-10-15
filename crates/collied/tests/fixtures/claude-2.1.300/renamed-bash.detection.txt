@@ -1,0 +1,62 @@
+
+❯ Reply with just the word OK and nothing else. Do not use any tools.
+
+⏺ OK
+
+✻ Cogitated for 2s · done 11:22 AM
+
+❯ /rename demo-session
+  ⎿  Session renamed to: demo-session
+
+❯ Use the AskUserQuestion tool to ask me which color I prefer, with options Red, Green and Blue. Do nothing else and use no other tools.
+
+  Called 1 tool
+  ⎿  Interrupted · What should Claude do instead?
+
+✻ Cooked for 2s · done 11:23 AM · 1 message hidden (/focus to show)
+
+❯ Run the Bash command: ls -la crates/collied/tests  (one call, nothing else)
+
+  Listed 1 directory
+
+⏺ crates/collied/tests holds five test files and a fixtures directory:
+
+  ┌───────────────┬───────┬──────────────┐
+  │     Entry     │ Size  │   Modified   │
+  ├───────────────┼───────┼──────────────┤
+  │ approvals.rs  │ 72k   │ Oct 11 16:28 │
+  ├───────────────┼───────┼──────────────┤
+  │ drive.rs      │ 160k  │ Oct 14 21:17 │
+  ├───────────────┼───────┼──────────────┤
+  │ fixtures/     │ (dir) │ Oct 14 10:55 │
+  ├───────────────┼───────┼──────────────┤
+  │ live_herdr.rs │ 21k   │ Oct 15 10:15 │
+  ├───────────────┼───────┼──────────────┤
+  │ server.rs     │ 67k   │ Oct 14 21:17 │
+  ├───────────────┼───────┼──────────────┤
+  │ setup.rs      │ 615 B │ Oct 8 22:09  │
+  └───────────────┴───────┴──────────────┘
+
+✻ Baked for 4s · done 11:23 AM
+
+❯ Run the Bash command: cksum Cargo.toml  (one call, nothing else)
+
+  Computing checksum of Cargo.toml
+  ⎿  $ cksum Cargo.toml
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+ Compute checksum of Cargo.toml
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ cksum Cargo.toml
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ This command requires approval
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don’t ask again for: cksum *
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend

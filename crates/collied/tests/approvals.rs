@@ -55,6 +55,14 @@ const EFFORT: &str = include_str!("fixtures/claude-2.1.294/effort.detection.txt"
 const TIME_FORMAT: &str = include_str!("fixtures/claude-2.1.294/config-time-format.detection.txt");
 const IDE: &str = include_str!("fixtures/claude-2.1.294/ide.detection.txt");
 
+// Claude Code 2.1.300 in herdr 0.9.5, in a session named with `/rename`, over a task panel:
+// a question (live_blocked_form_named_session), the name drawn on a rule under its footer,
+// and `/config`'s time format picker (live_blocked_form).
+const RENAMED_QUESTION: &str =
+    include_str!("fixtures/claude-2.1.300/renamed-question-tasks.detection.txt");
+const RENAMED_TIME_FORMAT: &str =
+    include_str!("fixtures/claude-2.1.300/renamed-config-time-format-tasks.detection.txt");
+
 // Codex CLI and Copilot CLI prompts as herdr rules them; see `prompt::fixtures`.
 const OTHER_KINDS: [(&str, &str, &str); 6] = [
     (
@@ -263,7 +271,11 @@ fn move_cursor(text: &str, by: isize) -> String {
         .unwrap();
     let to = at.saturating_add_signed(by).min(options.len() - 1);
     lines[options[at]] = lines[options[at]].replacen('❯', " ", 1);
-    lines[options[to]] = lines[options[to]].replacen("   ", " ❯ ", 1);
+    lines[options[to]] = if lines[options[to]].starts_with("   ") {
+        lines[options[to]].replacen("   ", " ❯ ", 1)
+    } else {
+        lines[options[to]].replacen("  ", "❯ ", 1)
+    };
     lines.join("\n") + "\n"
 }
 
@@ -1269,7 +1281,7 @@ async fn a_clear_names_only_the_alerted_approval() {
 
 #[tokio::test]
 async fn settings_pickers_raise_no_approval() {
-    for text in [EFFORT, TIME_FORMAT] {
+    for text in [EFFORT, TIME_FORMAT, RENAMED_TIME_FORMAT] {
         let mut rig = Rig::start(TTL).await;
         rig.follow();
         rig.herdr.with(|h| {
@@ -1648,6 +1660,50 @@ async fn a_question_is_answered_by_choosing_an_option() {
     assert_eq!(
         rig.herdr.params("agent.send_keys")[2],
         json!({"target": "w7:p1", "keys": ["enter"]})
+    );
+}
+
+#[tokio::test]
+async fn a_question_in_a_renamed_session_is_answered_by_choosing_an_option() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| {
+        h.rule = "live_blocked_form_named_session".into();
+        h.text = RENAMED_QUESTION.into();
+    });
+    let a = rig.needed().await;
+    assert!(a.options.is_empty());
+    assert_eq!(
+        choice_labels(&a),
+        [
+            (0, "Red".to_owned(), true),
+            (1, "Green".to_owned(), false),
+            (2, "Blue".to_owned(), false),
+            (3, "Type something.".to_owned(), false),
+            (4, "Chat about this".to_owned(), false),
+        ]
+    );
+    assert_eq!(a.choices[1].detail.as_deref(), Some("Pick green"));
+    assert_eq!(a.snippet, "☐ Color\nWhich color do you prefer?");
+    assert!(a.accepts_input && a.has_text_field);
+    let alerts = rig.alerts(1).await;
+    assert_eq!(
+        open_context(&alerts[0].1.payload),
+        json!({"v": 1, "body": "Which color do you prefer?"})
+    );
+
+    assert_eq!(
+        resolved(rig.choose(&a, 1, &a.nonce).await),
+        ApprovalOutcome::Chosen {
+            choice: 1,
+            by: LABEL.into()
+        }
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ]
     );
 }
 
