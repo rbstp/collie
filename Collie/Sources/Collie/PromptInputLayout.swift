@@ -3,7 +3,6 @@ import SwiftUI
 /// Keeps the same text field alive as it moves between the compact row and the full-width row.
 struct PromptInputLayout: Layout {
     let expanded: Bool
-    let showsStatus: Bool
     private let spacing: CGFloat = 8
 
     private struct Sizes {
@@ -22,12 +21,11 @@ struct PromptInputLayout: Layout {
     private func sizes(width: CGFloat, subviews: Subviews) -> Sizes {
         let leading = subviews[0].sizeThatFits(.unspecified)
         let trailing = subviews[3].sizeThatFits(.unspecified)
-        let sides = leading.width + trailing.width + gap(after: leading) + gap(after: trailing)
+        let statusWidth = max(0, width - leading.width - trailing.width - gap(after: leading) - gap(after: trailing))
+        let status = subviews[2].sizeThatFits(ProposedViewSize(width: statusWidth, height: nil))
+        let sides = leading.width + status.width + trailing.width + gap(after: leading) + gap(after: status) + gap(after: trailing)
         let fieldWidth = expanded ? width : max(0, width - sides)
         let field = subviews[1].sizeThatFits(ProposedViewSize(width: fieldWidth, height: nil))
-        let statusWidth = max(0, width - sides)
-        let status = showsStatus
-            ? subviews[2].sizeThatFits(ProposedViewSize(width: statusWidth, height: nil)) : .zero
         return Sizes(leading: leading, field: field, status: status, trailing: trailing,
                      fieldWidth: fieldWidth, statusWidth: statusWidth)
     }
@@ -57,11 +55,9 @@ struct PromptInputLayout: Layout {
         subviews[3].place(at: CGPoint(x: bounds.maxX - measured.trailing.width,
                                       y: controlsBottom - measured.trailing.height),
                           anchor: .topLeading, proposal: ProposedViewSize(measured.trailing))
-        if showsStatus {
-            subviews[2].place(at: CGPoint(x: bounds.minX + measured.leading.width + gap(after: measured.leading),
-                                          y: controlsBottom - measured.status.height),
-                              anchor: .topLeading,
-                              proposal: ProposedViewSize(width: measured.statusWidth, height: measured.status.height))
-        }
+        subviews[2].place(at: CGPoint(x: bounds.maxX - measured.trailing.width - gap(after: measured.trailing),
+                                      y: controlsBottom - measured.status.height),
+                          anchor: .topTrailing,
+                          proposal: ProposedViewSize(width: measured.statusWidth, height: measured.status.height))
     }
 }

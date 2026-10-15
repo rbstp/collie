@@ -12,6 +12,7 @@ struct NewTaskSheet: View {
     @State private var pickingFile = false
     @State private var pickingPrompt = false
     @State private var dictationExpanded = false
+    @State private var dictationShown = false
     @State private var selection: TextSelection?
     @FocusState private var editingPrompt: Bool
     @Environment(\.dismiss) private var dismiss
@@ -19,7 +20,7 @@ struct NewTaskSheet: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var expandedPrompt: Bool {
-        editingPrompt || model.dictation.isActive || !model.attachments.isEmpty || (dictationExpanded && !model.prompt.isEmpty)
+        editingPrompt || model.dictation.isActive || dictationShown || !model.attachments.isEmpty || (dictationExpanded && !model.prompt.isEmpty)
     }
 
     init(
@@ -263,7 +264,7 @@ struct NewTaskSheet: View {
                         .scrollIndicators(.hidden)
                     }
                     GlassEffectContainer(spacing: 4) {
-                        PromptInputLayout(expanded: expandedPrompt && (verticalSizeClass != .compact || model.dictation.isActive), showsStatus: model.dictation.isActive) {
+                        PromptInputLayout(expanded: expandedPrompt && (verticalSizeClass != .compact || model.dictation.isActive || dictationShown)) {
                             ZStack {
                                 AttachmentMenu(
                                     savedPromptsEnabled: !model.dictation.isActive,
@@ -300,19 +301,11 @@ struct NewTaskSheet: View {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
-                            ZStack {
-                                if model.dictation.isActive {
-                                    DictationBar(dictation: model.dictation)
-                                        .frame(maxWidth: .infinity)
-                                }
+                            DictationControl(dictation: model.dictation, disabled: model.phase != .editing, shown: $dictationShown) {
+                                dictationExpanded = model.startDictation(at: editingPrompt ? selection : nil) != nil
+                                editingPrompt = false
                             }
                             HStack(spacing: 8) {
-                                if !model.dictation.isActive {
-                                    DictationButton(dictation: model.dictation, disabled: model.phase != .editing) {
-                                        dictationExpanded = model.startDictation(at: editingPrompt ? selection : nil) != nil
-                                        editingPrompt = false
-                                    }
-                                }
                                 if editingPrompt {
                                     Button {
                                         editingPrompt = false
