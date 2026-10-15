@@ -5,7 +5,7 @@ const MAX_CONTINUATION_LINES: usize = 3;
 const MAX_BODY_LINES: usize = 12;
 pub const MAX_CONTEXT_CHARS: usize = 600;
 
-/// herdr rule ids (claude manifest 2026.09.11.1) whose screens are Claude Code's numbered
+/// herdr rule ids (claude manifest 2026.10.11.1) whose screens are Claude Code's numbered
 /// select menu: `❯` marks the cursor, arrows move it, Enter confirms. Arrows plus Enter
 /// are used rather than digit shortcuts, whose select-only or select-and-submit behaviour
 /// has varied across Claude Code versions: a digit that submits followed by an Enter
@@ -23,6 +23,12 @@ pub fn uses_menu(kind: &str, rule: Option<&str>) -> bool {
 }
 
 const CLAUDE_FORM_RULES: &[&str] = &["live_blocked_form"];
+
+/// herdr's rule (claude manifest 2026.10.11.1) for a form in a session named with `/rename`
+/// or `--name`: Claude Code draws the name on a rule under the form's footer, with its task
+/// panel, if any, below that rule. It takes nothing from the phone until
+/// [`without_session_name`] reads the form.
+const NAMED_SESSION_RULE: &str = "live_blocked_form_named_session";
 
 pub fn open_to_keys(kind: &str, rule: Option<&str>, text: &str) -> bool {
     kind == "claude"
@@ -785,6 +791,48 @@ fn is_deny_countdown(line: &str) -> bool {
     }
 }
 
+/// Under [`NAMED_SESSION_RULE`], the form above the session name rule and
+/// `live_blocked_form`, as the same form reads in an unnamed session. Cut only when the last
+/// rule on screen carries text after its dashes (the name: a box border never does), the
+/// last line above it ends in "Esc to cancel" (a footer wrapped inside that phrase is not
+/// read), and below it are only blank lines and the task panel (`N tasks (...)`, `◻`, `◼`
+/// or `✔` rows, `… +N pending`). Anything else keeps the screen whole and herdr's rule,
+/// which takes nothing from the phone.
+pub fn without_session_name<'a>(
+    kind: &str,
+    rule: Option<&'a str>,
+    text: &'a str,
+) -> (Option<&'a str>, &'a str) {
+    if kind != "claude" || rule != Some(NAMED_SESSION_RULE) {
+        return (rule, text);
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(divider) = lines.iter().rposition(|l| is_rule(l)) else {
+        return (rule, text);
+    };
+    let named = lines[divider]
+        .trim()
+        .trim_start_matches('─')
+        .trim_start()
+        .starts_with(|c| c != '─');
+    let footer = lines[..divider].iter().rev().find(|l| !l.trim().is_empty());
+    let panel = |l: &&str| {
+        let t = l.trim();
+        t.is_empty()
+            || t.starts_with(['◻', '◼', '✔', '…'])
+            || t.split_once(" task")
+                .is_some_and(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    if !named
+        || !footer.is_some_and(|l| l.trim_end().to_lowercase().ends_with("esc to cancel"))
+        || !lines[divider + 1..].iter().all(panel)
+    {
+        return (rule, text);
+    }
+    let end = text.split_inclusive('\n').take(divider).map(str::len).sum();
+    (Some("live_blocked_form"), &text[..end])
+}
+
 /// The dialog's non-empty lines with all whitespace removed, for [`shows_whole`].
 pub fn squashed_lines(text: &str) -> Vec<String> {
     after_last_rule(text)
@@ -988,6 +1036,49 @@ pub mod fixtures {
     pub const EFFORT_299: &str = include_str!("../tests/fixtures/claude-2.1.299/effort.tmux.txt");
     pub const EFFORT_ULTRACODE_299: &str =
         include_str!("../tests/fixtures/claude-2.1.299/effort-ultracode.tmux.txt");
+
+    // Claude Code 2.1.300 in herdr 0.9.5 (claude manifest 2026.10.11.1, 207 columns, the
+    // working directory renamed), in a session named `demo-session` with `/rename`: a
+    // question, the same over a task panel, and two questions over it, each `blocked` under
+    // live_blocked_form_named_session, the name drawn on a rule under the footer. Then
+    // dialogs that draw no such rule: the Bash prompt and the same over a task panel
+    // (bash_permission_prompt), the dynamic workflow prompt (dynamic_workflow_prompt), and
+    // `/effort` and `/config`'s time format picker, the latter also with tasks open, which
+    // the picker hides (live_blocked_form).
+    macro_rules! renamed {
+        ($name:literal) => {
+            include_str!(concat!(
+                "../tests/fixtures/claude-2.1.300/renamed-",
+                $name,
+                ".detection.txt"
+            ))
+        };
+    }
+    pub const RENAMED_QUESTIONS: [&str; 3] = [
+        renamed!("question"),
+        renamed!("question-tasks"),
+        renamed!("questions-tasks"),
+    ];
+    // Hand-built, ruled live_blocked_form_named_session by `herdr agent explain --file`: an
+    // idle renamed session's input box, the name on its top rule, holding a typed menu.
+    pub const RENAMED_IDLE_BOX: &str = "\
+❯ earlier prompt
+
+⏺ Done.
+
+─────────────────────────────────────────── demo-session ─
+❯ 1. Yes
+  2. No
+  Enter to confirm · Esc to cancel
+────────────────────────────────────────────────────────────
+";
+    pub const RENAMED_BASH: [&str; 2] = [renamed!("bash"), renamed!("bash-tasks")];
+    pub const RENAMED_WORKFLOW: &str = renamed!("workflow");
+    pub const RENAMED_PICKERS: [&str; 3] = [
+        renamed!("effort"),
+        renamed!("config-time-format"),
+        renamed!("config-time-format-tasks"),
+    ];
 
     // Codex CLI and GitHub Copilot CLI permission, folder trust and update prompts, each
     // checked with `herdr agent explain --file` (herdr 0.9.4, codex manifest 2026.10.11.1,
@@ -2066,6 +2157,86 @@ me@mac app % codex
         let hint_only = IDLE_ULTRACODE_299.replacen("─ ultracode ─", "────────────", 1);
         assert!(!ultracode_on(&hint_only));
         for screen in [EFFORT_299, EFFORT_ULTRACODE_299] {
+            assert!(settings_picker("claude", Some("live_blocked_form"), screen));
+        }
+    }
+
+    #[test]
+    fn renamed_session_forms_read_as_unnamed() {
+        let named = Some("live_blocked_form_named_session");
+        assert!(!uses_menu("claude", named));
+        for screen in RENAMED_QUESTIONS {
+            assert!(!open_to_keys("claude", named, screen));
+            let (rule, text) = without_session_name("claude", named, screen);
+            assert_eq!(rule, Some("live_blocked_form"));
+            assert!(text.len() < screen.len());
+            assert!(text.trim_end().ends_with("Esc to cancel"));
+            let m = Menu::parse(text).unwrap();
+            assert_eq!(
+                m.heads,
+                ["Red", "Green", "Blue", "Type something.", "Chat about this"]
+            );
+            assert_eq!((m.cursor, m.free_text()), (0, Some(3)));
+            assert!(m.decisions().is_empty());
+            assert_eq!(m.body.last().unwrap(), "Which color do you prefer?");
+            assert_eq!(context(text), "Which color do you prefer?");
+            assert!(uses_menu("claude", rule));
+            assert!(open_to_keys("claude", rule, text));
+            assert!(open_to_text("claude", rule, text));
+            assert!(!settings_picker("claude", rule, text));
+            for (kind, rule) in [("claude", Some("live_blocked_form")), ("codex", named)] {
+                assert_eq!(without_session_name(kind, rule, screen), (rule, screen));
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_session_name_rule_herdr_matched_is_cut() {
+        let named = Some("live_blocked_form_named_session");
+        let screen = RENAMED_QUESTIONS[1];
+        for (from, to) in [
+            (" demo-session ─", "───────────────"),
+            ("Esc to cancel", "Esc\nto cancel"),
+            ("Esc to cancel", "Esc to go back"),
+            ("  ◻ Pick a shape", "  Pick a shape"),
+            ("  ◻ Pick a shape", "  ◻ Pick a shape\n❯ 1. Yes"),
+        ] {
+            let changed = screen.replacen(from, to, 1);
+            assert_ne!(changed, screen);
+            assert_eq!(
+                without_session_name("claude", named, &changed),
+                (named, changed.as_str())
+            );
+        }
+        for screen in [
+            IDLE_299,
+            BASH_LIVE,
+            QUESTION_LIVE,
+            RENAMED_WORKFLOW,
+            RENAMED_IDLE_BOX,
+        ]
+        .into_iter()
+        .chain(RENAMED_BASH)
+        {
+            assert_eq!(
+                without_session_name("claude", named, screen),
+                (named, screen)
+            );
+        }
+    }
+
+    #[test]
+    fn renamed_sessions_draw_no_rule_under_other_dialogs() {
+        for screen in RENAMED_BASH {
+            let m = Menu::parse(screen).unwrap();
+            assert_eq!(m.decisions(), [(Approve, 0), (ApproveAlways, 1), (Deny, 3)]);
+            assert!(context(screen).starts_with("Bash: "));
+        }
+        let m = Menu::parse(RENAMED_WORKFLOW).unwrap();
+        assert_eq!(m.heads, ["Yes, run it", "View raw script", "No"]);
+        assert!(m.decisions().is_empty());
+        assert_eq!(context(RENAMED_WORKFLOW), "Run a dynamic workflow?");
+        for screen in RENAMED_PICKERS {
             assert!(settings_picker("claude", Some("live_blocked_form"), screen));
         }
     }

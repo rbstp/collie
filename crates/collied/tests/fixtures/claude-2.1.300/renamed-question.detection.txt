@@ -1,0 +1,62 @@
+
+ ▐▛███▛█   Claude Code v2.1.300
+▝▜██████▀  Opus 5.5 with high effort · Claude Team
+ ▝▝   ▝▝   ~/src/app
+
+
+❯ Reply with just the word OK and nothing else. Do not use any tools.
+
+⏺ OK
+
+✻ Cogitated for 2s · done 11:22 AM
+
+❯ /rename demo-session
+  ⎿  Session renamed to: demo-session
+
+❯ Use the AskUserQuestion tool to ask me which color I prefer, with options Red, Green and Blue. Do nothing else and use no other tools.
+
+  Which color do you prefer?
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color do you prefer?
+
+❯ 1. Red
+     The color red.
+  2. Green
+     The color green.
+  3. Blue
+     The color blue.
+  4. Type something.
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── demo-session ─
