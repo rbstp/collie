@@ -1,8 +1,10 @@
+diff --git a/tailscale.go b/tailscale.go
+index da82df8..443f557 100644
 --- a/tailscale.go
 +++ b/tailscale.go
-@@ -76,18 +76,6 @@
- 	closed   bool
- }
+@@ -88,18 +88,6 @@ type listener struct {
+ // exact-size reads; 47 bytes covers the longest "[ipv6]:port".
+ const listenAddrLen = 64
  
 -// conns tracks all the pipe(2)s allocated via tsnet_dial.
 -var conns struct {
@@ -19,12 +21,10 @@
  func (s *server) recErr(err error) C.int {
  	s.mu.Lock()
  	defer s.mu.Unlock()
-@@ -451,40 +439,42 @@
- func newConn(s *server, netConn net.Conn, connOut *C.int) error {
- 	fds, err := syscall.Socketpair(syscall.AF_LOCAL, syscall.SOCK_STREAM, 0)
+@@ -494,61 +482,55 @@ func newConn(s *server, netConn net.Conn, connOut *C.int) error {
  	if err != nil {
-+		return err
-+	}
+ 		return err
+ 	}
 +	// Non-blocking so r is pollable: Close then wakes a pending read and
 +	// closes the fd at once, which the C side sees as EOF. A blocking r kept
 +	// the fd open behind a read(2) until C closed its end, leaving the
@@ -33,8 +33,8 @@
 +	if err := syscall.SetNonblock(fds[1], true); err != nil {
 +		syscall.Close(fds[0])
 +		syscall.Close(fds[1])
- 		return err
- 	}
++		return err
++	}
  	r := os.NewFile(uintptr(fds[1]), "socketpair-r")
 -	c := &conn{s: s.s, c: netConn, r: r}
 -	fdC := C.int(fds[0])
@@ -65,7 +65,7 @@
  		r.Close()
 -		netConn.Close()
 +		return err
- 	}
++	}
 +	// Control holds a reference on r's fd, so a shutdown can never reach a
 +	// reused fd number after r is closed.
 +	shutdown := func(how int) {
@@ -77,9 +77,14 @@
 +			r.Close()
 +			netConn.Close()
 +		})
-+	}
+ 	}
+-	// the Shutdowns below must precede connCleanup: r.Fd() after Close
+-	// can return a reused fd number. Wait for both copy directions.
+-	var copies sync.WaitGroup
+-	copies.Add(2)
  	go func() {
- 		defer connCleanup()
+-		defer copies.Done()
++		defer connCleanup()
  		var b [1 << 16]byte
  		io.CopyBuffer(r, netConn, b[:])
 -		syscall.Shutdown(int(r.Fd()), syscall.SHUT_WR)
@@ -87,8 +92,10 @@
  		if cr, ok := netConn.(interface{ CloseRead() error }); ok {
  			cr.CloseRead()
  		}
-@@ -493,13 +483,13 @@
- 		defer connCleanup()
+ 	}()
+ 	go func() {
+-		defer copies.Done()
++		defer connCleanup()
  		var b [1 << 16]byte
  		io.CopyBuffer(netConn, r, b[:])
 -		syscall.Shutdown(int(r.Fd()), syscall.SHUT_RD)
@@ -97,6 +104,10 @@
  			cw.CloseWrite()
  		}
  	}()
+-	go func() {
+-		copies.Wait()
+-		connCleanup()
+-	}()
  
 -	*connOut = fdC
 +	*connOut = C.int(fds[0])

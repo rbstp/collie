@@ -27,10 +27,10 @@ index 420d67e..11fa7d8 100644
  	return TsnetGetRemoteAddr(l, conn, buf, buflen);
  }
 diff --git a/tailscale.go b/tailscale.go
-index 316efdd..27fe218 100644
+index ce7cb74..1a00bdd 100644
 --- a/tailscale.go
 +++ b/tailscale.go
-@@ -23,6 +23,7 @@ import (
+@@ -24,6 +24,7 @@ import (
  	"unsafe"
  
  	"golang.org/x/sys/unix"
@@ -38,7 +38,7 @@ index 316efdd..27fe218 100644
  	"tailscale.com/hostinfo"
  	"tailscale.com/ipn"
  	"tailscale.com/tsnet"
-@@ -40,6 +41,7 @@ var servers struct {
+@@ -41,6 +42,7 @@ var servers struct {
  
  type server struct {
  	s       *tsnet.Server
@@ -46,7 +46,25 @@ index 316efdd..27fe218 100644
  	lastErr string
  	started bool
  }
-@@ -77,6 +79,8 @@ type conn struct {
+@@ -65,12 +67,15 @@ type listener struct {
+ 	// m maps the fd number C holds for an accepted connection (not our
+ 	// sender-side number; recvmsg installs a new one) to its remote IP.
+ 	m map[C.int]string
++	// acceptMu makes each accept read its whole record before another
++	// accept reads: a read cut short by a signal resumes mid-record.
++	acceptMu sync.Mutex
+ }
+ 
+ // listenAddrLen is the size of the fixed-size, NUL-padded record that
+-// carries each accepted connection's remote IP over the listener
++// carries each accepted connection's remote ip:port over the listener
+ // socketpair. Fixed size so TsnetAccept frames the stream with
+-// exact-size reads; 45 bytes covers the longest textual IP.
++// exact-size reads; 47 bytes covers the longest "[ipv6]:port".
+ const listenAddrLen = 64
+ 
+ // conns tracks all the pipe(2)s allocated via tsnet_dial.
+@@ -86,6 +91,8 @@ type conn struct {
  }
  
  func (s *server) recErr(err error) C.int {
@@ -55,7 +73,7 @@ index 316efdd..27fe218 100644
  	if err == nil {
  		s.lastErr = ""
  		return 0
-@@ -93,6 +97,7 @@ func TsnetNewServer() C.int {
+@@ -102,6 +109,7 @@ func TsnetNewServer() C.int {
  	if servers.m == nil {
  		servers.m = map[C.int]*server{}
  		hostinfo.SetApp("libtailscale")
@@ -63,7 +81,7 @@ index 316efdd..27fe218 100644
  	}
  	if servers.next == 0 {
  		servers.next = 42<<16 + 1
-@@ -204,7 +209,9 @@ func TsnetErrmsg(sd C.int, buf *C.char, buflen C.size_t) C.int {
+@@ -213,7 +221,9 @@ func TsnetErrmsg(sd C.int, buf *C.char, buflen C.size_t) C.int {
  		out[0] = '\x00'
  		return C.EBADF
  	}
@@ -73,42 +91,33 @@ index 316efdd..27fe218 100644
  	if n >= len(out) {
  		out[len(out)-1] = '\x00' // always NUL-terminate
  		return C.ERANGE
-@@ -284,8 +291,12 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+@@ -293,17 +303,17 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  				netConn.Close()
  				continue
  			}
-+			// The peer address travels in the same message as the fd so the
-+			// C side can never pair a connection with another peer's address.
-+			var rec [acceptRecordLen]byte
-+			copy(rec[:], netConn.RemoteAddr().String())
- 			rights := syscall.UnixRights(int(connFd))
--			err = syscall.Sendmsg(sp, nil, rights, nil, 0)
-+			err = syscall.Sendmsg(sp, rec[:], rights, nil, 0)
- 			if err != nil {
- 				// We handle sp being closed in the read goroutine above.
+-			ip := extractIP(netConn.RemoteAddr().String())
+-			if len(ip) >= listenAddrLen {
++			remote := netConn.RemoteAddr().String()
++			if len(remote) >= listenAddrLen {
  				if s.s.Logf != nil {
-@@ -295,11 +306,6 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
- 				// fallthrough to close connFd, then continue Accept()ing
+-					s.s.Logf("libtailscale.accept: remote address %q does not fit in a %d-byte record", ip, listenAddrLen)
++					s.s.Logf("libtailscale.accept: remote address %q does not fit in a %d-byte record", remote, listenAddrLen)
+ 				}
+ 				netConn.Close()
+ 				syscall.Close(int(connFd))
+ 				continue
  			}
+ 			var addrRec [listenAddrLen]byte
+-			copy(addrRec[:], ip)
++			copy(addrRec[:], remote)
  
--			// map the connection to the remote address
--			listener.mu.Lock()
--			listener.m[connFd] = netConn.RemoteAddr()
--			listener.mu.Unlock()
--
- 			syscall.Close(int(connFd)) // now owned by recvmsg
- 		}
- 	}()
-@@ -308,8 +314,40 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
- 	return 0
- }
+ 			rights := syscall.UnixRights(int(connFd))
+ 			err = syscall.Sendmsg(sp, addrRec[:], rights, nil, 0)
+@@ -326,6 +336,31 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  
-+const acceptRecordLen = 64
-+
  //export TsnetAccept
  func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
-+	var rec [acceptRecordLen]byte
-+	return tsnetAccept(listenerFd, connOut, &rec)
++	return tsnetAccept(listenerFd, connOut, nil)
 +}
 +
 +//export TsnetAcceptWithAddr
@@ -118,67 +127,109 @@ index 316efdd..27fe218 100644
 +	}
 +	out := unsafe.Slice((*byte)(unsafe.Pointer(buf)), buflen)
 +	out[0] = '\x00'
-+	var rec [acceptRecordLen]byte
-+	if rc := tsnetAccept(listenerFd, connOut, &rec); rc != 0 {
++	var remote string
++	if rc := tsnetAccept(listenerFd, connOut, &remote); rc != 0 {
 +		return rc
 +	}
-+	addr := rec[:]
-+	if i := strings.IndexByte(string(addr), 0); i >= 0 {
-+		addr = addr[:i]
-+	}
-+	if len(addr) >= len(out) {
++	if len(remote) >= len(out) {
 +		syscall.Close(int(*connOut))
 +		*connOut = -1
 +		return C.ERANGE
 +	}
-+	n := copy(out, addr)
++	n := copy(out, remote)
 +	out[n] = '\x00'
 +	return 0
 +}
 +
-+func tsnetAccept(listenerFd C.int, connOut *C.int, rec *[acceptRecordLen]byte) C.int {
++func tsnetAccept(listenerFd C.int, connOut *C.int, remoteOut *string) C.int {
  	listeners.mu.Lock()
  	ln := listeners.m[listenerFd]
  	listeners.mu.Unlock()
-@@ -319,10 +357,13 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+@@ -335,30 +370,24 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
  	}
  
- 	buf := make([]byte, unix.CmsgLen(int(unsafe.Sizeof((C.int)(0)))))
--	_, oobn, _, _, err := syscall.Recvmsg(int(listenerFd), nil, buf, 0)
-+	n, oobn, _, _, err := syscall.Recvmsg(int(listenerFd), rec[:], buf, 0)
- 	if err != nil {
- 		return ln.s.recErr(err)
- 	}
-+	if n == 0 {
-+		return ln.s.recErr(io.EOF)
-+	}
- 
- 	scms, err := syscall.ParseSocketControlMessage(buf[:oobn])
- 	if err != nil {
-@@ -336,8 +377,22 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
- 		return ln.s.recErr(err)
- 	}
- 	if len(fds) != 1 {
-+		for _, fd := range fds {
-+			syscall.Close(fd)
-+		}
- 		return ln.s.recErr(fmt.Errorf("libtailscale: got %d FDs, want 1", len(fds)))
- 	}
-+	for n < acceptRecordLen {
-+		m, err := syscall.Read(int(listenerFd), rec[n:])
-+		if err == syscall.EAGAIN || err == syscall.EINTR {
+ 	// One record per connection: the fd via SCM_RIGHTS plus its remote
+-	// IP. The fd parsed below is the number the kernel installed, i.e.
+-	// the number C will hold.
++	// ip:port. The fd parsed below is the number the kernel installed,
++	// i.e. the number C will hold.
+ 	//
+ 	// The socketpair is a stream socket, so records are framed here:
+ 	// each read asks for the remaining bytes of the head record, with
+-	// MSG_WAITALL. The FIFO never serves a later record's bytes first,
+-	// so each accept consumes exactly one record, even concurrently or
+-	// after EINTR.
++	// MSG_WAITALL, and acceptMu keeps concurrent accepts from reading
++	// between the pieces of a short read.
++	ln.acceptMu.Lock()
++	defer ln.acceptMu.Unlock()
+ 	data := make([]byte, listenAddrLen)
+-	cbuf := make([]byte, unix.CmsgLen(int(unsafe.Sizeof((C.int)(0)))))
++	oob := make([]byte, unix.CmsgLen(int(unsafe.Sizeof((C.int)(0)))))
++	cbuf := oob
+ 	var n, oobn int
+ 	for n < len(data) {
+-		buf := data[n:]
+-		if n > 0 {
+-			// the cmsg rode with the record's first byte; only the tail remains
+-			cbuf = nil
+-		}
+-		nn, on, _, _, err := syscall.Recvmsg(int(listenerFd), buf, cbuf, syscall.MSG_WAITALL)
+-		n += nn
+-		if nn > 0 {
+-			oobn = on
+-		}
++		// nn is -1 on error
++		nn, on, _, _, err := syscall.Recvmsg(int(listenerFd), data[n:], cbuf, syscall.MSG_WAITALL)
+ 		if err == syscall.EINTR {
+-			continue // partial bytes stay record-aligned, keep draining
 +			continue
+ 		}
+ 		if err != nil {
+ 			return ln.s.recErr(err)
+@@ -367,9 +396,15 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+ 			// EOF mid-record: the listener was closed on the C side.
+ 			return ln.s.recErr(fmt.Errorf("libtailscale: listener closed mid-record: got %d of %d bytes", n, len(data)))
+ 		}
++		if n == 0 {
++			// the cmsg rode with the record's first byte; only the tail remains
++			oobn = on
++			cbuf = nil
 +		}
-+		if err != nil || m == 0 {
-+			syscall.Close(fds[0])
-+			return ln.s.recErr(fmt.Errorf("libtailscale: short accept record: %v", err))
-+		}
-+		n += m
-+	}
- 	*connOut = (C.int)(fds[0])
++		n += nn
+ 	}
  
- 	return 0
-@@ -615,6 +670,34 @@ func TsnetStatusJSON(sd C.int, jsonOut **C.char) C.int {
+-	scms, err := syscall.ParseSocketControlMessage(cbuf[:oobn])
++	scms, err := syscall.ParseSocketControlMessage(oob[:oobn])
+ 	if err != nil {
+ 		return ln.s.recErr(err)
+ 	}
+@@ -390,9 +425,13 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+ 	if addrLen < 0 {
+ 		addrLen = listenAddrLen
+ 	}
++	remote := string(data[:addrLen])
+ 	ln.mu.Lock()
+-	ln.m[fd] = string(data[:addrLen])
++	ln.m[fd] = extractIP(remote)
+ 	ln.mu.Unlock()
++	if remoteOut != nil {
++		*remoteOut = remote
++	}
+ 
+ 	*connOut = fd
+ 
+@@ -484,7 +523,9 @@ func TsnetGetRemoteAddr(listener C.int, conn C.int, buf *C.char, buflen C.size_t
+ 	ip, ok := l.m[conn]
+ 	if !ok {
+ 		// set errmsg too: EBADF with an empty message is not debuggable
++		l.s.mu.Lock()
+ 		l.s.lastErr = fmt.Sprintf("libtailscale: getremoteaddr: no remote address recorded for conn %d on listener %d", conn, listener)
++		l.s.mu.Unlock()
+ 		out[0] = '\x00'
+ 		return C.EBADF
+ 	}
+@@ -679,6 +720,34 @@ func TsnetStatusJSON(sd C.int, jsonOut **C.char) C.int {
  	return 0
  }
  

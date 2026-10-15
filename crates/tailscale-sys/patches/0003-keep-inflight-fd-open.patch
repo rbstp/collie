@@ -1,11 +1,11 @@
 diff --git a/tailscale.go b/tailscale.go
-index 27fe218..c0c72a4 100644
+index 1a00bdd..8cb9f42 100644
 --- a/tailscale.go
 +++ b/tailscale.go
-@@ -64,6 +64,16 @@ type listener struct {
- 	fd int // go side fd of socketpair sent to C
- 	mu sync.Mutex
- 	m  map[C.int]net.Addr //maps fds to remote addresses for lookup
+@@ -70,6 +70,16 @@ type listener struct {
+ 	// acceptMu makes each accept read its whole record before another
+ 	// accept reads: a read cut short by a signal resumes mid-record.
+ 	acceptMu sync.Mutex
 +
 +	// inflight holds the Go copies of conn fds sent to C, oldest first.
 +	// macOS's unix-socket GC can flush a socket whose last reference is in
@@ -18,8 +18,8 @@ index 27fe218..c0c72a4 100644
 +	closed   bool
  }
  
- // conns tracks all the pipe(2)s allocated via tsnet_dial.
-@@ -265,6 +275,14 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+ // listenAddrLen is the size of the fixed-size, NUL-padded record that
+@@ -277,6 +287,14 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  		listeners.mu.Unlock()
  
  		ln.Close()
@@ -34,12 +34,12 @@ index 27fe218..c0c72a4 100644
  	}
  	go func() {
  		// fdC is never written to, so trying to read from sp blocks
-@@ -295,18 +313,44 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
- 			// C side can never pair a connection with another peer's address.
- 			var rec [acceptRecordLen]byte
- 			copy(rec[:], netConn.RemoteAddr().String())
+@@ -315,8 +333,29 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+ 			var addrRec [listenAddrLen]byte
+ 			copy(addrRec[:], remote)
+ 
 -			rights := syscall.UnixRights(int(connFd))
--			err = syscall.Sendmsg(sp, rec[:], rights, nil, 0)
+-			err = syscall.Sendmsg(sp, addrRec[:], rights, nil, 0)
 +			f := os.NewFile(uintptr(connFd), "libtailscale-conn")
 +			rc, err := f.SyscallConn()
 +			if err != nil {
@@ -58,18 +58,18 @@ index 27fe218..c0c72a4 100644
 +			listener.mu.Unlock()
 +			var sendErr error
 +			err = rc.Control(func(fd uintptr) {
-+				sendErr = syscall.Sendmsg(sp, rec[:], syscall.UnixRights(int(fd)), nil, 0)
++				sendErr = syscall.Sendmsg(sp, addrRec[:], syscall.UnixRights(int(fd)), nil, 0)
 +			})
 +			if err == nil {
 +				err = sendErr
 +			}
  			if err != nil {
- 				// We handle sp being closed in the read goroutine above.
- 				if s.s.Logf != nil {
+ 				// a failed sendmsg delivered nothing (sp being closed is
+ 				// handled by the read goroutine above)
+@@ -324,9 +363,15 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  					s.s.Logf("libtailscale.accept: sendmsg failed: %v", err)
  				}
  				netConn.Close()
--				// fallthrough to close connFd, then continue Accept()ing
 +				// Never received, so still the tail unless cleanup already
 +				// dropped it.
 +				listener.mu.Lock()
@@ -84,16 +84,16 @@ index 27fe218..c0c72a4 100644
  		}
  	}()
  
-@@ -364,6 +408,12 @@ func tsnetAccept(listenerFd C.int, connOut *C.int, rec *[acceptRecordLen]byte) C
- 	if n == 0 {
- 		return ln.s.recErr(io.EOF)
+@@ -400,6 +445,12 @@ func tsnetAccept(listenerFd C.int, connOut *C.int, remoteOut *string) C.int {
+ 			// the cmsg rode with the record's first byte; only the tail remains
+ 			oobn = on
+ 			cbuf = nil
++			ln.mu.Lock()
++			if len(ln.inflight) > 0 {
++				ln.inflight[0].Close()
++				ln.inflight = ln.inflight[1:]
++			}
++			ln.mu.Unlock()
+ 		}
+ 		n += nn
  	}
-+	ln.mu.Lock()
-+	if len(ln.inflight) > 0 {
-+		ln.inflight[0].Close()
-+		ln.inflight = ln.inflight[1:]
-+	}
-+	ln.mu.Unlock()
- 
- 	scms, err := syscall.ParseSocketControlMessage(buf[:oobn])
- 	if err != nil {

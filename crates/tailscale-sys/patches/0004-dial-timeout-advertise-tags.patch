@@ -27,10 +27,10 @@ index 11fa7d8..0caaa26 100644
  	return TsnetSetEphemeral(sd, ephemeral);
  }
 diff --git a/tailscale.go b/tailscale.go
-index c840065..6a2dd24 100644
+index 8cb9f42..da82df8 100644
 --- a/tailscale.go
 +++ b/tailscale.go
-@@ -548,11 +548,29 @@ func extractIP(ipWithPort string) string {
+@@ -599,11 +599,29 @@ func extractIP(ipWithPort string) string {
  
  //export TsnetDial
  func TsnetDial(sd C.int, network, addr *C.char, connOut *C.int) C.int {
@@ -61,7 +61,7 @@ index c840065..6a2dd24 100644
  	if err != nil {
  		return s.recErr(err)
  	}
-@@ -603,6 +621,21 @@ func TsnetSetControlURL(sd C.int, str *C.char) C.int {
+@@ -654,6 +672,21 @@ func TsnetSetControlURL(sd C.int, str *C.char) C.int {
  	return 0
  }
  
