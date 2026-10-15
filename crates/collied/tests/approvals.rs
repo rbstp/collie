@@ -55,9 +55,10 @@ const EFFORT: &str = include_str!("fixtures/claude-2.1.294/effort.detection.txt"
 const TIME_FORMAT: &str = include_str!("fixtures/claude-2.1.294/config-time-format.detection.txt");
 const IDE: &str = include_str!("fixtures/claude-2.1.294/ide.detection.txt");
 
-// Claude Code 2.1.300 in herdr 0.9.5, in a session named with `/rename`, over a task panel:
-// a question (live_blocked_form_named_session), the name drawn on a rule under its footer,
-// and `/config`'s time format picker (live_blocked_form).
+// Claude Code 2.1.300 in herdr 0.9.5, in a session named with `/rename`, with tasks open: a
+// question over the task panel (live_blocked_form_named_session), the name drawn on a rule
+// under its footer, and `/config`'s time format picker, which hides the panel
+// (live_blocked_form).
 const RENAMED_QUESTION: &str =
     include_str!("fixtures/claude-2.1.300/renamed-question-tasks.detection.txt");
 const RENAMED_TIME_FORMAT: &str =
@@ -1705,6 +1706,23 @@ async fn a_question_in_a_renamed_session_is_answered_by_choosing_an_option() {
             json!({"target": "w7:p1", "keys": ["enter"]}),
         ]
     );
+}
+
+#[tokio::test]
+async fn a_menu_typed_into_a_renamed_session_box_is_answered_in_the_terminal() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| {
+        h.rule = "live_blocked_form_named_session".into();
+        h.text = "❯ earlier prompt\n\n────────────── demo-session ─\n❯ 1. Yes\n  2. No\n  Enter to confirm · Esc to cancel\n──────────────────────────────\n".into();
+    });
+    let a = rig.needed().await;
+    assert!(a.options.is_empty() && a.choices.is_empty());
+    assert!(!a.accepts_input && !a.has_text_field);
+    assert_eq!(
+        code(rig.decide(&a, Decision::Approve, &a.nonce).await),
+        ErrorCode::InvalidParams
+    );
+    assert!(rig.herdr.params("agent.send_keys").is_empty());
 }
 
 #[tokio::test]

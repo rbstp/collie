@@ -399,13 +399,11 @@ impl Approvals {
     async fn screen(&self, a: &AgentInfo) -> Result<Screen, herdr::Error> {
         let kind = a.agent.as_deref().unwrap_or_default();
         let explain = herdr::agent_explain(&self.herdr, &a.pane_id).await?;
-        let rule = explain.matched_rule.map(|r| r.id);
+        let matched = explain.matched_rule.map(|r| r.id);
         let detected = herdr::detection_text(&self.herdr, &a.pane_id).await?;
-        let text = prompt::without_deny_countdown(
-            kind,
-            prompt::without_session_name(kind, rule.as_deref(), &detected),
-        );
-        let menu = prompt::uses_menu(kind, rule.as_deref())
+        let (rule, form) = prompt::without_session_name(kind, matched.as_deref(), &detected);
+        let text = prompt::without_deny_countdown(kind, form);
+        let menu = prompt::uses_menu(kind, rule)
             .then(|| Menu::parse(&text))
             .flatten();
         let (region, snippet, offered) = match &menu {
@@ -420,19 +418,18 @@ impl Approvals {
                 Vec::new(),
             ),
         };
-        let accepts_input = prompt::open_to_keys(kind, rule.as_deref(), &text);
-        let has_text_field = prompt::open_to_text(kind, rule.as_deref(), &text)
+        let accepts_input = prompt::open_to_keys(kind, rule, &text);
+        let has_text_field = prompt::open_to_text(kind, rule, &text)
             && menu.as_ref().is_some_and(|m| m.free_text().is_some());
         let supports_note =
             offered.iter().any(|(d, _)| prompt::amend(*d).is_some()) && prompt::offers_note(&text);
         let session = a.agent_session.as_ref().map(|s| s.value.as_str());
-        let print =
-            |region: &str| fingerprint(kind, rule.as_deref(), &a.terminal_id, session, region);
+        let print = |region: &str| fingerprint(kind, rule, &a.terminal_id, session, region);
         Ok(Screen {
             pane_id: a.pane_id.clone(),
             seq: a.state_change_seq,
             blocked: is_blocked(a),
-            settings_picker: prompt::settings_picker(kind, rule.as_deref(), &text),
+            settings_picker: prompt::settings_picker(kind, rule, &text),
             fingerprint: print(&region),
             dialog: prompt::squashed_lines(&text),
             cursor_at: menu.as_ref().map_or_else(Vec::new, |m| {

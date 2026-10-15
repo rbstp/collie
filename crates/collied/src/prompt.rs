@@ -14,7 +14,6 @@ const CLAUDE_MENU_RULES: &[&str] = &[
     "bash_permission_prompt",
     "generic_permission_prompt",
     "live_blocked_form",
-    NAMED_SESSION_RULE,
     "legacy_no_prompt_blocker",
     "dynamic_workflow_prompt",
 ];
@@ -23,11 +22,12 @@ pub fn uses_menu(kind: &str, rule: Option<&str>) -> bool {
     kind == "claude" && rule.is_some_and(|r| CLAUDE_MENU_RULES.contains(&r))
 }
 
-const CLAUDE_FORM_RULES: &[&str] = &["live_blocked_form", NAMED_SESSION_RULE];
+const CLAUDE_FORM_RULES: &[&str] = &["live_blocked_form"];
 
 /// herdr's rule (claude manifest 2026.10.11.1) for a form in a session named with `/rename`
 /// or `--name`: Claude Code draws the name on a rule under the form's footer, with its task
-/// panel, if any, below that rule.
+/// panel, if any, below that rule. It takes nothing from the phone until
+/// [`without_session_name`] reads the form.
 const NAMED_SESSION_RULE: &str = "live_blocked_form_named_session";
 
 pub fn open_to_keys(kind: &str, rule: Option<&str>, text: &str) -> bool {
@@ -791,19 +791,30 @@ fn is_deny_countdown(line: &str) -> bool {
     }
 }
 
-/// `text` above the session name rule under [`NAMED_SESSION_RULE`], so the form reads as
-/// in an unnamed session. Only the shape herdr matches is cut: the last rule on screen, a
-/// line ending in "Esc to cancel" as the last one above it, and only blank lines and the
-/// task panel (`N tasks (...)`, `◻`, `◼` or `✔` rows, `… +N pending`) below it. Anything
-/// else is left whole.
-pub fn without_session_name<'a>(kind: &str, rule: Option<&str>, text: &'a str) -> &'a str {
+/// Under [`NAMED_SESSION_RULE`], the form above the session name rule and
+/// `live_blocked_form`, as the same form reads in an unnamed session. Cut only when the last
+/// rule on screen carries text after its dashes (the name: a box border never does), the
+/// last line above it ends in "Esc to cancel" (a footer wrapped inside that phrase is not
+/// read), and below it are only blank lines and the task panel (`N tasks (...)`, `◻`, `◼`
+/// or `✔` rows, `… +N pending`). Anything else keeps the screen whole and herdr's rule,
+/// which takes nothing from the phone.
+pub fn without_session_name<'a>(
+    kind: &str,
+    rule: Option<&'a str>,
+    text: &'a str,
+) -> (Option<&'a str>, &'a str) {
     if kind != "claude" || rule != Some(NAMED_SESSION_RULE) {
-        return text;
+        return (rule, text);
     }
     let lines: Vec<&str> = text.lines().collect();
     let Some(divider) = lines.iter().rposition(|l| is_rule(l)) else {
-        return text;
+        return (rule, text);
     };
+    let named = lines[divider]
+        .trim()
+        .trim_start_matches('─')
+        .trim_start()
+        .starts_with(|c| c != '─');
     let footer = lines[..divider].iter().rev().find(|l| !l.trim().is_empty());
     let panel = |l: &&str| {
         let t = l.trim();
@@ -812,13 +823,14 @@ pub fn without_session_name<'a>(kind: &str, rule: Option<&str>, text: &'a str) -
             || t.split_once(" task")
                 .is_some_and(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
     };
-    if !footer.is_some_and(|l| l.trim_end().to_lowercase().ends_with("esc to cancel"))
+    if !named
+        || !footer.is_some_and(|l| l.trim_end().to_lowercase().ends_with("esc to cancel"))
         || !lines[divider + 1..].iter().all(panel)
     {
-        return text;
+        return (rule, text);
     }
     let end = text.split_inclusive('\n').take(divider).map(str::len).sum();
-    &text[..end]
+    (Some("live_blocked_form"), &text[..end])
 }
 
 /// The dialog's non-empty lines with all whitespace removed, for [`shows_whole`].
@@ -1031,8 +1043,8 @@ pub mod fixtures {
     // live_blocked_form_named_session, the name drawn on a rule under the footer. Then
     // dialogs that draw no such rule: the Bash prompt and the same over a task panel
     // (bash_permission_prompt), the dynamic workflow prompt (dynamic_workflow_prompt), and
-    // `/effort` and `/config`'s time format picker, the latter also over a task panel
-    // (live_blocked_form).
+    // `/effort` and `/config`'s time format picker, the latter also with tasks open, which
+    // the picker hides (live_blocked_form).
     macro_rules! renamed {
         ($name:literal) => {
             include_str!(concat!(
@@ -1047,6 +1059,19 @@ pub mod fixtures {
         renamed!("question-tasks"),
         renamed!("questions-tasks"),
     ];
+    // Hand-built, ruled live_blocked_form_named_session by `herdr agent explain --file`: an
+    // idle renamed session's input box, the name on its top rule, holding a typed menu.
+    pub const RENAMED_IDLE_BOX: &str = "\
+❯ earlier prompt
+
+⏺ Done.
+
+─────────────────────────────────────────── demo-session ─
+❯ 1. Yes
+  2. No
+  Enter to confirm · Esc to cancel
+────────────────────────────────────────────────────────────
+";
     pub const RENAMED_BASH: [&str; 2] = [renamed!("bash"), renamed!("bash-tasks")];
     pub const RENAMED_WORKFLOW: &str = renamed!("workflow");
     pub const RENAMED_PICKERS: [&str; 3] = [
@@ -2139,8 +2164,11 @@ me@mac app % codex
     #[test]
     fn renamed_session_forms_read_as_unnamed() {
         let named = Some("live_blocked_form_named_session");
+        assert!(!uses_menu("claude", named));
         for screen in RENAMED_QUESTIONS {
-            let text = without_session_name("claude", named, screen);
+            assert!(!open_to_keys("claude", named, screen));
+            let (rule, text) = without_session_name("claude", named, screen);
+            assert_eq!(rule, Some("live_blocked_form"));
             assert!(text.len() < screen.len());
             assert!(text.trim_end().ends_with("Esc to cancel"));
             let m = Menu::parse(text).unwrap();
@@ -2152,12 +2180,12 @@ me@mac app % codex
             assert!(m.decisions().is_empty());
             assert_eq!(m.body.last().unwrap(), "Which color do you prefer?");
             assert_eq!(context(text), "Which color do you prefer?");
-            assert!(uses_menu("claude", named));
-            assert!(open_to_keys("claude", named, text));
-            assert!(open_to_text("claude", named, text));
-            assert!(!settings_picker("claude", named, text));
+            assert!(uses_menu("claude", rule));
+            assert!(open_to_keys("claude", rule, text));
+            assert!(open_to_text("claude", rule, text));
+            assert!(!settings_picker("claude", rule, text));
             for (kind, rule) in [("claude", Some("live_blocked_form")), ("codex", named)] {
-                assert_eq!(without_session_name(kind, rule, screen), screen);
+                assert_eq!(without_session_name(kind, rule, screen), (rule, screen));
             }
         }
     }
@@ -2167,19 +2195,33 @@ me@mac app % codex
         let named = Some("live_blocked_form_named_session");
         let screen = RENAMED_QUESTIONS[1];
         for (from, to) in [
+            (" demo-session ─", "───────────────"),
+            ("Esc to cancel", "Esc\nto cancel"),
             ("Esc to cancel", "Esc to go back"),
             ("  ◻ Pick a shape", "  Pick a shape"),
             ("  ◻ Pick a shape", "  ◻ Pick a shape\n❯ 1. Yes"),
         ] {
             let changed = screen.replacen(from, to, 1);
             assert_ne!(changed, screen);
-            assert_eq!(without_session_name("claude", named, &changed), changed);
+            assert_eq!(
+                without_session_name("claude", named, &changed),
+                (named, changed.as_str())
+            );
         }
-        for screen in [IDLE_299, BASH_LIVE, QUESTION_LIVE, RENAMED_WORKFLOW]
-            .into_iter()
-            .chain(RENAMED_BASH)
+        for screen in [
+            IDLE_299,
+            BASH_LIVE,
+            QUESTION_LIVE,
+            RENAMED_WORKFLOW,
+            RENAMED_IDLE_BOX,
+        ]
+        .into_iter()
+        .chain(RENAMED_BASH)
         {
-            assert_eq!(without_session_name("claude", named, screen), screen);
+            assert_eq!(
+                without_session_name("claude", named, screen),
+                (named, screen)
+            );
         }
     }
 
