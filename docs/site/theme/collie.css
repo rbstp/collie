@@ -224,3 +224,10 @@ blockquote.blockquote-tag {
     background-color: var(--quote-bg);
     padding-block: 0.2em;
 }
+
+.content mark,
+.content a mark,
+.content mark a:link,
+.content mark a:visited {
+    color: var(--fg);
+}

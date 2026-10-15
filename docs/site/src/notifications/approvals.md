@@ -27,4 +27,4 @@ When an agent finishes a turn that took 30 seconds or more, you get one alert wi
 
 ## What Apple can see
 
-The visible part of an alert only says which agent is blocked and where. The command is encrypted end to end with a key generated on your phone, and decrypted by the app's notification extension. Apple still sees agent and workspace names, opaque IDs and timing. Details are in the [threat model](../reference/threat-model.md#apple-sees-push-payload-metadata).
+The visible part of an alert only says which agent is blocked and where. The command is encrypted end to end with a key generated on your phone, and decrypted by the app's notification extension. Apple still sees agent and workspace names, pull request numbers and their status in the Woke and Archived alerts (such as "CI failed on #123" or "PR #123 merged"), opaque IDs and timing. Details are in the [threat model](../reference/threat-model.md#apple-sees-push-payload-metadata).

@@ -9,7 +9,7 @@ The documentation site at <https://collie.rbstp.dev> is built with [mdBook](http
 - `docs/site/src/reference/`: each page is a single mdBook include directive for `architecture.md`, `threat-model.md`, `tailnet.md`, `notifications.md`, `release.md` and this file, so those documents have one source.
 - `docs/site/theme/`: the Dark Gold theme (`collie.css`), the favicon and logo (`favicon.png`, the app icon at 128 px) and `head.hbs`, which puts the logo in the top bar.
 
-The site lives under `docs/`, so a change to it starts no TestFlight build (`testflight.yml` ignores `docs/**`). `ci.yml` ignores `docs/site/**` on pushes to `master`; pull requests still run it, because `rust` and `ios` are required checks.
+The site lives under `docs/`, so a change to it starts no TestFlight build (`testflight.yml` ignores `docs/**`). `ci.yml` ignores `docs/site/**` and `docs/deploy-pages.md` on pushes to `master`. On a pull request, its `changes` job lists the changed files, and when nothing outside those two paths changed, the `rust` and `ios` jobs are skipped. A job skipped by its condition counts as passing, so the required checks are still met. Other docs stay out of that list because tests read `docs/protocol/` and `docs/tailnet.md`.
 
 ## The workflow
 
@@ -21,7 +21,7 @@ The site lives under `docs/`, so a change to it starts no TestFlight build (`tes
 `stage-site.sh <outdir>` builds the book and adds:
 
 - `reference/protocol/`, a copy of `docs/protocol/`, which the included reference pages link to;
-- `CNAME` with `collie.rbstp.dev` (override with `SITE_DOMAIN`), carried in the artifact so a deploy never drops the custom domain;
+- `CNAME` with `collie.rbstp.dev` (override with `SITE_DOMAIN`), in the artifact as a record of the domain. GitHub ignores `CNAME` files for sites deployed by a custom Actions workflow: the custom domain lives only in Settings > Pages;
 - `.nojekyll`.
 
 mdBook writes `404.html` itself, from `src/404.md`. With `site-url = "/"`, it carries `<base href="/">`, so its links work at any depth. mdBook also adds a content hash to every asset name, so a deploy never mixes new pages with cached old assets.
@@ -58,7 +58,7 @@ Every text color passes WCAG AA (4.5:1) on the backgrounds it is drawn on:
 | Body text in tables (alternate row) | `#24211B` on `#F5F1E8`: 14.24 | `#E8E3D8` on `#1C1914`: 13.69 |
 | Body text in callouts | `#24211B` on `#F5F0E6`: 14.13 | `#E8E3D8` on `#1F1C16`: 13.28 |
 | Code text | `#24211B` on `#F2EDE2`: 13.75 | `#E8E3D8` on `#211E18`: 12.99 |
-| Search highlight | `#24211B` on `#F0DCA6`: 11.84 | `#E8E3D8` on `#5C4716`: 6.93 |
+| Search highlight, links in it included | `#24211B` on `#F0DCA6`: 11.84 | `#E8E3D8` on `#5C4716`: 6.93 |
 | Search field | `#24211B` on `#FFFFFF`: 16.05 | `#E8E3D8` on `#211E18`: 12.99 |
 | Theme menu | `#24211B` on `#FFFDF8`: 15.79 | `#E8E3D8` on `#1D1A15`: 13.55 |
 | Links | `#805C14` on `#FBF9F4`: 5.77 | `#C79E40` on `#16140F`: 7.36 |
@@ -142,4 +142,4 @@ curl -sS https://collie.rbstp.dev/no/such/page | grep -o 'Page not found'
 | The custom domain is rejected | The DNS record has not propagated: check `dig` first. |
 | Enforce HTTPS stays unavailable for over an hour | No certificate. Check that the record is gray and the CAA records. |
 | `ERR_TOO_MANY_REDIRECTS` | Proxied with SSL/TLS set to Flexible. Use Full (strict), or go back to gray. |
-| The custom domain is blank after a deploy | Set it again, and check that the artifact has `CNAME`. |
+| The custom domain is blank | Set it again in Settings > Pages. With an Actions deploy, that setting is the only source; the artifact's `CNAME` does not restore it. |

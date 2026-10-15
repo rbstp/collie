@@ -12,7 +12,7 @@ The phone could not reach the machine over the tailnet.
 
 1. Check that the machine is awake and `collied` runs: the `daemon` line in `collied doctor`, or `collied status`.
 2. If you ran `collied stop`, run `collied start`.
-3. A `fail` on the `tailnet` or `tag` line means the node is logged out or lost its tag: run `collied login`.
+3. A `warn` on the `tailnet` line saying "no node state (not logged in)", or a `fail` on the `daemon` line whose node is not `Running`, means the node is logged out: run `collied login`. A `fail` on the `tag` line means the node lost its tag; `collied login` prints what to fix. A `fail` on the `tailnet` line is a problem with the node state folder itself, such as its permissions.
 4. A `warn` on the `reach` line means no device of yours can reach the node: check the [tailnet policy](install/tailnet-policy.md) and that the phone is signed in to Tailscale in the app.
 5. Pull to refresh on the Agents tab to retry at once.
 

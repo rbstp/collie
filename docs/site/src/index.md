@@ -24,7 +24,7 @@ The only socket on the real network is Tailscale's own WireGuard UDP socket. See
 
 ## What stays on your machine
 
-herdr, your agents, their transcripts and your files stay on the machine. The phone fetches conversation history over the encrypted session only while Chat is open, and none of it goes into logs or notifications. Push notifications go through Apple, so `collied` keeps them short: the agent and workspace names in clear, and the pending command encrypted end to end for your phone. There is no collie server and no account to create.
+herdr, your agents, their transcripts and your files stay on the machine. The phone fetches conversation history over the encrypted session only while Chat is open, and none of it goes into logs or notifications. Push notifications go through Apple, so `collied` keeps them short: the agent and workspace names, and pull request numbers and their status, in clear, and the pending command encrypted end to end for your phone. There is no collie server and no account to create.
 
 ## The parts
 
