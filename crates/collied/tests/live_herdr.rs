@@ -410,7 +410,7 @@ async fn scenario(session: &HerdrSession) {
     drop(watcher);
 
     // A line past the canonical input limit while `cat` reads in canonical mode: herdr
-    // 0.9.4 refuses it on macOS instead of cutting it.
+    // 0.9.5 refuses it on macOS instead of cutting it.
     let cat = TerminalRunParams {
         op_id: OpId::new("C".repeat(22)).unwrap(),
         terminal_id: terminal.clone(),

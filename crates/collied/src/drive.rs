@@ -140,7 +140,7 @@ fn granted(auth: &Authorized) -> Result<(), Fail> {
     }
 }
 
-/// herdr 0.9.4 on macOS refuses a line longer than the terminal's canonical input limit
+/// herdr 0.9.5 on macOS refuses a line longer than the terminal's canonical input limit
 /// while its shell starts, instead of cutting it.
 fn canonical_limit(message: &str) -> bool {
     message.contains("terminal is in canonical mode")
@@ -1434,7 +1434,7 @@ impl Driver {
         }
     }
 
-    // Readiness rules follow herdr's own `herdr agent start` CLI (0.9.4). The busy retry
+    // Readiness rules follow herdr's own `herdr agent start` CLI (0.9.5). The busy retry
     // gets 30 s instead of the CLI's 2 s and, unlike the CLI, does not require the shell
     // in the foreground: the CLI targets any pane, this one was just created.
     async fn start_agent(
