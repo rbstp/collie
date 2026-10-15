@@ -681,6 +681,7 @@ private struct PromptBar: View {
     @FocusState private var editing: Bool
     @State private var typingCommand = false
     @State private var dictationExpanded = false
+    @State private var dictationShown = false
     @State private var selection: TextSelection?
     @State private var pickingPhoto = false
     @State private var photos: [PhotosPickerItem] = []
@@ -710,7 +711,7 @@ private struct PromptBar: View {
     }
 
     private var expanded: Bool {
-        editing || typingCommand || model.dictation.isActive || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
+        editing || typingCommand || model.dictation.isActive || dictationShown || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
     }
 
     var body: some View {
@@ -738,7 +739,7 @@ private struct PromptBar: View {
                 .disabled(model.sendingPrompt)
                 .scrollIndicators(.hidden)
             }
-            PromptInputLayout(expanded: expanded && (verticalSizeClass != .compact || model.dictation.isActive), showsStatus: model.dictation.isActive) {
+            PromptInputLayout(expanded: expanded && (verticalSizeClass != .compact || model.dictation.isActive || dictationShown)) {
                 HStack(spacing: 8) {
                     if !model.answering && !model.isTerminal {
                         AttachmentMenu(
@@ -821,18 +822,14 @@ private struct PromptBar: View {
                 .padding(.vertical, 8)
                 .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
                 ZStack {
-                    if model.dictation.isActive {
-                        DictationBar(dictation: model.dictation)
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                HStack(spacing: 8) {
-                    if !model.isTerminal && !model.dictation.isActive {
-                        DictationButton(dictation: model.dictation, disabled: model.sendingPrompt) {
+                    if !model.isTerminal {
+                        DictationControl(dictation: model.dictation, disabled: model.sendingPrompt, shown: $dictationShown) {
                             dictationExpanded = model.startDictation(at: editing ? selection : nil) != nil
                             editing = false
                         }
                     }
+                }
+                HStack(spacing: 8) {
                     if editing || typingCommand {
                         Button {
                             editing = false
@@ -1031,47 +1028,100 @@ struct DictationButton: View {
     }
 }
 
-struct DictationBar: View {
+/// The waveform button grows into the dictation bar and shrinks back, with the stop control where the button was.
+struct DictationControl: View {
     let dictation: DictationModel
+    let disabled: Bool
+    @Binding var shown: Bool
+    let starting: () -> Void
+    @State private var grown = false
+    @State private var revealed = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 8) {
-            switch dictation.phase {
-            case .preparing(let download?):
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        Text("Downloading speech model").font(.caption).fixedSize()
-                        ProgressView(value: download).frame(width: 60)
-                    }
-                    Text("Downloading…").font(.caption).lineLimit(1)
-                }
-            case .listening:
-                DictationWaveform(levels: dictation.levels)
-            case .idle, .preparing(nil), .finishing:
-                ProgressView().controlSize(.mini)
-                Text(dictation.phase == .finishing ? "Finishing…" : "Starting…").font(.caption)
+        ZStack(alignment: .trailing) {
+            if dictation.isActive || shown {
+                DictationBar(dictation: dictation, grown: grown, revealed: revealed)
+            } else {
+                DictationButton(dictation: dictation, disabled: disabled, starting: starting)
             }
-            if dictation.phase != .listening { Spacer(minLength: 0) }
-            Button(dictation.language.code) { dictation.select(dictation.language.other) }
-                .font(.caption.monospaced().weight(.semibold))
-                .buttonStyle(.plain)
-                .controlSize(.mini)
-                .disabled(dictation.phase == .finishing)
-                .accessibilityLabel("Dictation language, \(dictation.language.label)")
-                .accessibilityHint("Switches to \(dictation.language.other.label)")
+        }
+        .task(id: dictation.isActive) {
+            let resize: Animation? = reduceMotion ? nil : .smooth(duration: 0.3)
+            if dictation.isActive {
+                shown = true
+                // Lets a Form row finish resizing for the expanded field first, or that resize animates with the grow.
+                try? await Task.sleep(for: .milliseconds(50))
+                guard !Task.isCancelled else { return }
+                withAnimation(resize) { grown = true }
+                withAnimation(.easeOut(duration: 0.15).delay(reduceMotion ? 0 : 0.25)) { revealed = true }
+            } else {
+                guard grown else {
+                    shown = false
+                    return
+                }
+                withAnimation(.easeIn(duration: 0.1)) { revealed = false }
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled else { return }
+                withAnimation(resize) { grown = false }
+                try? await Task.sleep(for: .milliseconds(reduceMotion ? 0 : 300))
+                guard !Task.isCancelled else { return }
+                shown = false
+            }
+        }
+        .onDisappear { shown = false }
+    }
+}
+
+struct DictationBar: View {
+    let dictation: DictationModel
+    let grown: Bool
+    let revealed: Bool
+
+    var body: some View {
+        HStack(spacing: grown ? 8 : 0) {
+            HStack(spacing: 8) {
+                switch dictation.phase {
+                case .preparing(let download?):
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            Text("Downloading speech model").font(.caption).fixedSize()
+                            ProgressView(value: download).frame(width: 60)
+                        }
+                        Text("Downloading…").font(.caption).lineLimit(1)
+                    }
+                case .listening:
+                    DictationWaveform(levels: dictation.levels)
+                case .idle, .preparing(nil), .finishing:
+                    ProgressView().controlSize(.mini)
+                    Text(dictation.phase == .preparing(download: nil) ? "Starting…" : "Finishing…").font(.caption)
+                }
+                if dictation.phase != .listening { Spacer(minLength: 0) }
+                Button(dictation.language.code) { dictation.select(dictation.language.other) }
+                    .font(.caption.monospaced().weight(.semibold))
+                    .buttonStyle(.plain)
+                    .controlSize(.mini)
+                    .disabled(dictation.phase == .finishing)
+                    .accessibilityLabel("Dictation language, \(dictation.language.label)")
+                    .accessibilityHint("Switches to \(dictation.language.other.label)")
+            }
+            .frame(width: grown ? nil : 0, height: 28)
+            // Not 0: a glass whose only accessible child is a button gives that button the glass's accessibility frame.
+            .opacity(revealed ? 1 : 0.001)
+            .allowsHitTesting(revealed)
             Button(action: dictation.stop) {
                 Image(systemName: "waveform")
-                    .font(.title3)
+                    .font(.system(size: 20))
+                    .frame(width: 28, height: 28)
                     .foregroundStyle(.tint)
-                    .symbolEffect(.breathe, isActive: dictation.phase != .finishing)
+                    .symbolEffect(.breathe, isActive: dictation.isActive && dictation.phase != .finishing)
             }
             .buttonStyle(.plain)
             .disabled(dictation.phase == .finishing)
             .accessibilityLabel("Stop dictation")
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 6)
-        .padding(.vertical, 4)
+        .padding(.leading, grown ? 7 : 0)
+        .padding(5)
         .glassEffect(.regular.interactive(), in: .capsule)
     }
 }
