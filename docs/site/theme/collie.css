@@ -1,0 +1,226 @@
+/* Every text color here passes WCAG AA (4.5:1) on the backgrounds it is drawn on; docs/deploy-pages.md lists the ratios. */
+
+:root {
+    --sidebar-target-width: 280px;
+    --content-max-width: 780px;
+    --mono-font: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.light,
+.rust {
+    --bg: #FBF9F4;
+    --fg: #24211B;
+    --accent: #805C14;
+
+    --sidebar-bg: #F3EEE3;
+    --sidebar-fg: #3B362C;
+    --sidebar-non-existant: #5E5647;
+    --sidebar-active: var(--accent);
+    --sidebar-spacer: #E2D9C6;
+    --sidebar-header-border-color: var(--accent);
+    --scrollbar: #B9AE97;
+
+    --icons: #5E5647;
+    --icons-hover: var(--accent);
+    --links: var(--accent);
+    --inline-code-color: #24211B;
+    --code-bg: #F2EDE2;
+
+    --theme-popup-bg: #FFFDF8;
+    --theme-popup-border: #CFC4AC;
+    --theme-hover: #EEE6D5;
+
+    --quote-bg: #F5F0E6;
+    --quote-border: #E2D9C6;
+    --warning-border: var(--accent);
+
+    --table-border-color: #E2D9C6;
+    --table-header-bg: #EAE3D3;
+    --table-alternate-bg: #F5F1E8;
+
+    --searchbar-border-color: #CFC4AC;
+    --searchbar-bg: #FFFFFF;
+    --searchbar-fg: #24211B;
+    --searchbar-shadow-color: #CFC4AC;
+    --searchresults-header-fg: #5E5647;
+    --searchresults-border-color: #CFC4AC;
+    --searchresults-li-bg: #EEE6D5;
+    --search-mark-bg: #F0DCA6;
+
+    --blockquote-note-color: var(--accent);
+    --blockquote-tip-color: var(--accent);
+    --blockquote-important-color: var(--accent);
+    --blockquote-warning-color: var(--accent);
+    --blockquote-caution-color: #B3261E;
+
+    --hl-comment: #6B6252;
+    --hl-string: #3F6B21;
+    --hl-keyword: #8A3B12;
+    --hl-number: #7A4A9E;
+    --hl-attr: #805C14;
+    --hl-title: #1F5C7A;
+
+    --color-scheme: light;
+}
+
+.coal,
+.navy,
+.ayu {
+    --bg: #16140F;
+    --fg: #E8E3D8;
+    --accent: #C79E40;
+
+    --sidebar-bg: #1D1A15;
+    --sidebar-fg: #D2CABA;
+    --sidebar-non-existant: #B3AB9A;
+    --sidebar-active: var(--accent);
+    --sidebar-spacer: #2E2A21;
+    --sidebar-header-border-color: var(--accent);
+    --scrollbar: #4A4436;
+
+    --icons: #B3AB9A;
+    --icons-hover: var(--accent);
+    --links: var(--accent);
+    --inline-code-color: #E8E3D8;
+    --code-bg: #211E18;
+
+    --theme-popup-bg: #1D1A15;
+    --theme-popup-border: #4A4436;
+    --theme-hover: #2A261E;
+
+    --quote-bg: #1F1C16;
+    --quote-border: #2E2A21;
+    --warning-border: var(--accent);
+
+    --table-border-color: #2E2A21;
+    --table-header-bg: #2E2A21;
+    --table-alternate-bg: #1C1914;
+
+    --searchbar-border-color: #4A4436;
+    --searchbar-bg: #211E18;
+    --searchbar-fg: #E8E3D8;
+    --searchbar-shadow-color: #4A4436;
+    --searchresults-header-fg: #B3AB9A;
+    --searchresults-border-color: #4A4436;
+    --searchresults-li-bg: #2A261E;
+    --search-mark-bg: #5C4716;
+
+    --blockquote-note-color: var(--accent);
+    --blockquote-tip-color: var(--accent);
+    --blockquote-important-color: var(--accent);
+    --blockquote-warning-color: var(--accent);
+    --blockquote-caution-color: #F2867A;
+
+    --hl-comment: #A39A88;
+    --hl-string: #A9C77E;
+    --hl-keyword: #E39A6B;
+    --hl-number: #C9A6E8;
+    --hl-attr: #C79E40;
+    --hl-title: #86C1D9;
+
+    --color-scheme: dark;
+}
+
+/* Only Auto, Light and Coal (the dark palette) stay in the theme menu. */
+#mdbook-theme-rust,
+#mdbook-theme-navy,
+#mdbook-theme-ayu {
+    display: none;
+}
+
+html {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.content main {
+    line-height: 1.65;
+}
+
+.content h1,
+.content h2,
+.content h3 {
+    letter-spacing: -0.01em;
+}
+
+.menu-title::before {
+    content: "";
+    display: inline-block;
+    width: 28px;
+    height: 28px;
+    margin-inline-end: 10px;
+    vertical-align: -6px;
+    border-radius: 7px;
+    background-size: cover;
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+:root .hljs {
+    background: var(--code-bg);
+}
+
+:root pre > .hljs {
+    color: var(--fg);
+}
+
+pre > code.hljs {
+    border-radius: 6px;
+    padding: 0.9em 1em;
+    line-height: 1.5;
+}
+
+:root .hljs-comment,
+:root .hljs-quote {
+    color: var(--hl-comment);
+    font-style: italic;
+}
+
+:root .hljs-string,
+:root .hljs-symbol,
+:root .hljs-bullet,
+:root .hljs-value {
+    color: var(--hl-string);
+}
+
+:root .hljs-keyword,
+:root .hljs-selector-tag,
+:root .hljs-built_in,
+:root .hljs-type {
+    color: var(--hl-keyword);
+}
+
+:root .hljs-number,
+:root .hljs-literal,
+:root .hljs-meta,
+:root .hljs-params {
+    color: var(--hl-number);
+}
+
+:root .hljs-attr,
+:root .hljs-attribute,
+:root .hljs-variable,
+:root .hljs-template-variable,
+:root .hljs-name,
+:root .hljs-tag {
+    color: var(--hl-attr);
+}
+
+:root .hljs-title,
+:root .hljs-section {
+    color: var(--hl-title);
+    font-weight: 600;
+}
+
+.content table {
+    display: block;
+    overflow-x: auto;
+}
+
+blockquote.blockquote-tag {
+    border-radius: 0 6px 6px 0;
+    background-color: var(--quote-bg);
+    padding-block: 0.2em;
+}
