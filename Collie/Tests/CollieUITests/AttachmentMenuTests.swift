@@ -57,17 +57,19 @@ final class AttachmentMenuTests: XCTestCase {
         let option = app.buttons[choice].firstMatch
         XCTAssertTrue(option.appears(within: 3), app.debugDescription)
         option.tap()
-        let picker = switch choice {
-        case "Saved prompts": app.navigationBars["Saved prompts"]
-        case "Files": app.navigationBars["FullDocumentManagerViewControllerNavigationBar"]
+        let (picker, timeout): (XCUIElement, TimeInterval) = switch choice {
+        case "Saved prompts": (app.navigationBars["Saved prompts"], 5)
+        // The document browser service starts with each launch. On CI its first presentation takes 9 to 28 s and sometimes
+        // over 30 s, with the sheet up but empty until the service draws, so there is no loading view to bind to.
+        case "Files": (app.navigationBars["FullDocumentManagerViewControllerNavigationBar"], 60)
         // On CI the picker can stay on PUPickerUnavailableView, loading, for over 30 s, then become Photos mid-cancel.
-        default: app.navigationBars.matching(NSPredicate(format: "identifier IN %@", ["Photos", "PUPickerUnavailableView"])).firstMatch
+        default: (app.navigationBars.matching(NSPredicate(format: "identifier IN %@", ["Photos", "PUPickerUnavailableView"])).firstMatch, 30)
         }
         if choice == "Photo Library" {
             _ = app.navigationBars["Photos"].appears(within: 30)
         }
         // Cancel remote pickers before another presentation or terminating their host app.
-        XCTAssertTrue(picker.appears(within: choice == "Saved prompts" ? 5 : 30), app.debugDescription)
+        XCTAssertTrue(picker.appears(within: timeout), app.debugDescription)
         let cancel = picker.buttons.matching(identifier: "Cancel")
         // While Photos replaces the loading view, its Cancel can be unhittable or drop the tap.
         for _ in 0..<(choice == "Photo Library" ? 2 : 1) where picker.exists {
