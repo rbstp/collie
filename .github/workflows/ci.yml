@@ -8,6 +8,8 @@ on:
       - master
     paths-ignore:
       - '.github/**'
+      - 'docs/deploy-pages.md'
+      - 'docs/site/**'
 
 concurrency:
   group: test-${{ github.ref }}
@@ -17,7 +19,44 @@ permissions:
   contents: read
 
 jobs:
+  # rust and ios are required checks, so a site-only pull request skips them with if
+  # (a skipped job passes) rather than with paths-ignore (which would leave them pending).
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+
+    steps:
+      - name: checkout
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: list the changed paths
+        id: diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          printf '%s\n' "$files"
+          # Only paths no test reads: tests read docs/protocol/ and docs/tailnet.md.
+          if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/site/|docs/deploy-pages\.md$)'; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   rust:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code != 'false') }}
     runs-on: xcode-27
 
     env:
@@ -85,6 +124,8 @@ jobs:
         run: just test
 
   ios:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code != 'false') }}
     runs-on: xcode-27
 
     steps:

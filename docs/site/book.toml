@@ -1,0 +1,17 @@
+[book]
+title = "collie"
+description = "Remote control for herdr coding agents from your iPhone and Apple Watch"
+authors = ["Richard Boisvert"]
+language = "en"
+src = "src"
+
+[build]
+create-missing = false
+
+[output.html]
+site-url = "/"
+default-theme = "light"
+preferred-dark-theme = "coal"
+smart-punctuation = false
+git-repository-url = "https://github.com/rbstp/collie"
+additional-css = ["theme/collie.css"]

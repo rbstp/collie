@@ -262,6 +262,8 @@ scripts/           libghostty-vt xcframework build
 
 ## Documentation
 
+The documentation site, <https://collie.rbstp.dev>, covers setup, the app, troubleshooting, the privacy policy and support. It is built from `docs/` ([docs/deploy-pages.md](docs/deploy-pages.md)).
+
 - [Architecture](docs/architecture.md): design, protocol behavior, herdr and Tailscale integration, and how the main features work
 - [Threat model](docs/threat-model.md): assets, trust boundaries, threats and what is not covered
 - [Tailnet setup](docs/tailnet.md): the policy file, tags, owner, key expiry and revocation
