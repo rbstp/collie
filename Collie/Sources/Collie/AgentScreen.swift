@@ -1056,6 +1056,10 @@ struct DictationControl: View {
                 withAnimation(resize) { grown = true }
                 withAnimation(.easeOut(duration: 0.15).delay(reduceMotion ? 0 : 0.25)) { revealed = true }
             } else {
+                guard grown else {
+                    shown = false
+                    return
+                }
                 withAnimation(.easeIn(duration: 0.1)) { revealed = false }
                 try? await Task.sleep(for: .milliseconds(100))
                 guard !Task.isCancelled else { return }
@@ -1065,6 +1069,7 @@ struct DictationControl: View {
                 shown = false
             }
         }
+        .onDisappear { shown = false }
     }
 }
 
@@ -1101,13 +1106,15 @@ struct DictationBar: View {
                     .accessibilityHint("Switches to \(dictation.language.other.label)")
             }
             .frame(width: grown ? nil : 0, height: 28)
-            .opacity(revealed ? 1 : 0)
+            // Not 0: a glass whose only accessible child is a button gives that button the glass's accessibility frame.
+            .opacity(revealed ? 1 : 0.001)
+            .allowsHitTesting(revealed)
             Button(action: dictation.stop) {
                 Image(systemName: "waveform")
                     .font(.system(size: 20))
                     .frame(width: 28, height: 28)
                     .foregroundStyle(.tint)
-                    .symbolEffect(.breathe, isActive: dictation.phase != .finishing)
+                    .symbolEffect(.breathe, isActive: dictation.isActive && dictation.phase != .finishing)
             }
             .buttonStyle(.plain)
             .disabled(dictation.phase == .finishing)
