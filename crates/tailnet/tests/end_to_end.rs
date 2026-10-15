@@ -1,14 +1,16 @@
 use std::collections::{HashMap, HashSet};
+use std::ffi::{CStr, c_char, c_int};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use tailnet::{Accepted, BackendState, Config, Error, Node, Status};
+use tailnet::{Accepted, BackendState, Config, Error, Node, Status, WhoIs};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use zeroize::Zeroizing;
 
@@ -18,6 +20,8 @@ const KNOBS: [(&str, &str); 2] = [
 ];
 const PORT: u16 = 7000;
 const REUSE_PORT: u16 = 7001;
+const CONCURRENT_PORT: u16 = 7002;
+const ACCEPTORS: usize = 8;
 const DIALERS: [&str; 2] = ["it-dialer-a", "it-dialer-b"];
 const TAGGED: &str = "it-tagged";
 const TAG: &str = "tag:collie-phone";
@@ -187,6 +191,25 @@ fn end_to_end() {
         "no 4-tuple was reused, so TIME-WAIT reopen was not exercised"
     );
 
+    let t = Instant::now();
+    let (dial_failures, bad_conns) = {
+        let _rt = rt.enter();
+        concurrent_accepts(&listener, &dialers, &listener_ips, &owners)
+    };
+    println!(
+        "concurrent accepts: {} accepted on {ACCEPTORS} threads in {:?}",
+        DIALERS.len() * CONNS_PER_DIALER,
+        t.elapsed()
+    );
+    assert!(
+        dial_failures.is_empty() && bad_conns.is_empty(),
+        "{} dial failures: {:#?}\n{} bad accepted connections: {:#?}",
+        dial_failures.len(),
+        dial_failures,
+        bad_conns.len(),
+        bad_conns
+    );
+
     let report = rt.block_on(attribution(
         listener.clone(),
         dialers,
@@ -354,7 +377,7 @@ async fn attribution(
         }
     });
 
-    let mut dial = tokio::task::spawn_blocking(move || dial_all(&dialers, &listener_ips));
+    let mut dial = tokio::task::spawn_blocking(move || dial_all(&dialers, &listener_ips, PORT));
     let mut checks = tokio::task::JoinSet::new();
     let mut accepted = 0;
     let dial_failures = loop {
@@ -405,6 +428,81 @@ async fn check(
         .await
         .unwrap();
     let _ = write.write_all(b"k").await;
+    verdict(peer, &token, who, &owners)
+}
+
+// Threads block in tailscale_accept_with_addr on one listener at once, and
+// start once records have queued up, so each accept must take exactly one
+// record: the fd and the ip:port sent with it.
+fn concurrent_accepts(
+    node: &Node,
+    dialers: &[Node],
+    listener_ips: &[IpAddr],
+    owners: &Owners,
+) -> (Vec<String>, Vec<String>) {
+    let listener = node.listen("tcp", &format!(":{CONCURRENT_PORT}")).unwrap();
+    let fd = listener.as_raw_fd();
+    let total = DIALERS.len() * CONNS_PER_DIALER;
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        let dial = s.spawn(|| dial_all(dialers, listener_ips, CONCURRENT_PORT));
+        std::thread::sleep(Duration::from_millis(500));
+        let acceptors: Vec<_> = (0..ACCEPTORS)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut bad = Vec::new();
+                    while next.fetch_add(1, Ordering::Relaxed) < total {
+                        bad.extend(accept_and_check(fd, node, owners));
+                    }
+                    bad
+                })
+            })
+            .collect();
+        let dial_failures = dial.join().unwrap();
+        if !dial_failures.is_empty() {
+            // Fewer records than accepts; EOF wakes the blocked threads.
+            unsafe { libc::shutdown(fd, libc::SHUT_RDWR) };
+        }
+        let bad = acceptors
+            .into_iter()
+            .flat_map(|a| a.join().unwrap())
+            .collect();
+        (dial_failures, bad)
+    })
+}
+
+fn accept_and_check(fd: RawFd, node: &Node, owners: &Owners) -> Option<String> {
+    let mut conn: c_int = -1;
+    let mut addr = [0 as c_char; 128];
+    let rc = unsafe {
+        tailscale_sys::tailscale_accept_with_addr(fd, &mut conn, addr.as_mut_ptr(), addr.len())
+    };
+    if rc != 0 {
+        return Some(format!("accept_with_addr returned {rc}"));
+    }
+    let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(conn) };
+    let addr = unsafe { CStr::from_ptr(addr.as_ptr()) }.to_string_lossy();
+    let Ok(peer) = addr.parse::<SocketAddr>() else {
+        return Some(format!("unparseable peer address {addr:?}"));
+    };
+    let mut token = String::new();
+    if let Err(e) = stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .and_then(|()| BufReader::new(&stream).read_line(&mut token))
+    {
+        return Some(format!("from {peer}: read: {e}"));
+    }
+    let who = node.whois(&peer.to_string());
+    let _ = (&stream).write_all(b"k");
+    verdict(peer, &token, who, owners)
+}
+
+fn verdict(
+    peer: SocketAddr,
+    token: &str,
+    who: tailnet::Result<WhoIs>,
+    owners: &Owners,
+) -> Option<String> {
     let token = token.trim();
     let Some((id, ips)) = owners.get(token.split(' ').next().unwrap()) else {
         return Some(format!(
@@ -420,7 +518,7 @@ async fn check(
     }
 }
 
-fn dial_all(dialers: &[Node], listener_ips: &[IpAddr]) -> Vec<String> {
+fn dial_all(dialers: &[Node], listener_ips: &[IpAddr], port: u16) -> Vec<String> {
     std::thread::scope(|s| {
         let workers: Vec<_> = DIALERS
             .iter()
@@ -431,7 +529,7 @@ fn dial_all(dialers: &[Node], listener_ips: &[IpAddr]) -> Vec<String> {
                         let mut failures = Vec::new();
                         for seq in (worker..CONNS_PER_DIALER).step_by(WORKERS_PER_DIALER) {
                             let target =
-                                SocketAddr::new(listener_ips[seq % listener_ips.len()], PORT);
+                                SocketAddr::new(listener_ips[seq % listener_ips.len()], port);
                             if let Err(e) = dial_one(node, &target, &format!("{name} {seq}\n")) {
                                 failures.push(format!("{name} {seq} -> {target}: {e}"));
                             }

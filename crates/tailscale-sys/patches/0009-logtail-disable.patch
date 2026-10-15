@@ -1,8 +1,8 @@
 diff --git a/tailscale.go b/tailscale.go
-index 4f91010..61230f2 100644
+index dc7fdb1..95e84d3 100644
 --- a/tailscale.go
 +++ b/tailscale.go
-@@ -26,6 +26,7 @@ import (
+@@ -27,6 +27,7 @@ import (
  	"tailscale.com/envknob"
  	"tailscale.com/hostinfo"
  	"tailscale.com/ipn"
@@ -10,7 +10,7 @@ index 4f91010..61230f2 100644
  	"tailscale.com/tsnet"
  	"tailscale.com/types/logger"
  )
-@@ -100,6 +101,7 @@ func TsnetNewServer() C.int {
+@@ -112,6 +113,7 @@ func TsnetNewServer() C.int {
  		servers.m = map[C.int]*server{}
  		hostinfo.SetApp("libtailscale")
  		envknob.SetNoLogsNoSupport()

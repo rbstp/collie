@@ -263,6 +263,12 @@ impl Listener {
     }
 }
 
+impl AsRawFd for Listener {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd.get_ref().as_raw_fd()
+    }
+}
+
 fn poll_readable(fd: RawFd) -> std::io::Result<bool> {
     let mut pfd = libc::pollfd {
         fd,

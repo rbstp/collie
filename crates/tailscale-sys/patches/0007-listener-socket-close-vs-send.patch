@@ -1,8 +1,8 @@
 diff --git a/tailscale.go b/tailscale.go
-index 15576d6..e9ca43c 100644
+index 2df8916..66787ec 100644
 --- a/tailscale.go
 +++ b/tailscale.go
-@@ -74,6 +74,10 @@ type listener struct {
+@@ -80,6 +80,10 @@ type listener struct {
  	// cleanup can never free the number while sendmsg may still pass it.
  	inflight []*os.File
  	closed   bool
@@ -12,8 +12,8 @@ index 15576d6..e9ca43c 100644
 +	spMu sync.RWMutex
  }
  
- func (s *server) recErr(err error) C.int {
-@@ -252,15 +256,21 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+ // listenAddrLen is the size of the fixed-size, NUL-padded record that
+@@ -264,15 +268,21 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  	listeners.mu.Unlock()
  
  	cleanup := func() {
@@ -35,12 +35,12 @@ index 15576d6..e9ca43c 100644
  
  		ln.Close()
  
-@@ -318,9 +328,18 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+@@ -338,9 +348,18 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  			listener.inflight = append(listener.inflight, f)
  			listener.mu.Unlock()
  			var sendErr error
 -			err = rc.Control(func(fd uintptr) {
--				sendErr = syscall.Sendmsg(sp, rec[:], syscall.UnixRights(int(fd)), nil, 0)
+-				sendErr = syscall.Sendmsg(sp, addrRec[:], syscall.UnixRights(int(fd)), nil, 0)
 -			})
 +			listener.spMu.RLock()
 +			listener.mu.Lock()
@@ -50,7 +50,7 @@ index 15576d6..e9ca43c 100644
 +				sendErr = syscall.EBADF
 +			} else {
 +				err = rc.Control(func(fd uintptr) {
-+					sendErr = syscall.Sendmsg(sp, rec[:], syscall.UnixRights(int(fd)), nil, 0)
++					sendErr = syscall.Sendmsg(sp, addrRec[:], syscall.UnixRights(int(fd)), nil, 0)
 +				})
 +			}
 +			listener.spMu.RUnlock()
