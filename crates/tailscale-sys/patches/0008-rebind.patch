@@ -79,10 +79,10 @@ index 0caaa26..a333952 100644
  	return TsnetErrmsg(sd, buf, buflen);
  }
 diff --git a/tailscale.go b/tailscale.go
-index 7568086..49d8aa6 100644
+index 66787ec..dc7fdb1 100644
 --- a/tailscale.go
 +++ b/tailscale.go
-@@ -809,6 +809,34 @@ func TsnetStatusJSON(sd C.int, jsonOut **C.char) C.int {
+@@ -835,6 +835,34 @@ func TsnetStatusJSON(sd C.int, jsonOut **C.char) C.int {
  	return 0
  }
  

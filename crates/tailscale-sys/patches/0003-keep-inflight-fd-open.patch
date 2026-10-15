@@ -1,5 +1,5 @@
 diff --git a/tailscale.go b/tailscale.go
-index 1a00bdd..8cb9f42 100644
+index 7ec8789..6be5aa7 100644
 --- a/tailscale.go
 +++ b/tailscale.go
 @@ -70,6 +70,16 @@ type listener struct {
@@ -84,7 +84,7 @@ index 1a00bdd..8cb9f42 100644
  		}
  	}()
  
-@@ -400,6 +445,12 @@ func tsnetAccept(listenerFd C.int, connOut *C.int, remoteOut *string) C.int {
+@@ -414,6 +459,12 @@ func tsnetAccept(listenerFd C.int, connOut *C.int, remoteOut *string) C.int {
  			// the cmsg rode with the record's first byte; only the tail remains
  			oobn = on
  			cbuf = nil

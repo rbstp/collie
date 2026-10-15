@@ -1,5 +1,5 @@
 diff --git a/tailscale.go b/tailscale.go
-index 0b1004b..7568086 100644
+index 2df8916..66787ec 100644
 --- a/tailscale.go
 +++ b/tailscale.go
 @@ -80,6 +80,10 @@ type listener struct {

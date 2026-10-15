@@ -27,7 +27,7 @@ index 420d67e..11fa7d8 100644
  	return TsnetGetRemoteAddr(l, conn, buf, buflen);
  }
 diff --git a/tailscale.go b/tailscale.go
-index ce7cb74..1a00bdd 100644
+index ce7cb74..7ec8789 100644
 --- a/tailscale.go
 +++ b/tailscale.go
 @@ -24,6 +24,7 @@ import (
@@ -145,7 +145,7 @@ index ce7cb74..1a00bdd 100644
  	listeners.mu.Lock()
  	ln := listeners.m[listenerFd]
  	listeners.mu.Unlock()
-@@ -335,30 +370,24 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+@@ -335,30 +370,38 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
  	}
  
  	// One record per connection: the fd via SCM_RIGHTS plus its remote
@@ -163,11 +163,25 @@ index ce7cb74..1a00bdd 100644
 +	// between the pieces of a short read.
 +	ln.acceptMu.Lock()
 +	defer ln.acceptMu.Unlock()
++	// An accept that waited here behind one that saw the listener close
++	// must not read a listenerFd number C may have reused.
++	listeners.mu.Lock()
++	current := listeners.m[listenerFd] == ln
++	listeners.mu.Unlock()
++	if !current {
++		return C.EBADF
++	}
  	data := make([]byte, listenAddrLen)
 -	cbuf := make([]byte, unix.CmsgLen(int(unsafe.Sizeof((C.int)(0)))))
 +	oob := make([]byte, unix.CmsgLen(int(unsafe.Sizeof((C.int)(0)))))
 +	cbuf := oob
  	var n, oobn int
++	accepted := false
++	defer func() {
++		if !accepted {
++			closeReceived(oob[:oobn])
++		}
++	}()
  	for n < len(data) {
 -		buf := data[n:]
 -		if n > 0 {
@@ -187,7 +201,7 @@ index ce7cb74..1a00bdd 100644
  		}
  		if err != nil {
  			return ln.s.recErr(err)
-@@ -367,9 +396,15 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+@@ -367,9 +410,15 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
  			// EOF mid-record: the listener was closed on the C side.
  			return ln.s.recErr(fmt.Errorf("libtailscale: listener closed mid-record: got %d of %d bytes", n, len(data)))
  		}
@@ -204,7 +218,7 @@ index ce7cb74..1a00bdd 100644
  	if err != nil {
  		return ln.s.recErr(err)
  	}
-@@ -390,9 +425,13 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+@@ -390,15 +439,31 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
  	if addrLen < 0 {
  		addrLen = listenAddrLen
  	}
@@ -218,8 +232,26 @@ index ce7cb74..1a00bdd 100644
 +	}
  
  	*connOut = fd
++	accepted = true
  
-@@ -484,7 +523,9 @@ func TsnetGetRemoteAddr(listener C.int, conn C.int, buf *C.char, buflen C.size_t
+ 	return 0
+ }
+ 
++// closeReceived closes every fd that the SCM_RIGHTS messages in oob delivered.
++func closeReceived(oob []byte) {
++	scms, _ := syscall.ParseSocketControlMessage(oob)
++	for i := range scms {
++		fds, _ := syscall.ParseUnixRights(&scms[i])
++		for _, fd := range fds {
++			syscall.Close(fd)
++		}
++	}
++}
++
+ func newConn(s *server, netConn net.Conn, connOut *C.int) error {
+ 	fds, err := syscall.Socketpair(syscall.AF_LOCAL, syscall.SOCK_STREAM, 0)
+ 	if err != nil {
+@@ -484,7 +549,9 @@ func TsnetGetRemoteAddr(listener C.int, conn C.int, buf *C.char, buflen C.size_t
  	ip, ok := l.m[conn]
  	if !ok {
  		// set errmsg too: EBADF with an empty message is not debuggable
@@ -229,7 +261,7 @@ index ce7cb74..1a00bdd 100644
  		out[0] = '\x00'
  		return C.EBADF
  	}
-@@ -679,6 +720,34 @@ func TsnetStatusJSON(sd C.int, jsonOut **C.char) C.int {
+@@ -679,6 +746,34 @@ func TsnetStatusJSON(sd C.int, jsonOut **C.char) C.int {
  	return 0
  }
  

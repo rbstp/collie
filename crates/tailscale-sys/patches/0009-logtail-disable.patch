@@ -1,5 +1,5 @@
 diff --git a/tailscale.go b/tailscale.go
-index 49d8aa6..5d8b6f4 100644
+index dc7fdb1..95e84d3 100644
 --- a/tailscale.go
 +++ b/tailscale.go
 @@ -27,6 +27,7 @@ import (

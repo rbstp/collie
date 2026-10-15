@@ -1,5 +1,5 @@
 diff --git a/tailscale.go b/tailscale.go
-index 443f557..0b1004b 100644
+index 6118047..2df8916 100644
 --- a/tailscale.go
 +++ b/tailscale.go
 @@ -114,7 +114,7 @@ func TsnetNewServer() C.int {
@@ -11,7 +11,7 @@ index 443f557..0b1004b 100644
  	servers.m[sd] = s
  	return (C.int)(sd)
  }
-@@ -689,8 +689,11 @@ func TsnetSetLogFD(sd, fd C.int) C.int {
+@@ -715,8 +715,11 @@ func TsnetSetLogFD(sd, fd C.int) C.int {
  	if s == nil {
  		return C.EBADF
  	}
@@ -23,7 +23,7 @@ index 443f557..0b1004b 100644
  		return 0
  	}
  	f := os.NewFile(uintptr(fd), "logfd")
-@@ -698,6 +701,7 @@ func TsnetSetLogFD(sd, fd C.int) C.int {
+@@ -724,6 +727,7 @@ func TsnetSetLogFD(sd, fd C.int) C.int {
  		fmt.Fprintf(f, format, args...)
  		fmt.Fprintf(f, "\n")
  	}
