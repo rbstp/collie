@@ -60,16 +60,21 @@ final class AttachmentMenuTests: XCTestCase {
         let picker = switch choice {
         case "Saved prompts": app.navigationBars["Saved prompts"]
         case "Files": app.navigationBars["FullDocumentManagerViewControllerNavigationBar"]
-        // On CI the picker can stay on PUPickerUnavailableView, loading, when the simulator's photo service does not start.
-        default: app.navigationBars["Photos"].appears(within: 30) ? app.navigationBars["Photos"] : app.navigationBars["PUPickerUnavailableView"]
+        // On CI the picker can stay on PUPickerUnavailableView, loading, for over 30 s, then become Photos mid-cancel.
+        default: app.navigationBars.matching(NSPredicate(format: "identifier IN %@", ["Photos", "PUPickerUnavailableView"])).firstMatch
+        }
+        if choice == "Photo Library" {
+            _ = app.navigationBars["Photos"].appears(within: 30)
         }
         // Cancel remote pickers before another presentation or terminating their host app.
         XCTAssertTrue(picker.appears(within: choice == "Saved prompts" ? 5 : 30), app.debugDescription)
         let cancel = picker.buttons.matching(identifier: "Cancel")
-        XCTAssertTrue(cancel.firstMatch.appears(within: 5), app.debugDescription)
-        let hittableCancel = cancel.allElementsBoundByIndex.first(where: \.isHittable)
-        XCTAssertNotNil(hittableCancel, app.debugDescription)
-        hittableCancel?.tap()
-        XCTAssertTrue(picker.disappears(within: 5), app.debugDescription)
+        // While Photos replaces the loading view, its Cancel can be unhittable or drop the tap.
+        for _ in 0..<(choice == "Photo Library" ? 2 : 1) where picker.exists {
+            XCTAssertTrue(cancel.firstMatch.appears(within: 5), app.debugDescription)
+            cancel.allElementsBoundByIndex.first(where: \.isHittable)?.tap()
+            _ = picker.disappears(within: 5)
+        }
+        XCTAssertFalse(picker.exists, app.debugDescription)
     }
 }
