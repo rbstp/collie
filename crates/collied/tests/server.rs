@@ -258,10 +258,25 @@ async fn scenario(
     assert_error(&recv(&mut ws).await, ErrorCode::HelloRequired);
     assert_closed(&mut ws).await;
 
-    let mut ws = open(&phone, &target).await;
-    send(&mut ws, hello_frame(99)).await;
-    assert_error(&recv(&mut ws).await, ErrorCode::UnsupportedProtocol);
-    assert_closed(&mut ws).await;
+    for (version, message) in [
+        (
+            99,
+            "collied is older than this app. Update collied on this machine.",
+        ),
+        (1, "This app is older than collied. Update the app."),
+    ] {
+        let mut ws = open(&phone, &target).await;
+        send(&mut ws, hello_frame(version)).await;
+        let frame = recv(&mut ws).await;
+        assert!(
+            matches!(&frame, ServerFrame::Error { error, .. }
+                if error.code == ErrorCode::UnsupportedProtocol
+                    && error.message == message
+                    && error.protocol_version == Some(protocol::PROTOCOL_VERSION)),
+            "{frame:?}"
+        );
+        assert_closed(&mut ws).await;
+    }
 
     println!("pairing-only session refuses anything but pair.complete");
     let mut ws = open(&phone, &target).await;
@@ -992,7 +1007,10 @@ async fn scenario(
         "\"result\":\"agent_blocked: agent is blocked; answer it through an approval (replayed)\"",
         "\"result\":\"invalid_params: cwd is outside the allowed roots\"",
         "\"result\":\"hello_required\"",
-        "\"result\":\"unsupported_protocol\"",
+        &format!(
+            "\"result\":\"unsupported_protocol: app 99, collied {}\"",
+            protocol::PROTOCOL_VERSION
+        ),
         "\"result\":\"not_paired\"",
         "\"method\":\"push.register\"",
         "\"method\":\"push.activity_token\"",

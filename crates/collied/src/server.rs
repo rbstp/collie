@@ -1369,14 +1369,30 @@ impl Session<'_> {
                     let hello = self.hello().await;
                     self.reply(id, Ok(hello)).await
                 }
-                Request::Hello(_) => {
-                    self.audit(method, "unsupported_protocol");
-                    self.send_error(
-                        Some(id),
-                        ErrorCode::UnsupportedProtocol,
-                        "unsupported protocol version",
-                    )
-                    .await;
+                Request::Hello(p) => {
+                    let ours = protocol::PROTOCOL_VERSION;
+                    self.audit(
+                        method,
+                        &format!(
+                            "unsupported_protocol: app {}, collied {ours}",
+                            p.protocol_version
+                        ),
+                    );
+                    let message = if p.protocol_version < ours {
+                        "This app is older than collied. Update the app."
+                    } else {
+                        "collied is older than this app. Update collied on this machine."
+                    };
+                    let frame = ServerFrame::Error {
+                        id: Some(id),
+                        error: ErrorBody {
+                            code: ErrorCode::UnsupportedProtocol,
+                            message: message.to_owned(),
+                            draft: None,
+                            protocol_version: Some(ours),
+                        },
+                    };
+                    self.send_frame(&frame).await;
                     Flow::Close
                 }
                 _ => {
@@ -2168,6 +2184,7 @@ impl Session<'_> {
                 code,
                 message: message.to_owned(),
                 draft: None,
+                protocol_version: None,
             },
         };
         self.send_frame(&frame).await;
@@ -2425,11 +2442,13 @@ fn error_body(code: ErrorCode, message: String) -> ErrorBody {
             code,
             message: drive::DRAFT_CHANGED.to_owned(),
             draft: Some(message),
+            protocol_version: None,
         },
         _ => ErrorBody {
             code,
             message,
             draft: None,
+            protocol_version: None,
         },
     }
 }

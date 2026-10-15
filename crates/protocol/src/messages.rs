@@ -1656,6 +1656,9 @@ pub struct ErrorBody {
     /// With `draft_changed`: the text now in the Mac's input box.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draft: Option<String>,
+    /// With `unsupported_protocol`: collied's protocol version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1681,6 +1684,7 @@ impl FrameError {
                 code: self.code,
                 message: self.message,
                 draft: None,
+                protocol_version: None,
             },
         }
     }
@@ -2421,6 +2425,7 @@ mod tests {
                 code: ErrorCode::DraftChanged,
                 message: "m".into(),
                 draft: Some("typed on the Mac".into()),
+                protocol_version: None,
             },
         };
         let json = serde_json::to_string(&frame).unwrap();

@@ -306,20 +306,27 @@ struct MachineHeader: View {
     let showsLink: Bool
 
     var body: some View {
-        HStack {
-            MachineName(machine: entry.machine)
-            Spacer()
-            if approvalsCount > 0 {
-                Text("\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
-                    .foregroundStyle(.red)
-            }
-            if showsLink, let link = entry.flock?.link {
-                if link == .connecting {
-                    ProgressView().controlSize(.mini)
-                    Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
-                } else {
-                    StatusPill(state: link == .connected ? .done : .idle, title: link.label)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                MachineName(machine: entry.machine)
+                Spacer()
+                if approvalsCount > 0 {
+                    Text("\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
+                        .foregroundStyle(.red)
                 }
+                if showsLink, let link = entry.flock?.link {
+                    if link == .connecting {
+                        ProgressView().controlSize(.mini)
+                        Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
+                    } else {
+                        StatusPill(state: link == .connected ? .done : .idle, title: link.label)
+                    }
+                }
+            }
+            if showsLink, entry.flock?.versionMismatch == true, let message = entry.flock?.lastError {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
             }
         }
     }

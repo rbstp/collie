@@ -404,6 +404,8 @@ pub struct Link {
     pub last_error: Option<String>,
     resumed: Option<Instant>,
     pub last_dial: Instant,
+    /// Set while stopped on a protocol version mismatch: collied's version, if it sent one.
+    pub version_mismatch: Option<Option<u32>>,
 }
 
 impl Link {
@@ -418,6 +420,8 @@ impl Link {
 pub struct Shared {
     pub flock: Mutex<FlockState>,
     pub link: Mutex<Link>,
+    /// The machine's current name, kept up to date on rename.
+    pub label: Mutex<String>,
 }
 
 impl Shared {
@@ -481,7 +485,9 @@ impl Conn {
                 last_error: None,
                 resumed: None,
                 last_dial: Instant::now(),
+                version_mismatch: None,
             }),
+            label: Mutex::new(machine.label.clone()),
         });
         let (requests, rx) = mpsc::channel(QUEUE);
         let (reconnect, reconnect_rx) = watch::channel(0);
@@ -554,7 +560,8 @@ impl Conn {
     /// no session left to probe.
     pub fn resume(self: &Arc<Self>, background: Duration, suspended: bool) {
         let waiting = self.shared.resume(Instant::now());
-        if waiting || suspended || background >= FOREGROUND_RECONNECT {
+        let stopped = lock(&self.shared.link).phase == LinkPhase::Stopped;
+        if waiting || stopped || suspended || background >= FOREGROUND_RECONNECT {
             self.reconnect_now();
             return;
         }
@@ -716,6 +723,26 @@ async fn supervise(
             }
             Err(e) => e,
         };
+        // Only an update fixes it: answer requests at once until a resume or a pull to
+        // refresh dials again.
+        if let ConnectError::Session(SessionError::VersionMismatch { collied }) = err {
+            {
+                let mut link = lock(&shared.link);
+                link.phase = LinkPhase::Stopped;
+                link.last_error = None;
+                link.version_mismatch = Some(collied);
+            }
+            loop {
+                tokio::select! {
+                    () = wake.notified() => break,
+                    Some((_, reply)) = requests.recv() => {
+                        let _ = reply.send(Err(SessionError::VersionMismatch { collied }));
+                    }
+                }
+            }
+            lock(&shared.link).version_mismatch = None;
+            continue;
+        }
         let Some(delay) = backoff.failed(&shared, &err, Instant::now()) else {
             return;
         };
@@ -941,7 +968,9 @@ mod tests {
                 last_error: None,
                 resumed: None,
                 last_dial: Instant::now(),
+                version_mismatch: None,
             }),
+            label: Mutex::default(),
         }
     }
 
@@ -1193,6 +1222,40 @@ mod tests {
                 "a later wait is not cut short ({phase:?})"
             );
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn resume_redials_a_stopped_link() {
+        let (_suspend, suspended) = watch::channel(true);
+        let machine = Machine {
+            id: "m".into(),
+            label: "m".into(),
+            host: "m".into(),
+            port: 0,
+            node_id: "n".into(),
+            kind: MachineKind::Mac,
+            key: String::new(),
+            terminal_key: String::new(),
+            default_label: None,
+        };
+        let conn = Arc::new(Conn::spawn(
+            &tokio::runtime::Handle::current(),
+            machine,
+            NodeSlot::default(),
+            IdentitySlot::default(),
+            PushSlot::default(),
+            Arc::default(),
+            suspended,
+        ));
+        lock(&conn.shared.link).phase = LinkPhase::Stopped;
+        let wake = conn.wake.clone();
+        let parked = tokio::spawn(async move { wake.notified().await });
+        tokio::task::yield_now().await;
+        conn.resume(Duration::ZERO, false);
+        tokio::time::timeout(PROBE_TIMEOUT / 2, parked)
+            .await
+            .expect("a short resume wakes a parked supervisor at once")
+            .unwrap();
     }
 
     #[tokio::test]
