@@ -143,7 +143,8 @@ fn check_hooks() -> (Status, String) {
     }
 }
 
-/// herdr 0.9.4 reports a `--no-daemon` Codex's turns through its hook from version 9.
+/// herdr 0.9.5 writes version 10, the SessionStart hook only. Version 9 (0.9.4) also
+/// installed turn hooks that make Codex warn "clamping Interrupt hook timeout".
 fn check_codex_hook(codex_home: &Path) -> (Status, String) {
     if !codex_home.is_dir() {
         return (
@@ -164,11 +165,11 @@ fn check_codex_hook(codex_home: &Path) -> (Status, String) {
         .find_map(|l| l.strip_prefix("# HERDR_INTEGRATION_VERSION="))
         .and_then(|v| v.trim().parse::<u32>().ok());
     match version {
-        Some(v) if v >= 9 => (Status::Ok, format!("v{v} in {}", path.display())),
+        Some(v) if v >= 10 => (Status::Ok, format!("v{v} in {}", path.display())),
         _ => (
             Status::Warn,
             format!(
-                "{} predates herdr 0.9.4's turn reports; {fix}",
+                "{} predates herdr 0.9.5's v10, which drops 0.9.4's Codex turn hooks; {fix}",
                 path.display()
             ),
         ),
@@ -751,7 +752,7 @@ mod tests {
         let (s, d) = check_codex_hook(dir.path());
         assert!(s == Status::Warn && d.contains("not installed"), "{d}");
         let hook = dir.path().join("herdr-agent-state.sh");
-        for (version, want) in [("8", Status::Warn), ("9", Status::Ok), ("10", Status::Ok)] {
+        for (version, want) in [("8", Status::Warn), ("9", Status::Warn), ("10", Status::Ok)] {
             let script = format!(
                 "#!/bin/sh\n# HERDR_INTEGRATION_ID=codex\n# HERDR_INTEGRATION_VERSION={version}\n"
             );
