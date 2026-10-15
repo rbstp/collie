@@ -153,7 +153,7 @@ fn check_codex_hook(codex_home: &Path) -> (Status, String) {
         );
     }
     let path = codex_home.join("herdr-agent-state.sh");
-    let fix = "run `herdr integration install codex`";
+    let fix = "update herdr to 0.9.5 or later, then run `herdr integration install codex`";
     let Ok(script) = std::fs::read_to_string(&path) else {
         return (
             Status::Warn,
@@ -168,10 +168,7 @@ fn check_codex_hook(codex_home: &Path) -> (Status, String) {
         Some(v) if v >= 10 => (Status::Ok, format!("v{v} in {}", path.display())),
         _ => (
             Status::Warn,
-            format!(
-                "{} predates herdr 0.9.5's v10, which drops 0.9.4's Codex turn hooks; {fix}",
-                path.display()
-            ),
+            format!("{} is older than v10; {fix}", path.display()),
         ),
     }
 }
@@ -763,7 +760,9 @@ mod tests {
         std::fs::write(&hook, "#!/bin/sh\n").unwrap();
         let (s, d) = check_codex_hook(dir.path());
         assert!(
-            s == Status::Warn && d.contains("herdr integration install codex"),
+            s == Status::Warn
+                && d.contains("0.9.5 or later")
+                && d.contains("herdr integration install codex"),
             "{d}"
         );
     }
