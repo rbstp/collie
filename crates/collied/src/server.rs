@@ -683,8 +683,8 @@ async fn pull_requests(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
 
 type Merged = Vec<(herdr::AgentInfo, Cwd, u64)>;
 
-/// `Merged` lists the agents whose pull request a fresh read found merged, only while
-/// automatic archive is on.
+/// `Merged` lists the agents whose pull request a fresh or kept read found merged, only
+/// while automatic archive is on.
 async fn read_pulls(
     state: &State,
     gh: &str,
@@ -709,7 +709,21 @@ async fn read_pulls(
                 if !state.reads_pulls() {
                     return None;
                 }
-                let read = pulls::fetch(gh, &root).await;
+                let kept = lock(&state.pulls).kept(&key, Instant::now());
+                let kept = match kept {
+                    Some(pull) => git::line(&root, &["rev-parse", "--verify", "--quiet", "HEAD"])
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|head| head == pull.1)
+                        .then_some(pull),
+                    None => None,
+                };
+                let is_kept = kept.is_some();
+                let read = match kept {
+                    Some(kept) => Ok(Some(kept)),
+                    None => pulls::fetch(gh, &root).await,
+                };
                 let same = git::branch(&cwd, roots)
                     .await
                     .is_ok_and(|now| now.is_some_and(|(r, b)| r.as_str() == key.0 && b == key.1));
@@ -719,7 +733,7 @@ async fn read_pulls(
                 if let Some(number) = pulls::merged_number(&read, || state.archives_on_merge()) {
                     merged.push((a.clone(), root.clone(), number));
                 }
-                lock(&state.pulls).store(key.clone(), Instant::now(), read)
+                lock(&state.pulls).store(key.clone(), Instant::now(), read, is_kept)
             }
         };
         if let Some(pr) = pr {
