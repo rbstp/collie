@@ -22,7 +22,7 @@
 
 # Using the app
 
-- [Agents](app/agents.md)
+- [Agents](app/agents-tab.md)
 - [Chat and Terminal](app/chat-terminal.md)
 - [Key strip and gestures](app/keys.md)
 - [Dictation and attachments](app/dictation-attachments.md)
