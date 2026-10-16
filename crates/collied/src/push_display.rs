@@ -255,7 +255,9 @@ mod tests {
                 .is_none()
             );
             assert!(open(&key, &format!("{enc}="), kind, node, scope, event).is_none());
-            assert!(seal(&key, kind, node, scope, [0; 16], [0; 12], &vec![0; 4096]).is_none());
+            let mut nonce = [0u8; 12];
+            getrandom::fill(&mut nonce).unwrap();
+            assert!(seal(&key, kind, node, scope, [0; 16], nonce, &vec![0; 4096]).is_none());
         }
         assert_eq!(
             fixture["vectors"][0]["payload"]["aps"]["alert"],
