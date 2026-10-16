@@ -792,3 +792,9 @@ Desktop release artifacts share the TestFlight version tag and exact source comm
 macOS 26+ Apple silicon packages use publisher Developer ID Application signing, hardened runtime and notarization. The daemon disk image and CollieBar app are stapled; archives carry checksums and runtime/protocol metadata. Linux x86_64 packages are built on Ubuntu 24.04, check ELF GLIBC symbols against the 2.39 floor, and list dynamic library requirements. CollieTray is an architecture-independent Omarchy 4/Quickshell plugin archive.
 
 The explicit packaged installer copies the selected daemon into a fresh regular `~/.cargo/bin/collied`, preserving the stable setup contract. It refreshes only the executable in the existing launchd plist or systemd unit, preserving custom config, environment, data and stopped/running state. Homebrew supplies this installer as `collied-install --replace`; it does not change the user's daemon automatically or create a `brew services` label. The daemon's executable therefore survives Cellar cleanup. See [Desktop release downloads](desktop-releases.md) for controls, installation and validation gates. No protocol change or version bump.
+
+## Push relay validation foundation
+
+The isolated Worker/D1 implementation under `relay/` provides a bounded authenticated send contract, fixed topics, deterministic provider JWTs and atomic indexed installation/global quotas. It is not deployed or connected to released clients. Enrollment, App Attest verification and production rollout remain gated. See [relay.md](relay.md) for the exact contract, local measurements and outstanding live Free-plan validation. No version bump: this foundation changes no phone/daemon wire types.
+
+The isolated Free-plan benchmark failed the CPU gate for full App Attest verification; production remains blocked pending a revised, remeasured design. See [the validation report](reviews/relay-free-tier.md).
