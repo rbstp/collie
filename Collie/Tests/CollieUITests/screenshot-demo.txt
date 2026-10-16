@@ -1,0 +1,38 @@
+> what does the approval hook send to collied?
+
+⏺ The hook posts the tool name, its input and the
+  session ID. collied matches the session to a
+  pane, then waits for an answer from the phone.
+
+> the approval tests are flaky, fix them
+
+⏺ I'll read the approval tests first to see where
+  the timing depends on an idle machine.
+
+⏺ Read(crates/collied/tests/approvals.rs)
+  ⎿  Read 412 lines
+
+⏺ The tests wait a fixed 200 ms for the hook to
+  settle, which is too short on a busy machine.
+  I'll poll the approval state instead, with a
+  five second deadline.
+
+⏺ Update(crates/collied/tests/approvals.rs)
+  ⎿  Updated approvals.rs with 14 additions and 6
+     removals
+
+⏺ Bash(cargo nextest run -p collied --test approvals)
+  ⎿  Running 18 tests across 1 binary
+     PASS [ 0.41s] allow_once_then_deny
+     PASS [ 0.39s] deny_with_a_reason
+     PASS [ 0.37s] superseded_prompt_is_refused
+     Summary [ 2.20s] 18 tests run: 18 passed
+
+⏺ All 18 approval tests pass. I'll run them twenty
+  times under load before I commit.
+
+✻ Running the approval tests again… (2m 15s)
+
+╭────────────────────────────────────────────────╮
+│ >                                              │
+╰────────────────────────────────────────────────╯

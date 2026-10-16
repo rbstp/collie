@@ -231,3 +231,25 @@ blockquote.blockquote-tag {
 .content mark a:visited {
     color: var(--fg);
 }
+
+.screenshots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.screenshots img {
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--table-border-color);
+    border-radius: 16px;
+}
+
+/* Each screenshot comes in a light and a dark copy; the html class is the active mdBook theme, Auto included. */
+.light .screenshot-dark,
+.rust .screenshot-dark,
+.coal .screenshot-light,
+.navy .screenshot-light,
+.ayu .screenshot-light {
+    display: none;
+}

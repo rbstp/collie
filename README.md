@@ -6,6 +6,11 @@ collie is a remote control for [herdr](https://github.com/herdrdev/herdr) coding
 
 Documentation: <https://collie.rbstp.dev>
 
+<p>
+<img src="docs/site/src/images/agents-dark.png" width="300" alt="The Agents tab: a grid of agents in three workspaces, each card a preview of the agent's screen">
+<img src="docs/site/src/images/chat-dark.png" width="300" alt="An agent's Chat view: the conversation, with the prompt field at the bottom">
+</p>
+
 ## Requirements
 
 - An Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.5
@@ -69,6 +74,7 @@ Reference, in this repository:
 | `just ios-ghostty` | Builds libghostty-vt from its pinned commit (skipped when already built) |
 | `just ios-project` | Builds libghostty-vt and generates the Xcode project with XcodeGen |
 | `just ios-test` | GhosttyTerminal package tests on macOS, then the iOS unit and UI tests on the simulator |
+| `just ios-screenshots` | Regenerates the documentation screenshots, light and dark, from the app's demo on the iPhone 18 Pro Max simulator, compressed with pngquant when installed |
 | `just ios-build-sim` | Simulator build |
 | `just ios-run-device` | Builds, installs and launches on a connected iPhone |
 | `just mac-project` | Generates the menu bar app's Xcode project (`Mac/project.yml`) |

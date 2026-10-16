@@ -126,6 +126,46 @@ ios-test diagnostics="on-failure": ios-framework ios-project
     cd Collie/GhosttyTerminal && xcodebuild -scheme GhosttyTerminal -destination 'platform=iOS Simulator,name={{ sim }}' -derivedDataPath ../../target/ios/GhosttyTerminal CODE_SIGNING_ALLOWED=NO test
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' CODE_SIGNING_ALLOWED=NO test
 
+# The documentation screenshots, light and dark, from the demo on one fixed simulator.
+ios-screenshots: ios-framework ios-project
+    #!/usr/bin/env bash
+    set -euo pipefail
+    device="iPhone 18 Pro Max"
+    udid="$(xcrun simctl list devices available -j | jq -r --arg name "$device" '[.devices[][] | select(.name == $name) | .udid][0] // empty')"
+    [ -n "$udid" ] || { echo "no available simulator named $device"; exit 1; }
+    xcrun simctl bootstatus "$udid" -b
+    appearance="$(xcrun simctl ui "$udid" appearance)"
+    trap 'xcrun simctl status_bar "$udid" clear; xcrun simctl ui "$udid" appearance "$appearance"' EXIT
+    xcrun simctl status_bar "$udid" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3 \
+        --cellularMode active --cellularBars 4 --operatorName '' --batteryState discharging --batteryLevel 100
+    {{ xcodebuild }} -destination "id=$udid" CODE_SIGNING_ALLOWED=NO build-for-testing
+    # A fresh install drops drafts left by other UI tests; the demo takes its accent from the prefs file.
+    xcrun simctl uninstall "$udid" dev.rbstp.collie
+    xcrun simctl install "$udid" target/ios/DerivedData/Build/Products/Debug-iphonesimulator/Collie.app
+    state="$(xcrun simctl get_app_container "$udid" dev.rbstp.collie data)/Library/Application Support/collie"
+    mkdir -p "$state"
+    chmod 700 "$state"
+    echo '{"accent":"gold"}' > "$state/prefs.json"
+    raw="$PWD/target/ios/screenshots"
+    rm -rf "$raw"
+    mkdir -p "$raw"
+    TEST_RUNNER_COLLIE_SCREENSHOTS="$raw" {{ xcodebuild }} -destination "id=$udid" CODE_SIGNING_ALLOWED=NO \
+        -only-testing CollieUITests/ScreenshotTests test-without-building
+    out=docs/site/src/images
+    mkdir -p "$out"
+    for f in "$raw"/*.png; do
+        sips --resampleWidth 600 "$f" --out "$out/$(basename "$f")" >/dev/null
+    done
+    if command -v pngquant >/dev/null; then
+        for f in "$out"/*.png; do
+            # 98 and 99: kept as is, the result would be larger or below the quality floor.
+            pngquant --quality 70-90 --strip --skip-if-larger --force --ext .png "$f" || [ $? -ge 98 ]
+        done
+    else
+        echo "pngquant not found: the screenshots are not compressed (brew install pngquant)"
+    fi
+    du -ch "$out"/*.png | tail -n 1
+
 # Debug build with automatic signing on the first connected iPhone. Release keeps its manual TestFlight signing.
 ios-run-device: ios-framework ios-project
     #!/usr/bin/env bash

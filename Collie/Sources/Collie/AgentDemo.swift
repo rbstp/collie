@@ -17,6 +17,7 @@ struct AgentDemo: View {
     @State private var approvals: ApprovalsModel?
     @State private var follows: FollowModel
     @State private var opening: AgentRoute?
+    private let accent = DevicePrefs.load(from: DevicePrefs.file).accent
 
     init?(arguments: [String]) {
         guard let flag = arguments.firstIndex(of: "--terminal-demo"), flag + 1 < arguments.count,
@@ -55,6 +56,9 @@ struct AgentDemo: View {
             }
             Tab("Settings", systemImage: "gearshape") { Color.clear }
         }
+        .tint(accent.color)
+        .accentColor(accent.color)
+        .environment(\.appAccent, accent.color)
         .task {
             approvals?.poll()
             follows.foreground()
@@ -119,10 +123,10 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 lastPrompt: "the approval tests are flaky, fix them", lastActivityMs: now - 4_000
             ),
             AgentSummary(
-                terminalId: "term_2", workspaceId: "ws_collie", kind: "codex", name: nil, title: "add approval tests",
+                terminalId: "term_2", workspaceId: "ws_collie", kind: "claude", name: nil, title: "add approval tests",
                 status: .blocked, statusSinceMs: now - 42_000, cwd: "/Users/demo/collie",
                 lastLine: "I need to run cargo test to check the new cases.", contextLeft: 38,
-                lastPrompt: "add approval tests for the Codex menu", lastActivityMs: now - 42_000
+                lastPrompt: "add approval tests for the deny path", lastActivityMs: now - 42_000
             ),
             AgentSummary(
                 terminalId: "term_3", workspaceId: "ws_site", kind: "claude", name: nil, title: "update the docs",
@@ -178,7 +182,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         let now = Date.now.unixMs
         return ApprovalFeed(link: .connected, pending: [
             PendingApproval(
-                approvalId: "ap_demo", terminalId: "term_2", agentLabel: "Codex", workspaceLabel: "collie",
+                approvalId: "ap_demo", terminalId: "term_2", agentLabel: "Claude Code", workspaceLabel: "collie",
                 snippet: (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n"),
                 toolName: "Bash", toolSummary: "cargo test -p collied --test approvals -- --nocapture",
                 options: [.approve, .approveAlways, .deny], choices: [], acceptsInput: true, hasTextField: false,
@@ -192,6 +196,10 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     }
 
     func agentHistory(machineId: String, terminalId: String, before: String?, after: String?, query: String?) async throws -> HistoryPage {
+        if ProcessInfo.processInfo.environment["COLLIE_DEMO_SCREENSHOTS"] != nil {
+            let messages = after == nil && before == nil ? Self.screenshotHistory(terminalId) : []
+            return HistoryPage(session: "demo", available: true, unavailableReason: nil, reset: false, messages: messages, before: nil, after: "end", more: false, omitted: false)
+        }
         let messages = after == nil && before == nil ? (1...20).flatMap { turn in
             [
                 HistoryMessage(id: "u\(turn)", role: "user", text: "Run the approval tests again, round \(turn).", tool: nil, callId: nil, truncated: false, parentCallId: nil),
@@ -203,6 +211,35 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
             ]
         } : []
         return HistoryPage(session: "demo", available: true, unavailableReason: nil, reset: false, messages: messages, before: nil, after: "end", more: false, omitted: false)
+    }
+
+    private static func screenshotHistory(_ terminalId: String) -> [HistoryMessage] {
+        func message(_ id: String, _ role: String, _ text: String, tool: String? = nil, call: String? = nil) -> HistoryMessage {
+            HistoryMessage(id: id, role: role, text: text, tool: tool, callId: call, truncated: false, parentCallId: nil)
+        }
+        if terminalId == "term_2" {
+            return [
+                message("u1", "user", "add approval tests for the deny path"),
+                message("a1", "assistant", "I'll add three cases to `crates/collied/tests/approvals.rs`:\n\n- deny with a reason\n- deny after the prompt changed\n- deny from the lock screen"),
+                message("t1", "assistant", "crates/collied/tests/approvals.rs", tool: "Update", call: "c1"),
+                message("r1", "tool", "Added 3 tests", tool: "Result", call: "c1"),
+                message("a2", "assistant", "I need to run cargo test to check the new cases."),
+            ]
+        }
+        return [
+            message("u1", "user", "the approval tests are flaky, fix them"),
+            message("a1", "assistant", "I'll read the approval tests first to see where the timing depends on an idle machine."),
+            message("t1", "assistant", "crates/collied/tests/approvals.rs", tool: "Read", call: "c1"),
+            message("r1", "tool", "Read 412 lines", tool: "Result", call: "c1"),
+            message("a2", "assistant", "The tests wait a fixed 200 ms for the hook to settle, which is too short on a busy machine. The fix:\n\n- poll the approval state instead of sleeping\n- give up after a five second deadline"),
+            message("t2", "assistant", "crates/collied/tests/approvals.rs", tool: "Update", call: "c2"),
+            message("r2", "tool", "14 additions and 6 removals", tool: "Result", call: "c2"),
+            message("t3", "assistant", "cargo nextest run -p collied --test approvals", tool: "Bash", call: "c3"),
+            message("r3", "tool", "18 tests run: 18 passed", tool: "Result", call: "c3"),
+            message("a3", "assistant", "All 18 approval tests pass:\n\n```\n18 tests run: 18 passed\n```\n\nI'll run them twenty times under load before I commit."),
+            message("u2", "user", "commit it once the loop passes"),
+            message("a4", "assistant", "Will do. The loop is on run 7 of 20 and every run has passed so far."),
+        ]
     }
 
     func prompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws {
@@ -246,7 +283,8 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     }
 
     func taskOptions(machineId: String) async throws -> TaskOptions {
-        throw CoreError.NotImplemented
+        guard ProcessInfo.processInfo.environment["COLLIE_DEMO_SCREENSHOTS"] != nil else { throw CoreError.NotImplemented }
+        return TaskOptions(agents: ["claude", "codex", "copilot"], defaultAgent: "claude", recentCwds: ["/Users/demo/collie", "/Users/demo/website"], roots: ["/Users/demo"])
     }
 
     func taskFolders(machineId: String, path: String) async throws -> TaskFolders {

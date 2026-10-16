@@ -2,6 +2,11 @@
 
 **New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick.
 
+<div class="screenshots">
+<img class="screenshot-light" src="../images/new-task-light.png" width="300" height="652" loading="lazy" alt="The New task sheet: location, folder, agent picker and prompt">
+<img class="screenshot-dark" src="../images/new-task-dark.png" width="300" height="652" loading="lazy" alt="The New task sheet: location, folder, agent picker and prompt">
+</div>
+
 ## Choose a folder
 
 Each machine can have a **base folder** (Machines > the machine > Base folder). Use a full path such as `/Users/you/git`, since `~` is not expanded. It must be inside one of `collied`'s task roots (`[tasks] roots` in `collied.toml`, your home folder by default).

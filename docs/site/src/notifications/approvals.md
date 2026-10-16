@@ -17,6 +17,11 @@ Codex and Copilot CLI send blocked notifications without Approve or Deny. Answer
 
 The notification is removed once the agent moves on, on a best-effort basis.
 
+<div class="screenshots">
+<img class="screenshot-light" src="../images/approval-light.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, its output, and Approve, Approve always and Deny buttons">
+<img class="screenshot-dark" src="../images/approval-dark.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, its output, and Approve, Approve always and Deny buttons">
+</div>
+
 ## Answering by hand
 
 Approvals, questions and trust prompts from all three agents can also be answered with the terminal buttons, or by typing in the session composer. Typed answers are pasted into the current prompt and submitted with Enter. This does not ask for Face ID, and it is not tied to one approval: if the prompt changes, the new prompt receives your input.

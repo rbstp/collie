@@ -1,0 +1,59 @@
+import XCTest
+
+/// The documentation screenshots, written only when `just ios-screenshots` sets COLLIE_SCREENSHOTS.
+@MainActor
+final class ScreenshotTests: XCTestCase {
+    func testScreenshots() throws {
+        let path = ProcessInfo.processInfo.environment["COLLIE_SCREENSHOTS"] ?? ""
+        try XCTSkipIf(path.isEmpty, "set by just ios-screenshots")
+        continueAfterFailure = false
+        let dir = URL(filePath: path, directoryHint: .isDirectory)
+        for appearance in [XCUIDevice.Appearance.light, .dark] {
+            XCUIDevice.shared.appearance = appearance
+            let suffix = appearance == .dark ? "dark" : "light"
+            func save(_ name: String) throws {
+                sleep(1)
+                try XCUIScreen.main.screenshot().pngRepresentation.write(to: dir.appending(path: "\(name)-\(suffix).png"))
+            }
+
+            var app = try launchDemo()
+            let card = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
+            XCTAssertTrue(card.appears(within: 10), app.debugDescription)
+            try save("agents")
+            app.segmentedControls["View"].buttons["Usage"].tap()
+            XCTAssertTrue(app.staticTexts["5-hour usage limit"].appears(within: 5), app.debugDescription)
+            try save("usage")
+            app.segmentedControls["View"].buttons["Agents"].tap()
+            app.buttons["New task"].tap()
+            XCTAssertTrue(app.textFields["What should the agent do?"].appears(within: 5), app.debugDescription)
+            try save("new-task")
+            app.terminate()
+
+            app = try launchDemo()
+            app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
+            let latest = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Will do.")).firstMatch
+            XCTAssertTrue(latest.appears(within: 10), app.debugDescription)
+            try save("chat")
+            app.buttons["Terminal"].firstMatch.tap()
+            XCTAssertTrue(app.scrollViews.firstMatch.appears(within: 5), app.debugDescription)
+            try save("terminal")
+            app.terminate()
+
+            app = try launchDemo(["--approval-demo"])
+            app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
+            XCTAssertTrue(app.buttons["Approve"].appears(within: 10), app.debugDescription)
+            try save("approval")
+            app.terminate()
+        }
+    }
+
+    private func launchDemo(_ arguments: [String] = []) throws -> XCUIApplication {
+        let app = XCUIApplication()
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "screenshot-demo", withExtension: "txt"))
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path] + arguments
+        app.launchEnvironment["COLLIE_DEMO_SCREENSHOTS"] = "1"
+        app.launch()
+        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
+        return app
+    }
+}
