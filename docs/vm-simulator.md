@@ -91,8 +91,106 @@ Clean removes the recorded disposable guest, dedicated Simulator, prepared deskt
 | Guest SSH startup timeout | Inspect the private run's `ssh-ready-*.log` files and guest log, preserve the failed attempt, then stop/reset only owned resources before rerunning |
 | Build, guest boot, pairing or mock push timeout | Inspect the printed private run directory, stop owned resources, and preserve the failure evidence before resetting |
 
+## Check the Release sample workspace
+
+This is separate from the Debug integration above. Use the dedicated Simulator, ordinary Release core and a Release app with no demo arguments. The iOS 27.2 Simulator acceptance passed for Welcome entry, simulated denial, terminal Escape, a prompt response, Machines, actual reset of changed sample data, exit and re-entry. Ordinary preferences remained unchanged. This does not establish physical iPhone acceptance or preservation of a real signed-in account or pairing.
+
+From the checkout, reset the harness-owned test resources, retaining the prepared baseline, and build the app:
+
+```sh
+just vm-reset
+export PATH="/opt/homebrew/opt/go/bin:$PATH"
+just ios-framework sim release
+just ios-project
+collie_vm_root="$(dirname "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")")/.codex/vms/collie-374"
+collie_sample_sim="$(jq -er '.simulator' "$collie_vm_root/owned.json")"
+xcodebuild -project Collie/Collie.xcodeproj -scheme Collie -configuration Release \
+  -derivedDataPath target/ios/ReleaseSampleCheck \
+  -destination "platform=iOS Simulator,id=$collie_sample_sim" \
+  ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Automatic build
+xcrun simctl boot "$collie_sample_sim"
+xcrun simctl bootstatus "$collie_sample_sim" -b
+xcrun simctl install "$collie_sample_sim" target/ios/ReleaseSampleCheck/Build/Products/Release-iphonesimulator/Collie.app
+collie_sample_data="$(xcrun simctl get_app_container "$collie_sample_sim" dev.rbstp.collie data)"
+collie_sample_state="$collie_sample_data/Library/Application Support/collie"
+mkdir -p "$collie_sample_state"
+chmod 700 "$collie_sample_state"
+printf '%s\n' '{"accent":"orange","agentsLayout":"grid","defaultSessionView":"chat","wrapLines":false,"historyLines":500}' > "$collie_sample_state/prefs.json"
+shasum -a 256 "$collie_sample_state/prefs.json"
+xcrun simctl launch "$collie_sample_sim" dev.rbstp.collie
+```
+
+This uses Simulator ad-hoc signing, without a personal certificate or provisioning profile, and seeds only benign ordinary preferences in the freshly erased dedicated Simulator. Do not use the Debug VM core, demo flags or a relay override. In Simulator, select **Collie VM test** and check:
+
+1. On **Welcome**, choose **Explore sample workspace** without signing in. Keep the **Sample workspace / Simulated actions only** banner visible.
+2. In Agents, choose the list layout and **add approval tests**. Deny its pending approval and require the visible simulated denial. In Terminal, open Keys and send Escape, then return to Chat and require the simulated terminal-key result. Send a sample prompt and require its visible simulated response. Inspect Machines.
+3. In sample Settings, choose **Reset sample workspace**. Reopen the same agent: it must be blocked again with Approve and Deny available, and the prior denial and prompt response must be gone. The banner alone does not prove reset.
+4. Exit to Welcome, then enter the sample again. Check that the ordinary onboarding and existing local preferences have not changed. Repeat `shasum -a 256 "$collie_sample_state/prefs.json"` and require the original digest. Confirm `machines.json` and `tsnet/tailscaled.state` remain absent from that state directory. Do not copy a real account or pairing into this test.
+
+Keep screenshots and the exact source, Release app/core hashes and signing results with the acceptance record. The existing `SampleWorkspaceTests` covers the representative actions and exit; its reset assertion checks only the banner, so the restored-state check above is also needed. Stop and erase only this dedicated Simulator afterward:
+
+```sh
+xcrun simctl shutdown "$collie_sample_sim"
+xcrun simctl erase "$collie_sample_sim"
+```
+
+## Check published desktop downloads in a separate guest
+
+`vm-test` uses host-only networking and Debug artifacts. Published downloads require a separately named clone with default shared NAT for GitHub HTTPS and Apple's online notarization lookup. NAT permits general outbound access, not an Apple-only allowlist. Use the stopped, consented `collie-374-desktop` baseline; never install into it or copy host credentials, home directories or existing tailnet state into the clone.
+
+Choose one approved published tag, replace the tag placeholder below, and record its exact source from `source.json`, selected asset hashes, clone name and baseline identity in a separate private acceptance record. Confirm the name is absent in `tart list` before cloning. From the checkout:
+
+```sh
+collie_vm_root="$(dirname "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")")/.codex/vms/collie-374"
+export TART_HOME="$collie_vm_root/tart"
+export TART_NO_AUTO_PRUNE=1
+collie_tart="$collie_vm_root/tools/tart.app/Contents/MacOS/tart"
+collie_release_tag='vMAJOR.MINOR.PATCH'
+collie_release_vm="collie-release-acceptance-$collie_release_tag"
+"$collie_tart" list
+"$collie_tart" clone collie-374-desktop "$collie_release_vm"
+"$collie_tart" set "$collie_release_vm" --cpu 2 --memory 4096
+"$collie_tart" run "$collie_release_vm" --no-audio --no-usb-accessories --no-clipboard
+```
+
+Leave `--net-host` off this run. Add no bridge, SSH listener, shares, host proxy or host network/security changes. Use the guest desktop and its existing signed Driver grants. Record the actual guest OS, empty installed-product state, Driver socket/permissions and CI security posture before testing.
+
+If guest HTTPS times out while routing and DNS work, record the current guest `en0` MTU first. On the tested host VPN path, guest MTU 1500 failed, 1280 passed the same HTTPS probes, and restoring 1500 reproduced the failure. The scoped workaround is temporary and guest-only. In the guest Terminal:
+
+```sh
+collie_guest_original_mtu="$(/sbin/ifconfig en0 | awk 'NR == 1 {print $NF}')"
+printf 'Original guest MTU: %s\n' "$collie_guest_original_mtu"
+sudo -n /sbin/ifconfig en0 mtu 1280
+```
+
+Keep this guest Terminal open and save the displayed original MTU in the acceptance record. Do not treat this as a certificate fix or change host interfaces, VPN or DNS. Restore that actual original value before deleting the clone; it was 1500 in the verified experiment.
+
+Use guest Safari to download the selected macOS assets, `source.json` and `SHA256SUMS` from that exact release. Record actual quarantine attributes before opening anything, verify each selected manifest entry uniquely and compare the source identity. Follow the existing [download installation and trust checks](desktop-releases.md): retain strict Developer ID/team/identifier checks, the standalone daemon's explicit online notarization check, and app/DMG policy checks. The raw daemon check is `codesign --verify --strict -R=notarized --check-notarization ./collied`. Never re-sign, remove quarantine or skip a failed check. If browser downloads fail but verified HTTPS works, a CLI transfer can support bounded install tests; browser/quarantine acceptance remains unproven.
+
+The authentic v0.0.152 downloads passed guest checksum, Safari quarantine and explicit signature/notarization checks, but its installer exited 141 before copying the executable because a metadata pipeline failed under `pipefail`. Published install, service and app acceptance did not pass. An unreleased installer candidate against that unchanged signed binary is separate evidence; do not present it as a fixed published download.
+
+Run the packaged installer with `--replace` only inside this disposable guest and stop at its first failure. Continue only after it succeeds: record the installed binary hash/version/signature, then check setup prerequisites and cancel if it reaches login without signing in. Setup logs in before installing its service. Separately check service install/start/stop/uninstall and CollieBar's initial Off state, installed-service discovery and Quit. A registered service or Starting/Off menu is not a healthy authenticated daemon. Real Running, full setup, pairing and agent control need legitimate dedicated test-tailnet authorization and guest prerequisites; never use Debug control/auth bypasses for Release. Do not send APNs or activate a publisher relay in this lane.
+
+Quit CollieBar, disable any guest login item enabled during the test, uninstall its guest service and detach any mounted DMG. If you applied the MTU workaround, use the same guest Terminal to restore and verify the captured original value:
+
+```sh
+sudo -n /sbin/ifconfig en0 mtu "$collie_guest_original_mtu"
+/sbin/ifconfig en0
+```
+
+Then, from a second host Terminal with the same variables, stop and delete only the separately recorded clone:
+
+```sh
+"$collie_tart" stop "$collie_release_vm"
+"$collie_tart" delete "$collie_release_vm"
+"$collie_tart" list
+```
+
+Verify its owned process has exited, its name is absent, and the stopped prepared baseline and harness ownership record are unchanged. Keep private download, trust, screenshot, service, MTU-restoration and cleanup evidence. Do not run `vm-clean` or remove the harness task directory while a separate acceptance clone exists. This CI base has SIP and Gatekeeper assessments disabled, so even successful explicit trust/install checks cannot establish pristine-consumer Gatekeeper acceptance.
+
 ## Acceptance limits
 
-The pinned image is a CI base, not a pristine consumer Mac: Gatekeeper assessments and System Integrity Protection are disabled in the guest. Debug integration or loading signed downloads in this image cannot establish clean-consumer Gatekeeper acceptance. Do not change those security settings on the host to make a test pass. Actual immutable release assets need the separate [desktop release acceptance checks](desktop-releases.md).
+The pinned image is a CI base, not a pristine consumer Mac: Gatekeeper assessments and System Integrity Protection are disabled in the guest. Debug integration or loading signed downloads in this image cannot establish clean-consumer Gatekeeper acceptance. Do not change those security settings on the host to make a test pass. Published versioned release assets need the separate [desktop release acceptance checks](desktop-releases.md).
 
 The local relay uses a fresh software identity and mock delivery. Genuine Apple App Attest, Secure Enclave trust, production APNs delivery and locked/background/pre-first-unlock behavior require a physical iPhone with separate evidence. Simulator success does not authorize public relay activation. See [Simulator relay testing](simulator.md) for its distinct modes and [notifications](notifications.md) for device acceptance. Linux x86_64 and Omarchy acceptance remain separate requirements.

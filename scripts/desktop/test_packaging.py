@@ -213,7 +213,7 @@ class SourceValidationTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
-    def install(self, running, unit_text=None, replace=True, macos=False, notarized=True):
+    def install(self, running, unit_text=None, replace=True, macos=False, notarized=True, metadata_id="dev.rbstp.collied", metadata_team="RM3UT3MMSR", metadata_exit=0, verbose_metadata=False):
         with tempfile.TemporaryDirectory(prefix="collie-install-") as temp:
             root = Path(temp)
             home = root / "home with spaces % $"
@@ -241,10 +241,16 @@ class InstallerTests(unittest.TestCase):
             system, arch = ("Darwin", "arm64") if macos else ("Linux", "x86_64")
             (shim / "uname").write_text(f'#!/bin/bash\nif [ "$1" = -s ]; then echo {system}; else echo {arch}; fi\n')
             (shim / "codesign").write_text('''#!/bin/bash
+set -e
 printf 'codesign %s\\n' "$*" >> "$CALLS"
 if [ "$1" = -dv ]; then
-    echo Identifier=dev.rbstp.collied >&2
-    echo TeamIdentifier=RM3UT3MMSR >&2
+    echo "Identifier=$METADATA_ID" >&2
+    echo "TeamIdentifier=$METADATA_TEAM" >&2
+    if [ "$VERBOSE_METADATA" = 1 ]; then
+        head -c 1048576 /dev/zero | tr '\\0' x >&2
+        echo >&2
+    fi
+    exit "$METADATA_EXIT"
 fi
 if [[ "$*" = *--check-notarization* ]]; then exit "$NOTARIZATION"; fi
 ''')
@@ -258,7 +264,7 @@ if [[ "$*" = *FragmentPath* ]]; then printf '%s\\n' "$UNIT"; fi
             for path in shim.iterdir():
                 path.chmod(0o755)
             calls = root / "calls"
-            env = dict(os.environ, HOME=str(home), PATH=f"{shim}:{os.environ['PATH']}", CALLS=str(calls), UNIT=str(unit), ACTIVE="0" if running else "3", NOTARIZATION="0" if notarized else "3")
+            env = dict(os.environ, HOME=str(home), PATH=f"{shim}:{os.environ['PATH']}", CALLS=str(calls), UNIT=str(unit), ACTIVE="0" if running else "3", NOTARIZATION="0" if notarized else "3", METADATA_ID=metadata_id, METADATA_TEAM=metadata_team, METADATA_EXIT=str(metadata_exit), VERBOSE_METADATA="1" if verbose_metadata else "0")
             env.pop("XDG_CONFIG_HOME", None)
             result = subprocess.run(["bash", str(package_dir / "install.sh")] + (["--replace"] if replace else []), env=env, capture_output=True, text=True)
             log = calls.read_text() if calls.exists() else ""
@@ -295,6 +301,30 @@ if [[ "$*" = *FragmentPath* ]]; then printf '%s\\n' "$UNIT"; fi
         result, binary, _, _, _, _ = self.install(False, macos=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("collied 1.2.3", binary)
+
+    def test_macos_consumes_verbose_signing_metadata_before_asserting_identity(self):
+        result, binary, _, _, log, _ = self.install(False, macos=True, verbose_metadata=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("collied 1.2.3", binary)
+        self.assertEqual(sum(line.startswith("codesign -dv ") for line in log.splitlines()), 1)
+
+    def test_macos_metadata_failure_preserves_existing_binary_and_service(self):
+        result, binary, unit, original, log, _ = self.install(True, macos=True, metadata_exit=7)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(binary, "old binary")
+        self.assertEqual(unit, original)
+        self.assertNotIn("launchctl", log)
+        self.assertNotIn("--check-notarization", log)
+
+    def test_macos_requires_literal_signing_identifier_and_team(self):
+        for identity in ({"metadata_id": "other.collied"}, {"metadata_id": "devXrbstpXcollied"}, {"metadata_team": "OTHERTEAM"}):
+            with self.subTest(identity=identity):
+                result, binary, unit, original, log, _ = self.install(True, macos=True, **identity)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(binary, "old binary")
+                self.assertEqual(unit, original)
+                self.assertNotIn("launchctl", log)
+                self.assertNotIn("--check-notarization", log)
 
     def test_macos_notarization_failure_preserves_existing_binary_and_service(self):
         result, binary, unit, original, log, _ = self.install(True, macos=True, notarized=False)
