@@ -151,6 +151,12 @@ CollieWidgets went in this way. `Collie/ExportOptions.plist` maps each bundle ID
 2. Add its secret, for example `APPLE_PROVISIONING_PROFILE_<NAME>`, to the `env` of the "check for the signing secrets" and "import the signing certificate and profiles" steps; every `APPLE_PROVISIONING_PROFILE*` variable is checked and installed.
 3. Map its bundle ID to the profile name in `Collie/ExportOptions.plist` and set `PROVISIONING_PROFILE_SPECIFIER` in its Release settings in `Collie/project.yml`.
 
+## Desktop GitHub releases
+
+The reusable desktop workflow is called explicitly after TestFlight creates its immutable version tag. It also supports a master-only manual dispatch at an exact master SHA. One publish job owns the shared macOS/Linux release, retains signed assets on draft retries, and verifies completed releases without replacing assets. This avoids GITHUB_TOKEN tag-push suppression and duplicate release owners.
+
+See [Desktop release downloads](desktop-releases.md) for publisher Developer ID/notary secrets, notarized macOS archives and disk image, Linux runtime manifests, Homebrew tap artifacts, install/refresh commands and the clean-machine rollout gates. No signing credentials, public release or Homebrew tap update is provisioned by adding the workflow.
+
 ## Protocol compatibility
 
 The negotiated baseline is revision 26, with supported floor 26. Existing exact-match installations through revision 25 need one update on each side; pairing keys stay valid. The baseline app uses a legacy-shaped hello so a revision-25 daemon can tell it to update collied. Subsequent releases retain the current and previous two implemented negotiated revisions. Publish every floor increase here and in the release notes, after fixtures cover both upgrade orders and the removed revision's refusal. A range alone does not establish compatibility: wire codecs must gate methods, parameters, response/event fields and enum variants, with separate negotiated capabilities for new relay grant and encrypted payload formats.

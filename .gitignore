@@ -16,3 +16,6 @@ Mac/*.xcodeproj/
 
 # Agent guidance; overrides a global **/AGENTS.md ignore.
 !AGENTS.md
+
+/dist/
+scripts/desktop/__pycache__/

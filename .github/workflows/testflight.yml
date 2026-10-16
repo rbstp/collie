@@ -35,6 +35,9 @@ jobs:
           || (github.event.pull_request.merged
               && !contains(github.event.pull_request.title, '[skip-release]')) }}
     runs-on: xcode-27
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      source_sha: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
     permissions:
       contents: write
 
@@ -233,7 +236,8 @@ jobs:
       - name: tag the release
         run: |
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            echo "$TAG already exists"
+            [ "$(git rev-parse "$TAG^{commit}")" = "$SHA" ] || { echo "$TAG points at another commit"; exit 1; }
+            echo "$TAG already identifies $SHA"
             exit 0
           fi
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA"
@@ -250,3 +254,13 @@ jobs:
             security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
           fi
           rm -f "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision
+
+  desktop-release:
+    needs: build-ship
+    uses: ./.github/workflows/desktop-release.yml
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      tag: ${{ needs.build-ship.outputs.tag }}
+      source_sha: ${{ needs.build-ship.outputs.source_sha }}
