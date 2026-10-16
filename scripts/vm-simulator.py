@@ -463,11 +463,16 @@ X11Forwarding no
         raise RuntimeError('unexpected isolated guest IP or host key')
     known = logdir / 'known_hosts'
     private(known, f'[{address}]:2222 {hostkey}\n')
-    ssh = ['/usr/bin/ssh', '-F', '/dev/null', '-i', str(key), '-p', '2222', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', f'UserKnownHostsFile={known}', '-o', 'ForwardAgent=no', '-o', 'ExitOnForwardFailure=yes', '-o', 'GatewayPorts=no']
+    ssh = ['/usr/bin/ssh', '-F', '/dev/null', '-i', str(key), '-p', '2222', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=yes', '-o', f'UserKnownHostsFile={known}', '-o', 'ForwardAgent=no', '-o', 'ExitOnForwardFailure=yes', '-o', 'GatewayPorts=no']
+    remote = [*ssh, f'admin@{address}']
+    def ssh_ready():
+        result = run([*remote, 'true'], check=False, timeout=10)
+        private(logdir / f'ssh-ready-{time.monotonic_ns()}.log', result.stdout + result.stderr)
+        return result.returncode == 0
+    wait_for(ssh_ready, 'strict guest SSH authentication', 60)
     forwards = [value for port in (8788,8789,8790) for value in ('-R', f'127.0.0.1:{port}:127.0.0.1:{port}')]
     spawn([*ssh, *forwards, '-N', f'admin@{address}'], logdir / 'ssh.log')
     time.sleep(2)
-    remote = [*ssh, f'admin@{address}']
     spawn([*remote, f'{guest_root}/testcontrol -vm-dir {shlex.quote(guest_data)} -stun-only'], logdir / 'guest-stun.log')
     prefix = f'COLLIE_VM_TEST=1 COLLIE_SIMULATOR_RELAY=1 {guest_root}/collied'
     result = run([*remote, prefix + ' login'], timeout=120)
