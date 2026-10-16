@@ -114,7 +114,7 @@ The certificate and the profiles expire after a year; renew them and update thei
 
 ## Cutting a release
 
-- Merging a pull request into `master` ships a build, unless its title contains `[skip-release]` or it only touches `.github/`, `docs/` (the documentation site's sources, in `docs/site/`, included), `Mac/` or `README.md`. Changes only to `docs/site/` and `docs/deploy-pages.md` also skip the macOS `ci` jobs, on pull requests and on `master`; the site has its own workflow, `pages` ([deploy-pages.md](deploy-pages.md)).
+- Merging a pull request into `master` ships a build, unless its title contains `[skip-release]` or it only touches `.github/`, `docs/` (the documentation site's sources, in `docs/site/`, included), `Mac/` or `README.md`. Changes only to `docs/site/`, `docs/deploy-pages.md` and `README.md` also skip the macOS `ci` jobs, on pull requests and on `master`; the site has its own workflow, `pages` ([deploy-pages.md](deploy-pages.md)).
 - Version: the latest `v*` tag bumped by minor when any commit since that tag (or the pull request title) is a `feat`, by patch otherwise. Build number: the workflow run number.
 - A manual run (Actions, testflight, Run workflow, on `master` only) ships the given version, for example `1.0.0`.
 - After the upload, the workflow pushes the tag `v<version>`.

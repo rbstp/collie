@@ -8,6 +8,7 @@ on:
       - master
     paths-ignore:
       - '.github/**'
+      - 'README.md'
       - 'docs/deploy-pages.md'
       - 'docs/site/**'
 
@@ -48,7 +49,7 @@ jobs:
           files="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
           printf '%s\n' "$files"
           # Only paths no test reads: tests read docs/protocol/ and docs/tailnet.md.
-          if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/site/|docs/deploy-pages\.md$)'; then
+          if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/site/|docs/deploy-pages\.md$|README\.md$)'; then
             echo "code=false" >> "$GITHUB_OUTPUT"
           else
             echo "code=true" >> "$GITHUB_OUTPUT"

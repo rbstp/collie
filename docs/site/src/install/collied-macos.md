@@ -30,7 +30,7 @@
 5. **`collied pair`**, offered at the end: see [Pair a phone](pair.md).
 
 > [!NOTE]
-> Setup needs a terminal, and `~/.cargo/bin/collied` must be the signed regular file, not a symlink. Setup never confirms a pairing for you: that stays your `y` on the machine.
+> Setup needs a terminal, and `~/.cargo/bin/collied` must be the signed regular file, not a symlink. Setup never confirms a pairing for you: that stays your `y` on the machine. Each step also runs on its own.
 
 ## Files
 

@@ -15,6 +15,8 @@ The default. Each card is a live preview of the agent's screen. Claude Code, Cod
 - **Star** a card with a long press. Starred cards lead their machine's section at twice the height. Stars are kept on the machine, shared by your phones, until the pane closes or the machine is removed.
 - **Reorder** by dragging a card to an insertion line. Moving a card between the starred and unstarred groups also stars or unstars it. The order is saved on this phone.
 
+Card positions stay fixed through status updates. Drop a card above or below a starred card, or on any edge of an unstarred card in a grid with several rows. A single row only offers left and right, and a single column above and below. When the other group is empty, a glass drop area appears during the drag: above the cards to star, below them to unstar. The Agents page stays in place until the drag ends.
+
 ### List
 
 A compact list of agents, with their status as icons.

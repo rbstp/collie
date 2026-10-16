@@ -21,7 +21,7 @@ Add your own buttons in **Settings > Prompt > Key shortcuts**, or with **+** on 
 - a key or a two-key combination, such as Shift+Tab;
 - text, such as `/effort high`.
 
-A shortcut can apply to every session or to one kind: Claude Code, Codex, Copilot CLI or Terminal. Text is sent at once and leaves your draft alone. Claude Code refuses it while its input box holds unsent text; Codex and Copilot CLI take it after any text there. Swipe to delete a shortcut and use **Edit** to reorder. Shortcuts stay on this phone.
+A shortcut can apply to every session or to one kind: Claude Code, Codex, Copilot CLI or Terminal. Text is sent at once and leaves your draft alone. Claude Code refuses it while its input box holds unsent text; Codex and Copilot CLI take it after any text there. A text shortcut runs as a command only in a terminal, and only when its kind is Terminal. Swipe to delete a shortcut and use **Edit** to reorder. Shortcuts stay on this phone.
 
 ## Gestures
 

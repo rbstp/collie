@@ -7,7 +7,7 @@
 - **An iPhone on iOS 26 or later.** An Apple Watch on watchOS 26 or later is optional.
 - **A Tailscale account** whose policy file you can edit.
 - **An Apple Developer account**, with a Developer ID Application certificate (`collied` is always signed on macOS, never on Linux) and an APNs key if you want push notifications.
-- **Optional, for the Linux bar widget**: Omarchy 4 with `qrencode`, which Omarchy installs.
+- **Optional, for the Linux bar widget**: Omarchy 4 (its shell runs on Quickshell 0.3) with `qrencode`, which Omarchy installs.
 
 > [!NOTE]
 > On Linux, the encrypted APNs key needs systemd 256 or later (`systemd-creds --user`). Older versions fall back to a file readable only by your user.
@@ -16,7 +16,7 @@
 
 - Rust (the version in `rust-toolchain.toml`) and Go
 - Xcode 27 with the watchOS platform and an iPhone 18 Pro simulator
-- [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, [cargo-nextest](https://nexte.st) and `jq`
+- [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, [cargo-nextest](https://nexte.st) and `jq` (for `just ios-run-device`)
 
 The libghostty-vt build downloads its own pinned Zig.
 
@@ -25,6 +25,7 @@ The libghostty-vt build downloads its own pinned Zig.
 - Rust (the version in `rust-toolchain.toml`) and Go 1.27.2 or later
 - A C compiler and libclang
 - [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st)
+- Node, for `just tray-test`
 
 ## Your own identifiers
 
