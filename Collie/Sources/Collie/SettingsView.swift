@@ -4,6 +4,7 @@ import WatchConnectivity
 
 struct SettingsView: View {
     @Bindable var app: AppModel
+    var openSample: () -> Void = {}
     @State private var removeError: String?
     @State private var report: ColdStartReport?
     @State private var keepKeyboard = DevicePrefs.load(from: DevicePrefs.file).keepKeyboard
@@ -17,6 +18,11 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Button("Explore sample workspace", systemImage: "play.rectangle", action: openSample)
+                } footer: {
+                    Text("Try simulated agents and approvals without signing in or connecting a machine.")
+                }
                 Section("Appearance") {
                     Picker("Accent color", selection: $app.accent) {
                         ForEach(AppAccent.allCases, id: \.self) { accent in
@@ -46,6 +52,7 @@ struct SettingsView: View {
                     Text("Notifications")
                 } footer: {
                     Text("An alert when an agent finishes a turn of 30 seconds or more, not when it stops for an approval.")
+                    if let status = app.relayStatus { Text(status) }
                 }
                 if watchDecisions || (WCSession.isSupported() && WCSession.default.isPaired) {
                     Section {

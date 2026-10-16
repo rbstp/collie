@@ -675,6 +675,16 @@
             }
           ]
         },
+        "relay_grant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RelayGrant"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "shows_approvals": {
           "description": "The activity shows an approval's command and its Approve and Deny buttons. Without\nit collied keeps sending that device the approval alert.",
           "type": "boolean"
@@ -708,6 +718,16 @@
         },
         "notification_key": {
           "$ref": "#/$defs/NotificationKey"
+        },
+        "relay_grant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RelayGrant"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -751,6 +771,43 @@
         "visible",
         "recent"
       ],
+      "type": "string"
+    },
+    "RelayGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_at": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "generation": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "route_id": {
+          "$ref": "#/$defs/RelayRouteId"
+        },
+        "token": {
+          "$ref": "#/$defs/RelaySendToken"
+        }
+      },
+      "required": [
+        "token",
+        "route_id",
+        "generation",
+        "expires_at"
+      ],
+      "type": "object"
+    },
+    "RelayRouteId": {
+      "pattern": "^[A-Za-z0-9_-]{1,64}$",
+      "type": "string"
+    },
+    "RelaySendToken": {
+      "maxLength": 2041,
+      "pattern": "^v1\\.[A-Za-z0-9_-]{1,32}\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$",
       "type": "string"
     },
     "SessionId": {

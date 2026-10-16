@@ -9,16 +9,22 @@
     "check": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
     "build": "cf build",
-    "benchmark": "node test/benchmark.ts"
+    "benchmark": "node test/benchmark.ts",
+    "benchmark:attestation": "node test/attestation-benchmark.ts"
   },
   "dependencies": {
-    "@noble/curves": "2.4.0"
+    "@noble/curves": "2.4.0",
+    "@peculiar/x509": "2.2.0",
+    "asn1js": "3.0.10",
+    "reflect-metadata": "0.2.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261016.1",
+    "@types/node": "26.6.5",
+    "cf": "1.0.0-beta.17",
+    "esbuild": "0.28.2",
     "miniflare": "4.20260730.0",
     "typescript": "7.0.2",
-    "wrangler": "4.151.1",
-    "cf": "1.0.0-beta.17"
+    "wrangler": "4.151.1"
   }
 }

@@ -21,8 +21,8 @@ pub trait Host {
     async fn settle(&mut self) -> Option<StatusInfo>;
     async fn wait_daemon(&mut self) -> anyhow::Result<StatusInfo>;
     async fn doctor(&mut self) -> anyhow::Result<bool>;
-    fn apns_configured(&mut self) -> anyhow::Result<bool>;
-    fn setup_apns(&mut self) -> anyhow::Result<bool>;
+    fn push_configured(&mut self) -> anyhow::Result<bool>;
+    fn setup_push(&mut self) -> anyhow::Result<bool>;
     async fn pair(&mut self) -> anyhow::Result<bool>;
     fn ask(&mut self, question: &str) -> anyhow::Result<bool>;
     fn say(&mut self, line: &str);
@@ -92,13 +92,10 @@ pub async fn run(host: &mut impl Host) -> anyhow::Result<bool> {
         ));
     }
 
-    if host.apns_configured()? {
+    if host.push_configured()? {
         host.say("push notifications: configured");
-    } else if host
-        .ask("Set up push notifications now (needs this machine's APNs key, a .p8)? [y/N]")?
-        && host.setup_apns()?
-    {
-        // The daemon reads [apns] only when it starts.
+    } else if host.ask("Set up push notifications now? [y/N]")? && host.setup_push()? {
+        // Push configuration is read only when the daemon starts.
         host.install_service()?;
         host.wait_daemon().await?;
     }
@@ -111,6 +108,30 @@ pub async fn run(host: &mut impl Host) -> anyhow::Result<bool> {
         return host.pair().await;
     }
     host.say("Pair a phone later with collied pair.");
+    Ok(true)
+}
+
+pub fn configure_relay(config_path: &Path) -> anyhow::Result<bool> {
+    let old = match std::fs::read_to_string(config_path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e.into()),
+    };
+    let mut text = old.clone().unwrap_or_default();
+    let config = config::parse(&text)?;
+    anyhow::ensure!(
+        config.apns.is_none(),
+        "[apns] is configured; remove it before selecting the publisher relay"
+    );
+    if config.push.relay.is_some() {
+        return Ok(false);
+    }
+    text.push_str("\n[push.relay]\n");
+    config::parse(&text)?;
+    match old {
+        Some(_) => config::rewrite(config_path, &text)?,
+        None => create_private(config_path, &text)?,
+    }
     Ok(true)
 }
 
@@ -224,6 +245,7 @@ mod tests {
 
     fn info(peers: usize, user_peers: Option<usize>) -> StatusInfo {
         StatusInfo {
+            push: None,
             pid: 1,
             backend_state: "Running".into(),
             dns_name: "m".into(),
@@ -278,10 +300,10 @@ mod tests {
             self.log.push("doctor".into());
             Ok(self.doctor)
         }
-        fn apns_configured(&mut self) -> anyhow::Result<bool> {
+        fn push_configured(&mut self) -> anyhow::Result<bool> {
             Ok(self.apns)
         }
-        fn setup_apns(&mut self) -> anyhow::Result<bool> {
+        fn setup_push(&mut self) -> anyhow::Result<bool> {
             self.log.push("apns".into());
             Ok(true)
         }
@@ -499,6 +521,36 @@ mod tests {
             assert!(r.is_err());
             assert!(!f.log.contains(&"install".to_owned()));
         }
+    }
+
+    #[test]
+    fn relay_setup_needs_no_key_and_preserves_other_settings() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("collied.toml");
+        assert!(configure_relay(&path).unwrap());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!configure_relay(&path).unwrap());
+        assert!(
+            config::load(&path, true)
+                .unwrap()
+                .unwrap()
+                .push
+                .relay
+                .is_some()
+        );
+        std::fs::write(&path, "[tailnet]\nport = 9000\n").unwrap();
+        assert!(configure_relay(&path).unwrap());
+        let config = config::load(&path, true).unwrap().unwrap();
+        assert_eq!(config.tailnet.port, 9000);
+        assert!(config.push.relay.is_some() && config.apns.is_none());
+        let direct = apns_section("ABCDE12345", TEAM_ID, BUNDLE_ID).unwrap();
+        std::fs::write(&path, &direct).unwrap();
+        assert!(configure_relay(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), direct);
     }
 
     #[test]

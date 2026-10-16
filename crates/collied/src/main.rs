@@ -25,7 +25,10 @@ struct Cli {
 enum Command {
     /// Set up or update this machine: login, service, doctor, push notifications and
     /// pairing, each skipped when already done (interactive).
-    Setup,
+    Setup {
+        #[arg(long, help = "Use your own APNs key for a self-built app")]
+        direct_apns: bool,
+    },
     /// Join the tailnet as tag:collie-mac on macOS, tag:collie-linux on Linux
     /// (interactive, or COLLIE_TS_AUTHKEY).
     Login,
@@ -146,10 +149,7 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
             command: ApnsCommand::Test { terminal_id },
         } => {
             let config = load_config(cli.config.as_deref(), &data_dir)?;
-            let apns = config
-                .apns
-                .as_ref()
-                .context("no [apns] section in collied.toml")?;
+
             let session = if let Some(terminal_id) = terminal_id {
                 let terminal_id =
                     protocol::TerminalId::new(terminal_id).context("invalid terminal id")?;
@@ -168,7 +168,7 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
             } else {
                 None
             };
-            return push::send_test(&data_dir, apns, session).await;
+            return push::send_test(&data_dir, &config, session).await;
         }
         Command::Apns {
             command: ApnsCommand::Import { path },
@@ -179,7 +179,7 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
                 .unwrap_or_else(|| data_dir.join(config::CONFIG_FILE));
             return push::import(&config_path, explicit, &path);
         }
-        Command::Setup => {
+        Command::Setup { direct_apns } => {
             anyhow::ensure!(
                 std::io::stdin().is_terminal(),
                 "collied setup is interactive: run it in a terminal"
@@ -204,6 +204,7 @@ async fn dispatch(cli: Cli, auth_key: Option<Zeroizing<String>>) -> anyhow::Resu
                 data_dir: &data_dir,
                 control_path: &control_path,
                 auth_key,
+                direct_apns,
             };
             return collied::setup::run(&mut host).await;
         }
@@ -236,6 +237,7 @@ struct SetupHost<'a> {
     data_dir: &'a Path,
     control_path: &'a Path,
     auth_key: Option<Zeroizing<String>>,
+    direct_apns: bool,
 }
 
 impl SetupHost<'_> {
@@ -317,12 +319,23 @@ impl collied::setup::Host for SetupHost<'_> {
         doctor::run(self.config.map(Path::to_owned)).await
     }
 
-    fn apns_configured(&mut self) -> anyhow::Result<bool> {
-        Ok(load_config(self.config, self.data_dir)?.apns.is_some())
+    fn push_configured(&mut self) -> anyhow::Result<bool> {
+        let config = load_config(self.config, self.data_dir)?;
+        Ok(config.apns.is_some() || config.push.relay.is_some())
     }
 
-    fn setup_apns(&mut self) -> anyhow::Result<bool> {
+    fn setup_push(&mut self) -> anyhow::Result<bool> {
         use collied::setup;
+        if !self.direct_apns {
+            let path = self
+                .config
+                .map_or_else(|| self.data_dir.join(config::CONFIG_FILE), Path::to_owned);
+            let changed = setup::configure_relay(&path)?;
+            println!(
+                "publisher relay configured; open the App Store app on a paired phone to register"
+            );
+            return Ok(changed);
+        }
         let p8 = setup::typed_path(&prompt(
             "Path to the APNs key AuthKey_<KEY_ID>.p8 (mode 0600):",
         )?)?;

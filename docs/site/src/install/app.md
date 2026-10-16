@@ -19,3 +19,11 @@ The app runs its own Tailscale node, `collie-phone`. It does not need the Tailsc
 ## Next
 
 [Pair your phone](pair.md) with each machine.
+
+## Try the sample workspace
+
+Tap **Explore sample workspace** on Welcome, or in Settings when already signed in. It works in the distributed app on iPhone and iOS Simulator, without a Tailscale login or a desktop.
+
+The labeled sample contains synthetic agents, Chat and Terminal output, usage and an approval. Send a prompt, use the terminal keys or approve or deny the sample request to see a local result. These actions do not run commands or reach a real machine. New tasks, pairing, attachments, dictation, Live Activities and remote notifications are not part of the sample.
+
+Use **Reset sample workspace** in its Settings tab to restore the initial data, or **Exit** to return to your real setup. Sample state is held in memory and does not change accounts, pairings, saved drafts or preferences.

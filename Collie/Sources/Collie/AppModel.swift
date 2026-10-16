@@ -24,6 +24,12 @@ final class AppModel {
     private(set) var signingIn = false
     private(set) var pushStatus = "not registered"
     private var pushToken: Data?
+    private(set) var relayStatus: String?
+    @ObservationIgnored private var relay: RelayEnrollment?
+    @ObservationIgnored private var relayTask: Task<Void, Never>?
+    @ObservationIgnored private var relayDelivered: [String: RelayRouteGrant] = [:]
+    @ObservationIgnored private var relayRetryAt = Date.distantPast
+    @ObservationIgnored private var relayFailures = 0
     private var alertsOff = false
     let approvals: ApprovalsModel
     let follows: FollowModel
@@ -60,6 +66,11 @@ final class AppModel {
         approvals = ApprovalsModel(core: core)
         follows = FollowModel(core: core, approvals: approvals)
         machines = core?.machines() ?? []
+        if let marker = try? StateDirectory.prepare().appending(path: "relay-installation"),
+            FileManager.default.fileExists(atPath: marker.path)
+        {
+            do { _ = try relayClient() } catch { relayStatus = "Relay credentials are unavailable" }
+        }
         if let core, let group = AppGroup.container {
             do {
                 try core.setAppGroupDir(path: group.path)
@@ -75,6 +86,12 @@ final class AppModel {
             pathMonitor.start(queue: DispatchQueue(label: "dev.rbstp.collie.path"))
         }
         loadTerminalKey()
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.environment["COLLIE_SIMULATOR_RELAY"] == "mock" {
+            pushToken = Data(repeating: 0xaa, count: 32)
+            pushStatus = "Simulator mock destination. No APNs delivery."
+        }
+        #endif
     }
 
     /// The interface iOS routes through, never a VPN tunnel; empty when there is no path.
@@ -191,6 +208,10 @@ final class AppModel {
             removing.remove(machine.id)
             reloadMachines()
         }
+        if let relay {
+            try await relay.prepareRevocation(pairingId: machine.id)
+            relayStatus = "Revocation pending. Remote pushes may continue until it succeeds or the grant expires."
+        }
         PromptResends.shared.stop(machineId: machine.id)
         let unpaired = try await core?.removeMachine(id: machine.id) ?? false
         AgentDrafts.forget(machineId: machine.id, file: AgentDrafts.file)
@@ -201,6 +222,13 @@ final class AppModel {
         if !(core?.machines() ?? []).contains(where: { $0.nodeId == machine.nodeId }) {
             NotificationKey.delete(nodeId: machine.nodeId)
         }
+        relayDelivered.removeValue(forKey: machine.id)
+        if let relay {
+            Task {
+                do { try await relay.retryPendingRevocations(); await updateRelayStatus() }
+                catch { relayStatus = "Revocation pending. Remote pushes may continue until it succeeds or the grant expires." }
+            }
+        }
         return unpaired
     }
 
@@ -208,7 +236,14 @@ final class AppModel {
     func machinePaired(_ machine: Machine) {
         NotificationKey.delete(nodeId: machine.nodeId)
         reloadMachines()
-        if let pushToken { registerPush(token: pushToken) }
+        if let relay {
+            Task {
+                do {
+                    try await relay.confirmNewPairing()
+                    if let pushToken { registerPush(token: pushToken) }
+                } catch { relayStatus = "Relay credentials are unavailable" }
+            }
+        } else if let pushToken { registerPush(token: pushToken) }
     }
 
     /// The key is in the Keychain only while the phone is unlocked, so a launch in the background
@@ -269,17 +304,20 @@ final class AppModel {
     /// One notification key per Mac, keyed by its node id: the NSE only sees `node_id` in the alert.
     func registerPush(token: Data) {
         pushToken = token
+        relayDelivered.removeAll()
+        relayRetryAt = .distantPast
         guard let core else { return }
         let environment = PushEnvironment.current
         let hex = token.hexString
         let muteDone = !DevicePrefs.load(from: DevicePrefs.file).doneAlerts
         var failure: (any Error)?
         for machine in core.machines() {
+            if core.pushMode(machineId: machine.id) == .relay { continue }
             do {
                 let key = try NotificationKey.loadOrCreate(nodeId: machine.nodeId)
                 try core.registerPush(
                     machineId: machine.id, apnsTokenHex: hex, environment: environment,
-                    notificationKey: key.withUnsafeBytes { Data($0) }, muteDone: muteDone
+                    notificationKey: key.withUnsafeBytes { Data($0) }, muteDone: muteDone, relayGrant: nil
                 )
             } catch {
                 failure = failure ?? error
@@ -291,6 +329,70 @@ final class AppModel {
             pushStatus = "registered, notifications are off for collie"
         } else {
             pushStatus = environment == .production ? "registered" : "registered (sandbox)"
+        }
+        refreshRelayRegistration()
+    }
+
+    private func relayClient() throws -> RelayEnrollment {
+        if let relay { return relay }
+        #if DEBUG && targetEnvironment(simulator)
+        if let value = try SimulatorRelay.make() {
+            relay = value
+            return value
+        }
+        #endif
+        let store = RelayCredentialStore(marker: try StateDirectory.prepare().appending(path: "relay-installation"))
+        let value = RelayEnrollment(state: try store.load(), environment: PushEnvironment.current == .production ? "production" : "development",
+                                    persist: { try store.save($0) })
+        relay = value
+        return value
+    }
+
+    private func updateRelayStatus() async {
+        guard let relay else { return }
+        let state = await relay.snapshot()
+        if !state.pendingPairingRevocations.isEmpty || state.pendingInstallationRevocation {
+            relayStatus = "Revocation pending. Remote pushes may continue until it succeeds or the grant expires."
+        } else if state.requiresPairing {
+            relayStatus = "Relay key unavailable. Pair the machine again to restore notifications. Previous grants may continue until expiry."
+        } else if let previous = state.previousGrantExpiry, previous > UInt64(Date().timeIntervalSince1970) {
+            relayStatus = "Previous relay grants may continue until \(Date(timeIntervalSince1970: TimeInterval(previous)).formatted(date: .abbreviated, time: .omitted))."
+        } else if let expiry = state.routes.map(\.grant.expiresAt).min() {
+            relayStatus = "Relay notifications expire \(Date(timeIntervalSince1970: TimeInterval(expiry)).formatted(date: .abbreviated, time: .omitted)). Open Collie to renew before expiry."
+        }
+    }
+
+    func refreshRelayRegistration() {
+        guard relayTask == nil, Date.now >= relayRetryAt, let core, let pushToken else { return }
+        let eligible = core.machines().filter { core.pushMode(machineId: $0.id) == .relay }
+        guard !eligible.isEmpty || relay != nil else { return }
+        relayTask = Task {
+            defer { relayTask = nil }
+            do {
+                let client = try relayClient()
+                try await client.retryPendingRevocations()
+                for machine in eligible {
+                    let grant = try await client.register(pairingId: machine.id, destination: pushToken.hexString)
+                    guard core.machines().contains(where: { $0.id == machine.id }), core.pushMode(machineId: machine.id) == .relay else { continue }
+                    if relayDelivered[machine.id] != grant {
+                        let key = try NotificationKey.loadOrCreate(nodeId: machine.nodeId)
+                        try core.registerPush(machineId: machine.id, apnsTokenHex: pushToken.hexString, environment: .current,
+                                              notificationKey: key.withUnsafeBytes { Data($0) },
+                                              muteDone: !DevicePrefs.load(from: DevicePrefs.file).doneAlerts, relayGrant: grant.coreGrant)
+                        relayDelivered[machine.id] = grant
+                    }
+                }
+                follows.relayReady(client)
+                relayFailures = 0
+                await updateRelayStatus()
+            } catch {
+                relayFailures += 1
+                relayRetryAt = .now.addingTimeInterval(min(600, pow(2, Double(min(relayFailures, 7))) * 5))
+                relayStatus = "Relay notifications are unavailable. Paired sessions remain usable."
+                if let state = await relay?.snapshot(), state.requiresPairing || !state.pendingPairingRevocations.isEmpty || state.pendingInstallationRevocation {
+                    await updateRelayStatus()
+                }
+            }
         }
     }
 
@@ -530,5 +632,12 @@ final class CoreLogRelay: CoreLog {
 
     func log(message: String) {
         logger.notice("\(message, privacy: .public)")
+    }
+}
+
+
+extension RelayRouteGrant {
+    var coreGrant: RelayPushGrant {
+        RelayPushGrant(token: token, routeId: routeId, generation: generation, expiresAt: expiresAt)
     }
 }

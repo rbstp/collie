@@ -400,6 +400,7 @@ pub enum LinkPhase {
 }
 
 pub struct Link {
+    pub push_mode: Option<protocol::PushMode>,
     pub phase: LinkPhase,
     pub last_error: Option<String>,
     resumed: Option<Instant>,
@@ -411,6 +412,9 @@ pub struct Link {
 impl Link {
     fn set(&mut self, phase: LinkPhase, error: Option<String>) {
         self.phase = phase;
+        if phase != LinkPhase::Connected {
+            self.push_mode = None;
+        }
         if error.is_some() || phase == LinkPhase::Connected {
             self.last_error = error;
         }
@@ -481,6 +485,7 @@ impl Conn {
         let shared = Arc::new(Shared {
             flock: Mutex::default(),
             link: Mutex::new(Link {
+                push_mode: None,
                 phase: LinkPhase::Connecting,
                 last_error: None,
                 resumed: None,
@@ -695,7 +700,8 @@ async fn supervise(
         }
         let err = match opened {
             Ok((_, hello, _)) if !hello.paired => ConnectError::Session(SessionError::NotPaired),
-            Ok((session, _, _)) => {
+            Ok((session, hello, _)) => {
+                lock(&shared.link).push_mode = hello.push_mode;
                 lock(&shared.flock).new_connection();
                 shared.set(LinkPhase::Connected, None);
                 let since = Instant::now();
@@ -964,6 +970,7 @@ mod tests {
         Shared {
             flock: Mutex::default(),
             link: Mutex::new(Link {
+                push_mode: None,
                 phase: LinkPhase::Connected,
                 last_error: None,
                 resumed: None,

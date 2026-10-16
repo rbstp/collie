@@ -28,6 +28,7 @@ pub mod pulls;
 pub mod push;
 mod push_display;
 pub mod reflow;
+pub mod relay;
 pub mod server;
 pub mod service;
 pub mod setup;

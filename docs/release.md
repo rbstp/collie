@@ -151,6 +151,16 @@ CollieWidgets went in this way. `Collie/ExportOptions.plist` maps each bundle ID
 2. Add its secret, for example `APPLE_PROVISIONING_PROFILE_<NAME>`, to the `env` of the "check for the signing secrets" and "import the signing certificate and profiles" steps; every `APPLE_PROVISIONING_PROFILE*` variable is checked and installed.
 3. Map its bundle ID to the profile name in `Collie/ExportOptions.plist` and set `PROVISIONING_PROFILE_SPECIFIER` in its Release settings in `Collie/project.yml`.
 
+## Public submission
+
+[Public submission preparation](public-submission.md) contains the offline metadata, review notes, disclosure checks and operating procedures for #359. Public capacity and submission remain unapproved until its evidence gates pass.
+
+## App Review sample workspace
+
+Review notes should direct reviewers to **Explore sample workspace** on Welcome, with no account or desktop required. Existing users can open the same sample from Settings. Ask reviewers to inspect Agents, Chat, Terminal, Usage and Machines, send a sample prompt, try a terminal key, then approve or deny the blocked sample agent. The persistent sample banner identifies every action as simulated. Reset is in sample Settings and Exit returns to onboarding or the existing paired setup.
+
+The sample is available in Release builds on iOS Simulator and iPhone. It does not demonstrate real pairing, background APNs delivery, Live Activities or device attestation. Include real-hardware review evidence for those workflows. Obtain any required prior App Review approval for using the sample instead of credentials before submission; sample availability does not establish that approval. Record the actual Release simulator and signed-device validation with the submission evidence.
+
 ## Desktop GitHub releases
 
 The reusable desktop workflow is called explicitly after TestFlight creates its immutable version tag. It also supports a master-only manual dispatch at an exact master SHA. One publish job owns the shared macOS/Linux release, retains signed assets on draft retries, and verifies completed releases without replacing assets. This avoids GITHUB_TOKEN tag-push suppression and duplicate release owners.

@@ -323,6 +323,39 @@ impl From<protocol::AgentStatus> for AgentState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PushDeliveryMode {
+    Disabled,
+    Direct,
+    Relay,
+}
+
+#[derive(Clone, uniffi::Record)]
+pub struct RelayPushGrant {
+    pub token: String,
+    pub route_id: String,
+    pub generation: u32,
+    pub expires_at: u64,
+}
+
+impl TryFrom<RelayPushGrant> for protocol::RelayGrant {
+    type Error = CoreError;
+    fn try_from(grant: RelayPushGrant) -> Result<Self, Self::Error> {
+        let value = Self {
+            token: protocol::RelaySendToken::new(grant.token)
+                .map_err(|_| invalid("relay_grant", "invalid relay credential"))?,
+            route_id: protocol::RelayRouteId::new(grant.route_id)
+                .map_err(|_| invalid("relay_grant", "invalid relay route"))?,
+            generation: grant.generation,
+            expires_at: grant.expires_at,
+        };
+        if !value.is_valid(reach::now_ms() / 1000) {
+            return Err(invalid("relay_grant", "expired relay registration"));
+        }
+        Ok(value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct MachineDetails {
     pub name: String,
@@ -2245,6 +2278,19 @@ impl CollieCore {
     /// Sends `push.register` to that machine if it is connected; every later connection
     /// of this process registers it again. Kept in memory only: the notification key's
     /// one store is the iOS Keychain, so the app registers each machine on launch.
+    pub fn push_mode(&self, machine_id: String) -> Option<PushDeliveryMode> {
+        let conn = lock(&self.inner.conns).get(&machine_id).cloned()?;
+        let link = lock(&conn.shared.link);
+        if link.phase != LinkPhase::Connected {
+            return None;
+        }
+        link.push_mode.map(|mode| match mode {
+            protocol::PushMode::None => PushDeliveryMode::Disabled,
+            protocol::PushMode::Direct => PushDeliveryMode::Direct,
+            protocol::PushMode::Relay => PushDeliveryMode::Relay,
+        })
+    }
+
     pub fn register_push(
         &self,
         machine_id: String,
@@ -2252,6 +2298,7 @@ impl CollieCore {
         environment: PushEnvironment,
         notification_key: Vec<u8>,
         mute_done: bool,
+        relay_grant: Option<RelayPushGrant>,
     ) -> Result<(), CoreError> {
         let notification_key = Zeroizing::new(notification_key);
         if notification_key.len() != 32 {
@@ -2261,6 +2308,7 @@ impl CollieCore {
             ));
         }
         let push = PushRegisterParams {
+            relay_grant: relay_grant.map(TryInto::try_into).transpose()?,
             apns_token: PushToken::new(apns_token_hex.trim()).map_err(|_| {
                 invalid("apns_token", "APNs token must be 64 to 256 hex characters")
             })?,
@@ -2298,6 +2346,7 @@ impl CollieCore {
         terminal_id: String,
         token_hex: String,
         binding_id: String,
+        relay_grant: Option<RelayPushGrant>,
     ) -> Result<(), CoreError> {
         let node_id = lock(&self.inner.machines)
             .iter()
@@ -2306,6 +2355,7 @@ impl CollieCore {
             .node_id
             .clone();
         let params = PushActivityTokenParams {
+            relay_grant: relay_grant.map(TryInto::try_into).transpose()?,
             activity_id: activity(activity_id)?,
             terminal_id: terminal(terminal_id)?,
             token: PushToken::new(token_hex.trim())
@@ -3936,11 +3986,11 @@ mod tests {
         let key: Vec<u8> = (1..=32).collect();
         let token = "ab".repeat(32);
         assert!(matches!(
-            core.register_push("m1".into(), "not hex".into(), PushEnvironment::Sandbox, key.clone(), false),
+            core.register_push("m1".into(), "not hex".into(), PushEnvironment::Sandbox, key.clone(), false, None),
             Err(CoreError::InvalidInput { field: Some(f), .. }) if f == "apns_token"
         ));
         assert!(matches!(
-            core.register_push("m1".into(), token.clone(), PushEnvironment::Sandbox, vec![1; 31], false),
+            core.register_push("m1".into(), token.clone(), PushEnvironment::Sandbox, vec![1; 31], false, None),
             Err(CoreError::InvalidInput { field: Some(f), .. }) if f == "notification_key"
         ));
         assert!(matches!(
@@ -3949,7 +3999,8 @@ mod tests {
                 token.clone(),
                 PushEnvironment::Sandbox,
                 key.clone(),
-                false
+                false,
+                None
             ),
             Err(CoreError::MachineNotFound)
         ));
@@ -3959,6 +4010,7 @@ mod tests {
             PushEnvironment::Production,
             key.clone(),
             false,
+            None,
         )
         .unwrap();
         core.register_push(
@@ -3967,6 +4019,7 @@ mod tests {
             PushEnvironment::Production,
             vec![9; 32],
             true,
+            None,
         )
         .unwrap();
         let push: BTreeMap<String, PushRegisterParams> = lock(&core.inner.push)
@@ -4048,6 +4101,7 @@ mod tests {
             PushEnvironment::Sandbox,
             vec![3; 32],
             false,
+            None,
         )
         .unwrap();
         let methods = || -> Vec<&str> { seed().iter().map(Request::method).collect() };
@@ -4094,6 +4148,7 @@ mod tests {
                 t.into(),
                 tok.into(),
                 "binding-test".into(),
+                None,
             )
         };
         assert_eq!(
@@ -4129,6 +4184,7 @@ mod tests {
             PushEnvironment::Sandbox,
             vec![3; 32],
             false,
+            None,
         )
         .unwrap();
         let methods = |reg: &conn::Registrations| -> Vec<String> {
@@ -4212,6 +4268,7 @@ mod tests {
             "term_1".into(),
             token.clone(),
             "binding-test".into(),
+            None,
         )
         .unwrap();
         core.end_activity("m1".into(), "A1".into()).unwrap();
@@ -4823,6 +4880,7 @@ mod tailnet_tests {
                     let mut events = Vec::new();
                     let result = match frame.request {
                         Request::Hello(_) => Ok(Response::Hello(HelloResult {
+                            push_mode: None,
                             protocol_version: PROTOCOL_VERSION,
                             protocol_min_version: protocol::PROTOCOL_MIN_VERSION,
                             protocol_max_version: PROTOCOL_VERSION,
@@ -5638,6 +5696,7 @@ mod tailnet_tests {
             PushEnvironment::Sandbox,
             vec![7; 32],
             false,
+            None,
         )
         .unwrap();
         poll("push.register", || {
@@ -5650,6 +5709,7 @@ mod tailnet_tests {
             "term_1".into(),
             token.clone(),
             "binding-test".into(),
+            None,
         )
         .unwrap();
         let registered = format!("token {ACTIVITY} term_1 {token} true");
@@ -5794,6 +5854,7 @@ mod tailnet_tests {
             PushEnvironment::Sandbox,
             vec![7; 32],
             false,
+            None,
         )
         .unwrap();
         poll("token registered again by the new process", || {
@@ -5821,6 +5882,7 @@ mod tailnet_tests {
             "term_1".into(),
             token.clone(),
             "binding-test".into(),
+            None,
         )
         .unwrap();
         rt.block_on(core.suspend(core.begin_suspend()));

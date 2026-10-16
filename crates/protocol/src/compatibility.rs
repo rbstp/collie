@@ -2,6 +2,7 @@ use crate::{ClientFrame, Event, HelloParams, HelloResult, Label, Request, Respon
 
 pub const PROTOCOL_MIN_VERSION: u32 = 26;
 pub const TERMINAL_GRANTS_V1: &str = "terminal_grants_v1";
+pub const RELAY_GRANTS_V1: &str = "relay_grants_v1";
 pub const ENCRYPTED_DISPLAY_V1: &str = "encrypted_display_v1";
 
 pub(crate) fn baseline_capabilities() -> Vec<Label> {
@@ -37,7 +38,7 @@ impl HelloParams {
             protocol_version: crate::PROTOCOL_VERSION,
             protocol_min_version: (PROTOCOL_MIN_VERSION != crate::PROTOCOL_VERSION)
                 .then_some(PROTOCOL_MIN_VERSION),
-            capabilities: [TERMINAL_GRANTS_V1, ENCRYPTED_DISPLAY_V1]
+            capabilities: [TERMINAL_GRANTS_V1, ENCRYPTED_DISPLAY_V1, RELAY_GRANTS_V1]
                 .into_iter()
                 .map(|s| Label::new(s).expect("capability is a label"))
                 .collect(),
@@ -70,6 +71,7 @@ pub struct NegotiatedProtocol {
     version: u32,
     terminal_grants: bool,
     encrypted_display: bool,
+    relay_grants: bool,
 }
 
 impl NegotiatedProtocol {
@@ -80,6 +82,14 @@ impl NegotiatedProtocol {
         let version = ProtocolRange::CURRENT.highest_common(hello.range())?;
         Some(Self {
             version,
+            relay_grants: hello
+                .capabilities
+                .iter()
+                .any(|c| c.as_str() == RELAY_GRANTS_V1)
+                && hello
+                    .capabilities
+                    .iter()
+                    .any(|c| c.as_str() == ENCRYPTED_DISPLAY_V1),
             encrypted_display: hello
                 .capabilities
                 .iter()
@@ -97,10 +107,20 @@ impl NegotiatedProtocol {
             max: hello.protocol_max_version,
         };
         let version = ProtocolRange::CURRENT.highest_common(range)?;
-        if hello.protocol_version != version
-            || hello.capabilities.len() > 2
+        let relay = hello
+            .capabilities
+            .iter()
+            .any(|c| c.as_str() == RELAY_GRANTS_V1);
+        let encrypted = hello
+            .capabilities
+            .iter()
+            .any(|c| c.as_str() == ENCRYPTED_DISPLAY_V1);
+        if (relay && !encrypted)
+            || (hello.push_mode.is_some() && !relay)
+            || hello.protocol_version != version
+            || hello.capabilities.len() > 3
             || hello.capabilities.iter().enumerate().any(|(i, c)| {
-                ![TERMINAL_GRANTS_V1, ENCRYPTED_DISPLAY_V1].contains(&c.as_str())
+                ![TERMINAL_GRANTS_V1, ENCRYPTED_DISPLAY_V1, RELAY_GRANTS_V1].contains(&c.as_str())
                     || hello.capabilities[..i].contains(c)
             })
         {
@@ -108,6 +128,14 @@ impl NegotiatedProtocol {
         }
         Some(Self {
             version,
+            relay_grants: hello
+                .capabilities
+                .iter()
+                .any(|c| c.as_str() == RELAY_GRANTS_V1)
+                && hello
+                    .capabilities
+                    .iter()
+                    .any(|c| c.as_str() == ENCRYPTED_DISPLAY_V1),
             terminal_grants: hello
                 .capabilities
                 .iter()
@@ -127,11 +155,16 @@ impl NegotiatedProtocol {
         [
             (TERMINAL_GRANTS_V1, self.terminal_grants),
             (ENCRYPTED_DISPLAY_V1, self.encrypted_display),
+            (RELAY_GRANTS_V1, self.relay_grants),
         ]
         .into_iter()
         .filter(|(_, enabled)| *enabled)
         .map(|(s, _)| Label::new(s).expect("capability is a label"))
         .collect()
+    }
+
+    pub fn relay_grants(&self) -> bool {
+        self.relay_grants
     }
 
     pub fn allows_request(&self, request: &Request) -> bool {
@@ -145,7 +178,12 @@ impl NegotiatedProtocol {
             | Request::TerminalRun(_)
             | Request::TerminalSendKeys(_)
             | Request::TerminalLock(_) => self.terminal_grants,
-            Request::PushRegister(_) | Request::PushActivityToken(_) => self.encrypted_display,
+            Request::PushRegister(p) => {
+                self.encrypted_display && (p.relay_grant.is_none() || self.relay_grants)
+            }
+            Request::PushActivityToken(p) => {
+                self.encrypted_display && (p.relay_grant.is_none() || self.relay_grants)
+            }
             Request::PairComplete(p) => self.terminal_grants || p.terminal_key.is_none(),
             Request::Hello(_)
             | Request::Unpair(_)
@@ -241,7 +279,16 @@ impl NegotiatedProtocol {
         if !allowed {
             return Err("frame requires an unnegotiated capability");
         }
-        serde_json::to_string(frame).map_err(|_| "cannot serialize server frame")
+        let mut frame = frame.clone();
+        if let ServerFrame::Result {
+            result: Response::Hello(hello),
+            ..
+        } = &mut frame
+            && !self.relay_grants
+        {
+            hello.push_mode = None;
+        }
+        serde_json::to_string(&frame).map_err(|_| "cannot serialize server frame")
     }
 }
 
@@ -326,7 +373,7 @@ mod tests {
         result.protocol_min_version = 26;
         result
             .capabilities
-            .push(Label::new("relay_grants_v1").unwrap());
+            .push(Label::new("unknown_future_v1").unwrap());
         assert!(NegotiatedProtocol::from_result(&result).is_none());
     }
 
@@ -352,6 +399,7 @@ mod tests {
     #[test]
     fn display_registration_requires_the_concrete_codec_capability() {
         let request = Request::PushRegister(crate::PushRegisterParams {
+            relay_grant: None,
             apns_token: crate::PushToken::new("a".repeat(64)).unwrap(),
             environment: crate::ApnsEnvironment::Sandbox,
             notification_key: crate::NotificationKey::new(
@@ -481,5 +529,46 @@ mod tests {
                 None
             );
         }
+    }
+    #[test]
+    fn relay_grants_require_both_concrete_capabilities_and_modes_are_gated() {
+        let mut hello = HelloParams::current(Label::new("test").unwrap());
+        let grant = crate::RelayGrant {
+            token: crate::RelaySendToken::new(format!("v1.key.YQ.{}", "A".repeat(43))).unwrap(),
+            route_id: crate::RelayRouteId::new("route_1").unwrap(),
+            generation: 1,
+            expires_at: 2000000000,
+        };
+        let request = Request::PushRegister(crate::PushRegisterParams {
+            apns_token: crate::PushToken::new("a".repeat(64)).unwrap(),
+            environment: crate::ApnsEnvironment::Production,
+            notification_key: crate::NotificationKey::new("A".repeat(43)).unwrap(),
+            mute_done: false,
+            relay_grant: Some(grant.clone()),
+        });
+        let negotiated = NegotiatedProtocol::negotiate(&hello).unwrap();
+        assert!(negotiated.allows_request(&request));
+        hello.capabilities.retain(|c| c.as_str() != RELAY_GRANTS_V1);
+        let previous = NegotiatedProtocol::negotiate(&hello).unwrap();
+        assert!(!previous.allows_request(&request));
+        let mut result: HelloResult =
+            serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
+        result.push_mode = Some(crate::PushMode::Relay);
+        result.capabilities = negotiated.capabilities();
+        assert!(
+            NegotiatedProtocol::from_result(&result)
+                .unwrap()
+                .relay_grants()
+        );
+        let frame = ServerFrame::Result {
+            id: 1,
+            result: Response::Hello(result.clone()),
+        };
+        let old: Value = serde_json::from_str(&previous.server_frame(&frame).unwrap()).unwrap();
+        assert!(old["result"].get("push_mode").is_none());
+        result.capabilities = vec![Label::new(RELAY_GRANTS_V1).unwrap()];
+        assert!(NegotiatedProtocol::from_result(&result).is_none());
+        assert!(!grant.is_valid(2000000000));
+        assert!(format!("{grant:?}").contains("<redacted>"));
     }
 }

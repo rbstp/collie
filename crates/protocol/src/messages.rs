@@ -927,10 +927,39 @@ pub enum ApnsEnvironment {
     Production,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct RelayGrant {
+    pub token: RelaySendToken,
+    pub route_id: RelayRouteId,
+    pub generation: u32,
+    pub expires_at: u64,
+}
+
+impl RelayGrant {
+    pub fn is_valid(&self, now: u64) -> bool {
+        self.generation > 0
+            && self.expires_at > now
+            && self.expires_at <= now.saturating_add(30 * 86400)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PushMode {
+    None,
+    Direct,
+    Relay,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PushRegisterParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_grant: Option<RelayGrant>,
     pub apns_token: PushToken,
     pub environment: ApnsEnvironment,
     pub notification_key: NotificationKey,
@@ -945,6 +974,8 @@ pub struct PushRegisterParams {
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PushActivityTokenParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_grant: Option<RelayGrant>,
     pub activity_id: ActivityId,
     pub terminal_id: TerminalId,
     pub token: PushToken,
@@ -1106,6 +1137,8 @@ pub enum Response {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct HelloResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push_mode: Option<PushMode>,
     pub protocol_version: u32,
     pub protocol_min_version: u32,
     pub protocol_max_version: u32,

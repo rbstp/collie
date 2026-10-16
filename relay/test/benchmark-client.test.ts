@@ -15,23 +15,23 @@ test('benchmark counter is shared across clients and records network failures be
     let calls = 0;
     const failed = benchmarkClient(path, async () => { calls++; throw new Error('network failed'); });
     await assert.rejects(failed('https://benchmark.invalid'), /network failed/);
-    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { attempts: 1 });
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { attempts: 1, limit: 1000 });
     const resumed = benchmarkClient(path, async (_url, init) => { calls++; assert.equal(init?.redirect, 'error'); return new Response('', { status: 503 }); });
     assert.equal((await resumed('https://benchmark.invalid')).status, 503);
     assert.equal(calls, 2);
-    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { attempts: 2 });
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { attempts: 2, limit: 1000 });
   });
 });
 test('benchmark hard cap survives resumes and rejects the next request without calling fetch', async () => {
   await fixture(async path => {
-    await writeFile(path, JSON.stringify({ attempts: 999 }));
+    await writeFile(path, JSON.stringify({ attempts: 999, limit: 1000 }));
     let calls = 0;
     const first = benchmarkClient(path, async () => { calls++; return new Response(''); });
     await first('https://benchmark.invalid');
     const resumed = benchmarkClient(path, async () => { calls++; return new Response(''); });
     await assert.rejects(resumed('https://benchmark.invalid'), /budget exhausted/);
     assert.equal(calls, 1);
-    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { attempts: 1000 });
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { attempts: 1000, limit: 1000 });
   });
 });
 test('corrupt state and concurrent allocation fail closed without calling fetch', async () => {
@@ -42,7 +42,7 @@ test('corrupt state and concurrent allocation fail closed without calling fetch'
     await assert.rejects(client('https://benchmark.invalid'));
     await writeFile(path, '');
     await assert.rejects(client('https://benchmark.invalid'));
-    await writeFile(path, JSON.stringify({ attempts: 0 }));
+    await writeFile(path, JSON.stringify({ attempts: 0, limit: 1000 }));
     await writeFile(`${path}.lock`, '');
     await assert.rejects(client('https://benchmark.invalid'));
     assert.equal(calls, 0);
@@ -68,10 +68,23 @@ test('explicit first-run initialization refuses existing state and held locks', 
   await fixture(async path => {
     await initializeBenchmarkBudget(path);
     await assert.rejects(initializeBenchmarkBudget(path), { code: 'EEXIST' });
-    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { attempts: 0 });
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { attempts: 0, limit: 1000 });
     await unlink(path);
     await writeFile(`${path}.lock`, '');
     await assert.rejects(initializeBenchmarkBudget(path), { code: 'EEXIST' });
     await assert.rejects(readFile(path), { code: 'ENOENT' });
+  });
+});
+
+test('an explicitly smaller experiment limit survives resumes and cannot be raised by initialization', async () => {
+  await fixture(async path => {
+    await initializeBenchmarkBudget(path, 50);
+    let calls = 0;
+    const client = benchmarkClient(path, async () => { calls++; return new Response(''); });
+    for (let i = 0; i < 50; i++) await client('https://benchmark.invalid');
+    await assert.rejects(initializeBenchmarkBudget(path, 1000), { code: 'EEXIST' });
+    await assert.rejects(benchmarkClient(path, async () => { calls++; return new Response(''); })('https://benchmark.invalid'), /budget exhausted/);
+    assert.equal(calls, 50);
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { attempts: 50, limit: 50 });
   });
 });

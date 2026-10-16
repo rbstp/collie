@@ -28,13 +28,10 @@ agents = ["claude", "codex", "copilot"]
 [terminals]
 enabled = false                # plain shells from the phone; see Terminals
 
-[apns]
-key_id = "<KEY_ID>"
-team_id = "<TEAM_ID>"
-bundle_id = "<bundle ID>"
+[push.relay]                  # publisher app; no APNs key
 ```
 
 - **`owner_user_id`** is the numeric Tailscale user ID of the only person allowed to use this `collied`. Without it, the first phone you confirm at pairing sets the owner. Read the ID from the pairing prompt or `collied peers list`; copying it here keeps the owner pinned even if the paired phones file is deleted.
 - **`[tasks] agents`** limits which agents New task can start, the first being the default.
 - **`[terminals]`**: see [Terminals](../install/terminals.md).
-- **`[apns]`**: see [Push notifications](../install/push.md).
+- **`[push.relay]` or `[apns]`** (mutually exclusive): see [Push notifications](../install/push.md).

@@ -371,6 +371,7 @@ impl State {
         let sessions = self.lock_sessions().live.len();
         let peers = lock(&self.peers).peers.len();
         StatusInfo {
+            push: Some(self.push.status()),
             pid: std::process::id(),
             backend_state,
             dns_name: self.dns_name.clone(),
@@ -553,6 +554,14 @@ pub async fn start_with(
         )
         .with_timing(cfg.approval_ttl, approvals::SETTLE),
     );
+    {
+        let approvals = Arc::downgrade(&approvals);
+        push.set_approval_check(Arc::new(move |id| {
+            approvals
+                .upgrade()
+                .is_some_and(|a| a.is_pending(id, crate::now_ms()))
+        }));
+    }
     let attachments = {
         let dir = cfg.attachments_dir.clone();
         Arc::new(tokio::task::spawn_blocking(move || Attachments::open(dir)).await??)
@@ -1621,6 +1630,16 @@ impl Session<'_> {
                 err(ErrorCode::NotPaired, "peer is no longer authorized"),
                 None,
             ),
+            Request::PushRegister(ref p)
+                if p.relay_grant
+                    .as_ref()
+                    .is_some_and(|g| !g.is_valid(crate::now_ms() / 1000)) =>
+            {
+                (
+                    err(ErrorCode::InvalidParams, "invalid relay registration"),
+                    None,
+                )
+            }
             Request::PushRegister(p) => (
                 self.state
                     .push
@@ -1630,6 +1649,7 @@ impl Session<'_> {
                         p.environment,
                         p.notification_key,
                         p.mute_done,
+                        p.relay_grant,
                     )
                     .map(|()| Response::Ok)
                     .map_err(|e| {
@@ -1642,6 +1662,16 @@ impl Session<'_> {
                 err(ErrorCode::NotPaired, "peer is no longer authorized"),
                 None,
             ),
+            Request::PushActivityToken(ref p)
+                if p.relay_grant
+                    .as_ref()
+                    .is_some_and(|g| !g.is_valid(crate::now_ms() / 1000)) =>
+            {
+                (
+                    err(ErrorCode::InvalidParams, "invalid relay registration"),
+                    None,
+                )
+            }
             Request::PushActivityToken(p) => (
                 self.state
                     .push
@@ -1652,6 +1682,7 @@ impl Session<'_> {
                         p.token,
                         p.shows_approvals,
                         p.display_binding,
+                        p.relay_grant,
                     )
                     .map(|()| Response::Ok)
                     .map_err(|e| {
@@ -1962,6 +1993,11 @@ impl Session<'_> {
             None
         };
         Response::Hello(HelloResult {
+            push_mode: self
+                .protocol
+                .as_ref()
+                .filter(|p| p.relay_grants())
+                .map(|_| self.state.push.mode()),
             protocol_version: self.protocol.as_ref().expect("hello negotiated").version(),
             protocol_min_version: protocol::PROTOCOL_MIN_VERSION,
             protocol_max_version: protocol::PROTOCOL_VERSION,

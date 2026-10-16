@@ -1,4 +1,3 @@
-#if DEBUG
 import ActivityKit
 import CollieCore
 import CryptoKit
@@ -6,6 +5,7 @@ import Foundation
 import SwiftUI
 import Synchronization
 
+#if DEBUG
 /// `--terminal-demo <file>`: the Agents list over fake agents, each agent screen showing the
 /// first "text" string of a herdr JSON response (or the raw file), with no Mac. Debug builds only.
 /// `--follow-demo <terminal id>` also follows that agent, which starts its Live Activity, and
@@ -98,6 +98,8 @@ struct AgentDemo: View {
     }
 }
 
+#endif
+
 final class DemoAgentCore: ActivityCore, ApprovalCore {
     static let machine = Machine(id: "demo", label: "MacBook Pro", host: "mac.example.ts.net", port: 8457, nodeId: "nDEMO", kind: .mac, key: "")
 
@@ -107,7 +109,36 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     private let usage: PlanUsage
     private let stars = Mutex<[String]>([])
 
-    init(snapshot: String, connectionError: String? = nil) {
+    private struct Simulation {
+        var resolved = false
+        var revision: UInt64 = 1
+        var output: [String: String] = [:]
+        var messages: [String: [HistoryMessage]] = [:]
+    }
+
+    private let simulation = Mutex(Simulation())
+    let isSample: Bool
+
+    convenience init() {
+        self.init(snapshot: "Sample workspace: all actions are simulated locally.\r\n18 tests passed.\r\n", connectionError: nil, isSample: true)
+    }
+
+    #if DEBUG
+    convenience init(snapshot: String, connectionError: String? = nil) {
+        self.init(snapshot: snapshot, connectionError: connectionError, isSample: false)
+    }
+    #endif
+
+    private var screenshotDemo: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["COLLIE_DEMO_SCREENSHOTS"] != nil
+        #else
+        return false
+        #endif
+    }
+
+    private init(snapshot: String, connectionError: String?, isSample: Bool) {
+        self.isSample = isSample
         self.snapshot = snapshot
         self.connectionError = connectionError
         let now = Date.now.unixMs
@@ -161,11 +192,12 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     func reconnect(machineId: String) throws {}
 
     func agentView(machineId: String, terminalId: String, afterRevision: UInt64) -> AgentView? {
-        AgentView(
+        let revision = simulation.withLock { $0.revision }
+        return AgentView(
             link: .connected, lastError: nil,
-            agent: agents.first { $0.terminalId == terminalId },
-            output: afterRevision < 1 ? read(terminalId) : nil,
-            outputRevision: 1
+            agent: currentAgents.first { $0.terminalId == terminalId },
+            output: afterRevision < revision ? read(terminalId) : nil,
+            outputRevision: revision
         )
     }
 
@@ -175,11 +207,21 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         read(terminalId)
     }
 
-    func agentChanges(machineId: String, terminalId: String, root: String?, branch: Bool) async throws -> GitChanges { throw CoreError.NotImplemented }
-    func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff { throw CoreError.NotImplemented }
+    func agentChanges(machineId: String, terminalId: String, root: String?, branch: Bool) async throws -> GitChanges {
+        guard isSample else { throw CoreError.NotImplemented }
+        return GitChanges(root: "/Users/demo/collie", branch: "sample-approval-tests", base: "master", files: [
+            GitFile(path: "tests/approvals.rs", oldPath: nil, section: "unstaged", status: "modified", additions: 1, deletions: 1, hash: nil)
+        ], truncated: false, worktrees: [])
+    }
+
+    func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff {
+        guard isSample else { throw CoreError.NotImplemented }
+        return GitDiff(patch: "diff --git a/tests/approvals.rs b/tests/approvals.rs\n--- a/tests/approvals.rs\n+++ b/tests/approvals.rs\n@@ -1 +1 @@\n-sleep(Duration::from_millis(200)).await;\n+wait_for_approval_state().await;\n", truncated: false)
+    }
     func agentDraft(machineId: String, terminalId: String) async throws -> String? { nil }
 
     func approvalFeed(machineId: String) -> ApprovalFeed? {
+        if simulation.withLock({ $0.resolved }) { return ApprovalFeed(link: .connected, pending: []) }
         let now = Date.now.unixMs
         return ApprovalFeed(link: .connected, pending: [
             PendingApproval(
@@ -193,11 +235,27 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     }
 
     func decide(machineId: String, approvalId: String, decision: ApprovalDecision, note: String?) async throws -> DecisionOutcome {
-        throw CoreError.NotImplemented
+        guard isSample, machineId == Self.machine.id, approvalId == "ap_demo" else { throw CoreError.NotImplemented }
+        let applied = simulation.withLock { state in
+            guard !state.resolved else { return false }
+            state.resolved = true
+            return true
+        }
+        guard applied else { return .expired }
+        record(terminalId: "term_2", text: "Simulated \(decision == .deny ? "denial" : "approval"). No command was run.")
+        return .applied(decision: decision, by: "sample")
     }
 
     func agentHistory(machineId: String, terminalId: String, before: String?, after: String?, query: String?) async throws -> HistoryPage {
-        if ProcessInfo.processInfo.environment["COLLIE_DEMO_SCREENSHOTS"] != nil {
+        if isSample {
+            let extra = simulation.withLock { $0.messages[terminalId, default: []] }
+            var messages = Self.screenshotHistory(terminalId) + extra
+            if let query { messages = messages.filter { $0.text.localizedCaseInsensitiveContains(query) } }
+            if before != nil { messages = [] }
+            if let after, let index = messages.firstIndex(where: { $0.id == after }) { messages = Array(messages.dropFirst(index + 1)) }
+            return HistoryPage(session: "sample", available: true, unavailableReason: nil, reset: false, messages: messages, before: nil, after: messages.last?.id ?? after, more: false, omitted: false)
+        }
+        if screenshotDemo {
             let messages = after == nil && before == nil ? Self.screenshotHistory(terminalId) : []
             return HistoryPage(session: "demo", available: true, unavailableReason: nil, reset: false, messages: messages, before: nil, after: "end", more: false, omitted: false)
         }
@@ -244,16 +302,21 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     }
 
     func prompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws {
-        try await Task.sleep(for: .milliseconds(500))
+        if isSample { record(terminalId: terminalId, text: "Simulated response to: \(text)\nThe sample action completed locally. No command was run.") }
+        else { try await Task.sleep(for: .milliseconds(500)) }
     }
 
     func resendPrompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws {
-        try await Task.sleep(for: .milliseconds(500))
+        try await prompt(machineId: machineId, terminalId: terminalId, text: text, expectedDraft: expectedDraft)
     }
 
-    func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {}
+    func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {
+        if isSample { record(terminalId: terminalId, text: "Simulated terminal keys received. No keys were sent to a machine.") }
+    }
 
-    func typeText(machineId: String, terminalId: String, text: String) async throws {}
+    func typeText(machineId: String, terminalId: String, text: String) async throws {
+        if isSample { record(terminalId: terminalId, text: "Simulated terminal input: \(text)") }
+    }
 
     func focus(machineId: String, terminalId: String) async throws {}
     func scrollBottom(machineId: String, terminalId: String) async throws {}
@@ -284,7 +347,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     }
 
     func taskOptions(machineId: String) async throws -> TaskOptions {
-        guard ProcessInfo.processInfo.environment["COLLIE_DEMO_SCREENSHOTS"] != nil else { throw CoreError.NotImplemented }
+        guard isSample || screenshotDemo else { throw CoreError.NotImplemented }
         return TaskOptions(agents: ["claude", "codex", "copilot"], defaultAgent: "claude", recentCwds: ["/Users/demo/collie", "/Users/demo/website"], roots: ["/Users/demo"])
     }
 
@@ -337,11 +400,30 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         throw CoreError.TerminalsDisabled
     }
 
-    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String) throws {
+    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String, relayGrant: RelayPushGrant?) throws {
         print("demo: activity \(activityId) token \(tokenHex.prefix(8))… for \(terminalId)")
     }
 
     func endActivity(machineId: String, activityId: String) throws {}
+
+    private func record(terminalId: String, text: String) {
+        simulation.withLock { state in
+            state.revision += 1
+            state.output[terminalId, default: ""] += "\r\n" + text.replacingOccurrences(of: "\n", with: "\r\n") + "\r\n"
+            state.messages[terminalId, default: []].append(HistoryMessage(id: "sample-\(state.revision)", role: "assistant", text: text, tool: nil, callId: nil, truncated: false, parentCallId: nil))
+        }
+    }
+
+    private var currentAgents: [AgentSummary] {
+        guard simulation.withLock({ $0.resolved }) else { return agents }
+        return agents.map { agent in
+            guard agent.terminalId == "term_2" else { return agent }
+            var agent = agent
+            agent.status = .done
+            agent.lastLine = "Sample decision applied locally. No command was run."
+            return agent
+        }
+    }
 
     private var demoFlock: MachineFlock {
         MachineFlock(
@@ -352,13 +434,13 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 WorkspaceSummary(workspaceId: "ws_site", label: "website", number: 2, status: .done, cwd: "/Users/demo/website"),
                 WorkspaceSummary(workspaceId: "ws_api", label: "api", number: 3, status: .idle, cwd: "/Users/demo/api"),
             ],
-            agents: agents, approvalsCount: 1, planUsage: usage, starred: stars.withLock { $0 }
+            agents: currentAgents, approvalsCount: simulation.withLock { $0.resolved ? 0 : 1 }, planUsage: usage, starred: stars.withLock { $0 }
         )
     }
 
     private func read(_ terminalId: String) -> TerminalSnapshot {
-        let preview = ProcessInfo.processInfo.environment["COLLIE_DEMO_SCREENSHOTS"] != nil ? Self.screenshotPreviews[terminalId]?.replacingOccurrences(of: "\n", with: "\r\n") : nil
-        return TerminalSnapshot(terminalId: terminalId, source: .recent, ansi: preview ?? snapshot, truncated: false)
+        let preview = (isSample || screenshotDemo) ? Self.screenshotPreviews[terminalId]?.replacingOccurrences(of: "\n", with: "\r\n") : nil
+        return TerminalSnapshot(terminalId: terminalId, source: .recent, ansi: (preview ?? snapshot) + simulation.withLock { $0.output[terminalId, default: ""] }, truncated: false)
     }
 
     private static let screenshotPreviews = [
@@ -416,4 +498,3 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
             """,
     ]
 }
-#endif

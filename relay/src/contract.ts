@@ -72,9 +72,9 @@ export function validSend(v: unknown): v is Send {
     && (aps['dismissal-date'] === undefined || (aps.event === 'end' && integer(aps['dismissal-date'], 4294967295)))
     && (aps.alert === undefined || fallback(aps.alert));
 }
-export async function readBody(request: Request, timeoutMs = 5000): Promise<unknown> {
+export async function readBody(request: Request, timeoutMs = 5000, maximum = 8192): Promise<unknown> {
   const length = request.headers.get('content-length');
-  if (length !== null && (!/^\d+$/.test(length) || Number(length) > 8192)) throw new Error('invalid_request');
+  if (length !== null && (!/^\d+$/.test(length) || Number(length) > maximum)) throw new Error('invalid_request');
   if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json'
     || request.headers.has('content-encoding') || !request.body) throw new Error('invalid_request');
   const reader = request.body.getReader();
@@ -92,7 +92,7 @@ export async function readBody(request: Request, timeoutMs = 5000): Promise<unkn
       const { done, value } = await Promise.race([reader.read(), timeout]);
       if (done) break;
       size += value.length;
-      if (size > 8192) { void reader.cancel().catch(() => {}); throw new Error('invalid_request'); }
+      if (size > maximum) { void reader.cancel().catch(() => {}); throw new Error('invalid_request'); }
       chunks.push(value);
     }
   } finally { clearTimeout(timer!); reader.releaseLock(); }

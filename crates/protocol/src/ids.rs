@@ -309,6 +309,26 @@ validated_string!(
 );
 
 validated_string!(
+    RelayRouteId,
+    debug = plain,
+    check = |s| ascii_ident(s, 64, b"_-"),
+    schema = { "pattern": "^[A-Za-z0-9_-]{1,64}$" }
+);
+
+validated_string!(
+    RelaySendToken,
+    debug = redacted,
+    check = |s| {
+        let parts: Vec<_> = s.split('.').collect();
+        s.len() <= 2041 && parts.len() == 4 && parts[0] == "v1"
+            && ascii_ident(parts[1], 32, b"_-")
+            && !parts[2].is_empty() && parts[2].bytes().all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+            && base64url_len(parts[3], 43)
+    },
+    schema = { "maxLength": 2041, "pattern": "^v1\\.[A-Za-z0-9_-]{1,32}\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$" }
+);
+
+validated_string!(
     /// The phone's terminal key: a P-256 SubjectPublicKeyInfo (91 bytes), base64url without
     /// padding (canonical: the last character carries 2 bits).
     TerminalKey,
@@ -758,5 +778,21 @@ mod tests {
         assert!(NotificationKey::new("A".repeat(42)).is_err());
         assert!(NotificationKey::new(format!("{}B", "A".repeat(42))).is_err());
         assert!(NotificationKey::new(format!("{}=", "A".repeat(42))).is_err());
+    }
+    #[test]
+    fn relay_bearer_credentials_are_bounded_and_redacted() {
+        let token = format!("v1.current.YQ.{}", "A".repeat(43));
+        assert!(RelaySendToken::new(token.clone()).is_ok());
+        assert!(!format!("{:?}", RelaySendToken::new(token).unwrap()).contains("YQ"));
+        for bad in [
+            "v2.key.YQ.signature".to_owned(),
+            "v1.key.secret.with.extra.segments".to_owned(),
+            format!("v1.key.{}.{}", "A".repeat(2042), "A".repeat(43)),
+            "Bearer v1.key.YQ.sig".to_owned(),
+        ] {
+            assert!(RelaySendToken::new(bad).is_err());
+        }
+        assert!(RelayRouteId::new("route_1-2").is_ok());
+        assert!(RelayRouteId::new("route/1").is_err());
     }
 }

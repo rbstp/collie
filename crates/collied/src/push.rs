@@ -30,6 +30,9 @@ use crate::config::{self, ApnsConfig, ApnsKey};
 use crate::keychain;
 use crate::peers::{self, Store};
 
+#[path = "push_relay.rs"]
+mod relay_delivery;
+
 const QUEUE: usize = 64;
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 pub const CATEGORY: &str = "APPROVAL";
@@ -38,6 +41,8 @@ pub const MAX_ACTIVITIES: usize = 8;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Device {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_grant: Option<protocol::RelayGrant>,
     pub stable_id: String,
     pub token: PushToken,
     pub environment: ApnsEnvironment,
@@ -55,6 +60,8 @@ pub struct Device {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Activity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_grant: Option<protocol::RelayGrant>,
     pub stable_id: String,
     pub activity_id: ActivityId,
     pub terminal_id: TerminalId,
@@ -73,6 +80,7 @@ impl Activity {
     /// The token as a delivery target, with no notification key.
     pub fn target(&self) -> Device {
         Device {
+            relay_grant: self.relay_grant.clone(),
             stable_id: self.stable_id.clone(),
             token: self.token.clone(),
             environment: self.environment,
@@ -132,7 +140,7 @@ pub enum ActivityError {
 
 enum Job {
     Alert(Vec<Device>, Alert),
-    Activity(Activity, Alert, Option<Box<Routed>>),
+    Activity(Box<Activity>, Alert, Option<Box<Routed>>),
     Routed(Box<Routed>),
 }
 
@@ -307,13 +315,53 @@ pub enum Rejection {
     Unregistered,
     #[error("bad device token")]
     BadDeviceToken,
+    #[error("{reason}")]
+    Retry {
+        reason: String,
+        after: Duration,
+        daily_quota: bool,
+    },
     #[error("{0}")]
     Other(String),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Health {
+    pub pending: usize,
+    pub last_send_ms: Option<u64>,
+    pub last_error: Option<String>,
+    pub retry_at_ms: Option<u64>,
+    pub quota_reset_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Status {
+    pub mode: protocol::PushMode,
+    pub devices: usize,
+    pub activities: usize,
+    pub grant_expires_at: Option<u64>,
+    pub health: Health,
+}
+
+type ApprovalLive = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+pub fn sender(config: &config::Config) -> anyhow::Result<Option<Arc<dyn Sender>>> {
+    match (&config.apns, &config.push.relay) {
+        (Some(_), Some(_)) => anyhow::bail!("set either [push.relay] or [apns], not both"),
+        (Some(apns), None) => Ok(Some(Arc::new(Apns::new(apns).context("[apns]")?))),
+        (None, Some(_)) => Ok(Some(Arc::new(
+            crate::relay::Relay::new().context("[push.relay]")?,
+        ))),
+        (None, None) => Ok(None),
+    }
 }
 
 pub type Paired = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 pub trait Sender: Send + Sync {
+    fn mode(&self) -> protocol::PushMode {
+        protocol::PushMode::Direct
+    }
     fn send<'a>(
         &'a self,
         device: &'a Device,
@@ -424,7 +472,10 @@ pub struct Push {
     devices: Mutex<Devices>,
     queue: Option<mpsc::Sender<Job>>,
     paired: Paired,
+    mode: protocol::PushMode,
     routed: Mutex<Vec<Routed>>,
+    health: Mutex<Health>,
+    approval_live: Mutex<Option<ApprovalLive>>,
 }
 
 impl Push {
@@ -434,6 +485,9 @@ impl Push {
         paired: Paired,
     ) -> Result<Arc<Self>, peers::Error> {
         let devices = peers::load_json(&path)?;
+        let mode = sender
+            .as_ref()
+            .map_or(protocol::PushMode::None, |s| s.mode());
         let (queue, worker) = match sender {
             Some(s) => {
                 let (tx, rx) = mpsc::channel(QUEUE);
@@ -443,15 +497,52 @@ impl Push {
         };
         let push = Arc::new(Self {
             path,
+            mode,
             devices: Mutex::new(devices),
             queue,
             paired: paired.clone(),
             routed: Mutex::new(Vec::new()),
+            health: Mutex::new(Health::default()),
+            approval_live: Mutex::new(None),
         });
         if let Some((rx, sender)) = worker {
-            tokio::spawn(deliver(Arc::downgrade(&push), rx, sender, paired));
+            if mode == protocol::PushMode::Relay {
+                tokio::spawn(relay_delivery::deliver(Arc::downgrade(&push), rx, sender));
+            } else {
+                tokio::spawn(deliver(Arc::downgrade(&push), rx, sender, paired));
+            }
         }
         Ok(push)
+    }
+
+    pub fn mode(&self) -> protocol::PushMode {
+        self.mode
+    }
+
+    pub fn set_approval_check(&self, check: ApprovalLive) {
+        *crate::lock(&self.approval_live) = Some(check);
+    }
+
+    pub fn status(&self) -> Status {
+        let devices = self.lock();
+        Status {
+            mode: self.mode,
+            devices: devices.devices.len(),
+            activities: devices.activities.len(),
+            grant_expires_at: devices
+                .devices
+                .iter()
+                .filter_map(|d| d.relay_grant.as_ref())
+                .chain(
+                    devices
+                        .activities
+                        .iter()
+                        .filter_map(|a| a.relay_grant.as_ref()),
+                )
+                .map(|g| g.expires_at)
+                .min(),
+            health: crate::lock(&self.health).clone(),
+        }
     }
 
     pub fn devices(&self) -> Vec<Device> {
@@ -465,6 +556,7 @@ impl Push {
         environment: ApnsEnvironment,
         notification_key: NotificationKey,
         mute_done: bool,
+        relay_grant: Option<protocol::RelayGrant>,
     ) -> Result<(), peers::Error> {
         // Checked under the devices lock: revoke removes the peer before its `forget`
         // takes this lock, so a racing registration is either skipped here or forgotten.
@@ -475,6 +567,7 @@ impl Push {
             d.devices
                 .retain(|x| x.stable_id != stable_id && x.token != token);
             d.devices.push(Device {
+                relay_grant,
                 stable_id: stable_id.to_owned(),
                 token,
                 environment,
@@ -493,6 +586,7 @@ impl Push {
     /// Replaces the device's activity with the same id or terminal: the phone keeps one
     /// activity per followed agent, and an old one it never ended must not hold a slot.
     /// The environment is the one the device registered with `push.register`.
+    #[allow(clippy::too_many_arguments)]
     pub fn register_activity(
         &self,
         stable_id: &str,
@@ -501,6 +595,7 @@ impl Push {
         token: PushToken,
         shows_approvals: bool,
         display_binding: Option<protocol::ActivityDisplayBinding>,
+        relay_grant: Option<protocol::RelayGrant>,
     ) -> Result<(), ActivityError> {
         let mut outcome = Ok(());
         // Checked under the devices lock, as in `register`.
@@ -538,6 +633,7 @@ impl Push {
                 return;
             }
             d.activities.push(Activity {
+                relay_grant,
                 stable_id: stable_id.to_owned(),
                 activity_id,
                 terminal_id,
@@ -620,7 +716,11 @@ impl Push {
 
     /// Sends `fallback` as an approval alert if `alert` reaches no Live Activity.
     pub fn notify_activity(&self, activity: Activity, alert: Alert, fallback: Option<Routed>) {
-        self.enqueue(Job::Activity(activity, alert, fallback.map(Box::new)));
+        self.enqueue(Job::Activity(
+            Box::new(activity),
+            alert,
+            fallback.map(Box::new),
+        ));
     }
 
     /// A routed approval as an approval alert, unless its device already got that one.
@@ -678,10 +778,12 @@ impl Push {
         }
     }
 
-    fn drop_token(&self, token: &PushToken) {
+    fn drop_token(&self, device: &Device) {
         if let Err(e) = self.update(|d| {
-            d.devices.retain(|x| x.token != *token);
-            d.activities.retain(|x| x.token != *token);
+            d.devices
+                .retain(|x| x.token != device.token || x.relay_grant != device.relay_grant);
+            d.activities
+                .retain(|x| x.token != device.token || x.relay_grant != device.relay_grant);
         }) {
             tracing::error!(error = %e, "could not remove a dead APNs token");
         }
@@ -769,11 +871,17 @@ async fn send(
     {
         return false;
     }
-    match sender.send(device, alert).await {
+    let result = sender.send(device, alert).await;
+    {
+        let mut health = crate::lock(&push.health);
+        health.last_send_ms = Some(crate::now_ms());
+        health.last_error = result.as_ref().err().map(ToString::to_string);
+    }
+    match result {
         Ok(()) => true,
         Err(e @ (Rejection::Unregistered | Rejection::BadDeviceToken)) => {
             tracing::info!(peer = %device.stable_id, reason = %e, "removing APNs token");
-            push.drop_token(&device.token);
+            push.drop_token(device);
             false
         }
         Err(e) => {
@@ -899,7 +1007,7 @@ impl Sender for Apns {
                         None => Rejection::Other(format!("HTTP {}", r.code)),
                     })
                 }
-                Err(e) => Err(Rejection::Other(e.to_string())),
+                Err(_) => Err(Rejection::Other("APNs transport unavailable".into())),
             }
         })
     }
@@ -1274,10 +1382,10 @@ fn write_private(path: &Path, data: &[u8]) -> anyhow::Result<()> {
 
 pub async fn send_test(
     data_dir: &Path,
-    cfg: &ApnsConfig,
+    cfg: &config::Config,
     session: Option<(String, TerminalId)>,
 ) -> anyhow::Result<bool> {
-    let apns = Apns::new(cfg)?;
+    let sender = sender(cfg)?.context("no [push.relay] or [apns] section in collied.toml")?;
     let store = peers::load(&data_dir.join(config::PEERS_FILE))?;
     let devices: Devices = peers::load_json(&data_dir.join(config::PUSH_FILE))?;
     let alert = match session {
@@ -1291,10 +1399,13 @@ pub async fn send_test(
             continue;
         };
         let label = crate::printable(&peer.label);
-        match apns.send(d, &alert.for_device(d)).await {
+        match sender.send(d, &alert.for_device(d)).await {
             Ok(()) => {
                 sent += 1;
-                println!("sent to {label} ({:?})", d.environment);
+                println!(
+                    "accepted for {label} ({:?}); display is not confirmed",
+                    d.environment
+                );
             }
             Err(e) => {
                 ok = false;
@@ -1500,6 +1611,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
 
     fn device(notification_key: Option<NotificationKey>) -> Device {
         Device {
+            relay_grant: None,
             stable_id: "nA".into(),
             token: token('a'),
             environment: ApnsEnvironment::Sandbox,
@@ -1637,18 +1749,40 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             Arc::new(move |id| id != "nRevoked" || !revoked.load(Ordering::SeqCst))
         };
         let push = Push::open(path.clone(), Some(mock.clone()), paired).unwrap();
-        push.register("nA", token('a'), ApnsEnvironment::Sandbox, key(), false)
-            .unwrap();
-        push.register("nB", token('b'), ApnsEnvironment::Production, key(), false)
-            .unwrap();
-        push.register("nA", token('c'), ApnsEnvironment::Sandbox, key(), false)
-            .unwrap();
+        push.register(
+            "nA",
+            token('a'),
+            ApnsEnvironment::Sandbox,
+            key(),
+            false,
+            None,
+        )
+        .unwrap();
+        push.register(
+            "nB",
+            token('b'),
+            ApnsEnvironment::Production,
+            key(),
+            false,
+            None,
+        )
+        .unwrap();
+        push.register(
+            "nA",
+            token('c'),
+            ApnsEnvironment::Sandbox,
+            key(),
+            false,
+            None,
+        )
+        .unwrap();
         push.register(
             "nRevoked",
             token('d'),
             ApnsEnvironment::Sandbox,
             key(),
             false,
+            None,
         )
         .unwrap();
         revoked.store(true, Ordering::SeqCst);
@@ -1658,6 +1792,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             ApnsEnvironment::Sandbox,
             key(),
             false,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1693,8 +1828,15 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         assert_eq!(stored.devices.len(), 2);
         assert_eq!(stored.devices[0].stable_id, "nA");
 
-        push.register("nB", token('b'), ApnsEnvironment::Production, key(), true)
-            .unwrap();
+        push.register(
+            "nB",
+            token('b'),
+            ApnsEnvironment::Production,
+            key(),
+            true,
+            None,
+        )
+        .unwrap();
         push.notify_done(done_alert(&term(1), "t", "w", "nMAC"));
         let sent = mock.wait(3).await;
         assert_eq!(
@@ -1703,8 +1845,15 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             "never sent to a muted device"
         );
         assert!(sent[1].1.payload.get("terminal_id").is_none());
-        push.register("nA", token('c'), ApnsEnvironment::Sandbox, key(), true)
-            .unwrap();
+        push.register(
+            "nA",
+            token('c'),
+            ApnsEnvironment::Sandbox,
+            key(),
+            true,
+            None,
+        )
+        .unwrap();
         push.notify_done(done_alert(&term(1), "t", "w", "nMAC"));
         push.notify(test_alert());
         mock.wait(5).await;
@@ -1786,6 +1935,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
     fn activity_updates_and_ends_seal_every_display_field() {
         let device = device(Some(key()));
         let activity = Activity {
+            relay_grant: None,
             stable_id: device.stable_id.clone(),
             activity_id: aid(1),
             terminal_id: term(1),
@@ -1893,17 +2043,47 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         };
         let push = Push::open(path.clone(), Some(mock.clone()), paired).unwrap();
         assert_eq!(
-            push.register_activity("nA", aid(0), term(0), long_token(0), true, Some(binding())),
+            push.register_activity(
+                "nA",
+                aid(0),
+                term(0),
+                long_token(0),
+                true,
+                Some(binding()),
+                None
+            ),
             Err(ActivityError::NoDevice),
             "push.register comes first"
         );
-        push.register("nA", token('a'), ApnsEnvironment::Sandbox, key(), false)
-            .unwrap();
-        push.register("nB", token('b'), ApnsEnvironment::Production, key(), false)
-            .unwrap();
+        push.register(
+            "nA",
+            token('a'),
+            ApnsEnvironment::Sandbox,
+            key(),
+            false,
+            None,
+        )
+        .unwrap();
+        push.register(
+            "nB",
+            token('b'),
+            ApnsEnvironment::Production,
+            key(),
+            false,
+            None,
+        )
+        .unwrap();
         for i in 0..MAX_ACTIVITIES {
-            push.register_activity("nA", aid(i), term(i), long_token(i), true, Some(binding()))
-                .unwrap();
+            push.register_activity(
+                "nA",
+                aid(i),
+                term(i),
+                long_token(i),
+                true,
+                Some(binding()),
+                None,
+            )
+            .unwrap();
         }
         assert_eq!(
             push.register_activity(
@@ -1912,7 +2092,8 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
                 term(99),
                 long_token(99),
                 true,
-                Some(binding())
+                Some(binding()),
+                None
             ),
             Err(ActivityError::TooMany)
         );
@@ -1931,6 +2112,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             long_token(100),
             true,
             Some(binding()),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1945,6 +2127,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             long_token(150),
             true,
             Some(binding()),
+            None,
         )
         .unwrap();
         assert!(at(50).unwrap() > first, "a new activity starts its own");
@@ -1955,6 +2138,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             long_token(200),
             true,
             Some(binding()),
+            None,
         )
         .unwrap();
         let stored: Devices = peers::load_json(&path).unwrap();
@@ -2017,7 +2201,15 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         );
         assert_eq!(push.devices().len(), 2);
         assert_eq!(
-            push.register_activity("nB", aid(5), term(5), long_token(5), true, Some(binding())),
+            push.register_activity(
+                "nB",
+                aid(5),
+                term(5),
+                long_token(5),
+                true,
+                Some(binding()),
+                None
+            ),
             Err(ActivityError::NotPaired)
         );
 
@@ -2071,15 +2263,39 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         )
         .unwrap();
         for (id, c) in [("nA", 'a'), ("nB", 'b'), ("nC", 'c')] {
-            push.register(id, token(c), ApnsEnvironment::Sandbox, key(), false)
+            push.register(id, token(c), ApnsEnvironment::Sandbox, key(), false, None)
                 .unwrap();
         }
-        push.register_activity("nA", aid(1), term(1), long_token(1), true, Some(binding()))
-            .unwrap();
-        push.register_activity("nB", aid(2), term(2), long_token(2), true, Some(binding()))
-            .unwrap();
-        push.register_activity("nC", aid(3), term(1), long_token(3), false, Some(binding()))
-            .unwrap();
+        push.register_activity(
+            "nA",
+            aid(1),
+            term(1),
+            long_token(1),
+            true,
+            Some(binding()),
+            None,
+        )
+        .unwrap();
+        push.register_activity(
+            "nB",
+            aid(2),
+            term(2),
+            long_token(2),
+            true,
+            Some(binding()),
+            None,
+        )
+        .unwrap();
+        push.register_activity(
+            "nC",
+            aid(3),
+            term(1),
+            long_token(3),
+            false,
+            Some(binding()),
+            None,
+        )
+        .unwrap();
         let a = approval(vec![Decision::Approve, Decision::Deny]);
         let alert = approval_alert(&a, "api-fixer", "nMAC", "Bash: rm -rf build");
 
@@ -2120,10 +2336,25 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         let offline =
             Push::open(dir.path().join("offline.json"), None, Arc::new(|_| true)).unwrap();
         offline
-            .register("nA", token('a'), ApnsEnvironment::Sandbox, key(), false)
+            .register(
+                "nA",
+                token('a'),
+                ApnsEnvironment::Sandbox,
+                key(),
+                false,
+                None,
+            )
             .unwrap();
         offline
-            .register_activity("nA", aid(1), term(1), long_token(1), true, Some(binding()))
+            .register_activity(
+                "nA",
+                aid(1),
+                term(1),
+                long_token(1),
+                true,
+                Some(binding()),
+                None,
+            )
             .unwrap();
         offline.notify_approval(&a, alert, true);
         assert!(offline.take_routed().is_empty(), "nothing to deliver with");
@@ -2142,11 +2373,26 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             Arc::new(|_| true),
         )
         .unwrap();
-        push.register("nA", token('a'), ApnsEnvironment::Sandbox, key(), false)
-            .unwrap();
+        push.register(
+            "nA",
+            token('a'),
+            ApnsEnvironment::Sandbox,
+            key(),
+            false,
+            None,
+        )
+        .unwrap();
         for i in 1..=3 {
-            push.register_activity("nA", aid(i), term(i), long_token(i), true, Some(binding()))
-                .unwrap();
+            push.register_activity(
+                "nA",
+                aid(i),
+                term(i),
+                long_token(i),
+                true,
+                Some(binding()),
+                None,
+            )
+            .unwrap();
         }
         let find = |i: usize| {
             push.activities()
@@ -2235,6 +2481,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         assert!(!d.devices[0].mute_done);
         assert!(!serde_json::to_string(&d).unwrap().contains("mute_done"));
         let a = Activity {
+            relay_grant: None,
             stable_id: "nA".into(),
             activity_id: aid(0),
             terminal_id: term(0),
@@ -2352,5 +2599,48 @@ BDSKTTpvY6ZTNJ2aRaGwPfVBlnky7dc62au34JD4PDc7wpwLOJUSinI=
                 .unwrap()
                 .contains("key_path")
         );
+    }
+    #[tokio::test]
+    async fn relay_grants_stay_private_and_late_failures_preserve_replacements() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("push.json");
+        let push = Push::open(path.clone(), None, Arc::new(|_| true)).unwrap();
+        let grant = protocol::RelayGrant {
+            token: protocol::RelaySendToken::new(format!("v1.key.YQ.{}", "A".repeat(43))).unwrap(),
+            route_id: protocol::RelayRouteId::new("route").unwrap(),
+            generation: 1,
+            expires_at: crate::now_ms() / 1000 + 86400,
+        };
+        push.register(
+            "phone",
+            token('a'),
+            ApnsEnvironment::Production,
+            key(),
+            false,
+            Some(grant.clone()),
+        )
+        .unwrap();
+        let old = push.devices()[0].clone();
+        let replacement = protocol::RelayGrant {
+            generation: 2,
+            ..grant
+        };
+        push.register(
+            "phone",
+            token('a'),
+            ApnsEnvironment::Production,
+            key(),
+            false,
+            Some(replacement.clone()),
+        )
+        .unwrap();
+        push.drop_token(&old);
+        assert_eq!(push.devices()[0].relay_grant, Some(replacement.clone()));
+        let reloaded = Push::open(path.clone(), None, Arc::new(|_| true)).unwrap();
+        assert_eq!(reloaded.devices()[0].relay_grant, Some(replacement));
+        assert_eq!(std::fs::metadata(path).unwrap().mode() & 0o777, 0o600);
+        reloaded.drop_token(&reloaded.devices()[0]);
+        assert!(reloaded.devices().is_empty());
+        assert_eq!(reloaded.mode(), protocol::PushMode::None);
     }
 }

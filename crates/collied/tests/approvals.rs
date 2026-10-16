@@ -374,6 +374,7 @@ impl Rig {
             ApnsEnvironment::Sandbox,
             notification_key.clone(),
             false,
+            None,
         )
         .unwrap();
         let audit = dir.path().join("audit.log");
@@ -414,6 +415,7 @@ impl Rig {
                 activity_token(),
                 true,
                 Some(display_binding()),
+                None,
             )
             .unwrap();
     }
@@ -1405,6 +1407,7 @@ async fn notifications_and_live_activities_continue_without_app_events() {
             ApnsEnvironment::Sandbox,
             rig.notification_key.clone(),
             false,
+            None,
         )
         .unwrap();
     rig.follow();
@@ -1504,6 +1507,7 @@ async fn a_followed_terminal_alerts_on_its_activity_only() {
             ApnsEnvironment::Sandbox,
             rig.notification_key.clone(),
             false,
+            None,
         )
         .unwrap();
     rig.push
@@ -1514,6 +1518,7 @@ async fn a_followed_terminal_alerts_on_its_activity_only() {
             PushToken::new("12".repeat(80)).unwrap(),
             true,
             Some(display_binding()),
+            None,
         )
         .unwrap();
     rig.follow();
@@ -1649,6 +1654,7 @@ async fn an_activity_without_approvals_keeps_the_notification() {
             activity_token(),
             false,
             Some(display_binding()),
+            None,
         )
         .unwrap();
     let a = rig.ticked_needed().await;
