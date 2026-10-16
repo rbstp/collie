@@ -120,6 +120,8 @@ final class AgentModel {
 
     private(set) var gestures: TerminalGestures
 
+    var savesPreferences: Bool { prefsFile != nil }
+
     var keepsKeyboard: Bool { DevicePrefs.load(from: prefsFile).keepKeyboard }
 
     var historyLines: UInt16 { DevicePrefs.load(from: prefsFile).historyLines }

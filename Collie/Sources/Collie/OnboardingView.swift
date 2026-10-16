@@ -3,6 +3,7 @@ import SwiftUI
 
 struct OnboardingView: View {
     let app: AppModel
+    var openSample: () -> Void = {}
     @State private var authKey = ""
     @State private var signInTask: Task<Void, Never>?
     @State private var web = WebAuthenticator()
@@ -19,6 +20,11 @@ struct OnboardingView: View {
                     .padding(.vertical, 4)
                 }
 
+                Section {
+                    Button("Explore sample workspace", systemImage: "play.rectangle", action: openSample)
+                } footer: {
+                    Text("Try simulated agents and approvals without signing in or connecting a machine.")
+                }
                 Section {
                     Button {
                         signIn { await app.signIn(openLogin: openLogin, closeLogin: web.close) }
