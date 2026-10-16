@@ -2,7 +2,7 @@
 
 Run the test daemon in a disposable macOS guest and iOS Simulator on the Apple Silicon host. The harness uses its own local tailnet control, mock relay, identities and pairing. It does not require a Tailscale account, Cloudflare account or Apple signing credentials, and leaves the installed owner daemon and personal direct APNs configuration alone.
 
-This procedure is being exercised for [#374](https://github.com/rbstp/collie/issues/374). Guest boot, the pinned image's default login, app enumeration, desktop capture, a Calculator accessibility click changing `0` to `6`, and refusal of VM mode with an ordinary Release core before creating state are verified. The first complete integration run passed ordinary pairing, isolated VM identity, encrypted mock push and ordinary peer removal with a rejected follow-up. The documented reset/rerun remains pending; repeatability is not yet established.
+Two consecutive fresh `just vm-reset` and `just vm-test` runs passed at clean revision `90f747c7f66f3f7e0c328b2702bcc0a5c767f892`. Each reproved guest desktop capture and a Calculator accessibility click changing `0` to `6`, refusal of VM mode with an ordinary Release core, isolated VM identities, ordinary mutual-TLS pairing, encrypted mock push, and ordinary peer removal with a rejected follow-up. The prepared guest retained its Driver grants without another consent round. These are local integration results, not genuine App Attest or APNs delivery.
 
 ## Requirements and pinned inputs
 
@@ -68,7 +68,7 @@ just vm-reset
 just vm-test
 ```
 
-Reset stops the owned resources, deletes `collie-374-test`, erases the dedicated Simulator and clears the previous run marker. It retains the pinned base, `collie-374-desktop`, tool cache and private logs. The next test clones the prepared baseline with its guest Driver grants and creates fresh tailnet authentication, relay identity, SSH keys, Simulator state and pairing. A rerun is not established until its own result and cleanup have been recorded.
+Reset stops the owned resources, deletes `collie-374-test`, erases the dedicated Simulator and clears the previous run marker. It retains the pinned base, `collie-374-desktop`, tool cache and private logs. The next test clones the prepared baseline with its guest Driver grants and creates fresh tailnet authentication, relay identity, SSH keys, Simulator state and pairing. Inspect each run's own result and cleanup evidence; reset retains earlier private logs for diagnosing failed attempts.
 
 ## Remove owned resources
 
@@ -88,6 +88,7 @@ Clean removes the recorded disposable guest, dedicated Simulator, prepared deskt
 | Test ports `127.0.0.1:8788` through `8791` occupied | Identify their owner and stop it yourself if appropriate; the harness refuses to evict another process |
 | Previous run marker present | Run `just vm-reset` before another test |
 | Recorded Simulator missing or ownership does not match | Inspect the recorded state; do not adopt or delete an unrelated resource to bypass the check |
+| Guest SSH startup timeout | Inspect the private run's `ssh-ready-*.log` files and guest log, preserve the failed attempt, then stop/reset only owned resources before rerunning |
 | Build, guest boot, pairing or mock push timeout | Inspect the printed private run directory, stop owned resources, and preserve the failure evidence before resetting |
 
 ## Acceptance limits
