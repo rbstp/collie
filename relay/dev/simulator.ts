@@ -2,9 +2,9 @@ import { createServer } from 'node:http';
 import { connect } from 'node:http2';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { Miniflare } from 'miniflare';
 import { base64url } from '../src/crypto.ts';
-import { simulatorWorker } from './worker.ts';
+import type { Env } from '../src/index.ts';
+import { provisionSimulator, simulatorRuntime, simulatorWorker } from './worker.ts';
 
 const [mode, directory, team = 'SIMULATOR1'] = process.argv.slice(2);
 if (!['init', 'serve'].includes(mode) || !directory || !/^[A-Z0-9]{10}$/.test(team)) {
@@ -25,37 +25,21 @@ if (mode === 'init') {
 } else {
   const identity = JSON.parse(await readFile(identityPath, 'utf8'));
   const secret = await readFile(resolve(root, 'send-secret'), 'utf8');
-  const runtime = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response("unused")}}',
-    compatibilityDate: '2026-08-06', d1Databases: ['DB'], d1Persist: resolve(root, 'd1') });
-  const db = await runtime.getD1Database('DB');
-  const installed = await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='attestations'").first();
-  if (!installed) {
-    for (const migration of ['0001_relay.sql', '0002_attestation.sql']) {
-      let current = '';
-      for (const statement of (await readFile(new URL(`../migrations/${migration}`, import.meta.url), 'utf8')).split(/;\s*(?:\n|$)/)) {
-        if (!statement.trim()) continue;
-        current += `${statement};\n`;
-        if (current.includes('CREATE TRIGGER') && !/\nEND;\s*$/.test(current)) continue;
-        await db.prepare(current).run(); current = '';
-      }
-    }
-    await db.batch([
-      db.prepare('INSERT INTO installations VALUES (?, 0)').bind(identity.installationId),
-      db.prepare(`INSERT INTO attestations (installation_id,key_id,public_key,receipt,environment,last_nonce,retain_until)
-        VALUES (?, ?, ?, 'simulator-provisioned', 'development', 'initial', ?)`).bind(identity.installationId, identity.keyId,
-          identity.publicKey, Math.floor(Date.now() / 1000) + 37 * 86400),
-      db.prepare('INSERT INTO installation_usage VALUES (?, ?, 0, 0)').bind(identity.installationId, Math.floor(Date.now() / 86400))
-    ]);
-  }
   const real = process.env.COLLIE_SIMULATOR_APNS_KEY_FILE;
   const signingKey = real ? await readFile(real, 'utf8') : await (async () => {
     const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
     return `-----BEGIN PRIVATE KEY-----\n${Buffer.from(await crypto.subtle.exportKey('pkcs8', keys.privateKey)).toString('base64')}\n-----END PRIVATE KEY-----`;
   })();
   if (real && !/^[A-Z0-9]{10}$/.test(process.env.COLLIE_SIMULATOR_APNS_KEY_ID ?? '')) throw new Error('APNs key ID required');
-  const env = { DB: db, APNS_ENVIRONMENT: 'development' as const, SEND_HMAC_KEYS: JSON.stringify({ simulator: secret }),
-    APNS_TEAM_ID: identity.teamId, APNS_KEY_ID: real ? process.env.COLLIE_SIMULATOR_APNS_KEY_ID! : 'SIMULATOR1', APNS_PRIVATE_KEY: signingKey,
-    ATTEST_BUNDLE_VERSIONS: '["1"]', SEND_LIMITER: { async limit() { return { success: true }; } },
+  const cryptoEnv = { APNS_ENVIRONMENT: 'development' as const, APNS_TEAM_ID: identity.teamId,
+    APNS_KEY_ID: real ? process.env.COLLIE_SIMULATOR_APNS_KEY_ID! : 'SIMULATOR1', APNS_PRIVATE_KEY: signingKey,
+    ATTEST_BUNDLE_VERSIONS: '["1"]' };
+  const runtime = await simulatorRuntime(cryptoEnv, resolve(root, 'd1'));
+  const db = await runtime.getD1Database('DB');
+  await provisionSimulator(db, identity);
+  const env: Env = { ...cryptoEnv, DB: db,
+    CRYPTO: await runtime.getDurableObjectNamespace('CRYPTO') as unknown as NonNullable<Env['CRYPTO']>,
+    SEND_HMAC_KEYS: JSON.stringify({ simulator: secret }), SEND_LIMITER: { async limit() { return { success: true }; } },
     CONTROL_LIMITER: { async limit() { return { success: true }; } }, ENROLL_LIMITER: { async limit() { return { success: false }; } } };
   const sandbox: typeof fetch = async (input, init) => {
     const url = new URL(String(input));

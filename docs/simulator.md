@@ -41,7 +41,7 @@ node dev/simulator.ts init /private/tmp/collie-simulator-relay
 node dev/simulator.ts serve /private/tmp/collie-simulator-relay
 ```
 
-The server listens only at `127.0.0.1:8788`. It refuses enrollment and every production APNs environment. Offline provisioning inserts the local public key into this isolated D1 only. Later signed assertions, control transactions, quotas and sends use the unmodified production validators. Its send secret cannot authorize production routes. No Cloudflare resources or Apple credentials are needed. Cloud deployments, when separately authorized, use `cf`; this local server does not deploy anything.
+The server listens only at `127.0.0.1:8788`. It refuses enrollment and every production APNs environment. Offline provisioning inserts the local public key into this isolated D1 only. Later signed assertions, control transactions, quotas and sends use the unmodified production validators. The local harness binds a real Miniflare SQLite `RelayCrypto` actor for assertion verification and APNs provider signing. Its separate crypto entry returns 404 for all HTTP requests; enrollment remains closed. Missing crypto fails closed without an inline verifier or signing fallback. Its send secret cannot authorize production routes. No Cloudflare resources or Apple credentials are needed. Cloud deployments, when separately authorized, use `cf`; this local server does not deploy anything.
 
 In a second terminal, from the repository root, copy only the newly created development identity into the dedicated DEBUG Simulator app:
 

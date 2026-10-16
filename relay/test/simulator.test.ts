@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { createPrivateKey, sign } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
-import { simulatorWorker } from '../dev/worker.ts';
+import { provisionSimulator, simulatorRuntime, simulatorWorker } from '../dev/worker.ts';
 import { createWorker, signGrant } from '../src/index.ts';
-import { base64url, bytes } from '../src/crypto.ts';
-import { fixture, secret } from './helpers.ts';
+import { base64url, bytes, decode } from '../src/crypto.ts';
+import { fixture, privateKey, secret } from './helpers.ts';
 
 const now = Math.floor(Date.now() / 1000);
 
@@ -22,19 +22,27 @@ async function migration(db: D1Database) {
   }
 }
 async function setup() {
-  const f = await fixture(); await migration(f.db);
   const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const keyId = base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', await crypto.subtle.exportKey('raw', keys.publicKey))));
   const publicKey = base64url(new Uint8Array(await crypto.subtle.exportKey('spki', keys.publicKey)));
   const key = createPrivateKey({ key: await crypto.subtle.exportKey('jwk', keys.privateKey), format: 'jwk' });
-  await f.db.prepare(`INSERT INTO attestations (installation_id,key_id,public_key,receipt,environment,last_nonce,retain_until)
-    VALUES ('phone', ?, ?, 'simulator-provisioned', 'development', 'initial', ?)`)
-    .bind(keyId, publicKey, now + 37 * 86400).run();
-  const env = { ...f.env, ATTEST_BUNDLE_VERSIONS: '["1"]',
+  const cryptoEnv = { APNS_TEAM_ID: 'TESTTEAM01', APNS_KEY_ID: 'TESTKEY001', APNS_PRIVATE_KEY: await privateKey(),
+    APNS_ENVIRONMENT: 'development' as const, ATTEST_BUNDLE_VERSIONS: '["1"]' };
+  const runtime = await simulatorRuntime(cryptoEnv);
+  const db = await runtime.getD1Database('DB');
+  await provisionSimulator(db, { installationId: 'phone', keyId, publicKey });
+  const env = { ...cryptoEnv, DB: db, CRYPTO: await runtime.getDurableObjectNamespace('CRYPTO'),
+    SEND_HMAC_KEYS: JSON.stringify({ first: secret }), SEND_LIMITER: { async limit() { return { success: true }; } },
     CONTROL_LIMITER: { async limit() { return { success: true }; } }, ENROLL_LIMITER: { async limit() { return { success: true }; } } };
   const common = { v: 1, installation_id: 'phone', key_id: keyId, environment: 'development' };
   const upstream: string[] = []; let outage = false;
-  const worker = simulatorWorker(async (url) => { upstream.push(String(url)); return new Response('', { status: outage ? 503 : 200 }); }, () => now);
+  const worker = simulatorWorker(async (url, init) => {
+    upstream.push(String(url));
+    const token = new Headers(init?.headers).get('authorization')!.slice(7).split('.');
+    assert.equal(JSON.parse(new TextDecoder().decode(decode(token[0]))).kid, 'TESTKEY001');
+    assert.equal(JSON.parse(new TextDecoder().decode(decode(token[1]))).iss, 'TESTTEAM01');
+    return new Response('', { status: outage ? 503 : 200 });
+  }, () => now);
   const post = (path: string, body: unknown) => worker.fetch(new Request(`http://127.0.0.1:8788/v1/${path}`, {
     method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': '127.0.0.1' }, body: JSON.stringify(body)
   }), env);
@@ -50,13 +58,15 @@ async function setup() {
     const challenge = (await (await post('challenge', operation)).json()).challenge;
     return { operation, challenge, assertion: await proof(challenge) };
   }
-  return { ...f, env, common, upstream, worker, post, signed, proof, outage: () => { outage = true; } };
+  return { runtime, db, env, common, upstream, worker, post, signed, proof, outage: () => { outage = true; } };
 }
 test('local identity uses strict encrypted control/send, replay, quota, revocation and outage paths', async () => {
   const f = await setup();
   try {
     assert.equal((await f.post('challenge', { ...f.common, op: 'enroll' })).status, 403);
-    const operation = { ...f.common, op: 'route', pairing_id: 'machine', route_id: 'route', expected_generation: 1,
+    assert.equal((await f.runtime.dispatchFetch('http://local/v1/challenge', { method: 'POST', body: '{}' })).status, 404);
+    await assert.rejects(simulatorRuntime({ ...f.env, APNS_ENVIRONMENT: 'production' }), /sandbox_required/);
+    const operation = { ...f.common, op: 'route', pairing_id: 'machine', route_id: 'route', expected_generation: 0,
       kind: 'app', destination: 'a'.repeat(64) };
     const body = await f.signed(operation);
     const registration = await f.post('control', body); assert.equal(registration.status, 200);
@@ -65,12 +75,15 @@ test('local identity uses strict encrypted control/send, replay, quota, revocati
     assert.equal((await f.post('control', { ...body, assertion: await f.proof(body.challenge) })).status, 401);
     const vectors = JSON.parse(await readFile(new URL('../../docs/protocol/push-display-vectors.json', import.meta.url), 'utf8'));
     const payload = vectors.vectors.find((v: { kind: number; payload?: unknown }) => v.kind === 1 && v.payload).payload;
-    const send = async (value = payload) => f.worker.fetch(new Request('http://127.0.0.1:8788/v1/send', {
+    const send = async (value = payload, env = f.env) => f.worker.fetch(new Request('http://127.0.0.1:8788/v1/send', {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${grant}` },
       body: JSON.stringify({ v: 1, push_type: 'alert', priority: 10, expiration: 0, payload: value })
-    }), f.env);
+    }), env);
     assert.equal((await send()).status, 200);
     assert.match(f.upstream[0], /^https:\/\/api\.sandbox\.push\.apple\.com\/3\/device\//);
+    assert.equal((await f.runtime.listDurableObjectIds('CRYPTO')).length, 1);
+    assert.equal((await send(payload, { ...f.env, CRYPTO: undefined })).status, 503);
+    assert.equal((await f.db.prepare('SELECT total FROM installation_usage').first()).total, 1);
     assert.equal((await send({ ...payload, title: 'Private name' })).status, 400);
     f.outage(); assert.equal((await send()).status, 503);
     await f.db.prepare('UPDATE installation_usage SET total = 1000 WHERE installation_id = ?').bind('phone').run();
@@ -97,7 +110,7 @@ test('production entry rejects local identity enrollment, assertions and separat
     const op = { ...local.common, environment: 'production', op: 'enroll' };
     const challenge = (await (await post('challenge', op)).json()).challenge;
     assert.equal((await post('control', { operation: op, challenge, attestation: await local.proof(challenge) })).status, 401);
-    const token = await signGrant({ ...local.grant, environment: 'production' }, 'simulator', secret);
+    const token = await signGrant({ ...production.grant, environment: 'production' }, 'simulator', secret);
     assert.equal((await worker.fetch(new Request('https://publisher.example/v1/send', {
       method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}'
     }), env)).status, 401);
