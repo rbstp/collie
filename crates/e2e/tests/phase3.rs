@@ -23,6 +23,7 @@ use collied::server::{self, ServerConfig, ServerHandle};
 use common::*;
 use protocol::{ApnsEnvironment, Approval, ErrorCode, Response};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::sync::watch;
@@ -291,7 +292,8 @@ fn phase3_expired_approvals() {
         assert_eq!(alerts[0].1.payload["approval_id"], a.approval_id.as_str());
         assert_eq!(alerts[1].1.payload["approval_id"], b.approval_id.as_str());
         for (_, alert) in &alerts {
-            assert_eq!(alert.collapse_id.as_deref(), Some(TERMINAL));
+            let thread = URL_SAFE_NO_PAD.encode(&Sha256::digest(TERMINAL.as_bytes())[..16]);
+            assert_eq!(alert.collapse_id.as_deref(), Some(thread.as_str()));
         }
 
         println!("lock-screen decide on an expired approval");
@@ -365,6 +367,7 @@ fn live_activity_follows_an_agent() {
             ACTIVITY.into(),
             TERMINAL.into(),
             ACTIVITY_TOKEN.into(),
+            "binding-test".into(),
         )
         .unwrap();
         let activities = || match std::fs::read_to_string(data_dir.join(PUSH_FILE)) {
@@ -379,11 +382,11 @@ fn live_activity_follows_an_agent() {
         println!("the activity is synced quietly, then a blocked agent pushes with priority 10");
         let (_, sync) = live(&apns, "the first sync", |_, _| true).await;
         assert_eq!(sync.delivery, Delivery::LiveActivity { urgent: false });
-        assert_eq!(sync.payload["aps"]["content-state"]["status"], "working");
+        assert_eq!(open_display(&sync.payload, 2)["state"]["status"], "working");
         herdr.set_status("blocked");
         let approval = needed(&core, &m).await;
         let (device, blocked) = live(&apns, "the blocked update", |_, a| {
-            a.payload["aps"]["content-state"]["status"] == "blocked"
+            open_display(&a.payload, 2)["state"]["status"] == "blocked"
         })
         .await;
         assert_eq!(device.token.as_str(), ACTIVITY_TOKEN);
@@ -395,7 +398,8 @@ fn live_activity_follows_an_agent() {
         assert_eq!(headers.priority, 10);
         let aps = &blocked.payload["aps"];
         assert_eq!(aps["event"], "update");
-        let state = &aps["content-state"];
+        let decrypted = open_display(&blocked.payload, 2);
+        let state = &decrypted["state"];
         assert_eq!(
             *state,
             json!({
@@ -425,10 +429,10 @@ fn live_activity_follows_an_agent() {
         );
         assert_eq!(
             aps["alert"],
-            json!({"title": "api-fixer", "body": "Blocked in api"})
+            json!({"title": "Collie", "body": "An agent needs attention"})
         );
         let now = collied::now_ms() / 1000;
-        let since = aps["content-state"]["statusSince"].as_i64().unwrap();
+        let since = state["statusSince"].as_i64().unwrap();
         assert!(
             (now as i64 - 978_307_200 - since).abs() < 30,
             "seconds since 2001: {since}"
@@ -447,6 +451,7 @@ fn live_activity_follows_an_agent() {
             "SECOND".into(),
             TERMINAL.into(),
             SECOND_TOKEN.into(),
+            "binding-test".into(),
         )
         .unwrap();
         live(&apns, "the second sync", |d, _| {
@@ -625,22 +630,18 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
         phone_opens(&alert.payload),
         json!({"v": 1, "body": "Bash: rm -rf build\nRemove the build directory"})
     );
-    let mut clear = alert.payload.clone();
-    clear.as_object_mut().unwrap().remove("enc");
+    let display = open_display(&alert.payload, 1);
+    assert_eq!(display["title"], "api-fixer");
+    assert_eq!(display["approvalId"], a.approval_id);
+    assert_eq!(display["terminalId"], TERMINAL);
+    assert_eq!(display["offersApproval"], true);
     assert_eq!(
-        clear,
-        json!({
-            "aps": {
-                "alert": {"title": "api-fixer", "body": "Blocked in api"},
-                "category": "APPROVAL",
-                "thread-id": TERMINAL,
-                "mutable-content": 1,
-            },
-            "approval_id": a.approval_id,
-            "node_id": machine.node_id,
-        })
+        alert.payload["aps"]["alert"],
+        json!({"title":"Collie","body":"An agent needs attention"})
     );
-    assert_eq!(alert.collapse_id.as_deref(), Some(TERMINAL));
+    assert_eq!(alert.payload["node_id"], machine.node_id);
+    assert!(alert.payload["aps"].get("category").is_none());
+    assert_ne!(alert.collapse_id.as_deref(), Some(TERMINAL));
     let wire = alert.payload.to_string();
     for line in SNIPPET.lines() {
         assert!(!wire.contains(line), "snippet in the APNs payload: {wire}");
@@ -924,6 +925,10 @@ fn encoded_key() -> String {
 /// What ColliePush does with `enc`: CryptoKit `ChaChaPoly.SealedBox(combined:)`, AAD =
 /// approval_id.
 fn phone_opens(payload: &Value) -> Value {
+    if payload.get("event_id").is_some() {
+        let display = open_display(payload, 1);
+        return json!({"v":1,"body":display["body"]});
+    }
     let combined = STANDARD.decode(payload["enc"].as_str().unwrap()).unwrap();
     let (nonce, sealed) = combined.split_at(12);
     let plain = ChaCha20Poly1305::new_from_slice(&NOTIFY_KEY)
@@ -933,6 +938,52 @@ fn phone_opens(payload: &Value) -> Value {
             Payload {
                 msg: sealed,
                 aad: payload["approval_id"].as_str().unwrap().as_bytes(),
+            },
+        )
+        .unwrap();
+    serde_json::from_slice(&plain).unwrap()
+}
+
+fn open_display(payload: &Value, kind: u8) -> Value {
+    let enc = if kind == 1 {
+        &payload["enc"]
+    } else {
+        &payload["aps"]["content-state"]["enc"]
+    };
+    let bytes = URL_SAFE_NO_PAD.decode(enc.as_str().unwrap()).unwrap();
+    assert_eq!(&bytes[..2], &[1, kind]);
+    let node_end = 4 + usize::from(bytes[2]);
+    let scope_end = node_end + usize::from(bytes[3]);
+    let header_end = scope_end + 16;
+    assert_eq!(
+        std::str::from_utf8(&bytes[4..node_end]).unwrap(),
+        payload["node_id"].as_str().unwrap()
+    );
+    assert_eq!(
+        URL_SAFE_NO_PAD.encode(&bytes[scope_end..header_end]),
+        payload["event_id"].as_str().unwrap()
+    );
+    if kind == 1 {
+        assert_eq!(
+            std::str::from_utf8(&bytes[node_end..scope_end]).unwrap(),
+            payload["aps"]["thread-id"].as_str().unwrap()
+        );
+    } else {
+        assert_eq!(&bytes[node_end..scope_end], b"binding-test");
+    }
+    let aad = [
+        b"collie.push.v1\0".as_slice(),
+        &bytes[..header_end],
+        &Sha256::digest(NOTIFY_KEY),
+    ]
+    .concat();
+    let plain = ChaCha20Poly1305::new_from_slice(&NOTIFY_KEY)
+        .unwrap()
+        .decrypt(
+            bytes[header_end..header_end + 12].try_into().unwrap(),
+            Payload {
+                msg: &bytes[header_end + 12..],
+                aad: &aad,
             },
         )
         .unwrap();

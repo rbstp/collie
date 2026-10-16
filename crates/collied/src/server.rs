@@ -1125,6 +1125,7 @@ async fn connection(
         terminal_watch: None,
         tasks: JoinSet::new(),
         starting: None,
+        protocol: None,
     }
     .run(kill)
     .await;
@@ -1172,6 +1173,7 @@ struct Session<'a> {
     // and audit their own outcome.
     tasks: JoinSet<Finished>,
     starting: Option<(u32, Option<String>)>,
+    protocol: Option<protocol::NegotiatedProtocol>,
 }
 
 struct Finished {
@@ -1361,7 +1363,8 @@ impl Session<'_> {
         let method = frame.request.method();
         if !*greeted {
             return match frame.request {
-                Request::Hello(p) if p.protocol_version == protocol::PROTOCOL_VERSION => {
+                Request::Hello(ref p) if protocol::NegotiatedProtocol::negotiate(p).is_some() => {
+                    self.protocol = protocol::NegotiatedProtocol::negotiate(p);
                     *greeted = true;
                     if self.peer.paired() {
                         *events = Some(self.state.events.subscribe());
@@ -1401,6 +1404,23 @@ impl Session<'_> {
                         .await;
                     Flow::Close
                 }
+            };
+        }
+        if self
+            .protocol
+            .as_ref()
+            .is_none_or(|protocol| !protocol.allows_request(&frame.request))
+        {
+            self.send_error(
+                Some(id),
+                ErrorCode::NotImplemented,
+                "method or field requires an unnegotiated capability",
+            )
+            .await;
+            return if self.peer.pairing_window.is_some() {
+                Flow::Close
+            } else {
+                Flow::Continue
             };
         }
         if let Some(window) = self.peer.pairing_window {
@@ -1631,6 +1651,7 @@ impl Session<'_> {
                         p.terminal_id,
                         p.token,
                         p.shows_approvals,
+                        p.display_binding,
                     )
                     .map(|()| Response::Ok)
                     .map_err(|e| {
@@ -1941,7 +1962,14 @@ impl Session<'_> {
             None
         };
         Response::Hello(HelloResult {
-            protocol_version: protocol::PROTOCOL_VERSION,
+            protocol_version: self.protocol.as_ref().expect("hello negotiated").version(),
+            protocol_min_version: protocol::PROTOCOL_MIN_VERSION,
+            protocol_max_version: protocol::PROTOCOL_VERSION,
+            capabilities: self
+                .protocol
+                .as_ref()
+                .expect("hello negotiated")
+                .capabilities(),
             collied_version: env!("CARGO_PKG_VERSION").to_owned(),
             machine: self.state.machine.clone(),
             herdr_version,
@@ -2194,7 +2222,16 @@ impl Session<'_> {
         if !self.authorized() {
             return Flow::Abort;
         }
-        match serde_json::to_string(frame) {
+        let text = match &self.protocol {
+            Some(protocol) => protocol.server_frame(frame),
+            None => match frame {
+                ServerFrame::Error { .. } => {
+                    serde_json::to_string(frame).map_err(|_| "cannot serialize error")
+                }
+                _ => Err("hello first"),
+            },
+        };
+        match text {
             Ok(text) => self.send(Message::text(text)).await,
             Err(_) => Flow::Close,
         }

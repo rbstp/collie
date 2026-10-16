@@ -1,5 +1,21 @@
 {
   "$defs": {
+    "ActivityDisplayBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "binding_id": {
+          "$ref": "#/$defs/ActivityId"
+        },
+        "node_id": {
+          "$ref": "#/$defs/Label"
+        }
+      },
+      "required": [
+        "node_id",
+        "binding_id"
+      ],
+      "type": "object"
+    },
     "ActivityId": {
       "pattern": "^[A-Za-z0-9-]{1,64}$",
       "type": "string"
@@ -470,6 +486,20 @@
         "app_version": {
           "$ref": "#/$defs/Label"
         },
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
+        "protocol_min_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "protocol_version": {
           "format": "uint32",
           "minimum": 0,
@@ -634,6 +664,16 @@
       "properties": {
         "activity_id": {
           "$ref": "#/$defs/ActivityId"
+        },
+        "display_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActivityDisplayBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "shows_approvals": {
           "description": "The activity shows an approval's command and its Approve and Deny buttons. Without\nit collied keeps sending that device the approval alert.",

@@ -54,7 +54,9 @@ pub enum SessionError {
 pub fn version_mismatch(collied: Option<u32>, machine: &str) -> String {
     match collied.map(|v| v.cmp(&PROTOCOL_VERSION)) {
         Some(std::cmp::Ordering::Less) => {
-            format!("Update collied on {machine}: run just collied-install there.")
+            format!(
+                "Update collied on {machine}: install the latest release from github.com/rbstp/collie/releases."
+            )
         }
         Some(std::cmp::Ordering::Greater) => "Update the app.".to_owned(),
         _ => format!("This app and collied on {machine} use different versions. Update both."),
@@ -125,6 +127,7 @@ pub struct Session<S> {
     ws: WebSocketStream<S>,
     next_id: RequestId,
     last_frame: Instant,
+    protocol: Option<protocol::NegotiatedProtocol>,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
@@ -151,6 +154,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
             ws,
             next_id: 1,
             last_frame: Instant::now(),
+            protocol: None,
         })
     }
 
@@ -158,19 +162,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         let app_version = Label::new(env!("CARGO_PKG_VERSION")).expect("crate version is a label");
         match self
             .call(
-                Request::Hello(HelloParams {
-                    protocol_version: PROTOCOL_VERSION,
-                    app_version,
-                }),
+                Request::Hello(HelloParams::current(app_version)),
                 CALL_TIMEOUT,
             )
             .await?
         {
-            Response::Hello(hello) if hello.protocol_version == PROTOCOL_VERSION => Ok(hello),
-            Response::Hello(hello) => Err(SessionError::Protocol(format!(
-                "protocol version {}",
-                hello.protocol_version
-            ))),
+            Response::Hello(hello) => {
+                let negotiated = protocol::NegotiatedProtocol::from_result(&hello)
+                    .ok_or_else(|| SessionError::Protocol("invalid protocol negotiation".into()))?;
+                self.protocol = Some(negotiated);
+                Ok(hello)
+            }
             other => Err(unexpected(&other)),
         }
     }
@@ -203,8 +205,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
     async fn send(&mut self, request: Request) -> Result<RequestId, SessionError> {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
-        let text = serde_json::to_string(&ClientFrame { id, request })
-            .map_err(|e| SessionError::Protocol(e.to_string()))?;
+        let frame = ClientFrame { id, request };
+        let text = if let Some(protocol) = &self.protocol {
+            protocol
+                .client_frame(frame)
+                .map_err(|message| SessionError::Server {
+                    code: ErrorCode::NotImplemented,
+                    message: message.to_owned(),
+                })?
+        } else if matches!(frame.request, Request::Hello(_)) {
+            serde_json::to_string(&frame).map_err(|e| SessionError::Protocol(e.to_string()))?
+        } else {
+            return Err(SessionError::Protocol("hello first".into()));
+        };
         self.ws.send(Message::text(text)).await?;
         Ok(id)
     }
@@ -294,7 +307,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                     let read_mark = read_mark(state, &request);
                     match self.send(request).await {
                         Ok(id) => { pending.insert(id, (Some(reply), read_mark)); }
-                        Err(e) => { let _ = reply.send(Err(e.clone())); break e; }
+                        Err(e) => {
+                            let unsupported = matches!(e, SessionError::Server { code: ErrorCode::NotImplemented, .. });
+                            let _ = reply.send(Err(e.clone()));
+                            if !unsupported { break e; }
+                        }
                     }
                 }
                 frame = self.recv() => {
@@ -1076,7 +1093,14 @@ mod tests {
             .await
             .ok()
         });
-        let session = Session::connect(client, "mac.tail1234.ts.net", 8457).await;
+        let session = Session::connect(client, "mac.tail1234.ts.net", 8457)
+            .await
+            .map(|mut session| {
+                session.protocol = protocol::NegotiatedProtocol::negotiate(&HelloParams::current(
+                    Label::new("test").unwrap(),
+                ));
+                session
+            });
         (session, server.await.unwrap())
     }
 
@@ -1099,6 +1123,9 @@ mod tests {
     fn hello_result(paired: bool) -> Response {
         Response::Hello(HelloResult {
             protocol_version: PROTOCOL_VERSION,
+            protocol_min_version: protocol::PROTOCOL_MIN_VERSION,
+            protocol_max_version: PROTOCOL_VERSION,
+            capabilities: HelloParams::current(Label::new("test").unwrap()).capabilities,
             collied_version: "0.1.0".into(),
             machine: machine(),
             herdr_version: None,
@@ -1112,6 +1139,91 @@ mod tests {
         assert!(matches!(session, Err(SessionError::WebSocket(_))));
         let (session, _server) = pair_of(Some("collie.v2")).await;
         assert!(matches!(session, Err(SessionError::WebSocket(_))));
+    }
+
+    #[tokio::test]
+    async fn negotiated_terminal_opt_out_keeps_ordinary_calls_usable() {
+        for maximum in [26, 27, 28] {
+            let (session, server) = pair_of(Some(WS_SUBPROTOCOL)).await;
+            let (mut session, mut ws) = (session.unwrap(), server.unwrap());
+            let server = tokio::spawn(async move {
+                let hello = read(&mut ws).await;
+                let Response::Hello(mut result) = hello_result(true) else {
+                    unreachable!()
+                };
+                result.protocol_max_version = maximum;
+                result.capabilities.clear();
+                write(
+                    &mut ws,
+                    ServerFrame::Result {
+                        id: hello.id,
+                        result: Response::Hello(result),
+                    },
+                )
+                .await;
+                let ordinary = read(&mut ws).await;
+                assert!(matches!(ordinary.request, Request::FlockSnapshot(_)));
+                write(
+                    &mut ws,
+                    ServerFrame::Result {
+                        id: ordinary.id,
+                        result: Response::Ok,
+                    },
+                )
+                .await;
+            });
+            session.hello().await.unwrap();
+            let error = session
+                .call(
+                    Request::TerminalChallenge(protocol::AgentTarget {
+                        terminal_id: TerminalId::new("t1").unwrap(),
+                    }),
+                    CALL_TIMEOUT,
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                SessionError::Server {
+                    code: ErrorCode::NotImplemented,
+                    ..
+                }
+            ));
+            assert_eq!(
+                session
+                    .call(Request::FlockSnapshot(Empty {}), CALL_TIMEOUT)
+                    .await
+                    .unwrap(),
+                Response::Ok
+            );
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn hello_refuses_a_selection_without_an_implemented_codec() {
+        let (session, server) = pair_of(Some(WS_SUBPROTOCOL)).await;
+        let (mut session, mut ws) = (session.unwrap(), server.unwrap());
+        let server = tokio::spawn(async move {
+            let hello = read(&mut ws).await;
+            let Response::Hello(mut result) = hello_result(true) else {
+                unreachable!()
+            };
+            result.protocol_version = 27;
+            result.protocol_max_version = 28;
+            write(
+                &mut ws,
+                ServerFrame::Result {
+                    id: hello.id,
+                    result: Response::Hello(result),
+                },
+            )
+            .await;
+        });
+        assert!(
+            matches!(session.hello().await, Err(SessionError::Protocol(message)) if message == "invalid protocol negotiation")
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]
@@ -1195,7 +1307,7 @@ mod tests {
         for (collied, message) in [
             (
                 Some(PROTOCOL_VERSION - 1),
-                "Update collied on Mac mini: run just collied-install there.",
+                "Update collied on Mac mini: install the latest release from github.com/rbstp/collie/releases.",
             ),
             (Some(PROTOCOL_VERSION + 1), "Update the app."),
             (
@@ -1678,9 +1790,12 @@ mod tests {
             }
             (ws, Instant::now())
         });
-        let session = Session::connect(client, "mac.tail1234.ts.net", 8457)
+        let mut session = Session::connect(client, "mac.tail1234.ts.net", 8457)
             .await
             .unwrap();
+        session.protocol = protocol::NegotiatedProtocol::negotiate(&HelloParams::current(
+            Label::new("test").unwrap(),
+        ));
         let state = Mutex::new(FlockState::default());
         let (_tx, mut rx) = mpsc::channel(8);
         let end = session

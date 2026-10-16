@@ -1,4 +1,5 @@
 mod banner;
+mod compatibility;
 mod ids;
 mod invite;
 mod messages;
@@ -7,6 +8,7 @@ mod output;
 mod schema;
 
 pub use banner::{NoticeOption, jump_banner, notice};
+pub use compatibility::*;
 pub use ids::*;
 pub use invite::*;
 pub use messages::*;
@@ -14,7 +16,7 @@ pub use output::*;
 #[cfg(feature = "schema")]
 pub use schema::{client_frame_schema, server_frame_schema};
 
-pub const PROTOCOL_VERSION: u32 = 25;
+pub const PROTOCOL_VERSION: u32 = 26;
 
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
