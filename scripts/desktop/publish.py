@@ -19,20 +19,28 @@ def main(args):
     names = [f"collied-{version}-linux-x86_64.tar.gz", f"CollieTray-{version}-omarchy.tar.gz",
              f"collied-{version}-macos-arm64.tar.gz", f"collied-{version}-macos-arm64.dmg",
              f"CollieBar-{version}-macos-arm64.zip"]
+    source = dict(tag=args.tag, source_sha=args.sha)
+    source_claim = "<!-- collie-desktop-source:" + json.dumps(source, sort_keys=True) + " -->"
     marker = args.out / "source.json"
-    marker.write_text(json.dumps(dict(tag=args.tag, source_sha=args.sha), indent=2) + "\n")
+    marker.write_text(json.dumps(source, indent=2) + "\n")
     names.append(marker.name)
     pages = json.loads(gh("api", "repos/{owner}/{repo}/releases", "--paginate", "--slurp"))
     existing = [release for page in pages for release in page]
     release = next((item for item in existing if item["tag_name"] == args.tag), None)
     if release:
         assets = {asset["name"] for asset in release["assets"]}
-        if "source.json" not in assets:
-            raise ValueError("existing release has no source identity; refusing to adopt it")
-        with tempfile.TemporaryDirectory() as temp:
-            gh("release", "download", args.tag, "--pattern", "source.json", "--dir", temp)
-            if json.loads((Path(temp) / "source.json").read_text()) != json.loads(marker.read_text()):
-                raise ValueError("existing release belongs to another source SHA")
+        if source_claim not in (release.get("body") or "").splitlines() or release.get("target_commitish") != args.sha:
+            raise ValueError("existing release has no matching source identity; refusing to adopt it")
+        if "source.json" in assets:
+            with tempfile.TemporaryDirectory() as temp:
+                gh("release", "download", args.tag, "--pattern", "source.json", "--dir", temp)
+                if json.loads((Path(temp) / "source.json").read_text()) != source:
+                    raise ValueError("existing release belongs to another source SHA")
+        elif release["draft"]:
+            gh("release", "upload", args.tag, str(marker))
+            assets.add(marker.name)
+        else:
+            raise ValueError("published release has no source identity asset; refusing to mutate it")
         if not release["draft"]:
             expected = set(names + [f"homebrew-{version}.tar.gz", "SHA256SUMS"])
             if not expected <= assets:
@@ -50,9 +58,8 @@ def main(args):
             return
     else:
         gh("release", "create", args.tag, "--verify-tag", "--target", args.sha, "--draft",
-           "--title", args.tag, "--notes", "Desktop downloads: macOS 26+ Apple silicon and Linux x86_64 (glibc 2.39+). CollieTray requires Omarchy 4, Quickshell and qrencode. See the packaged README and release.json for installation, protocol and runtime requirements.")
+           "--title", args.tag, "--notes", "Desktop downloads: macOS 26+ Apple silicon and Linux x86_64 (glibc 2.39+). CollieTray requires Omarchy 4, Quickshell and qrencode. See the packaged README and release.json for installation, protocol and runtime requirements.\n\n" + source_claim)
         assets = set()
-        # Claim the draft before any platform upload so retries can verify its identity.
         gh("release", "upload", args.tag, str(marker))
         assets.add(marker.name)
     for name in names:

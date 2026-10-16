@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -62,12 +63,33 @@ class PackageTests(unittest.TestCase):
                 cask = archive.extractfile("homebrew/Casks/colliebar.rb").read().decode()
             self.assertIn(package.digest(daemon), formula)
             self.assertIn(package.digest(app), cask)
+            self.assertIn("depends_on macos: :tahoe", formula)
+            self.assertIn('depends_on macos: :tahoe', cask)
             self.assertIn("collied-install --replace", formula)
             self.assertNotIn("def post_install", formula)
             self.assertNotIn("service do", formula)
             for line in (out / "SHA256SUMS").read_text().splitlines():
                 checksum, name = line.split("  ", 1)
                 self.assertEqual(checksum, package.digest(out / name))
+
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("brew"), "requires macOS Homebrew")
+    def test_generated_tap_loads_in_real_homebrew_dsl(self):
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp)
+            (out / "collied-1.2.3-macos-arm64.tar.gz").write_bytes(b"daemon")
+            (out / "CollieBar-1.2.3-macos-arm64.zip").write_bytes(b"app")
+            args = argparse.Namespace(tag="v1.2.3", sha="a" * 40, out=out)
+            with patch.object(package, "identity", return_value="1.2.3"):
+                package.homebrew(args)
+            env = dict(os.environ, HOMEBREW_NO_AUTO_UPDATE="1", HOMEBREW_NO_ANALYTICS="1")
+            with tarfile.open(out / "homebrew-1.2.3.tar.gz") as archive:
+                for name, ruby in [("Formula/collied.rb", 'require "formula"; puts Formulary.factory(ARGV.first).name'),
+                                   ("Casks/colliebar.rb", 'require "cask/cask_loader"; puts Cask::CaskLoader.load(ARGV.first).token')]:
+                    path = out / Path(name).name
+                    path.write_bytes(archive.extractfile("homebrew/" + name).read())
+                    result = subprocess.run(["brew", "ruby", "-e", ruby, str(path)], env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), path.stem)
 
 
 class InstallerTests(unittest.TestCase):
@@ -139,7 +161,7 @@ class PublisherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             args = argparse.Namespace(tag="v1.2.3", sha="a" * 40, out=Path(temp))
             with patch.object(publish, "identity", return_value="1.2.3"), patch.object(publish, "gh", side_effect=["a" * 40, json.dumps([[dict(tag_name="v1.2.3", assets=[])]])]):
-                with self.assertRaisesRegex(ValueError, "no source identity"):
+                with self.assertRaisesRegex(ValueError, "no matching source identity"):
                     publish.main(args)
 
     def test_draft_retry_retains_signed_bytes_and_completed_retry_is_read_only(self):
@@ -160,7 +182,7 @@ class PublisherTests(unittest.TestCase):
                 if command[0] == "api":
                     if "commits" in command[1]:
                         return sha
-                    return json.dumps([[dict(tag_name=args.tag, draft=state["draft"], assets=[dict(name=name) for name in assets])]])
+                    return json.dumps([[dict(tag_name=args.tag, target_commitish=sha, body="<!-- collie-desktop-source:" + json.dumps(dict(tag=args.tag, source_sha=sha), sort_keys=True) + " -->", draft=state["draft"], assets=[dict(name=name) for name in assets])]])
                 if command[:2] == ("release", "download"):
                     dest = Path(command[command.index("--dir") + 1])
                     selected = [command[command.index("--pattern") + 1]] if "--pattern" in command else assets.keys()
@@ -188,6 +210,68 @@ class PublisherTests(unittest.TestCase):
                 assets[names[0]] = b"tampered after publication"
                 with self.assertRaisesRegex(ValueError, "checksum validation failed"):
                     publish.main(args)
+
+    def test_interrupted_creation_before_marker_upload_is_recoverable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp)
+            sha = "a" * 40
+            args = argparse.Namespace(tag="v1.2.3", sha=sha, out=out)
+            names = ["collied-1.2.3-linux-x86_64.tar.gz", "CollieTray-1.2.3-omarchy.tar.gz",
+                     "collied-1.2.3-macos-arm64.tar.gz", "collied-1.2.3-macos-arm64.dmg",
+                     "CollieBar-1.2.3-macos-arm64.zip"]
+            for name in names:
+                (out / name).write_bytes(b"build")
+            assets = {}
+            state = dict(release=None, interrupt=True)
+
+            def fake_gh(*command):
+                if command[0] == "api":
+                    if "commits" in command[1]:
+                        return sha
+                    return json.dumps([[state["release"]] if state["release"] else []])
+                if command[:2] == ("release", "create"):
+                    self.assertIsNone(state["release"])
+                    state["release"] = dict(tag_name=args.tag, target_commitish=command[command.index("--target") + 1],
+                                            body=command[command.index("--notes") + 1], draft=True, assets=[])
+                elif command[:2] == ("release", "upload"):
+                    path = Path(command[3])
+                    if path.name == "source.json" and state["interrupt"]:
+                        state["interrupt"] = False
+                        raise RuntimeError("interrupted before source asset upload")
+                    self.assertNotIn(path.name, assets)
+                    assets[path.name] = path.read_bytes()
+                    state["release"]["assets"].append(dict(name=path.name))
+                elif command[:2] == ("release", "download"):
+                    dest = Path(command[command.index("--dir") + 1])
+                    selected = [command[command.index("--pattern") + 1]] if "--pattern" in command else assets.keys()
+                    for name in selected:
+                        (dest / name).write_bytes(assets[name])
+                elif command[:2] == ("release", "edit"):
+                    state["release"]["draft"] = False
+                else:
+                    self.fail(f"Unexpected GitHub operation: {command}")
+                return ""
+
+            with patch.object(publish, "identity", return_value="1.2.3"), patch.object(package, "identity", return_value="1.2.3"), patch.object(publish, "gh", side_effect=fake_gh):
+                with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                    publish.main(args)
+                self.assertTrue(state["release"]["draft"])
+                self.assertEqual(assets, {})
+                publish.main(args)
+                self.assertFalse(state["release"]["draft"])
+                self.assertEqual(json.loads(assets["source.json"]), dict(tag=args.tag, source_sha=sha))
+
+    def test_marker_repair_rejects_foreign_claim_or_wrong_commit(self):
+        sha = "a" * 40
+        matching = "<!-- collie-desktop-source:" + json.dumps(dict(tag="v1.2.3", source_sha=sha), sort_keys=True) + " -->"
+        for body, target in [("", sha), (matching.replace(sha, "b" * 40), sha), (matching, "b" * 40)]:
+            with self.subTest(body=body, target=target), tempfile.TemporaryDirectory() as temp:
+                args = argparse.Namespace(tag="v1.2.3", sha=sha, out=Path(temp))
+                release = dict(tag_name=args.tag, body=body, target_commitish=target, draft=True, assets=[])
+                with patch.object(publish, "identity", return_value="1.2.3"), patch.object(publish, "gh", side_effect=[sha, json.dumps([[release]])]) as github:
+                    with self.assertRaisesRegex(ValueError, "no matching source identity"):
+                        publish.main(args)
+                    self.assertEqual(github.call_count, 2)
 
     def test_refuses_a_moved_remote_tag(self):
         with tempfile.TemporaryDirectory() as temp:

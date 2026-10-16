@@ -68,7 +68,7 @@ For a desktop-only release, select master and supply a new version tag and its f
 gh workflow run desktop-release.yml --ref master -f tag=v0.3.0 -f source_sha=FULL_COMMIT_SHA
 ```
 
-For retries, rerun failed jobs or dispatch the same tag and exact SHA. Existing tags are never moved. Published releases are immutable: retries verify source identity, asset completeness and every checksum without replacing assets. Interrupted drafts retain already uploaded signed packages and upload only missing assets; Homebrew hashes and final checksums use the retained packages. A release from another owner or source is rejected. Do not manually edit assets or move tags during a release.
+For retries, rerun failed jobs or dispatch the same tag and exact SHA. Existing tags are never moved. Published releases are immutable: retries verify source identity, asset completeness and every checksum without replacing assets. The initial draft creation records its exact tag/source identity in the release body and target commit before any asset upload. A retry repairs a missing source marker only when those claims and the current tag match exactly. Interrupted drafts retain already uploaded signed packages and upload only missing assets; Homebrew hashes and final checksums use the retained packages. A release from another owner or source is rejected. Do not manually edit assets or move tags during a release.
 
 ## Validation before public rollout
 
