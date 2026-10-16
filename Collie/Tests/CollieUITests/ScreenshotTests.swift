@@ -31,7 +31,7 @@ final class ScreenshotTests: XCTestCase {
 
             app = try launchDemo()
             app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
-            let latest = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Round 20:")).firstMatch
+            let latest = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Will do.")).firstMatch
             XCTAssertTrue(latest.appears(within: 10), app.debugDescription)
             try save("chat")
             app.buttons["Terminal"].firstMatch.tap()
@@ -51,6 +51,7 @@ final class ScreenshotTests: XCTestCase {
         let app = XCUIApplication()
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "screenshot-demo", withExtension: "txt"))
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path] + arguments
+        app.launchEnvironment["COLLIE_DEMO_SCREENSHOTS"] = "1"
         app.launch()
         XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
         return app

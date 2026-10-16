@@ -156,6 +156,14 @@ ios-screenshots: ios-framework ios-project
     for f in "$raw"/*.png; do
         sips --resampleWidth 600 "$f" --out "$out/$(basename "$f")" >/dev/null
     done
+    if command -v pngquant >/dev/null; then
+        for f in "$out"/*.png; do
+            # 98 and 99: kept as is, the result would be larger or below the quality floor.
+            pngquant --quality 70-90 --strip --skip-if-larger --force --ext .png "$f" || [ $? -ge 98 ]
+        done
+    else
+        echo "pngquant not found: the screenshots are not compressed (brew install pngquant)"
+    fi
     du -ch "$out"/*.png | tail -n 1
 
 # Debug build with automatic signing on the first connected iPhone. Release keeps its manual TestFlight signing.
