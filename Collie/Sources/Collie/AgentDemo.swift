@@ -337,7 +337,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         throw CoreError.TerminalsDisabled
     }
 
-    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String) throws {
+    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String, relayGrant: RelayPushGrant?) throws {
         print("demo: activity \(activityId) token \(tokenHex.prefix(8))… for \(terminalId)")
     }
 

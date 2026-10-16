@@ -72,3 +72,9 @@ docs/site/check-site.sh /tmp/collie-site
 - Merging a pull request into `master` uploads a TestFlight build. Put `[skip-release]` in the title of a pull request that should not ship one (docs, CI, tests only).
 - Pull requests that change only `docs/site/`, `docs/deploy-pages.md`, `README.md`, `AGENTS.md` or `CLAUDE.md` skip the macOS `rust` and `ios` CI jobs (the `changes` job in `.github/workflows/ci.yml`). Any other path runs them; tests read `docs/protocol/` and `docs/tailnet.md`.
 - Release details, signing and secrets: `docs/release.md`.
+
+## Cloudflare deployments
+
+Use the `cf` CLI with its active OAuth login for Cloudflare deployments.
+Before deployment, unset `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_API_KEY` and `CLOUDFLARE_EMAIL`, then verify the intended account with `cf auth whoami`.
+Set the verified `CLOUDFLARE_ACCOUNT_ID` explicitly. Wrangler is limited to local builds and dry runs.

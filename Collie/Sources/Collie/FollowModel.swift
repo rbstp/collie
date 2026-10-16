@@ -9,11 +9,16 @@ import os
 
 /// The slice of CollieCore Live Activities use, so the model can run against a fake.
 protocol ActivityCore: FlockCore {
-    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String) throws
+    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String, relayGrant: RelayPushGrant?) throws
+    func pushMode(machineId: String) -> PushDeliveryMode?
     func endActivity(machineId: String, activityId: String) throws
 }
 
 extension CollieCore: ActivityCore {}
+
+extension ActivityCore {
+    func pushMode(machineId: String) -> PushDeliveryMode? { nil }
+}
 
 /// An activity whose token went to a Mac. Ids only, never tokens: iOS can end an activity while
 /// the app is not running, and its Mac must still be told to stop pushing to it.
@@ -70,6 +75,10 @@ final class FollowModel {
     nonisolated static let staleAfter: TimeInterval = 15 * 60
 
     private let core: (any ActivityCore)?
+    private var relay: RelayEnrollment?
+    private var relayRegistered: [String: RelayRouteGrant] = [:]
+    private var relayRefreshing = false
+    private var relayRetryAt = Date.distantPast
     private let approvals: ApprovalsModel?
     private let file: URL?
     private(set) var list: FollowList
@@ -144,7 +153,7 @@ final class FollowModel {
                 continue
             }
             watch(activity)
-            if let token = activity.pushToken { register(activity, token: token) }
+            if let token = activity.pushToken { Task { [weak self] in await self?.register(activity, token: token) } }
         }
         endDead()
         sync()
@@ -284,7 +293,7 @@ final class FollowModel {
         watchers[activity.id] = Task { [weak self] in
             let tokens = Task {
                 for await token in activity.pushTokenUpdates {
-                    self?.register(activity, token: token)
+                    await self?.register(activity, token: token)
                 }
             }
             defer { tokens.cancel() }
@@ -296,17 +305,42 @@ final class FollowModel {
         }
     }
 
-    private func register(_ activity: Activity<AgentActivityAttributes>, token: Data) {
+    func relayReady(_ client: RelayEnrollment) {
+        relay = client
+        guard !relayRefreshing, Date.now >= relayRetryAt else { return }
+        relayRefreshing = true
+        Task {
+            defer { relayRefreshing = false }
+            for activity in Activity<AgentActivityAttributes>.activities where activity.isLive && core?.pushMode(machineId: activity.attributes.machineId) == .relay {
+                if let token = activity.pushToken { await register(activity, token: token) }
+            }
+        }
+    }
+
+    private func register(_ activity: Activity<AgentActivityAttributes>, token: Data) async {
+        let agent = AgentRoute(machineId: activity.attributes.machineId, terminalId: activity.attributes.terminalId)
+        guard !Task.isCancelled, activity.isLive, list.contains(agent) else { return }
         if list.remember(RegisteredActivity(machineId: activity.attributes.machineId, activityId: activity.id)) {
             list.save(to: file)
         }
         let hex = token.hexString
         do {
+            let grant: RelayRouteGrant?
+            if core?.pushMode(machineId: activity.attributes.machineId) == .relay {
+                guard let relay else { return }
+                grant = try await relay.register(pairingId: activity.attributes.machineId, activityId: activity.id, destination: hex)
+                if relayRegistered[activity.id] == grant { return }
+            } else { grant = nil }
+            guard !Task.isCancelled, activity.isLive, list.contains(agent), activity.pushToken == token,
+                core?.machines().contains(where: { $0.id == activity.attributes.machineId }) == true
+            else { return }
             try core?.registerActivityToken(
                 machineId: activity.attributes.machineId, activityId: activity.id,
-                terminalId: activity.attributes.terminalId, tokenHex: hex, bindingId: activity.attributes.bindingId
+                terminalId: activity.attributes.terminalId, tokenHex: hex, bindingId: activity.attributes.bindingId, relayGrant: grant?.coreGrant
             )
+            relayRegistered[activity.id] = grant
         } catch {
+            relayRetryAt = .now.addingTimeInterval(600)
             log.error("activity token: \(describe(error), privacy: .public)")
         }
     }
@@ -324,6 +358,10 @@ final class FollowModel {
 
     private func forget(machineId: String, activityId: String) {
         watchers.removeValue(forKey: activityId)?.cancel()
+        relayRegistered.removeValue(forKey: activityId)
+        if let relay {
+            Task { try? await relay.revokeActivity(pairingId: machineId, activityId: activityId) }
+        }
         do {
             try core?.endActivity(machineId: machineId, activityId: activityId)
         } catch {
