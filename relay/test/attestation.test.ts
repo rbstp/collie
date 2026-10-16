@@ -224,3 +224,40 @@ test('lost installation-revocation responses recover with a fresh assertion with
       kind: 'app', destination: 'b'.repeat(64) })).status, 401);
   } finally { await f.runtime.dispose(); }
 });
+
+test('shared control and enrollment admission rejects rotating sources before database or crypto work', async () => {
+  for (const path of ['challenge', 'control']) for (const enrollment of [false, true]) {
+    const shared = enrollment ? 'shared:enrollment' : 'shared:control';
+    const counts = new Map<string, number>();
+    let databaseReads = 0;
+    let cryptoCalls = 0;
+    const limiter = { async limit({ key }: { key: string }) {
+      const count = (counts.get(key) ?? 0) + 1;
+      counts.set(key, count);
+      return { success: key !== shared || count <= 1 };
+    } };
+    const env = {
+      APNS_ENVIRONMENT: 'development', SEND_HMAC_KEYS: JSON.stringify({ first: base64url(new Uint8Array(32)) }),
+      CONTROL_LIMITER: limiter, ENROLL_LIMITER: limiter,
+      DB: { prepare() { databaseReads++; return { bind() { return { async first() { return null; } }; } }; } },
+      CRYPTO: { getByName() { cryptoCalls++; throw new Error('unexpected crypto'); } }
+    };
+    const worker = createWorker();
+    const post = (ip: string) => {
+      const operation = { v: 1, op: enrollment ? 'enroll' : 'revoke_installation',
+        installation_id: ip.replaceAll('.', '_'), key_id: 'A'.repeat(43), environment: 'development' };
+      return worker.fetch(new Request(`https://relay.example/v1/${path}`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip },
+        body: JSON.stringify(path === 'challenge' ? operation : { operation, challenge: 'unused', attestation: 'AQ' })
+      }), env as never);
+    };
+    assert.equal((await post('192.0.2.1')).status, path === 'challenge' && enrollment ? 200 : 401);
+    assert.equal(databaseReads, 1);
+    const rejected = await post('192.0.2.2');
+    assert.equal(rejected.status, 429);
+    assert.deepEqual(await rejected.json(), { v: 1, result: 'rate_limited', retry_after: 60 });
+    assert.equal(databaseReads, 1);
+    assert.equal(cryptoCalls, 0);
+    assert.equal(counts.get(shared), 2);
+  }
+});

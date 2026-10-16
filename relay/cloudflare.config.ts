@@ -7,6 +7,7 @@ export default defineConfig({
     entrypoint: './src/worker.ts',
     workersDev: false,
     previewUrls: false,
+    limits: { cpuMs: 250 },
     observability: { enabled: false },
     exports: { RelayCrypto: exports.durableObject({ storage: 'sqlite' }) },
     env: {

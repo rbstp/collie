@@ -131,14 +131,16 @@ export async function control(request: Request, env: ControlEnv, now: number,
   try {
     const source = request.headers.get('cf-connecting-ip');
     if (!env.CONTROL_LIMITER || !env.ENROLL_LIMITER) return response(503, 'unavailable');
-    if (!source || !(await env.CONTROL_LIMITER.limit({ key: `ip:${source}` })).success) return response(429, 'rate_limited', { retry_after: 60 });
+    if (!source || !(await env.CONTROL_LIMITER.limit({ key: `ip:${source}` })).success
+      || !(await env.CONTROL_LIMITER.limit({ key: 'shared:control' })).success) return response(429, 'rate_limited', { retry_after: 60 });
     let body: unknown;
     try { body = await readBody(request, 5000, 16384); } catch { return response(400, 'invalid_request'); }
     if (!object(body)) return response(400, 'invalid_request');
     const op = operation(path === '/v1/challenge' ? body : body.operation);
     if (!op || op.environment !== env.APNS_ENVIRONMENT) return response(400, 'invalid_request');
     if (!(await env.CONTROL_LIMITER.limit({ key: `installation:${op.installation_id}` })).success) return response(429, 'rate_limited', { retry_after: 60 });
-    if (op.op === 'enroll' && !(await env.ENROLL_LIMITER.limit({ key: `ip:${source}` })).success) return response(429, 'rate_limited', { retry_after: 60 });
+    if (op.op === 'enroll' && (!(await env.ENROLL_LIMITER.limit({ key: `ip:${source}` })).success
+      || !(await env.ENROLL_LIMITER.limit({ key: 'shared:enrollment' })).success)) return response(429, 'rate_limited', { retry_after: 60 });
     const current = await state(env, op);
     if ((op.op !== 'enroll' && !current) || (current && ((current.revoked && op.op !== 'revoke_installation') || current.key_id !== op.key_id || current.environment !== op.environment))) return response(401, 'unauthorized');
     if (path === '/v1/challenge') {
