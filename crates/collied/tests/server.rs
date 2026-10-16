@@ -1522,7 +1522,7 @@ async fn terminal_phase(
 }
 
 fn hello_frame(version: u32) -> Value {
-    json!({"id": 1, "method": "hello", "params": {"protocol_version": version, "protocol_min_version": version, "capabilities": [protocol::TERMINAL_GRANTS_V1], "app_version": "it"}})
+    json!({"id": 1, "method": "hello", "params": {"protocol_version": version, "protocol_min_version": version, "capabilities": [protocol::TERMINAL_GRANTS_V1, protocol::ENCRYPTED_DISPLAY_V1], "app_version": "it"}})
 }
 
 fn pair_frame(code: &str) -> Value {

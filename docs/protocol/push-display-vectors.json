@@ -1,0 +1,64 @@
+{
+  "key_hex" : "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "vectors" : [
+    {
+      "enc" : "AQEEFm5NQUNaTFc4X2VYczlmeElGam5MVUVLLVBBAAECAwQFBgcICQoLDA0OD6ChoqOkpaanqKmqq-0AOIWBKWUSe9c9_ptzM9zCVNp24_pA_ieYFKgXesQOxPE2-woaOBXc0TAbSnXDvaQGCSckOi1xr7e9kXRwYxL2c3AeNLxueXsjU7nlX2I9HaPDfD79ocP3bmdoucdB8QLvKRtZra2s1d1FeEDZNAnFgmxKC9C4_jAZ55D32nDgMVUPPO5J",
+      "event_id" : "AAECAwQFBgcICQoLDA0ODw",
+      "kind" : 1,
+      "node_id" : "nMAC",
+      "nonce_hex" : "a0a1a2a3a4a5a6a7a8a9aaab",
+      "payload" : {
+        "approval_id" : "apr_test",
+        "aps" : {
+          "alert" : {
+            "body" : "An agent needs attention",
+            "title" : "Collie"
+          },
+          "mutable-content" : 1,
+          "sound" : "default",
+          "thread-id" : "ZLW8_eXs9fxIFjnLUEK-PA"
+        },
+        "enc" : "AQEEFm5NQUNaTFc4X2VYczlmeElGam5MVUVLLVBBAAECAwQFBgcICQoLDA0OD6ChoqOkpaanqKmqq-0AOIWBKWUSe9c9_ptzM9zCVNp24_pA_ieYFKgXesQOxPE2-woaOBXc0TAbSnXDvaQGCSckOi1xr7e9kXRwYxL2c3AeNLxueXsjU7nlX2I9HaPDfD79ocP3bmdoucdB8QLvKRtZra2s1d1FeEDZNAnFgmxKC9C4_jAZ55D32nDgMVUPPO5J",
+        "event_id" : "AAECAwQFBgcICQoLDA0ODw",
+        "node_id" : "nMAC"
+      },
+      "plaintext" : "{\"approvalId\":\"apr_test\",\"body\":\"Bash: echo hi\",\"offersApproval\":true,\"terminalId\":\"term_1\",\"title\":\"api-fixer\",\"v\":1}",
+      "scope" : "ZLW8_eXs9fxIFjnLUEK-PA"
+    },
+    {
+      "enc" : "AQIEDG5NQUNiaW5kaW5nLXRlc3QAAQIDBAUGBwgJCgsMDQ4PoKGio6Slpqeoqaqr7QAqgZAvb0YgwFb7yTlj0sRH6Uviqw7-asoEmAdmlUDEn3XpElBqH8nYM0gAJtC9pAwBImNyfF-UgKaRNEJjQL1ibRow4T46TxBI4bNKfz4S281vCNy5w5sSP2ui_X6yOuNmFj2p7Z-y1ElySe09dYWuIhhS1Pmmf3KsIfKWfbHFz-nWYIWcEFx6MFZcoWzb3XdD9587rZqVkM3Uok_qIoXIhI-cKMjf0xLtlrui68wxrv4CEJ9_VZhh_LJ_aXiFdN4Fiaj5DmNgbVNQNYylKhZW6UHmRiIxUfPeRF8NFWPku3ScxINMZ7n_yZFGD42VdNEkmpAwVYW44fSWmtMTeSw",
+      "event_id" : "AAECAwQFBgcICQoLDA0ODw",
+      "kind" : 2,
+      "node_id" : "nMAC",
+      "nonce_hex" : "a0a1a2a3a4a5a6a7a8a9aaab",
+      "payload" : {
+        "aps" : {
+          "alert" : {
+            "body" : "An agent needs attention",
+            "title" : "Collie"
+          },
+          "content-state" : {
+            "enc" : "AQIEDG5NQUNiaW5kaW5nLXRlc3QAAQIDBAUGBwgJCgsMDQ4PoKGio6Slpqeoqaqr7QAqgZAvb0YgwFb7yTlj0sRH6Uviqw7-asoEmAdmlUDEn3XpElBqH8nYM0gAJtC9pAwBImNyfF-UgKaRNEJjQL1ibRow4T46TxBI4bNKfz4S281vCNy5w5sSP2ui_X6yOuNmFj2p7Z-y1ElySe09dYWuIhhS1Pmmf3KsIfKWfbHFz-nWYIWcEFx6MFZcoWzb3XdD9587rZqVkM3Uok_qIoXIhI-cKMjf0xLtlrui68wxrv4CEJ9_VZhh_LJ_aXiFdN4Fiaj5DmNgbVNQNYylKhZW6UHmRiIxUfPeRF8NFWPku3ScxINMZ7n_yZFGD42VdNEkmpAwVYW44fSWmtMTeSw",
+            "v" : 1
+          },
+          "event" : "update",
+          "stale-date" : 1791029700,
+          "timestamp" : 1791028800
+        },
+        "event_id" : "AAECAwQFBgcICQoLDA0ODw",
+        "node_id" : "nMAC"
+      },
+      "plaintext" : "{\"state\":{\"approvalId\":\"apr_test\",\"approvals\":1,\"enc\":\"oKGio6Slpqeoqaqr7QAv18tqJkZ41BDjm3Mz/9NV7Tim7Fe0ZJoerlF+PbZlhhy7Ws9jjgfEGOzE+w==\",\"kind\":\"claude\",\"status\":\"blocked\",\"statusSince\":812721600,\"title\":\"api-fixer\",\"workspace\":\"api\"},\"v\":1}",
+      "scope" : "binding-test"
+    },
+    {
+      "enc" : "AQMEDG5NQUNiaW5kaW5nLXRlc3QAAQIDBAUGBwgJCgsMDQ4PoKGio6Slpqeoqaqr7QA0lJIzYwp_9xX43CUzh5Bi4HTj5VusZt8Ys1NOh1fEn3X8C1R0FZ2DfX1LZMHl7gxPIzQhMlT96-2IICs-TVWKiTAnMlkY4BOuQ3dZ6sc",
+      "event_id" : "AAECAwQFBgcICQoLDA0ODw",
+      "kind" : 3,
+      "node_id" : "nMAC",
+      "nonce_hex" : "a0a1a2a3a4a5a6a7a8a9aaab",
+      "plaintext" : "{\"machineLabel\":\"Development Mac\",\"title\":\"Fix the build\",\"v\":1}",
+      "scope" : "binding-test"
+    }
+  ]
+}

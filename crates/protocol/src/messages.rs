@@ -952,6 +952,16 @@ pub struct PushActivityTokenParams {
     /// it collied keeps sending that device the approval alert.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shows_approvals: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_binding: Option<ActivityDisplayBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ActivityDisplayBinding {
+    pub node_id: Label,
+    pub binding_id: ActivityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

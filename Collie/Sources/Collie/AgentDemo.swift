@@ -76,11 +76,11 @@ struct AgentDemo: View {
         guard let key = try? NotificationKey.loadOrCreate(nodeId: DemoAgentCore.machine.nodeId),
             let sealed = try? ChaChaPoly.seal(Data(plaintext.utf8), using: key, authenticating: Data(approvalId.utf8))
         else { return }
-        for activity in Activity<AgentActivityAttributes>.activities where activity.content.state.status == .blocked {
-            var state = activity.content.state
+        for activity in Activity<AgentActivityAttributes>.activities where activity.content.state.opened(attributes: activity.attributes).status == .blocked {
+            var state = activity.content.state.opened(attributes: activity.attributes)
             state.approvalId = approvalId
             state.enc = sealed.combined.base64EncodedString()
-            await activity.update(FollowModel.activityContent(state))
+            await activity.update(FollowModel.activityContent(state, attributes: activity.attributes))
         }
     }
 
@@ -335,7 +335,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         throw CoreError.TerminalsDisabled
     }
 
-    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String) throws {
+    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String) throws {
         print("demo: activity \(activityId) token \(tokenHex.prefix(8))… for \(terminalId)")
     }
 

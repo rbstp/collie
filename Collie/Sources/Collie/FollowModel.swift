@@ -9,7 +9,7 @@ import os
 
 /// The slice of CollieCore Live Activities use, so the model can run against a fake.
 protocol ActivityCore: FlockCore {
-    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String) throws
+    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String) throws
     func endActivity(machineId: String, activityId: String) throws
 }
 
@@ -192,10 +192,10 @@ final class FollowModel {
             }
             for activity in live {
                 let current = activity.content
-                let state = state.keepingApproval(of: current.state)
+                let state = state.keepingApproval(of: current.state.opened(attributes: activity.attributes))
                 let staleSoon = current.staleDate.map { $0 < .now.addingTimeInterval(Self.staleAfter / 3) } ?? true
-                guard current.state != state || staleSoon else { continue }
-                let content = Self.activityContent(state)
+                guard !current.state.opened(attributes: activity.attributes).sameDisplay(as: state) || staleSoon else { continue }
+                let content = Self.activityContent(state, attributes: activity.attributes)
                 let id = activity.id
                 Task.detached { await Self.live(id)?.update(content) }
             }
@@ -203,9 +203,9 @@ final class FollowModel {
     }
 
     nonisolated static func activityContent(
-        _ state: AgentActivityAttributes.ContentState
+        _ state: AgentActivityAttributes.ContentState, attributes: AgentActivityAttributes
     ) -> ActivityContent<AgentActivityAttributes.ContentState> {
-        ActivityContent(state: state, staleDate: .now.addingTimeInterval(staleAfter), relevanceScore: state.relevance)
+        ActivityContent(state: state.secured(nodeId: attributes.nodeId, scope: attributes.bindingId), staleDate: .now.addingTimeInterval(staleAfter), relevanceScore: 0)
     }
 
     /// After a decision applied: drops the buttons and shows the status the agent moves to, at
@@ -214,17 +214,17 @@ final class FollowModel {
     nonisolated static func resolve(_ link: ApprovalLink, approved: Bool, tappedAt: Date) async {
         guard
             let activity = Activity<AgentActivityAttributes>.activities.first(where: {
-                $0.isLive && $0.attributes.nodeId == link.nodeId && $0.content.state.approvalId == link.approvalId
+                $0.isLive && $0.attributes.nodeId == link.nodeId && $0.content.state.opened(attributes: $0.attributes).approvalId == link.approvalId
             })
         else { return }
-        var state = activity.content.state
+        var state = activity.content.state.opened(attributes: activity.attributes)
         state.status = approved ? .working : .idle
         state.statusSince = .now
         state.approvalId = nil
         state.enc = nil
         state.progress = nil
         state.approvals = max(0, state.approvals - 1)
-        await activity.update(activityContent(state), alertConfiguration: nil, timestamp: tappedAt.addingTimeInterval(-1))
+        await activity.update(activityContent(state, attributes: activity.attributes), alertConfiguration: nil, timestamp: tappedAt.addingTimeInterval(-1))
     }
 
     /// Shows `progress` instead of the buttons on the live activity holding this approval, and
@@ -233,12 +233,12 @@ final class FollowModel {
     nonisolated static func show(progress: String?, on link: ApprovalLink) async -> (title: String, terminalId: String)? {
         guard
             let activity = Activity<AgentActivityAttributes>.activities.first(where: {
-                $0.isLive && $0.attributes.nodeId == link.nodeId && $0.content.state.pendingApproval == link.approvalId
+                $0.isLive && $0.attributes.nodeId == link.nodeId && $0.content.state.opened(attributes: $0.attributes).pendingApproval == link.approvalId
             })
         else { return nil }
-        var state = activity.content.state
+        var state = activity.content.state.opened(attributes: activity.attributes)
         state.progress = progress
-        await activity.update(activityContent(state))
+        await activity.update(activityContent(state, attributes: activity.attributes))
         return (state.title, activity.attributes.terminalId)
     }
 
@@ -255,11 +255,16 @@ final class FollowModel {
     }
 
     private func start(_ agent: AgentRoute, machine: Machine, title: String, state: AgentActivityAttributes.ContentState) throws {
+        _ = try NotificationKey.loadOrCreate(nodeId: machine.nodeId)
         let attributes = AgentActivityAttributes(
             machineId: agent.machineId, terminalId: agent.terminalId, machineLabel: machine.label, nodeId: machine.nodeId,
             title: title
         )
-        let activity = try Activity.request(attributes: attributes, content: Self.activityContent(state), pushType: .token)
+        let content = Self.activityContent(state, attributes: attributes)
+        guard try JSONEncoder().encode(attributes).count + JSONEncoder().encode(content.state).count <= 4000 else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        let activity = try Activity.request(attributes: attributes, content: content, pushType: .token)
         watch(activity)
     }
 
@@ -296,7 +301,7 @@ final class FollowModel {
         do {
             try core?.registerActivityToken(
                 machineId: activity.attributes.machineId, activityId: activity.id,
-                terminalId: activity.attributes.terminalId, tokenHex: hex
+                terminalId: activity.attributes.terminalId, tokenHex: hex, bindingId: activity.attributes.bindingId
             )
         } catch {
             log.error("activity token: \(describe(error), privacy: .public)")

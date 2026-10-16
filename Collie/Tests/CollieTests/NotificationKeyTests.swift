@@ -93,3 +93,91 @@ extension Data {
         #expect(!NotificationKey.Mirror.isValid(nodeId: bad), "\(bad)")
     }
 }
+
+@Test func displayEnvelopeSharedVectorsRejectEveryWrongBinding() throws {
+    let url = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../docs/protocol/push-display-vectors.json")
+    let fixture = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    for vector in try #require(fixture["vectors"] as? [[String: Any]]) {
+        let enc = try #require(vector["enc"] as? String)
+        let kind = UInt8(try #require(vector["kind"] as? Int))
+        let node = try #require(vector["node_id"] as? String)
+        let scope = try #require(vector["scope"] as? String)
+        let event = try #require(vector["event_id"] as? String)
+        let expected = try #require(vector["plaintext"] as? String)
+        let opened = try #require(PushEnvelope.open(enc, kind: kind, nodeId: node, scope: scope, eventId: event, key: vectorKey, as: TestDisplay.self))
+        #expect(opened == (try JSONDecoder().decode(TestDisplay.self, from: Data(expected.utf8))))
+        for (otherKind, otherNode, otherScope, otherEvent) in [(kind % 3 + 1, node, scope, event), (kind, "nOther", scope, event), (kind, node, "another-activity", event), (kind, node, scope, "another-event")] {
+            #expect(PushEnvelope.open(enc, kind: otherKind, nodeId: otherNode, scope: otherScope, eventId: otherEvent, key: vectorKey, as: TestDisplay.self) == nil)
+        }
+        #expect(PushEnvelope.open(enc, kind: kind, nodeId: node, scope: scope, eventId: event, key: SymmetricKey(size: .bits256), as: TestDisplay.self) == nil)
+        #expect(PushEnvelope.header(enc + "=") == nil)
+        #expect(PushEnvelope.header(String(repeating: "A", count: 3801)) == nil)
+        var tampered = Array(enc.utf8)
+        tampered[tampered.count - 3] = tampered[tampered.count - 3] == 65 ? 66 : 65
+        #expect(PushEnvelope.open(String(decoding: tampered, as: UTF8.self), kind: kind, nodeId: node, scope: scope, eventId: event, key: vectorKey, as: TestDisplay.self) == nil)
+    }
+}
+
+private struct TestDisplay: Decodable, Equatable {
+    let v: Int
+    let title: String?
+    let body: String?
+    let terminalId: String?
+    let approvalId: String?
+    let offersApproval: Bool?
+    let machineLabel: String?
+    let state: TestDisplayState?
+}
+
+private struct TestDisplayState: Decodable, Equatable {
+    let status: String
+    let statusSince: Double
+    let title: String
+    let kind: String?
+    let workspace: String?
+    let approvals: Int
+    let approvalId: String?
+    let enc: String?
+}
+
+@Test func alertDisplayAuthenticatesTheApprovalBeforeOfferingControls() throws {
+    let url = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../docs/protocol/push-display-vectors.json")
+    let fixture = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    let vectors = try #require(fixture["vectors"] as? [[String: Any]])
+    var payload = try #require(vectors.first?["payload"] as? [String: Any])
+    let display = try #require(PushDisplay.open(userInfo: payload, key: vectorKey))
+    #expect(display.title == "api-fixer")
+    #expect(display.body == "Bash: echo hi")
+    #expect(display.terminalId == "term_1")
+    #expect(display.approvalId == "apr_test")
+    #expect(display.offersApproval)
+    payload["approval_id"] = "apr_other"
+    #expect(PushDisplay.open(userInfo: payload, key: vectorKey) == nil)
+}
+
+@Test func displayEnvelopeBoundsUnicodeEscapingAndInitialActivityStorage() throws {
+    struct AttributesDisplay: Encodable { let v = 1; let machineLabel: String; let title: String }
+    struct StateDisplay: Encodable { let v = 1; let state: State }
+    struct State: Encodable {
+        let status = "blocked"
+        let statusSince = 812721600
+        let title: String
+        let workspace: String
+        let approvals = 1
+    }
+    for text in [String(repeating: "😀", count: 64), String(repeating: "\"", count: 64), String(repeating: "\u{1}", count: 64)] {
+        let binding = String(repeating: "A", count: 64)
+        let node = String(repeating: "n", count: 64)
+        let attrsEnc = try #require(PushEnvelope.seal(AttributesDisplay(machineLabel: text, title: text), kind: 3, nodeId: node, scope: binding, key: vectorKey))
+        let stateEnc = try #require(PushEnvelope.seal(StateDisplay(state: State(title: text, workspace: text)), kind: 2, nodeId: node, scope: binding, key: vectorKey))
+        let attrs = try JSONSerialization.data(withJSONObject: ["machineId": String(repeating: "m", count: 64), "terminalId": String(repeating: "t", count: 64), "nodeId": node, "bindingId": binding, "enc": attrsEnc])
+        let state = try JSONSerialization.data(withJSONObject: ["v": 1, "enc": stateEnc])
+        #expect(attrs.count + state.count <= 4000)
+        #expect(attrsEnc.utf8.count <= 3800)
+        #expect(stateEnc.utf8.count <= 3800)
+        let decodedAttrs = try JSONDecoder().decode(AgentActivityAttributes.self, from: attrs)
+        let decodedState = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: state)
+        #expect(try JSONEncoder().encode(decodedAttrs).count + JSONEncoder().encode(decodedState).count <= 4000)
+    }
+    #expect(PushEnvelope.seal(AttributesDisplay(machineLabel: "x", title: String(repeating: "😀", count: 4096)), kind: 3, nodeId: "nMAC", scope: "binding", key: vectorKey) == nil)
+}

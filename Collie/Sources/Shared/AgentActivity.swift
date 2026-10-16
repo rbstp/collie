@@ -3,23 +3,44 @@ import CryptoKit
 import Foundation
 import SwiftUI
 
-// Compiled into the app and CollieWidgets. collied sends ContentState as the `content-state` of
-// Live Activity pushes: docs/protocol/live-activity-content-state.json is checked by both sides.
+// ActivityKit storage always uses ciphertext, including initial attributes and local updates.
 
 struct AgentActivityAttributes: ActivityAttributes {
     let machineId: String
     let terminalId: String
-    let machineLabel: String
-    /// The Mac's node id, which keys its notification key and its decisions.
     let nodeId: String
-    /// The title the app shows for the agent, which may be the terminal title: set on the phone
-    /// and never sent through APNs. Nil on activities an older build started.
-    let title: String?
+    let bindingId: String
+    private let enc: String
 
-    func displayTitle(_ state: ContentState) -> String { title ?? state.title }
+    private struct Display: Codable {
+        let v: Int
+        let machineLabel: String
+        let title: String?
+    }
 
-    /// Plaintext to Apple: only what the approval alert already shows, plus the status and a count.
-    /// `enc` is the approval context sealed like the alert's, so Apple only sees ciphertext.
+    init(machineId: String, terminalId: String, machineLabel: String, nodeId: String, title: String?) {
+        self.machineId = machineId
+        self.terminalId = terminalId
+        self.nodeId = nodeId
+        let binding = UUID().uuidString
+        bindingId = binding
+        let display = Display(v: 1, machineLabel: String(machineLabel.prefix(64)), title: title.map { String($0.prefix(64)) })
+        enc = NotificationKey.load(nodeId: nodeId).flatMap {
+            PushEnvelope.seal(display, kind: 3, nodeId: nodeId, scope: binding, key: $0)
+        } ?? ""
+    }
+
+    private var display: Display? {
+        guard let key = NotificationKey.load(nodeId: nodeId),
+            let display = PushEnvelope.open(enc, kind: 3, nodeId: nodeId, scope: bindingId, key: key, as: Display.self), display.v == 1
+        else { return nil }
+        return display
+    }
+
+    var machineLabel: String { display?.machineLabel ?? "" }
+    var title: String? { display?.title }
+    func displayTitle(_ state: ContentState) -> String { state.status == .unknown ? "Collie" : title ?? state.title }
+
     struct ContentState: Codable, Hashable, Sendable {
         var status: AgentActivityStatus
         var statusSince: Date
@@ -31,6 +52,7 @@ struct AgentActivityAttributes: ActivityAttributes {
         var enc: String?
         /// Local only, never sent by collied: "Approving…" after a tap, until its next push.
         var progress: String?
+        private var sealedDisplay: String? = nil
 
         init(
             status: AgentActivityStatus, statusSince: Date, title: String, kind: String? = nil, workspace: String?,
@@ -46,36 +68,73 @@ struct AgentActivityAttributes: ActivityAttributes {
             self.enc = enc
         }
 
-        enum CodingKeys: String, CodingKey {
-            case status, statusSince, title, kind, workspace, approvals, approvalId, enc, progress
+        private struct Display: Codable {
+            let v: Int
+            let state: PrivateState
         }
 
-        // statusSince is whole seconds since 2001-01-01 UTC (Foundation's reference date, what a
-        // default Date decoding expects), decoded here explicitly so no decoder strategy can change it.
+        private struct PrivateState: Codable {
+            var status: AgentActivityStatus
+            var statusSince: Double
+            var title: String
+            var kind: String?
+            var workspace: String?
+            var approvals: Int
+            var approvalId: String?
+            var enc: String?
+            var progress: String?
+        }
+
+        private enum CodingKeys: String, CodingKey { case v, enc }
+
         init(from decoder: any Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            status = try container.decode(AgentActivityStatus.self, forKey: .status)
-            statusSince = Date(timeIntervalSinceReferenceDate: try container.decode(Double.self, forKey: .statusSince))
-            title = try container.decode(String.self, forKey: .title)
-            kind = try container.decodeIfPresent(String.self, forKey: .kind)
-            workspace = try container.decodeIfPresent(String.self, forKey: .workspace)
-            approvals = try container.decode(Int.self, forKey: .approvals)
-            approvalId = try container.decodeIfPresent(String.self, forKey: .approvalId)
-            enc = try container.decodeIfPresent(String.self, forKey: .enc)
-            progress = try container.decodeIfPresent(String.self, forKey: .progress)
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            guard try c.decode(Int.self, forKey: .v) == 1 else {
+                throw DecodingError.dataCorruptedError(forKey: .v, in: c, debugDescription: "Unsupported encrypted display")
+            }
+            self.init(status: .unknown, statusSince: Date(timeIntervalSinceReferenceDate: 0), title: "Collie", workspace: nil, approvals: 0)
+            sealedDisplay = try c.decode(String.self, forKey: .enc)
         }
 
         func encode(to encoder: any Encoder) throws {
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(status, forKey: .status)
-            try container.encode(Int64(statusSince.timeIntervalSinceReferenceDate.rounded(.down)), forKey: .statusSince)
-            try container.encode(title, forKey: .title)
-            try container.encodeIfPresent(kind, forKey: .kind)
-            try container.encodeIfPresent(workspace, forKey: .workspace)
-            try container.encode(approvals, forKey: .approvals)
-            try container.encodeIfPresent(approvalId, forKey: .approvalId)
-            try container.encodeIfPresent(enc, forKey: .enc)
-            try container.encodeIfPresent(progress, forKey: .progress)
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(1, forKey: .v)
+            try c.encode(sealedDisplay ?? "", forKey: .enc)
+        }
+
+        func secured(nodeId: String, scope: String) -> Self {
+            var state = self
+            let privateState = PrivateState(status: status, statusSince: statusSince.timeIntervalSinceReferenceDate.rounded(.down),
+                title: title, kind: kind, workspace: workspace, approvals: approvals, approvalId: approvalId, enc: enc, progress: progress)
+            state.sealedDisplay = NotificationKey.load(nodeId: nodeId).flatMap {
+                PushEnvelope.seal(Display(v: 1, state: privateState), kind: 2, nodeId: nodeId, scope: scope, key: $0)
+            } ?? ""
+            return state
+        }
+
+        func opened(attributes: AgentActivityAttributes) -> Self {
+            guard sealedDisplay != nil, let key = NotificationKey.load(nodeId: attributes.nodeId) else {
+                return Self(status: .unknown, statusSince: Date(timeIntervalSinceReferenceDate: 0), title: "Collie", workspace: nil, approvals: 0)
+            }
+            return opened(nodeId: attributes.nodeId, scope: attributes.bindingId, key: key)
+        }
+
+        func opened(nodeId: String, scope: String, key: SymmetricKey) -> Self {
+            guard let sealedDisplay,
+                let display = PushEnvelope.open(sealedDisplay, kind: 2, nodeId: nodeId, scope: scope, key: key, as: Display.self), display.v == 1
+            else { return Self(status: .unknown, statusSince: Date(timeIntervalSinceReferenceDate: 0), title: "Collie", workspace: nil, approvals: 0) }
+            let d = display.state
+            var state = Self(status: d.status, statusSince: Date(timeIntervalSinceReferenceDate: d.statusSince), title: d.title,
+                kind: d.kind, workspace: d.workspace, approvals: d.approvals, approvalId: d.approvalId, enc: d.enc)
+            state.progress = d.progress
+            state.sealedDisplay = sealedDisplay
+            return state
+        }
+
+        func sameDisplay(as other: Self) -> Bool {
+            status == other.status && statusSince == other.statusSince && title == other.title
+                && kind == other.kind && workspace == other.workspace && approvals == other.approvals
+                && approvalId == other.approvalId && enc == other.enc && progress == other.progress
         }
 
         /// The kinds collied sends, each with an icon in CollieWidgets.

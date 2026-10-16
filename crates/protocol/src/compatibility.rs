@@ -2,13 +2,14 @@ use crate::{ClientFrame, Event, HelloParams, HelloResult, Label, Request, Respon
 
 pub const PROTOCOL_MIN_VERSION: u32 = 26;
 pub const TERMINAL_GRANTS_V1: &str = "terminal_grants_v1";
+pub const ENCRYPTED_DISPLAY_V1: &str = "encrypted_display_v1";
 
 pub(crate) fn baseline_capabilities() -> Vec<Label> {
     vec![Label::new(TERMINAL_GRANTS_V1).expect("capability is a label")]
 }
 
 pub(crate) fn has_baseline_capabilities(capabilities: &[Label]) -> bool {
-    capabilities.len() == 1 && capabilities[0].as_str() == TERMINAL_GRANTS_V1
+    capabilities == baseline_capabilities()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +37,10 @@ impl HelloParams {
             protocol_version: crate::PROTOCOL_VERSION,
             protocol_min_version: (PROTOCOL_MIN_VERSION != crate::PROTOCOL_VERSION)
                 .then_some(PROTOCOL_MIN_VERSION),
-            capabilities: baseline_capabilities(),
+            capabilities: [TERMINAL_GRANTS_V1, ENCRYPTED_DISPLAY_V1]
+                .into_iter()
+                .map(|s| Label::new(s).expect("capability is a label"))
+                .collect(),
             app_version,
         }
     }
@@ -65,6 +69,7 @@ impl HelloParams {
 pub struct NegotiatedProtocol {
     version: u32,
     terminal_grants: bool,
+    encrypted_display: bool,
 }
 
 impl NegotiatedProtocol {
@@ -75,6 +80,10 @@ impl NegotiatedProtocol {
         let version = ProtocolRange::CURRENT.highest_common(hello.range())?;
         Some(Self {
             version,
+            encrypted_display: hello
+                .capabilities
+                .iter()
+                .any(|c| c.as_str() == ENCRYPTED_DISPLAY_V1),
             terminal_grants: hello
                 .capabilities
                 .iter()
@@ -88,17 +97,25 @@ impl NegotiatedProtocol {
             max: hello.protocol_max_version,
         };
         let version = ProtocolRange::CURRENT.highest_common(range)?;
-        if hello.protocol_version != version || hello.capabilities.len() > 1 {
+        if hello.protocol_version != version
+            || hello.capabilities.len() > 2
+            || hello.capabilities.iter().enumerate().any(|(i, c)| {
+                ![TERMINAL_GRANTS_V1, ENCRYPTED_DISPLAY_V1].contains(&c.as_str())
+                    || hello.capabilities[..i].contains(c)
+            })
+        {
             return None;
         }
-        let terminal_grants = match hello.capabilities.as_slice() {
-            [] => false,
-            [cap] if cap.as_str() == TERMINAL_GRANTS_V1 => true,
-            _ => return None,
-        };
         Some(Self {
             version,
-            terminal_grants,
+            terminal_grants: hello
+                .capabilities
+                .iter()
+                .any(|c| c.as_str() == TERMINAL_GRANTS_V1),
+            encrypted_display: hello
+                .capabilities
+                .iter()
+                .any(|c| c.as_str() == ENCRYPTED_DISPLAY_V1),
         })
     }
 
@@ -107,11 +124,14 @@ impl NegotiatedProtocol {
     }
 
     pub fn capabilities(&self) -> Vec<Label> {
-        if self.terminal_grants {
-            vec![Label::new(TERMINAL_GRANTS_V1).expect("capability is a label")]
-        } else {
-            Vec::new()
-        }
+        [
+            (TERMINAL_GRANTS_V1, self.terminal_grants),
+            (ENCRYPTED_DISPLAY_V1, self.encrypted_display),
+        ]
+        .into_iter()
+        .filter(|(_, enabled)| *enabled)
+        .map(|(s, _)| Label::new(s).expect("capability is a label"))
+        .collect()
     }
 
     pub fn allows_request(&self, request: &Request) -> bool {
@@ -125,6 +145,7 @@ impl NegotiatedProtocol {
             | Request::TerminalRun(_)
             | Request::TerminalSendKeys(_)
             | Request::TerminalLock(_) => self.terminal_grants,
+            Request::PushRegister(_) | Request::PushActivityToken(_) => self.encrypted_display,
             Request::PairComplete(p) => self.terminal_grants || p.terminal_key.is_none(),
             Request::Hello(_)
             | Request::Unpair(_)
@@ -156,8 +177,6 @@ impl NegotiatedProtocol {
             | Request::PaneClose(_)
             | Request::ApprovalList(_)
             | Request::ApprovalDecide(_)
-            | Request::PushRegister(_)
-            | Request::PushActivityToken(_)
             | Request::PushActivityEnd(_)
             | Request::AttachmentBegin(_)
             | Request::AttachmentChunk(_)
@@ -173,7 +192,7 @@ impl NegotiatedProtocol {
             p.terminal_key = None;
         }
         if !self.allows_request(&frame.request) {
-            return Err("the machine does not support terminal grants");
+            return Err("the machine does not support this capability");
         }
         serde_json::to_string(&frame).map_err(|_| "cannot serialize client frame")
     }
@@ -249,8 +268,11 @@ mod tests {
             protocol_version: u32,
             app_version: Label,
         }
-        let encoded =
-            serde_json::to_value(HelloParams::current(Label::new("test").unwrap())).unwrap();
+        let encoded = serde_json::to_value(HelloParams {
+            capabilities: baseline_capabilities(),
+            ..HelloParams::current(Label::new("test").unwrap())
+        })
+        .unwrap();
         assert_eq!(encoded, fixture()["baseline_offer"]);
         let old: V25Hello = serde_json::from_value(encoded.clone()).unwrap();
         assert_eq!(old.app_version.as_str(), "test");
@@ -324,6 +346,37 @@ mod tests {
                 .unwrap()
                 .capabilities()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn display_registration_requires_the_concrete_codec_capability() {
+        let request = Request::PushRegister(crate::PushRegisterParams {
+            apns_token: crate::PushToken::new("a".repeat(64)).unwrap(),
+            environment: crate::ApnsEnvironment::Sandbox,
+            notification_key: crate::NotificationKey::new(
+                "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE".to_owned(),
+            )
+            .unwrap(),
+            mute_done: false,
+        });
+        let mut hello = HelloParams::current(Label::new("test").unwrap());
+        let current = NegotiatedProtocol::negotiate(&hello).unwrap();
+        assert!(current.allows_request(&request));
+        let encoded = serde_json::to_value(&hello).unwrap();
+        assert!(
+            encoded["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(ENCRYPTED_DISPLAY_V1))
+        );
+        hello.capabilities = baseline_capabilities();
+        let legacy = NegotiatedProtocol::negotiate(&hello).unwrap();
+        assert!(!legacy.allows_request(&request));
+        assert!(legacy.client_frame(ClientFrame { id: 1, request }).is_err());
+        assert_eq!(
+            serde_json::to_value(&hello).unwrap(),
+            fixture()["baseline_offer"]
         );
     }
 
