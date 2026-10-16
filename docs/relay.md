@@ -4,7 +4,7 @@ The Worker in `relay/` is an isolated validation foundation for [#350](https://g
 
 ## Development
 
-Use Node 24 or newer. `relay/package-lock.json` locks tooling and dependency integrity; direct versions are exact stable releases checked on 2026-10-16. The compatibility date is 2026-08-06, supported by the pinned stable Miniflare runtime. The pinned local bundler includes a newer beta Miniflare separately. The deployment CLI is `cf` 1.0.0-beta.17, selected explicitly for this project.
+Use Node 24 or newer. `relay/package-lock.json` locks tooling and dependency integrity; direct versions are exact pins checked on 2026-10-16, using the latest compatible stable releases and the existing beta-only `cf` tool. The compatibility date is 2026-08-06, supported by the pinned stable Miniflare runtime. The pinned local bundler includes a newer beta Miniflare separately. Scoped overrides patch every Miniflare copy to sharp 0.35.5 and Undici 7.30.1 while retaining its compatible Undici 7 API; Miniflare 4.20260730.0 remains the latest stable release. The deployment CLI is `cf` 1.0.0-beta.18, selected explicitly for this project.
 
 ```sh
 cd relay
