@@ -1,6 +1,6 @@
 # Push relay foundation
 
-The Worker in `relay/` is an isolated validation foundation for [#350](https://github.com/rbstp/collie/issues/350). It is not deployed or enabled in the app or collied. The control endpoints and isolated phone client are implemented for validation; public enrollment and client integration remain gated. Existing releases keep direct APNs delivery. Public rollout remains blocked on verified App Attest control operations (#353), encrypted phone payloads (#352), compatible peers (#351), the daemon sender (#354), and the Free-account measurements below.
+The Worker in `relay/` is an isolated validation foundation for [#350](https://github.com/rbstp/collie/issues/350). Public delivery remains gated. The daemon can select the publisher relay; configuring it does not deploy a relay or establish phone enrollment. The control endpoints and isolated phone client are implemented for validation; public enrollment and client integration remain gated. Existing releases keep direct APNs delivery. Public rollout remains blocked on verified App Attest control operations (#353), encrypted phone payloads (#352), compatible peers (#351), the daemon sender (#354), and the Free-account measurements below.
 
 ## Development
 
@@ -85,7 +85,7 @@ Responses are `{ "v": 1, "result": "..." }`, with `Cache-Control: no-store`:
 | 503 | `upstream_unavailable` | Network, timeout, Apple 429/5xx; includes `retry_after: 60` |
 | 503 | `unavailable` | D1, secret or other internal failure; fails closed |
 
-Only Apple's `410 Unregistered` and `400 BadDeviceToken` invalidate the exact matching route generation and destination digest. Late failures cannot erase a replacement. APNs reason strings, response headers, destinations and payloads are never returned. There is no automatic retry or exactly-once delivery guarantee. A lost response after Apple accepts can lead to duplicate delivery if the sender retries.
+Only Apple's `410 Unregistered` and `400 BadDeviceToken` invalidate the exact matching route generation and destination digest. Late failures cannot erase a replacement. APNs reason strings, response headers, destinations and payloads are never returned. The Worker does not retry. The daemon uses bounded in-memory retries and does not guarantee exactly-once delivery. A lost response after Apple accepts can lead to duplicate delivery if the sender retries.
 
 ## Atomic quotas and storage ownership
 
@@ -160,3 +160,7 @@ The scheduled cleanup handler deletes expired route records, obsolete pairings, 
 Cloud operations use the user's `cf` CLI with its confirmed OAuth account. Wrangler remains only a locked local bundle/dry-run dependency. No deployment, account, credential, profile or Apple portal changes are implied by a local test/build.
 
 A 2026-10-16 local Node run of `npm run benchmark:attestation` verified the complete historical Apple attestation and CMS receipt 100 times: first verification 21.946 ms, median 9.133 ms and p99 12.039 ms wall time. This includes local scheduling/WebCrypto waits, is not Worker CPU, and does not satisfy the below-8-ms deployed p99 gate. It is a reason to measure and optimize before enrollment, not to bypass receipt or chain checks.
+
+## Daemon sender
+
+`collied` selects `[push.relay]` or `[apns]`, never both. Relay sends use the fixed publisher `/v1/send` endpoint and only the machine/activity grant persisted through the paired mutual-TLS registration. See [architecture.md](architecture.md#relay-sender) for bounded coalescing, expiry, quota/backoff, invalidation and diagnostic behavior. Source-level/mock validation is separate from actual Cloudflare deployment, successful App Attest enrollment, Apple acceptance and physical display confirmation.

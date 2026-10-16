@@ -25,8 +25,8 @@
 
 1. **`collied login`**: open the printed link and sign in as a tag owner. The node becomes `tag:collie-mac`.
 2. **`collied service install`**: installs the launchd agent that runs `collied` at login. It is installed again, restarting `collied`, when it points at another binary or config, is stopped, or runs an older binary.
-3. **`collied doctor`**: setup stops on a `fail` line. On a new machine, `warn` lines for peers, apns, hooks, codex hook and plan usage are expected, and one for reach until your phone is signed in to Tailscale.
-4. **Push notifications**, when `[apns]` is not configured yet. You can skip this and come back later: see [Push notifications](push.md).
+3. **`collied doctor`**: setup stops on a `fail` line. On a new machine, `warn` lines for peers, push, hooks, codex hook and plan usage are expected, and one for reach until your phone is signed in to Tailscale.
+4. **Push notifications**, when neither `[push.relay]` nor `[apns]` is configured yet. The default is the publisher relay, without an APNs key. For a self-built app use `collied setup --direct-apns`. You can skip this and come back later: see [Push notifications](push.md).
 5. **`collied pair`**, offered at the end: see [Pair a phone](pair.md).
 
 > [!NOTE]

@@ -23,7 +23,7 @@ Setup runs the same steps as [on macOS](collied-macos.md#what-setup-does), with 
 
 - `collied login` tags the node `tag:collie-linux`, and `collied` refuses to run until the node has that tag.
 - `collied service install` writes the systemd user unit `~/.config/systemd/user/collied.service`.
-- The APNs key is stored as a systemd user credential, encrypted with the host key and sealed to the TPM2 when one is usable. Where `systemd-creds` cannot encrypt, it falls back to a file readable only by your user. `collied doctor` reports which one you have.
+- Publisher relay mode needs no APNs key. With `collied setup --direct-apns` for a self-built app, the APNs key is stored as a systemd user credential, encrypted with the host key and sealed to the TPM2 when one is usable. Where `systemd-creds` cannot encrypt, it falls back to a file readable only by your user. `collied doctor` reports which one you have.
 
 > [!WARNING]
 > Setup stops when the user manager loads the unit from another file, applies a `collied.service.d` drop-in to it, or the unit pins another `XDG_DATA_HOME`. Remove the override and run setup again.

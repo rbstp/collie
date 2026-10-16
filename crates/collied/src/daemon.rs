@@ -1,6 +1,5 @@
 use std::os::fd::OwnedFd;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -199,10 +198,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
     }
     let env = herdr::SocketEnv::from_process();
     let herdr_socket = herdr::resolve_socket_path(config.herdr.session.as_deref(), &env)?;
-    let apns: Option<Arc<dyn push::Sender>> = match &config.apns {
-        Some(apns) => Some(Arc::new(push::Apns::new(apns).context("[apns]")?)),
-        None => None,
-    };
+    let apns = push::sender(config)?;
     let mut handle = server::start_with(
         node,
         ServerConfig {
