@@ -56,6 +56,8 @@ The following is a draft for the final validated binary, not an instruction to s
 >
 > In the sample, open Agents and inspect Chat and Terminal. Send a sample prompt, use a terminal key, approve or deny the blocked sample agent, and inspect Usage and Machines. Reset sample workspace is in sample Settings. Exit returns to onboarding or the existing setup. Sample actions run on this device only and cannot operate a real machine.
 >
+> Outside the sample, confirmed paired-machine controls can send prompts, terminal input and files, create or resume agent tasks and worktrees, clone repositories, inspect Git changes and pull requests, and approve or deny pending actions. These actions operate on the paired computer as its user. The configured coding agents contact their own AI services; Collie does not supply an AI account.
+>
 > Real use requires the user's Tailscale account, tailnet policy, herdr and collied. Desktop software and installation requirements are documented at https://collie.rbstp.dev/ . The macOS menu app and Linux Omarchy widget are desktop companions. Collie does not sell accounts or AI access. Agents use the services and credentials configured on the user's machine.
 >
 > The sample demonstrates interface workflows. It does not reproduce genuine device attestation, pairing, background pushes or Live Activities. The submission's attached real-device video and validation record cover those workflows. Approval decisions always use the authenticated device connection; a push does not authorize a command.
@@ -63,6 +65,29 @@ The following is a draft for the final validated binary, not an instruction to s
 Before sending, attach the actual video and build/device/OS evidence, verify the desktop links, and include any review resources Apple requests. Keep reviewer credentials or private support contacts out of this repository. Never offer access to the user's personal Mac or tailnet.
 
 **Guideline 4.8 treatment is UNCONFIRMED.** Ask App Review whether signing in directly to Tailscale qualifies for the specific-third-party-service client exception, given that Tailscale supplies connectivity rather than the agent content. Obtain any required prior approval to use the sample instead of credentials. Neither the sample, a video nor this draft establishes a waiver. [Apple's guidelines 2.1 and 4.8](https://developer.apple.com/app-store/review/guidelines/) and [review information](https://developer.apple.com/help/app-review/before-submitting-for-review/complete-review/) control the final submission.
+
+## Guideline assessment
+
+Checked October 16, 2026 against Apple's [guidelines](https://developer.apple.com/app-store/review/guidelines/) and [update summary](https://developer.apple.com/news/?id=92th7e5i). This is preparation, not an App Review determination.
+
+- **1.2:** Collie sends prompts/files to private coding agents and displays user/agent content. The revised scope includes AI content creation apps; private use without a public feed is not an automatic exemption. Assess actual filtering, content reporting/response, abusive-user blocking and contact safeguards; ask App Review how these apply where uncertain. Authenticated pairing/revocation are security controls, not content-moderation evidence. This assessment authorizes no cloud scanning or other data-processing change.
+- **2.3.1 and 2.5.19:** Describe all new features, functionality and product changes specifically and disclose all shipped capabilities and actual availability. The sample must not conceal real remote controls. Reconcile compiled but unavailable relay paths before submission; this draft approves neither dormant behavior nor undisclosed activation after review.
+- **2.3.14, if creative assets are used:** Follow Apple's [asset guidance](https://developer.apple.com/app-store/asset-best-practices/): accurate functionality/brand, all-audience presentation, no misleading associations, unverifiable claims or specific/discounted prices. Retain app-in-use screenshots and do not advertise unfinished delivery.
+
+**Separate open decisions:** 2.1 requires full review access and any prior approval needed to substitute a demo for credentials; the sample does not exercise every real backend/device flow. The 4.8 Tailscale login exception remains independently unconfirmed. Supply actual tested-device, external-service and hardware information under the complete-review guidance above.
+
+### Release capability and review access
+
+Verify this record against the exact submitted phone build.
+
+| Capability | Current preparation state and review boundary |
+|---|---|
+| Visible bundled sample | Welcome/Settings entry, simulated prompts, terminal keys and decisions, reset/exit. Release Simulator acceptance passed; physical iPhone sample acceptance remains open. No real machine action |
+| Paired remote controls | Terminal/chat, prompts/files, tasks/worktrees, repository/Git and approvals on confirmed paired computers. Requires Tailscale, its policy, herdr and collied; provide approved review resources, never the owner's personal account/machine |
+| Genuine push and attestation | APNs, encrypted alerts/Live Activities and App Attest need exact signed-build/physical-device evidence. Publisher relay remains in private validation without established public enrollment/availability. Sample/mock results cannot prove delivery |
+| Debug VM and Simulator hooks | Excluded from ordinary Release app/core artifacts; retain the submitted build's exclusion proof. These cannot supply production trust or review credentials |
+
+Use Apple's [review-status](https://developer.apple.com/help/app-review/after-submitting-for-review/review-status) and [submission-contact](https://developer.apple.com/help/app-review/after-submitting-for-review/contact-app-review) guidance after submission. Submitted, approved and released remain separate states.
 
 ## App Privacy draft
 
