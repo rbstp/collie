@@ -67,4 +67,5 @@
 - [Tailnet setup](reference/tailnet.md)
 - [Notifications](reference/notifications.md)
 - [Release](reference/release.md)
+- [App Store release plan](reference/app-store.md)
 - [Documentation site](reference/deploy-pages.md)
