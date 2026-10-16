@@ -76,10 +76,15 @@ export function createWorker(upstream: typeof fetch = fetch, clock: () => number
         if (Math.floor(clock() / 2700) !== Math.floor(now / 2700)) jwt = await bounded(signing.token(clock()));
         now = clock();
         if (!validGrant(grant, now)) return response(401, 'unauthorized');
-        const charged = await bounded(charge(env.DB, grant, now, routine));
+        let charged = await bounded(charge(env.DB, grant, now, routine));
+        if (charged === 'daily_quota' && Math.floor(clock() / 86400) !== Math.floor(now / 86400)) {
+          now = clock();
+          if (!validGrant(grant, now)) return response(401, 'unauthorized');
+          charged = await bounded(charge(env.DB, grant, now, routine));
+        }
         if (charged === 'invalid_route') return response(410, 'invalid_route');
         if (charged === 'unavailable') return response(503, 'unavailable');
-        if (charged === 'daily_quota') return response(429, 'daily_quota', { reset_at: (Math.floor(clock() / 86400) + 1) * 86400 });
+        if (charged === 'daily_quota') return response(429, 'daily_quota', { reset_at: (Math.floor(now / 86400) + 1) * 86400 });
         now = clock();
         if (!validGrant(grant, now)) return response(401, 'unauthorized');
         if (route.expires_at <= now) return response(410, 'invalid_route');

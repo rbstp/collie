@@ -308,3 +308,80 @@ test('real quota exhaustion returns daily_quota but an absent counter returns un
   assert.equal(missing.status, 503);
   assert.deepEqual(await missing.json(), { v: 1, result: 'unavailable' });
 });
+test('a quota rejection delivered after midnight is re-evaluated once against the fresh day', async () => {
+  await reset();
+  const midnight = (Math.floor(now / 86400) + 1) * 86400;
+  let time = midnight - 1;
+  const grant = { ...f.grant, expires_at: midnight + 100 };
+  await f.db.prepare('UPDATE routes SET expires_at = ?').bind(grant.expires_at).run();
+  await f.db.prepare('UPDATE global_usage SET total = 20000').run();
+  let charges = 0;
+  let calls = 0;
+  const db = { prepare(sql: string) {
+    const statement = f.db.prepare(sql);
+    if (!sql.startsWith('UPDATE installation_usage')) return statement;
+    return { bind(...values: unknown[]) { const bound = statement.bind(...values); return { async first() {
+      charges++;
+      try { return await bound.first(); }
+      finally { time = midnight + 1; }
+    } }; } };
+  } };
+  const worker = createWorker(async () => { calls++; return new Response('', { status: 200 }); }, () => time);
+  assert.equal((await worker.fetch(await request(grant), { ...f.env, DB: db } as never)).status, 200);
+  assert.equal(charges, 2);
+  assert.equal(calls, 1);
+  assert.deepEqual(await f.db.prepare('SELECT day, total FROM global_usage').first(), { day: midnight / 86400, total: 1 });
+  assert.equal((await f.db.prepare('SELECT total FROM installation_usage').first())!.total, 1);
+  await f.db.prepare('UPDATE routes SET expires_at = ?').bind(f.grant.expires_at).run();
+});
+test('a query queued past midnight respects the actual D1 rejection day and its reset', async () => {
+  await reset();
+  const midnight = (Math.floor(now / 86400) + 1) * 86400;
+  let time = midnight - 1;
+  const grant = { ...f.grant, expires_at: midnight + 100 };
+  await f.db.prepare('UPDATE routes SET expires_at = ?').bind(grant.expires_at).run();
+  await f.db.prepare('UPDATE global_usage SET day = ?, total = 20000').bind(midnight / 86400).run();
+  let charges = 0;
+  let calls = 0;
+  const db = { prepare(sql: string) {
+    const statement = f.db.prepare(sql.replaceAll('unixepoch()', String(midnight + 1)));
+    if (!sql.startsWith('UPDATE installation_usage')) return statement;
+    return { bind(...values: unknown[]) { const bound = statement.bind(...values); return { async first() {
+      charges++;
+      try { return await bound.first(); }
+      finally { time = midnight + 1; }
+    } }; } };
+  } };
+  const worker = createWorker(async () => { calls++; return new Response('', { status: 200 }); }, () => time);
+  const result = await worker.fetch(await request(grant), { ...f.env, DB: db } as never);
+  assert.equal(result.status, 429);
+  assert.deepEqual(await result.json(), { v: 1, result: 'daily_quota', reset_at: midnight + 86400 });
+  assert.equal(charges, 2);
+  assert.equal(calls, 0);
+  assert.equal((await f.db.prepare('SELECT total FROM global_usage').first())!.total, 20000);
+  assert.equal((await f.db.prepare('SELECT total FROM installation_usage').first())!.total, 0);
+  await f.db.prepare('UPDATE routes SET expires_at = ?').bind(f.grant.expires_at).run();
+});
+test('successful and ambiguous charges are never retried when their response crosses midnight', async () => {
+  const midnight = (Math.floor(now / 86400) + 1) * 86400;
+  for (const ambiguous of [false, true]) {
+    await reset();
+    let time = midnight - 1;
+    const grant = { ...f.grant, expires_at: midnight + 100 };
+    await f.db.prepare('UPDATE routes SET expires_at = ?').bind(grant.expires_at).run();
+    let charges = 0;
+    let calls = 0;
+    const db = interceptCharge(() => {
+      charges++;
+      time = midnight + 1;
+      if (ambiguous) throw new Error('ambiguous_charge');
+    });
+    const worker = createWorker(async () => { calls++; return new Response('', { status: 200 }); }, () => time);
+    const result = await worker.fetch(await request(grant), { ...f.env, DB: db } as never);
+    assert.equal(result.status, ambiguous ? 503 : 200);
+    assert.equal(charges, 1);
+    assert.equal(calls, ambiguous ? 0 : 1);
+    assert.equal((await f.db.prepare('SELECT total FROM installation_usage').first())!.total, 1);
+    await f.db.prepare('UPDATE routes SET expires_at = ?').bind(f.grant.expires_at).run();
+  }
+});
