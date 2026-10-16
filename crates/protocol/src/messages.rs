@@ -409,6 +409,13 @@ pub struct Empty {}
 #[serde(deny_unknown_fields)]
 pub struct HelloParams {
     pub protocol_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_min_version: Option<u32>,
+    #[serde(
+        default = "crate::baseline_capabilities",
+        skip_serializing_if = "crate::has_baseline_capabilities"
+    )]
+    pub capabilities: Vec<Label>,
     pub app_version: Label,
 }
 
@@ -920,10 +927,39 @@ pub enum ApnsEnvironment {
     Production,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct RelayGrant {
+    pub token: RelaySendToken,
+    pub route_id: RelayRouteId,
+    pub generation: u32,
+    pub expires_at: u64,
+}
+
+impl RelayGrant {
+    pub fn is_valid(&self, now: u64) -> bool {
+        self.generation > 0
+            && self.expires_at > now
+            && self.expires_at <= now.saturating_add(30 * 86400)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PushMode {
+    None,
+    Direct,
+    Relay,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PushRegisterParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_grant: Option<RelayGrant>,
     pub apns_token: PushToken,
     pub environment: ApnsEnvironment,
     pub notification_key: NotificationKey,
@@ -938,6 +974,8 @@ pub struct PushRegisterParams {
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PushActivityTokenParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_grant: Option<RelayGrant>,
     pub activity_id: ActivityId,
     pub terminal_id: TerminalId,
     pub token: PushToken,
@@ -945,6 +983,16 @@ pub struct PushActivityTokenParams {
     /// it collied keeps sending that device the approval alert.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shows_approvals: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_binding: Option<ActivityDisplayBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ActivityDisplayBinding {
+    pub node_id: Label,
+    pub binding_id: ActivityId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1089,7 +1137,12 @@ pub enum Response {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct HelloResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push_mode: Option<PushMode>,
     pub protocol_version: u32,
+    pub protocol_min_version: u32,
+    pub protocol_max_version: u32,
+    pub capabilities: Vec<Label>,
     pub collied_version: String,
     pub machine: MachineInfo,
     pub herdr_version: Option<String>,
@@ -1722,6 +1775,7 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
     let request: Request = serde_json::from_value(tagged)
         .map_err(|e| FrameError::new(id, ErrorCode::InvalidParams, e.to_string()))?;
     let valid = match &request {
+        Request::Hello(p) => p.is_valid(),
         Request::AgentRead(p) | Request::PaneRead(p) => p.is_valid(),
         Request::AgentHistory(p) => p.is_valid(),
         Request::AgentSendKeys(p) => p.is_valid(),
@@ -2006,7 +2060,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 25);
+        assert_eq!(crate::PROTOCOL_VERSION, 26);
     }
 
     #[test]

@@ -100,6 +100,7 @@ struct RootView: View {
             .task {
                 while !Task.isCancelled {
                     app.approvals.poll()
+                    app.refreshRelayRegistration()
                     app.publishWatchState()
                     try? await Task.sleep(for: .seconds(1))
                 }

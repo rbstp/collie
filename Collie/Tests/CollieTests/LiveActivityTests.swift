@@ -13,87 +13,70 @@ private func fixture() throws -> [String: Any] {
     return try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
 }
 
-@Test func contentStateDecodesWhatColliedSends() throws {
-    let object = try fixture()
-    let json = try JSONSerialization.data(withJSONObject: try #require(object["content_state"]))
-    let state = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: json)
-    let unix = try #require(object["status_since_unix"] as? Double)
+private func displayVectors() throws -> [[String: Any]] {
+    let url = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../docs/protocol/push-display-vectors.json")
+    let json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    return try #require(json["vectors"] as? [[String: Any]])
+}
+
+@Test func encryptedStateOpensOnlyForItsMachineActivityAndKey() throws {
+    let vector = try #require(try displayVectors().first { $0["kind"] as? Int == 2 })
+    let enc = try #require(vector["enc"] as? String)
+    let json = try JSONSerialization.data(withJSONObject: ["v": 1, "enc": enc])
+    let stored = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: json)
+    #expect(stored.status == .unknown)
+    #expect(stored.pendingApproval == nil)
+    let state = stored.opened(nodeId: "nMAC", scope: "binding-test", key: vectorKey)
     #expect(state.status == .blocked)
-    #expect(state.statusSince == Date(timeIntervalSince1970: unix))
+    #expect(state.statusSince == Date(timeIntervalSince1970: 1_791_028_800))
     #expect(state.title == "api-fixer")
     #expect(state.kind == "claude")
     #expect(state.workspace == "api")
     #expect(state.approvals == 1)
-    #expect(state.approvalId == nil)
-    #expect(state.enc == nil)
-    #expect(state.pendingApproval == nil)
-    #expect(state.command(key: vectorKey) == nil)
+    #expect(state.pendingApproval == "apr_test")
+    #expect(state.command(key: vectorKey) == "Bash: echo hi")
+    for neutral in [stored.opened(nodeId: "nOther", scope: "binding-test", key: vectorKey),
+        stored.opened(nodeId: "nMAC", scope: "another-activity", key: vectorKey),
+        stored.opened(nodeId: "nMAC", scope: "binding-test", key: SymmetricKey(size: .bits256))] {
+        #expect(neutral.status == .unknown)
+        #expect(neutral.title == "Collie")
+        #expect(neutral.pendingApproval == nil)
+        #expect(neutral.command(key: vectorKey) == nil)
+    }
+    let encoded = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? [String: Any])
+    #expect(Set(encoded.keys) == ["v", "enc"])
+    #expect(encoded["enc"] as? String == enc)
 }
 
-@Test func contentStateFromAnOlderColliedHasNoKind() throws {
-    let object = try #require(try fixture()["content_state"] as? [String: Any])
-    let older = object.filter { $0.key != "kind" }
-    let state = try JSONDecoder().decode(
-        AgentActivityAttributes.ContentState.self, from: JSONSerialization.data(withJSONObject: older)
-    )
-    #expect(state.kind == nil)
-    #expect(state.title == "api-fixer")
-    #expect(try JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? NSDictionary == older as NSDictionary)
+@Test func ciphertextChangesRemainDistinctToActivityKit() throws {
+    let first = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: Data(#"{"v":1,"enc":"first"}"#.utf8))
+    let second = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: Data(#"{"v":1,"enc":"second"}"#.utf8))
+    #expect(first != second)
+    #expect(first.sameDisplay(as: second))
+}
+
+@Test func privateStateNeverEncodesWithoutAnAuthenticatedEnvelope() throws {
+    let state = AgentActivityAttributes.ContentState(status: .blocked, statusSince: .now, title: "Private title", workspace: "Private workspace", approvals: 1, approvalId: "apr_private")
+    let encoded = try JSONEncoder().encode(state)
+    let text = try #require(String(data: encoded, encoding: .utf8))
+    #expect(!text.contains("Private"))
+    #expect(!text.contains("apr_private"))
+    let stored = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: encoded)
+    #expect(stored.pendingApproval == nil)
+    #expect(stored.status == .unknown)
 }
 
 @Test func kindsMatchCollied() throws {
     #expect(try fixture()["kinds"] as? [String] == AgentActivityAttributes.ContentState.kinds)
 }
 
-@Test func theAgentMostInNeedIsTheMostRelevant() {
-    let ranked = [AgentActivityStatus.blocked, .done, .working, .idle, .unknown].map {
-        AgentActivityAttributes.ContentState(status: $0, statusSince: .now, title: "a", workspace: nil, approvals: 0).relevance
-    }
-    #expect(zip(ranked, ranked.dropFirst()).allSatisfy { $0 > $1 })
-}
-
-@Test func contentStateEncodesTheSameJSON() throws {
-    let object = try fixture()
-    let expected = try #require(object["content_state"] as? NSDictionary)
-    let state = try JSONDecoder().decode(
-        AgentActivityAttributes.ContentState.self, from: JSONSerialization.data(withJSONObject: expected)
-    )
-    let encoded = try JSONEncoder().encode(state)
-    #expect(try JSONSerialization.jsonObject(with: encoded) as? NSDictionary == expected)
-    #expect(try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: encoded) == state)
-}
-
 @Test func everyStatusDecodesAndUnknownOnesFallBack() throws {
     let statuses = try #require(try fixture()["statuses"] as? [String])
     for status in statuses {
-        let decoded = try JSONDecoder().decode(AgentActivityStatus.self, from: Data("\"\(status)\"".utf8))
+        let decoded = try JSONDecoder().decode(AgentActivityStatus.self, from: JSONEncoder().encode(status))
         #expect(decoded.rawValue == status)
     }
     #expect(try JSONDecoder().decode(AgentActivityStatus.self, from: Data(#""sleeping""#.utf8)) == .unknown)
-}
-
-@Test func contentStateWithApprovalOpensWithTheMacKey() throws {
-    let object = try fixture()
-    let expected = try #require(object["content_state_with_approval"] as? NSDictionary)
-    let state = try JSONDecoder().decode(
-        AgentActivityAttributes.ContentState.self, from: JSONSerialization.data(withJSONObject: expected)
-    )
-    let approvalId = try #require(state.approvalId)
-    #expect(state.status == .blocked)
-    #expect(state.pendingApproval == approvalId)
-    #expect(state.enc != nil)
-    #expect(state.command(key: vectorKey) == "Bash: echo hi")
-    #expect(state.command(key: SymmetricKey(size: .bits256)) == nil)
-    #expect(state.command(key: nil) == nil)
-    var other = state
-    other.approvalId = "ap_other"
-    #expect(other.command(key: vectorKey) == nil)
-    var working = state
-    working.status = .working
-    #expect(working.pendingApproval == nil)
-    #expect(working.command(key: vectorKey) == nil)
-    let encoded = try JSONEncoder().encode(state)
-    #expect(try JSONSerialization.jsonObject(with: encoded) as? NSDictionary == expected)
 }
 
 @Test func localUpdatesKeepTheApprovalOnlyWhileBlocked() throws {
@@ -109,20 +92,28 @@ private func fixture() throws -> [String: Any] {
     #expect(local.keepingApproval(of: moved) == local)
 }
 
-@Test func activityAttributesRequireTheNodeId() throws {
-    let state = AgentActivityAttributes.ContentState(status: .idle, statusSince: .now, title: "claude", workspace: nil, approvals: 0)
-    let running = #"{"machineId":"m1","terminalId":"t1","machineLabel":"Mac","nodeId":"nMAC","title":"fix the build"}"#
-    let decoded = try JSONDecoder().decode(AgentActivityAttributes.self, from: Data(running.utf8))
-    #expect(decoded.nodeId == "nMAC")
-    #expect(decoded.displayTitle(state) == "fix the build")
-    let current = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Mac", nodeId: "nMAC", title: "fix the build")
-    let roundTrip = try JSONDecoder().decode(AgentActivityAttributes.self, from: JSONEncoder().encode(current))
-    #expect(roundTrip.nodeId == "nMAC")
-    #expect(roundTrip.displayTitle(state) == "fix the build")
-    let untitled = #"{"machineId":"m1","terminalId":"t1","machineLabel":"Mac","nodeId":"nMAC"}"#
-    #expect(try JSONDecoder().decode(AgentActivityAttributes.self, from: Data(untitled.utf8)).displayTitle(state) == "claude")
-    let old = #"{"machineId":"m1","terminalId":"t1","machineLabel":"Mac"}"#
-    #expect(throws: DecodingError.self) { try JSONDecoder().decode(AgentActivityAttributes.self, from: Data(old.utf8)) }
+@Test func everyLocalActivityUpdateReservesItsStaticAttributes() throws {
+    let attrs = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Mac", nodeId: "nNoKey", title: "title")
+    let state = AgentActivityAttributes.ContentState(status: .working, statusSince: .now, title: "agent", workspace: "workspace", approvals: 0)
+    #expect(FollowModel.activityContent(state, attributes: attrs) != nil)
+    let object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(attrs)) as? [String: Any])
+    var oversized = object
+    oversized["enc"] = String(repeating: "A", count: AgentActivityAttributes.maxAttributesBytes)
+    let large = try JSONDecoder().decode(AgentActivityAttributes.self, from: JSONSerialization.data(withJSONObject: oversized))
+    #expect(FollowModel.activityContent(state, attributes: large) == nil)
+}
+
+@Test func activityAttributesCarryNoPrivateLabelsEvenWithoutAKey() throws {
+    let current = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Private machine", nodeId: "nNoKey", title: "Private title")
+    let encoded = try JSONEncoder().encode(current)
+    let object = try #require(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    #expect(Set(object.keys) == ["machineId", "terminalId", "nodeId", "bindingId", "enc"])
+    let text = try #require(String(data: encoded, encoding: .utf8))
+    #expect(!text.contains("Private"))
+    let decoded = try JSONDecoder().decode(AgentActivityAttributes.self, from: encoded)
+    #expect(decoded.nodeId == "nNoKey")
+    #expect(decoded.machineLabel == "")
+    #expect(decoded.title == nil)
 }
 
 @MainActor
@@ -147,14 +138,6 @@ private func fixture() throws -> [String: Any] {
         }
     }
     #expect(calls.count == 2)
-}
-
-@Test func contentStateWithoutWorkspace() throws {
-    let json = #"{"status":"idle","statusSince":812721600,"title":"agent","workspace":null,"approvals":0}"#
-    let state = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: Data(json.utf8))
-    #expect(state.workspace == nil)
-    let absent = #"{"status":"idle","statusSince":812721600,"title":"agent","approvals":0}"#
-    #expect(try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: Data(absent.utf8)) == state)
 }
 
 private func summary(name: String? = nil, kind: String? = "claude", title: String? = "rm -rf secrets", status: AgentState = .blocked) -> AgentSummary {
@@ -275,7 +258,7 @@ extension FakeCore: ActivityCore {
     func machines() -> [Machine] { state.withLock { $0.machines } }
     func cachedFlock(machineId: String) -> MachineFlock? { state.withLock { $0.cachedFlock } }
     func reconnect(machineId: String) throws {}
-    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String) throws {}
+    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String, relayGrant: RelayPushGrant?) throws {}
     func endActivity(machineId: String, activityId: String) throws {
         state.withLock { $0.endedActivities.append(activityId) }
     }

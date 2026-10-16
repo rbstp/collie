@@ -52,6 +52,7 @@ struct SettingsView: View {
                     Text("Notifications")
                 } footer: {
                     Text("An alert when an agent finishes a turn of 30 seconds or more, not when it stops for an approval.")
+                    if let status = app.relayStatus { Text(status) }
                 }
                 if watchDecisions || (WCSession.isSupported() && WCSession.default.isPaired) {
                     Section {

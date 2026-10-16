@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated: October 15, 2026.
+Last updated: October 16, 2026.
 
 This policy covers the Collie app for iPhone and Apple Watch, its notification extension and widgets, and `collied`, the daemon you run on your own Mac or Linux machine.
 
@@ -46,14 +46,11 @@ Both the app and `collied` embed a Tailscale client. You sign in to your own Tai
 
 ## Push notifications
 
-If you set up notifications, `collied` on your machine sends them through Apple Push Notification service. Apple can see:
+If you set up notifications, `collied` on your machine sends them through Apple Push Notification service. Alert titles, bodies, agent and workspace names, pull request details, pending commands, and the private attributes and initial/update/end state of Live Activities are encrypted with a key generated on your phone. Only your paired machine and phone hold that key. Apple receives generic alert text and ciphertext.
 
-- the agent and workspace names shown in the alert, and opaque identifiers;
-- pull request numbers and what happened to them, in alerts such as "Woke" with "CI failed on #123", or "Archived" with "PR #123 merged";
-- when alerts are sent, how often, and the size of the encrypted part;
-- for agents you choose to follow in a Live Activity, their status changes and the time of each.
+Apple can still see notification delivery destinations, opaque machine/thread/approval/event/activity identifiers, generic categories, notification priority, timing, frequency, ciphertext size and Live Activity lifecycle. A generic alert can distinguish an agent finishing from an agent needing attention. Initial and local activity content use the same encrypted storage shape. Your phone's notification extension and widget decrypt the content locally; before the first unlock after reboot, or if decryption fails, they show generic content without approval controls. Approval nonces and decisions travel only over your authenticated tailnet connection.
 
-The pending command or question is encrypted with a key generated on your phone, and only the phone can read it. Apple's handling of this data is covered by [Apple's privacy policy](https://www.apple.com/legal/privacy/).
+The app keeps a protected App Group mirror of notification keys so the widget can read them. It is available only to Collie's own targets after the first unlock, stays on this device and is excluded from backups. No push relay is enabled by this change. If a future release uses one, its metadata handling will be described here before release. Apple's handling of APNs is covered by [Apple's privacy policy](https://www.apple.com/legal/privacy/).
 
 ## GitHub and Codex, from your machine
 
@@ -90,3 +87,8 @@ Changes to this policy are published on this page with a new date. If a future v
 ## Contact
 
 Questions about this policy: open an issue on [GitHub](https://github.com/rbstp/collie/issues), or see [Support](support.md).
+
+
+## Undeployed relay validation
+
+The repository contains an isolated App Attest/relay validation implementation that is not enabled in released clients. Before a relay-enabled build is distributed, this policy must describe publisher/Cloudflare processing of source IPs, APNs destinations, route relationships and timing, as well as Apple's attestation processing. The implementation retains verified public keys/receipts, route metadata, revocation epochs and counters, with no notification keys or stored payloads. Its deployment gate requires deletion within seven days after the last grant expires and disabled authorization/body/destination logging. Local validation does not change the data flow of the released app.

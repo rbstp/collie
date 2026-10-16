@@ -1,0 +1,248 @@
+import Foundation
+import DeviceCheck
+import XCTest
+@testable import Collie
+
+private actor RelayAttestationFixture: RelayAttesting {
+    private(set) var assertions = 0
+    private var invalidKey = false
+    private var holdAssertion: Bool
+    private var pausedAssertion: CheckedContinuation<Void, Never>?
+    init(holdAssertion: Bool = false) { self.holdAssertion = holdAssertion }
+    func releaseAssertion() { pausedAssertion?.resume(); pausedAssertion = nil }
+    func invalidate() { invalidKey = true }
+    func supported() -> Bool { true }
+    func generateKey() -> String { invalidKey = false; return Data(repeating: 2, count: 32).base64EncodedString() }
+    func attest(keyId: String, hash: Data) -> Data { Data([1]) }
+    func assert(keyId: String, hash: Data) async throws -> Data {
+        if invalidKey { throw DCError(.invalidKey) }
+        assertions += 1
+        if holdAssertion {
+            holdAssertion = false
+            await withCheckedContinuation { pausedAssertion = $0 }
+        }
+        return Data([2])
+    }
+}
+
+private actor RelayTransportFixture: RelayControlTransport {
+    private(set) var calls: [String] = []
+    private var firstChallenge: CheckedContinuation<Void, Never>?
+    private let holdFirst: Bool
+    private var failRevocation: Bool
+    private var first = true
+    private var challengeFailure: RelayEnrollmentError?
+    private let challengeExpiresAt: UInt64
+    private let failRouteResponse: Bool
+
+    init(holdFirst: Bool = false, failRevocation: Bool = false, challengeFailure: RelayEnrollmentError? = nil,
+         challengeExpiresAt: UInt64 = UInt64(Date().timeIntervalSince1970) + 300, failRouteResponse: Bool = false) {
+        self.challengeExpiresAt = challengeExpiresAt
+        self.failRouteResponse = failRouteResponse
+        self.challengeFailure = challengeFailure
+        self.holdFirst = holdFirst
+        self.failRevocation = failRevocation
+    }
+
+    func release() { firstChallenge?.resume(); firstChallenge = nil }
+
+    func post(path: String, body: Data) async throws -> RelayControlResponse {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let operation = path == "challenge" ? object : try XCTUnwrap(object["operation"] as? [String: Any])
+        let name = try XCTUnwrap(operation["op"] as? String)
+        calls.append("\(path):\(name)")
+        if path == "challenge" {
+            if let failure = challengeFailure { challengeFailure = nil; throw failure }
+            if first, holdFirst {
+                first = false
+                await withCheckedContinuation { firstChallenge = $0 }
+            }
+            return RelayControlResponse(v: 1, result: "challenge", challenge: "c1.fixture.challenge.signature", grant: nil,
+                                        routeId: nil, generation: nil, expiresAt: challengeExpiresAt)
+        }
+        if name.hasPrefix("revoke_"), failRevocation { throw URLError(.notConnectedToInternet) }
+        if name == "route" {
+            if failRouteResponse { throw URLError(.networkConnectionLost) }
+            return RelayControlResponse(v: 1, result: "registered", challenge: nil, grant: "v1.fixture.claims.signature",
+                                        routeId: operation["route_id"] as? String,
+                                        generation: UInt32((operation["expected_generation"] as? Int ?? 0) + 1),
+                                        expiresAt: UInt64(Date().timeIntervalSince1970) + 30 * 86400)
+        }
+        return RelayControlResponse(v: 1, result: name == "enroll" ? "enrolled" : "revoked", challenge: nil, grant: nil,
+                                    routeId: nil, generation: nil, expiresAt: nil)
+    }
+}
+
+private final class RelayPersistenceFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var state: RelayEnrollmentState?
+
+    func save(_ value: RelayEnrollmentState) {
+        lock.lock()
+        defer { lock.unlock() }
+        state = value
+    }
+
+    func snapshot() -> RelayEnrollmentState? {
+        lock.lock()
+        defer { lock.unlock() }
+        return state
+    }
+}
+
+@MainActor
+final class RelayEnrollmentTests: XCTestCase {
+    private func enrolled() -> RelayEnrollmentState {
+        var state = RelayEnrollmentState()
+        state.keyId = Data(repeating: 1, count: 32).base64EncodedString()
+        state.enrolled = true
+        return state
+    }
+
+    func testCompleteTransactionsRemainSerializedAcrossActorSuspension() async throws {
+        let transport = RelayTransportFixture(holdFirst: true)
+        let attestation = RelayAttestationFixture()
+        let relay = RelayEnrollment(state: enrolled(), environment: "development", attestation: attestation,
+                                    transport: transport, persist: { _ in })
+        let first = Task { try await relay.register(pairingId: "first", destination: String(repeating: "a", count: 64)) }
+        while await transport.calls.isEmpty { await Task.yield() }
+        let second = Task { try await relay.register(pairingId: "second", destination: String(repeating: "b", count: 64)) }
+        for _ in 0..<10 { await Task.yield() }
+        let heldCalls = await transport.calls
+        XCTAssertEqual(heldCalls, ["challenge:route"])
+        await transport.release()
+        _ = try await first.value
+        _ = try await second.value
+        let calls = await transport.calls
+        XCTAssertEqual(calls, ["challenge:route", "control:route", "challenge:route", "control:route"])
+        let count = await attestation.assertions
+        XCTAssertEqual(count, 2)
+    }
+
+    func testFreshGrantsAreReusedAndChangedDestinationsRotateIndependently() async throws {
+        let transport = RelayTransportFixture()
+        let relay = RelayEnrollment(state: enrolled(), environment: "development", attestation: RelayAttestationFixture(),
+                                    transport: transport, persist: { _ in })
+        let first = try await relay.register(pairingId: "first", destination: String(repeating: "a", count: 64))
+        let reused = try await relay.register(pairingId: "first", destination: String(repeating: "a", count: 64))
+        XCTAssertEqual(first, reused)
+        let second = try await relay.register(pairingId: "second", destination: String(repeating: "b", count: 64))
+        let rotated = try await relay.register(pairingId: "first", destination: String(repeating: "c", count: 64))
+        XCTAssertEqual(rotated.routeId, first.routeId)
+        XCTAssertEqual(rotated.generation, first.generation + 1)
+        let state = await relay.snapshot()
+        XCTAssertEqual(state.routes.first { $0.pairingId == "second" }?.grant, second)
+    }
+
+    func testOfflineRevocationRetainsOnlyRetryAuthorityAndShowsPendingState() async throws {
+        let transport = RelayTransportFixture(failRevocation: true)
+        var initial = enrolled()
+        initial.routes = [RelayRoute(pairingId: "removed", activityId: nil, destination: String(repeating: "a", count: 64),
+                                     grant: RelayRouteGrant(token: "secret", routeId: "route", generation: 1, expiresAt: 2000000000))]
+        let relay = RelayEnrollment(state: initial, environment: "development", attestation: RelayAttestationFixture(),
+                                    transport: transport, persist: { _ in })
+        do { try await relay.revoke(pairingId: "removed"); XCTFail("Offline revocation unexpectedly succeeded") } catch {}
+        let state = await relay.snapshot()
+        XCTAssertTrue(state.routes.isEmpty)
+        XCTAssertEqual(state.pendingPairingRevocations, ["removed"])
+        XCTAssertEqual(state.keyId, initial.keyId)
+    }
+
+    func testRenewalStartsSevenDaysBeforeExpiry() {
+        let now = UInt64(Date().timeIntervalSince1970)
+        XCTAssertTrue(RelayRouteGrant(token: "token", routeId: "route", generation: 1, expiresAt: now + 7 * 86400 - 1).needsRenewal)
+        XCTAssertFalse(RelayRouteGrant(token: "token", routeId: "route", generation: 1, expiresAt: now + 8 * 86400).needsRenewal)
+    }
+    func testExpiredDeletedServerStateCanEnrollAgainButTransientFailuresPreserveIdentity() async throws {
+        let initial = enrolled()
+        let expired = RelayEnrollment(state: initial, environment: "development", attestation: RelayAttestationFixture(),
+                                      transport: RelayTransportFixture(challengeFailure: .unauthorized), persist: { _ in })
+        _ = try await expired.register(pairingId: "paired", destination: String(repeating: "a", count: 64))
+        let renewed = await expired.snapshot()
+        XCTAssertNotEqual(renewed.installationId, initial.installationId)
+        XCTAssertTrue(renewed.enrolled)
+        let unavailable = RelayEnrollment(state: initial, environment: "development", attestation: RelayAttestationFixture(),
+                                          transport: RelayTransportFixture(challengeFailure: .unavailable), persist: { _ in })
+        do { _ = try await unavailable.register(pairingId: "paired", destination: String(repeating: "a", count: 64)); XCTFail("Unexpected success") } catch {}
+        let retained = await unavailable.snapshot()
+        XCTAssertEqual(retained.installationId, initial.installationId)
+        XCTAssertEqual(retained.keyId, initial.keyId)
+    }
+
+    func testInvalidKeyRequiresNewPairingAndPreservesPreviousGrantExpiry() async throws {
+        let attestation = RelayAttestationFixture()
+        await attestation.invalidate()
+        var initial = enrolled()
+        let expiry = UInt64(Date().timeIntervalSince1970) + 86400
+        initial.routes = [RelayRoute(pairingId: "paired", activityId: nil, destination: String(repeating: "a", count: 64),
+                                     grant: RelayRouteGrant(token: "token", routeId: "route", generation: 1, expiresAt: expiry))]
+        let relay = RelayEnrollment(state: initial, environment: "development", attestation: attestation,
+                                    transport: RelayTransportFixture(), persist: { _ in })
+        do { _ = try await relay.register(pairingId: "paired", destination: String(repeating: "b", count: 64)); XCTFail("Unexpected success") } catch {}
+        let invalidated = await relay.snapshot()
+        XCTAssertTrue(invalidated.requiresPairing)
+        try await relay.confirmNewPairing()
+        let reset = await relay.snapshot()
+        XCTAssertFalse(reset.requiresPairing)
+        XCTAssertGreaterThanOrEqual(reset.previousGrantExpiry ?? 0, expiry)
+        _ = try await relay.register(pairingId: "new-pair", destination: String(repeating: "b", count: 64))
+        let recovered = await relay.snapshot()
+        XCTAssertTrue(recovered.enrolled)
+        XCTAssertNotEqual(recovered.keyId, initial.keyId)
+    }
+
+    func testAmbiguousRouteAuthorityUsesDurableServerChallengeBoundBeforeAssertionSuspends() async throws {
+        let serverExpiry = UInt64(Date().timeIntervalSince1970) + 2 * 86400 + 300
+        let bound = serverExpiry + 30 * 86400
+        let transport = RelayTransportFixture(failRevocation: true, challengeExpiresAt: serverExpiry, failRouteResponse: true)
+        let attestation = RelayAttestationFixture(holdAssertion: true)
+        let persistence = RelayPersistenceFixture()
+        let relay = RelayEnrollment(state: enrolled(), environment: "development", attestation: attestation,
+                                    transport: transport, persist: { persistence.save($0) })
+        let registration = Task { try await relay.register(pairingId: "paired", destination: String(repeating: "a", count: 64)) }
+        while await attestation.assertions == 0 { await Task.yield() }
+        let paused = await relay.snapshot()
+        XCTAssertEqual(paused.pendingRoutes.first?.expiresAt, bound)
+        XCTAssertEqual(persistence.snapshot()?.pendingRoutes.first?.expiresAt, bound)
+        await attestation.releaseAssertion()
+        do { _ = try await registration.value; XCTFail("A lost response unexpectedly succeeded") } catch {}
+        try await relay.prepareRevocation(pairingId: "paired")
+        do { try await relay.retryPendingRevocations(); XCTFail("Offline revocation unexpectedly succeeded") } catch {}
+        let retained = await relay.snapshot()
+        XCTAssertEqual(retained.pendingRevocationExpiry["paired"], bound)
+        XCTAssertEqual(retained.pendingPairingRevocations, ["paired"])
+        XCTAssertEqual(persistence.snapshot()?.pendingRevocationExpiry["paired"], bound)
+    }
+
+    func testRepeatedOfflineInstallationRevocationRetainsItsOriginalAuthorityUntilExpiry() async throws {
+        var initial = enrolled()
+        let expiry = UInt64(Date().timeIntervalSince1970) + 86400
+        initial.routes = [RelayRoute(pairingId: "paired", activityId: nil, destination: String(repeating: "a", count: 64),
+                                     grant: RelayRouteGrant(token: "token", routeId: "route", generation: 1, expiresAt: expiry))]
+        let transport = RelayTransportFixture(failRevocation: true)
+        let relay = RelayEnrollment(state: initial, environment: "development", attestation: RelayAttestationFixture(),
+                                    transport: transport, persist: { _ in })
+        for _ in 0..<2 {
+            do { try await relay.revokeInstallation(); XCTFail("Offline revocation unexpectedly succeeded") } catch {}
+            let retained = await relay.snapshot()
+            XCTAssertTrue(retained.pendingInstallationRevocation)
+            XCTAssertEqual(retained.installationRevocationExpiry, expiry)
+            XCTAssertEqual(retained.installationId, initial.installationId)
+            XCTAssertEqual(retained.keyId, initial.keyId)
+        }
+        var expired = initial
+        expired.routes = []
+        expired.pendingInstallationRevocation = true
+        expired.installationRevocationExpiry = UInt64(Date().timeIntervalSince1970) - 86400
+        let expiredTransport = RelayTransportFixture(failRevocation: true)
+        let inactive = RelayEnrollment(state: expired, environment: "development", attestation: RelayAttestationFixture(),
+                                       transport: expiredTransport, persist: { _ in })
+        try await inactive.retryPendingRevocations()
+        let cleared = await inactive.snapshot()
+        XCTAssertFalse(cleared.pendingInstallationRevocation)
+        XCTAssertNotEqual(cleared.installationId, expired.installationId)
+        let calls = await expiredTransport.calls
+        XCTAssertTrue(calls.isEmpty)
+    }
+
+}

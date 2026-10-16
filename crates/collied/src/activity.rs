@@ -35,10 +35,9 @@ pub const REFERENCE_DATE: u64 = 978_307_200;
 pub const KINDS: [&str; 3] = ["claude", "codex", "copilot"];
 /// The approval context's JSON-escaped bytes an activity carries sealed: with labels at their
 /// caps, more would take the update over APNs' 4 KB, and APNs would refuse it.
-const MAX_CONTEXT_BYTES: usize = 1800;
+pub(crate) const MAX_CONTEXT_BYTES: usize = 600;
 
-/// Plaintext to Apple: labels, status, a count and an approval id only, never terminal
-/// text. The approval's context only leaves sealed to the device's notification key.
+// Private state: APNs receives only the authenticated outer envelope.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ContentState {
     pub status: AgentStatus,
@@ -85,9 +84,6 @@ pub fn content(
     })
 }
 
-/// `urgent` is an approval alert delivered on the activity instead of as a notification:
-/// priority 10 and an alert that expands the Dynamic Island, with the same plaintext as
-/// the approval alert.
 pub fn update(state: &ContentState, urgent: bool, now_ms: u64) -> Alert {
     tracing::debug!(
         status = ?state.status,
@@ -127,20 +123,7 @@ pub fn relevance(status: AgentStatus) -> u32 {
 
 /// Cut with a visible `…`, so the approver never takes part of a command for all of it.
 fn fit(body: &str) -> String {
-    let escaped = |c: char| serde_json::to_string(&c).map_or(6, |s| s.len() - 2);
-    if body.chars().map(escaped).sum::<usize>() <= MAX_CONTEXT_BYTES {
-        return body.to_owned();
-    }
-    let mut used = escaped('…');
-    let mut out: String = body
-        .chars()
-        .take_while(|&c| {
-            used += escaped(c);
-            used <= MAX_CONTEXT_BYTES
-        })
-        .collect();
-    out.push('…');
-    out
+    crate::push_display::fit(body, MAX_CONTEXT_BYTES)
 }
 
 pub fn end(last: Option<&ContentState>, now_ms: u64) -> Alert {
@@ -446,6 +429,7 @@ mod tests {
 
     fn activity(token: char) -> Activity {
         Activity {
+            relay_grant: None,
             stable_id: "nPhone".into(),
             activity_id: ActivityId::new("3F2504E0-4F89-11D3-9A0C-0305E82C3301").unwrap(),
             terminal_id: TerminalId::new("term_1").unwrap(),
@@ -453,6 +437,7 @@ mod tests {
             environment: ApnsEnvironment::Production,
             registered_at: 0,
             shows_approvals: true,
+            display_binding: None,
         }
     }
 
@@ -530,10 +515,12 @@ mod tests {
     fn route(stable_id: &str, due: bool, approval: &Approval) -> Routed {
         Routed {
             device: Device {
+                relay_grant: None,
                 stable_id: stable_id.into(),
                 token: PushToken::new("d".repeat(64)).unwrap(),
                 environment: ApnsEnvironment::Sandbox,
                 notification_key: Some(push::tests::key()),
+                encrypted_display: true,
                 registered_at: 0,
                 mute_done: false,
             },
@@ -658,6 +645,23 @@ mod tests {
             let payload_len = update(&state, true, u64::MAX / 2).payload.to_string().len();
             assert!(state_len <= 4096, "content state {state_len} bytes");
             assert!(payload_len <= 4096, "payload {payload_len} bytes");
+            let mut destination = route("nPhone", true, &pending()[0]).device;
+            destination.encrypted_display = true;
+            let mut activity = activity('a');
+            activity.display_binding = Some(protocol::ActivityDisplayBinding {
+                node_id: protocol::Label::new("n".repeat(64)).unwrap(),
+                binding_id: ActivityId::new("A".repeat(64)).unwrap(),
+            });
+            let sent = update(&state, true, T0)
+                .for_activity(&activity, Some(&destination))
+                .unwrap();
+            assert!(sent.payload.to_string().len() <= 4096);
+            let state_bytes = sent.payload["aps"]["content-state"].to_string().len();
+            assert!(state_bytes <= crate::push_display::MAX_ACTIVITY_STATE);
+            assert!(
+                state_bytes + crate::push_display::MAX_ACTIVITY_ATTRIBUTES
+                    <= crate::push_display::MAX_ACTIVITY_TOTAL
+            );
         }
     }
 
