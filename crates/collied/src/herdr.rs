@@ -363,22 +363,50 @@ enum PaneLayoutResult {
     PaneLayout { layout: PaneLayout },
 }
 
-/// Only the pids are kept: `argv` and `cmdline` can hold secrets.
+/// Only the pids and a `claude attach` target are kept: `argv` and `cmdline` can hold secrets.
 #[derive(Deserialize)]
 struct PaneProcess {
     pid: u32,
+    #[serde(default)]
+    argv: Option<Vec<String>>,
+}
+
+pub struct PaneProcesses {
+    pub pids: Vec<u32>,
+    pub attach: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct PaneProcesses {
+struct PaneProcessList {
     #[serde(default)]
     foreground_processes: Vec<PaneProcess>,
+}
+
+impl From<PaneProcessList> for PaneProcesses {
+    fn from(list: PaneProcessList) -> Self {
+        let attach = list
+            .foreground_processes
+            .iter()
+            .find_map(|p| match p.argv.as_deref()? {
+                [bin, verb, target]
+                    if verb == "attach"
+                        && Path::new(bin).file_name().is_some_and(|n| n == "claude") =>
+                {
+                    Some(target.clone())
+                }
+                _ => None,
+            });
+        Self {
+            pids: list.foreground_processes.iter().map(|p| p.pid).collect(),
+            attach,
+        }
+    }
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum PaneProcessInfoResult {
-    PaneProcessInfo { process_info: PaneProcesses },
+    PaneProcessInfo { process_info: PaneProcessList },
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -682,15 +710,11 @@ pub async fn workspace_close(socket: &Path, workspace_id: &str) -> Result<(), Er
     Ok(())
 }
 
-/// The pids of the pane's foreground process group.
-pub async fn pane_pids(socket: &Path, pane_id: &str) -> Result<Vec<u32>, Error> {
+/// The pane's foreground process group.
+pub async fn pane_processes(socket: &Path, pane_id: &str) -> Result<PaneProcesses, Error> {
     let PaneProcessInfoResult::PaneProcessInfo { process_info } =
         call(socket, "pane.process_info", json!({ "pane_id": pane_id })).await?;
-    Ok(process_info
-        .foreground_processes
-        .into_iter()
-        .map(|p| p.pid)
-        .collect())
+    Ok(process_info.into())
 }
 
 pub async fn pane_close(socket: &Path, pane_id: &str) -> Result<(), Error> {
@@ -880,11 +904,36 @@ mod tests {
         )
         .unwrap();
         let PaneProcessInfoResult::PaneProcessInfo { process_info } = info.result.unwrap();
-        let pids: Vec<u32> = process_info
-            .foreground_processes
-            .iter()
-            .map(|p| p.pid)
-            .collect();
-        assert_eq!(pids, [12, 13]);
+        let procs = PaneProcesses::from(process_info);
+        assert_eq!((procs.pids, procs.attach), (vec![12, 13], None));
+    }
+
+    #[test]
+    fn only_a_claude_attach_target_is_kept_from_argv() {
+        let attach = |argv: &str| {
+            let list: PaneProcessList = serde_json::from_str(&format!(
+                r#"{{"foreground_processes":[{{"pid":12,"argv":{argv}}},{{"pid":13,"argv":null}}]}}"#
+            ))
+            .unwrap();
+            PaneProcesses::from(list).attach
+        };
+        assert_eq!(
+            attach(r#"["/home/me/.local/bin/claude","attach","3f1b2c4d"]"#).as_deref(),
+            Some("3f1b2c4d")
+        );
+        assert_eq!(
+            attach(r#"["claude","attach","my session"]"#).as_deref(),
+            Some("my session")
+        );
+        for argv in [
+            r#"["claude"]"#,
+            r#"["claude","--resume","3f1b2c4d"]"#,
+            r#"["claude","attach"]"#,
+            r#"["claude","attach","3f1b2c4d","--x"]"#,
+            r#"["/usr/bin/notclaude","attach","3f1b2c4d"]"#,
+            r#"["ssh","attach","3f1b2c4d"]"#,
+        ] {
+            assert_eq!(attach(argv), None, "{argv}");
+        }
     }
 }

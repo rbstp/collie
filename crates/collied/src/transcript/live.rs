@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::subagents::alive;
 use super::{Kind, Transcripts, is_file, is_session_id, open, project_dir, session_id};
-use crate::herdr::AgentInfo;
+use crate::herdr::{AgentInfo, PaneProcesses};
 
 const SESSION_BYTES: u64 = 64 * 1024;
 const POINTER_BYTES: u64 = 64 * 1024;
@@ -22,6 +22,7 @@ pub(super) struct Pane {
     pane_id: String,
     at: Instant,
     pids: Vec<i32>,
+    attach: Option<String>,
 }
 
 /// Rebuilt when herdr's id or the pane's pids are refreshed; followed again when the
@@ -40,6 +41,7 @@ struct Claim {
     cwd: String,
     kind: Option<String>,
     job: Option<String>,
+    name: Option<String>,
 }
 
 enum Pointer {
@@ -61,19 +63,23 @@ impl Transcripts {
             .collect()
     }
 
-    /// `None` when herdr could not list them: the pids last listed for this pane stand.
-    pub fn set_pane(&mut self, terminal_id: String, pane_id: String, pids: Option<Vec<u32>>) {
+    /// `None` when herdr could not list them: the processes last listed for this pane stand.
+    pub fn set_pane(&mut self, terminal_id: String, pane_id: String, procs: Option<PaneProcesses>) {
         let kept = self
             .panes
             .remove(&terminal_id)
             .filter(|p| p.pane_id == pane_id)
-            .map(|p| p.pids);
-        let pids = match pids {
-            Some(pids) => pids
-                .into_iter()
-                .filter_map(|p| i32::try_from(p).ok())
-                .take(MAX_PIDS)
-                .collect(),
+            .map(|p| (p.pids, p.attach));
+        let (pids, attach) = match procs {
+            Some(procs) => (
+                procs
+                    .pids
+                    .into_iter()
+                    .filter_map(|p| i32::try_from(p).ok())
+                    .take(MAX_PIDS)
+                    .collect(),
+                procs.attach,
+            ),
             None => kept.unwrap_or_default(),
         };
         self.panes.insert(
@@ -82,6 +88,7 @@ impl Transcripts {
                 pane_id,
                 at: Instant::now(),
                 pids,
+                attach,
             },
         );
     }
@@ -137,9 +144,10 @@ impl Transcripts {
     }
 
     fn start(&self, a: &AgentInfo, relocate: bool) -> (Option<String>, Option<PathBuf>) {
-        let start = self
-            .sessions_dir()
-            .and_then(|s| self.pane_session(&s, a))
+        let sessions = self.sessions_dir();
+        let start = sessions
+            .as_deref()
+            .and_then(|s| self.pane_session(s, a).or_else(|| self.attached_to(s, a)))
             .or_else(|| session_id(a).map(str::to_owned));
         let path = start
             .as_deref()
@@ -178,6 +186,44 @@ impl Transcripts {
         let first = found.next()?;
         found.all(|s| s == first).then_some(first)
     }
+
+    /// `claude attach` takes a session id prefix or a name; only one live `bg` process may match.
+    fn attached_to(&self, sessions: &Path, a: &AgentInfo) -> Option<String> {
+        let target = self
+            .panes
+            .get(&a.terminal_id)
+            .filter(|p| p.pane_id == a.pane_id)?
+            .attach
+            .as_deref()
+            .filter(|t| !t.is_empty())?;
+        unique(
+            background(sessions)?
+                .filter(|c| c.session.starts_with(target) || c.name.as_deref() == Some(target)),
+        )
+    }
+}
+
+fn unique(mut found: impl Iterator<Item = Claim>) -> Option<String> {
+    let first = found.next()?.session;
+    found.all(|c| c.session == first).then_some(first)
+}
+
+fn background(sessions: &Path) -> Option<impl Iterator<Item = Claim>> {
+    let files = std::fs::read_dir(sessions).ok()?;
+    Some(
+        files
+            .flatten()
+            .filter_map(|e| {
+                e.file_name()
+                    .to_str()?
+                    .strip_suffix(".json")?
+                    .parse::<i32>()
+                    .ok()
+            })
+            .take(MAX_SESSION_FILES)
+            .filter_map(move |pid| claim(sessions, pid))
+            .filter(|c| c.kind.as_deref() == Some("bg")),
+    )
 }
 
 fn stamp(path: &Path) -> Option<(u64, SystemTime)> {
@@ -205,6 +251,7 @@ fn claim(sessions: &Path, pid: i32) -> Option<Claim> {
         cwd: v["cwd"].as_str()?.to_owned(),
         kind: v["kind"].as_str().map(str::to_owned),
         job: v["jobId"].as_str().map(str::to_owned),
+        name: v["name"].as_str().map(str::to_owned),
     };
     (alive(pid) && started_ms(pid)? <= started_at.saturating_add(START_SLACK_MS)).then_some(claim)
 }
@@ -290,28 +337,12 @@ fn background_job(content: &str) -> Option<&str> {
 
 fn attached(sessions: &Path, dir: &Path, job: &str) -> Option<String> {
     let name = dir.file_name()?.to_str()?;
-    let mut found = std::fs::read_dir(sessions)
-        .ok()?
-        .flatten()
-        .filter_map(|e| {
-            e.file_name()
-                .to_str()?
-                .strip_suffix(".json")?
-                .parse::<i32>()
-                .ok()
-        })
-        .take(MAX_SESSION_FILES)
-        .filter_map(|pid| claim(sessions, pid))
-        .filter(|c| {
-            c.kind.as_deref() == Some("bg")
-                && c.job.as_deref() == Some(job)
-                && c.session.starts_with(job)
-                && project_dir(&c.cwd) == name
-                && is_file(&dir.join(format!("{}.jsonl", c.session)))
-        })
-        .map(|c| c.session);
-    let first = found.next()?;
-    found.all(|s| s == first).then_some(first)
+    unique(background(sessions)?.filter(|c| {
+        c.job.as_deref() == Some(job)
+            && c.session.starts_with(job)
+            && project_dir(&c.cwd) == name
+            && is_file(&dir.join(format!("{}.jsonl", c.session)))
+    }))
 }
 
 #[cfg(target_os = "macos")]
@@ -459,10 +490,17 @@ mod tests {
     }
 
     fn pane(t: &mut Transcripts, pids: &[i32]) {
+        attach(t, pids, None);
+    }
+
+    fn attach(t: &mut Transcripts, pids: &[i32], target: Option<&str>) {
         t.set_pane(
             "term_1".into(),
             "w1:p1".into(),
-            Some(pids.iter().map(|p| *p as u32).collect()),
+            Some(PaneProcesses {
+                pids: pids.iter().map(|p| *p as u32).collect(),
+                attach: target.map(str::to_owned),
+            }),
         );
     }
 
@@ -687,6 +725,96 @@ mod tests {
             &(resumed("3f1b2c4d") + &reply(CLIENT, "Back in the client.")),
         );
         assert_eq!(t.live_id(&a).as_deref(), Some(CLIENT), "a later turn");
+    }
+
+    #[test]
+    fn claude_attach_follows_the_background_session() {
+        let (_dir, mut t, project, sessions) = setup();
+        let mut a = agent(OLD);
+        a.agent_session = None;
+        let (pid, started) = own();
+        let (bg, bg_started) = parent();
+        transcript(&project, LIVE, CLAUDE);
+        let named = r#","kind":"bg","jobId":"3f1b2c4d","name":"collie app""#;
+        pid_file(&sessions, bg, LIVE, CWD, bg_started, named);
+
+        attach(&mut t, &[pid], None);
+        assert_eq!(t.live_id(&a), None, "not an attach");
+        for unknown in ["0a0a0a0a", "collie", "", "collie app 2"] {
+            attach(&mut t, &[pid], Some(unknown));
+            assert_eq!(t.live_id(&a), None, "{unknown:?}");
+        }
+        for target in ["3f1b2c4d", "3f1b", LIVE, "collie app"] {
+            attach(&mut t, &[pid], Some(target));
+            assert_eq!(t.live_id(&a).as_deref(), Some(LIVE), "{target}");
+        }
+
+        let sub = project.join(LIVE).join("subagents");
+        write(
+            &sub.join("agent-a1.meta.json"),
+            include_str!("../../tests/fixtures/transcripts/claude-live-agent.meta.json"),
+        );
+        let lines = include_str!("../../tests/fixtures/transcripts/claude-live-agent.jsonl")
+            .split_inclusive('\n')
+            .collect::<Vec<_>>();
+        write(&sub.join("agent-a1.jsonl"), &lines[..4].concat());
+        attach(&mut t, &[pid], Some("3f1b2c4d"));
+        let d = t.derive(&a, true).unwrap();
+        assert_eq!(
+            (d.context_left, d.last_line.as_deref(), d.subagents.len()),
+            (Some(94), Some("**Fixed** the flaky test."), 1)
+        );
+        assert!(d.last_prompt.is_some());
+        let params = HistoryParams {
+            terminal_id: TerminalId::new("term_1").unwrap(),
+            before: None,
+            after: None,
+            query: None,
+        };
+        let page = t.history_reader().history(&a, &params);
+        assert!(
+            page.session
+                .unwrap()
+                .starts_with(&format!("claude:{LIVE}:"))
+        );
+
+        assert_eq!(
+            t.live_id(&agent(OLD)).as_deref(),
+            Some(LIVE),
+            "over a stale herdr id"
+        );
+
+        let other = "3f1b0000-0000-4000-8000-000000000004";
+        pid_file(
+            &sessions,
+            pid,
+            other,
+            CWD,
+            started,
+            r#","kind":"bg","name":"3f1b2c4d""#,
+        );
+        attach(&mut t, &[DEAD], Some("3f1b"));
+        assert_eq!(t.live_id(&a), None, "two prefixes");
+        attach(&mut t, &[DEAD], Some("3f1b2c4d"));
+        assert_eq!(t.live_id(&a), None, "a prefix and a name");
+        attach(&mut t, &[DEAD], Some("3f1b2c"));
+        assert_eq!(t.live_id(&a).as_deref(), Some(LIVE), "unique prefix");
+        std::fs::remove_file(sessions.join(format!("{pid}.json"))).unwrap();
+
+        pid_file(
+            &sessions,
+            bg,
+            LIVE,
+            CWD,
+            bg_started,
+            r#","kind":"interactive""#,
+        );
+        assert_eq!(t.live_id(&a), None, "not kind bg");
+        pid_file(&sessions, bg, LIVE, CWD, bg_started - 60_000, named);
+        assert_eq!(t.live_id(&a), None, "reused pid");
+        std::fs::remove_file(sessions.join(format!("{bg}.json"))).unwrap();
+        pid_file(&sessions, DEAD, LIVE, CWD, bg_started, named);
+        assert_eq!(t.live_id(&a), None, "dead pid");
     }
 
     #[test]
