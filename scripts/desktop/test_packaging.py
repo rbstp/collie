@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import plistlib
 import shutil
 from pathlib import Path
 import subprocess
@@ -212,7 +213,7 @@ class SourceValidationTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
-    def install(self, running, unit_text=None, replace=True):
+    def install(self, running, unit_text=None, replace=True, macos=False, notarized=True):
         with tempfile.TemporaryDirectory(prefix="collie-install-") as temp:
             root = Path(temp)
             home = root / "home with spaces % $"
@@ -228,11 +229,27 @@ class InstallerTests(unittest.TestCase):
             unit.parent.mkdir(parents=True)
             original = unit_text or '[Service]\nExecStart="/old/Cellar/collied" "--config" "/my config/custom.toml" "run"\nEnvironment="XDG_DATA_HOME=/retained"\n'
             unit.write_text(original)
+            if macos and running:
+                unit = home / "Library/LaunchAgents/dev.rbstp.collied.plist"
+                unit.parent.mkdir(parents=True)
+                original = plistlib.dumps({"Label": "dev.rbstp.collied", "ProgramArguments": ["/old/collied", "--config", "/my config/custom.toml", "run"]}).decode()
+                unit.write_text(original)
             dest = home / ".cargo/bin/collied"
             dest.parent.mkdir(parents=True)
             dest.write_text("old binary")
             (shim / "id").write_text("#!/bin/bash\necho 501\n")
-            (shim / "uname").write_text('#!/bin/bash\nif [ "$1" = -s ]; then echo Linux; else echo x86_64; fi\n')
+            system, arch = ("Darwin", "arm64") if macos else ("Linux", "x86_64")
+            (shim / "uname").write_text(f'#!/bin/bash\nif [ "$1" = -s ]; then echo {system}; else echo {arch}; fi\n')
+            (shim / "codesign").write_text('''#!/bin/bash
+printf 'codesign %s\\n' "$*" >> "$CALLS"
+if [ "$1" = -dv ]; then
+    echo Identifier=dev.rbstp.collied >&2
+    echo TeamIdentifier=RM3UT3MMSR >&2
+fi
+if [[ "$*" = *--check-notarization* ]]; then exit "$NOTARIZATION"; fi
+''')
+            (shim / "spctl").write_text('#!/bin/bash\nexit 99\n')
+            (shim / "launchctl").write_text('#!/bin/bash\nprintf "launchctl %s\\n" "$*" >> "$CALLS"\nexit 1\n')
             (shim / "systemctl").write_text('''#!/bin/bash
 printf '%s\\n' "$*" >> "$CALLS"
 if [[ "$*" = *is-active* ]]; then exit "$ACTIVE"; fi
@@ -241,7 +258,7 @@ if [[ "$*" = *FragmentPath* ]]; then printf '%s\\n' "$UNIT"; fi
             for path in shim.iterdir():
                 path.chmod(0o755)
             calls = root / "calls"
-            env = dict(os.environ, HOME=str(home), PATH=f"{shim}:{os.environ['PATH']}", CALLS=str(calls), UNIT=str(unit), ACTIVE="0" if running else "3")
+            env = dict(os.environ, HOME=str(home), PATH=f"{shim}:{os.environ['PATH']}", CALLS=str(calls), UNIT=str(unit), ACTIVE="0" if running else "3", NOTARIZATION="0" if notarized else "3")
             env.pop("XDG_CONFIG_HOME", None)
             result = subprocess.run(["bash", str(package_dir / "install.sh")] + (["--replace"] if replace else []), env=env, capture_output=True, text=True)
             log = calls.read_text() if calls.exists() else ""
@@ -273,6 +290,31 @@ if [[ "$*" = *FragmentPath* ]]; then printf '%s\\n' "$UNIT"; fi
         result, binary, _, _, _, _ = self.install(True, replace=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(binary, "old binary")
+
+    def test_macos_uses_standalone_notarization_without_an_app_assessment(self):
+        result, binary, _, _, _, _ = self.install(False, macos=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("collied 1.2.3", binary)
+
+    def test_macos_notarization_failure_preserves_existing_binary_and_service(self):
+        result, binary, unit, original, log, _ = self.install(True, macos=True, notarized=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(binary, "old binary")
+        self.assertEqual(unit, original)
+        self.assertNotIn("launchctl", log)
+
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("clang"), "requires macOS signing tools")
+    def test_valid_adhoc_cli_fails_the_notarized_requirement(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "scratch.c"
+            binary = Path(temp) / "scratch"
+            source.write_text("int main(void) { return 0; }\n")
+            subprocess.run(["clang", str(source), "-o", str(binary)], check=True, capture_output=True)
+            subprocess.run(["codesign", "--force", "--sign", "-", str(binary)], check=True, capture_output=True)
+            subprocess.run(["codesign", "--verify", "--strict", str(binary)], check=True, capture_output=True)
+            result = subprocess.run(["codesign", "--verify", "--strict", "-R=notarized", "--check-notarization", str(binary)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("specified code requirement", result.stderr)
 
 
 class PublisherTests(unittest.TestCase):

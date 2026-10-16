@@ -19,7 +19,7 @@ case "$(uname -s)" in
         codesign --verify --strict "$binary"
         codesign -dv "$binary" 2>&1 | grep -q '^Identifier=dev.rbstp.collied$'
         codesign -dv "$binary" 2>&1 | grep -q '^TeamIdentifier=RM3UT3MMSR$'
-        spctl --assess --type execute "$binary"
+        codesign --verify --strict -R=notarized --check-notarization "$binary"
         plist="$HOME/Library/LaunchAgents/dev.rbstp.collied.plist"
         agent="gui/$(id -u)/dev.rbstp.collied"
         running=false
