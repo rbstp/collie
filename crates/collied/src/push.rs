@@ -30,6 +30,9 @@ use crate::config::{self, ApnsConfig, ApnsKey};
 use crate::keychain;
 use crate::peers::{self, Store};
 
+#[path = "push_relay.rs"]
+mod relay_delivery;
+
 const QUEUE: usize = 64;
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 pub const CATEGORY: &str = "APPROVAL";
@@ -312,8 +315,45 @@ pub enum Rejection {
     Unregistered,
     #[error("bad device token")]
     BadDeviceToken,
+    #[error("{reason}")]
+    Retry {
+        reason: String,
+        after: Duration,
+        daily_quota: bool,
+    },
     #[error("{0}")]
     Other(String),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Health {
+    pub pending: usize,
+    pub last_send_ms: Option<u64>,
+    pub last_error: Option<String>,
+    pub retry_at_ms: Option<u64>,
+    pub quota_reset_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Status {
+    pub mode: protocol::PushMode,
+    pub devices: usize,
+    pub activities: usize,
+    pub grant_expires_at: Option<u64>,
+    pub health: Health,
+}
+
+type ApprovalLive = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+pub fn sender(config: &config::Config) -> anyhow::Result<Option<Arc<dyn Sender>>> {
+    match (&config.apns, &config.push.relay) {
+        (Some(_), Some(_)) => anyhow::bail!("set either [push.relay] or [apns], not both"),
+        (Some(apns), None) => Ok(Some(Arc::new(Apns::new(apns).context("[apns]")?))),
+        (None, Some(_)) => Ok(Some(Arc::new(
+            crate::relay::Relay::new().context("[push.relay]")?,
+        ))),
+        (None, None) => Ok(None),
+    }
 }
 
 pub type Paired = Arc<dyn Fn(&str) -> bool + Send + Sync>;
@@ -434,6 +474,8 @@ pub struct Push {
     paired: Paired,
     mode: protocol::PushMode,
     routed: Mutex<Vec<Routed>>,
+    health: Mutex<Health>,
+    approval_live: Mutex<Option<ApprovalLive>>,
 }
 
 impl Push {
@@ -460,15 +502,47 @@ impl Push {
             queue,
             paired: paired.clone(),
             routed: Mutex::new(Vec::new()),
+            health: Mutex::new(Health::default()),
+            approval_live: Mutex::new(None),
         });
         if let Some((rx, sender)) = worker {
-            tokio::spawn(deliver(Arc::downgrade(&push), rx, sender, paired));
+            if mode == protocol::PushMode::Relay {
+                tokio::spawn(relay_delivery::deliver(Arc::downgrade(&push), rx, sender));
+            } else {
+                tokio::spawn(deliver(Arc::downgrade(&push), rx, sender, paired));
+            }
         }
         Ok(push)
     }
 
     pub fn mode(&self) -> protocol::PushMode {
         self.mode
+    }
+
+    pub fn set_approval_check(&self, check: ApprovalLive) {
+        *crate::lock(&self.approval_live) = Some(check);
+    }
+
+    pub fn status(&self) -> Status {
+        let devices = self.lock();
+        Status {
+            mode: self.mode,
+            devices: devices.devices.len(),
+            activities: devices.activities.len(),
+            grant_expires_at: devices
+                .devices
+                .iter()
+                .filter_map(|d| d.relay_grant.as_ref())
+                .chain(
+                    devices
+                        .activities
+                        .iter()
+                        .filter_map(|a| a.relay_grant.as_ref()),
+                )
+                .map(|g| g.expires_at)
+                .min(),
+            health: crate::lock(&self.health).clone(),
+        }
     }
 
     pub fn devices(&self) -> Vec<Device> {
@@ -797,7 +871,13 @@ async fn send(
     {
         return false;
     }
-    match sender.send(device, alert).await {
+    let result = sender.send(device, alert).await;
+    {
+        let mut health = crate::lock(&push.health);
+        health.last_send_ms = Some(crate::now_ms());
+        health.last_error = result.as_ref().err().map(ToString::to_string);
+    }
+    match result {
         Ok(()) => true,
         Err(e @ (Rejection::Unregistered | Rejection::BadDeviceToken)) => {
             tracing::info!(peer = %device.stable_id, reason = %e, "removing APNs token");
@@ -927,7 +1007,7 @@ impl Sender for Apns {
                         None => Rejection::Other(format!("HTTP {}", r.code)),
                     })
                 }
-                Err(e) => Err(Rejection::Other(e.to_string())),
+                Err(_) => Err(Rejection::Other("APNs transport unavailable".into())),
             }
         })
     }
@@ -1302,10 +1382,10 @@ fn write_private(path: &Path, data: &[u8]) -> anyhow::Result<()> {
 
 pub async fn send_test(
     data_dir: &Path,
-    cfg: &ApnsConfig,
+    cfg: &config::Config,
     session: Option<(String, TerminalId)>,
 ) -> anyhow::Result<bool> {
-    let apns = Apns::new(cfg)?;
+    let sender = sender(cfg)?.context("no [push.relay] or [apns] section in collied.toml")?;
     let store = peers::load(&data_dir.join(config::PEERS_FILE))?;
     let devices: Devices = peers::load_json(&data_dir.join(config::PUSH_FILE))?;
     let alert = match session {
@@ -1319,10 +1399,13 @@ pub async fn send_test(
             continue;
         };
         let label = crate::printable(&peer.label);
-        match apns.send(d, &alert.for_device(d)).await {
+        match sender.send(d, &alert.for_device(d)).await {
             Ok(()) => {
                 sent += 1;
-                println!("sent to {label} ({:?})", d.environment);
+                println!(
+                    "accepted for {label} ({:?}); display is not confirmed",
+                    d.environment
+                );
             }
             Err(e) => {
                 ok = false;

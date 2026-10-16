@@ -68,5 +68,7 @@
 - [Notifications](reference/notifications.md)
 - [Push relay validation](reference/relay.md)
 - [Free-plan relay validation](reference/reviews/relay-free-tier.md)
+- [Simulator relay testing](reference/simulator.md)
 - [Release](reference/release.md)
+- [App Store release plan](reference/app-store.md)
 - [Documentation site](reference/deploy-pages.md)

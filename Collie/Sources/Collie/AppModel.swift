@@ -86,6 +86,12 @@ final class AppModel {
             pathMonitor.start(queue: DispatchQueue(label: "dev.rbstp.collie.path"))
         }
         loadTerminalKey()
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.environment["COLLIE_SIMULATOR_RELAY"] == "mock" {
+            pushToken = Data(repeating: 0xaa, count: 32)
+            pushStatus = "Simulator mock destination. No APNs delivery."
+        }
+        #endif
     }
 
     /// The interface iOS routes through, never a VPN tunnel; empty when there is no path.
@@ -329,6 +335,12 @@ final class AppModel {
 
     private func relayClient() throws -> RelayEnrollment {
         if let relay { return relay }
+        #if DEBUG && targetEnvironment(simulator)
+        if let value = try SimulatorRelay.make() {
+            relay = value
+            return value
+        }
+        #endif
         let store = RelayCredentialStore(marker: try StateDirectory.prepare().appending(path: "relay-installation"))
         let value = RelayEnrollment(state: try store.load(), environment: PushEnvironment.current == .production ? "production" : "development",
                                     persist: { try store.save($0) })

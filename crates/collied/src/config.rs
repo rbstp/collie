@@ -7,7 +7,7 @@ use serde::Deserialize;
 use protocol::DEFAULT_PORT;
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawConfig")]
 pub struct Config {
     #[serde(default)]
     pub herdr: HerdrConfig,
@@ -18,6 +18,46 @@ pub struct Config {
     #[serde(default)]
     pub terminals: TerminalsConfig,
     pub apns: Option<ApnsConfig>,
+    pub push: PushConfig,
+}
+
+#[derive(Default, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PushConfig {
+    pub relay: Option<RelayConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelayConfig {}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawConfig {
+    herdr: HerdrConfig,
+    tailnet: TailnetConfig,
+    tasks: TasksConfig,
+    terminals: TerminalsConfig,
+    apns: Option<ApnsConfig>,
+    push: PushConfig,
+}
+
+impl TryFrom<RawConfig> for Config {
+    type Error = &'static str;
+
+    fn try_from(raw: RawConfig) -> Result<Self, Self::Error> {
+        if raw.apns.is_some() && raw.push.relay.is_some() {
+            return Err("set either [push.relay] or [apns], not both");
+        }
+        Ok(Self {
+            herdr: raw.herdr,
+            tailnet: raw.tailnet,
+            tasks: raw.tasks,
+            terminals: raw.terminals,
+            apns: raw.apns,
+            push: raw.push,
+        })
+    }
 }
 
 /// Plain shell panes from the phone. Off unless set here; read at start only.
@@ -428,6 +468,13 @@ mod tests {
         assert!(parse("[terminals]\nenabled = \"yes\"").is_err());
         assert!(!parse("[terminals]\n").unwrap().terminals.enabled);
         assert!(parse("[apns]\nkey_path = \"/k\"\nkey_id = \"a\"\nteam_id = \"b\"\nbundle_id = \"c\"\nx = 1").is_err());
+    }
+
+    #[test]
+    fn relay_and_direct_are_mutually_exclusive() {
+        assert!(parse("[push.relay]\n").unwrap().push.relay.is_some());
+        assert!(parse("[push.relay]\nurl = \"https://other.example\"").is_err());
+        assert!(parse(&format!("[push.relay]\n[apns]\n{IDS}")).is_err());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Push relay foundation
 
-The Worker in `relay/` is an isolated validation foundation for [#350](https://github.com/rbstp/collie/issues/350). The production foundation is not deployed and is not enabled in the app or collied. The control endpoints and isolated phone client are implemented for validation; public enrollment and client integration remain gated. A separate guarded synthetic benchmark was deployed temporarily and removed; [the Free-plan CPU gate failed](reviews/relay-free-tier.md). Existing releases keep direct APNs delivery. Public rollout remains blocked on verified App Attest control operations (#353), encrypted phone payloads (#352), compatible peers (#351), the daemon sender (#354), and the Free-account measurements below.
+The Worker in `relay/` is an isolated validation foundation for [#350](https://github.com/rbstp/collie/issues/350). The production foundation is not deployed. The daemon can select the publisher relay; configuring it does not deploy a relay or establish phone enrollment. The control endpoints and isolated phone client are implemented for validation; public enrollment and client integration remain gated. A separate guarded synthetic benchmark was deployed temporarily and removed; [the Free-plan CPU gate failed](reviews/relay-free-tier.md). Existing releases keep direct APNs delivery. Public rollout remains blocked on verified App Attest control operations (#353), encrypted phone payloads (#352), compatible peers (#351), the daemon sender (#354), and the Free-account measurements below.
 
 ## Development
 
@@ -99,7 +99,7 @@ Responses are `{ "v": 1, "result": "..." }`, with `Cache-Control: no-store`:
 | 503 | `upstream_unavailable` | Network, timeout, Apple 429/5xx; includes `retry_after: 60` |
 | 503 | `unavailable` | D1, secret or other internal failure; fails closed |
 
-Only Apple's `410 Unregistered` and `400 BadDeviceToken` invalidate the exact matching route generation and destination digest. Late failures cannot erase a replacement. APNs reason strings, response headers, destinations and payloads are never returned. There is no automatic retry or exactly-once delivery guarantee. A lost response after Apple accepts can lead to duplicate delivery if the sender retries.
+Only Apple's `410 Unregistered` and `400 BadDeviceToken` invalidate the exact matching route generation and destination digest. Late failures cannot erase a replacement. APNs reason strings, response headers, destinations and payloads are never returned. The Worker does not retry. The daemon uses bounded in-memory retries and does not guarantee exactly-once delivery. A lost response after Apple accepts can lead to duplicate delivery if the sender retries.
 
 ## Atomic quotas and storage ownership
 
@@ -181,3 +181,7 @@ A 2026-10-16 local Node run of `npm run benchmark:attestation` verified the comp
 The first isolated Free Worker enrollment benchmark failed its CPU acceptance gate: only 45 of 100 complete Apple verifications succeeded, with 55 CPU-limit errors; all 100 invalid-nonce cases exceeded CPU limits. These are failed validation results, not authorization to expose enrollment, remove verification checks or enable billing. The direct Worker verifier remains a validation implementation until a separately reviewed Free-plan design passes complete cold/warm and hostile-input measurements.
 
 The phone integration requests publisher grants only after a paired daemon negotiates both concrete capabilities and reports actual relay mode. Direct/disabled/older senders do not trigger public enrollment. A lost installation-revocation response can be retried with a fresh assertion after revocation, but that retired installation still cannot register or send. Missing expired server state may enroll afresh only when every locally known grant and ambiguous registration is expired; transient failures preserve identity. Invalid App Attest keys require explicit pairing again, retain the last possible grant expiry and do not claim earlier remote authority disappeared. Wire pairing IDs hash the installation and local confirmed pairing, so fresh installations cannot collide with retained old pairing records.
+
+## Daemon sender
+
+`collied` selects `[push.relay]` or `[apns]`, never both. Relay sends use the fixed publisher `/v1/send` endpoint and only the machine/activity grant persisted through the paired mutual-TLS registration. See [architecture.md](architecture.md#relay-sender) for bounded coalescing, expiry, quota/backoff, invalidation and diagnostic behavior. Source-level/mock validation is separate from actual Cloudflare deployment, successful App Attest enrollment, Apple acceptance and physical display confirmation.

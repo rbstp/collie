@@ -93,7 +93,7 @@ protocol RelayControlTransport: Sendable {
     func post(path: String, body: Data) async throws -> RelayControlResponse
 }
 
-private final class RelayRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+final class RelayRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(
         _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
         newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void

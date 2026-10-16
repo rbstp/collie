@@ -371,6 +371,7 @@ impl State {
         let sessions = self.lock_sessions().live.len();
         let peers = lock(&self.peers).peers.len();
         StatusInfo {
+            push: Some(self.push.status()),
             pid: std::process::id(),
             backend_state,
             dns_name: self.dns_name.clone(),
@@ -553,6 +554,14 @@ pub async fn start_with(
         )
         .with_timing(cfg.approval_ttl, approvals::SETTLE),
     );
+    {
+        let approvals = Arc::downgrade(&approvals);
+        push.set_approval_check(Arc::new(move |id| {
+            approvals
+                .upgrade()
+                .is_some_and(|a| a.is_pending(id, crate::now_ms()))
+        }));
+    }
     let attachments = {
         let dir = cfg.attachments_dir.clone();
         Arc::new(tokio::task::spawn_blocking(move || Attachments::open(dir)).await??)

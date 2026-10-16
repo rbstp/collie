@@ -286,6 +286,14 @@ impl Approvals {
         out
     }
 
+    pub fn is_pending(&self, id: &str, now_ms: u64) -> bool {
+        self.lock().pending.values().any(|p| {
+            !p.deciding
+                && p.approval.approval_id.as_str() == id
+                && p.approval.expires_at_ms > now_ms
+        })
+    }
+
     /// The number of pending approvals, sent again on every change.
     pub fn watch_pending(&self) -> watch::Receiver<usize> {
         self.pending_count.subscribe()

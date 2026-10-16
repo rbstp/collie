@@ -92,13 +92,20 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     let (s, d) = check_private(&attachments, Kind::Dir, (Status::Warn, "not created yet"));
     let stored = crate::attachments::stored_bytes(&attachments);
     r.line(s, "attachments", format!("{d}, {stored} bytes stored"));
-    match config.as_ref().map(|c| &c.apns) {
-        Some(Some(apns)) => check_apns(&mut r, apns, &data_dir.join(config::APNS_DIR)),
-        Some(None) => r.line(
-            Status::Warn,
-            "apns",
-            "not configured (collied setup offers it)",
+    match config.as_ref() {
+        Some(c) if c.push.relay.is_some() => r.line(
+            Status::Ok,
+            "push",
+            "publisher relay; no APNs key needed, delivery requires a valid phone grant",
         ),
+        Some(c) => match &c.apns {
+            Some(apns) => check_apns(&mut r, apns, &data_dir.join(config::APNS_DIR)),
+            None => r.line(
+                Status::Warn,
+                "push",
+                "not configured (collied setup offers the publisher relay)",
+            ),
+        },
         None => {}
     }
     #[cfg(target_os = "macos")]
@@ -605,7 +612,51 @@ async fn check_daemon(r: &mut Report, data_dir: &Path) -> Option<u64> {
         ),
         Err(e) => r.line(Status::Fail, "listen", e.to_string()),
     }
+    if let Some(push) = &info.push {
+        r.line(
+            if push.health.last_error.is_some()
+                || (push.mode == protocol::PushMode::Relay
+                    && push
+                        .grant_expires_at
+                        .is_none_or(|at| at <= crate::now_ms() / 1000))
+            {
+                Status::Warn
+            } else {
+                Status::Ok
+            },
+            "push",
+            push_detail(push),
+        );
+    }
     info.started_ms
+}
+
+fn push_detail(push: &push::Status) -> String {
+    let mut detail = format!(
+        "{:?}, {} device(s), {} activity registration(s), {} queued",
+        push.mode, push.devices, push.activities, push.health.pending
+    );
+    if push.mode == protocol::PushMode::Relay {
+        detail.push_str(&format!(
+            ", earliest grant expiry: {}",
+            push.grant_expires_at
+                .map_or_else(|| "not registered".into(), |t| t.to_string())
+        ));
+        detail.push_str(", shared installation budget 1000 total/700 routine per UTC day; remaining budget not reported");
+    }
+    if let Some(last) = push.health.last_send_ms {
+        detail.push_str(&format!(", last attempt at {last} ms"));
+    }
+    if let Some(error) = &push.health.last_error {
+        detail.push_str(&format!(", last send error: {}", crate::printable(error)));
+    }
+    if let Some(retry) = push.health.retry_at_ms {
+        detail.push_str(&format!(", next retry at {retry} ms"));
+    }
+    if let Some(reset) = push.health.quota_reset_at_ms {
+        detail.push_str(&format!(", quota reset at {reset} ms"));
+    }
+    detail
 }
 
 #[derive(Clone, Copy)]
