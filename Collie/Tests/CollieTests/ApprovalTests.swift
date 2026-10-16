@@ -15,8 +15,8 @@ import UserNotifications
 
     let info: [AnyHashable: Any] = ["node_id": "nMAC123", "approval_id": "ap_1", "aps": ["category": "APPROVAL"]]
     let link = ApprovalLink(nodeId: "nMAC123", approvalId: "ap_1")!
-    #expect(NotificationResponse(actionIdentifier: "APPROVE", userInfo: info) == .decide(link, .approve))
-    #expect(NotificationResponse(actionIdentifier: "DENY", userInfo: info) == .decide(link, .deny))
+    #expect(NotificationResponse(actionIdentifier: "APPROVE", userInfo: info) == .ignore)
+    #expect(NotificationResponse(actionIdentifier: "DENY", userInfo: info) == .ignore)
     #expect(NotificationResponse(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: info) == .open(link))
     #expect(NotificationResponse(actionIdentifier: UNNotificationDismissActionIdentifier, userInfo: info) == .ignore)
     #expect(NotificationResponse(actionIdentifier: "APPROVE", userInfo: ["approval_id": "ap_1"]) == .ignore)

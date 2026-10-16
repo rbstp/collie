@@ -22,6 +22,7 @@ use protocol::{
     TerminalId,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::sync::broadcast;
@@ -401,6 +402,7 @@ impl Rig {
                 TerminalId::new(TERMINAL).unwrap(),
                 activity_token(),
                 true,
+                Some(display_binding()),
             )
             .unwrap();
     }
@@ -583,6 +585,10 @@ fn key() -> NotificationKey {
 
 /// The phone's side: `enc` opened with the device key, AAD = approval_id.
 fn open_context(payload: &Value) -> Value {
+    if payload.get("event_id").is_some() {
+        let display = open_display(payload, 1);
+        return json!({"v":1,"body":display["body"]});
+    }
     let combined = STANDARD.decode(payload["enc"].as_str().unwrap()).unwrap();
     let (nonce, sealed) = combined.split_at(12);
     let plain = ChaCha20Poly1305::new_from_slice(&[7u8; 32])
@@ -592,6 +598,59 @@ fn open_context(payload: &Value) -> Value {
             Payload {
                 msg: sealed,
                 aad: payload["approval_id"].as_str().unwrap().as_bytes(),
+            },
+        )
+        .unwrap();
+    serde_json::from_slice(&plain).unwrap()
+}
+
+fn display_binding() -> protocol::ActivityDisplayBinding {
+    protocol::ActivityDisplayBinding {
+        node_id: protocol::Label::new("nMAC").unwrap(),
+        binding_id: ActivityId::new("binding-test").unwrap(),
+    }
+}
+
+fn open_display(payload: &Value, kind: u8) -> Value {
+    let enc = if kind == 1 {
+        &payload["enc"]
+    } else {
+        &payload["aps"]["content-state"]["enc"]
+    };
+    let bytes = URL_SAFE_NO_PAD.decode(enc.as_str().unwrap()).unwrap();
+    assert_eq!(&bytes[..2], &[1, kind]);
+    let node_end = 4 + usize::from(bytes[2]);
+    let scope_end = node_end + usize::from(bytes[3]);
+    let header_end = scope_end + 16;
+    assert_eq!(
+        std::str::from_utf8(&bytes[4..node_end]).unwrap(),
+        payload["node_id"].as_str().unwrap()
+    );
+    assert_eq!(
+        URL_SAFE_NO_PAD.encode(&bytes[scope_end..header_end]),
+        payload["event_id"].as_str().unwrap()
+    );
+    if kind == 1 {
+        assert_eq!(
+            std::str::from_utf8(&bytes[node_end..scope_end]).unwrap(),
+            payload["aps"]["thread-id"].as_str().unwrap()
+        );
+    } else {
+        assert_eq!(&bytes[node_end..scope_end], b"binding-test");
+    }
+    let aad = [
+        b"collie.push.v1\0".as_slice(),
+        &bytes[..header_end],
+        &Sha256::digest([7u8; 32]),
+    ]
+    .concat();
+    let plain = ChaCha20Poly1305::new_from_slice(&[7u8; 32])
+        .unwrap()
+        .decrypt(
+            bytes[header_end..header_end + 12].try_into().unwrap(),
+            Payload {
+                msg: &bytes[header_end + 12..],
+                aad: &aad,
             },
         )
         .unwrap();
@@ -646,22 +705,17 @@ async fn blocked_agent_gets_one_approval_and_one_alert() {
         open_context(&alert.payload),
         json!({"v": 1, "body": "Bash: rm -rf build\nRemove the build directory"})
     );
-    let mut clear = alert.payload.clone();
-    clear.as_object_mut().unwrap().remove("enc");
+    let display = open_display(&alert.payload, 1);
+    assert_eq!(display["title"], "api-fixer");
+    assert_eq!(display["approvalId"], a.approval_id.as_str());
+    assert_eq!(display["terminalId"], TERMINAL);
+    assert_eq!(display["offersApproval"], true);
     assert_eq!(
-        clear,
-        json!({
-            "aps": {
-                "alert": {"title": "api-fixer", "body": "Blocked in api"},
-                "category": "APPROVAL",
-                "thread-id": TERMINAL,
-                "mutable-content": 1,
-            },
-            "approval_id": a.approval_id.as_str(),
-            "node_id": "nMAC",
-        })
+        alert.payload["aps"]["alert"],
+        json!({"title":"Collie","body":"An agent needs attention"})
     );
-    assert_eq!(alert.collapse_id.as_deref(), Some(TERMINAL));
+    assert!(alert.payload["aps"].get("category").is_none());
+    assert_ne!(alert.collapse_id.as_deref(), Some(TERMINAL));
     assert_eq!(alert.expiration, Some(a.expires_at_ms / 1000));
     let wire = alert.payload.to_string();
     assert!(!wire.contains(a.nonce.as_str()) && !wire.contains("rm -rf"));
@@ -1079,9 +1133,10 @@ async fn codex_and_copilot_prompts_are_answered_in_the_terminal() {
         assert_eq!(alerts[0].1.delivery, Delivery::Alert);
         assert!(alerts[0].1.payload["aps"].get("category").is_none());
         assert!(sent.iter().all(|(_, s)| {
-            s.payload["aps"]["content-state"]
-                .get("approvalId")
-                .is_none()
+            !matches!(s.delivery, Delivery::LiveActivity { .. })
+                || open_display(&s.payload, 2)["state"]
+                    .get("approvalId")
+                    .is_none()
         }));
 
         assert_eq!(
@@ -1296,11 +1351,10 @@ async fn settings_pickers_raise_no_approval() {
         assert!(!rig.approvals.has_pending(TERMINAL));
         let sent = rig.sent().await;
         assert!(alerting(&sent).is_empty(), "{sent:?}");
-        assert!(sent.iter().all(|(_, s)| {
-            s.payload["aps"]["content-state"]
-                .get("approvals")
-                .is_none_or(|n| *n == 0)
-        }));
+        assert!(
+            sent.iter()
+                .all(|(_, s)| { open_display(&s.payload, 2)["state"]["approvals"] == 0 })
+        );
 
         rig.herdr.set_status("idle");
         rig.tick().await;
@@ -1346,7 +1400,7 @@ async fn notifications_and_live_activities_continue_without_app_events() {
         .find(|(to, _)| to == activity_token().as_str())
         .unwrap();
     assert_eq!(live.delivery, Delivery::LiveActivity { urgent: true });
-    let state = &live.payload["aps"]["content-state"];
+    let state = &open_display(&live.payload, 2)["state"];
     assert_eq!(state["status"], "blocked");
     assert_eq!(state["approvalId"], approval.approval_id.as_str());
     assert_eq!(open_offered(state)["v"], 1);
@@ -1380,7 +1434,7 @@ async fn notifications_and_live_activities_continue_without_app_events() {
         .rev()
         .find(|(to, _)| to == activity_token().as_str())
         .unwrap();
-    let state = &live.payload["aps"]["content-state"];
+    let state = &open_display(&live.payload, 2)["state"];
     assert_eq!(state["status"], "working");
     assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
 
@@ -1402,7 +1456,10 @@ async fn notifications_and_live_activities_continue_without_app_events() {
     let sent = rig.sent().await;
     let done: Vec<_> = sent
         .iter()
-        .filter(|(_, alert)| alert.payload["aps"]["alert"]["body"] == "Done in api")
+        .filter(|(_, alert)| {
+            alert.delivery == Delivery::Alert
+                && open_display(&alert.payload, 1)["body"] == "Done in api"
+        })
         .collect();
     assert_eq!(done.len(), 2);
     assert!(
@@ -1414,7 +1471,7 @@ async fn notifications_and_live_activities_continue_without_app_events() {
         .rev()
         .find(|(to, _)| to == activity_token().as_str())
         .unwrap();
-    assert_eq!(live.payload["aps"]["content-state"]["status"], "done");
+    assert_eq!(open_display(&live.payload, 2)["state"]["status"], "done");
 }
 
 #[tokio::test]
@@ -1430,6 +1487,7 @@ async fn a_followed_terminal_alerts_on_its_activity_only() {
             TerminalId::new("term_elsewhere").unwrap(),
             PushToken::new("12".repeat(80)).unwrap(),
             true,
+            Some(display_binding()),
         )
         .unwrap();
     rig.follow();
@@ -1446,9 +1504,9 @@ async fn a_followed_terminal_alerts_on_its_activity_only() {
     let aps = &live.payload["aps"];
     assert_eq!(
         aps["alert"],
-        json!({"title": "api-fixer", "body": "Blocked in api"})
+        json!({"title": "Collie", "body": "An agent needs attention"})
     );
-    let state = &aps["content-state"];
+    let state = &open_display(&live.payload, 2)["state"];
     assert_eq!(state["status"], "blocked");
     assert_eq!(state["approvalId"], a.approval_id.as_str());
     assert_eq!(
@@ -1498,7 +1556,7 @@ async fn a_followed_terminal_alerts_on_its_activity_only() {
     let (to, quiet) = sent.last().unwrap();
     assert_eq!(to, activity_token().as_str());
     assert_eq!(quiet.delivery, Delivery::LiveActivity { urgent: false });
-    let state = &quiet.payload["aps"]["content-state"];
+    let state = &open_display(&quiet.payload, 2)["state"];
     assert_eq!(state["approvalId"], b.approval_id.as_str());
     assert_eq!(open_offered(state)["v"], 1);
 
@@ -1517,7 +1575,7 @@ async fn a_followed_terminal_alerts_on_its_activity_only() {
         "the update that drops the buttons goes at priority 10"
     );
     assert!(cleared.payload["aps"].get("alert").is_none());
-    let state = &cleared.payload["aps"]["content-state"];
+    let state = &open_display(&cleared.payload, 2)["state"];
     assert_eq!(state["status"], "working");
     assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
     assert_eq!(alerting(&sent).len(), 2);
@@ -1564,6 +1622,7 @@ async fn an_activity_without_approvals_keeps_the_notification() {
             TerminalId::new(TERMINAL).unwrap(),
             activity_token(),
             false,
+            Some(display_binding()),
         )
         .unwrap();
     let a = rig.ticked_needed().await;
@@ -1579,7 +1638,7 @@ async fn an_activity_without_approvals_keeps_the_notification() {
         activity_token().as_str(),
         "the activity still shows the status"
     );
-    let state = &live.payload["aps"]["content-state"];
+    let state = &open_display(&live.payload, 2)["state"];
     assert_eq!(state["status"], "blocked");
     assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
 }
