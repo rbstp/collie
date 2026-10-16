@@ -17,8 +17,9 @@ case "$(uname -s)" in
     Darwin)
         [ "$(uname -m)" = arm64 ] || { echo 'This package requires Apple silicon' >&2; exit 1; }
         codesign --verify --strict "$binary"
-        codesign -dv "$binary" 2>&1 | grep -q '^Identifier=dev.rbstp.collied$'
-        codesign -dv "$binary" 2>&1 | grep -q '^TeamIdentifier=RM3UT3MMSR$'
+        signature="$(codesign -dv "$binary" 2>&1)"
+        grep -Fx 'Identifier=dev.rbstp.collied' <<< "$signature" >/dev/null
+        grep -Fx 'TeamIdentifier=RM3UT3MMSR' <<< "$signature" >/dev/null
         codesign --verify --strict -R=notarized --check-notarization "$binary"
         plist="$HOME/Library/LaunchAgents/dev.rbstp.collied.plist"
         agent="gui/$(id -u)/dev.rbstp.collied"
