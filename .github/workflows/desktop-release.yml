@@ -75,15 +75,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ needs.validate.outputs.source_sha }}
+          ref: master
 
-      - name: verify trusted release checkout
+      - name: validate and check out approved release source
         run: |
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [ "$(git rev-parse HEAD)" = "$SOURCE_SHA" ]
-          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/master
-          [ "$(git rev-parse "$TAG^{commit}")" = "$SOURCE_SHA" ]
+          cp scripts/desktop/validate-source.sh "$RUNNER_TEMP/validate-desktop-source.sh"
+          bash "$RUNNER_TEMP/validate-desktop-source.sh" --checkout
         env:
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
           TAG: ${{ needs.validate.outputs.tag }}
@@ -139,15 +136,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ needs.validate.outputs.source_sha }}
+          ref: master
 
-      - name: verify trusted release checkout
+      - name: validate and check out approved release source
         run: |
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [ "$(git rev-parse HEAD)" = "$SOURCE_SHA" ]
-          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/master
-          [ "$(git rev-parse "$TAG^{commit}")" = "$SOURCE_SHA" ]
+          cp scripts/desktop/validate-source.sh "$RUNNER_TEMP/validate-desktop-source.sh"
+          bash "$RUNNER_TEMP/validate-desktop-source.sh" --checkout
         env:
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
           TAG: ${{ needs.validate.outputs.tag }}
@@ -214,15 +208,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ needs.validate.outputs.source_sha }}
+          ref: master
 
-      - name: verify trusted release checkout
+      - name: validate and check out approved release source
         run: |
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [ "$(git rev-parse HEAD)" = "$SOURCE_SHA" ]
-          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/master
-          [ "$(git rev-parse "$TAG^{commit}")" = "$SOURCE_SHA" ]
+          cp scripts/desktop/validate-source.sh "$RUNNER_TEMP/validate-desktop-source.sh"
+          bash "$RUNNER_TEMP/validate-desktop-source.sh" --checkout
         env:
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
           TAG: ${{ needs.validate.outputs.tag }}
