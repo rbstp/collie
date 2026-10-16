@@ -39,8 +39,8 @@ These are actual D1 response metadata, including the schema's indexes and trigge
 |---|---:|---:|---:|
 | Synthetic verified-installation storage, three primary inserts | 1 | 1 | 9 |
 | Challenge | 40 | 2 | 0 |
-| First pairing/app-route registration | 1 | 12 | 12 |
-| App-route rotation | 39 | 17 | 14 |
+| First pairing/app-route registration | 1 | 12 | 14 |
+| App-route rotation | 39 | 17 | 12 |
 | Accepted send, including the benchmark's extra route lookup | 100 complete matrix samples | 11 | 2 |
 | Send plus exact-generation invalidation | 1 | 12 | 3 |
 | No-expiry cleanup | 1 | 8 | 0 |
@@ -54,7 +54,7 @@ Keep the conservative ceiling of 20,000 sends/day and the 20,000-write reserve. 
 
 The implementing agent exceeded the approved 1,000-attempt experiment cap by rerunning a matrix without first accounting for its interrupted initial run. The overwritten partial counter prevents an exact one-attempt reconstruction. The partial run attempted 634 to 635 calls, the repeated matrix 805, the control supplement 84, and standalone probes two: **1,525 to 1,526 controlled HTTP attempts**, including the failed network attempt. The conservative recorded total is 1,526. Unsolicited unauthenticated scans are separate account traffic and are not used to reduce that count. All load processes had ended when the accounting error was identified; no further Worker probes were made.
 
-The benchmark client now reserves and fsyncs each attempt in one shared counter before HTTP, including network failures and error responses. Resumed and supplemental clients use the same file. Automatic redirects are rejected so they cannot create uncounted requests. It fails closed at 1,000, on corrupt/empty existing state, or when another allocator holds its lock. Local mocked tests prove these properties. The old temporary drivers were patched to use the shared exhausted counter and were not run again.
+The benchmark client now reserves and fsyncs each attempt in one shared counter before HTTP, including network failures and error responses. Only explicit first-run initialization creates the journal, refusing existing state or a held lock. Normal, resumed and supplemental clients require the same existing file and never recreate a missing or moved journal. Automatic redirects are rejected so they cannot create uncounted requests. It fails closed at 1,000, on missing/corrupt/empty existing state, or when another allocator holds its lock. Local mocked tests prove these properties. The old temporary drivers were patched to use the shared exhausted counter and were not run again.
 
 ## Cleanup and remaining work
 

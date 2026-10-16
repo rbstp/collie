@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { benchmarkClient } from './benchmark-client.ts';
+import { benchmarkClient, initializeBenchmarkBudget } from './benchmark-client.ts';
 
 async function fixture(run: (path: string) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), 'collie-request-budget-'));
@@ -11,6 +11,7 @@ async function fixture(run: (path: string) => Promise<void>) {
 }
 test('benchmark counter is shared across clients and records network failures before the attempt', async () => {
   await fixture(async path => {
+    await initializeBenchmarkBudget(path);
     let calls = 0;
     const failed = benchmarkClient(path, async () => { calls++; throw new Error('network failed'); });
     await assert.rejects(failed('https://benchmark.invalid'), /network failed/);
@@ -45,5 +46,32 @@ test('corrupt state and concurrent allocation fail closed without calling fetch'
     await writeFile(`${path}.lock`, '');
     await assert.rejects(client('https://benchmark.invalid'));
     assert.equal(calls, 0);
+  });
+});
+
+test('resume requires its journal and never recreates deleted state', async () => {
+  await fixture(async path => {
+    let calls = 0;
+    const client = benchmarkClient(path, async () => { calls++; return new Response(''); });
+    await assert.rejects(client('https://benchmark.invalid'), { code: 'ENOENT' });
+    await assert.rejects(readFile(path), { code: 'ENOENT' });
+    await initializeBenchmarkBudget(path);
+    await client('https://benchmark.invalid');
+    await unlink(path);
+    const resumed = benchmarkClient(path, async () => { calls++; return new Response(''); });
+    await assert.rejects(resumed('https://benchmark.invalid'), { code: 'ENOENT' });
+    await assert.rejects(readFile(path), { code: 'ENOENT' });
+    assert.equal(calls, 1);
+  });
+});
+test('explicit first-run initialization refuses existing state and held locks', async () => {
+  await fixture(async path => {
+    await initializeBenchmarkBudget(path);
+    await assert.rejects(initializeBenchmarkBudget(path), { code: 'EEXIST' });
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { attempts: 0 });
+    await unlink(path);
+    await writeFile(`${path}.lock`, '');
+    await assert.rejects(initializeBenchmarkBudget(path), { code: 'EEXIST' });
+    await assert.rejects(readFile(path), { code: 'ENOENT' });
   });
 });
