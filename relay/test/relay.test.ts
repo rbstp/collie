@@ -385,3 +385,20 @@ test('successful and ambiguous charges are never retried when their response cro
     await f.db.prepare('UPDATE routes SET expires_at = ?').bind(f.grant.expires_at).run();
   }
 });
+test('priority-10 silent activity clears retain reserved capacity after routine budget exhaustion', async () => {
+  await reset();
+  const grant = { ...f.grant, push_classes: ['liveactivity'] as const };
+  await f.db.prepare("UPDATE routes SET kind = 'liveactivity'").run();
+  await f.db.prepare('UPDATE installation_usage SET total = 700, routine = 700').run();
+  const body = { v: 1, push_type: 'liveactivity', priority: 10, expiration: now + 300,
+    payload: { node_id: 'node', event_id: 'event', aps: { timestamp: now, event: 'update',
+      'content-state': { v: 1, enc: base64url(new Uint8Array(40).fill(1)) } } } };
+  let calls = 0;
+  const worker = createWorker(async () => { calls++; return new Response('', { status: 200 }); }, () => now);
+  assert.equal((await worker.fetch(await request(grant as never, body), f.env as never)).status, 200);
+  assert.deepEqual(await f.db.prepare('SELECT total, routine FROM installation_usage').first(), { total: 701, routine: 700 });
+  body.priority = 5;
+  assert.equal((await worker.fetch(await request(grant as never, body), f.env as never)).status, 429);
+  assert.equal(calls, 1);
+  await f.db.prepare("UPDATE routes SET kind = 'app'").run();
+});

@@ -82,7 +82,7 @@ export function createWorker(upstream: typeof fetch = fetch, clock: () => number
         if (!route || !/^[a-f0-9]{64,512}$/.test(route.destination)
           || ((route.kind === 'liveactivity') !== (body.push_type === 'liveactivity'))) return response(410, 'invalid_route');
         const aps = body.payload.aps as Record<string, unknown>;
-        const routine = body.push_type === 'liveactivity' && aps.event === 'update' && aps.alert === undefined;
+        const routine = body.push_type === 'liveactivity' && body.priority === 5 && aps.event === 'update' && aps.alert === undefined;
         signing ??= new ProviderToken(env.APNS_TEAM_ID, env.APNS_KEY_ID, env.APNS_PRIVATE_KEY);
         now = clock();
         let jwt = await bounded(signing.token(now));
