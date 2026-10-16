@@ -51,8 +51,9 @@ enum DoneNotification {
         delivered.compactMap { note in
             guard note.userInfo["approval_id"] == nil,
                 let nodeId = note.userInfo["node_id"] as? String,
-                let terminalId = note.userInfo["terminal_id"] as? String,
-                ProtocolId.valid(nodeId, extra: "-_"), ProtocolId.valid(terminalId, extra: "_:.-")
+                ProtocolId.valid(nodeId, extra: "-_"),
+                (note.userInfo["event_id"] as? String).map({ ProtocolId.valid($0, extra: "-_") }) == true
+                    || (note.userInfo["terminal_id"] as? String).map({ ProtocolId.valid($0, extra: "_:.-") }) == true
             else { return nil }
             return note.id
         }
@@ -101,6 +102,18 @@ enum NotificationResponse: Equatable, Sendable {
     case ignore
 
     init(actionIdentifier: String, userInfo: [AnyHashable: Any]) {
+        var userInfo = userInfo
+        if ApprovalNotification.decision(forAction: actionIdentifier) != nil, userInfo["enc"] == nil {
+            self = .ignore
+            return
+        }
+        if userInfo["enc"] != nil {
+            guard let node = userInfo["node_id"] as? String, let key = NotificationKey.load(nodeId: node),
+                let display = PushDisplay.open(userInfo: userInfo, key: key),
+                ApprovalNotification.decision(forAction: actionIdentifier) == nil || display.offersApproval
+            else { self = .ignore; return }
+            userInfo["terminal_id"] = display.terminalId
+        }
         guard let link = ApprovalLink(userInfo: userInfo) else {
             if actionIdentifier == UNNotificationDefaultActionIdentifier,
                 let nodeId = userInfo["node_id"] as? String, ProtocolId.valid(nodeId, extra: "-_"),

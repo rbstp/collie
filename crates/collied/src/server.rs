@@ -1651,6 +1651,7 @@ impl Session<'_> {
                         p.terminal_id,
                         p.token,
                         p.shows_approvals,
+                        p.display_binding,
                     )
                     .map(|()| Response::Ok)
                     .map_err(|e| {

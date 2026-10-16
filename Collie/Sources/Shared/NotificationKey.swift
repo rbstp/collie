@@ -6,7 +6,7 @@ import Security
 // group and its App Group mirror except in `push.register` over the tailnet session, and is
 // never logged.
 
-/// The per-Mac key collied seals the alert context with, so Apple only sees the plaintext fallback.
+/// The per-machine destination key for authenticated encrypted display content.
 enum NotificationKey {
     static let service = "dev.rbstp.collie.notify"
 
@@ -131,8 +131,7 @@ struct KeychainError: Error, CustomStringConvertible {
     var description: String { "keychain error \(status)" }
 }
 
-/// The alert context sealed by collied: `enc` = base64(nonce || ciphertext || tag),
-/// ChaCha20-Poly1305 with the Mac's notification key, AAD = approval id.
+// The inner approval command seal stays inside the authenticated display envelope.
 enum PushContext {
     static let maxLength = 600
 

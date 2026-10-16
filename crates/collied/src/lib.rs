@@ -26,6 +26,7 @@ pub mod pr_watch;
 pub mod prompt;
 pub mod pulls;
 pub mod push;
+mod push_display;
 pub mod reflow;
 pub mod server;
 pub mod service;
