@@ -71,4 +71,5 @@
 - [Simulator relay testing](reference/simulator.md)
 - [Release](reference/release.md)
 - [App Store release plan](reference/app-store.md)
+- [Public submission preparation](reference/public-submission.md)
 - [Documentation site](reference/deploy-pages.md)
