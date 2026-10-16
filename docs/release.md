@@ -151,6 +151,10 @@ CollieWidgets went in this way. `Collie/ExportOptions.plist` maps each bundle ID
 2. Add its secret, for example `APPLE_PROVISIONING_PROFILE_<NAME>`, to the `env` of the "check for the signing secrets" and "import the signing certificate and profiles" steps; every `APPLE_PROVISIONING_PROFILE*` variable is checked and installed.
 3. Map its bundle ID to the profile name in `Collie/ExportOptions.plist` and set `PROVISIONING_PROFILE_SPECIFIER` in its Release settings in `Collie/project.yml`.
 
+## Public submission
+
+[Public submission preparation](public-submission.md) contains the offline metadata, review notes, disclosure checks and operating procedures for #359. Public capacity and submission remain unapproved until its evidence gates pass.
+
 ## App Review sample workspace
 
 Review notes should direct reviewers to **Explore sample workspace** on Welcome, with no account or desktop required. Existing users can open the same sample from Settings. Ask reviewers to inspect Agents, Chat, Terminal, Usage and Machines, send a sample prompt, try a terminal key, then approve or deny the blocked sample agent. The persistent sample banner identifies every action as simulated. Reset is in sample Settings and Exit returns to onboarding or the existing paired setup.

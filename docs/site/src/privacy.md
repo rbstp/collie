@@ -6,10 +6,10 @@ This policy covers the Collie app for iPhone and Apple Watch, its notification e
 
 ## In short
 
-- collie has no server and no account. The developer does not receive your data.
+- Collie has no publisher account. Released clients use direct push delivery. A publisher push relay is under validation and is not open for public enrollment; its metadata handling is described below.
 - The app talks to your own machines over your own tailnet, end to end encrypted.
-- The app contains no analytics, advertising or tracking code. Apart from its own connection to your machines, the only component that talks to the network is the embedded Tailscale client.
-- The services involved are Tailscale, to connect your devices; Apple's push notification service, if you turn on notifications; and, from your machine and with your own credentials, GitHub through `gh` and OpenAI through Codex, for the features described below.
+- The app contains no advertising or tracking code. Tailscale connects your devices. Relay validation also includes a phone client for Apple App Attest and the publisher relay; it is separate from direct device sessions.
+- The services involved are Tailscale, to connect your devices; Apple's push notification and attestation services; Cloudflare for the relay when enabled; and, from your machine and with your own credentials, GitHub through `gh` and OpenAI through Codex, for the features described below.
 
 ## What stays on your devices
 
@@ -50,7 +50,7 @@ If you set up notifications, `collied` on your machine sends them through Apple 
 
 Apple can still see notification delivery destinations, opaque machine/thread/approval/event/activity identifiers, generic categories, notification priority, timing, frequency, ciphertext size and Live Activity lifecycle. A generic alert can distinguish an agent finishing from an agent needing attention. Initial and local activity content use the same encrypted storage shape. Your phone's notification extension and widget decrypt the content locally; before the first unlock after reboot, or if decryption fails, they show generic content without approval controls. Approval nonces and decisions travel only over your authenticated tailnet connection.
 
-The app keeps a protected App Group mirror of notification keys so the widget can read them. It is available only to Collie's own targets after the first unlock, stays on this device and is excluded from backups. No push relay is enabled by this change. If a future release uses one, its metadata handling will be described here before release. Apple's handling of APNs is covered by [Apple's privacy policy](https://www.apple.com/legal/privacy/).
+The app keeps a protected App Group mirror of notification keys so the widget can read them. It is available only to Collie's own targets after the first unlock, stays on this device and is excluded from backups. Public relay enrollment remains closed pending validation. The relay data flow is described below. Apple's handling of APNs is covered by [Apple's privacy policy](https://www.apple.com/legal/privacy/).
 
 ## GitHub and Codex, from your machine
 
@@ -89,6 +89,16 @@ Changes to this policy are published on this page with a new date. If a future v
 Questions about this policy: open an issue on [GitHub](https://github.com/rbstp/collie/issues), or see [Support](support.md).
 
 
-## Undeployed relay validation
+## Publisher relay under validation
 
-The repository contains an isolated App Attest/relay validation implementation that is not enabled in released clients. Before a relay-enabled build is distributed, this policy must describe publisher/Cloudflare processing of source IPs, APNs destinations, route relationships and timing, as well as Apple's attestation processing. The implementation retains verified public keys/receipts, route metadata, revocation epochs and counters, with no notification keys or stored payloads. Its deployment gate requires deletion within seven days after the last grant expires and disabled authorization/body/destination logging. Local validation does not change the data flow of the released app.
+The repository includes a publisher push relay and an attested phone client. They are not a publicly enabled service. Current direct notification delivery does not send data to this relay. Before a relay-enabled build is distributed, deployment settings and this policy must be checked together; no automatic deletion or production availability is claimed by local validation.
+
+In relay mode, the phone enrolls with Apple App Attest and authorizes routes for confirmed paired machines. The machine sends encrypted notification content through the relay instead of holding the publisher's Apple sending key. Commands, chats, files and approval decisions still travel directly over your authenticated tailnet connection. The relay receives no notification decryption key and cannot read encrypted names, text or detailed activity state.
+
+The publisher and Cloudflare process source IP addresses, app/activity notification tokens, installation/pairing/route relationships, generic push categories, opaque event identifiers, timing, frequency and ciphertext sizes. These expose delivery patterns even though content is encrypted. Apple receives delivery metadata and ciphertext and processes device/app integrity information for App Attest. The relay stores verified public keys and attestation receipts, counters, revocation state and delivery-route records in Cloudflare D1. It stores no notification payloads or decryption keys. IP addresses are used for transient abuse limiting, not stored in these D1 records.
+
+The current code retains enrollment state for at least 37 days from enrollment and extends its deadline to the latest issued grant expiry plus seven days. Grants last 30 days. Superseding a route removes the previous destination; other expired or revoked destinations become eligible for bounded cleanup only after expiry plus seven days. Parent key/receipt and revocation records are removed once their retention deadline and child cleanup allow it. The validation configuration has no cleanup schedule, so a live deletion deadline has not been established. Public enrollment requires a verified schedule/backlog bound and an updated policy stating that bound. Cloudflare D1 Free [Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/) can retain restorable database history for seven days beyond an active-database change.
+
+Removing a pairing retains a minimal pending revocation on the phone if the relay is unreachable. A previously authorized machine may still send until remote revocation succeeds or its grant expires. Local removal does not immediately delete relay records. Inactive phones whose grants expire stop receiving relay pushes until renewal; direct sessions remain available.
+
+The checked-in relay configuration disables observability, and the handler emits no request-body, authorization, destination or attestation logs. Provider service/security processing is separate from application logging and covered by [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/). A future deployment must verify those settings and retention before this policy can describe a live service. No marketing or advertising use is implemented.
