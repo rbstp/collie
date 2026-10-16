@@ -81,15 +81,41 @@ class PackageTests(unittest.TestCase):
             args = argparse.Namespace(tag="v1.2.3", sha="a" * 40, out=out)
             with patch.object(package, "identity", return_value="1.2.3"):
                 package.homebrew(args)
-            env = dict(os.environ, HOMEBREW_NO_AUTO_UPDATE="1", HOMEBREW_NO_ANALYTICS="1")
+            repository = Path(subprocess.check_output(["brew", "--repository"], text=True).strip())
+            prefix = out.resolve() / "brew"
+            (prefix / "bin").mkdir(parents=True)
+            (prefix / "Library").mkdir()
+            shutil.copy2(repository / "bin/brew", prefix / "bin/brew")
+            (prefix / "Library/Homebrew").symlink_to(repository / "Library/Homebrew", target_is_directory=True)
+            tap = prefix / "Library/Taps/collie-tests/homebrew-fixture"
+            (tap / "Formula").mkdir(parents=True)
+            (tap / "Casks").mkdir()
+            for path in [prefix, tap]:
+                subprocess.run(["git", "init", "--quiet", str(path)], check=True)
+            env = dict(os.environ, HOMEBREW_NO_AUTO_UPDATE="1", HOMEBREW_NO_ANALYTICS="1",
+                       HOMEBREW_FORBID_PACKAGES_FROM_PATHS="1", HOMEBREW_REQUIRE_TAP_TRUST="1",
+                       XDG_CONFIG_HOME=str(out / "config"), HOMEBREW_CACHE=str(out / "cache"),
+                       HOMEBREW_LOGS=str(out / "logs"), HOMEBREW_TEMP=str(out / "tmp"))
+            for name in ["HOMEBREW_INTERNAL_ALLOW_PACKAGES_FROM_PATHS", "HOMEBREW_NO_REQUIRE_TAP_TRUST"]:
+                env.pop(name, None)
+            brew = str(prefix / "bin/brew")
             with tarfile.open(out / "homebrew-1.2.3.tar.gz") as archive:
-                for name, ruby in [("Formula/collied.rb", 'require "formula"; puts Formulary.factory(ARGV.first).name'),
-                                   ("Casks/colliebar.rb", 'require "cask/cask_loader"; puts Cask::CaskLoader.load(ARGV.first).token')]:
-                    path = out / Path(name).name
-                    path.write_bytes(archive.extractfile("homebrew/" + name).read())
-                    result = subprocess.run(["brew", "ruby", "-e", ruby, str(path)], env=env, capture_output=True, text=True)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(result.stdout.strip(), path.stem)
+                for name in ["Formula/collied.rb", "Casks/colliebar.rb"]:
+                    (tap / name).write_bytes(archive.extractfile("homebrew/" + name).read())
+            loose = out.resolve() / "collied.rb"
+            shutil.copy2(tap / "Formula/collied.rb", loose)
+            result = subprocess.run([brew, "ruby", "-e", 'require "formula"; Formulary.factory(ARGV.first)', str(loose)],
+                                    env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Homebrew requires formulae to be in a tap", result.stderr)
+            result = subprocess.run([brew, "trust", "--tap", "collie-tests/fixture"], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for name, ruby in [("Formula/collied.rb", 'require "formula"; puts Formulary.factory(ARGV.first).full_name'),
+                               ("Casks/colliebar.rb", 'require "cask/cask_loader"; puts Cask::CaskLoader.load(ARGV.first).full_name')]:
+                path = tap / name
+                result = subprocess.run([brew, "ruby", "-e", ruby, str(path)], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), "collie-tests/fixture/" + path.stem)
 
 
 class SourceValidationTests(unittest.TestCase):
