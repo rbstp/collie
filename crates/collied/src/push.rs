@@ -137,7 +137,7 @@ pub enum ActivityError {
 
 enum Job {
     Alert(Vec<Device>, Alert),
-    Activity(Activity, Alert, Option<Box<Routed>>),
+    Activity(Box<Activity>, Alert, Option<Box<Routed>>),
     Routed(Box<Routed>),
 }
 
@@ -512,6 +512,7 @@ impl Push {
     /// Replaces the device's activity with the same id or terminal: the phone keeps one
     /// activity per followed agent, and an old one it never ended must not hold a slot.
     /// The environment is the one the device registered with `push.register`.
+    #[allow(clippy::too_many_arguments)]
     pub fn register_activity(
         &self,
         stable_id: &str,
@@ -641,7 +642,11 @@ impl Push {
 
     /// Sends `fallback` as an approval alert if `alert` reaches no Live Activity.
     pub fn notify_activity(&self, activity: Activity, alert: Alert, fallback: Option<Routed>) {
-        self.enqueue(Job::Activity(activity, alert, fallback.map(Box::new)));
+        self.enqueue(Job::Activity(
+            Box::new(activity),
+            alert,
+            fallback.map(Box::new),
+        ));
     }
 
     /// A routed approval as an approval alert, unless its device already got that one.

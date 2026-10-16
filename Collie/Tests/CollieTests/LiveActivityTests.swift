@@ -258,7 +258,7 @@ extension FakeCore: ActivityCore {
     func machines() -> [Machine] { state.withLock { $0.machines } }
     func cachedFlock(machineId: String) -> MachineFlock? { state.withLock { $0.cachedFlock } }
     func reconnect(machineId: String) throws {}
-    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String) throws {}
+    func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String, relayGrant: RelayPushGrant?) throws {}
     func endActivity(machineId: String, activityId: String) throws {
         state.withLock { $0.endedActivities.append(activityId) }
     }

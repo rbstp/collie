@@ -25,7 +25,8 @@ CREATE TABLE control_commits (
     epoch INTEGER NOT NULL,
     nonce TEXT NOT NULL,
     now INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL
+    expires_at INTEGER NOT NULL,
+    terminal_revocation INTEGER NOT NULL DEFAULT 0 CHECK (terminal_revocation IN (0, 1))
 );
 CREATE TABLE control_usage (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -47,7 +48,7 @@ BEGIN
     SELECT CASE WHEN NOT EXISTS (
         SELECT 1 FROM attestations a JOIN installations i ON i.id = a.installation_id
         WHERE a.installation_id = NEW.installation_id AND a.key_id = NEW.key_id
-          AND a.counter = NEW.previous_counter AND NEW.counter > a.counter AND a.revoked = 0
+          AND a.counter = NEW.previous_counter AND NEW.counter > a.counter AND (a.revoked = 0 OR NEW.terminal_revocation = 1)
           AND i.epoch = NEW.epoch AND a.last_nonce <> NEW.nonce
           AND NEW.expires_at > MAX(NEW.now, unixepoch())
     ) THEN RAISE(ABORT, 'unauthorized_control') END;

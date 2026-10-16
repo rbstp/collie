@@ -212,3 +212,15 @@ test('complete Apple fixture verifies pinned certificate chains, authenticator n
   receipt[receipt.length - 12] ^= 1;
   await assert.rejects(verifyAttestation(base64url(encode(object)), key, hash, context, time));
 });
+test('lost installation-revocation responses recover with a fresh assertion without reopening routes or incrementing the epoch twice', async () => {
+  const f = await controlFixture();
+  try {
+    const op: Operation = { ...f.common, op: 'revoke_installation' };
+    assert.equal((await f.execute(op)).status, 200);
+    assert.equal((await f.execute(op)).status, 200);
+    assert.equal((await f.db.prepare('SELECT epoch FROM installations').first()).epoch, 1);
+    assert.equal((await f.db.prepare('SELECT counter FROM attestations').first()).counter, 2);
+    assert.equal((await f.post('challenge', { ...f.common, op: 'route', pairing_id: 'machine', route_id: 'route', expected_generation: 1,
+      kind: 'app', destination: 'b'.repeat(64) })).status, 401);
+  } finally { await f.runtime.dispose(); }
+});
