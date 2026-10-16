@@ -237,7 +237,7 @@ actor RelayEnrollment {
     private var lastGrantExpiry: UInt64 {
         (state.routes.map(\.grant.expiresAt) + state.pendingRoutes.map(\.expiresAt)
             + Array(state.pendingRevocationExpiry.values) + state.pendingRouteRevocations.map(\.expiresAt)
-            + [state.previousGrantExpiry ?? 0]).max() ?? 0
+            + [state.previousGrantExpiry ?? 0, state.installationRevocationExpiry ?? 0]).max() ?? 0
     }
 
     private func registerRoute(pairingId: String, activityId: String?, destination: String) async throws -> RelayRouteGrant {
@@ -407,8 +407,19 @@ actor RelayEnrollment {
         let encoder = JSONEncoder()
         let operationData = try encoder.encode(operation)
         let challenge = try await transport.post(path: "challenge", body: operationData)
-        guard challenge.result == "challenge", let value = challenge.challenge, value.count <= 2048, let keyId = state.keyId else {
-            throw RelayEnrollmentError.invalidResponse
+        guard challenge.result == "challenge", let value = challenge.challenge, value.count <= 2048,
+            let challengeExpiry = challenge.expiresAt, let keyId = state.keyId
+        else { throw RelayEnrollmentError.invalidResponse }
+        if case .string("route")? = operation["op"], case .string(let routeId)? = operation["route_id"],
+            let index = state.pendingRoutes.firstIndex(where: { $0.routeId == routeId })
+        {
+            let (bound, overflow) = challengeExpiry.addingReportingOverflow(30 * 86400)
+            guard !overflow else { throw RelayEnrollmentError.invalidResponse }
+            let route = state.pendingRoutes[index]
+            state.pendingRoutes[index] = RelayPendingRoute(pairingId: route.pairingId, activityId: route.activityId,
+                destination: route.destination, routeId: route.routeId, expectedGeneration: route.expectedGeneration,
+                expiresAt: max(route.expiresAt, bound))
+            try persist(state)
         }
         let hash = Data(SHA256.hash(data: Data(value.utf8)))
         let proof: Data
