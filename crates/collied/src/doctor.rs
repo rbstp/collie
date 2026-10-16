@@ -614,7 +614,12 @@ async fn check_daemon(r: &mut Report, data_dir: &Path) -> Option<u64> {
     }
     if let Some(push) = &info.push {
         r.line(
-            if push.health.last_error.is_some() {
+            if push.health.last_error.is_some()
+                || (push.mode == protocol::PushMode::Relay
+                    && push
+                        .grant_expires_at
+                        .is_none_or(|at| at <= crate::now_ms() / 1000))
+            {
                 Status::Warn
             } else {
                 Status::Ok

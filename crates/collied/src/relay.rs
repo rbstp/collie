@@ -309,13 +309,15 @@ mod http_tests {
         (relay, server)
     }
     fn device() -> Device {
+        let mut key = [0u8; 32];
+        getrandom::fill(&mut key).unwrap();
         Device {
             stable_id: "phone".into(),
             token: protocol::PushToken::new("a".repeat(64)).unwrap(),
             environment: protocol::ApnsEnvironment::Production,
             notification_key: Some(
                 protocol::NotificationKey::new(
-                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([1; 32]),
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key),
                 )
                 .unwrap(),
             ),

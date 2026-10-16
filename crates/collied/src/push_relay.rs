@@ -393,7 +393,9 @@ mod tests {
     }
 
     fn key() -> NotificationKey {
-        NotificationKey::new(URL_SAFE_NO_PAD.encode([7; 32])).unwrap()
+        let mut bytes = [0u8; 32];
+        getrandom::fill(&mut bytes).unwrap();
+        NotificationKey::new(URL_SAFE_NO_PAD.encode(bytes)).unwrap()
     }
     fn grant(generation: u32) -> protocol::RelayGrant {
         protocol::RelayGrant {
@@ -486,7 +488,7 @@ mod tests {
         assert_eq!(sent.len(), 2);
         let alert = &sent[1].1;
         let plain = crate::push_display::open(
-            &key(),
+            push.devices()[0].notification_key.as_ref().unwrap(),
             alert.payload["aps"]["content-state"]["enc"]
                 .as_str()
                 .unwrap(),
@@ -604,7 +606,7 @@ mod tests {
         assert_eq!(crate::lock(&mock.sent).len(), 3);
         let alert = &crate::lock(&mock.sent)[2].1;
         let plain = crate::push_display::open(
-            &key(),
+            push.devices()[0].notification_key.as_ref().unwrap(),
             alert.payload["aps"]["content-state"]["enc"]
                 .as_str()
                 .unwrap(),
@@ -615,6 +617,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plain["state"]["title"], "latest");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn approval_expiry_discards_work_before_the_next_retry() {
+        let mock = Arc::new(Mock::default());
+        crate::lock(&mock.replies).push_back(Err(retry(60, false)));
+        let (_dir, push) = rig(mock.clone(), Arc::new(|_| true));
+        let mut alert = test_alert();
+        alert.payload["approval_id"] = json!("approval");
+        alert.expiration = Some(crate::now_ms() / 1000 + 2);
+        push.notify(alert);
+        settle().await;
+        assert_eq!(crate::lock(&mock.sent).len(), 1);
+        tokio::time::advance(Duration::from_secs(3)).await;
+        settle().await;
+        assert_eq!(push.status().health.pending, 0);
+        tokio::time::advance(Duration::from_secs(120)).await;
+        settle().await;
+        assert_eq!(crate::lock(&mock.sent).len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_end_bypasses_cadence_and_cancels_obsolete_routine_state() {
+        let mock = Arc::new(Mock::default());
+        let (_dir, push) = rig(mock.clone(), Arc::new(|_| true));
+        let activity = activity(&push);
+        push.notify_activity(activity.clone(), update("first", false), None);
+        settle().await;
+        push.notify_activity(activity.clone(), update("obsolete", false), None);
+        settle().await;
+        assert_eq!(push.status().health.pending, 1);
+        assert_eq!(crate::lock(&mock.sent).len(), 1);
+        push.end_activity("phone", &activity.activity_id).unwrap();
+        push.notify_activity(activity, crate::activity::end(None, crate::now_ms()), None);
+        settle().await;
+        assert_eq!(crate::lock(&mock.sent).len(), 2);
+        assert_eq!(crate::lock(&mock.sent)[1].1.payload["aps"]["event"], "end");
+        tokio::time::advance(ROUTINE_GAP).await;
+        settle().await;
+        assert_eq!(crate::lock(&mock.sent).len(), 2);
     }
 
     #[tokio::test(start_paused = true)]
