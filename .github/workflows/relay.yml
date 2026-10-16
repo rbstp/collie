@@ -1,0 +1,61 @@
+name: relay
+run-name: "[relay] - testing ${{ github.ref_name }}"
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/relay.yml'
+      - 'relay/**'
+  push:
+    branches:
+      - master
+    paths:
+      - '.github/workflows/relay.yml'
+      - 'relay/**'
+
+concurrency:
+  group: relay-test-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: relay
+
+env:
+  WRANGLER_SEND_METRICS: 'false'
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: install node
+        run: |
+          node_dir="$RUNNER_TEMP/node"
+          mkdir -p "$node_dir"
+          curl -sSfL -o "$RUNNER_TEMP/node.tar.xz" \
+            https://nodejs.org/dist/v26.12.0/node-v26.12.0-linux-x64.tar.xz
+          echo "fd47865ecd6391ebb431fc815e01b9135bf83ded5cf373247e9331e196b7aded  $RUNNER_TEMP/node.tar.xz" | sha256sum -c
+          tar -xJf "$RUNNER_TEMP/node.tar.xz" -C "$node_dir" --strip-components 1
+          echo "$node_dir/bin" >> "$GITHUB_PATH"
+
+      - name: install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: check types
+        run: npm run check
+
+      - name: test
+        run: npm test
+
+      - name: build without deployment
+        run: npm run build

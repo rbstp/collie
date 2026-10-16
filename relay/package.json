@@ -1,0 +1,19 @@
+{
+  "name": "collie-push-relay",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "benchmark": "node test/benchmark.ts"
+  },
+  "dependencies": { "@noble/curves": "2.4.0" },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261016.1",
+    "miniflare": "4.20260730.0",
+    "typescript": "7.0.2",
+    "wrangler": "4.151.1"
+  }
+}

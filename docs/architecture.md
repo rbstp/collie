@@ -796,3 +796,7 @@ On both OSes, `collied status` also prints `tags:` (`(none)` for an untagged nod
 | A paired phone writes files on the Mac | disk use, files an agent may read | size, rate, in-flight, 200 MiB and 1000 entry caps; private 0600 non-executable files in a 0700 cache dir; 24 h retention; [threat-model.md](threat-model.md#attachment-uploads) |
 | Older app vs newer collied | decode failures | additive events/errors/statuses decode to `Unrecognized`; anything else bumps `PROTOCOL_VERSION` |
 | Shell input from a paired phone | command execution as the user | off by default, `collied.toml` only; its own method class; a grant signed by a Secure Enclave key behind Face ID, per terminal, session and 5 minutes; the pane re-read before every write; audited without the text; [threat-model.md](threat-model.md#shell-input-from-the-phone) |
+
+## Push relay validation foundation
+
+The isolated Worker/D1 implementation under `relay/` provides a bounded authenticated send contract, fixed topics, deterministic provider JWTs and atomic indexed installation/global quotas. It is not deployed or connected to released clients. Enrollment, App Attest verification and production rollout remain gated. See [relay.md](relay.md) for the exact contract, local measurements and outstanding live Free-plan validation. No version bump: this foundation changes no phone/daemon wire types.
