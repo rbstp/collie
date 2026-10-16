@@ -18,7 +18,7 @@ Reserve at least 80 GiB free for VM setup, plus separate space for Rust and Xcod
 
 Guest boot reports macOS 27.0, build `26A428`. The harness downloads Tart into its own tool directory, verifies its signature and Gatekeeper assessment, and uses a separate `TART_HOME`. It installs the signed CuaDriver app only inside the guest and disables its telemetry. Driver control uses a guest `admin`-owned UNIX socket with mode `0600`, without a TCP listener. No global Tart installation, host Accessibility grant or host screen-recording grant is part of this procedure.
 
-All owned state lives at `<repo-parent>/.codex/vms/collie-374`, shared by this repository's worktrees. Only one harness command may run at a time. The dedicated host Simulator is named **Collie VM test**; its exact identifier and VM ownership are recorded in `owned.json`. Treat this directory as private: it contains disposable authentication material, pairing state and test logs. Do not commit or share it.
+VM disks, downloaded tools, ownership records and private logs live at `<repo-parent>/.codex/vms/collie-374`, shared by this repository's worktrees. The dedicated Simulator holds its own app and Keychain state, and build outputs remain under `target`. Only one harness command may run at a time. The dedicated host Simulator is named **Collie VM test**; its exact identifier and VM ownership are recorded in `owned.json`. Treat this directory as private: it contains disposable authentication material, pairing state and test logs. Do not commit or share it.
 
 ## Set up the guest desktop once
 
