@@ -150,7 +150,7 @@ end
   url "{base}/{app.name}"
   name "CollieBar"
   desc "Menu bar companion for collied"
-  homepage "https://collie.rbstp.dev"
+  homepage "https://collie.rbstp.dev/"
 
   depends_on arch: :arm64
   depends_on macos: :tahoe
