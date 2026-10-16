@@ -447,7 +447,8 @@ actor RelayEnrollment {
         let now = UInt64(Date().timeIntervalSince1970)
         let previousCount = state.pendingPairingRevocations.count + state.pendingRouteRevocations.count
         let previousExpiry = state.previousGrantExpiry
-        state.pendingPairingRevocations.removeAll { (state.pendingRevocationExpiry[$0] ?? UInt64.max) <= now }
+        let pendingExpiry = state.pendingRevocationExpiry
+        state.pendingPairingRevocations.removeAll { (pendingExpiry[$0] ?? UInt64.max) <= now }
         state.pendingRevocationExpiry = state.pendingRevocationExpiry.filter { $0.value > now }
         state.pendingRouteRevocations.removeAll { $0.expiresAt <= now }
         if let expiry = state.previousGrantExpiry, expiry <= now { state.previousGrantExpiry = nil }
