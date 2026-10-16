@@ -327,6 +327,7 @@ struct Rig {
     herdr: Mock,
     apns: Arc<Apns>,
     push: Arc<Push>,
+    notification_key: NotificationKey,
     approvals: Arc<Approvals>,
     live: Mutex<(Live, StatusTracker)>,
     events: Option<broadcast::Receiver<Event>>,
@@ -364,8 +365,17 @@ impl Rig {
             Arc::new(|_| true),
         )
         .unwrap();
-        push.register(PHONE, token(), ApnsEnvironment::Sandbox, key(), false)
-            .unwrap();
+        let mut key = [0u8; 32];
+        getrandom::fill(&mut key).unwrap();
+        let notification_key = NotificationKey::new(URL_SAFE_NO_PAD.encode(key)).unwrap();
+        push.register(
+            PHONE,
+            token(),
+            ApnsEnvironment::Sandbox,
+            notification_key.clone(),
+            false,
+        )
+        .unwrap();
         let audit = dir.path().join("audit.log");
         let audit_log = Arc::new(Audit::open(&audit).unwrap());
         let (tx, events) = broadcast::channel(64);
@@ -385,6 +395,7 @@ impl Rig {
             herdr,
             apns,
             push,
+            notification_key,
             approvals,
             live: Mutex::new((Live::default(), StatusTracker::default())),
             events: Some(events),
@@ -579,19 +590,16 @@ fn resolved(reply: Reply) -> ApprovalOutcome {
     }
 }
 
-fn key() -> NotificationKey {
-    NotificationKey::new(URL_SAFE_NO_PAD.encode([7u8; 32])).unwrap()
-}
-
 /// The phone's side: `enc` opened with the device key, AAD = approval_id.
-fn open_context(payload: &Value) -> Value {
+fn open_context(key: &NotificationKey, payload: &Value) -> Value {
     if payload.get("event_id").is_some() {
-        let display = open_display(payload, 1);
+        let display = open_display(key, payload, 1);
         return json!({"v":1,"body":display["body"]});
     }
+    let key = URL_SAFE_NO_PAD.decode(key.as_str()).unwrap();
     let combined = STANDARD.decode(payload["enc"].as_str().unwrap()).unwrap();
     let (nonce, sealed) = combined.split_at(12);
-    let plain = ChaCha20Poly1305::new_from_slice(&[7u8; 32])
+    let plain = ChaCha20Poly1305::new_from_slice(&key)
         .unwrap()
         .decrypt(
             nonce.try_into().unwrap(),
@@ -611,7 +619,8 @@ fn display_binding() -> protocol::ActivityDisplayBinding {
     }
 }
 
-fn open_display(payload: &Value, kind: u8) -> Value {
+fn open_display(key: &NotificationKey, payload: &Value, kind: u8) -> Value {
+    let key = URL_SAFE_NO_PAD.decode(key.as_str()).unwrap();
     let enc = if kind == 1 {
         &payload["enc"]
     } else {
@@ -641,10 +650,10 @@ fn open_display(payload: &Value, kind: u8) -> Value {
     let aad = [
         b"collie.push.v1\0".as_slice(),
         &bytes[..header_end],
-        &Sha256::digest([7u8; 32]),
+        &Sha256::digest(&key),
     ]
     .concat();
-    let plain = ChaCha20Poly1305::new_from_slice(&[7u8; 32])
+    let plain = ChaCha20Poly1305::new_from_slice(&key)
         .unwrap()
         .decrypt(
             bytes[header_end..header_end + 12].try_into().unwrap(),
@@ -702,10 +711,10 @@ async fn blocked_agent_gets_one_approval_and_one_alert() {
     let (to, alert) = &alerts[0];
     assert_eq!(to, token().as_str());
     assert_eq!(
-        open_context(&alert.payload),
+        open_context(&rig.notification_key, &alert.payload),
         json!({"v": 1, "body": "Bash: rm -rf build\nRemove the build directory"})
     );
-    let display = open_display(&alert.payload, 1);
+    let display = open_display(&rig.notification_key, &alert.payload, 1);
     assert_eq!(display["title"], "api-fixer");
     assert_eq!(display["approvalId"], a.approval_id.as_str());
     assert_eq!(display["terminalId"], TERMINAL);
@@ -921,7 +930,7 @@ async fn a_hook_report_names_only_the_prompt_that_shows_it() {
     let a = rig.needed().await;
     assert_eq!(a.tool, named("rm -rf build"));
     assert_eq!(
-        open_context(&rig.alerts(1).await[0].1.payload),
+        open_context(&rig.notification_key, &rig.alerts(1).await[0].1.payload),
         json!({"v": 1, "body": "Bash: rm -rf build\nRemove the build directory"})
     );
     rig.herdr
@@ -1134,7 +1143,7 @@ async fn codex_and_copilot_prompts_are_answered_in_the_terminal() {
         assert!(alerts[0].1.payload["aps"].get("category").is_none());
         assert!(sent.iter().all(|(_, s)| {
             !matches!(s.delivery, Delivery::LiveActivity { .. })
-                || open_display(&s.payload, 2)["state"]
+                || open_display(&rig.notification_key, &s.payload, 2)["state"]
                     .get("approvalId")
                     .is_none()
         }));
@@ -1351,10 +1360,9 @@ async fn settings_pickers_raise_no_approval() {
         assert!(!rig.approvals.has_pending(TERMINAL));
         let sent = rig.sent().await;
         assert!(alerting(&sent).is_empty(), "{sent:?}");
-        assert!(
-            sent.iter()
-                .all(|(_, s)| { open_display(&s.payload, 2)["state"]["approvals"] == 0 })
-        );
+        assert!(sent.iter().all(|(_, s)| {
+            open_display(&rig.notification_key, &s.payload, 2)["state"]["approvals"] == 0
+        }));
 
         rig.herdr.set_status("idle");
         rig.tick().await;
@@ -1379,8 +1387,11 @@ fn alerting(sent: &[(String, Alert)]) -> Vec<(String, Alert)> {
 }
 
 /// The widget's side: `enc` from the content-state opened with the device key, AAD = approvalId.
-fn open_offered(state: &Value) -> Value {
-    open_context(&json!({"enc": state["enc"], "approval_id": state["approvalId"]}))
+fn open_offered(key: &NotificationKey, state: &Value) -> Value {
+    open_context(
+        key,
+        &json!({"enc": state["enc"], "approval_id": state["approvalId"]}),
+    )
 }
 
 #[tokio::test]
@@ -1388,7 +1399,13 @@ async fn notifications_and_live_activities_continue_without_app_events() {
     let mut rig = Rig::start(TTL).await;
     drop(rig.events.take());
     rig.push
-        .register(OTHER, other_token(), ApnsEnvironment::Sandbox, key(), false)
+        .register(
+            OTHER,
+            other_token(),
+            ApnsEnvironment::Sandbox,
+            rig.notification_key.clone(),
+            false,
+        )
         .unwrap();
     rig.follow();
     rig.tick().await;
@@ -1400,17 +1417,17 @@ async fn notifications_and_live_activities_continue_without_app_events() {
         .find(|(to, _)| to == activity_token().as_str())
         .unwrap();
     assert_eq!(live.delivery, Delivery::LiveActivity { urgent: true });
-    let state = &open_display(&live.payload, 2)["state"];
+    let state = &open_display(&rig.notification_key, &live.payload, 2)["state"];
     assert_eq!(state["status"], "blocked");
     assert_eq!(state["approvalId"], approval.approval_id.as_str());
-    assert_eq!(open_offered(state)["v"], 1);
+    assert_eq!(open_offered(&rig.notification_key, state)["v"], 1);
     let (_, alert) = sent
         .iter()
         .find(|(to, _)| to == other_token().as_str())
         .unwrap();
     assert_eq!(alert.delivery, Delivery::Alert);
     assert_eq!(alert.payload["approval_id"], approval.approval_id.as_str());
-    assert_eq!(open_context(&alert.payload)["v"], 1);
+    assert_eq!(open_context(&rig.notification_key, &alert.payload)["v"], 1);
     rig.tick().await;
     assert_eq!(rig.sent().await.len(), 2);
 
@@ -1434,7 +1451,7 @@ async fn notifications_and_live_activities_continue_without_app_events() {
         .rev()
         .find(|(to, _)| to == activity_token().as_str())
         .unwrap();
-    let state = &open_display(&live.payload, 2)["state"];
+    let state = &open_display(&rig.notification_key, &live.payload, 2)["state"];
     assert_eq!(state["status"], "working");
     assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
 
@@ -1458,7 +1475,7 @@ async fn notifications_and_live_activities_continue_without_app_events() {
         .iter()
         .filter(|(_, alert)| {
             alert.delivery == Delivery::Alert
-                && open_display(&alert.payload, 1)["body"] == "Done in api"
+                && open_display(&rig.notification_key, &alert.payload, 1)["body"] == "Done in api"
         })
         .collect();
     assert_eq!(done.len(), 2);
@@ -1471,14 +1488,23 @@ async fn notifications_and_live_activities_continue_without_app_events() {
         .rev()
         .find(|(to, _)| to == activity_token().as_str())
         .unwrap();
-    assert_eq!(open_display(&live.payload, 2)["state"]["status"], "done");
+    assert_eq!(
+        open_display(&rig.notification_key, &live.payload, 2)["state"]["status"],
+        "done"
+    );
 }
 
 #[tokio::test]
 async fn a_followed_terminal_alerts_on_its_activity_only() {
     let mut rig = Rig::start(TTL).await;
     rig.push
-        .register(OTHER, other_token(), ApnsEnvironment::Sandbox, key(), false)
+        .register(
+            OTHER,
+            other_token(),
+            ApnsEnvironment::Sandbox,
+            rig.notification_key.clone(),
+            false,
+        )
         .unwrap();
     rig.push
         .register_activity(
@@ -1506,11 +1532,11 @@ async fn a_followed_terminal_alerts_on_its_activity_only() {
         aps["alert"],
         json!({"title": "Collie", "body": "An agent needs attention"})
     );
-    let state = &open_display(&live.payload, 2)["state"];
+    let state = &open_display(&rig.notification_key, &live.payload, 2)["state"];
     assert_eq!(state["status"], "blocked");
     assert_eq!(state["approvalId"], a.approval_id.as_str());
     assert_eq!(
-        open_offered(state),
+        open_offered(&rig.notification_key, state),
         json!({"v": 1, "body": "Bash: rm -rf build\nRemove the build directory"})
     );
     let wire = live.payload.to_string();
@@ -1556,9 +1582,9 @@ async fn a_followed_terminal_alerts_on_its_activity_only() {
     let (to, quiet) = sent.last().unwrap();
     assert_eq!(to, activity_token().as_str());
     assert_eq!(quiet.delivery, Delivery::LiveActivity { urgent: false });
-    let state = &open_display(&quiet.payload, 2)["state"];
+    let state = &open_display(&rig.notification_key, &quiet.payload, 2)["state"];
     assert_eq!(state["approvalId"], b.approval_id.as_str());
-    assert_eq!(open_offered(state)["v"], 1);
+    assert_eq!(open_offered(&rig.notification_key, state)["v"], 1);
 
     assert!(matches!(
         resolved(rig.decide(&b, Decision::Approve, &b.nonce).await),
@@ -1575,7 +1601,7 @@ async fn a_followed_terminal_alerts_on_its_activity_only() {
         "the update that drops the buttons goes at priority 10"
     );
     assert!(cleared.payload["aps"].get("alert").is_none());
-    let state = &open_display(&cleared.payload, 2)["state"];
+    let state = &open_display(&rig.notification_key, &cleared.payload, 2)["state"];
     assert_eq!(state["status"], "working");
     assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
     assert_eq!(alerting(&sent).len(), 2);
@@ -1598,7 +1624,7 @@ async fn a_failed_activity_alert_falls_back_to_the_notification() {
         assert_eq!(to, token().as_str());
         assert_eq!(alert.delivery, Delivery::Alert);
         assert_eq!(alert.payload["approval_id"], a.approval_id.as_str());
-        assert_eq!(open_context(&alert.payload)["v"], 1);
+        assert_eq!(open_context(&rig.notification_key, &alert.payload)["v"], 1);
         assert_eq!(
             rig.push.activities().is_empty(),
             rejection == Rejection::Unregistered,
@@ -1638,7 +1664,7 @@ async fn an_activity_without_approvals_keeps_the_notification() {
         activity_token().as_str(),
         "the activity still shows the status"
     );
-    let state = &open_display(&live.payload, 2)["state"];
+    let state = &open_display(&rig.notification_key, &live.payload, 2)["state"];
     assert_eq!(state["status"], "blocked");
     assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
 }
@@ -1747,7 +1773,7 @@ async fn a_question_in_a_renamed_session_is_answered_by_choosing_an_option() {
     assert!(a.accepts_input && a.has_text_field);
     let alerts = rig.alerts(1).await;
     assert_eq!(
-        open_context(&alerts[0].1.payload),
+        open_context(&rig.notification_key, &alerts[0].1.payload),
         json!({"v": 1, "body": "Which color do you prefer?"})
     );
 
@@ -2071,7 +2097,7 @@ async fn a_note_is_typed_into_the_amend_field_then_enter() {
     );
     let alerts = rig.alerts(1).await;
     assert_eq!(
-        open_context(&alerts[0].1.payload),
+        open_context(&rig.notification_key, &alerts[0].1.payload),
         json!({"v": 1, "body": "Bash: Create empty probe2.txt file\ntouch probe2.txt"})
     );
     let note = "use a .tmp extension";
