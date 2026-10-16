@@ -26,3 +26,8 @@ The iPhone checks the setting again and only sends an answer it showed the watch
 - The **Plan usage widget** in the Smart Stack, also available as a rectangular complication, shows three gauges with the provider's logo and a reset countdown. A small orange dot marks readings at least 30 minutes old.
 
 Tap either one to open a compact usage list. They refresh about every 15 minutes when watchOS allows it.
+
+<div class="screenshots">
+<img src="../images/watch-widget.png" width="208" height="248" loading="lazy" alt="The Plan usage widget: three gauges, Claude 5-hour, Claude weekly and Codex monthly, each with a reset countdown">
+<img src="../images/watch-usage.png" width="208" height="248" loading="lazy" alt="The watch usage list: Claude 5-hour at 38%, Claude weekly at 61% and Codex monthly at 24%, each with the time left">
+</div>

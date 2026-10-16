@@ -13,7 +13,15 @@ struct CollieWatchApp: App {
     var body: some Scene {
         let model = delegate.model
         WindowGroup {
+            #if DEBUG
+            if WatchDemo.mode == "widget" {
+                WatchWidgetDemo()
+            } else {
+                NavigationStack { WatchHome(model: model) }
+            }
+            #else
             NavigationStack { WatchHome(model: model) }
+            #endif
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.refreshIfStale() } }
@@ -90,6 +98,15 @@ final class WatchModel: NSObject, WCSessionDelegate {
 
     override init() {
         super.init()
+        #if DEBUG
+        if WatchDemo.mode != nil {
+            usage = WatchDemo.usage
+            lastSyncedAt = .now
+            refreshedAt = .distantFuture
+            showingUsage = true
+            return
+        }
+        #endif
         WCSession.default.delegate = self
         WCSession.default.activate()
     }
