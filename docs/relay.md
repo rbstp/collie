@@ -15,6 +15,8 @@ npm run build
 npm run benchmark
 ```
 
+The separate `relay` GitHub Actions workflow runs the locked dependency install, typecheck, regression tests and dry-run build on relay pull requests and master changes. It pins Node 26.12.0 with the official archive SHA-256 and requires no Cloudflare credentials or deployment.
+
 Tests use local workerd D1 and mocked APNs. They never enroll a real phone or send a push. The benchmark generates an ephemeral test signing key and uses local fixture registration. Fixture provisioning exists only in test code; the deployed source has no registration bypass, administrative fixture endpoint or test signing key.
 
 ## Send contract v1
