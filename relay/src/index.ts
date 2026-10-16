@@ -14,6 +14,11 @@ export interface Env {
 }
 const response = (status: number, result: string, extra: Record<string, unknown> = {}): Response =>
   Response.json({ v: 1, result, ...extra }, { status, headers: { 'cache-control': 'no-store' } });
+async function bounded<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), 5000); });
+  try { return await Promise.race([operation, timeout]); } finally { clearTimeout(timer!); }
+}
 async function authenticate(request: Request, keys: Map<string, Promise<CryptoKey>>, now: number): Promise<Grant | null> {
   const authorization = request.headers.get('authorization');
   if (!authorization || authorization.length > 2048 || !authorization.startsWith('Bearer v1.')) return null;
@@ -41,7 +46,7 @@ export function createWorker(upstream: typeof fetch = fetch, clock: () => number
       const url = new URL(request.url);
       if (url.pathname !== '/v1/send' || url.search || request.method !== 'POST') return response(404, 'not_found');
       try {
-        const now = clock();
+        let now = clock();
         const source = request.headers.get('cf-connecting-ip');
         if (source && !(await env.SEND_LIMITER.limit({ key: `ip:${source}` })).success) return response(429, 'rate_limited', { retry_after: 60 });
         if (!keys) {
@@ -58,14 +63,26 @@ export function createWorker(upstream: typeof fetch = fetch, clock: () => number
         try { body = await readBody(request); } catch { return response(400, 'invalid_request'); }
         if (!validSend(body)) return response(400, 'invalid_request');
         if (!grant.push_classes.includes(body.push_type)) return response(401, 'unauthorized');
-        const route = await lookupRoute(env.DB, grant, now);
+        now = clock();
+        if (!validGrant(grant, now)) return response(401, 'unauthorized');
+        const route = await bounded(lookupRoute(env.DB, grant, now));
         if (!route || !/^[a-f0-9]{64,512}$/.test(route.destination)
           || ((route.kind === 'liveactivity') !== (body.push_type === 'liveactivity'))) return response(410, 'invalid_route');
         const aps = body.payload.aps as Record<string, unknown>;
         const routine = body.push_type === 'liveactivity' && aps.event === 'update' && aps.alert === undefined;
         signing ??= new ProviderToken(env.APNS_TEAM_ID, env.APNS_KEY_ID, env.APNS_PRIVATE_KEY);
-        const jwt = await signing.token(now);
-        if (!await charge(env.DB, grant, now, routine)) return response(429, 'daily_quota', { reset_at: (Math.floor(now / 86400) + 1) * 86400 });
+        now = clock();
+        let jwt = await bounded(signing.token(now));
+        if (Math.floor(clock() / 2700) !== Math.floor(now / 2700)) jwt = await bounded(signing.token(clock()));
+        now = clock();
+        if (!validGrant(grant, now)) return response(401, 'unauthorized');
+        const charged = await bounded(charge(env.DB, grant, now, routine));
+        if (charged === 'invalid_route') return response(410, 'invalid_route');
+        if (charged === 'unavailable') return response(503, 'unavailable');
+        if (charged === 'daily_quota') return response(429, 'daily_quota', { reset_at: (Math.floor(clock() / 86400) + 1) * 86400 });
+        now = clock();
+        if (!validGrant(grant, now)) return response(401, 'unauthorized');
+        if (route.expires_at <= now) return response(410, 'invalid_route');
         const host = grant.environment === 'production' ? 'api.push.apple.com' : 'api.sandbox.push.apple.com';
         const headers: Record<string, string> = {
           authorization: `bearer ${jwt}`, 'content-type': 'application/json',
@@ -79,7 +96,7 @@ export function createWorker(upstream: typeof fetch = fetch, clock: () => number
             method: 'POST', headers, body: JSON.stringify(body.payload), redirect: 'manual', signal: AbortSignal.timeout(10000)
           });
         } catch { return response(503, 'upstream_unavailable', { retry_after: 60 }); }
-        if (result.status === 200) { await result.body?.cancel(); return response(200, 'accepted'); }
+        if (result.status === 200) { void result.body?.cancel().catch(() => {}); return response(200, 'accepted'); }
         let reason: unknown;
         try {
           const reader = result.body?.getReader();
@@ -96,11 +113,11 @@ export function createWorker(upstream: typeof fetch = fetch, clock: () => number
                 text += decoder.decode(chunk.value, { stream: true });
               }
               reason = JSON.parse(text).reason;
-            } finally { await reader.cancel(); reader.releaseLock(); }
+            } finally { void reader.cancel().catch(() => {}); reader.releaseLock(); }
           }
         } catch { reason = undefined; }
         if ((result.status === 410 && reason === 'Unregistered') || (result.status === 400 && reason === 'BadDeviceToken')) {
-          await invalidate(env.DB, grant);
+          await bounded(invalidate(env.DB, grant));
           return response(410, 'invalid_route');
         }
         if (result.status === 429 || result.status >= 500) return response(503, 'upstream_unavailable', { retry_after: 60 });

@@ -72,23 +72,30 @@ export function validSend(v: unknown): v is Send {
     && (aps['dismissal-date'] === undefined || (aps.event === 'end' && integer(aps['dismissal-date'], 4294967295)))
     && (aps.alert === undefined || fallback(aps.alert));
 }
-export async function readBody(request: Request): Promise<unknown> {
+export async function readBody(request: Request, timeoutMs = 5000): Promise<unknown> {
   const length = request.headers.get('content-length');
   if (length !== null && (!/^\d+$/.test(length) || Number(length) > 8192)) throw new Error('invalid_request');
   if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json'
     || request.headers.has('content-encoding') || !request.body) throw new Error('invalid_request');
   const reader = request.body.getReader();
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error('invalid_request'));
+      void reader.cancel().catch(() => {});
+    }, timeoutMs);
+  });
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), timeout]);
       if (done) break;
       size += value.length;
-      if (size > 8192) { await reader.cancel(); throw new Error('invalid_request'); }
+      if (size > 8192) { void reader.cancel().catch(() => {}); throw new Error('invalid_request'); }
       chunks.push(value);
     }
-  } finally { reader.releaseLock(); }
+  } finally { clearTimeout(timer!); reader.releaseLock(); }
   const data = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.length; }

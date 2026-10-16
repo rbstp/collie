@@ -4,7 +4,7 @@ import { base64url, digest } from '../src/crypto.ts';
 import { signGrant } from '../src/index.ts';
 import type { Grant, Send } from '../src/contract.ts';
 
-export const now = 1792152000;
+export const now = Math.floor(Date.now() / 2700000) * 2700 + 60;
 export const secret = base64url(new Uint8Array(32).fill(7));
 export async function privateKey(): Promise<string> {
   const key = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);

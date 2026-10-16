@@ -84,28 +84,28 @@ test('stream body limit rejects absent length, misleading lengths, compression a
 test('installation routine cap reserves alerts and installation total cap is exact under concurrency', async () => {
   await reset();
   await f.db.prepare('UPDATE installation_usage SET total = 699, routine = 699').run();
-  assert.equal(await charge(f.db as never, f.grant, now, true), true);
-  assert.equal(await charge(f.db as never, f.grant, now, true), false);
-  assert.equal(await charge(f.db as never, f.grant, now, false), true);
+  assert.equal(await charge(f.db as never, f.grant, now, true), 'charged');
+  assert.equal(await charge(f.db as never, f.grant, now, true), 'daily_quota');
+  assert.equal(await charge(f.db as never, f.grant, now, false), 'charged');
   await f.db.prepare('UPDATE installation_usage SET total = 999').run();
   const results = await Promise.all(Array.from({ length: 20 }, () => charge(f.db as never, f.grant, now, false)));
-  assert.equal(results.filter(Boolean).length, 1);
+  assert.equal(results.filter(result => result === 'charged').length, 1);
   assert.equal((await f.db.prepare('SELECT total FROM installation_usage').first())!.total, 1000);
 });
 test('global cap rolls back the installation counter under concurrent last-slot requests', async () => {
   await reset();
   await f.db.prepare('UPDATE global_usage SET total = 19999, routine = 15999').run();
   const results = await Promise.all(Array.from({ length: 20 }, () => charge(f.db as never, f.grant, now, true)));
-  assert.equal(results.filter(Boolean).length, 1);
+  assert.equal(results.filter(result => result === 'charged').length, 1);
   assert.equal((await f.db.prepare('SELECT total FROM installation_usage').first())!.total, 1);
   assert.equal((await f.db.prepare('SELECT total FROM global_usage').first())!.total, 20000);
 });
 test('global routine cap reserves total capacity for nonroutine sends', async () => {
   await reset();
   await f.db.prepare('UPDATE global_usage SET total = 16000, routine = 16000').run();
-  assert.equal(await charge(f.db as never, f.grant, now, true), false);
+  assert.equal(await charge(f.db as never, f.grant, now, true), 'daily_quota');
   assert.equal((await f.db.prepare('SELECT total FROM installation_usage').first())!.total, 0);
-  assert.equal(await charge(f.db as never, f.grant, now, false), true);
+  assert.equal(await charge(f.db as never, f.grant, now, false), 'charged');
 });
 test('UTC midnight resets both counters, including a device with yesterday routine count', async () => {
   await reset();
@@ -114,7 +114,7 @@ test('UTC midnight resets both counters, including a device with yesterday routi
   const tomorrow = (Math.floor(now / 86400) + 1) * 86400;
   const grant = { ...f.grant, expires_at: tomorrow + 100 };
   await f.db.prepare('UPDATE routes SET expires_at = ?').bind(grant.expires_at).run();
-  assert.equal(await charge(f.db as never, grant, tomorrow, true), true);
+  assert.equal(await charge(f.db as never, grant, tomorrow, true), 'charged');
   assert.deepEqual(await f.db.prepare('SELECT total, routine FROM global_usage').first(), { total: 1, routine: 1 });
   assert.deepEqual(await f.db.prepare('SELECT total, routine FROM installation_usage').first(), { total: 1, routine: 1 });
   await f.db.prepare('UPDATE routes SET expires_at = ?').bind(f.grant.expires_at).run();
@@ -123,7 +123,7 @@ test('revocation between route lookup and quota charge fails closed', async () =
   await reset();
   assert.ok(await lookupRoute(f.db as never, f.grant, now));
   await f.db.prepare('UPDATE pairings SET epoch = epoch + 1').run();
-  assert.equal(await charge(f.db as never, f.grant, now, false), false);
+  assert.equal(await charge(f.db as never, f.grant, now, false), 'invalid_route');
   await f.db.prepare('UPDATE pairings SET epoch = 0').run();
   await f.db.prepare('UPDATE routes SET revoked = 1').run();
   assert.equal(await lookupRoute(f.db as never, f.grant, now), null);
@@ -181,8 +181,130 @@ test('a delayed previous-day invocation cannot roll counters backward after midn
   const tomorrow = (Math.floor(now / 86400) + 1) * 86400;
   const grant = { ...f.grant, expires_at: tomorrow + 100 };
   await f.db.prepare('UPDATE routes SET expires_at = ?').bind(grant.expires_at).run();
-  assert.equal(await charge(f.db as never, grant, tomorrow, true), true);
-  assert.equal(await charge(f.db as never, f.grant, now, false), false);
+  assert.equal(await charge(f.db as never, grant, tomorrow, true), 'charged');
+  assert.equal(await charge(f.db as never, grant, now, false), 'daily_quota');
   assert.deepEqual(await f.db.prepare('SELECT total, routine FROM global_usage').first(), { total: 1, routine: 1 });
   await f.db.prepare('UPDATE routes SET expires_at = ?').bind(f.grant.expires_at).run();
+});
+
+async function streamedRequest(grant: typeof f.grant, finish: () => void | Promise<void>) {
+  const req = await request(grant);
+  const body = JSON.stringify(alert);
+  let first = true;
+  const stream = new ReadableStream({
+    async pull(controller) {
+      if (first) { first = false; controller.enqueue(bytes(body)); }
+      else { await finish(); controller.close(); }
+    }
+  });
+  return new Request(req.url, { method: 'POST', headers: req.headers, body: stream, duplex: 'half' } as RequestInit);
+}
+function interceptCharge(after: () => void | Promise<void>) {
+  return {
+    prepare(sql: string) {
+      const statement = f.db.prepare(sql);
+      if (!sql.startsWith('UPDATE installation_usage')) return statement;
+      return { bind(...values: unknown[]) {
+        const bound = statement.bind(...values);
+        return { async first() { const result = await bound.first(); await after(); return result; } };
+      } };
+    }
+  };
+}
+test('a grant expiring during streamed body parsing never reaches quota or APNs', async () => {
+  await reset();
+  let time = Math.floor(Date.now() / 1000);
+  const grant = { ...f.grant, expires_at: time + 1 };
+  let calls = 0;
+  const worker = createWorker(async () => { calls++; return new Response('', { status: 200 }); }, () => time);
+  const req = await streamedRequest(grant, () => { time += 2; });
+  assert.equal((await worker.fetch(req, f.env as never)).status, 401);
+  assert.equal(calls, 0);
+  assert.equal((await f.db.prepare('SELECT total FROM installation_usage').first())!.total, 0);
+});
+test('streamed requests crossing midnight use the new quota day and JWT window', async () => {
+  await reset();
+  const midnight = (Math.floor(now / 86400) + 1) * 86400;
+  let time = midnight - 1;
+  const grant = { ...f.grant, expires_at: midnight + 100 };
+  await f.db.prepare('UPDATE routes SET expires_at = ?').bind(grant.expires_at).run();
+  await f.db.prepare('UPDATE installation_usage SET total = 1000').run();
+  await f.db.prepare('UPDATE global_usage SET total = 20000').run();
+  let calls = 0;
+  const worker = createWorker(async (_url, init) => {
+    calls++;
+    const token = (init!.headers as Record<string, string>).authorization.slice(7);
+    const payload = JSON.parse(new TextDecoder().decode(decode(token.split('.')[1])));
+    assert.equal(payload.iat, midnight);
+    return new Response('', { status: 200 });
+  }, () => time);
+  const req = await streamedRequest(grant, () => { time = midnight + 1; });
+  assert.equal((await worker.fetch(req, f.env as never)).status, 200);
+  assert.equal(calls, 1);
+  assert.deepEqual(await f.db.prepare('SELECT day, total FROM installation_usage').first(), { day: midnight / 86400, total: 1 });
+  assert.equal((await f.db.prepare('SELECT total FROM global_usage').first())!.total, 1);
+  await f.db.prepare('UPDATE routes SET expires_at = ?').bind(f.grant.expires_at).run();
+});
+test('grant expiry during an awaited quota response stops forwarding after consuming the reservation', async () => {
+  await reset();
+  let time = Math.floor(Date.now() / 1000);
+  const grant = { ...f.grant, expires_at: time + 60 };
+  let calls = 0;
+  const worker = createWorker(async () => { calls++; return new Response('', { status: 200 }); }, () => time);
+  const db = interceptCharge(() => { time += 61; });
+  assert.equal((await worker.fetch(await request(grant), { ...f.env, DB: db } as never)).status, 401);
+  assert.equal(calls, 0);
+  assert.equal((await f.db.prepare('SELECT total FROM installation_usage').first())!.total, 1);
+});
+test('an epoch change between lookup and charge returns invalid_route rather than daily_quota', async () => {
+  await reset();
+  let calls = 0;
+  const worker = createWorker(async () => { calls++; return new Response('', { status: 200 }); }, () => now);
+  const db = { prepare(sql: string) {
+    const statement = f.db.prepare(sql);
+    if (!sql.startsWith('UPDATE installation_usage')) return statement;
+    return { bind(...values: unknown[]) { const bound = statement.bind(...values); return { async first() {
+      await f.db.prepare('UPDATE pairings SET epoch = epoch + 1').run();
+      return bound.first();
+    } }; } };
+  } };
+  const result = await worker.fetch(await request(f.grant), { ...f.env, DB: db } as never);
+  assert.equal(result.status, 410);
+  assert.deepEqual(await result.json(), { v: 1, result: 'invalid_route' });
+  assert.equal(calls, 0);
+  assert.equal((await f.db.prepare('SELECT total FROM installation_usage').first())!.total, 0);
+  await f.db.prepare('UPDATE pairings SET epoch = 0').run();
+});
+test('body duration is bounded even when the stream never finishes or cancellation stalls', async () => {
+  const stream = new ReadableStream({ start(controller) { controller.enqueue(bytes('{}')); }, cancel() { return new Promise(() => {}); } });
+  const req = new Request('https://relay.example', { method: 'POST', headers: { 'content-type': 'application/json' }, body: stream, duplex: 'half' } as RequestInit);
+  await assert.rejects(readBody(req, 20), /invalid_request/);
+});
+test('route expiry during a streamed request returns invalid_route without consuming quota', async () => {
+  await reset();
+  let time = Math.floor(Date.now() / 1000);
+  const grant = { ...f.grant, expires_at: time + 100 };
+  await f.db.prepare('UPDATE routes SET expires_at = ?').bind(grant.expires_at).run();
+  let calls = 0;
+  const worker = createWorker(async () => { calls++; return new Response('', { status: 200 }); }, () => time);
+  const req = await streamedRequest(grant, async () => {
+    await f.db.prepare('UPDATE routes SET expires_at = ?').bind(time + 1).run();
+    time += 2;
+  });
+  assert.equal((await worker.fetch(req, f.env as never)).status, 410);
+  assert.equal(calls, 0);
+  assert.equal((await f.db.prepare('SELECT total FROM installation_usage').first())!.total, 0);
+  await f.db.prepare('UPDATE routes SET expires_at = ?').bind(f.grant.expires_at).run();
+});
+test('real quota exhaustion returns daily_quota but an absent counter returns unavailable', async () => {
+  await reset();
+  const worker = createWorker(async () => { throw new Error('unexpected APNs'); }, () => now);
+  await f.db.prepare('UPDATE global_usage SET total = 20000').run();
+  const exhausted = await worker.fetch(await request(f.grant), f.env as never);
+  assert.equal(exhausted.status, 429);
+  assert.deepEqual(await exhausted.json(), { v: 1, result: 'daily_quota', reset_at: (Math.floor(now / 86400) + 1) * 86400 });
+  await f.db.prepare('DELETE FROM installation_usage').run();
+  const missing = await worker.fetch(await request(f.grant), f.env as never);
+  assert.equal(missing.status, 503);
+  assert.deepEqual(await missing.json(), { v: 1, result: 'unavailable' });
 });
