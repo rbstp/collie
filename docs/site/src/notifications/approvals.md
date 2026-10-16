@@ -32,4 +32,4 @@ When an agent finishes a turn that took 30 seconds or more, you get one alert wi
 
 ## What Apple can see
 
-The visible part of an alert only says which agent is blocked and where. The command is encrypted end to end with a key generated on your phone, and decrypted by the app's notification extension. Apple still sees agent and workspace names, pull request numbers and their status in the Woke and Archived alerts (such as "CI failed on #123" or "PR #123 merged"), opaque IDs and timing. Details are in the [threat model](../reference/threat-model.md#apple-sees-push-payload-metadata).
+Alert titles, bodies, names, pull request details and commands are encrypted with your phone's per-machine key and decrypted locally by the notification extension. Apple receives generic text and ciphertext, plus opaque IDs, urgency, timing, frequency and payload size. A failed decryption or extension timeout leaves generic text without approval controls. Details are in the [threat model](../reference/threat-model.md#apple-sees-push-payload-metadata).

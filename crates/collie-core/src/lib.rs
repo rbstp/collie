@@ -2297,7 +2297,14 @@ impl CollieCore {
         activity_id: String,
         terminal_id: String,
         token_hex: String,
+        binding_id: String,
     ) -> Result<(), CoreError> {
+        let node_id = lock(&self.inner.machines)
+            .iter()
+            .find(|m| m.id == machine_id)
+            .ok_or(CoreError::MachineNotFound)?
+            .node_id
+            .clone();
         let params = PushActivityTokenParams {
             activity_id: activity(activity_id)?,
             terminal_id: terminal(terminal_id)?,
@@ -2305,6 +2312,11 @@ impl CollieCore {
                 .map_err(|_| invalid("token", "activity token must be 64 to 256 hex characters"))?,
             // Every activity the app starts carries the Mac's node id.
             shows_approvals: true,
+            display_binding: Some(protocol::ActivityDisplayBinding {
+                node_id: Label::new(node_id)
+                    .map_err(|_| invalid("node_id", "invalid machine node id"))?,
+                binding_id: activity(binding_id)?,
+            }),
         };
         self.update_push(&machine_id, |reg| {
             reg.unsent_ends
@@ -4076,7 +4088,13 @@ mod tests {
             other => panic!("{other:?}"),
         };
         let register = |m: &str, a: &str, t: &str, tok: &str| {
-            core.register_activity_token(m.into(), a.into(), t.into(), tok.into())
+            core.register_activity_token(
+                m.into(),
+                a.into(),
+                t.into(),
+                tok.into(),
+                "binding-test".into(),
+            )
         };
         assert_eq!(
             field(register("m1", "a/b", "term_1", &token)).as_deref(),
@@ -4188,8 +4206,14 @@ mod tests {
         let token = "cd".repeat(80);
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
         assert!(!file.exists(), "an older build has no file");
-        core.register_activity_token("m1".into(), "T1".into(), "term_1".into(), token.clone())
-            .unwrap();
+        core.register_activity_token(
+            "m1".into(),
+            "T1".into(),
+            "term_1".into(),
+            token.clone(),
+            "binding-test".into(),
+        )
+        .unwrap();
         core.end_activity("m1".into(), "A1".into()).unwrap();
         core.end_activity("m1".into(), "A2".into()).unwrap();
         core.end_activity("m2".into(), "B1".into()).unwrap();
@@ -4800,6 +4824,12 @@ mod tailnet_tests {
                     let result = match frame.request {
                         Request::Hello(_) => Ok(Response::Hello(HelloResult {
                             protocol_version: PROTOCOL_VERSION,
+                            protocol_min_version: protocol::PROTOCOL_MIN_VERSION,
+                            protocol_max_version: PROTOCOL_VERSION,
+                            capabilities: protocol::HelloParams::current(
+                                Label::new("test").unwrap(),
+                            )
+                            .capabilities,
                             collied_version: "test".into(),
                             machine,
                             herdr_version: None,
@@ -5391,7 +5421,7 @@ mod tailnet_tests {
                 (f.link == LinkPhase::Stopped).then_some(f)
             })
             .expect("stopped on the version mismatch");
-        let update = "Update collied on Studio: run just collied-install there.";
+        let update = "Update collied on Studio: install the latest release from github.com/rbstp/collie/releases.";
         assert!(stopped.version_mismatch);
         assert_eq!(stopped.last_error.as_deref(), Some(update));
         let agent = core.agent_view(id(), t1(), 0).unwrap();
@@ -5614,8 +5644,14 @@ mod tailnet_tests {
             (lock(&seen).pushes.len() == 1).then_some(())
         });
         let token = "ab".repeat(80);
-        core.register_activity_token(id(), ACTIVITY.into(), "term_1".into(), token.clone())
-            .unwrap();
+        core.register_activity_token(
+            id(),
+            ACTIVITY.into(),
+            "term_1".into(),
+            token.clone(),
+            "binding-test".into(),
+        )
+        .unwrap();
         let registered = format!("token {ACTIVITY} term_1 {token} true");
         poll("push.activity_token", || {
             (lock(&seen).activities.last() == Some(&registered)).then_some(())
@@ -5779,8 +5815,14 @@ mod tailnet_tests {
             let seen = lock(&seen);
             (seen.connections, seen.closed)
         };
-        core.register_activity_token(id(), ACTIVITY.into(), "term_1".into(), token.clone())
-            .unwrap();
+        core.register_activity_token(
+            id(),
+            ACTIVITY.into(),
+            "term_1".into(),
+            token.clone(),
+            "binding-test".into(),
+        )
+        .unwrap();
         rt.block_on(core.suspend(core.begin_suspend()));
         assert_eq!(
             lock(&seen).activities.last(),

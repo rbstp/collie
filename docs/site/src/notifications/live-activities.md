@@ -7,4 +7,4 @@ Follow an agent to keep it on the Lock Screen and in the Dynamic Island.
 
 When a followed Claude Code agent blocks on a permission prompt, the activity shows the command with **Approve** and **Deny** buttons. Other prompts, and Codex or Copilot CLI agents, arrive as a regular notification instead.
 
-Following is off by default. A followed agent's status changes travel through Apple's push service with their names in clear, while the pending command stays encrypted.
+Following is off by default. Private static attributes and all initial, local, update and end display state are encrypted, including names, status and pending commands. Apple sees generic alert text, opaque IDs, priority, timing, size and activity lifecycle. The widget shows neutral state without approval controls before first unlock after boot or if decryption fails.

@@ -263,6 +263,7 @@ async fn scenario(
             99,
             "collied is older than this app. Update collied on this machine.",
         ),
+        (25, "This app is older than collied. Update the app."),
         (1, "This app is older than collied. Update the app."),
     ] {
         let mut ws = open(&phone, &target).await;
@@ -275,6 +276,19 @@ async fn scenario(
                     && error.protocol_version == Some(protocol::PROTOCOL_VERSION)),
             "{frame:?}"
         );
+        assert_closed(&mut ws).await;
+    }
+
+    for maximum in [26, 27, 28] {
+        let mut ws = open(&phone, &target).await;
+        send(&mut ws, json!({"id":1,"method":"hello","params":{"protocol_version":maximum,"protocol_min_version":26,"app_version":"it","capabilities":[]}})).await;
+        let Response::Hello(hello) = result(recv(&mut ws).await) else {
+            panic!("no negotiated hello")
+        };
+        assert_eq!(hello.protocol_version, 26);
+        assert!(hello.capabilities.is_empty());
+        send(&mut ws, json!({"id":2,"method":"pair.complete","params":{"pairing_code":invite.code.as_str(),"device_label":"phone","terminal_key":format!("{}Q", "M".repeat(121))}})).await;
+        assert_error(&recv(&mut ws).await, ErrorCode::NotImplemented);
         assert_closed(&mut ws).await;
     }
 
@@ -1508,7 +1522,7 @@ async fn terminal_phase(
 }
 
 fn hello_frame(version: u32) -> Value {
-    json!({"id": 1, "method": "hello", "params": {"protocol_version": version, "app_version": "it"}})
+    json!({"id": 1, "method": "hello", "params": {"protocol_version": version, "protocol_min_version": version, "capabilities": [protocol::TERMINAL_GRANTS_V1, protocol::ENCRYPTED_DISPLAY_V1], "app_version": "it"}})
 }
 
 fn pair_frame(code: &str) -> Value {
