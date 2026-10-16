@@ -225,4 +225,4 @@ jobs:
       - name: test desktop packaging and service refresh
         run: |
           python3 -m unittest discover -s scripts/desktop -p 'test_*.py'
-          bash -n scripts/desktop/install.sh scripts/desktop/install-tray.sh scripts/desktop/sign-macos.sh
+          bash -n scripts/desktop/*.sh

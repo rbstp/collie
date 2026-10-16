@@ -92,6 +92,74 @@ class PackageTests(unittest.TestCase):
                     self.assertEqual(result.stdout.strip(), path.stem)
 
 
+class SourceValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="collie-source-")
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name)
+        self.git("init", "--quiet", "--initial-branch=master")
+        (self.repo / "fixture").write_text("first master commit")
+        self.git("add", "fixture")
+        self.git("commit", "--quiet", "-m", "Initial fixture")
+        self.previous = self.git("rev-parse", "HEAD")
+        (self.repo / "fixture").write_text("current master commit")
+        self.git("commit", "--quiet", "-a", "-m", "Update fixture")
+        self.master = self.git("rev-parse", "HEAD")
+        self.git("update-ref", "refs/remotes/origin/master", self.master)
+        self.output = self.repo / "outputs"
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", *args], cwd=self.repo, text=True).strip()
+
+    def validate(self, source, tag="v1.2.3"):
+        env = dict(os.environ, SOURCE_SHA=source, TAG=tag, GITHUB_OUTPUT=str(self.output))
+        return subprocess.run(["bash", str(package.ROOT / "scripts/desktop/validate-source.sh")], cwd=self.repo, env=env, capture_output=True, text=True)
+
+    def test_master_ancestor_produces_canonical_identity_without_changing_checkout(self):
+        result = self.validate(self.previous)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.output.read_text(), f"source_sha={self.previous}\ntag=v1.2.3\n")
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.master)
+
+    def test_existing_annotated_tag_at_same_commit_allows_retry(self):
+        self.git("tag", "-a", "v1.2.3", self.previous, "-m", "Fixture release")
+        result = self.validate(self.previous)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(self.previous, self.output.read_text())
+
+    def test_off_master_commit_cannot_produce_trusted_output(self):
+        self.git("checkout", "--quiet", "-b", "untrusted", self.previous)
+        (self.repo / "fixture").write_text("untrusted commit")
+        self.git("commit", "--quiet", "-a", "-m", "Untrusted fixture")
+        untrusted = self.git("rev-parse", "HEAD")
+        self.git("checkout", "--quiet", "master")
+        result = self.validate(untrusted)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.output.exists())
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.master)
+
+    def test_tag_cannot_be_reused_for_another_commit(self):
+        self.git("tag", "v1.2.3", self.previous)
+        result = self.validate(self.master)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.output.exists())
+
+    def test_dispatch_input_is_data_and_invalid_values_are_rejected(self):
+        injected = self.repo / "injected"
+        for source, tag in [(f"$(touch {injected})", "v1.2.3"), (self.master, f"v1.2.3$(touch {injected})")]:
+            with self.subTest(source=source, tag=tag):
+                result = self.validate(source, tag)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(injected.exists())
+                self.assertFalse(self.output.exists())
+
+    def test_validator_refuses_to_run_from_a_different_checkout(self):
+        self.git("checkout", "--quiet", "--detach", self.previous)
+        result = self.validate(self.previous)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.output.exists())
+
+
 class InstallerTests(unittest.TestCase):
     def install(self, running, unit_text=None, replace=True):
         with tempfile.TemporaryDirectory(prefix="collie-install-") as temp:
