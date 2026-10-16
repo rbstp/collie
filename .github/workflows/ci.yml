@@ -212,3 +212,17 @@ jobs:
 
       - name: test
         run: just --no-deps ios-test never
+
+  desktop-packaging:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: test desktop packaging and service refresh
+        run: |
+          python3 -m unittest discover -s scripts/desktop -p 'test_*.py'
+          bash -n scripts/desktop/install.sh scripts/desktop/install-tray.sh scripts/desktop/sign-macos.sh

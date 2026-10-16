@@ -67,4 +67,5 @@
 - [Tailnet setup](reference/tailnet.md)
 - [Notifications](reference/notifications.md)
 - [Release](reference/release.md)
+- [Desktop releases](reference/desktop-releases.md)
 - [Documentation site](reference/deploy-pages.md)

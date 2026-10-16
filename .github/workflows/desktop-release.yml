@@ -1,0 +1,194 @@
+name: desktop release
+run-name: "[desktop] - shipping ${{ inputs.tag }}"
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: immutable version tag, for example v0.3.0
+        required: true
+        type: string
+      source_sha:
+        description: full master commit SHA, including for retries
+        required: true
+        type: string
+
+concurrency:
+  group: desktop-release-${{ inputs.tag }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: ${{ github.repository == 'rbstp/collie' && github.ref == 'refs/heads/master' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.merged) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: checkout trusted release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: master
+
+      - name: validate immutable source and create the tag if absent
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" origin/master
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            [ "$(git rev-parse "$TAG^{commit}")" = "$SOURCE_SHA" ] || { echo 'Existing tag points at another commit'; exit 1; }
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$SOURCE_SHA"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TAG: ${{ inputs.tag }}
+
+  linux:
+    needs: validate
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+          submodules: true
+
+      - name: set up go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.2
+          cache: false
+
+      - name: install rust
+        run: rustup toolchain install
+
+      - name: test desktop packaging
+        run: |
+          python3 -m unittest discover -s scripts/desktop -p 'test_*.py'
+
+      - name: build and smoke test the stamped daemon
+        run: |
+          python3 scripts/desktop/stamp-version.py "$TAG"
+          cargo build --release -p collied
+          target/release/collied --version
+          target/release/collied --help
+          ldd target/release/collied | tee /tmp/collied-libraries
+          if grep -q 'not found' /tmp/collied-libraries; then exit 1; fi
+          git restore Cargo.toml Cargo.lock
+          python3 scripts/desktop/package.py package --tag "$TAG" --sha "$SOURCE_SHA" --platform linux-x86_64 --binary target/release/collied --out dist
+          python3 scripts/desktop/package.py package --tag "$TAG" --sha "$SOURCE_SHA" --platform omarchy --out dist
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TAG: ${{ inputs.tag }}
+
+      - name: keep Linux packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-linux
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    environment: desktop-release
+    needs: validate
+    runs-on: xcode-27
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+          submodules: true
+
+      - name: set up go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.2
+          cache: false
+
+      - name: install rust and xcodegen
+        run: |
+          rustup toolchain install
+          curl -sSfL -o "$RUNNER_TEMP/xcodegen.zip" https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
+          echo "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: test and build stamped desktop software
+        run: |
+          python3 -m unittest discover -s scripts/desktop -p 'test_*.py'
+          python3 scripts/desktop/stamp-version.py "$TAG"
+          cargo build --release -p collied --target aarch64-apple-darwin
+          git restore Cargo.toml Cargo.lock
+          xcodegen generate --spec Mac/project.yml
+          xcodebuild -project Mac/CollieBar.xcodeproj -scheme CollieBar -destination 'platform=macOS' -derivedDataPath target/mac-tests CODE_SIGNING_ALLOWED=NO test
+          xcodebuild -project Mac/CollieBar.xcodeproj -scheme CollieBar -configuration Release -destination 'generic/platform=macOS' -derivedDataPath target/mac ARCHS=arm64 CODE_SIGNING_ALLOWED=NO MARKETING_VERSION="${TAG#v}" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" build
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '26.0'
+          TAG: ${{ inputs.tag }}
+
+      - name: sign notarize and package
+        run: bash scripts/desktop/sign-macos.sh
+        env:
+          DESKTOP_CERT_P12: '${{ secrets.DESKTOP_CERT_P12 }}'
+          DESKTOP_CERT_PASSWORD: '${{ secrets.DESKTOP_CERT_PASSWORD }}'
+          APPLE_KEY_P8: '${{ secrets.APPLE_KEY_P8 }}'
+          APPLE_KEY_ID: '${{ secrets.APPLE_KEY_ID }}'
+          APPLE_ISSUER_ID: '${{ secrets.APPLE_ISSUER_ID }}'
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TAG: ${{ inputs.tag }}
+
+      - name: keep macOS packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-macos
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+
+      - name: collect desktop packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+
+      - name: publish one release without replacing existing assets
+        run: python3 scripts/desktop/publish.py --tag "$TAG" --sha "$SOURCE_SHA" --out dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TAG: ${{ inputs.tag }}
