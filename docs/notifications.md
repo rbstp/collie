@@ -62,6 +62,8 @@ Daily routine exhaustion preserves urgent capacity, while a total quota or gener
 
 The phone's App Attest grants expire after 30 days and renew from seven days before expiry. An inactive phone loses relay pushes after expiry until it renews. Removing a machine offline retains remote revocation work, so previously authorized sends may continue until success or expiry. Existing physical navigation observations above do not validate encrypted relay delivery, locked/pre-first-unlock display or activity update/end. Those remain explicit physical-device gates.
 
+The phone uses grants only for negotiated actual relay mode; public deployment and a passing Free-plan verification design remain rollout gates. See [relay.md](relay.md#attested-control-contract) for the control limits, privacy and retention policy.
+
 ## Simulator testing
 
 [Simulator relay testing](simulator.md) gives separate commands for real paired sessions, local mock APNs, payload injection and optional real sandbox delivery. Mock acceptance and `simctl push` do not establish notification service extension execution, remote ActivityKit delivery or physical-device acceptance. A fresh explicitly provisioned DEBUG Simulator identity and an isolated local database cannot enroll with production.
