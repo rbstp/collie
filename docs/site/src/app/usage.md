@@ -15,3 +15,7 @@ Switch the Agents tab to **Usage**, or swipe left, to see plan usage. There is o
 Each block has a bar with a tick for the time elapsed in the window, the amount used and the reset time. Usage beyond the tick means you are ahead of an even pace.
 
 The same readings feed the [Apple Watch](../notifications/apple-watch.md) complication and widget.
+
+<div class="screenshots">
+<img src="../images/watch-widget.png" width="208" height="248" loading="lazy" alt="The Plan usage widget on the Apple Watch: three gauges, Claude 5-hour, Claude weekly and Codex monthly, each with a reset countdown">
+</div>
