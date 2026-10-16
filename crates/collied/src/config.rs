@@ -216,6 +216,10 @@ pub fn home_dir() -> Result<PathBuf> {
 
 #[cfg(target_os = "macos")]
 pub fn data_dir() -> Result<PathBuf> {
+    #[cfg(debug_assertions)]
+    if tailnet::vm_test::enabled() {
+        return Ok(home_dir()?.join("Library/Application Support/collie-vm-test"));
+    }
     Ok(home_dir()?.join("Library/Application Support/collie"))
 }
 

@@ -882,6 +882,12 @@ fn approval_note(note: String, decision: ApprovalDecision) -> Result<PromptText,
         })
 }
 
+#[cfg(all(debug_assertions, target_os = "ios", target_abi = "sim"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn collie_vm_test_supported() -> u32 {
+    0x434f4c4c
+}
+
 #[uniffi::export]
 pub fn build_info() -> BuildInfo {
     BuildInfo {
@@ -958,7 +964,12 @@ impl Drop for Busy {
 impl CollieCore {
     #[uniffi::constructor]
     pub fn new(state_dir: String) -> Result<Arc<Self>, CoreError> {
-        Self::build(PathBuf::from(state_dir), None)
+        let state_dir = PathBuf::from(state_dir);
+        #[cfg(all(debug_assertions, target_os = "ios", target_abi = "sim"))]
+        if tailnet::vm_test::load(&state_dir)?.is_some() {
+            return Self::build(state_dir, Some(tailnet::vm_test::CONTROL_URL.into()));
+        }
+        Self::build(state_dir, None)
     }
 
     pub fn set_identity(
@@ -1005,6 +1016,10 @@ impl CollieCore {
 
     /// The key is used once to build the node and never stored by collie-core.
     pub async fn node_start(&self, auth_key: Option<String>) -> Result<(), CoreError> {
+        #[cfg(all(debug_assertions, target_os = "ios", target_abi = "sim"))]
+        let auth_key = tailnet::vm_test::load(&self.inner.state_dir)?
+            .map(|key| key.to_string())
+            .or(auth_key);
         let key = auth_key
             .map(Zeroizing::new)
             .map(|k| Zeroizing::new(k.trim().to_owned()))

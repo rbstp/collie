@@ -9,7 +9,11 @@ struct KeychainItem: @unchecked Sendable {
     let accessible: CFString
 
     var query: [String: Any] {
-        [
+        var service = self.service
+        #if DEBUG && targetEnvironment(simulator)
+        if SimulatorVM.enabled { service = "dev.rbstp.collie.vm-test." + service }
+        #endif
+        return [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,

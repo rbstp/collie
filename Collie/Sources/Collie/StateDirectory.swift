@@ -4,7 +4,14 @@ enum StateDirectory {
     /// collie-core refuses a state dir that is not 0700. The protection class lets a
     /// background launch after first unlock read tailnet state and machines.
     static func prepare() throws -> URL {
-        let dir = URL.applicationSupportDirectory.appending(path: "collie", directoryHint: .isDirectory)
+        var name = "collie"
+        #if DEBUG && targetEnvironment(simulator)
+        if SimulatorVM.enabled {
+            try SimulatorVM.verifyCore()
+            name = "collie-vm-test"
+        }
+        #endif
+        let dir = URL.applicationSupportDirectory.appending(path: name, directoryHint: .isDirectory)
         let attributes: [FileAttributeKey: Any] = [
             .posixPermissions: 0o700,
             .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication,

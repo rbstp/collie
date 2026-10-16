@@ -59,6 +59,7 @@ targets:
           # Expanded into the entitlements and Info.plist, so the token's environment always matches the signing.
           APS_ENVIRONMENT: development
           "INFOPLIST_PREPROCESSOR_DEFINITIONS[sdk=iphonesimulator*]": COLLIE_SIMULATOR_RELAY=1
+          "OTHER_LDFLAGS[sdk=iphonesimulator*]": "$(inherited) $(COLLIE_VM_TEST_LDFLAGS)"
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"

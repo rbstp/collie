@@ -394,3 +394,10 @@ Relay retries hold at most 64 encrypted pending destinations in memory, with no 
 ## Local Simulator development trust
 
 The local-only Simulator entry pre-provisions a fresh software key into private isolated D1 storage and refuses enrollment. It fixes sandbox APNs and uses separate send secrets. Its control assertions still pass the production verifier and atomic counter/epoch checks. Production cannot authenticate this key through enrollment and cannot verify the local HMAC grants. Do not copy development database rows or secrets into production. Swift development import is DEBUG Simulator only; the daemon loopback switch is debug-only and absent from Release artifacts. Real APNs keys remain locally held operator credentials, never provisioning fixtures. See [Simulator testing](simulator.md) for the exact boundary and limits.
+
+
+## Local VM test boundary
+
+The [VM and Simulator harness](vm-simulator.md) is a Debug-only trust island. It uses a disposable macOS guest, a separately recorded host Simulator, fresh software identities, synthetic tailnet authorization and a private mock publisher database. The fixed local control hook requires explicit opt-in plus owned private marker files; unsupported Rust frameworks fail before Swift creates state or identity. Neither physical-device nor Release artifacts expose this hook. Ordinary pairing confirmation, identity pins and mutual TLS still apply.
+
+SSH host keys are obtained through the local VM guest agent and verified with a private per-run known-hosts file. The harness forwards only fixed loopback endpoints with a task-only key, disables agent forwarding, shares no host directories and refuses occupied test ports. Reset and teardown operate only on recorded test resources. VM image tooling and any guest desktop-control permissions belong to the guest; a CI image with SIP or Gatekeeper disabled cannot prove pristine consumer acceptance. Local mock success establishes neither genuine App Attest nor Apple APNs acceptance.

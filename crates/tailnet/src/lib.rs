@@ -13,6 +13,12 @@ use tailscale_sys as sys;
 use tokio::io::unix::AsyncFd;
 use zeroize::Zeroizing;
 
+#[cfg(all(
+    debug_assertions,
+    any(target_os = "macos", all(target_os = "ios", target_abi = "sim"))
+))]
+pub mod vm_test;
+
 mod listeners;
 pub use listeners::{kernel_tcp_listeners, udp_listeners};
 

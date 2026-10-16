@@ -18,7 +18,7 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
 for artifact in "$app/Collie" "$2" "$3"; do
     strings "$artifact" > "$scratch/strings"
-    if rg 'COLLIE_SIMULATOR_RELAY|127\.0\.0\.1:8788|simulator-relay\.json|simulator-provisioned|local_provisioning_required' "$scratch/strings"; then
+    if rg 'COLLIE_SIMULATOR_RELAY|COLLIE_VM_TEST|collie_vm_test_supported|vm-tailnet\.json|vm-core-(rejection|identity)\.json|127\.0\.0\.1:878[89]|simulator-relay\.json|simulator-provisioned|local_provisioning_required' "$scratch/strings"; then
         echo 'Release artifact contains Simulator relay support' >&2
         exit 1
     else
