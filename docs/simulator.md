@@ -66,7 +66,7 @@ COLLIE_SIMULATOR_RELAY=1 target/debug/collied run
 
 This exact DEBUG-only switch selects `http://127.0.0.1:8788/v1/send`. There is no arbitrary endpoint option. A Release daemon always uses the HTTPS publisher endpoint. DEBUG Simulator builds alone receive the exact loopback ATS exception; Release and physical-device builds do not.
 
-Pair this Simulator as above. Open the app to deliver app-token grants over its paired mutual-TLS session. Run `target/debug/collied apns test` against that running daemon. In mock mode `accepted` means the mock accepted the encrypted request. It does not mean Apple accepted it or an alert displayed. The mock saves only the last encrypted payload to `/private/tmp/collie-simulator-relay/last-push.apns`.
+Pair this Simulator as above. Open the app to deliver app-token grants over its paired mutual-TLS session. Run `COLLIE_SIMULATOR_RELAY=1 target/debug/collied apns test` with the same configuration. The test command constructs its own sender, so it needs the loopback switch too. In mock mode `accepted` means the mock accepted the encrypted request. It does not mean Apple accepted it or an alert displayed. The mock saves only the last encrypted payload to `/private/tmp/collie-simulator-relay/last-push.apns`.
 
 To inspect local rendering separately:
 
@@ -96,7 +96,7 @@ Both placeholders must be replaced with the actual ten-character team/key IDs. T
 
 Use a fresh dedicated Simulator, copy this directory's new identity as above, and launch with `SIMCTL_CHILD_COLLIE_SIMULATOR_RELAY=sandbox`. This mode supplies no synthetic token: the app must register with real APNs. Use a locally signed DEBUG build with the matching sandbox entitlement if unsigned registration is refused. Follow the normal pairing flow and confirm Settings reports a sandbox registration. If registration fails, report that gate and use mock tests, without substituting a fake token and claiming APNs success.
 
-Run `collied apns test`, background the app, and separately record Apple acceptance and the displayed decrypted title/body from ColliePush. Exercise approval/done/agent alerts and the generic missing-key fallback. Follow a scratch agent, wait for its real ActivityKit push token registration, then change its status and end following. Record actual update and end observations. The mock's encrypted fixture tests do not prove these remote deliveries. Follow [notifications.md](notifications.md) for decisions, expiry and background-clear behavior.
+Run `COLLIE_SIMULATOR_RELAY=1 target/debug/collied apns test`, background the app, and separately record Apple acceptance and the displayed decrypted title/body from ColliePush. Exercise approval/done/agent alerts and the generic missing-key fallback. Follow a scratch agent, wait for its real ActivityKit push token registration, then change its status and end following. Record actual update and end observations. The mock's encrypted fixture tests do not prove these remote deliveries. Follow [notifications.md](notifications.md) for decisions, expiry and background-clear behavior.
 
 ## Release separation and cleanup
 
