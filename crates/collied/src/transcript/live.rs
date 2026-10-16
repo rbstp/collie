@@ -187,7 +187,9 @@ impl Transcripts {
         found.all(|s| s == first).then_some(first)
     }
 
-    /// `claude attach` takes a session id prefix or a name; only one live `bg` process may match.
+    /// Claude Code matches up to 8 hex as a job id prefix and anything else as a name; here a
+    /// name must be exact. The attach client can switch to another session from its agent
+    /// view without its argv changing, so a named session must also be the pane's title.
     fn attached_to(&self, sessions: &Path, a: &AgentInfo) -> Option<String> {
         let target = self
             .panes
@@ -196,16 +198,27 @@ impl Transcripts {
             .attach
             .as_deref()
             .filter(|t| !t.is_empty())?;
-        unique(
-            background(sessions)?
-                .filter(|c| c.session.starts_with(target) || c.name.as_deref() == Some(target)),
-        )
+        let job = target.len() <= 8
+            && target
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        let found = unique(
+            background(sessions)?.filter(|c| match (job, &c.job, &c.name) {
+                (true, Some(j), _) => j == target || (target.len() < 8 && j.starts_with(target)),
+                (false, _, Some(name)) => name == target,
+                _ => false,
+            }),
+        )?;
+        match found.name {
+            Some(name) if a.terminal_title_stripped.as_deref() != Some(name.as_str()) => None,
+            _ => Some(found.session),
+        }
     }
 }
 
-fn unique(mut found: impl Iterator<Item = Claim>) -> Option<String> {
-    let first = found.next()?.session;
-    found.all(|c| c.session == first).then_some(first)
+fn unique(mut found: impl Iterator<Item = Claim>) -> Option<Claim> {
+    let first = found.next()?;
+    found.all(|c| c.session == first.session).then_some(first)
 }
 
 fn background(sessions: &Path) -> Option<impl Iterator<Item = Claim>> {
@@ -343,6 +356,7 @@ fn attached(sessions: &Path, dir: &Path, job: &str) -> Option<String> {
             && project_dir(&c.cwd) == name
             && is_file(&dir.join(format!("{}.jsonl", c.session)))
     }))
+    .map(|c| c.session)
 }
 
 #[cfg(target_os = "macos")]
@@ -732,6 +746,7 @@ mod tests {
         let (_dir, mut t, project, sessions) = setup();
         let mut a = agent(OLD);
         a.agent_session = None;
+        a.terminal_title_stripped = Some("collie app".into());
         let (pid, started) = own();
         let (bg, bg_started) = parent();
         transcript(&project, LIVE, CLAUDE);
@@ -740,11 +755,11 @@ mod tests {
 
         attach(&mut t, &[pid], None);
         assert_eq!(t.live_id(&a), None, "not an attach");
-        for unknown in ["0a0a0a0a", "collie", "", "collie app 2"] {
+        for unknown in ["0a0a0a0a", "3f1b2c4d5", LIVE, "collie", "Collie app", ""] {
             attach(&mut t, &[pid], Some(unknown));
             assert_eq!(t.live_id(&a), None, "{unknown:?}");
         }
-        for target in ["3f1b2c4d", "3f1b", LIVE, "collie app"] {
+        for target in ["3f1b2c4d", "3f1b", "3", "collie app"] {
             attach(&mut t, &[pid], Some(target));
             assert_eq!(t.live_id(&a).as_deref(), Some(LIVE), "{target}");
         }
@@ -778,10 +793,24 @@ mod tests {
                 .starts_with(&format!("claude:{LIVE}:"))
         );
 
+        let mut stale = a.clone();
+        stale.agent_session = agent(OLD).agent_session;
         assert_eq!(
-            t.live_id(&agent(OLD)).as_deref(),
+            t.live_id(&stale).as_deref(),
             Some(LIVE),
             "over a stale herdr id"
+        );
+        let mut elsewhere = a.clone();
+        elsewhere.terminal_title_stripped = Some("other session".into());
+        assert_eq!(t.live_id(&elsewhere), None, "showing another session");
+        elsewhere.terminal_title_stripped = None;
+        assert_eq!(t.live_id(&elsewhere), None, "no title");
+
+        pid_file(&sessions, pid, CLIENT, CWD, started, "");
+        assert_eq!(
+            t.live_id(&a).as_deref(),
+            Some(CLIENT),
+            "the pane's own process first"
         );
 
         let other = "3f1b0000-0000-4000-8000-000000000004";
@@ -791,23 +820,26 @@ mod tests {
             other,
             CWD,
             started,
-            r#","kind":"bg","name":"3f1b2c4d""#,
+            r#","kind":"bg","jobId":"3f1b0000","name":"3f1b2c4d""#,
         );
         attach(&mut t, &[DEAD], Some("3f1b"));
-        assert_eq!(t.live_id(&a), None, "two prefixes");
+        assert_eq!(t.live_id(&a), None, "two job prefixes");
         attach(&mut t, &[DEAD], Some("3f1b2c4d"));
-        assert_eq!(t.live_id(&a), None, "a prefix and a name");
-        attach(&mut t, &[DEAD], Some("3f1b2c"));
-        assert_eq!(t.live_id(&a).as_deref(), Some(LIVE), "unique prefix");
+        assert_eq!(t.live_id(&a).as_deref(), Some(LIVE), "hex is never a name");
+        attach(&mut t, &[DEAD], Some("3f1b2"));
+        assert_eq!(t.live_id(&a).as_deref(), Some(LIVE), "unique job prefix");
         std::fs::remove_file(sessions.join(format!("{pid}.json"))).unwrap();
 
+        let unnamed = r#","kind":"bg","jobId":"3f1b2c4d""#;
+        pid_file(&sessions, bg, LIVE, CWD, bg_started, unnamed);
+        assert_eq!(t.live_id(&elsewhere).as_deref(), Some(LIVE), "unnamed");
         pid_file(
             &sessions,
             bg,
             LIVE,
             CWD,
             bg_started,
-            r#","kind":"interactive""#,
+            r#","kind":"interactive","jobId":"3f1b2c4d""#,
         );
         assert_eq!(t.live_id(&a), None, "not kind bg");
         pid_file(&sessions, bg, LIVE, CWD, bg_started - 60_000, named);
