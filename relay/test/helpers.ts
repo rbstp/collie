@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { Miniflare } from 'miniflare';
-import { base64url, digest } from '../src/crypto.ts';
+import { base64url, digest, ProviderToken } from '../src/crypto.ts';
+import { attestationPolicy } from '../src/attestation-policy.ts';
+import { verifyAssertion, verifyAttestation } from '../src/attestation.ts';
 import { signGrant } from '../src/index.ts';
 import type { Grant, Send } from '../src/contract.ts';
 
@@ -35,7 +37,22 @@ export async function fixture() {
   const env = { DB: db, APNS_ENVIRONMENT: 'development' as const, SEND_HMAC_KEYS: JSON.stringify({ first: secret }),
     APNS_TEAM_ID: 'TESTTEAM01', APNS_KEY_ID: 'TESTKEY001', APNS_PRIVATE_KEY: await privateKey(),
     SEND_LIMITER: { async limit() { return { success: true }; } } };
-  return { runtime, db, grant, env };
+  const provider = new ProviderToken(env.APNS_TEAM_ID, env.APNS_KEY_ID, env.APNS_PRIVATE_KEY);
+  const cryptoBinding = { getByName(name: string) {
+    if (name !== 'relay-crypto') throw new Error('unexpected_crypto_object');
+    return {
+      providerToken(time: number) { return provider.token(time); },
+      async attest(encoded: string, keyId: string, hash: Uint8Array<ArrayBuffer>) {
+        try { return await verifyAttestation(encoded, keyId, hash, attestationPolicy({ ...env, ATTEST_BUNDLE_VERSIONS: '["1"]' }), Math.floor(Date.now() / 1000)); }
+        catch { return null; }
+      },
+      async assertion(encoded: string, publicKey: string, previousCounter: number, hash: Uint8Array<ArrayBuffer>) {
+        try { return await verifyAssertion(encoded, publicKey, previousCounter, hash, attestationPolicy({ ...env, ATTEST_BUNDLE_VERSIONS: '["1"]' })); }
+        catch { return null; }
+      }
+    };
+  } };
+  return { runtime, db, grant, env: { ...env, CRYPTO: cryptoBinding } };
 }
 export const alert: Send = { v: 1, push_type: 'alert', priority: 10, expiration: 0, collapse_id: 'terminal',
   payload: { aps: { alert: { title: 'Collie', body: 'An agent needs attention' }, 'mutable-content': 1,

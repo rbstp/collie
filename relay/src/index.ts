@@ -1,9 +1,11 @@
-import { base64url, bytes, decode, hmacKey, ProviderToken } from './crypto.ts';
+import { base64url, bytes, decode, hmacKey } from './crypto.ts';
 import { readBody, validGrant, validSend } from './contract.ts';
 import type { Environment, Grant } from './contract.ts';
+import { compute } from './compute-client.ts';
+import type { CryptoBinding } from './compute-client.ts';
 import { charge, invalidate, lookupRoute } from './storage.ts';
 
-export interface Env {
+export interface Env extends CryptoBinding {
   DB: D1Database;
   SEND_LIMITER: { limit(options: { key: string }): Promise<{ success: boolean }> };
   APNS_ENVIRONMENT: Environment;
@@ -42,7 +44,7 @@ export async function signGrant(grant: Grant, keyId: string, secret: string): Pr
   return `${message}.${base64url(new Uint8Array(await crypto.subtle.sign('HMAC', await hmacKey(secret), bytes(message))))}`;
 }
 export function createWorker(upstream: typeof fetch = fetch, clock: () => number = () => Math.floor(Date.now() / 1000)) {
-  let signing: ProviderToken | undefined;
+  let signing: { window: number; token: string } | undefined;
   let keys: Map<string, Promise<CryptoKey>> | undefined;
   return {
     async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
@@ -83,10 +85,14 @@ export function createWorker(upstream: typeof fetch = fetch, clock: () => number
           || ((route.kind === 'liveactivity') !== (body.push_type === 'liveactivity'))) return response(410, 'invalid_route');
         const aps = body.payload.aps as Record<string, unknown>;
         const routine = body.push_type === 'liveactivity' && body.priority === 5 && aps.event === 'update' && aps.alert === undefined;
-        signing ??= new ProviderToken(env.APNS_TEAM_ID, env.APNS_KEY_ID, env.APNS_PRIVATE_KEY);
         now = clock();
-        let jwt = await bounded(signing.token(now));
-        if (Math.floor(clock() / 2700) !== Math.floor(now / 2700)) jwt = await bounded(signing.token(clock()));
+        if (!env.CRYPTO) throw new Error('crypto_unavailable');
+        if (signing?.window !== Math.floor(now / 2700)) signing = { window: Math.floor(now / 2700), token: await bounded(compute(env).providerToken(now)) };
+        if (Math.floor(clock() / 2700) !== signing.window) {
+          now = clock();
+          signing = { window: Math.floor(now / 2700), token: await bounded(compute(env).providerToken(now)) };
+        }
+        const jwt = signing.token;
         now = clock();
         if (!validGrant(grant, now)) return response(401, 'unauthorized');
         let charged = await bounded(charge(env.DB, grant, now, routine));

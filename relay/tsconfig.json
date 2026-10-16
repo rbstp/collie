@@ -13,6 +13,7 @@
   },
   "include": [
     "src/**/*.ts",
-    "cloudflare.config.ts"
+    "cloudflare.config.ts",
+    "test/cloudflare-crypto*.config.ts"
   ]
 }

@@ -1,9 +1,10 @@
 import { base64url, bytes, decode, digest, hmacKey } from './crypto.ts';
 import { exact, object, readBody } from './contract.ts';
 import type { Environment, Grant } from './contract.ts';
-import type { AttestationPolicy } from './attestation.ts';
+import { compute, validCryptoInput, validKeyId } from './compute-client.ts';
+import type { CryptoBinding } from './compute-client.ts';
 
-export interface ControlEnv {
+export interface ControlEnv extends CryptoBinding {
   DB: D1Database;
   APNS_ENVIRONMENT: Environment;
   APNS_TEAM_ID: string;
@@ -81,13 +82,6 @@ async function challenge(token: unknown, op: Operation, env: ControlEnv, now: nu
     || !Number.isSafeInteger(value.expires_at) || value.expires_at <= now || value.expires_at > now + 300) return null;
   return value;
 }
-function policy(env: ControlEnv): AttestationPolicy {
-  if (!/^[A-Z0-9]{10}$/.test(env.APNS_TEAM_ID)) throw new Error('invalid_app_id');
-  const versions: unknown = JSON.parse(env.ATTEST_BUNDLE_VERSIONS ?? '[]');
-  if (!Array.isArray(versions) || !versions.length || versions.length > 16
-    || versions.some(v => typeof v !== 'string' || !/^[A-Za-z0-9.]{1,32}$/.test(v))) throw new Error('invalid_bundle_versions');
-  return { appId: `${env.APNS_TEAM_ID}.dev.rbstp.collie`, environment: env.APNS_ENVIRONMENT, bundleVersions: versions };
-}
 export async function commitControl(env: ControlEnv, op: Exclude<Operation, { op: 'enroll' }>, proof: Challenge, counter: number, now: number): Promise<Grant | null> {
   const db = env.DB;
   const statements = [db.prepare(`INSERT OR REPLACE INTO control_commits
@@ -157,14 +151,13 @@ export async function control(request: Request, env: ControlEnv, now: number,
     const proof = await challenge(body.challenge, op, env, now);
     if (!proof) return response(401, 'unauthorized');
     const clientHash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes(body.challenge)));
-    const { verifyAssertion, verifyAttestation } = await import('./attestation.ts');
-    const validation = policy(env);
     if (op.op === 'enroll' && current) {
       if (typeof body.assertion !== 'string' || body.attestation !== undefined || current.counter !== proof.previous_counter
         || current.epoch !== proof.epoch) return response(401, 'unauthorized');
       let counter;
-      try { counter = await verifyAssertion(body.assertion, current.public_key, current.counter, clientHash, validation); }
-      catch { return response(401, 'unauthorized'); }
+      if (!validCryptoInput(body.assertion, clientHash)) return response(401, 'unauthorized');
+      counter = await compute(env).assertion(body.assertion, current.public_key, current.counter, clientHash);
+      if (counter === null) return response(401, 'unauthorized');
       await env.DB.prepare(`INSERT OR REPLACE INTO control_commits
         (installation_id, key_id, previous_counter, counter, epoch, nonce, now, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(op.installation_id, op.key_id, proof.previous_counter, counter, proof.epoch, proof.nonce, now, proof.expires_at).run();
@@ -173,8 +166,9 @@ export async function control(request: Request, env: ControlEnv, now: number,
     if (op.op === 'enroll') {
       if (typeof body.attestation !== 'string' || body.assertion !== undefined) return response(400, 'invalid_request');
       let verified;
-      try { verified = await verifyAttestation(body.attestation, op.key_id, clientHash, validation, now); }
-      catch { return response(401, 'unauthorized'); }
+      if (!validCryptoInput(body.attestation, clientHash) || !validKeyId(op.key_id)) return response(401, 'unauthorized');
+      verified = await compute(env).attest(body.attestation, op.key_id, clientHash);
+      if (!verified) return response(401, 'unauthorized');
       await env.DB.batch([
         env.DB.prepare('INSERT INTO installations (id, epoch) VALUES (?, 0)').bind(op.installation_id),
         env.DB.prepare(`INSERT INTO attestations (installation_id, key_id, public_key, receipt, environment, last_nonce, retain_until)
@@ -188,8 +182,9 @@ export async function control(request: Request, env: ControlEnv, now: number,
     if (typeof body.assertion !== 'string' || body.attestation !== undefined || !current
       || current.counter !== proof.previous_counter || current.epoch !== proof.epoch) return response(401, 'unauthorized');
     let counter;
-    try { counter = await verifyAssertion(body.assertion, current.public_key, current.counter, clientHash, validation); }
-    catch { return response(401, 'unauthorized'); }
+    if (!validCryptoInput(body.assertion, clientHash)) return response(401, 'unauthorized');
+    counter = await compute(env).assertion(body.assertion, current.public_key, current.counter, clientHash);
+    if (counter === null) return response(401, 'unauthorized');
     const grant = await commitControl(env, op, proof, counter, now);
     if (!grant) return response(200, 'revoked');
     const [id, secret] = configured(env)[0];

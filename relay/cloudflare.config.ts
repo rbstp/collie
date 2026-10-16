@@ -1,14 +1,16 @@
-import { bindings, defineConfig } from 'cf/config';
+import { bindings, defineConfig, exports } from 'cf/config';
 
 export default defineConfig({
   worker: {
     name: 'collie-push-validation',
     compatibilityDate: '2026-08-06',
-    entrypoint: './src/index.ts',
+    entrypoint: './src/worker.ts',
     workersDev: false,
     previewUrls: false,
     observability: { enabled: false },
+    exports: { RelayCrypto: exports.durableObject({ storage: 'sqlite' }) },
     env: {
+      CRYPTO: bindings.durableObject({ worker: 'collie-push-validation', exportName: 'RelayCrypto' }),
       DB: bindings.d1({ id: '00000000-0000-0000-0000-000000000000', name: 'collie-push-validation' }),
       APNS_ENVIRONMENT: bindings.text('development'),
       APNS_TEAM_ID: bindings.secret(),
