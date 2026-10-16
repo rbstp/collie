@@ -785,3 +785,5 @@ On both OSes, `collied status` also prints `tags:` (`(none)` for an untagged nod
 ## Push relay validation foundation
 
 The isolated Worker/D1 implementation under `relay/` provides a bounded authenticated send contract, fixed topics, deterministic provider JWTs and atomic indexed installation/global quotas. It is not deployed or connected to released clients. Enrollment, App Attest verification and production rollout remain gated. See [relay.md](relay.md) for the exact contract, local measurements and outstanding live Free-plan validation. No version bump: this foundation changes no phone/daemon wire types.
+
+The isolated Free-plan benchmark failed the CPU gate for full App Attest verification; production remains blocked pending a revised, remeasured design. See [the validation report](reviews/relay-free-tier.md).

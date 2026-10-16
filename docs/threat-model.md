@@ -372,3 +372,5 @@ Chat additionally sends bounded native conversation pages over that same authent
 ## Isolated relay foundation
 
 The unpublished Worker in `relay/` accepts only HMAC-authorized, registered destinations and strict generic/encrypted public envelopes. It stores no notification payloads and cannot issue approval decisions. Its validation configuration exposes no public URL or enrollment bypass. App Attest control authorization, retention cleanup and measured Free-plan resource limits are launch gates, not completed protections. Stolen grants permit bounded sends until expiry or revocation, and revocation can race an already authorized in-flight attempt. See [relay.md](relay.md) for storage, privacy, abuse and deployment constraints.
+
+Measured full attestation exceeded the Free CPU budget, including hostile invalid-nonce cases. The relay cannot claim availability within that budget; do not expose enrollment until the design is revised and remeasured. See [the validation report](reviews/relay-free-tier.md).
