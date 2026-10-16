@@ -16,6 +16,11 @@ chacha20poly1305 = { workspace = true, features = ["alloc", "zeroize"] }
 clap = { version = "4.6.7", features = ["derive"] }
 futures-util.workspace = true
 getrandom.workspace = true
+http-body-util = "0.1.5"
+httpdate = "1.0.3"
+hyper = { version = "1.12.0", features = ["client", "http1"] }
+hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "http2", "ring", "rustls-platform-verifier", "tls12"] }
+hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "http2", "tokio"] }
 protocol.workspace = true
 qrcode = { version = "0.14.1", default-features = false }
 rustix = { version = "1.1.5", features = ["fs", "param", "process", "system", "termios"] }

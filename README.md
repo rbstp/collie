@@ -16,7 +16,7 @@ Documentation: <https://collie.rbstp.dev>
 - An Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.5
 - An iPhone on iOS 26 or later, and optionally an Apple Watch on watchOS 26 or later
 - A Tailscale account whose policy file you can edit
-- An Apple Developer account with a Developer ID Application certificate, and an APNs key for push notifications
+- An Apple Developer account with a Developer ID Application certificate, and an APNs key for direct push with a self-built app; publisher relay mode needs no APNs key
 - To build: Rust, Go, [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st); on macOS also Xcode 27, [XcodeGen](https://github.com/yonaskolb/XcodeGen) and `jq`; on Linux a C compiler and libclang
 
 The full list is in [Requirements](https://collie.rbstp.dev/install/requirements.html). The justfile and `Collie/project.yml` use the maintainer's Apple team ID and `dev.rbstp` bundle identifiers: change them to your own before building.

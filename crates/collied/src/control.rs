@@ -40,6 +40,8 @@ pub enum Request {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatusInfo {
+    #[serde(default)]
+    pub push: Option<crate::push::Status>,
     pub pid: u32,
     pub backend_state: String,
     pub dns_name: String,
@@ -521,6 +523,7 @@ mod tests {
             let mut r = BufReader::new(r);
             let _ = read_msg::<Request>(&mut r).await;
             let info = StatusInfo {
+                push: None,
                 pid: 1,
                 backend_state: "Running".into(),
                 dns_name: "m".into(),
@@ -553,6 +556,7 @@ mod tests {
             .unwrap()
         };
         let info = |n| StatusInfo {
+            push: None,
             pid: 1,
             backend_state: "Running".into(),
             dns_name: "m".into(),

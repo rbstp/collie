@@ -8,7 +8,7 @@ collied apns test
 
 This sends a generic alert to registered devices belonging to paired phones. It has no session target, so tapping it opens the app without selecting an agent. Registered peers must support the encrypted display codec; unsupported registrations are not sent private content.
 
-The CLI reports APNs acceptance, not confirmation that the phone displayed the alert. Check the phone as well. Debug builds register sandbox tokens; production builds use production tokens. The sender uses each device's registered environment.
+The CLI reports APNs acceptance, not confirmation that the phone displayed the alert. Check the phone as well. Debug builds register sandbox tokens; production builds use production tokens. Direct delivery uses each device's registered environment. Relay delivery uses the environment bound into its attested grant. Both modes are selected in `collied.toml`.
 
 ## Session-linked test
 
@@ -52,11 +52,12 @@ Apple can still observe delivery destinations, opaque machine/thread/approval/ev
 
 Simulator unit checks verify the codec and neutral state separately from real APNs delivery. Locked/pre-first-unlock display, notification actions, and remote activity update/end behavior require physical iPhone validation; prior navigation observations above do not validate this new encrypted codec.
 
-## Relay validation status
+## Relay delivery and validation
 
-The Worker under `relay/` is a local validation foundation, not an available notification delivery option. `collied apns test` and released apps still use the direct APNs path described above. See [relay.md](relay.md) for its versioned contract and remaining enrollment, encryption and Free-account measurement gates.
+`[push.relay]` selects the publisher sender and `[apns]` selects direct APNs. They cannot be enabled together. `collied setup` offers the relay without importing credentials; use `collied setup --direct-apns` for a self-built app. `collied apns test` uses the selected mode. Relay availability still depends on the attested phone/control integration, the publisher deployment and the real-device/Free-account gates in [relay.md](relay.md); configuring a sender alone proves none of those.
 
+Routine relay Live Activity attempts are coalesced to at most one every 60 seconds per agent and phone, including unchanged refreshes. Urgent activity updates, ends, alerts and clears bypass that cadence. Installation quotas are shared across paired machines. During an outage, the daemon retains at most 64 pending encrypted destinations in RAM and retries transient failures with bounded backoff/jitter. Only the newest routine state survives. Non-approval work expires after two minutes; approval work expires with the still-live approval, capped at one hour. Pairing, exact token/grant generation, grant expiry, activity registration and approval state are checked again before retry. A restart discards queued work. An ambiguous response can cause duplicate delivery; this is not exactly-once delivery.
 
-## Relay control validation
+Daily routine exhaustion preserves urgent capacity, while a total quota or general outage pauses all work until the reported bounded reset/backoff. `collied doctor` reports the active mode, registration counts and earliest grant expiry, last actual send error, pending count and retry/reset times. It cannot report remaining server quota. Configuration failures keep registrations. A matching invalid-route reply removes only its failed destination generation, and an activity failure keeps the encrypted approval-alert fallback. Tailnet sessions, approvals, chat, terminals and desktop controls continue independently.
 
-The undeployed Worker and isolated phone client implement App Attest enrollment, exact per-machine/activity grants, 30-day expiry and renewal from seven days before expiry. The phone uses grants only for negotiated actual relay mode; the separate daemon sender and a passing Free-plan verification design remain rollout gates. If a future relay-enabled phone stays inactive past expiry, notifications stop until renewal while tailnet sessions still work. Removing a machine while offline leaves remote revocation pending, so its previously authorized pushes may continue until success or expiry. See [relay.md](relay.md#attested-control-contract) for control limits, privacy, retention and production validation gates.
+The phone's App Attest grants expire after 30 days and renew from seven days before expiry. An inactive phone loses relay pushes after expiry until it renews. Removing a machine offline retains remote revocation work, so previously authorized sends may continue until success or expiry. Existing physical navigation observations above do not validate encrypted relay delivery, locked/pre-first-unlock display or activity update/end. Those remain explicit physical-device gates.
