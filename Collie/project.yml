@@ -103,6 +103,7 @@ targets:
       - path: Sources/Shared/AgentActivity.swift
       - path: Sources/Shared/DecideApprovalIntent.swift
       - path: Sources/Shared/NotificationKey.swift
+      - path: Sources/Shared/PushEnvelope.swift
       - path: Sources/Shared/PushHint.swift
     settings:
       base:

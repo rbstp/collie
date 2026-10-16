@@ -16,7 +16,7 @@ struct AgentLiveActivity: Widget {
             LockScreenView(context: context)
                 .widgetURL(link(context))
         } dynamicIsland: { context in
-            let state = context.state
+            let state = context.state.opened(attributes: context.attributes)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     StatusPill(status: state.status).padding(.leading, 4)
@@ -69,14 +69,16 @@ private func link(_ context: ActivityViewContext<AgentActivityAttributes>) -> UR
 }
 
 private func subtitle(_ context: ActivityViewContext<AgentActivityAttributes>) -> String {
-    [context.state.workspace, context.attributes.machineLabel].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    let state = context.state.opened(attributes: context.attributes)
+    guard state.status != .unknown else { return "Open Collie to view the agent" }
+    return [state.workspace, context.attributes.machineLabel].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
 }
 
 private struct LockScreenView: View {
     let context: ActivityViewContext<AgentActivityAttributes>
 
     var body: some View {
-        let state = context.state
+        let state = context.state.opened(attributes: context.attributes)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 StatusPill(status: state.status)
@@ -115,7 +117,7 @@ private struct Approval: View {
     let context: ActivityViewContext<AgentActivityAttributes>
 
     var body: some View {
-        let state = context.state
+        let state = context.state.opened(attributes: context.attributes)
         // Buttons only for an approval whose command opened under the Mac's key with its id as
         // AAD: an id Apple or the APNs key holder pushed in clear must not become decidable here.
         let nodeId = context.attributes.nodeId
@@ -180,10 +182,12 @@ private struct ElapsedText: View {
     var width: CGFloat = 64
 
     var body: some View {
-        Text(timerInterval: since...Date.distantFuture, countsDown: false)
-            .multilineTextAlignment(.trailing)
-            .lineLimit(1)
-            .frame(maxWidth: width, alignment: .trailing)
+        if since.timeIntervalSinceReferenceDate > 0 {
+            Text(timerInterval: since...Date.distantFuture, countsDown: false)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(1)
+                .frame(maxWidth: width, alignment: .trailing)
+        }
     }
 }
 

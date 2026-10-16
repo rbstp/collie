@@ -1,0 +1,20 @@
+{
+  "baseline_offer": {"protocol_version":26,"app_version":"test"},
+  "v25_offer": {"protocol_version":25,"app_version":"test"},
+  "retained_offers": [
+    {"protocol_version":26,"protocol_min_version":26,"app_version":"test"},
+    {"protocol_version":27,"protocol_min_version":26,"app_version":"test"},
+    {"protocol_version":28,"protocol_min_version":26,"app_version":"test"}
+  ],
+  "unsupported_offers": [
+    {"protocol_version":25,"app_version":"test"},
+    {"protocol_version":27,"protocol_min_version":27,"app_version":"test"},
+    {"protocol_version":28,"protocol_min_version":27,"app_version":"test"}
+  ],
+  "baseline_result": {
+    "protocol_version":26,"protocol_min_version":26,"protocol_max_version":26,
+    "capabilities":["terminal_grants_v1"],"collied_version":"0.1.0",
+    "machine":{"name":"machine","node_id":"node","herdr_session":"session"},
+    "herdr_version":null,"paired":false
+  }
+}

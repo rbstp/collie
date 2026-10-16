@@ -564,7 +564,7 @@ impl Probe {
             HeaderValue::from_static(protocol::WS_SUBPROTOCOL),
         );
         let (mut ws, _) = tokio_tungstenite::client_async(req, stream).await.unwrap();
-        let hello = json!({"protocol_version": protocol::PROTOCOL_VERSION, "app_version": "e2e"});
+        let hello = json!({"protocol_version": protocol::PROTOCOL_VERSION, "protocol_min_version": protocol::PROTOCOL_MIN_VERSION, "capabilities": [protocol::TERMINAL_GRANTS_V1], "app_version": "e2e"});
         call(&mut ws, "hello", hello).await.unwrap();
         ws
     }

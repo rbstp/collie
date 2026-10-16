@@ -23,7 +23,7 @@ A pairing needs the QR code shown by `collied pair` and your `y` on the machine.
 
 ## Notifications
 
-The visible part of an alert says which agent is blocked and where. The command is encrypted end to end (ChaCha20-Poly1305) under a key generated on the phone. Apple still sees agent and workspace names, pull request numbers and their status (such as "CI failed on #123" or "PR #123 merged"), opaque IDs and timing.
+All private alert and Live Activity display content, including initial state and static labels, is authenticated ChaCha20-Poly1305 ciphertext under a per-machine key generated on the phone. Apple sees generic alerts, opaque IDs, urgency, timing, frequency, sizes and activity lifecycle. The phone shows generic state without approval controls when it cannot authenticate and decrypt the content.
 
 ## Secrets on the machine
 
