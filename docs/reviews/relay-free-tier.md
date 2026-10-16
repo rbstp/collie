@@ -74,3 +74,63 @@ Before production, revise and remeasure the enrollment/verifier design without w
 Development tooling audit also found three high findings: Miniflare via sharp (`GHSA-rgj7-g3m4-5g8c`, `GHSA-wq5f-xc86-pv6w`) and undici (the 7.29.1 fixes, including `GHSA-rfgv-xxqx-mfg5` and `GHSA-w293-vg96-wgc3`). They affect local tooling, not the deployed Worker dependency graph. The latest stable Miniflare remains 4.20260730.0; the newer release is beta. Do not apply npm's proposed downgrade or unreviewed transitive overrides. Wait for an upstream stable fix or separately review a tooling change.
 
 Sources: [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/), [CPU limits and rollover](https://developers.cloudflare.com/workers/platform/limits/), [D1 row accounting](https://developers.cloudflare.com/d1/platform/pricing/), [cf account selection and build/deploy](https://developers.cloudflare.com/cf/projects/), [cf configuration](https://developers.cloudflare.com/cf/projects/cloudflare-config/), [Worker CPU analytics](https://developers.cloudflare.com/workers/observability/metrics-and-analytics/).
+
+## Follow-up: internal SQLite crypto actor, 2026-10-16
+
+The sections above record the original direct-Worker experiment, including its failed CPU gate and request-accounting mistake. This separately approved follow-up ran the frozen prototype at `d881372e2c55a0d76283c33688c528edde30746f` on the same unchanged Free account. The single guarded matrix completed with its expected results and **42 controlled HTTP attempts**, below its durable 50-attempt ceiling. No paid plan, production endpoint, publisher secret or real APNs delivery was enabled. All temporary resources were removed.
+
+The public Worker retained its admission/body/challenge checks and transactional D1 replay/epoch/quota policy. One internal SQLite `BenchmarkCrypto` actor inherited production `RelayCrypto` verification/signing methods. The verifier, pinned roots and schema were unchanged. Only the guarded test subclass added Apple's fixed historical app/time/category context and a new-signer method; this context is absent from production RPCs. Six genuine historical attestations completed and six invalid-nonce attempts were rejected. Four actual signed route controls, re-signing a consumed challenge, eight mocked sends and hostile plaintext-field rejection returned their expected results. This was not fresh Collie-device enrollment.
+
+### Observed CPU and coverage
+
+Returned invocation logs contained all 42 controlled public fetches at sampling interval 1, with no error fields or CPU-limit responses. Their largest observed CPU time was **6 ms**, below the Worker's 10 ms Free limit. These are small-sample maxima, not production p99 estimates:
+
+| Public Worker case | Observations | Maximum CPU |
+|---|---:|---:|
+| Missing/wrong bearer guard | 2 | 0 ms |
+| Synthetic verified-key seed | 1 | 6 ms |
+| New/cached actor provider-token proxy | 8 | 1 ms |
+| Full historical verification proxy | 12 | 2 ms |
+| Challenge | 4 | 3 ms |
+| Signed control and replay rejection | 5 | 5 ms |
+| Mocked send and hostile-envelope rejection | 9 | 4 ms |
+| Database cleanup | 1 | 1 ms |
+
+The returned actor logs contained **21 aggregate `jsrpc` observations**, with maximum CPU **101 ms**, compared with the documented 30-second default SQLite actor budget. The source matrix makes 25 actor calls, so four call logs were not observed. All returned actor sampling intervals were 1 and all error fields were empty. Generic actor labels, missing parent ray IDs and skewed actor timestamps do not establish reliable per-case attribution. No per-case actor quantiles, complete actor coverage or billed GB-s are claimed. Invocation wall time is not billed actor duration; namespace duration analytics were not obtained through the active CLI.
+
+A later read-only log collection also returned five unattributed unauthenticated GETs, including a favicon request, after the matrix had ended. All returned 404 before actor/database work and used 0 to 1 ms CPU. They were not issued by the driver or the implementing agent's tools. The observed public total is therefore **47 fetch rows: 42 controlled POSTs and five unattributed GETs**. The shared journal remains the exact controlled-attempt count. No controlled Worker request was made after the cycle, including during cleanup verification.
+
+### Actual D1 accounting
+
+The initial 22 schema statements used 38 reads and 36 writes, within the 40-write setup reserve. Matrix response metadata included indexes/triggers:
+
+| Operation | Samples | Reads per operation | Writes per operation |
+|---|---:|---:|---:|
+| Synthetic verified-installation seed | 1 | 1 | 9 |
+| Challenge | 4 | 2 | 0 |
+| First pairing/app-route registration | 1 | 11 | 14 |
+| Route rotation | 3 | 16 | 12 |
+| Consumed-challenge replay rejection | 1 | 2 | 0 |
+| Accepted mocked send | 8 | 10 | 2 |
+| Hostile-envelope rejection | 1 | 0 | 0 |
+| Expiry cleanup | 1 | 21 | 6 |
+
+The matrix used 171 reads and 81 writes. Setup plus matrix used **209 reads and 117 writes**, excluding later read-only inspection. The driver conservatively reserved 40 setup writes plus 64 for each of 15 potentially mutating calls, exactly its 1,000-write ceiling. Its response log could not be recreated by a second matrix run, and its shared journal persisted each attempted request before network access. No retry or supplemental matrix ran. Final read-only state showed zero installations, routes, pairings, attestations and control-commit rows; singleton counters recorded eight sends, four controls and one synthetic seed enrollment.
+
+### Cleanup and evidence
+
+| Temporary resource | Recorded ID |
+|---|---|
+| Worker | `47310591a2574dbe9ba94d85374fb1ef` |
+| Custom Domain | `956f4325d4818a47918afef71dffbf6c4a877601` |
+| Managed DNS | `a5923390f78ad1112f1b56d32d8cdd48` |
+| D1 | `72ac2a4d-9cea-4442-b310-2b5c2f7f5607` |
+| SQLite namespace | `4da8514848b840b1841c3554c16bd046` |
+
+The initial cleanup command with an empty domain list reported no targets and did not detach the domain. The orchestrator approved a narrow order adjustment: deploy the reviewed inert/no-binding bundle with an explicit deleted-class tombstone, verify the exact namespace absent, confirm the new Worker had only its owned temporary domain and no outside references, then use native exact-Worker deletion to remove that Worker/domain/managed DNS. The exact empty D1 database was then deleted with the CLI's noninteractive confirmation. No broad reference-override flag was used. The experiment plan now records this tested order.
+
+Final CF API inventories for Workers, D1, namespaces and the exact DNS name matched their original snapshots. Exact resource absence and unchanged preexisting resources were verified without Worker probes. The owned load/CLI processes ended, and the synthetic private keys and guard secret were deleted after byte-identical redacted journal/response copies were preserved.
+
+The committed `docs/reviews/relay-free-crypto-evidence.json` records 59 raw evidence artifact hashes. Its SHA-256 is `b152eb3240a01c4dc91193ceb4d5629bb25768628250d3683de7be84535d2bd9`. Raw redacted responses, invocation logs, creation/absence/cleanup metadata and process exit evidence remain under `/private/tmp/collie-push-crypto-bench-20261016/`. The OAuth profile was not altered.
+
+The observed cycle supports continuing the Free prototype investigation; it does not complete #350 or authorize rollout. Keep the account Free. Fresh physical-device/TestFlight App Attest enrollment, complete actor duration/capacity accounting, account-wide quotas, real APNs behavior and statistically meaningful cold/warm CPU validation remain open gates. The earlier direct-Worker failure remains valid, and this small run does not prove production reliability.
