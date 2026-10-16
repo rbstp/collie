@@ -38,8 +38,14 @@ struct MenuContent: View {
         if let error = daemon.lastError {
             Text(verbatim: error)
         }
-        Button(daemon.running ? "Turn Off" : "Turn On") { daemon.toggle() }
-            .disabled(daemon.busy || daemon.starting)
+        if !daemon.running {
+            Button("Set Up…") { daemon.setup() }
+                .disabled(daemon.busy || daemon.starting)
+        }
+        if !daemon.needsSetup {
+            Button(daemon.running ? "Turn Off" : "Turn On") { daemon.toggle() }
+                .disabled(daemon.busy || daemon.starting)
+        }
         Divider()
         Button("Pair a Phone…") {
             NSApp.activate()

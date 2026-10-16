@@ -44,6 +44,7 @@ targets:
     sources:
       - path: Tests/CollieBarTests
       - path: CollieBar/ControlClient.swift
+      - path: CollieBar/SetupCommand.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
