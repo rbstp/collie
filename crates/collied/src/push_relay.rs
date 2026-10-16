@@ -235,6 +235,23 @@ fn wall_time(at: Instant) -> u64 {
     crate::now_ms().saturating_add(at.saturating_duration_since(Instant::now()).as_millis() as u64)
 }
 
+fn next(
+    queue: &[Pending],
+    cooldown: Instant,
+    routine_cooldown: Instant,
+    cadence: &VecDeque<(String, TerminalId, Instant)>,
+) -> Option<(usize, Instant)> {
+    let now = Instant::now();
+    queue
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, p)| {
+            let due = p.ready_at(cooldown, routine_cooldown, cadence);
+            (due > now, p.routine() && due <= now, due)
+        })
+        .map(|(i, p)| (i, p.ready_at(cooldown, routine_cooldown, cadence)))
+}
+
 pub(super) async fn deliver(
     owner: Weak<Push>,
     mut rx: mpsc::Receiver<Job>,
@@ -267,16 +284,7 @@ pub(super) async fn deliver(
             enqueue(&push, &mut queue, Job::Routed(routed), &mut alerted);
         }
         cadence.retain(|(_, _, at)| Instant::now().duration_since(*at) < ROUTINE_GAP);
-        let next = queue
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, p)| {
-                (
-                    p.ready_at(cooldown, routine_cooldown, &cadence),
-                    p.routine(),
-                )
-            })
-            .map(|(i, p)| (i, p.ready_at(cooldown, routine_cooldown, &cadence)));
+        let next = next(&queue, cooldown, routine_cooldown, &cadence);
         {
             let mut health = crate::lock(&push.health);
             health.pending = queue.len();
@@ -459,6 +467,149 @@ mod tests {
         let push = Push::open(dir.path().join("push.json"), Some(mock), paired).unwrap();
         register(&push, 1);
         (dir, push)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ready_alerts_clears_and_ends_precede_older_ready_routine_work() {
+        struct Slow {
+            calls: Mutex<Vec<(Instant, Alert)>>,
+            first: tokio::sync::Semaphore,
+        }
+        impl Sender for Slow {
+            fn mode(&self) -> protocol::PushMode {
+                protocol::PushMode::Relay
+            }
+            fn send<'a>(
+                &'a self,
+                _: &'a Device,
+                alert: &'a Alert,
+            ) -> BoxFuture<'a, Result<(), Rejection>> {
+                Box::pin(async move {
+                    let first = {
+                        let mut calls = crate::lock(&self.calls);
+                        let first = calls.is_empty();
+                        calls.push((Instant::now(), alert.clone()));
+                        first
+                    };
+                    if first {
+                        self.first.acquire().await.unwrap().forget();
+                    } else if alert.delivery == (Delivery::LiveActivity { urgent: false }) {
+                        tokio::time::sleep(Duration::from_secs(15)).await;
+                    }
+                    Ok(())
+                })
+            }
+        }
+        for kind in 0..3 {
+            let mock = Arc::new(Slow {
+                calls: Mutex::new(Vec::new()),
+                first: tokio::sync::Semaphore::new(0),
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let push = Push::open(
+                dir.path().join("push.json"),
+                Some(mock.clone()),
+                Arc::new(|_| true),
+            )
+            .unwrap();
+            register(&push, 1);
+            for i in 0..3 {
+                push.register_activity(
+                    "phone",
+                    ActivityId::new(format!("ACT-{i}")).unwrap(),
+                    TerminalId::new(format!("term{i}")).unwrap(),
+                    PushToken::new(format!("{i:0>160x}")).unwrap(),
+                    false,
+                    Some(protocol::ActivityDisplayBinding {
+                        node_id: protocol::Label::new("nMAC").unwrap(),
+                        binding_id: ActivityId::new(format!("binding-{i}")).unwrap(),
+                    }),
+                    Some(grant(1)),
+                )
+                .unwrap();
+            }
+            let activities = push.activities();
+            for activity in &activities {
+                push.notify_activity(activity.clone(), update("routine", false), None);
+            }
+            settle().await;
+            assert_eq!(crate::lock(&mock.calls).len(), 1);
+            tokio::time::advance(Duration::from_secs(1)).await;
+            match kind {
+                0 => push.notify(test_alert()),
+                1 => push.notify(approval_clear(
+                    "nMAC",
+                    &ApprovalId::new("A".repeat(22)).unwrap(),
+                )),
+                _ => {
+                    let activity = push
+                        .end_activity("phone", &activities[2].activity_id)
+                        .unwrap()
+                        .unwrap();
+                    push.notify_activity(
+                        activity,
+                        crate::activity::end(None, crate::now_ms()),
+                        None,
+                    );
+                }
+            }
+            let released = Instant::now();
+            mock.first.add_permits(1);
+            settle().await;
+            {
+                let calls = crate::lock(&mock.calls);
+                assert!(calls.len() >= 2);
+                let (at, urgent) = &calls[1];
+                assert_eq!(
+                    *at, released,
+                    "urgent work starts before waiting on another slow routine send"
+                );
+                match kind {
+                    0 => assert_eq!(urgent.delivery, Delivery::Alert),
+                    1 => assert_eq!(urgent.delivery, Delivery::Background),
+                    _ => assert_eq!(urgent.payload["aps"]["event"], "end"),
+                }
+            }
+            tokio::time::advance(Duration::from_secs(15)).await;
+            settle().await;
+            assert!(
+                crate::lock(&mock.calls).len() >= 3,
+                "routine work resumes after the urgent attempt"
+            );
+        }
+    }
+
+    #[test]
+    fn a_future_urgent_retry_does_not_block_ready_routine_work() {
+        let now = Instant::now();
+        let mut urgent = pending(
+            Device {
+                stable_id: "phone".into(),
+                token: PushToken::new("a".repeat(64)).unwrap(),
+                environment: ApnsEnvironment::Production,
+                notification_key: None,
+                registered_at: 0,
+                encrypted_display: false,
+                mute_done: false,
+                relay_grant: Some(grant(1)),
+            },
+            test_alert(),
+            None,
+            None,
+            None,
+        );
+        urgent.due = now + Duration::from_secs(60);
+        let mut routine = pending(
+            urgent.device.clone(),
+            update("ready", false),
+            None,
+            None,
+            None,
+        );
+        routine.due = now;
+        let jobs = [urgent, routine];
+        let selected = next(&jobs, now, now, &VecDeque::new()).unwrap().0;
+        assert_eq!(selected, 1);
     }
 
     #[tokio::test(start_paused = true)]

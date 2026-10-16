@@ -337,7 +337,7 @@ mod http_tests {
     #[tokio::test]
     async fn forwards_every_encrypted_type_without_device_tokens_or_caller_headers() {
         let accepted = r#"{"v":1,"result":"accepted"}"#.to_string();
-        let (relay, server) = server(vec![(200, accepted, None); 4]).await;
+        let (relay, server) = server(vec![(200, accepted, None); 5]).await;
         let device = device();
         let activity = crate::push::Activity {
             stable_id: device.stable_id.clone(),
@@ -366,16 +366,25 @@ mod http_tests {
         let end = crate::activity::end(None, crate::now_ms())
             .for_activity(&activity, Some(&device))
             .unwrap();
-        for alert in [alert, clear, live, end] {
+        let mut urgent_clear = live.clone();
+        urgent_clear.delivery = Delivery::LiveActivity { urgent: true };
+        for alert in [alert, clear, live, urgent_clear, end] {
             relay.send(&device, &alert).await.unwrap();
         }
         let requests = server.await.unwrap();
-        assert_eq!(requests.len(), 4);
-        for (request, kind) in
-            requests
-                .iter()
-                .zip(["alert", "background", "liveactivity", "liveactivity"])
-        {
+        assert_eq!(requests.len(), 5);
+        let urgent: serde_json::Value =
+            serde_json::from_str(requests[3].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(urgent["priority"], 10);
+        assert_eq!(urgent["payload"]["aps"]["event"], "update");
+        assert!(urgent["payload"]["aps"].get("alert").is_none());
+        for (request, kind) in requests.iter().zip([
+            "alert",
+            "background",
+            "liveactivity",
+            "liveactivity",
+            "liveactivity",
+        ]) {
             let (headers, body) = request.split_once("\r\n\r\n").unwrap();
             assert!(headers.starts_with("POST /v1/send HTTP/1.1\r\n"));
             assert!(headers.contains("authorization: Bearer v1.key."));
