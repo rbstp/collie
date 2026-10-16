@@ -23,7 +23,9 @@ Choose **Git worktree** to work on a branch in its own checkout:
 - **Open** picks an existing checkout from the list.
 - **Pull request** takes the number of a pull request of that repository. `collied` asks `gh` for its branch, fetches it from `origin` and creates the checkout. Pull requests from forks are refused.
 
-Check the branch and path shown before you tap **Start**.
+With no folder selected, browse the base folder, type a name for matching folders, pick a recent folder, or enter the absolute path of a checkout inside a task root; Collie lists its worktrees. Slashes in a custom branch name become hyphens in the checkout folder name.
+
+Check the branch and path shown before you tap **Start**. Collie starts the agent in the root pane herdr returns, and refuses an occupied pane. If the agent fails to start, the checkout and workspace stay in place and the error names them. Git worktree tasks need an updated `collied`.
 
 ## Resume a session
 
@@ -36,4 +38,4 @@ For Claude Code and Codex, New task can list a folder's recent sessions with the
 
 ## Archive
 
-**Archive** in a session's menu closes a linked worktree's workspace and removes its checkout, including uncommitted changes, then runs `gh poi` to clean up merged branches and worktrees. For a regular folder, Archive closes only the pane and leaves the folder in place. A banner shows progress, then confirms for 10 seconds.
+**Archive** in a session's menu closes a linked worktree's workspace and removes its checkout, including uncommitted changes, then runs `gh poi` to clean up merged branches and worktrees. For a regular folder, Archive closes only the pane and leaves the folder in place, and runs `gh poi` when the repository is inside a task root. When it is the last pane in a repository workspace that has linked worktree sessions, Archive leaves a shell there to keep those sessions open. A banner shows progress, then confirms for 10 seconds, with brief details if cleanup needs attention. Archiving from a session returns to the Agents tab.

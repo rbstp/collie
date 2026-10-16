@@ -20,7 +20,7 @@
    herdr integration install codex
    ```
 
-   The hook tells herdr which Codex session runs in each pane; Chat reads that session. herdr 0.9.5 installs version 10 of the hook. `collied doctor` warns when it is missing or older, once Codex has its `~/.codex` folder (or `$CODEX_HOME`).
+   The hook tells herdr which Codex session runs in each pane; Chat reads that session. herdr 0.9.5 installs version 10 of the hook, which removes the turn hooks 0.9.4 added (Codex warns "clamping Interrupt hook timeout" while they remain). `collied doctor` warns when it is missing or older, once Codex has its `~/.codex` folder (or `$CODEX_HOME`).
 
 2. Start Codex tasks from the phone, or start Codex with `--no-daemon` yourself.
 

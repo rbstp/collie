@@ -1,6 +1,6 @@
 # Chat and Terminal
 
-A Claude Code or Codex session has two views: **Chat** and **Terminal**. Switch between them with the toggle at the top of the session. **Settings > Sessions > Default view** picks which one opens first; Chat is the default. Copilot CLI and plain terminals use Terminal only.
+A Claude Code or Codex session has two views: **Chat** and **Terminal**. Switch between them with the toggle at the top of the session. **Settings > Sessions > Default view** picks which one opens first; Chat is the default. The toggle in a session does not change this setting. Copilot CLI and plain terminals use Terminal only.
 
 ## Chat
 
@@ -24,6 +24,7 @@ Each read is capped at 2 MiB and 40 message blocks, and long text is shortened w
 Terminal shows the last 200 lines of the agent's pane (500 or 1000 in **Settings > Terminal > Scrollback**), rendered with libghostty-vt in the MesloLGS NF font.
 
 - Turn on word wrapping to fit lines to the phone's width.
+- Codex's input box and Claude Code's sent prompts keep their shaded background across wrapped lines. With an updated `collied`, Codex prompt continuations wrap to the phone's width instead of keeping the desktop terminal's line breaks.
 - Long-press to select and copy text (Universal Clipboard included) or to open an http or https link.
 - The machine checks the pane four times a second, and once a second after 5 seconds without change or while the iPhone is in Low Data Mode.
 

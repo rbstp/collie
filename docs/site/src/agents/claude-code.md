@@ -40,7 +40,7 @@ The options of a notice above the input box, such as the "Heads up" tip or the s
 
 ## Draft sync
 
-A prompt typed on the machine but not sent shows up in the phone's prompt field, and sending from the phone replaces it.
+A prompt typed on the machine but not sent shows up in the phone's prompt field, and sending from the phone replaces it. Text from the mic button or a double-tap paste stays on the phone until you send it.
 
 ## Fullscreen mode
 

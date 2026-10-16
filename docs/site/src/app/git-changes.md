@@ -25,7 +25,7 @@ Listings show up to 200 entries, diffs are previewed up to a limit, and untracke
 2. Collect comments across files and edit them as needed.
 3. Tap **Send feedback** to send them all to the same agent at once.
 
-Your composer's prompt and attachments are left alone. Feedback survives closing and reopening Git changes, and a failed send. Sending respects approval safeguards and refuses to replace unsent text in the agent's input box.
+Your composer's prompt and attachments are left alone. Feedback survives closing and reopening Git changes, and a failed send. If a refreshed diff changes, existing comments stay below the diff with their original quotes. Sending respects approval safeguards and refuses to replace unsent text in the agent's input box.
 
 > [!NOTE]
 > Git changes needs an updated `collied`, and the checkout must be inside the machine's task roots (`[tasks] roots` in `collied.toml`).
