@@ -264,6 +264,7 @@ fn phase3_expired_approvals() {
             PushEnvironment::Sandbox,
             NOTIFY_KEY.to_vec(),
             false,
+            None,
         )
         .unwrap();
         println!("in-app decide on an expired approval");
@@ -360,6 +361,7 @@ fn live_activity_follows_an_agent() {
             PushEnvironment::Production,
             NOTIFY_KEY.to_vec(),
             false,
+            None,
         )
         .unwrap();
         core.register_activity_token(
@@ -368,6 +370,7 @@ fn live_activity_follows_an_agent() {
             TERMINAL.into(),
             ACTIVITY_TOKEN.into(),
             "binding-test".into(),
+            None,
         )
         .unwrap();
         let activities = || match std::fs::read_to_string(data_dir.join(PUSH_FILE)) {
@@ -452,6 +455,7 @@ fn live_activity_follows_an_agent() {
             TERMINAL.into(),
             SECOND_TOKEN.into(),
             "binding-test".into(),
+            None,
         )
         .unwrap();
         live(&apns, "the second sync", |d, _| {
@@ -579,6 +583,7 @@ async fn in_app(rig: &Rig, core: &Arc<CollieCore>) -> (collie_core::Machine, Str
         PushEnvironment::Sandbox,
         NOTIFY_KEY.to_vec(),
         false,
+        None,
     )
     .unwrap();
     wait_for("push.register", || rig.registrations() == 1).await;
@@ -770,6 +775,7 @@ async fn after_restart(rig: &Rig, core: &Arc<CollieCore>, m: &str, phone_id: &st
         PushEnvironment::Sandbox,
         NOTIFY_KEY.to_vec(),
         false,
+        None,
     )
     .unwrap();
     wait_for("push.register from the new process", || {
