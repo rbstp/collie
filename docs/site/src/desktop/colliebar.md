@@ -2,7 +2,11 @@
 
 CollieBar is a menu bar app that controls `collied` on the Mac.
 
-## Install
+## Downloads
+
+Publisher-signed/notarized macOS 26+ Apple silicon release archives and a Homebrew cask are prepared by the [desktop release workflow](../reference/desktop-releases.md). Once the first validated release and tap update are published, unzip `CollieBar-VERSION-macos-arm64.zip` and move CollieBar to Applications, or install `rbstp/tap/colliebar`. Install and set up the matching daemon first.
+
+## Build from source
 
 ```sh
 just mac-install

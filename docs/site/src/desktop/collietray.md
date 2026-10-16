@@ -2,7 +2,13 @@
 
 CollieTray is a bar widget for [Omarchy](https://omarchy.org), with the same icon states and menu as [CollieBar](colliebar.md). It needs Omarchy 4 and `qrencode`.
 
-## Install
+## Download
+
+The [desktop release workflow](../reference/desktop-releases.md) prepares a complete architecture-independent `CollieTray-VERSION-omarchy.tar.gz`. Once a validated release is available, extract it and run `bash install.sh`. The installer checks Omarchy 4/Quickshell commands and `qrencode`, validates the plugin and enables it on the bar. Install the matching collied daemon separately. This is an Omarchy plugin; GNOME/KDE generic tray support is not provided.
+
+Upgrade or roll back using the installer from the selected release. To uninstall, run `omarchy plugin disable rbstp.collie` and remove `~/.config/omarchy/plugins/rbstp.collie`. Daemon data and running state are retained.
+
+## Build from source
 
 ```sh
 just tray-install

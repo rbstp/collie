@@ -1,6 +1,8 @@
 # collied on macOS
 
-`collied` is built from a checkout, signed with your Developer ID Application certificate and installed to `~/.cargo/bin`.
+`collied` runs as a launchd user agent from `~/.cargo/bin`. Publisher-signed Apple silicon downloads and Homebrew packaging are described in [Desktop release downloads](../reference/desktop-releases.md). The first public release still requires signing/notary provisioning and clean-machine validation. Once a release is available, its `install.sh --replace` installs without a developer toolchain or your own Developer ID.
+
+The source installation below uses your Developer ID Application certificate.
 
 ## Install
 

@@ -70,6 +70,7 @@
 - [Free-plan relay validation](reference/reviews/relay-free-tier.md)
 - [Simulator relay testing](reference/simulator.md)
 - [Release](reference/release.md)
+- [Desktop releases](reference/desktop-releases.md)
 - [App Store release plan](reference/app-store.md)
 - [Public submission preparation](reference/public-submission.md)
 - [Documentation site](reference/deploy-pages.md)

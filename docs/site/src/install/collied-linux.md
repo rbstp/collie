@@ -1,6 +1,8 @@
 # collied on Linux
 
-There is no package yet. `collied` is built from a checkout, unsigned, and runs as a systemd user unit.
+`collied` runs as a systemd user unit. Linux x86_64 download packaging targets glibc 2.39+ and systemd 255+: see [Desktop release downloads](../reference/desktop-releases.md). The first public release still needs clean-machine verification. Once available, extract its daemon archive and run `bash install.sh --replace`, then `~/.cargo/bin/collied setup`. A Rust toolchain or checkout is not required for those downloads.
+
+The source installation remains available below.
 
 ## Install
 
