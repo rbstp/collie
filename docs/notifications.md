@@ -41,3 +41,7 @@ The iPhone has no separate Approvals tab. In-session approval controls, notifica
 - Opening the app alone does not demonstrate that session routing worked. Test the targeted payload and check the resulting screen.
 
 The payload helpers are in `crates/collied/src/push.rs`. iPhone action classification is in `Collie/Sources/Collie/Notifications.swift`; session routing is in `AppDelegate.swift`, `AppModel.swift`, and `ApprovalsModel.swift`.
+
+## Relay validation status
+
+The Worker under `relay/` is a local validation foundation, not an available notification delivery option. `collied apns test` and released apps still use the direct APNs path described above. See [relay.md](relay.md) for its versioned contract and remaining enrollment, encryption and Free-account measurement gates.
