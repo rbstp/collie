@@ -9,7 +9,8 @@
     "check": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
     "build": "wrangler deploy --dry-run --outdir dist",
-    "benchmark": "node test/benchmark.ts"
+    "benchmark": "node test/benchmark.ts",
+    "benchmark:attestation": "node test/attestation-benchmark.ts"
   },
   "dependencies": {
     "@noble/curves": "2.4.0",
