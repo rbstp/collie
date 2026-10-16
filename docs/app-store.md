@@ -1,0 +1,178 @@
+# App Store release plan
+
+Plan for [#290](https://github.com/rbstp/collie/issues/290), researched on 2026-10-16. This describes proposed work, not capabilities of the current release. No production code or infrastructure is changed by this plan.
+
+## Decision
+
+Ship the iOS app through external TestFlight, then the App Store, with a publisher-operated Cloudflare Worker forwarding encrypted pushes. Users install collied and the desktop companion from this repository's GitHub Releases. macOS downloads are signed and notarized by the publisher and also available through a Homebrew tap. Linux downloads include collied and the existing CollieTray Omarchy widget.
+
+An App Store user needs a Tailscale account, the tailnet policy, a supported machine running herdr and collied, and a paired phone. They need no Apple Developer account, APNs key, signing certificate or local build. The phone authorizes each paired machine to send through the relay. The publisher alone holds the APNs key. Tailscale still carries all commands, approvals, terminal output, conversations and files directly between phone and machine, inside mutual TLS.
+
+People building under their own Apple team keep direct `[apns]` mode and their own key. The public relay source is auditable, but deploying it does not let another Apple team push to the App Store app. Firebase would also require publisher-side sending credentials, so it does not remove the relay.
+
+## Findings in the current tree
+
+- `docs/release.md` assumes local builds and per-machine APNs keys. The macOS Keychain ACL trusts a Developer ID signed collied. Relay mode removes the need for an APNs Keychain item on users' Macs; publisher signing remains necessary for downloaded software.
+- `crates/collied/src/push.rs` already abstracts sending with `Sender`. Approval context is sealed per paired machine's notification key, but alert names and workspace labels, done alerts and agent alerts remain clear. PR watch wakes and archive-on-merge alerts use the same agent-alert path.
+- `crates/collied/src/activity.rs` permits routine updates every 2 seconds, refreshes every 600 seconds and allows up to eight activities per phone. Approval context is encrypted; other display state is clear. The widget already decrypts context using the App Group key mirror.
+- `crates/collied/src/server.rs` and `crates/collie-core/src/session.rs` require an exact protocol match, currently version 25. [#327](https://github.com/rbstp/collie/issues/327) improved the error, not compatibility. Strict request decoding means even an extra field can break an older daemon.
+- `AgentDemo` is DEBUG only. Simulator TLS and terminal identities already have software-key paths, but a simulator cannot establish genuine iOS App Attest trust.
+- `Mac/` builds CollieBar for macOS 26+. `Linux/CollieTray` is an Omarchy/Quickshell widget, not a generic Linux tray executable. Neither currently has a downloadable release package.
+
+## Relay and authorization
+
+Use a small TypeScript Worker in this repository, one D1 database, and no accounts, stored payloads, Queues, KV or external database. Reject KV for mutable registration/counter storage because its [Free write allowance](https://developers.cloudflare.com/kv/platform/limits/) is only 1,000/day. Synchronous forwarding avoids queue-operation budgets and durable payload storage. Use `collie-push.rbstp.dev` as a Worker Custom Domain. Keep `collie.rbstp.dev` as the DNS-only GitHub Pages CNAME. Universal SSL covers the single-level relay name; `push.collie.rbstp.dev` would need different certificate coverage. See [Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) and [Universal SSL coverage](https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/).
+
+### Phone enrollment and machine grants
+
+1. Enable App Attest for the app's App ID and regenerate provisioning profiles. The phone generates an installation key and attests it against a short-lived relay challenge bound to the enrollment body. The Worker validates Apple's chain, nonce, app identity, key identity, environment and initial counter, then stores the verified public key and receipt. Follow [Apple's validation procedure](https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server) and its [validation fixtures](https://developer.apple.com/documentation/devicecheck/attestation-object-validation-guide), including documented authenticator-data extensions.
+2. Later registration, rotation and revocation requests carry an App Attest assertion over a canonical operation body and one-time challenge. Bind operation, installation, machine pairing identity, exact destination token, push class and APNs environment. Atomically consume the challenge and advance the assertion counter. Serialize phone control operations to avoid valid requests arriving out of counter order. Issue challenges with a five-minute HMAC expiry and no unauthenticated D1 allocation; replay rejection still uses durable state when the operation commits.
+3. After the user confirms pairing, register that machine's routes. Ordinary alert/background delivery shares one app-token destination; each Live Activity update token gets its own route. A machine cannot substitute another destination, activity token, environment or topic. Cap an installation at eight paired machines and eight active Live Activities total, and rate-limit new enrollment and control operations.
+4. Return a versioned, HMAC-authenticated bearer send token for each route, expiring after 30 days. Claims bind the installation, pairing, destination digest, permitted push classes, environment, expiry and revocation epochs. Store raw destinations in bounded registration records; no notification keys or payloads enter D1. Verify the HMAC once per send and check current epochs and route validity in D1, without an eventually consistent revocation cache. Give each machine only its grants, over the existing paired mutual-TLS session; persist them privately and redact them from diagnostics.
+5. Renew on app launch and reconnection, starting seven days before expiry. Re-register whenever iOS supplies a changed app token or ActivityKit supplies a changed update token. Supersede the old route without deleting its replacement when an old in-flight APNs failure arrives. An inactive phone that never renews stops receiving relay pushes at expiry; direct sessions still work. This limitation must be visible in settings and doctor.
+6. Removing a machine revokes only its grants by incrementing its epoch; removing an installation revokes all its routes. Revoke at the relay before discarding credentials locally. If offline, remove the local pairing immediately and retain a minimal pending revocation for retry, with an explicit pending status. A previously authorized machine may still push until revocation succeeds or its grant expires. Never claim offline revocation is immediate.
+
+App Attest proves app integrity, not a user's identity, ownership of an APNs token, or that an arbitrary daemon is trustworthy. Pairing remains the authorization boundary. A stolen send token can send bounded pushes to its granted destination until revoked or expired; it cannot approve an action. Attestation keys do not survive reinstall or restore, so enroll anew and re-pair without migration logic. See [App Attest integrity](https://developer.apple.com/documentation/devicecheck/establishing-your-app-s-integrity).
+
+Production accepts production App Attest and production APNs routes only. TestFlight also uses production attestation. Debug physical-device builds use a separate development deployment and development attestation, or existing direct mode for their own team. Never accept a client's claim that attestation is unsupported as production authentication. See [App Attest environments](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.devicecheck.appattest-environment).
+
+### Sending to Apple
+
+Expose a versioned send endpoint. Validate bounded request bodies before expensive parsing: at most 16 KiB for attestation/control and 8 KiB for a send envelope, with the serialized APNs payload at most 4 KiB. Authenticate before D1 quota work or APNs forwarding. The Worker resolves the destination from the authorized route, constructs the fixed Collie topic, and permits only alert, background or liveactivity delivery. Allow only validated priority, expiration and opaque collapse identifiers from the caller; no arbitrary URL, topic, provider authorization, header passthrough or redirect following. Validate the payload's public envelope against the relevant allowlist, including fixed generic alert text, and reject unknown fields.
+
+Forward synchronously with a bounded timeout and return a small normalized result. `410 Unregistered` or `BadDeviceToken` invalidates only the matching route generation. `DeviceTokenNotForTopic`, signing errors and wrong-environment responses are configuration failures, not a reason to erase every registration. Never log APNs response bodies containing destinations.
+
+Reuse an APNs provider JWT in memory per isolate. T3 Code demonstrates APNs delivery through Worker `fetch` in its [APNs client](https://github.com/pingdotgg/t3code/blob/cfafb4bb54d244e4612f5681aad3832ea64cb0fb/infra/relay/src/agentActivity/ApnsClient.ts). Its [provider-token cache](https://github.com/pingdotgg/t3code/blob/cfafb4bb54d244e4612f5681aad3832ea64cb0fb/infra/relay/src/agentActivity/ApnsProviderTokens.ts) and [RFC 6979 ES256 signer](https://github.com/pingdotgg/t3code/blob/cfafb4bb54d244e4612f5681aad3832ea64cb0fb/infra/relay/src/agentActivity/apnsJwt.ts) derive identical JWTs in 45-minute issuance windows across isolates. Adopt that approach after benchmarking cold signing; ordinary ECDSA calls need not be deterministic. No provider JWT goes in D1. Do not copy T3's accounts, Postgres or queue architecture. Apple's [provider-token guidance](https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns) requires reuse and refresh within its validity window.
+
+## Push privacy
+
+Keep the existing per-machine notification key on the phone and collied. Extend the authenticated encrypted envelope to all private display state. Use a fresh random nonce and domain-separated authenticated data binding envelope version, push kind, machine, destination/activity identity and event identifier. Add shared Rust/Swift vectors for tampering, wrong key, wrong event and wrong kind. Neither the relay nor Apple receives decryption keys.
+
+| Push | Encrypted data | Public data and fallback |
+|---|---|---|
+| Approval alert | Agent/workspace names, title, body and command/question context | Generic title/body such as "An agent needs attention", opaque routing/approval IDs, category, mutable-content flag and delivery metadata |
+| Done alert | Names and completion text | Generic "An agent finished", opaque routing IDs and delivery metadata |
+| Agent alert | PR watch wake, archive-on-merge and other agent text and labels | Generic "An agent needs attention", opaque routing IDs and delivery metadata |
+| Background approval clear | No display text exists | Opaque machine/approval lookup IDs and content-available flag; its timing reveals that something cleared |
+| Live Activity update/end | Names, workspace, kind, status, status-since, approval count and context | Encrypted envelope plus ActivityKit timestamp, event, stale/dismissal dates and opaque routing identifiers |
+
+ColliePush decrypts alert title and body for every alert kind using `mutable-content: 1`. The original APNs alert must remain useful and private if the extension times out or keys are unavailable. Apple's [notification service extension guidance](https://developer.apple.com/documentation/usernotifications/modifying-content-in-newly-delivered-notifications) supports decrypting content before display.
+
+ActivityKit decodes an encrypted `ContentState` envelope; the widget decrypts it at render time using the existing protected App Group mirror. Put private values in ciphertext for the initial local activity state and attributes too, not just subsequent pushes. Use generic relevance scores and alert text, and no status-dependent public field. The widget cannot fetch a missing key. Missing, invalid or pre-first-unlock keys show neutral text with no approval controls. Preserve tailnet fetch-and-validate for every decision; no nonce or decision authority goes in a push. Respect both APNs payload and ActivityKit's combined static/dynamic 4 KiB limits. See [Live Activity data constraints](https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities).
+
+The publisher/Cloudflare sees IP addresses, device/activity tokens, route relationships, push class, generic fallback text, opaque IDs, timing, frequency and ciphertext sizes. Apple sees APNs metadata, generic fallback and ciphertext, and knows when activities update/end. Categories and urgency may reveal that attention is needed; encryption does not hide traffic patterns. The design hides names and detailed status, not all metadata or what iOS displays locally after decryption. App Attest also involves Apple. The App Group mirror retains its current weaker protection than a ThisDeviceOnly Keychain item.
+
+Update `docs/threat-model.md`, `docs/notifications.md`, `docs/architecture.md` and the privacy page in the implementing PRs, before deploying the relay or distributing a relay-enabled build. Keep the current policy accurate until then. Publish retention: no stored payloads or authorization/body logs; active registration/key/epoch records only, revoked or expired records retained just until the last grant expires, then deleted within seven days. Budget deletion writes. Disable automatic request-header capture and invocation logs that retain sensitive request URLs; tokens belong in bodies or Authorization, never paths/query strings. Aggregate counters and error codes are enough for monitoring.
+
+## Free-tier budget and capacity
+
+These are researched limits and proposed operating budgets, not load-test results.
+
+| Resource | Free allowance | Design budget |
+|---|---|---|
+| Worker requests | 100,000/day across the account, reset at 00:00 UTC | Reserve at least 20,000 for control, retries, probes and other account use; count rejected traffic too |
+| Worker CPU | 10 ms per invocation; network waits excluded | Benchmark cold/warm enrollment, assertion checks, signing, send and hostile input; target p99 below 8 ms with no CPU-limit errors |
+| D1 | 5 million rows read/day; 100,000 rows written/day; 5 GB/account, 500 MB/database | Indexed lookups; at most 4 billed writes per authorized send attempt as a launch gate; reserve 20,000 writes/day for control, failed quota checks, cleanup and other account use |
+| Burst limiter | Workers binding supports 10/60-second windows | Soft per-send-token, installation and source-IP limits, before expensive work; never the authority for global quota or replay protection |
+
+Sources: [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [D1 pricing and row accounting](https://developers.cloudflare.com/d1/platform/pricing/), [D1 limits](https://developers.cloudflare.com/d1/platform/limits/) and [rate limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/). D1 index changes and deletes count as writes. Binding counters are location-local and eventually consistent. The binding is GA with no paid-plan prerequisite stated in its documentation; deployment on an actual Free account is an acceptance check. If unavailable there, retain exact D1 quotas and use the Free zone's [one IP-based WAF rate rule](https://developers.cloudflare.com/waf/rate-limiting-rules/) for coarse protection. WAF and binding limits cannot guarantee the account stays available under distributed abuse.
+
+Start with a hard 1,000 authorized APNs attempts per installation per UTC day across all paired machines and activity routes. Allow routine Live Activity updates to consume at most 700, leaving 300 for alerts, clears and activity ends. Enforce this in D1 with atomic conditional updates, plus global ceilings of 20,000 total and 16,000 routine attempts/day. This leaves at least 4,000 global slots for alerts, clears and ends, which may also use unused routine capacity. Concurrent requests must not overspend either cap. Charge before forwarding, including retries and ambiguous network failures; never refund an attempt that may have reached Apple. Reject over-budget routine updates without losing the newest pending state. Daily quota responses name the UTC reset time.
+
+Exact D1 transaction/schema design and billed row costs are an implementation gate: quota enforcement must be atomic, indexed and fail closed, with no all-row scans or per-push assertion-counter updates. Prototype a single device-counter update whose global-counter trigger aborts the entire statement if either budget would be exceeded; concurrent last-slot and rollback tests must prove the property on D1. The 20,000-attempt ceiling follows `(100,000 - 20,000) / 4`; Count the complete lifecycle, including any outcome writes, index maintenance and cleanup; if measured billed writes exceed four, lower the ceiling and recompute capacity before launch. No per-send deduplication table or stored payload is budgeted. In-memory event IDs and collapse IDs reduce duplicates, but a send accepted by Apple followed by a lost response can still be delivered twice. Avoid promising exactly-once delivery.
+
+In relay mode, coalesce routine Live Activity updates to the latest state at most once per 60 seconds per agent, sharing the device budget across machines. Unchanged state needs only the existing ten-minute freshness refresh, counted within the routine ceiling. Approval alerts, clears and activity ends bypass this cadence but still count toward the reserved budget. Keep the current direct-mode cadence. Losing a routine update must not suppress a needed approval alert; use the existing fallback-to-alert path when the activity cannot be notified.
+
+A planning example per active phone per day:
+
+| Traffic | Requests/attempts |
+|---|---:|
+| 40 approvals plus their background clears | 80 |
+| 40 completed turns | 40 |
+| 10 PR wakes plus 10 archive alerts | 20 |
+| One continuously changing followed agent for 8 hours, every 60 seconds | 480 |
+| Four activity ends | 4 |
+| Enrollment/registration/renewal/revocation requests, including challenges | 12 |
+| Total | 636 |
+
+This is 624 send attempts and 12 control requests, before retries. Thirty such daily active phones use 18,720 attempts, 360 control requests and at most 74,880 send-path D1 writes. The 20,000-attempt ceiling supports roughly 32 such phones without retries; start external TestFlight at **30 daily active phones**, not 100,000 divided by alert count. The 20,000 reserved D1 writes must also cover control bursts and cleanup. Enrollment CPU and writes need a separate measured budget before expanding invitations. One phone following eight continuously changing agents for eight hours would request 3,840 routine updates; its 700-routine cap deliberately degrades freshness.
+
+Without coalescing, one followed agent at today's two-second gap for eight hours could cost 14,400 attempts; eight cost 115,200, beyond the whole account's daily Worker allowance. Per-device quotas cannot recover availability after unauthenticated traffic has exhausted the Worker request allowance.
+
+Do not automatically enable billing. Review migration to Workers Paid when seven-day peak usage exceeds 70% of Worker or D1 daily allowances, more than 1% of legitimate sends hit budgets, or forecast active use exceeds 30 phones. A CPU validation failure is a stop gate even at one user: first optimize or split enrollment into individually verified, bounded stages on the same Free stack; remeasure without skipping checks. If it still fails, report that the free-tier requirement is unmet and revise the plan before shipping. Paid Workers is an explicit future decision, not the assumed solution to this issue.
+
+## collied behavior and outages
+
+Add mutually exclusive `[push] relay = "https://collie-push.rbstp.dev"` and existing direct `[apns]` modes. Published App Store setup defaults to relay, skips APNs import and needs no Keychain APNs item. Custom endpoints remain explicit operator configuration; the phone must not silently choose an arbitrary endpoint for production grants. Self-built apps retain direct setup.
+
+`collied apns test` exercises the selected sender and reports the mode. `collied doctor` checks relay health, local registration/expiry, last send result, per-device budget and backoff/reset time without printing credentials. A health response alone cannot prove APNs delivery or remaining account quota; actual send failures remain authoritative.
+
+The current push send path removes invalid tokens and logs other failures; do not assume it supplies the required outage retry policy. Add bounded, in-memory exponential backoff with jitter for network errors, APNs transient failures, 429, relay 5xx and Cloudflare's quota error 1027. Recognize that 1027 is a Cloudflare error code, not an HTTP status, and need not have relay JSON. Honor bounded Retry-After, avoid probe/retry storms and distinguish device/global daily quotas from short burst limits. A known daily exhaustion waits until reset; no fixed fast retry loop.
+
+Keep only the newest pending routine update per activity and bounded unexpired alerts. Re-check pairing, revocation, route generation and approval expiry before retry. Drop stale approvals, use the current state after reconnect, and let ordinary tailnet synchronization repair missed clears/ends. No disk queue of payloads. When the relay, Apple or quota is unavailable, pushes degrade and doctor explains why; app sessions, approvals over the tailnet, terminal/chat and desktop controls remain usable. APNs acceptance itself never guarantees background execution or alert display.
+
+## Protocol compatibility before App Store distribution
+
+Create a negotiated baseline before external TestFlight. Initially support that baseline, then retain the current and previous two negotiated wire revisions as revisions are introduced. There are no invented adapters for every historical protocol version: existing exact-match peers may need one explicit update to reach the baseline.
+
+Negotiate the highest mutually supported revision from advertised ranges and a small capability set. Both hello implementations, pairing/bootstrap paths and serializers must agree. Feature-gate methods, parameters, response/event fields and enum variants, including relay registration and encrypted push formats; do not just replace equality with a range check. Preserve strict request validation and every pairing/authorization check. Unsupported peers keep the directional update message from #327, with installation instructions for release downloads rather than only `just collied-install`.
+
+Test app N with daemon N, N-1 and N-2, and daemon N with each retained older app, using serialized fixtures, both upgrade orders and unsupported-floor cases. Never send a method or field a peer cannot decode. Publish the baseline, floor and removal policy in architecture and release notes. App Store review delay must not strand an installed app whenever the daemon advances.
+
+## Desktop releases
+
+Make these assets part of this repository's GitHub Releases, with checksums, exact source SHA, protocol range, platform/runtime requirements and installation/update instructions. Pin build inputs and downloaded tools, and test the packaged artifacts rather than only source builds.
+
+| Platform | Initial release assets | Installation and checks |
+|---|---|---|
+| macOS 26+, Apple silicon | Signed collied archive and signed/notarized CollieBar app archive | Publisher Developer ID Application, hardened runtime and notarization for daemon distribution and app; staple supported containers/app and verify Gatekeeper on a clean Mac; Homebrew formula for collied and cask for CollieBar |
+| Linux x86_64 | collied binary archive and architecture-independent CollieTray widget archive | State glibc/runtime floor; install daemon plus systemd user service through setup; widget instructions name Omarchy 4/Quickshell, `qrencode`, manifest and all QML/JS/icon files |
+
+Do not advertise Intel macOS or Linux arm64 before native builds, bundled Go/libtailscale dependencies and packaged smoke tests pass for them. Do not describe CollieTray as a generic GNOME/KDE tray app; a portable replacement and AUR publishing are later optional work.
+
+The publisher supplies signing and notary credentials in CI secrets, isolated from untrusted pull requests. Never redistribute the APNs key. See [Apple notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution), [Homebrew formulae](https://docs.brew.sh/Formula-Cookbook) and [casks](https://docs.brew.sh/Cask-Cookbook).
+
+Reuse the release tag and SHA, stamp desktop versions from that tag, and define one owner for creating a release. The current TestFlight workflow creates `v*` tags using `GITHUB_TOKEN` after upload; a new tag-push workflow alone will not run for those tags. Explicitly invoke a reusable desktop release workflow, with manual dispatch for desktop-only releases and failed-job retries at the same immutable tag/SHA. Do not move an existing tag or double-publish a version. [GitHub documents this trigger restriction](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
+Homebrew upgrades must not leave launchd pointing into a deleted versioned Cellar/Caskroom path. Current service installers canonicalize `current_exe`, so installing through a stable symlink alone does not solve this. Refresh/reload the existing collied service definition to the new executable and restart it only when previously running. Keep one service label; do not introduce a competing `brew services` daemon. Test first install, upgrade, rollback, uninstall, desktop companion discovery and preservation of node identity, configuration and pairings.
+
+## Simulator and review testing
+
+Simulator support is a follow-up deliverable, not a production attestation bypass. There are three separate kinds of coverage:
+
+1. Run normal pairing, authenticated sessions and UI tests in iOS Simulator using existing software identity keys. Add local Worker/D1 tests with Apple attestation fixtures and invalid/replay/concurrent-budget cases. Mock APNs for deterministic failure and outage tests, with no Apple credentials in CI.
+2. Provide an explicitly provisioned local development relay identity for DEBUG simulator builds. Use separate storage and send secrets, sandbox APNs only and no production enrollment fallback. A local relay may use a maintainer's locally held sandbox-capable APNs credential for real delivery; never embed or distribute it. On supported Macs, the simulator can register with APNs Sandbox and receive real alert, notification-extension and Live Activity pushes. An unsupported host still gets mocked transport and local payload/UI tests. See [Xcode Simulator APNs support](https://developer.apple.com/documentation/xcode-release-notes/xcode-14-release-notes) and [ActivityKit push testing](https://developer.apple.com/documentation/activitykit/starting-and-updating-live-activities-with-activitykit-push-notifications). `simctl push` is useful for payload rendering but does not replace a real APNs-to-extension test.
+3. Validate genuine App Attest, production rejection of simulator/development credentials, Secure Enclave behavior, locked/pre-first-unlock decryption, background clears and notification actions on a physical iPhone. Validate production APNs/App Attest with external TestFlight. Simulator success cannot satisfy those gates.
+
+Document a repeatable simulator command sequence and distinguish mocked from real sandbox results. The public App Store app and published desktop binaries must never gain a development trust bypass.
+
+For App Review, expose a clearly labeled sample workspace in Release builds, using bundled synthetic data and simulated approvals/terminal controls with visible local outcomes and no real machine effects. It must be accessible without Tailscale login or a Mac, exercise the main screens and reset without touching real pairings. Reuse demo infrastructure carefully; arbitrary fixture file loading and developer launch flags do not become the user-facing demo.
+
+Start with external TestFlight through a public link after Beta App Review, cap enrollment to the measured capacity, then submit to the App Store. Supply review notes explaining the sample workspace, Tailscale dependency, pairing, optional desktop software and background push use, plus a video of real hardware behavior. A video alone does not establish compliance. Apple's [review guidelines 2.1 and 4.8](https://developer.apple.com/app-store/review/guidelines/) require review access and address third-party login. Tailscale appears to fit the client-of-a-specific-third-party-service exception, but confirm its application with App Review; demo access is not a guaranteed waiver. If replacing review credentials with a built-in demo requires prior approval, obtain it. See [review information](https://developer.apple.com/help/app-review/before-submitting-for-review/complete-review/).
+
+Prepare free pricing, age rating, screenshots, description, support/privacy URLs and App Privacy answers. Review device identifiers, relay IP/timing metadata, retention, Cloudflare/Apple processing, diagnostics and the absence of payload storage against actual deployment settings. Replace the current "no server" statement before a relay-enabled build ships. Follow the existing export checklist in [Release](release.md#export-compliance), including the France restriction and external-tester caveat; do not silently change the encryption declaration. Tailscale onboarding and tailnet policy remain required and out of scope for simplification here.
+
+## Operations and launch gates
+
+Use [free Workers metrics/logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/) for aggregate counts by push class/result, CPU, D1 row costs, quota rejection and APNs errors. Free logs are bounded, so sample or disable successful invocation logs and retain only redacted errors/metrics within the allowance; do not build a logging backend or treat logs as a queue. Track development usage and other Workers/D1 usage in the same account too.
+
+Keep the APNs key and HMAC signing secret as Worker secrets. Rotate APNs credentials by deploying the new key ID/key together and testing before revoking the old key. Rotate versioned HMAC secrets with bounded overlap of at most the existing grant lifetime; emergency rotation invalidates grants immediately and phones re-register. Maintain an operator procedure for revoking an installation/pairing, stopping new enrollments, diagnosing 1027/429/D1 exhaustion, rollback and payload-free incident reporting.
+
+Before public distribution, record evidence for: deployed Free-plan App Attest/CPU and D1 budgets; rejected unauthorized/replayed/revoked routes; every encrypted push kind and safe fallback; bounded outage recovery; protocol upgrade combinations; clean desktop install/upgrade; simulator sandbox tests and physical-device/TestFlight tests. No prototype was deployed and no CPU or delivery measurements were made for this planning issue.
+
+Open validation questions are the cold App Attest verification cost, actual indexed D1 transaction write count, Free-account limiter availability, clean-machine binary runtime floors, physical locked-widget behavior and App Review's treatment of Tailscale/demo access. These are assigned to the follow-ups below, not silently assumed solved.
+
+## Ordered follow-up work
+
+Each item is tracked in the Phase 7 milestone; its implementation PR should link back to this plan. Work is ordered by dependency, with desktop packaging and demo work able to proceed independently. Do not turn on production relay sending until privacy, authorization and compatibility are complete.
+
+1. **[Build and measure the free-tier relay (#350)](https://github.com/rbstp/collie/issues/350).** Implement the bounded Worker, deterministic APNs JWT, D1 schema/quotas and mocked APNs adapter; deploy an isolated Free-plan validation environment to measure CPU/row budgets. Depends on the contract in this plan; production sending/public enrollment remains gated by items 2 through 4.
+2. **[Establish protocol negotiation and the compatibility window (#351)](https://github.com/rbstp/collie/issues/351).** Land a safe baseline and capability/serialization gates before changing phone/daemon relay messages.
+3. **[Encrypt every alert and Live Activity display value (#352)](https://github.com/rbstp/collie/issues/352).** Cover all alert producers, initial state, widget decryption, safe fallbacks and shared crypto vectors; update security/privacy behavior docs.
+4. **[Add attested installation registration and per-machine grants (#353)](https://github.com/rbstp/collie/issues/353).** Integrate phone enrollment, D1 validation, route-specific tokens, rotation and revocation, using items 1 and 2. Physical production-attestation acceptance required.
+5. **[Add collied relay mode and bounded outage handling (#354)](https://github.com/rbstp/collie/issues/354).** Use items 1 through 4; update setup, doctor, apns test, coalescing and shared-device budgets while retaining direct mode.
+6. **[Make the push flow repeatable in iOS Simulator (#355)](https://github.com/rbstp/collie/issues/355).** Add isolated DEBUG development trust and local/mock plus real sandbox procedures alongside items 1 through 5, with production rejection tests.
+7. **[Publish signed and notarized macOS daemon and menu app releases (#356)](https://github.com/rbstp/collie/issues/356).** Build GitHub assets and Homebrew distribution, tag integration and clean upgrade verification; relay-first setup requires item 5.
+8. **[Publish Linux daemon and CollieTray widget releases (#357)](https://github.com/rbstp/collie/issues/357).** Build GitHub assets, runtime declarations and Omarchy installation/upgrade checks; relay-first setup requires item 5.
+9. **[Provide a Release-build sample workspace for review (#358)](https://github.com/rbstp/collie/issues/358).** Implement the inert, no-login demo and device/simulator checks, without developer fixture interfaces in Release.
+10. **[Prepare external TestFlight and App Store submission (#359)](https://github.com/rbstp/collie/issues/359).** Complete privacy/App Privacy, metadata, review notes, export checks and operating runbooks after the earlier acceptance gates, then request Beta App Review and a capacity-limited public TestFlight link before App Store review.
