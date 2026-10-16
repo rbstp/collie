@@ -4800,6 +4800,12 @@ mod tailnet_tests {
                     let result = match frame.request {
                         Request::Hello(_) => Ok(Response::Hello(HelloResult {
                             protocol_version: PROTOCOL_VERSION,
+                            protocol_min_version: protocol::PROTOCOL_MIN_VERSION,
+                            protocol_max_version: PROTOCOL_VERSION,
+                            capabilities: protocol::HelloParams::current(
+                                Label::new("test").unwrap(),
+                            )
+                            .capabilities,
                             collied_version: "test".into(),
                             machine,
                             herdr_version: None,
@@ -5391,7 +5397,7 @@ mod tailnet_tests {
                 (f.link == LinkPhase::Stopped).then_some(f)
             })
             .expect("stopped on the version mismatch");
-        let update = "Update collied on Studio: run just collied-install there.";
+        let update = "Update collied on Studio: install the latest release from github.com/rbstp/collie/releases.";
         assert!(stopped.version_mismatch);
         assert_eq!(stopped.last_error.as_deref(), Some(update));
         let agent = core.agent_view(id(), t1(), 0).unwrap();

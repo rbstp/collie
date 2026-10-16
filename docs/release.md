@@ -150,3 +150,9 @@ CollieWidgets went in this way. `Collie/ExportOptions.plist` maps each bundle ID
 1. Register its App ID (with the capabilities its entitlements use) and an App Store profile for it.
 2. Add its secret, for example `APPLE_PROVISIONING_PROFILE_<NAME>`, to the `env` of the "check for the signing secrets" and "import the signing certificate and profiles" steps; every `APPLE_PROVISIONING_PROFILE*` variable is checked and installed.
 3. Map its bundle ID to the profile name in `Collie/ExportOptions.plist` and set `PROVISIONING_PROFILE_SPECIFIER` in its Release settings in `Collie/project.yml`.
+
+## Protocol compatibility
+
+The negotiated baseline is revision 26, with supported floor 26. Existing exact-match installations through revision 25 need one update on each side; pairing keys stay valid. The baseline app uses a legacy-shaped hello so a revision-25 daemon can tell it to update collied. Subsequent releases retain the current and previous two implemented negotiated revisions. Publish every floor increase here and in the release notes, after fixtures cover both upgrade orders and the removed revision's refusal. A range alone does not establish compatibility: wire codecs must gate methods, parameters, response/event fields and enum variants, with separate negotiated capabilities for new relay grant and encrypted payload formats.
+
+When an installed app reports an incompatible daemon, download the latest release for the machine's operating system from [GitHub Releases](https://github.com/rbstp/collie/releases) and follow its installation instructions. Source builds can still use `just collied-install`. Update an incompatible app through its distribution channel, then reopen it or pull to refresh. Protocol updates do not require re-pairing.

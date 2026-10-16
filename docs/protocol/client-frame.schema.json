@@ -470,6 +470,20 @@
         "app_version": {
           "$ref": "#/$defs/Label"
         },
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
+        "protocol_min_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "protocol_version": {
           "format": "uint32",
           "minimum": 0,

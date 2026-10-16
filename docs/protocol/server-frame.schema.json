@@ -820,6 +820,12 @@
     },
     "HelloResult": {
       "properties": {
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
         "collied_version": {
           "type": "string"
         },
@@ -835,6 +841,16 @@
         "paired": {
           "type": "boolean"
         },
+        "protocol_max_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "protocol_min_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "protocol_version": {
           "format": "uint32",
           "minimum": 0,
@@ -843,6 +859,9 @@
       },
       "required": [
         "protocol_version",
+        "protocol_min_version",
+        "protocol_max_version",
+        "capabilities",
         "collied_version",
         "machine",
         "paired"
@@ -943,6 +962,11 @@
         "omitted"
       ],
       "type": "object"
+    },
+    "Label": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
     },
     "MachineInfo": {
       "description": "`node_id` is the Tailscale stable node ID; the phone pins it at pairing time.",
