@@ -805,7 +805,7 @@ Reset replaces the sample session and exit dismisses it. Sample screens suppress
 
 ## Desktop distribution
 
-Desktop release artifacts share the TestFlight version tag and exact source commit. TestFlight explicitly calls the reusable desktop publishing workflow because tags created with GITHUB_TOKEN cannot trigger a tag-push workflow. A protected master-only dispatch also supports desktop releases. One publisher owns the shared release, rejects moved tags and mismatched source markers, retains already uploaded signed packages when a draft is retried, and verifies completed releases without replacing their assets.
+Desktop release artifacts share the TestFlight version tag and exact source commit. TestFlight dispatches the desktop publishing workflow from master with the same immutable tag and exact source SHA, so the signing environment sees the permitted master ref instead of the merged pull request ref. Workflow dispatches created with GITHUB_TOKEN start runs; tag pushes do not. A protected master-only dispatch also supports desktop releases. One publisher owns the shared release, rejects moved tags and mismatched source markers, retains already uploaded signed packages when a draft is retried, and verifies completed releases without replacing their assets.
 
 macOS 26+ Apple silicon packages use publisher Developer ID Application signing, hardened runtime and notarization. The daemon disk image and CollieBar app are stapled; archives carry checksums and runtime/protocol metadata. Linux x86_64 packages are built on Ubuntu 24.04, check ELF GLIBC symbols against the 2.39 floor, and list dynamic library requirements. CollieTray is an architecture-independent Omarchy 4/Quickshell plugin archive.
 

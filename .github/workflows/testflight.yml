@@ -257,10 +257,15 @@ jobs:
 
   desktop-release:
     needs: build-ship
-    uses: ./.github/workflows/desktop-release.yml
+    if: ${{ github.repository == 'rbstp/collie' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-24.04
     permissions:
-      contents: write
-    secrets: inherit
-    with:
-      tag: ${{ needs.build-ship.outputs.tag }}
-      source_sha: ${{ needs.build-ship.outputs.source_sha }}
+      actions: write
+
+    steps:
+      - name: dispatch desktop signing from master
+        run: gh workflow run desktop-release.yml --repo "$GITHUB_REPOSITORY" --ref master -f "tag=$TAG" -f "source_sha=$SOURCE_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build-ship.outputs.tag }}
+          SOURCE_SHA: ${{ needs.build-ship.outputs.source_sha }}
