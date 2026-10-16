@@ -4,6 +4,11 @@ The **Agents** tab lists every herdr agent on every paired machine, grouped by m
 
 Pull down to retry every machine, or tap a machine's header to retry that one.
 
+<div class="screenshots">
+<img class="screenshot-light" src="../images/agents-light.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">
+<img class="screenshot-dark" src="../images/agents-dark.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">
+</div>
+
 ## Layouts
 
 The Agents tab has three layouts.

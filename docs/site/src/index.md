@@ -2,6 +2,13 @@
 
 collie lets you watch and steer your [herdr](https://github.com/herdrdev/herdr) coding agents from an iPhone and an Apple Watch. A small daemon, `collied`, runs on the Mac or Linux machine where herdr runs. The Collie app reaches it over your own tailnet, so you can check every agent, read its screen, send it a prompt, answer an approval from the lock screen and start new work while you are away from the keyboard.
 
+<div class="screenshots">
+<img class="screenshot-light" src="images/agents-light.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">
+<img class="screenshot-dark" src="images/agents-dark.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">
+<img class="screenshot-light" src="images/chat-light.png" width="300" height="652" loading="lazy" alt="An agent's Chat view: the conversation, with the prompt field at the bottom">
+<img class="screenshot-dark" src="images/chat-dark.png" width="300" height="652" loading="lazy" alt="An agent's Chat view: the conversation, with the prompt field at the bottom">
+</div>
+
 ## What you can do
 
 - See every herdr agent on every paired machine, with its status, live terminal preview and remaining context.

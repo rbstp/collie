@@ -2,6 +2,13 @@
 
 A Claude Code or Codex session has two views: **Chat** and **Terminal**. Switch between them with the toggle at the top of the session. **Settings > Sessions > Default view** picks which one opens first; Chat is the default. The toggle in a session does not change this setting. Copilot CLI and plain terminals use Terminal only.
 
+<div class="screenshots">
+<img class="screenshot-light" src="../images/chat-light.png" width="300" height="652" loading="lazy" alt="An agent's Chat view: the conversation, with the prompt field at the bottom">
+<img class="screenshot-dark" src="../images/chat-dark.png" width="300" height="652" loading="lazy" alt="An agent's Chat view: the conversation, with the prompt field at the bottom">
+<img class="screenshot-light" src="../images/terminal-light.png" width="300" height="652" loading="lazy" alt="An agent's Terminal view: the agent's raw screen, with the key strip button and the prompt field">
+<img class="screenshot-dark" src="../images/terminal-dark.png" width="300" height="652" loading="lazy" alt="An agent's Terminal view: the agent's raw screen, with the key strip button and the prompt field">
+</div>
+
 ## Chat
 
 Chat reads the agent's real conversation from its transcript on the machine.

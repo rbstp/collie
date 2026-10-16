@@ -15,3 +15,6 @@ preferred-dark-theme = "coal"
 smart-punctuation = false
 git-repository-url = "https://github.com/rbstp/collie"
 additional-css = ["theme/collie.css"]
+
+[output.html.print]
+enable = false

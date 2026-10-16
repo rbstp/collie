@@ -17,6 +17,7 @@ struct AgentDemo: View {
     @State private var approvals: ApprovalsModel?
     @State private var follows: FollowModel
     @State private var opening: AgentRoute?
+    private let accent = DevicePrefs.load(from: DevicePrefs.file).accent
 
     init?(arguments: [String]) {
         guard let flag = arguments.firstIndex(of: "--terminal-demo"), flag + 1 < arguments.count,
@@ -55,6 +56,9 @@ struct AgentDemo: View {
             }
             Tab("Settings", systemImage: "gearshape") { Color.clear }
         }
+        .tint(accent.color)
+        .accentColor(accent.color)
+        .environment(\.appAccent, accent.color)
         .task {
             approvals?.poll()
             follows.foreground()
@@ -119,7 +123,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 lastPrompt: "the approval tests are flaky, fix them", lastActivityMs: now - 4_000
             ),
             AgentSummary(
-                terminalId: "term_2", workspaceId: "ws_collie", kind: "codex", name: nil, title: "add approval tests",
+                terminalId: "term_2", workspaceId: "ws_collie", kind: "claude", name: nil, title: "add approval tests",
                 status: .blocked, statusSinceMs: now - 42_000, cwd: "/Users/demo/collie",
                 lastLine: "I need to run cargo test to check the new cases.", contextLeft: 38,
                 lastPrompt: "add approval tests for the Codex menu", lastActivityMs: now - 42_000
@@ -178,7 +182,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         let now = Date.now.unixMs
         return ApprovalFeed(link: .connected, pending: [
             PendingApproval(
-                approvalId: "ap_demo", terminalId: "term_2", agentLabel: "Codex", workspaceLabel: "collie",
+                approvalId: "ap_demo", terminalId: "term_2", agentLabel: "Claude Code", workspaceLabel: "collie",
                 snippet: (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n"),
                 toolName: "Bash", toolSummary: "cargo test -p collied --test approvals -- --nocapture",
                 options: [.approve, .approveAlways, .deny], choices: [], acceptsInput: true, hasTextField: false,
@@ -246,7 +250,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     }
 
     func taskOptions(machineId: String) async throws -> TaskOptions {
-        throw CoreError.NotImplemented
+        TaskOptions(agents: ["claude", "codex", "copilot"], defaultAgent: "claude", recentCwds: ["/Users/demo/collie", "/Users/demo/website"], roots: ["/Users/demo"])
     }
 
     func taskFolders(machineId: String, path: String) async throws -> TaskFolders {
