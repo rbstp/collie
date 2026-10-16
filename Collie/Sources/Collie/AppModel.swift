@@ -51,6 +51,9 @@ final class AppModel {
 
     init() {
         do {
+            #if DEBUG && targetEnvironment(simulator)
+            if SimulatorVM.enabled { try SimulatorVM.verifyCore() }
+            #endif
             let core = try CollieCore(stateDir: StateDirectory.prepare().path)
             let identity = try Identity.load()
             try core.setIdentity(publicKey: identity.publicKey, signer: identity.signer)
@@ -118,6 +121,22 @@ final class AppModel {
             await DoneNotification.removeDelivered()
         }
         guard let core else { return }
+        #if DEBUG && targetEnvironment(simulator)
+        if SimulatorVM.enabled {
+            guard await start(authKey: nil) else { return }
+            do {
+                let deadline = ContinuousClock.now + .seconds(30)
+                repeat {
+                    await refreshNode()
+                    if isRunning { break }
+                    guard ContinuousClock.now < deadline else { throw CocoaError(.featureUnsupported) }
+                    try await Task.sleep(for: .milliseconds(200))
+                } while true
+                machinePaired(try await SimulatorVM.pair(core: core))
+            } catch { startupError = describe(error) }
+            return
+        }
+        #endif
         if core.tailnetConfigured() || ProcessInfo.processInfo.arguments.contains("--measure-cold-start") {
             await start(authKey: nil)
         }

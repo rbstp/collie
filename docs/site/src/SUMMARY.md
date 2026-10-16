@@ -69,6 +69,7 @@
 - [Push relay validation](reference/relay.md)
 - [Free-plan relay validation](reference/reviews/relay-free-tier.md)
 - [Simulator relay testing](reference/simulator.md)
+- [VM and host Simulator testing](reference/vm-simulator.md)
 - [Release](reference/release.md)
 - [Desktop releases](reference/desktop-releases.md)
 - [App Store release plan](reference/app-store.md)

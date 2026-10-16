@@ -33,11 +33,21 @@ fn mac_node(
         .context("another collied (login or run) is using this data dir")?;
     let tsnet = data_dir.join(config::TSNET_DIR);
     crate::ensure_private_dir(&tsnet)?;
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    let test_key = tailnet::vm_test::load(data_dir)?;
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    let control_url = test_key
+        .as_ref()
+        .map(|_| tailnet::vm_test::CONTROL_URL.to_owned());
+    #[cfg(not(all(debug_assertions, target_os = "macos")))]
+    let control_url = None;
+    #[cfg(all(debug_assertions, target_os = "macos"))]
+    let auth_key = test_key.or(auth_key);
     let node = Node::new(&tailnet::Config {
         state_dir: tsnet,
         hostname: config.tailnet.hostname(),
         auth_key,
-        control_url: None,
+        control_url,
         advertise_tags: vec![NODE_TAG.to_owned()],
         log_to_stderr: false,
     })?;

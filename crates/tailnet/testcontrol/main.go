@@ -27,25 +27,52 @@ func main() {
 	authKey := flag.String("authkey", "", "auth key every node must present")
 	offline := flag.Bool("offline", false, "report every peer offline, as a stale netmap would")
 	sameUser := flag.Bool("same-user", false, "own every node by one user")
+	vmDir := flag.String("vm-dir", "", "private VM test marker directory; use fixed loopback ports")
+	stunOnly := flag.Bool("stun-only", false, "serve only guest-local VM STUN")
 	flag.Parse()
+	if *vmDir != "" {
+		var err error
+		*authKey, err = vmAuthKey(*vmDir)
+		if err != nil {
+			log.Fatal(err)
+		}
+	} else if *stunOnly {
+		log.Fatal("-stun-only requires -vm-dir")
+	}
 	if *authKey == "" {
 		log.Fatal("-authkey is required")
+	}
+
+	// A local STUN response prevents repeated magicsock rebinds in the test tailnet.
+	stunAddress := "127.0.0.1:0"
+	if *vmDir != "" {
+		stunAddress = "127.0.0.1:8791"
+	}
+	stun := stunserver.New(context.Background())
+	if err := stun.Listen(stunAddress); err != nil {
+		log.Fatal(err)
+	}
+	go stun.Serve()
+	if *stunOnly {
+		fmt.Println("VM STUN ready")
+		io.Copy(io.Discard, os.Stdin)
+		return
 	}
 
 	derp := httptest.NewUnstartedServer(derpserver.Handler(derpserver.New(key.NewNode(), logger.Discard)))
 	// DERP upgrades an HTTP/1.1 connection; HTTP/2 would break it.
 	derp.Config.TLSNextProto = map[string]func(*http.Server, *tls.Conn, http.Handler){}
 	derp.Config.ErrorLog = logger.StdLogger(logger.Discard)
+	if *vmDir != "" {
+		derp.Listener.Close()
+		listener, err := net.Listen("tcp", "127.0.0.1:8790")
+		if err != nil {
+			log.Fatal(err)
+		}
+		derp.Listener = listener
+	}
 	derp.StartTLS()
 	defer derp.Close()
-
-	// Without a STUN port netcheck sends no probe, so magicsock takes IPv4 as unable
-	// to send and rebinds on every endpoint update, dropping DERP and every peer path.
-	stun := stunserver.New(context.Background())
-	if err := stun.Listen("127.0.0.1:0"); err != nil {
-		log.Fatal(err)
-	}
-	go stun.Serve()
 
 	control := &testcontrol.Server{
 		DERPMap: &tailcfg.DERPMap{
@@ -76,6 +103,14 @@ func main() {
 		Logf:      logger.Discard,
 	}
 	control.HTTPTestServer = httptest.NewUnstartedServer(control)
+	if *vmDir != "" {
+		control.HTTPTestServer.Listener.Close()
+		listener, err := net.Listen("tcp", "127.0.0.1:8789")
+		if err != nil {
+			log.Fatal(err)
+		}
+		control.HTTPTestServer.Listener = listener
+	}
 	control.HTTPTestServer.Start()
 	defer control.HTTPTestServer.Close()
 

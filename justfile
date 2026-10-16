@@ -73,29 +73,38 @@ ios_deployment_target := "26.0"
 sim := "iPhone 18 Pro"
 xcodebuild := "xcodebuild -project Collie/Collie.xcodeproj -scheme Collie -derivedDataPath target/ios/DerivedData"
 
-ios-framework target="all":
+ios-framework target="all" profile="release":
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{ target }}" != all ] && [ "{{ target }}" != sim ]; then
         echo "ios-framework target must be all or sim" >&2
         exit 1
     fi
+    cargo_args=(build -p collie-core)
+    if [ "{{ profile }}" = release ]; then
+        cargo_args+=(--release)
+    elif [ "{{ profile }}" = debug ] && [ "{{ target }}" = sim ]; then
+        :
+    elif [ "{{ profile }}" != release ]; then
+        echo "Debug core is only supported for the dedicated Simulator test" >&2
+        exit 1
+    fi
     export IPHONEOS_DEPLOYMENT_TARGET={{ ios_deployment_target }}
     pkg=Collie/CollieCore
     headers=target/ios/headers
     if [ "{{ target }}" = all ]; then
-        cargo build --release -p collie-core --target aarch64-apple-ios
+        cargo "${cargo_args[@]}" --target aarch64-apple-ios
     fi
-    cargo build --release -p collie-core --target aarch64-apple-ios-sim
+    cargo "${cargo_args[@]}" --target aarch64-apple-ios-sim
     cargo build --release -p uniffi-bindgen
-    sim_lib=target/aarch64-apple-ios-sim/release/libcollie_core.a
+    sim_lib=target/aarch64-apple-ios-sim/{{ profile }}/libcollie_core.a
     lib="$sim_lib"
     if [ "{{ target }}" = all ]; then
         lib=target/aarch64-apple-ios/release/libcollie_core.a
     fi
     # Rewriting unchanged outputs makes Xcode recompile CollieCore and the app.
     stamp="$pkg/CollieCore.xcframework/.collie-build"
-    want="$(printf '%s\n' '{{ target }}'; shasum -a 256 "$lib" "$sim_lib" target/release/uniffi-bindgen)"
+    want="$(printf '%s\n' '{{ target }}' '{{ profile }}'; shasum -a 256 "$lib" "$sim_lib" target/release/uniffi-bindgen)"
     if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -f "$pkg/Sources/CollieCore/collie_core.swift" ]; then
         echo "CollieCore.xcframework is up to date"
         exit 0
@@ -296,3 +305,21 @@ tray-install:
     done
     [ "$r" = ok ] || { echo "tray-install: could not put rbstp.collie on the bar: $r" >&2; exit 1; }
     echo "installed $dest"
+
+vm-setup:
+    python3 scripts/vm-simulator.py setup
+
+vm-test:
+    python3 scripts/vm-simulator.py test
+
+vm-reset:
+    python3 scripts/vm-simulator.py reset
+
+vm-stop:
+    python3 scripts/vm-simulator.py stop
+
+vm-clean:
+    python3 scripts/vm-simulator.py clean
+
+vm-desktop-ready:
+    python3 scripts/vm-simulator.py desktop-ready
