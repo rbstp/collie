@@ -1,6 +1,6 @@
 # Isolated Free crypto experiment plan
 
-Status: local-only prototype. No resources or benchmark traffic have been created by this prototype. Independent review and an explicit orchestration decision are required before the steps below. This does not replace the failed direct-Worker result in `docs/reviews/relay-free-tier.md`. No billing, Paid plan, production hostname, real APNs secret or fresh device enrollment is part of this experiment.
+Status: the independently reviewed single 42-attempt cycle completed on 2026-10-16, and its exact temporary resources were removed. This is the reproducible plan and its corrected cleanup procedure, not authorization to rerun. A new experiment requires a separate explicit decision. This does not replace the failed direct-Worker result in `docs/reviews/relay-free-tier.md`. No billing, Paid plan, production hostname, real APNs secret or fresh device enrollment is part of this experiment.
 
 ## Source and limits
 
@@ -75,7 +75,7 @@ A fresh read-only `cf sql datasets --account-tag <verified-account> --include-co
 cf sql query "SELECT timestamp, scriptName, invocationType, invocationLabel, cpuTimeMs, wallTimeMs, sampleInterval, error, httpStatus, requestId, rayId, url FROM logs.workersLogs WHERE scriptName = 'collie-push-crypto-bench-20261016' ORDER BY timestamp LIMIT 2000 FORMAT JSON" --scope-account e0d20426f1862227c675befdcc4d1e7e --time-since '<experiment-start-RFC3339>' --time-until '<experiment-end-RFC3339>'
 ```
 
-Separate `fetch` public Worker invocations from `rpc` actor invocations using `invocationType` and `invocationLabel`. Record raw sampling intervals, error counts and small-sample maxima/quantiles, joined to the driver's timestamps and cases. There is only one deployed actor class/object; capture namespace/object metadata separately. Do not combine actor CPU with the public Worker's 10 ms limit. A new signer is not proof of a fresh isolate, and the small run cannot establish a production p99. Preserve first-use labels rather than claiming arbitrary calls are cold isolates.
+Separate `fetch` public Worker invocations from actor invocations (`jsrpc` in the observed logs) using `invocationType` and `invocationLabel`. Record raw sampling intervals, error counts and small-sample maxima/quantiles, compared with the driver's timestamps and cases. Generic actor labels, missing parent ray IDs and clock skew prevented reliable per-case actor attribution in the actual run; report aggregate actor samples only unless a reliable join is established. There is only one deployed actor class/object; capture namespace/object metadata separately. Do not combine actor CPU with the public Worker's 10 ms limit. A new signer is not proof of a fresh isolate, and the small run cannot establish a production p99. Preserve first-use labels rather than claiming arbitrary calls are cold isolates.
 
 Per-request `wallTimeMs` is not billed actor duration. Official metrics describe `durableObjectsInvocationsAdaptiveGroups` and `durableObjectsPeriodicGroups` for namespace request/CPU/duration analytics. If the active `cf` CLI cannot expose those metrics, record that exact unmeasured gate; do not substitute Node wall time or invocation wall time for GB-s, invent field names, extend Worker load, or claim full Free viability. The public Worker must also avoid CPU-limit failures on real control and send paths. Fresh Collie-device enrollment, real APNs latency, account-wide capacity and statistical p99 validation remain separate gates.
 
@@ -85,16 +85,22 @@ After all owned load processes have exited, collect metrics and read-only exact 
 
 ```sh
 cf build
-cf workers triggers deploy --prebuilt
 cf deploy --prebuilt --no-provision
 cf durable-objects namespaces list
 ```
 
-The trigger operation removes only attachments belonging to this exact newly created Worker. Verify the exact temporary domain/managed DNS are gone using CF API metadata, never HTTP probes. The tombstone deletes only this Worker's exact new class/namespace and its data; [the official class lifecycle contract](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/) requires absent class/binding and rejects external references. Verify the recorded namespace ID is absent from the returned namespace list before deleting Worker/D1. Stop and report any unexpected identity/reference or cleanup failure; do not use broad `--delete-with-references` or modify existing resources.
+Observed correction: `cf workers triggers deploy --prebuilt` with `domains: []` reported no targets but did not detach this Custom Domain. Do not treat that output as domain absence. The orchestrator approved the following narrow order adjustment, which removed the exact owned resources successfully.
+
+The tombstone deletes only this Worker's exact new class/namespace and its data; [the official class lifecycle contract](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/) requires absent class/binding and rejects external references. Verify the recorded namespace ID is absent from the returned namespace list before deleting Worker/D1. Read fresh Worker attachment metadata and require that its only domain is the exact newly recorded temporary domain, with no external Worker, Durable Object, queue or outbound references. Native deletion of this exact new Worker removes its own associated domain and managed DNS. Stop and report any unexpected identity/reference or cleanup failure; do not use broad `--delete-with-references` or modify existing resources.
 
 ```sh
 cf workers delete <exact-new-worker-id> --force
-cf d1 delete <exact-new-database-id>
+```
+
+Verify the exact temporary domain and managed DNS are absent through CF API reads before proceeding. Stop and report if either remains; deleting any leftover record requires an exact ownership decision. Then confirm deletion of only the exact new D1 database:
+
+```sh
+cf d1 delete <exact-new-database-id> --force
 ```
 
 Finally verify exact domain, managed DNS, Worker, D1 and namespace absence through CF API reads and compare preexisting inventories with their before snapshots. Preserve the redacted resource-ID list, before/create/after metadata, logs, actual attempt count and process exit sidecars. Delete no unrelated resources.
