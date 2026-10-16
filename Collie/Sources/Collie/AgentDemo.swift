@@ -38,7 +38,6 @@ struct AgentDemo: View {
             Tab("Agents", systemImage: "square.grid.2x2") {
                 FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: approvals, follows: follows, opening: $opening)
             }
-            Tab("Approvals", systemImage: "checkmark.shield") { Color.clear }
             Tab("Machines", systemImage: "desktopcomputer") {
                 NavigationStack {
                     List {
@@ -356,7 +355,63 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     }
 
     private func read(_ terminalId: String) -> TerminalSnapshot {
-        TerminalSnapshot(terminalId: terminalId, source: .recent, ansi: snapshot, truncated: false)
+        let preview = ProcessInfo.processInfo.environment["COLLIE_DEMO_SCREENSHOTS"] != nil ? Self.screenshotPreviews[terminalId]?.replacingOccurrences(of: "\n", with: "\r\n") : nil
+        return TerminalSnapshot(terminalId: terminalId, source: .recent, ansi: preview ?? snapshot, truncated: false)
     }
+
+    private static let screenshotPreviews = [
+        "term_2": """
+            ⏺ Update(crates/collied/tests/approvals.rs)
+              ⎿  Added 3 tests
+
+            ⏺ I need to run cargo test to check the new cases.
+
+             Bash command
+
+               cargo test -p collied --test approvals
+
+             Do you want to proceed?
+             ❯ 1. Yes
+               2. No
+            """,
+        "term_3": """
+            ⏺ Update(docs/inbox.md)
+              ⎿  Updated inbox.md with 9 additions
+
+            ⏺ Update(docs/release-notes.md)
+              ⎿  Updated release-notes.md with 24 additions
+
+            ⏺ The docs now describe the inbox and the context
+              ring.
+            """,
+        "term_4": """
+            • Edited src/styles/theme.css (+18 -2)
+
+            • Ran npm run build
+              └ Built 14 pages in 1.2s
+
+            ─ Worked for 4m 12s ──────────────────────────
+
+            • Dark mode follows the system setting on every
+              page.
+            """,
+        "term_5": """
+            ⏺ Bash(gh pr checks 42)
+              ⎿  All checks were successful
+
+            ⏺ Bash(gh pr merge 42 --squash)
+              ⎿  Merged pull request #42
+
+            ⏺ The rate limiter is merged.
+            """,
+        "term_6": """
+            ● List open issues
+              └ 12 issues
+
+            ● Labeled 5 issues as bug and 3 as enhancement.
+              The other 4 need more detail from their
+              authors.
+            """,
+    ]
 }
 #endif
