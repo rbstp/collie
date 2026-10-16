@@ -109,7 +109,7 @@ class SourceValidationTests(unittest.TestCase):
         self.output = self.repo / "outputs"
 
     def git(self, *args):
-        return subprocess.check_output(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", *args], cwd=self.repo, text=True).strip()
+        return subprocess.check_output(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args], cwd=self.repo, text=True).strip()
 
     def validate(self, source, tag="v1.2.3"):
         env = dict(os.environ, SOURCE_SHA=source, TAG=tag, GITHUB_OUTPUT=str(self.output))
