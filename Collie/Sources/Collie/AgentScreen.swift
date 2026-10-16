@@ -25,12 +25,12 @@ struct AgentScreen: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     init(
-        core: any AgentCore, route: AgentRoute, approvals: ApprovalsModel?, follows: FollowModel?,
+        core: any AgentCore, route: AgentRoute, persistsState: Bool = true, approvals: ApprovalsModel?, follows: FollowModel?,
         machineLabel: String?, showsMachine: Bool, neighbor: ((Int) -> AgentRoute?)?,
         switchAgent: @escaping (AgentRoute) -> Void, opened: @escaping (AgentSummary) -> Void,
         archived: @escaping (String) -> Void
     ) {
-        _model = State(initialValue: AgentModel(core: core, route: route, draftsFile: AgentDrafts.file, viewedFile: GitViewed.file, machineLabel: machineLabel))
+        _model = State(initialValue: AgentModel(core: core, route: route, prefsFile: persistsState ? DevicePrefs.file : nil, draftsFile: persistsState ? AgentDrafts.file : nil, viewedFile: persistsState ? GitViewed.file : nil, machineLabel: machineLabel, resends: persistsState ? .shared : PromptResends()))
         self.approvals = approvals
         self.follows = follows
         self.machineLabel = machineLabel
@@ -597,8 +597,13 @@ private struct PaneCard: View {
 
 private struct KeyStrip: View {
     let model: AgentModel
-    @State private var shortcuts = StripShortcuts.load(from: StripShortcuts.file)
+    @State private var shortcuts: StripShortcuts
     @State private var editingShortcuts = false
+
+    init(model: AgentModel) {
+        self.model = model
+        _shortcuts = State(initialValue: StripShortcuts.load(from: model.savesPreferences ? StripShortcuts.file : nil))
+    }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -633,6 +638,7 @@ private struct KeyStrip: View {
                         .buttonStyle(.glass)
                         .buttonBorderShape(.roundedRectangle(radius: 8))
                         .controlSize(.small)
+                        .disabled(!model.savesPreferences)
                 }
             }
             .scrollIndicators(.hidden)
@@ -752,7 +758,7 @@ private struct PromptBar: View {
                             case .photos: pickingPhoto = true
                             }
                         }
-                        .disabled(model.upload != nil || model.sendingPrompt)
+                        .disabled(model.upload != nil || model.sendingPrompt || !model.savesPreferences)
                     }
                     if keysAvailable {
                         Button {
@@ -823,7 +829,7 @@ private struct PromptBar: View {
                 .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
                 ZStack {
                     if !model.isTerminal {
-                        DictationControl(dictation: model.dictation, disabled: model.sendingPrompt, shown: $dictationShown) {
+                        DictationControl(dictation: model.dictation, disabled: model.sendingPrompt || !model.savesPreferences, shown: $dictationShown) {
                             dictationExpanded = model.startDictation(at: editing ? selection : nil) != nil
                             editing = false
                         }

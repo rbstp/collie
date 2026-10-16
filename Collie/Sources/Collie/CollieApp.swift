@@ -34,9 +34,11 @@ struct CollieApp: App {
 struct RootView: View {
     @Bindable var app: AppModel
     @State private var agentsReselected = 0
+    @State private var sample = false
 
     var body: some View {
         content
+            .fullScreenCover(isPresented: $sample) { SampleWorkspace() }
             .tint(app.accent.color)
             .accentColor(app.accent.color)
             .environment(\.appAccent, app.accent.color)
@@ -53,7 +55,14 @@ struct RootView: View {
     @ViewBuilder
     private var content: some View {
         if let error = app.startupError {
-            ContentUnavailableView("collie could not start", systemImage: "exclamationmark.triangle", description: Text(error))
+            ContentUnavailableView {
+                Label("collie could not start", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(error)
+            } actions: {
+                Button("Explore sample workspace", systemImage: "play.rectangle") { sample = true }
+                    .buttonStyle(.glass)
+            }
         } else if app.showsMain {
             TabView(
                 selection: Binding {
@@ -85,7 +94,7 @@ struct RootView: View {
                     }
                 }
                 Tab("Machines", systemImage: "desktopcomputer", value: AppTab.machines) { MachinesView(app: app) }
-                Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView(app: app) }
+                Tab("Settings", systemImage: "gearshape", value: AppTab.settings) { SettingsView(app: app, openSample: { sample = true }) }
             }
             .task { await app.enableNotifications() }
             .task {
@@ -103,7 +112,7 @@ struct RootView: View {
             }
 
         } else {
-            OnboardingView(app: app)
+            OnboardingView(app: app, openSample: { sample = true })
         }
     }
 }

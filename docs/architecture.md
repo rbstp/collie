@@ -781,3 +781,9 @@ On both OSes, `collied status` also prints `tags:` (`(none)` for an untagged nod
 | A paired phone writes files on the Mac | disk use, files an agent may read | size, rate, in-flight, 200 MiB and 1000 entry caps; private 0600 non-executable files in a 0700 cache dir; 24 h retention; [threat-model.md](threat-model.md#attachment-uploads) |
 | Older app vs newer collied | decode failures | additive events/errors/statuses decode to `Unrecognized`; anything else bumps `PROTOCOL_VERSION` |
 | Shell input from a paired phone | command execution as the user | off by default, `collied.toml` only; its own method class; a grant signed by a Secure Enclave key behind Face ID, per terminal, session and 5 minutes; the pane re-read before every write; audited without the text; [threat-model.md](threat-model.md#shell-input-from-the-phone) |
+
+## Release sample workspace
+
+Welcome and Settings expose a clearly labeled, bundled sample workspace in Debug and Release builds. Its core is a synthetic in-memory implementation of the agent and approval interfaces; it has no daemon, relay, pairing or network client. Prompts, terminal input and approval decisions append visible local results. The sample authenticator is private to the view that constructs this synthetic core. Real approvals continue to use device-owner authentication. The sample creates no Live Activities or push registrations.
+
+Reset replaces the sample session and exit dismisses it. Sample screens suppress persistence and cache pruning for real preferences, agent drafts, viewed changes, inbox markers, snoozes and layout order. New task creation is disabled in the sample. Arbitrary fixture files, developer launch flags and screenshot environment overrides remain compiled only in Debug. No version bump: the sample uses no wire protocol.

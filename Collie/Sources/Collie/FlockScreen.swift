@@ -7,6 +7,7 @@ struct FlockScreen: View {
     let approvals: ApprovalsModel?
     let follows: FollowModel?
     @Binding var opening: AgentRoute?
+    var persistsState = true
     var tailnetStarting = false
     var reselected = 0
     var navigationChanged: () -> Void = {}
@@ -63,7 +64,7 @@ struct FlockScreen: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("New task", systemImage: "plus") { newTask = true }
-                        .disabled(core == nil || machines.isEmpty)
+                        .disabled(core == nil || machines.isEmpty || !persistsState)
                 }
             }
             .closeConfirmation($model.close, archiving: model.archiving, archiveNotice: model.archiveNotice) {
@@ -74,7 +75,7 @@ struct FlockScreen: View {
             .navigationDestination(for: AgentRoute.self) { route in
                 if let core {
                     AgentScreen(
-                        core: core, route: route, approvals: approvals, follows: follows,
+                        core: core, route: route, persistsState: persistsState, approvals: approvals, follows: follows,
                         machineLabel: machines.first { $0.id == route.machineId }?.label, showsMachine: machines.count > 1,
                         neighbor: { offset in
                             // model.entries stops refreshing under a pushed agent; the core's cache follows events.
@@ -87,8 +88,8 @@ struct FlockScreen: View {
                         },
                         opened: { agent in
                             seen.markOpened(agent, route: route, nowMs: Date().unixMs)
-                            seen.save(to: SeenAgents.file)
-                            if snoozed.wakeNow(route) { snoozed.save(to: SnoozedAgents.file) }
+                            if persistsState { seen.save(to: SeenAgents.file) }
+                            if snoozed.wakeNow(route), persistsState { snoozed.save(to: SnoozedAgents.file) }
                         },
                         archived: { model.showArchiveNotice($0) }
                     )
@@ -104,6 +105,14 @@ struct FlockScreen: View {
                     ) { path.append($0) }
                 }
             }
+            .onAppear {
+                if !persistsState {
+                    seen = SeenAgents()
+                    snoozed = SnoozedAgents()
+                    gridOrder = GridOrder()
+                    layout = .grid
+                }
+            }
             .task {
                 // Events keep the cache current; no event lists shells, and an older collied sends no title change.
                 var tick = 0
@@ -112,7 +121,7 @@ struct FlockScreen: View {
                 while !Task.isCancelled {
                     let snapshot = tick % 20 == 0
                     await model.refresh(core: core, snapshot: snapshot)
-                    if snapshot {
+                    if snapshot && persistsState {
                         AgentDrafts.prune(model.entries, file: AgentDrafts.file)
                         if core != nil {
                             let previous = seen.markers.count
@@ -141,11 +150,11 @@ struct FlockScreen: View {
                 gridOrder.update(entries)
                 let snoozes = snoozed.snoozes.count
                 snoozed.endWoken(entries)
-                if snoozed.snoozes.count != snoozes { snoozed.save(to: SnoozedAgents.file) }
+                if snoozed.snoozes.count != snoozes, persistsState { snoozed.save(to: SnoozedAgents.file) }
             }
-            .onChange(of: gridOrder) { _, order in order.save(to: GridOrder.file) }
+            .onChange(of: gridOrder) { _, order in if persistsState { order.save(to: GridOrder.file) } }
             .onChange(of: layout) { _, layout in
-                DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout }
+                if persistsState { DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout } }
             }
             .onChange(of: path, initial: true) { _, path in viewing(path.last) }
             .onChange(of: path) { _, _ in navigationChanged() }
@@ -248,7 +257,7 @@ struct FlockScreen: View {
 
     private func markUnseen(_ agent: AgentSummary, route: AgentRoute) {
         seen.markUnseen(agent, route: route)
-        seen.save(to: SeenAgents.file)
+        if persistsState { seen.save(to: SeenAgents.file) }
     }
 
     private func snooze(_ agent: AgentSummary, route: AgentRoute, until wake: Date?) {
@@ -258,7 +267,7 @@ struct FlockScreen: View {
         } else {
             snoozed.wakeNow(route)
         }
-        snoozed.save(to: SnoozedAgents.file)
+        if persistsState { snoozed.save(to: SnoozedAgents.file) }
     }
 
     @ViewBuilder
