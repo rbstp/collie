@@ -51,3 +51,7 @@ Initial Live Activity attributes and state, foreground updates, remote updates a
 Apple can still observe delivery destinations, opaque machine/thread/approval/event/activity identifiers, generic categories and alerts, priorities, timing, frequency, payload size and activity lifecycle. A future relay sees the same metadata and ciphertext, with no notification keys. The exact envelope and shared vectors are in [architecture.md](architecture.md#encrypted-display-envelope).
 
 Simulator unit checks verify the codec and neutral state separately from real APNs delivery. Locked/pre-first-unlock display, notification actions, and remote activity update/end behavior require physical iPhone validation; prior navigation observations above do not validate this new encrypted codec.
+
+## Relay validation status
+
+The Worker under `relay/` is a local validation foundation, not an available notification delivery option. `collied apns test` and released apps still use the direct APNs path described above. See [relay.md](relay.md) for its versioned contract and remaining enrollment, encryption and Free-account measurement gates.
