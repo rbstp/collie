@@ -23,15 +23,21 @@ pub struct Relay {
 
 impl Relay {
     pub fn new() -> anyhow::Result<Self> {
-        let connector = HttpsConnectorBuilder::new()
-            .with_provider_and_platform_verifier(collie_tls::provider())?
-            .https_only()
-            .enable_http1()
-            .enable_http2()
-            .build();
+        let builder = HttpsConnectorBuilder::new()
+            .with_provider_and_platform_verifier(collie_tls::provider())?;
+        #[cfg(debug_assertions)]
+        let (connector, endpoint) =
+            if std::env::var("COLLIE_SIMULATOR_RELAY").is_ok_and(|v| v == "1") {
+                (builder.https_or_http(), "http://127.0.0.1:8788/v1/send")
+            } else {
+                (builder.https_only(), ENDPOINT)
+            };
+        #[cfg(not(debug_assertions))]
+        let (connector, endpoint) = (builder.https_only(), ENDPOINT);
         Ok(Self {
-            client: Client::builder(TokioExecutor::new()).build(connector),
-            endpoint: ENDPOINT.parse()?,
+            client: Client::builder(TokioExecutor::new())
+                .build(connector.enable_http1().enable_http2().build()),
+            endpoint: endpoint.parse()?,
         })
     }
 

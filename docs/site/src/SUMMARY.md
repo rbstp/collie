@@ -67,5 +67,6 @@
 - [Tailnet setup](reference/tailnet.md)
 - [Notifications](reference/notifications.md)
 - [Push relay validation](reference/relay.md)
+- [Simulator relay testing](reference/simulator.md)
 - [Release](reference/release.md)
 - [Documentation site](reference/deploy-pages.md)
