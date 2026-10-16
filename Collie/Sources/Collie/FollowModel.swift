@@ -146,14 +146,14 @@ final class FollowModel {
     func foreground() {
         enabled = ActivityAuthorizationInfo().areActivitiesEnabled
         attempted = []
-        for activity in Activity<AgentActivityAttributes>.activities where activity.isLive && core?.pushMode(machineId: activity.attributes.machineId) == .relay {
+        for activity in Activity<AgentActivityAttributes>.activities where activity.isLive {
             let agent = AgentRoute(machineId: activity.attributes.machineId, terminalId: activity.attributes.terminalId)
             guard list.contains(agent) else {
                 end(activity, dismissal: .immediate)
                 continue
             }
             watch(activity)
-            if let token = activity.pushToken { register(activity, token: token) }
+            if let token = activity.pushToken { Task { [weak self] in await self?.register(activity, token: token) } }
         }
         endDead()
         sync()
@@ -311,13 +311,15 @@ final class FollowModel {
         relayRefreshing = true
         Task {
             defer { relayRefreshing = false }
-            for activity in Activity<AgentActivityAttributes>.activities where activity.isLive {
+            for activity in Activity<AgentActivityAttributes>.activities where activity.isLive && core?.pushMode(machineId: activity.attributes.machineId) == .relay {
                 if let token = activity.pushToken { await register(activity, token: token) }
             }
         }
     }
 
     private func register(_ activity: Activity<AgentActivityAttributes>, token: Data) async {
+        let agent = AgentRoute(machineId: activity.attributes.machineId, terminalId: activity.attributes.terminalId)
+        guard !Task.isCancelled, activity.isLive, list.contains(agent) else { return }
         if list.remember(RegisteredActivity(machineId: activity.attributes.machineId, activityId: activity.id)) {
             list.save(to: file)
         }
@@ -329,6 +331,9 @@ final class FollowModel {
                 grant = try await relay.register(pairingId: activity.attributes.machineId, activityId: activity.id, destination: hex)
                 if relayRegistered[activity.id] == grant { return }
             } else { grant = nil }
+            guard !Task.isCancelled, activity.isLive, list.contains(agent), activity.pushToken == token,
+                core?.machines().contains(where: { $0.id == activity.attributes.machineId }) == true
+            else { return }
             try core?.registerActivityToken(
                 machineId: activity.attributes.machineId, activityId: activity.id,
                 terminalId: activity.attributes.terminalId, tokenHex: hex, bindingId: activity.attributes.bindingId, relayGrant: grant?.coreGrant
