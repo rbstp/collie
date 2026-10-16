@@ -52,7 +52,7 @@ private struct SimulatorRelayTransport: RelayControlTransport {
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
-        let session = URLSession(configuration: .ephemeral)
+        let session = URLSession(configuration: .ephemeral, delegate: RelayRedirects(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         let (stream, response) = try await session.bytes(for: request)
         guard let response = response as? HTTPURLResponse else { throw RelayEnrollmentError.invalidResponse }
