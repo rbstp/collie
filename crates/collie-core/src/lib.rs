@@ -2261,6 +2261,7 @@ impl CollieCore {
             ));
         }
         let push = PushRegisterParams {
+            relay_grant: None,
             apns_token: PushToken::new(apns_token_hex.trim()).map_err(|_| {
                 invalid("apns_token", "APNs token must be 64 to 256 hex characters")
             })?,
@@ -2306,6 +2307,7 @@ impl CollieCore {
             .node_id
             .clone();
         let params = PushActivityTokenParams {
+            relay_grant: None,
             activity_id: activity(activity_id)?,
             terminal_id: terminal(terminal_id)?,
             token: PushToken::new(token_hex.trim())
@@ -4823,6 +4825,7 @@ mod tailnet_tests {
                     let mut events = Vec::new();
                     let result = match frame.request {
                         Request::Hello(_) => Ok(Response::Hello(HelloResult {
+                            push_mode: None,
                             protocol_version: PROTOCOL_VERSION,
                             protocol_min_version: protocol::PROTOCOL_MIN_VERSION,
                             protocol_max_version: PROTOCOL_VERSION,

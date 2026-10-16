@@ -364,7 +364,7 @@ impl Rig {
             Arc::new(|_| true),
         )
         .unwrap();
-        push.register(PHONE, token(), ApnsEnvironment::Sandbox, key(), false)
+        push.register(PHONE, token(), ApnsEnvironment::Sandbox, key(), false, None)
             .unwrap();
         let audit = dir.path().join("audit.log");
         let audit_log = Arc::new(Audit::open(&audit).unwrap());
@@ -403,6 +403,7 @@ impl Rig {
                 activity_token(),
                 true,
                 Some(display_binding()),
+                None,
             )
             .unwrap();
     }
@@ -1388,7 +1389,14 @@ async fn notifications_and_live_activities_continue_without_app_events() {
     let mut rig = Rig::start(TTL).await;
     drop(rig.events.take());
     rig.push
-        .register(OTHER, other_token(), ApnsEnvironment::Sandbox, key(), false)
+        .register(
+            OTHER,
+            other_token(),
+            ApnsEnvironment::Sandbox,
+            key(),
+            false,
+            None,
+        )
         .unwrap();
     rig.follow();
     rig.tick().await;
@@ -1478,7 +1486,14 @@ async fn notifications_and_live_activities_continue_without_app_events() {
 async fn a_followed_terminal_alerts_on_its_activity_only() {
     let mut rig = Rig::start(TTL).await;
     rig.push
-        .register(OTHER, other_token(), ApnsEnvironment::Sandbox, key(), false)
+        .register(
+            OTHER,
+            other_token(),
+            ApnsEnvironment::Sandbox,
+            key(),
+            false,
+            None,
+        )
         .unwrap();
     rig.push
         .register_activity(
@@ -1488,6 +1503,7 @@ async fn a_followed_terminal_alerts_on_its_activity_only() {
             PushToken::new("12".repeat(80)).unwrap(),
             true,
             Some(display_binding()),
+            None,
         )
         .unwrap();
     rig.follow();
@@ -1623,6 +1639,7 @@ async fn an_activity_without_approvals_keeps_the_notification() {
             activity_token(),
             false,
             Some(display_binding()),
+            None,
         )
         .unwrap();
     let a = rig.ticked_needed().await;

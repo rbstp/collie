@@ -429,6 +429,7 @@ mod tests {
 
     fn activity(token: char) -> Activity {
         Activity {
+            relay_grant: None,
             stable_id: "nPhone".into(),
             activity_id: ActivityId::new("3F2504E0-4F89-11D3-9A0C-0305E82C3301").unwrap(),
             terminal_id: TerminalId::new("term_1").unwrap(),
@@ -514,6 +515,7 @@ mod tests {
     fn route(stable_id: &str, due: bool, approval: &Approval) -> Routed {
         Routed {
             device: Device {
+                relay_grant: None,
                 stable_id: stable_id.into(),
                 token: PushToken::new("d".repeat(64)).unwrap(),
                 environment: ApnsEnvironment::Sandbox,

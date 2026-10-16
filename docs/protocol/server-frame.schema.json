@@ -855,6 +855,16 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "push_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PushMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1216,6 +1226,14 @@
         "merged",
         "closed",
         "unknown"
+      ],
+      "type": "string"
+    },
+    "PushMode": {
+      "enum": [
+        "none",
+        "direct",
+        "relay"
       ],
       "type": "string"
     },

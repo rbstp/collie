@@ -1122,6 +1122,7 @@ mod tests {
 
     fn hello_result(paired: bool) -> Response {
         Response::Hello(HelloResult {
+            push_mode: None,
             protocol_version: PROTOCOL_VERSION,
             protocol_min_version: protocol::PROTOCOL_MIN_VERSION,
             protocol_max_version: PROTOCOL_VERSION,
