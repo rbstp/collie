@@ -111,6 +111,8 @@ scripts/           libghostty-vt xcframework build
 
 Bugs and feature requests are tracked as [GitHub issues](https://github.com/rbstp/collie/issues). Before opening a pull request, run `just lint` and `just test`, plus the tests of any app you changed (`just ios-test`, `just mac-test` or `just tray-test`).
 
+Conventions for coding agents (and people) working in the repository are in [AGENTS.md](AGENTS.md).
+
 ## License
 
 collie is licensed under the [Apache License 2.0](LICENSE). The `tailscale-sys` crate, which builds the vendored libtailscale, is licensed `Apache-2.0 AND BSD-3-Clause`.

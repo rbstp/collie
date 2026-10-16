@@ -13,3 +13,6 @@ Mac/*.xcodeproj/
 
 # SwiftPM scratch
 .build/
+
+# Agent guidance; overrides a global **/AGENTS.md ignore.
+!AGENTS.md

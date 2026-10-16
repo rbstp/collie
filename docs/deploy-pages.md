@@ -9,7 +9,7 @@ The documentation site at <https://collie.rbstp.dev> is built with [mdBook](http
 - `docs/site/src/reference/`: each page is a single mdBook include directive for `architecture.md`, `threat-model.md`, `tailnet.md`, `notifications.md`, `release.md` and this file, so those documents have one source.
 - `docs/site/theme/`: the Dark Gold theme (`collie.css`), the favicon and logo (`favicon.png`, the app icon at 128 px) and `head.hbs`, which puts the logo in the top bar.
 
-The site lives under `docs/`, so a change to it starts no TestFlight build (`testflight.yml` ignores `docs/**`). `ci.yml` ignores `docs/site/**` and `docs/deploy-pages.md` on pushes to `master`. On a pull request, its `changes` job lists the changed files, and when nothing outside those two paths changed, the `rust` and `ios` jobs are skipped. A job skipped by its condition counts as passing, so the required checks are still met. Other docs stay out of that list because tests read `docs/protocol/` and `docs/tailnet.md`.
+The site lives under `docs/`, so a change to it starts no TestFlight build (`testflight.yml` ignores `docs/**`). `ci.yml` ignores `docs/site/**`, `docs/deploy-pages.md`, `README.md`, `AGENTS.md` and `CLAUDE.md` on pushes to `master`. On a pull request, its `changes` job lists the changed files, and when nothing outside those paths changed, the `rust` and `ios` jobs are skipped. A job skipped by its condition counts as passing, so the required checks are still met. Other docs stay out of that list because tests read `docs/protocol/` and `docs/tailnet.md`.
 
 ## The workflow
 
