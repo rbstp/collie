@@ -7,6 +7,9 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 pub const MAX_ENCODED: usize = 3800;
+pub const MAX_ACTIVITY_ATTRIBUTES: usize = 1536;
+pub const MAX_ACTIVITY_STATE: usize = 2400;
+pub const MAX_ACTIVITY_TOTAL: usize = 4000;
 const DOMAIN: &[u8] = b"collie.push.v1\0";
 
 pub fn opaque(value: &str) -> String {
@@ -148,6 +151,54 @@ pub fn open(
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn shared_activity_vectors_fit_the_combined_budget_with_approval_context() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../docs/protocol/push-display-vectors.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            fixture["activity_limits"],
+            json!({"attributes_bytes":MAX_ACTIVITY_ATTRIBUTES,"state_bytes":MAX_ACTIVITY_STATE,"total_bytes":MAX_ACTIVITY_TOTAL,"context_bytes":crate::activity::MAX_CONTEXT_BYTES})
+        );
+        let key = crate::push::tests::key();
+        for v in fixture["activity_limit_vectors"].as_array().unwrap() {
+            let attrs = &v["attributes"];
+            let state = &v["content_state"];
+            let attrs_bytes = attrs.to_string().len();
+            let state_bytes = state.to_string().len();
+            assert_eq!(json!(attrs_bytes), v["attributes_bytes"]);
+            assert_eq!(json!(state_bytes), v["state_bytes"]);
+            assert_eq!(json!(attrs_bytes + state_bytes), v["combined_bytes"]);
+            assert!(attrs_bytes <= MAX_ACTIVITY_ATTRIBUTES);
+            assert!(state_bytes <= MAX_ACTIVITY_STATE);
+            assert!(MAX_ACTIVITY_ATTRIBUTES + state_bytes <= MAX_ACTIVITY_TOTAL);
+            let node = attrs["nodeId"].as_str().unwrap();
+            let scope = attrs["bindingId"].as_str().unwrap();
+            let event = "AAECAwQFBgcICQoLDA0ODw";
+            let plain = open(&key, state["enc"].as_str().unwrap(), 2, node, scope, event).unwrap();
+            assert_eq!(plain["state"], v["private_state"]);
+            let attrs_display =
+                open(&key, attrs["enc"].as_str().unwrap(), 3, node, scope, event).unwrap();
+            assert_eq!(attrs_display["title"], plain["state"]["title"]);
+            assert_eq!(attrs_display["machineLabel"], plain["state"]["workspace"]);
+            let command = crate::push::tests::open(
+                &key,
+                plain["state"]["enc"].as_str().unwrap(),
+                plain["state"]["approvalId"].as_str().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(command["body"], v["context"]);
+            assert!(
+                serde_json::to_string(v["context"].as_str().unwrap())
+                    .unwrap()
+                    .len()
+                    - 2
+                    <= crate::activity::MAX_CONTEXT_BYTES
+            );
+        }
+    }
 
     #[test]
     fn shared_vectors_authenticate_every_binding_and_ciphertext() {

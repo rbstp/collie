@@ -35,7 +35,7 @@ pub const REFERENCE_DATE: u64 = 978_307_200;
 pub const KINDS: [&str; 3] = ["claude", "codex", "copilot"];
 /// The approval context's JSON-escaped bytes an activity carries sealed: with labels at their
 /// caps, more would take the update over APNs' 4 KB, and APNs would refuse it.
-const MAX_CONTEXT_BYTES: usize = 1100;
+pub(crate) const MAX_CONTEXT_BYTES: usize = 600;
 
 // Private state: APNs receives only the authenticated outer envelope.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -654,7 +654,12 @@ mod tests {
                 .for_activity(&activity, Some(&destination))
                 .unwrap();
             assert!(sent.payload.to_string().len() <= 4096);
-            assert!(sent.payload["aps"]["content-state"].to_string().len() <= 4096);
+            let state_bytes = sent.payload["aps"]["content-state"].to_string().len();
+            assert!(state_bytes <= crate::push_display::MAX_ACTIVITY_STATE);
+            assert!(
+                state_bytes + crate::push_display::MAX_ACTIVITY_ATTRIBUTES
+                    <= crate::push_display::MAX_ACTIVITY_TOTAL
+            );
         }
     }
 

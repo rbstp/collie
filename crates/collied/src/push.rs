@@ -278,7 +278,15 @@ impl Alert {
             binding.binding_id.as_str(),
             &plain,
         )?;
-        alert.payload["aps"]["content-state"] = json!({"v":1,"enc":enc});
+        let encrypted = json!({"v":1,"enc":enc});
+        let state_bytes = encrypted.to_string().len();
+        if state_bytes > crate::push_display::MAX_ACTIVITY_STATE
+            || state_bytes + crate::push_display::MAX_ACTIVITY_ATTRIBUTES
+                > crate::push_display::MAX_ACTIVITY_TOTAL
+        {
+            return None;
+        }
+        alert.payload["aps"]["content-state"] = encrypted;
         alert.payload["aps"]
             .as_object_mut()?
             .remove("relevance-score");
@@ -1831,6 +1839,15 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
                 sent.payload
             );
         }
+        let oversized = crate::activity::ContentState {
+            title: "😀".repeat(400),
+            ..state.clone()
+        };
+        assert!(
+            crate::activity::update(&oversized, true, 1791028800000)
+                .for_activity(&activity, Some(&device))
+                .is_none()
+        );
         let mut unsupported = activity.clone();
         unsupported.display_binding = None;
         assert!(
@@ -2196,6 +2213,18 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         let sent = mock.wait(6).await;
         assert_eq!(sent[3].0, token('a').as_str(), "a late fallback, once");
         assert_eq!(sent[3].1.payload["approval_id"], "C".repeat(22));
+        let mut oversized = live;
+        oversized.payload["aps"]["content-state"] = json!({"status":"blocked","statusSince":812721600,
+            "title":"😀".repeat(400),"workspace":"😀".repeat(64),"approvals":1});
+        push.notify_activity(find(3), oversized, Some(routed('D')));
+        let sent = mock.wait(7).await;
+        assert_eq!(sent.len(), 5);
+        assert_eq!(
+            sent[4].0,
+            token('a').as_str(),
+            "over-budget activities fall back before an APNs attempt"
+        );
+        assert_eq!(sent[4].1.payload["approval_id"], "D".repeat(22));
     }
 
     #[test]

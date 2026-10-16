@@ -195,7 +195,7 @@ final class FollowModel {
                 let state = state.keepingApproval(of: current.state.opened(attributes: activity.attributes))
                 let staleSoon = current.staleDate.map { $0 < .now.addingTimeInterval(Self.staleAfter / 3) } ?? true
                 guard !current.state.opened(attributes: activity.attributes).sameDisplay(as: state) || staleSoon else { continue }
-                let content = Self.activityContent(state, attributes: activity.attributes)
+                guard let content = Self.activityContent(state, attributes: activity.attributes) else { continue }
                 let id = activity.id
                 Task.detached { await Self.live(id)?.update(content) }
             }
@@ -204,8 +204,10 @@ final class FollowModel {
 
     nonisolated static func activityContent(
         _ state: AgentActivityAttributes.ContentState, attributes: AgentActivityAttributes
-    ) -> ActivityContent<AgentActivityAttributes.ContentState> {
-        ActivityContent(state: state.secured(nodeId: attributes.nodeId, scope: attributes.bindingId), staleDate: .now.addingTimeInterval(staleAfter), relevanceScore: 0)
+    ) -> ActivityContent<AgentActivityAttributes.ContentState>? {
+        let secured = state.secured(nodeId: attributes.nodeId, scope: attributes.bindingId)
+        guard attributes.fits(secured) else { return nil }
+        return ActivityContent(state: secured, staleDate: .now.addingTimeInterval(staleAfter), relevanceScore: 0)
     }
 
     /// After a decision applied: drops the buttons and shows the status the agent moves to, at
@@ -224,7 +226,8 @@ final class FollowModel {
         state.enc = nil
         state.progress = nil
         state.approvals = max(0, state.approvals - 1)
-        await activity.update(activityContent(state, attributes: activity.attributes), alertConfiguration: nil, timestamp: tappedAt.addingTimeInterval(-1))
+        guard let content = activityContent(state, attributes: activity.attributes) else { return }
+        await activity.update(content, alertConfiguration: nil, timestamp: tappedAt.addingTimeInterval(-1))
     }
 
     /// Shows `progress` instead of the buttons on the live activity holding this approval, and
@@ -238,7 +241,8 @@ final class FollowModel {
         else { return nil }
         var state = activity.content.state.opened(attributes: activity.attributes)
         state.progress = progress
-        await activity.update(activityContent(state, attributes: activity.attributes))
+        guard let content = activityContent(state, attributes: activity.attributes) else { return nil }
+        await activity.update(content)
         return (state.title, activity.attributes.terminalId)
     }
 
@@ -260,8 +264,7 @@ final class FollowModel {
             machineId: agent.machineId, terminalId: agent.terminalId, machineLabel: machine.label, nodeId: machine.nodeId,
             title: title
         )
-        let content = Self.activityContent(state, attributes: attributes)
-        guard try JSONEncoder().encode(attributes).count + JSONEncoder().encode(content.state).count <= 4000 else {
+        guard let content = Self.activityContent(state, attributes: attributes) else {
             throw CocoaError(.coderInvalidValue)
         }
         let activity = try Activity.request(attributes: attributes, content: content, pushType: .token)

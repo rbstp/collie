@@ -80,7 +80,9 @@ struct AgentDemo: View {
             var state = activity.content.state.opened(attributes: activity.attributes)
             state.approvalId = approvalId
             state.enc = sealed.combined.base64EncodedString()
-            await activity.update(FollowModel.activityContent(state, attributes: activity.attributes))
+            if let content = FollowModel.activityContent(state, attributes: activity.attributes) {
+                await activity.update(content)
+            }
         }
     }
 

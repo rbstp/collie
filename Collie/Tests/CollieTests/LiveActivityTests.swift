@@ -92,6 +92,17 @@ private func displayVectors() throws -> [[String: Any]] {
     #expect(local.keepingApproval(of: moved) == local)
 }
 
+@Test func everyLocalActivityUpdateReservesItsStaticAttributes() throws {
+    let attrs = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Mac", nodeId: "nNoKey", title: "title")
+    let state = AgentActivityAttributes.ContentState(status: .working, statusSince: .now, title: "agent", workspace: "workspace", approvals: 0)
+    #expect(FollowModel.activityContent(state, attributes: attrs) != nil)
+    let object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(attrs)) as? [String: Any])
+    var oversized = object
+    oversized["enc"] = String(repeating: "A", count: AgentActivityAttributes.maxAttributesBytes)
+    let large = try JSONDecoder().decode(AgentActivityAttributes.self, from: JSONSerialization.data(withJSONObject: oversized))
+    #expect(FollowModel.activityContent(state, attributes: large) == nil)
+}
+
 @Test func activityAttributesCarryNoPrivateLabelsEvenWithoutAKey() throws {
     let current = AgentActivityAttributes(machineId: "m1", terminalId: "t1", machineLabel: "Private machine", nodeId: "nNoKey", title: "Private title")
     let encoded = try JSONEncoder().encode(current)

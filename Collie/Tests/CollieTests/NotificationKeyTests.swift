@@ -155,29 +155,31 @@ private struct TestDisplayState: Decodable, Equatable {
     #expect(PushDisplay.open(userInfo: payload, key: vectorKey) == nil)
 }
 
-@Test func displayEnvelopeBoundsUnicodeEscapingAndInitialActivityStorage() throws {
-    struct AttributesDisplay: Encodable { let v = 1; let machineLabel: String; let title: String }
-    struct StateDisplay: Encodable { let v = 1; let state: State }
-    struct State: Encodable {
-        let status = "blocked"
-        let statusSince = 812721600
-        let title: String
-        let workspace: String
-        let approvals = 1
+@Test func sharedActivityBudgetIncludesStaticLabelsAndPendingCommand() throws {
+    let url = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../docs/protocol/push-display-vectors.json")
+    let fixture = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    let limits = try #require(fixture["activity_limits"] as? [String: Int])
+    #expect(limits["attributes_bytes"] == AgentActivityAttributes.maxAttributesBytes)
+    #expect(limits["state_bytes"] == AgentActivityAttributes.maxStateBytes)
+    #expect(limits["total_bytes"] == AgentActivityAttributes.maxTotalBytes)
+    for vector in try #require(fixture["activity_limit_vectors"] as? [[String: Any]]) {
+        let attrsData = try JSONSerialization.data(withJSONObject: try #require(vector["attributes"]))
+        let stateData = try JSONSerialization.data(withJSONObject: try #require(vector["content_state"]))
+        let attrs = try JSONDecoder().decode(AgentActivityAttributes.self, from: attrsData)
+        let stored = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: stateData)
+        let state = stored.opened(nodeId: attrs.nodeId, scope: attrs.bindingId, key: vectorKey)
+        #expect(state.status == .blocked)
+        #expect(state.pendingApproval == String(repeating: "A", count: 64))
+        let context = try #require(vector["context"] as? String)
+        #expect(state.command(key: vectorKey) == PushDisplay.clean(context, maxLength: 600))
+        #expect(attrs.fits(stored))
+        #expect(attrsData.count == vector["attributes_bytes"] as? Int)
+        #expect(stateData.count == vector["state_bytes"] as? Int)
+        #expect(attrsData.count + stateData.count == vector["combined_bytes"] as? Int)
+        #expect(attrsData.count + stateData.count <= AgentActivityAttributes.maxTotalBytes)
+        #expect(stateData.count + AgentActivityAttributes.maxAttributesBytes <= AgentActivityAttributes.maxTotalBytes)
+        let oversized = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self,
+            from: JSONSerialization.data(withJSONObject: ["v": 1, "enc": String(repeating: "A", count: 2400)]))
+        #expect(!attrs.fits(oversized))
     }
-    for text in [String(repeating: "😀", count: 64), String(repeating: "\"", count: 64), String(repeating: "\u{1}", count: 64)] {
-        let binding = String(repeating: "A", count: 64)
-        let node = String(repeating: "n", count: 64)
-        let attrsEnc = try #require(PushEnvelope.seal(AttributesDisplay(machineLabel: text, title: text), kind: 3, nodeId: node, scope: binding, key: vectorKey))
-        let stateEnc = try #require(PushEnvelope.seal(StateDisplay(state: State(title: text, workspace: text)), kind: 2, nodeId: node, scope: binding, key: vectorKey))
-        let attrs = try JSONSerialization.data(withJSONObject: ["machineId": String(repeating: "m", count: 64), "terminalId": String(repeating: "t", count: 64), "nodeId": node, "bindingId": binding, "enc": attrsEnc])
-        let state = try JSONSerialization.data(withJSONObject: ["v": 1, "enc": stateEnc])
-        #expect(attrs.count + state.count <= 4000)
-        #expect(attrsEnc.utf8.count <= 3800)
-        #expect(stateEnc.utf8.count <= 3800)
-        let decodedAttrs = try JSONDecoder().decode(AgentActivityAttributes.self, from: attrs)
-        let decodedState = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: state)
-        #expect(try JSONEncoder().encode(decodedAttrs).count + JSONEncoder().encode(decodedState).count <= 4000)
-    }
-    #expect(PushEnvelope.seal(AttributesDisplay(machineLabel: "x", title: String(repeating: "😀", count: 4096)), kind: 3, nodeId: "nMAC", scope: "binding", key: vectorKey) == nil)
 }

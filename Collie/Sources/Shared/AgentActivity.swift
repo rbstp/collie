@@ -6,6 +6,9 @@ import SwiftUI
 // ActivityKit storage always uses ciphertext, including initial attributes and local updates.
 
 struct AgentActivityAttributes: ActivityAttributes {
+    static let maxAttributesBytes = 1536
+    static let maxStateBytes = 2400
+    static let maxTotalBytes = 4000
     let machineId: String
     let terminalId: String
     let nodeId: String
@@ -28,6 +31,14 @@ struct AgentActivityAttributes: ActivityAttributes {
         enc = NotificationKey.load(nodeId: nodeId).flatMap {
             PushEnvelope.seal(display, kind: 3, nodeId: nodeId, scope: binding, key: $0)
         } ?? ""
+    }
+
+    func fits(_ state: ContentState) -> Bool {
+        guard let attributesBytes = try? JSONEncoder().encode(self).count,
+            let stateBytes = try? JSONEncoder().encode(state).count
+        else { return false }
+        return attributesBytes <= Self.maxAttributesBytes && stateBytes <= Self.maxStateBytes
+            && attributesBytes + stateBytes <= Self.maxTotalBytes
     }
 
     private var display: Display? {
@@ -109,6 +120,9 @@ struct AgentActivityAttributes: ActivityAttributes {
             state.sealedDisplay = NotificationKey.load(nodeId: nodeId).flatMap {
                 PushEnvelope.seal(Display(v: 1, state: privateState), kind: 2, nodeId: nodeId, scope: scope, key: $0)
             } ?? ""
+            guard let bytes = try? JSONEncoder().encode(state), bytes.count <= AgentActivityAttributes.maxStateBytes else {
+                return Self(status: .unknown, statusSince: Date(timeIntervalSinceReferenceDate: 0), title: "Collie", workspace: nil, approvals: 0)
+            }
             return state
         }
 
