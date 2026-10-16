@@ -1,0 +1,5 @@
+The public synthetic App Attest object comes from [Apple's validation guide](https://developer.apple.com/documentation/devicecheck/attestation-object-validation-guide), retrieved 2026-10-16. It describes the fictitious `1234567890.com.example.myapp` app.
+
+The full positive verification uses its published historical context: 2026-04-21 18:13:13 UTC, OS executable category 1, bundle version `1`, and raw `example_server_challenge` client-hash bytes. The published object appends documented authenticator extensions without setting the extensions bit. These fixture choices are explicit test inputs, never production control configuration. Production constructs the current time, the publisher's fixed App ID, SHA256 of the signed challenge, and TestFlight/App Store categories 2 or 4. Both certificate paths still use the unmodified pinned Apple roots, and CMS signature, receipt app/key/hash and freshness are verified.
+
+The same fixture is rejected outside its historical context, for wrong app/environment/category, stale receipts and tampered signatures. It does not authenticate Collie or replace genuine-device acceptance.

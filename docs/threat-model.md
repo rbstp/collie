@@ -372,3 +372,10 @@ Chat additionally sends bounded native conversation pages over that same authent
 ## Isolated relay foundation
 
 The unpublished Worker in `relay/` accepts only HMAC-authorized, registered destinations and strict generic/encrypted public envelopes. It stores no notification payloads and cannot issue approval decisions. Its validation configuration exposes no public URL or enrollment bypass. App Attest control authorization, retention cleanup and measured Free-plan resource limits are launch gates, not completed protections. Stolen grants permit bounded sends until expiry or revocation, and revocation can race an already authorized in-flight attempt. See [relay.md](relay.md) for storage, privacy, abuse and deployment constraints.
+
+
+## Attested relay control validation
+
+The undeployed relay control path trusts pinned Apple certificate chains and fixed publisher app/environment policy. App Attest establishes app integrity, while the phone's confirmed pairing authorizes machine-specific, exact-destination grants. It does not establish a person's identity or token ownership. HMAC challenges bind canonical operations and an exact prior durable counter/epoch, preventing replay even with a newly signed higher counter. D1 trigger failures roll back counters, quotas and authorization together. A stolen grant can send bounded pushes only to its route until revocation/expiry; it carries no approval or decryption authority.
+
+The isolated phone client pins the publisher's endpoint and refuses redirects. Its whole control transaction uses an explicit FIFO gate across actor awaits. Offline revocation retains minimal retry credentials and remains pending until success or expiry; local removal cannot guarantee immediate remote denial. Raw destinations and verified attestation metadata remain in bounded D1 records until retention cleanup, with no notification keys, payloads or sensitive request logs. The exact validation and external rollout gates are in [relay.md](relay.md#attested-control-contract).

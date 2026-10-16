@@ -90,3 +90,8 @@ Changes to this policy are published on this page with a new date. If a future v
 ## Contact
 
 Questions about this policy: open an issue on [GitHub](https://github.com/rbstp/collie/issues), or see [Support](support.md).
+
+
+## Undeployed relay validation
+
+The repository contains an isolated App Attest/relay validation implementation that is not enabled in released clients. Before a relay-enabled build is distributed, this policy must describe publisher/Cloudflare processing of source IPs, APNs destinations, route relationships and timing, as well as Apple's attestation processing. The implementation retains verified public keys/receipts, route metadata, revocation epochs and counters, with no notification keys or stored payloads. Its deployment gate requires deletion within seven days after the last grant expires and disabled authorization/body/destination logging. Local validation does not change the data flow of the released app.

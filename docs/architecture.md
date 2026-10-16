@@ -800,3 +800,10 @@ On both OSes, `collied status` also prints `tags:` (`(none)` for an untagged nod
 ## Push relay validation foundation
 
 The isolated Worker/D1 implementation under `relay/` provides a bounded authenticated send contract, fixed topics, deterministic provider JWTs and atomic indexed installation/global quotas. It is not deployed or connected to released clients. Enrollment, App Attest verification and production rollout remain gated. See [relay.md](relay.md) for the exact contract, local measurements and outstanding live Free-plan validation. No version bump: this foundation changes no phone/daemon wire types.
+
+
+## Attested push control validation
+
+The relay control implementation authenticates installation enrollment with the pinned Apple App Attestation certificate chain and independently verifies Apple's CMS receipt against Apple Root CA G3. Later operations bind a stateless five-minute HMAC challenge to a canonical operation, exact destination, pairing, installation, environment and prior counter/epoch. A D1 aborting guard advances replay/control counters and changes routes in one transaction; conditional zero-row updates alone never authorize a route. Registered generations and revocation epochs are checked on every send. See [relay.md](relay.md#attested-control-contract) for limits, renewal, retention and fixture context.
+
+The isolated Swift client serializes full control transactions across suspension points, stores credentials in a ThisDeviceOnly Keychain record, pins the publisher endpoint and preserves pending offline revocations. It does not enable public enrollment or daemon relay delivery. Physical-device/TestFlight acceptance and deployed Free-plan CPU/D1/cleanup measurements remain required. No version bump: this validation checkpoint changes no phone/daemon wire types.

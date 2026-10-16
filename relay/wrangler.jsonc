@@ -14,6 +14,14 @@
     "migrations_dir": "migrations"
   }],
   "ratelimits": [{
+    "name": "CONTROL_LIMITER",
+    "namespace_id": "353",
+    "simple": { "limit": 30, "period": 60 }
+  }, {
+    "name": "ENROLL_LIMITER",
+    "namespace_id": "354",
+    "simple": { "limit": 5, "period": 60 }
+  }, {
     "name": "SEND_LIMITER",
     "namespace_id": "350",
     "simple": { "limit": 60, "period": 60 }

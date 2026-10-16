@@ -11,6 +11,9 @@ export interface Env {
   APNS_TEAM_ID: string;
   APNS_KEY_ID: string;
   APNS_PRIVATE_KEY: string;
+  ATTEST_BUNDLE_VERSIONS?: string;
+  CONTROL_LIMITER?: Env['SEND_LIMITER'];
+  ENROLL_LIMITER?: Env['SEND_LIMITER'];
 }
 const response = (status: number, result: string, extra: Record<string, unknown> = {}): Response =>
   Response.json({ v: 1, result, ...extra }, { status, headers: { 'cache-control': 'no-store' } });
@@ -42,8 +45,18 @@ export function createWorker(upstream: typeof fetch = fetch, clock: () => number
   let signing: ProviderToken | undefined;
   let keys: Map<string, Promise<CryptoKey>> | undefined;
   return {
+    async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
+      const { cleanup } = await import('./control.ts');
+      await cleanup(env.DB, clock());
+    },
     async fetch(request: Request, env: Env): Promise<Response> {
       const url = new URL(request.url);
+      if (['/v1/challenge', '/v1/control'].includes(url.pathname) && !url.search && request.method === 'POST') {
+        try {
+          const { control } = await import('./control.ts');
+          return await bounded(control(request, env, clock(), signGrant));
+        } catch { return response(503, 'unavailable'); }
+      }
       if (url.pathname !== '/v1/send' || url.search || request.method !== 'POST') return response(404, 'not_found');
       try {
         let now = clock();

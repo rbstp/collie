@@ -45,3 +45,8 @@ The payload helpers are in `crates/collied/src/push.rs`. iPhone action classific
 ## Relay validation status
 
 The Worker under `relay/` is a local validation foundation, not an available notification delivery option. `collied apns test` and released apps still use the direct APNs path described above. See [relay.md](relay.md) for its versioned contract and remaining enrollment, encryption and Free-account measurement gates.
+
+
+## Relay control validation
+
+The undeployed Worker and isolated phone client implement App Attest enrollment, exact per-machine/activity grants, 30-day expiry and renewal from seven days before expiry. They do not yet enable relay delivery in the app or daemon. If a future relay-enabled phone stays inactive past expiry, notifications stop until renewal while tailnet sessions still work. Removing a machine while offline leaves remote revocation pending, so its previously authorized pushes may continue until success or expiry. See [relay.md](relay.md#attested-control-contract) for control limits, privacy, retention and production validation gates.
