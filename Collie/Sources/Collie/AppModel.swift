@@ -21,6 +21,7 @@ final class AppModel {
     private(set) var signInError: String?
     private(set) var machines: [Machine] = []
     private var removing: Set<String> = []
+    private var machineOrder = MachineOrder.load(from: MachineOrder.file)
     private(set) var signingIn = false
     private(set) var pushStatus = "not registered"
     private var pushToken: Data?
@@ -69,7 +70,7 @@ final class AppModel {
         }
         approvals = ApprovalsModel(core: core)
         follows = FollowModel(core: core, approvals: approvals)
-        machines = core?.machines() ?? []
+        reloadMachines()
         if let marker = try? StateDirectory.prepare().appending(path: "relay-installation"),
             FileManager.default.fileExists(atPath: marker.path)
         {
@@ -206,7 +207,19 @@ final class AppModel {
     }
 
     func reloadMachines() {
-        machines = (core?.machines() ?? []).filter { !removing.contains($0.id) }
+        let ordered = machineOrder.sorted(core?.machines() ?? [])
+        let ids = ordered.map(\.id)
+        if machineOrder.ids != ids {
+            machineOrder.ids = ids
+            machineOrder.save(to: MachineOrder.file)
+        }
+        machines = ordered.filter { !removing.contains($0.id) }
+    }
+
+    func moveMachines(from offsets: IndexSet, to destination: Int) {
+        machines.move(fromOffsets: offsets, toOffset: destination)
+        machineOrder.ids = machines.map(\.id)
+        machineOrder.save(to: MachineOrder.file)
     }
 
     /// Shown only on this phone; nil or a blank name restores the name from pairing.

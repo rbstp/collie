@@ -13,7 +13,12 @@ struct MachinesView: View {
             MachinesList(app: app, removeError: $removeError)
                 .navigationTitle("Machines")
                 .toolbar {
-                    Button("Add machine", systemImage: "plus") { adding = true }
+                    ToolbarItem(placement: .topBarLeading) {
+                        if !app.machines.isEmpty { EditButton() }
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Add machine", systemImage: "plus") { adding = true }
+                    }
                 }
                 .sheet(isPresented: $adding, onDismiss: app.reloadMachines) {
                     PairView(app: app)
@@ -46,6 +51,7 @@ struct MachinesList: View {
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
+            .onMove(perform: app.moveMachines)
             .onDelete { offsets in
                 let removed = offsets.map { app.machines[$0] }
                 removed.forEach(app.hideMachine)
