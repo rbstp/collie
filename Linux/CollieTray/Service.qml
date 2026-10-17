@@ -20,6 +20,8 @@ Item {
 
   property string state: "off"
   property int pending: 0
+  property string colliedVersion: ""
+  readonly property string statusText: Model.statusText(state, Printable.printable(colliedVersion))
   readonly property bool running: state !== "off"
   property bool starting: false
   property bool busy: false
@@ -37,8 +39,9 @@ Item {
   property string message: ""
   property var pairConn: null
 
-  function apply(state, pending) {
+  function apply(state, pending, version) {
     if (state !== "off") starting = false
+    root.colliedVersion = state === "running" && typeof version === "string" ? version : ""
     root.state = state
     root.pending = pending
     if (state === "off") peers = []
@@ -226,7 +229,7 @@ Item {
       var r = Model.parseReply(line)
       if (r.type === "watch") {
         outdated = false
-        apply("running", Number(r.pending_approvals) || 0)
+        apply("running", Number(r.pending_approvals) || 0, r.collied_version)
       } else if (r.type === "error") {
         outdated = true
         apply("outdated", 0)
@@ -254,6 +257,7 @@ Item {
     var s = watchConn
     watchConn = null
     s.destroy()
+    apply("off", 0)
     watch()
   }
 
