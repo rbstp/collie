@@ -119,6 +119,12 @@ The certificate and the profiles expire after a year; renew them and update thei
 - A manual run (Actions, testflight, Run workflow, on `master` only) ships the given version, for example `1.0.0`.
 - After the upload, the workflow pushes the tag `v<version>`.
 
+## iOS release notes
+
+Use [iOS release notes](ios-release-notes.md) for the next combined release. Copy the release summary and tested-support disclosure into the App Store version description or What's New, and the test checklist into TestFlight's What to Test. Keep the tested-support disclosure in future release metadata until broader testing is recorded. For the first App Store release, put it in Description: Apple does not provide What's New until subsequent versions ([platform version information](https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information)).
+
+The upload workflow does not publish this metadata. Confirm the text in App Store Connect before distributing the build. A successful upload does not establish that the build is processed and installable.
+
 ## App icon and TestFlight
 
 - The icon is a single 1024x1024 universal image, `Collie/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png`; Xcode derives every other size. The app's `Info.plist` sets `CFBundleIconName` to `AppIcon` and `project.yml` sets `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`: App Store validation rejects an upload whose icon is only in the asset catalog without `CFBundleIconName`.
