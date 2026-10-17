@@ -1,0 +1,22 @@
+pkgname=collie-tray
+pkgver=0.1.2
+pkgrel=1
+pkgdesc='Collie bar widget for Omarchy 4'
+arch=('any')
+url='https://collie.rbstp.dev'
+license=('Apache-2.0')
+depends=("collied-bin=$pkgver" 'quickshell' 'qrencode' 'less' 'jq' 'bash')
+options=('!debug')
+source=("https://github.com/rbstp/collie/releases/download/v$pkgver/CollieTray-$pkgver-omarchy.tar.gz"
+        'collie-tray-activate')
+sha256sums=('cd9faed120231de459e2022e6461aa8e2011c53ef06a3e0df315a203837a5b35'
+            '62ee5a47be94557c3203801126d90d959da0a423ff3869b795667ef5fd2ac06c')
+
+package() {
+    local release="$srcdir/CollieTray-$pkgver-omarchy"
+    install -dm755 "$pkgdir/usr/share/collie-tray"
+    install -m644 "$release/CollieTray/"* "$pkgdir/usr/share/collie-tray/"
+    install -Dm755 collie-tray-activate "$pkgdir/usr/bin/collie-tray-activate"
+    install -Dm644 "$release/release.json" "$pkgdir/usr/share/doc/$pkgname/release.json"
+    install -Dm644 "$release/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

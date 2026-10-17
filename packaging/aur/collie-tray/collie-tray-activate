@@ -1,0 +1,32 @@
+#!/usr/bin/bash
+set -euo pipefail
+[ "$(id -u)" != 0 ] || { echo 'Run in your Omarchy session, without sudo' >&2; exit 1; }
+for command in omarchy-plugin-validate omarchy-shell omarchy qs qrencode; do
+    command -v "$command" >/dev/null || { echo "Missing Omarchy 4 dependency: $command" >&2; exit 1; }
+done
+source_dir=/usr/share/collie-tray
+omarchy-plugin-validate "$source_dir"
+plugins="$HOME/.config/omarchy/plugins"
+dest="$plugins/rbstp.collie"
+mkdir -p "$plugins"
+if [ -L "$dest" ]; then
+    [ "$(readlink "$dest")" = "$source_dir" ] || { echo "Unexpected plugin link: $dest" >&2; exit 1; }
+elif [ -e "$dest" ]; then
+    [ -d "$dest" ] && [ ! -e "$plugins/.rbstp.collie.before-aur" ] || {
+        echo "Inspect $dest and $plugins/.rbstp.collie.before-aur before adoption" >&2
+        exit 1
+    }
+    mv "$dest" "$plugins/.rbstp.collie.before-aur"
+    ln -s "$source_dir" "$dest"
+else
+    ln -s "$source_dir" "$dest"
+fi
+omarchy restart shell >/dev/null
+result=
+for _ in $(seq 100); do
+    result="$(omarchy-shell shell putBarWidget rbstp.collie '{"section":"right"}' 2>&1 || true)"
+    [ "$result" = ok ] && break
+    sleep 0.1
+done
+[ "$result" = ok ] || { echo "Could not enable widget: $result" >&2; exit 1; }
+printf 'Activated %s -> %s\n' "$dest" "$source_dir"

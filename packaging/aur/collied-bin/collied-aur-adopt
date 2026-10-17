@@ -1,0 +1,31 @@
+#!/usr/bin/bash
+set -euo pipefail
+[ "$(id -u)" != 0 ] || { echo 'Run as your login user, without sudo' >&2; exit 1; }
+unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/collied.service"
+[ -f "$unit" ] && [ ! -L "$unit" ] || { echo "Expected a regular user unit: $unit" >&2; exit 1; }
+[ "$(systemctl --user show collied.service --property=FragmentPath --value)" = "$unit" ] || {
+    echo 'The user manager loads a different collied unit; inspect it before adoption' >&2
+    exit 1
+}
+[ -z "$(systemctl --user show collied.service --property=DropInPaths --value)" ] || {
+    echo 'Inspect and adopt collied service drop-ins manually' >&2
+    exit 1
+}
+[ "$(grep -c '^ExecStart=' "$unit")" = 1 ] || { echo 'Expected one ExecStart' >&2; exit 1; }
+grep -Eq '^ExecStart="/([^"\\]*/)?collied" ("--config" "([^"\\]|\\.)*" )?"run"$' "$unit" || {
+    echo 'Unrecognized ExecStart; replace only its executable with /usr/bin/collied manually' >&2
+    exit 1
+}
+[ ! -e "$unit.before-aur" ] && [ ! -L "$unit.before-aur" ] || { echo "Backup already exists: $unit.before-aur" >&2; exit 1; }
+running=false
+if systemctl --user --quiet is-active collied.service; then running=true; fi
+tmp="$(mktemp "$(dirname "$unit")/.collied-aur.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+sed -E 's#^ExecStart=("[^"\\]+"|/[^[:space:]"\\]+)#ExecStart="/usr/bin/collied"#' "$unit" > "$tmp"
+chmod --reference="$unit" "$tmp"
+cp -p "$unit" "$unit.before-aur"
+mv "$tmp" "$unit"
+systemctl --user daemon-reload
+if $running; then systemctl --user restart collied.service; fi
+printf 'Adopted %s; backup: %s.before-aur\n' "$unit" "$unit"
+echo 'Use /usr/bin/collied; rename any old ~/.cargo/bin/collied so it cannot shadow package upgrades.'

@@ -1,8 +1,8 @@
 # collied on Linux
 
-This page describes the next matching phone and desktop candidate; user-owned setup is unreleased. Published desktop v0.1.0 still uses tagged nodes. Follow the [v0.1.0 tailnet procedure](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md) until both peers are updated.
+`collied` runs as a systemd user unit. Linux x86_64 download packaging targets glibc 2.39+ and systemd 255+: see [Desktop release downloads](../reference/desktop-releases.md). Published daemon archives include `install.sh`; extract an archive and run `bash install.sh --replace`, then `~/.cargo/bin/collied setup`. A Rust toolchain or checkout is not required for those downloads. Keep the phone and desktop on matching releases.
 
-`collied` runs as a systemd user unit. Linux x86_64 download packaging targets glibc 2.39+ and systemd 255+: see [Desktop release downloads](../reference/desktop-releases.md). Published daemon archives include `install.sh`; extract an archive and run `bash install.sh --replace`, then `~/.cargo/bin/collied setup`. A Rust toolchain or checkout is not required for those downloads. Acceptance of the downloaded binary on a clean Linux machine remains pending.
+AUR packaging is being prepared for Arch Linux x86_64 and Omarchy 4. The recipes are not published; their v0.1.2 downloads are test fixtures because that binary predates package-path setup support. After a matching release containing that support, the GitHub recipe installer will install both components without an AUR account or Rust/Go builds. A later AUR publication will also allow `paru -S collie-tray`. See [AUR preparation and activation](../reference/desktop-releases.md#arch-linux-and-aur-preparation) for first setup, adoption of an existing service and upgrades. Do not use the fixture recipes for a production install.
 
 The source installation remains available below.
 

@@ -1,0 +1,23 @@
+pkgbase = collied-bin
+	pkgdesc = Control local coding agents from an iPhone
+	pkgver = 0.1.2
+	pkgrel = 1
+	url = https://collie.rbstp.dev
+	arch = x86_64
+	license = Apache-2.0
+	depends = glibc>=2.39
+	depends = libgcc
+	depends = systemd>=255
+	depends = ca-certificates
+	depends = bash
+	optdepends = herdr: control local coding agents
+	provides = collied=0.1.2
+	conflicts = collied
+	options = !strip
+	options = !debug
+	source = https://github.com/rbstp/collie/releases/download/v0.1.2/collied-0.1.2-linux-x86_64.tar.gz
+	source = collied-aur-adopt
+	sha256sums = 99ef52ab0afd93747e6f8016b244fa068117e277b342f9831282b585846fe526
+	sha256sums = 8afdb31b2d1db9982f7fd364bba07f96218731ba3271228ace6f6caafc7e581b
+
+pkgname = collied-bin

@@ -2,6 +2,10 @@
 
 CollieTray is a bar widget for [Omarchy](https://omarchy.org), with the same icon states and menu as [CollieBar](colliebar.md). It needs Omarchy 4 and `qrencode`.
 
+## AUR preparation
+
+The unpublished `collie-tray` recipe pulls in the exact matching `collied-bin` package. Its v0.1.2 archive is a packaging fixture; the first publication needs a matching release with package-path setup support. After the recipes target that release, the GitHub recipe installer installs both without an AUR account or Rust/Go builds; later publication will also support `paru -S collie-tray`. Then `collie-tray-activate` links the package-owned widget into Omarchy's actual discovery directory. Existing bar placement is retained. Upgrades replace package files; restart the Omarchy shell to load new QML. Follow the [activation, adoption and upgrade instructions](../reference/desktop-releases.md#arch-linux-and-aur-preparation).
+
 ## Download
 
 The [desktop release workflow](../reference/desktop-releases.md) prepares a complete architecture-independent `CollieTray-VERSION-omarchy.tar.gz`. Once a validated release is available, extract it and run `bash install.sh`. The installer checks Omarchy 4/Quickshell commands and `qrencode`, validates the plugin and enables it on the bar. Install the matching collied daemon separately. This is an Omarchy plugin; GNOME/KDE generic tray support is not provided.

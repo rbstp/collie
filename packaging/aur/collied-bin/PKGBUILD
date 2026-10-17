@@ -1,0 +1,24 @@
+pkgname=collied-bin
+pkgver=0.1.2
+pkgrel=1
+pkgdesc='Control local coding agents from an iPhone'
+arch=('x86_64')
+url='https://collie.rbstp.dev'
+license=('Apache-2.0')
+depends=('glibc>=2.39' 'libgcc' 'systemd>=255' 'ca-certificates' 'bash')
+optdepends=('herdr: control local coding agents')
+provides=("collied=$pkgver")
+conflicts=('collied')
+options=('!strip' '!debug')
+source=("https://github.com/rbstp/collie/releases/download/v$pkgver/collied-$pkgver-linux-x86_64.tar.gz"
+        'collied-aur-adopt')
+sha256sums=('99ef52ab0afd93747e6f8016b244fa068117e277b342f9831282b585846fe526'
+            '8afdb31b2d1db9982f7fd364bba07f96218731ba3271228ace6f6caafc7e581b')
+
+package() {
+    local release="$srcdir/collied-$pkgver-linux-x86_64"
+    install -Dm755 "$release/collied" "$pkgdir/usr/bin/collied"
+    install -Dm755 collied-aur-adopt "$pkgdir/usr/bin/collied-aur-adopt"
+    install -Dm644 "$release/release.json" "$pkgdir/usr/share/collied/release.json"
+    install -Dm644 "$release/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
