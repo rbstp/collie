@@ -27,6 +27,7 @@ final class AppModel {
     private(set) var relayStatus: String?
     @ObservationIgnored private var relay: RelayEnrollment?
     @ObservationIgnored private var relayTask: Task<Void, Never>?
+    @ObservationIgnored private var pushTokenEvent: UInt64 = 0
     @ObservationIgnored private var relayDelivered: [String: RelayRouteGrant] = [:]
     @ObservationIgnored private var relayRetryAt = Date.distantPast
     @ObservationIgnored private var relayFailures = 0
@@ -320,6 +321,11 @@ final class AppModel {
         UIApplication.shared.registerForRemoteNotifications()
     }
 
+    func didRegisterPush(token: Data) {
+        pushTokenEvent += 1
+        registerPush(token: token)
+    }
+
     /// One notification key per Mac, keyed by its node id: the NSE only sees `node_id` in the alert.
     func registerPush(token: Data) {
         pushToken = token
@@ -391,8 +397,10 @@ final class AppModel {
                 let client = try relayClient()
                 try await client.retryPendingRevocations()
                 for machine in eligible {
-                    let grant = try await client.register(pairingId: machine.id, destination: pushToken.hexString)
-                    guard core.machines().contains(where: { $0.id == machine.id }), core.pushMode(machineId: machine.id) == .relay else { continue }
+                    let event = pushTokenEvent
+                    let grant = try await client.register(pairingId: machine.id, destination: pushToken.hexString, tokenEvent: event)
+                    guard self.pushToken == pushToken, core.machines().contains(where: { $0.id == machine.id }),
+                        core.pushMode(machineId: machine.id) == .relay else { continue }
                     if relayDelivered[machine.id] != grant {
                         let key = try NotificationKey.loadOrCreate(nodeId: machine.nodeId)
                         try core.registerPush(machineId: machine.id, apnsTokenHex: pushToken.hexString, environment: .current,

@@ -140,11 +140,12 @@ export function createWorker(upstream: typeof fetch = fetch, clock: () => number
             } finally { void reader.cancel().catch(() => {}); reader.releaseLock(); }
           }
         } catch { reason = undefined; }
-        if ((result.status === 410 && reason === 'Unregistered') || (result.status === 400 && reason === 'BadDeviceToken')) {
+        if ((result.status === 410 && (reason === 'Unregistered' || reason === 'ExpiredToken')) || (result.status === 400 && reason === 'BadDeviceToken')) {
           await bounded(invalidate(env.DB, grant));
           return response(410, 'invalid_route');
         }
-        if (result.status === 429 || result.status >= 500) return response(503, 'upstream_unavailable', { retry_after: 60 });
+        if (result.status >= 500) return response(503, 'upstream_unavailable', { retry_after: 900 });
+        if (result.status === 429) return response(503, 'upstream_unavailable', { retry_after: 60 });
         return response(502, 'configuration_error');
       } catch { return response(503, 'unavailable'); }
     }

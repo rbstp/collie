@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { createWorker, signGrant } from '../src/index.ts';
-import { base64url, bytes, decode, ProviderToken } from '../src/crypto.ts';
+import { base64url, bytes, decode, digest, ProviderToken } from '../src/crypto.ts';
 import { validSend, readBody } from '../src/contract.ts';
 import { charge, invalidate, lookupRoute } from '../src/storage.ts';
 import { alert, fixture, now, privateKey, request, secret } from './helpers.ts';
@@ -139,15 +139,124 @@ test('old invalidation cannot revoke a replacement route generation', async () =
 });
 test('normalizes APNs rejection and never erases a route for configuration failures', async () => {
   await reset();
-  for (const [status, reason, expected] of [[400, 'DeviceTokenNotForTopic', 502], [403, 'InvalidProviderToken', 502], [429, 'TooManyRequests', 503], [410, 'Unregistered', 410], [400, 'BadDeviceToken', 410]] as const) {
+  for (const [status, reason, expected] of [[400, 'DeviceTokenNotForTopic', 502], [403, 'InvalidProviderToken', 502], [429, 'TooManyRequests', 503], [403, 'ExpiredProviderToken', 502], [410, 'Unregistered', 410], [410, 'ExpiredToken', 410], [400, 'BadDeviceToken', 410], [500, 'InternalServerError', 503], [503, 'Shutdown', 503], [429, 'TooManyProviderTokenUpdates', 503]] as const) {
     await f.db.prepare('UPDATE routes SET revoked = 0').run();
     const worker = createWorker(async () => Response.json({ reason, destination: 'secret' }, { status }), () => now);
     const result = await worker.fetch(await request(f.grant), f.env as never);
     assert.equal(result.status, expected);
-    assert.equal((await result.text()).includes('secret'), false);
+    assert.deepEqual(await result.json(), expected === 503
+      ? { v: 1, result: 'upstream_unavailable', retry_after: status >= 500 ? 900 : 60 }
+      : { v: 1, result: expected === 410 ? 'invalid_route' : 'configuration_error' });
     assert.equal((await f.db.prepare('SELECT revoked FROM routes').first())!.revoked, expected === 410 ? 1 : 0);
   }
   await f.db.prepare('UPDATE routes SET revoked = 0').run();
+});
+
+test('terminal device-token failures revoke only the matching route and prevent subsequent APNs attempts', async () => {
+  for (const [status, reason] of [[410, 'ExpiredToken'], [410, 'Unregistered'], [400, 'BadDeviceToken']] as const) {
+    const local = await fixture();
+    try {
+      await local.db.prepare(`INSERT INTO routes VALUES ('sibling', 'machine', 1, ?, ?, 'liveactivity', 'development', ?, 0)`)
+        .bind('a'.repeat(64), local.grant.destination_digest, local.grant.expires_at).run();
+      let calls = 0;
+      const worker = createWorker(async () => { calls++; return Response.json({ reason }, { status }); }, () => now);
+      for (let i = 0; i < 2; i++) {
+        const result = await worker.fetch(await request(local.grant), local.env as never);
+        assert.equal(result.status, 410);
+        assert.deepEqual(await result.json(), { v: 1, result: 'invalid_route' });
+      }
+      assert.equal(calls, 1);
+      assert.equal((await local.db.prepare("SELECT revoked FROM routes WHERE id = 'route'").first())!.revoked, 1);
+      assert.equal((await local.db.prepare("SELECT revoked FROM routes WHERE id = 'sibling'").first())!.revoked, 0);
+      assert.equal((await local.db.prepare('SELECT total FROM installation_usage').first())!.total, 1);
+    } finally { await local.runtime.dispose(); }
+  }
+});
+test('late terminal responses preserve a same-token replacement generation and a changed destination digest', async () => {
+  for (const sameToken of [true, false]) {
+    const local = await fixture();
+    try {
+      const destination = (sameToken ? 'a' : 'b').repeat(64);
+      const replacement = { ...local.grant, generation: sameToken ? 2 : 1, destination_digest: await digest(destination) };
+      let calls = 0;
+      const worker = createWorker(async () => {
+        if (++calls === 1) {
+          await local.db.prepare('UPDATE routes SET generation = ?, destination = ?, destination_digest = ? WHERE id = ?')
+            .bind(replacement.generation, destination, replacement.destination_digest, replacement.route_id).run();
+          return Response.json({ reason: 'ExpiredToken' }, { status: 410 });
+        }
+        return new Response('', { status: 200 });
+      }, () => now);
+      const failed = await worker.fetch(await request(local.grant), local.env as never);
+      assert.equal(failed.status, 410);
+      assert.deepEqual(await failed.json(), { v: 1, result: 'invalid_route' });
+      assert.equal((await local.db.prepare('SELECT revoked FROM routes').first())!.revoked, 0);
+      assert.equal((await worker.fetch(await request(local.grant), local.env as never)).status, 410);
+      assert.equal(calls, 1);
+      assert.equal((await worker.fetch(await request(replacement), local.env as never)).status, 200);
+      assert.equal(calls, 2);
+      assert.equal((await local.db.prepare('SELECT total FROM installation_usage').first())!.total, 2);
+    } finally { await local.runtime.dispose(); }
+  }
+});
+test('failed or timed-out terminal invalidation remains unavailable without claiming durable revocation', async () => {
+  for (const failure of ['rejection', 'timeout']) {
+    const local = await fixture();
+    try {
+      let calls = 0;
+      const worker = createWorker(async () => { calls++; return Response.json({ reason: 'ExpiredToken' }, { status: 410 }); }, () => now);
+      const db = { prepare(sql: string) {
+        if (!sql.startsWith('UPDATE routes SET revoked = 1')) return local.db.prepare(sql);
+        return { bind() { return { async run() {
+          if (failure === 'rejection') throw new Error('unavailable');
+          return new Promise(() => {});
+        } }; } };
+      } };
+      const failed = await worker.fetch(await request(local.grant), { ...local.env, DB: db } as never);
+      assert.equal(failed.status, 503);
+      assert.deepEqual(await failed.json(), { v: 1, result: 'unavailable' });
+      assert.equal((await local.db.prepare('SELECT revoked FROM routes').first())!.revoked, 0);
+      assert.equal((await local.db.prepare('SELECT total FROM installation_usage').first())!.total, 1);
+      assert.equal((await worker.fetch(await request(local.grant), local.env as never)).status, 410);
+      assert.equal((await worker.fetch(await request(local.grant), local.env as never)).status, 410);
+      assert.equal(calls, 2);
+      assert.equal((await local.db.prepare('SELECT total FROM installation_usage').first())!.total, 2);
+    } finally { await local.runtime.dispose(); }
+  }
+});
+test('network failures retain the existing one-minute retry hint without revoking the route', async () => {
+  const local = await fixture();
+  try {
+    let calls = 0;
+    const worker = createWorker(async () => { calls++; throw new Error('network unavailable'); }, () => now);
+    const failed = await worker.fetch(await request(local.grant), local.env as never);
+    assert.equal(failed.status, 503);
+    assert.deepEqual(await failed.json(), { v: 1, result: 'upstream_unavailable', retry_after: 60 });
+    assert.equal(calls, 1);
+    assert.equal((await local.db.prepare('SELECT revoked FROM routes').first())!.revoked, 0);
+    assert.equal((await local.db.prepare('SELECT total FROM installation_usage').first())!.total, 1);
+  } finally { await local.runtime.dispose(); }
+});
+test('signed grants cannot cross installation or pairing ownership', async () => {
+  const local = await fixture();
+  try {
+    await local.db.batch([
+      local.db.prepare("INSERT INTO installations VALUES ('other', 0)"),
+      local.db.prepare("INSERT INTO pairings VALUES ('other_machine', 'other', 0)"),
+      local.db.prepare("INSERT INTO installation_usage VALUES ('other', ?, 0, 0)").bind(Math.floor(now / 86400))
+    ]);
+    let calls = 0;
+    const worker = createWorker(async () => { calls++; return new Response('', { status: 200 }); }, () => now);
+    for (const changed of [{ installation_id: 'other' }, { pairing_id: 'other_machine' }, { installation_id: 'other', pairing_id: 'other_machine' }]) {
+      const result = await worker.fetch(await request({ ...local.grant, ...changed }), local.env as never);
+      assert.equal(result.status, 410);
+      assert.deepEqual(await result.json(), { v: 1, result: 'invalid_route' });
+    }
+    assert.equal(calls, 0);
+    assert.equal((await local.db.prepare('SELECT SUM(total) total FROM installation_usage').first())!.total, 0);
+    assert.equal((await worker.fetch(await request(local.grant), local.env as never)).status, 200);
+    assert.equal(calls, 1);
+  } finally { await local.runtime.dispose(); }
 });
 
 test('validates Live Activity encrypted state, routine classification and reserved end capacity', async () => {
