@@ -27,7 +27,7 @@ fn mac_node(
     data_dir: &Path,
     config: &Config,
     auth_key: Option<Zeroizing<String>>,
-) -> anyhow::Result<(Node, OwnedFd)> {
+) -> anyhow::Result<(Node, OwnedFd, bool)> {
     crate::ensure_private_dir(data_dir)?;
     let lock = crate::peers::lock(&data_dir.join(config::NODE_LOCK))
         .context("another collied (login or run) is using this data dir")?;
@@ -43,6 +43,7 @@ fn mac_node(
     let control_url = None;
     #[cfg(all(debug_assertions, target_os = "macos"))]
     let auth_key = test_key.or(auth_key);
+    let custom_control = control_url.is_some();
     let node = Node::new(&tailnet::Config {
         state_dir: tsnet,
         hostname: config.tailnet.hostname(),
@@ -51,7 +52,7 @@ fn mac_node(
         advertise_tags: vec![NODE_TAG.to_owned()],
         log_to_stderr: false,
     })?;
-    Ok((node, lock))
+    Ok((node, lock, custom_control))
 }
 
 pub async fn login(
@@ -63,7 +64,18 @@ pub async fn login(
         !control::daemon_running(&data_dir.join(config::CONTROL_SOCKET)).await,
         "collied is running; stop it (collied stop) before logging in"
     );
-    let (node, _lock) = mac_node(data_dir, config, auth_key)?;
+    #[cfg(target_os = "macos")]
+    let has_auth_key = auth_key.is_some();
+    let (node, _lock, _custom_control) = mac_node(data_dir, config, auth_key)?;
+    #[cfg(target_os = "macos")]
+    let mut browser = {
+        use std::io::IsTerminal;
+        LoginBrowser::new(
+            std::io::stdin().is_terminal(),
+            has_auth_key,
+            _custom_control,
+        )
+    };
     node.start()?;
     let deadline = Instant::now() + LOGIN_TIMEOUT;
     let port = config.tailnet.port;
@@ -87,6 +99,19 @@ pub async fn login(
             println!("Log in to Tailscale to add this machine to your tailnet:\n");
             println!("{}", crate::qr_text(&st.auth_url)?);
             println!("{}\n", st.auth_url);
+            #[cfg(target_os = "macos")]
+            if browser.open(&st.auth_url, |url| {
+                std::process::Command::new("/usr/bin/open")
+                    .arg(url)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .is_ok_and(|status| status.success())
+            }) == Some(false)
+            {
+                println!("Could not open the browser. Open the link above to continue.");
+            }
             shown_url = st.auth_url;
         }
         if let Some(e) = login_error(st.health.as_deref().unwrap_or_default())
@@ -131,6 +156,39 @@ fn check_tag(st: &Status, data_dir: &Path, port: u16) -> anyhow::Result<()> {
         policy_help(port)
     );
     Ok(())
+}
+
+#[cfg(any(target_os = "macos", test))]
+struct LoginBrowser {
+    enabled: bool,
+    attempted: bool,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl LoginBrowser {
+    fn new(interactive: bool, auth_key: bool, custom_control: bool) -> Self {
+        Self {
+            enabled: interactive && !auth_key && !custom_control,
+            attempted: false,
+        }
+    }
+
+    fn open(&mut self, url: &str, opener: impl FnOnce(&str) -> bool) -> Option<bool> {
+        if !self.enabled || self.attempted {
+            return None;
+        }
+        let uri = url.parse::<hyper::Uri>().ok()?;
+        if uri.scheme_str() != Some("https")
+            || !matches!(
+                uri.authority().map(|a| a.as_str()),
+                Some("login.tailscale.com" | "login.tailscale.com:443")
+            )
+        {
+            return None;
+        }
+        self.attempted = true;
+        Some(opener(url))
+    }
 }
 
 fn login_error(health: &[String]) -> Option<&str> {
@@ -190,7 +248,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
         !control::daemon_running(&control_path).await,
         "collied is already running"
     );
-    let (node, _lock) = mac_node(data_dir, config, None)?;
+    let (node, _lock, _) = mac_node(data_dir, config, None)?;
     node.start()?;
     let deadline = Instant::now() + RUN_START_TIMEOUT;
     loop {
@@ -246,6 +304,68 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_browser_opens_once_even_when_open_fails() {
+        for success in [true, false] {
+            let mut browser = LoginBrowser::new(true, false, false);
+            assert_eq!(
+                browser.open("https://login.tailscale.com/a/test", |_| success),
+                Some(success)
+            );
+            assert_eq!(
+                browser.open("https://login.tailscale.com/a/another", |_| panic!(
+                    "opened twice"
+                )),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn login_browser_requires_interactive_login_without_an_auth_key() {
+        for (interactive, auth_key) in [(false, false), (false, true), (true, true)] {
+            assert_eq!(
+                LoginBrowser::new(interactive, auth_key, false)
+                    .open("https://login.tailscale.com/a/test", |_| panic!(
+                        "unexpected browser"
+                    )),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn custom_control_never_opens_even_a_trusted_login_url() {
+        assert_eq!(
+            LoginBrowser::new(true, false, true)
+                .open("https://login.tailscale.com/a/test", |_| panic!(
+                    "custom control opened the browser"
+                )),
+            None
+        );
+    }
+
+    #[test]
+    fn login_browser_only_opens_the_trusted_https_authority() {
+        let mut browser = LoginBrowser::new(true, false, false);
+        for url in [
+            "http://login.tailscale.com/a/test",
+            "https://control.example/a/test",
+            "https://login.tailscale.com.evil.example/a/test",
+            "https://user@login.tailscale.com/a/test",
+            "https://login.tailscale.com:444/a/test",
+            "https://login.tailscale.com:0443/a/test",
+            "file:///tmp/test",
+            "not a URL",
+        ] {
+            assert_eq!(browser.open(url, |_| panic!("untrusted browser URL")), None);
+        }
+        assert_eq!(
+            browser.open("https://login.tailscale.com:443/a/test", |_| true),
+            Some(true)
+        );
+    }
 
     #[test]
     fn policy_snippet_matches_the_docs() {

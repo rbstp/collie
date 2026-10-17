@@ -9,6 +9,7 @@ final class Daemon {
     private(set) var state: DaemonState = .off
     private(set) var starting = false
     private(set) var busy = false
+    private(set) var needsSetup: Bool
     private(set) var peers: [Peer] = []
     private(set) var lastError: String?
     private(set) var auditLogExists = false
@@ -17,6 +18,7 @@ final class Daemon {
     let socketPath: String
     private let dataDir: URL
     private let plist: URL
+    private let installedExecutable: URL
 
     init() {
         // HOME as collied reads it (config::home_dir), so a test collied with its own HOME works.
@@ -24,6 +26,8 @@ final class Daemon {
         dataDir = home.appending(path: "Library/Application Support/collie")
         socketPath = dataDir.appending(path: "control.sock").path(percentEncoded: false)
         plist = home.appending(path: "Library/LaunchAgents/dev.rbstp.collied.plist")
+        installedExecutable = home.appending(path: ".cargo/bin/collied")
+        needsSetup = !FileManager.default.fileExists(atPath: plist.path)
         let socket = socketPath
         Task {
             await watchDaemon(socket: socket, retry: .seconds(2)) { [weak self] state in
@@ -50,6 +54,7 @@ final class Daemon {
     }
 
     private func menuOpened() {
+        needsSetup = !FileManager.default.fileExists(atPath: plist.path)
         auditLogExists = FileManager.default.fileExists(atPath: auditLog.path(percentEncoded: false))
         openAtLogin = SMAppService.mainApp.status == .enabled
         refreshPeers()
@@ -62,6 +67,27 @@ final class Daemon {
             if case .peers(let list) = try? await request(.peersList, socket: socket) {
                 peers = list
             }
+        }
+    }
+
+    func setup() {
+        guard !busy else { return }
+        do {
+            let command = try SetupCommand.create(executable: installedExecutable)
+            busy = true
+            NSWorkspace.shared.open(
+                [command.file],
+                withApplicationAt: URL(filePath: "/System/Applications/Utilities/Terminal.app"),
+                configuration: NSWorkspace.OpenConfiguration()
+            ) { [weak self] _, error in
+                if error != nil { try? command.remove() }
+                Task { @MainActor in
+                    self?.busy = false
+                    self?.lastError = error == nil ? nil : "Could not open Terminal. Run ~/.cargo/bin/collied setup."
+                }
+            }
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
@@ -102,8 +128,6 @@ final class Daemon {
         openAtLogin = service.status == .enabled
     }
 
-    /// `collied start|stop` from the installed service's plist: launchd keeps the semantics
-    /// (disabled until start, across reboots) in one place, and the app runs nothing else.
     private func collied(_ command: String) async -> Bool {
         busy = true
         defer { busy = false }
