@@ -107,12 +107,11 @@ final class FlockModel {
 
     /// Without `snapshot`, a machine is read from the core's cache, unless its last read failed;
     /// `cacheOnly` then leaves that machine as it is, so nothing goes over the network.
-    func refresh(core: (any FlockCore)?, snapshot: Bool = true, cacheOnly: Bool = false) async {
+    func refresh(core: (any FlockCore)?, machines: [Machine]? = nil, snapshot: Bool = true, cacheOnly: Bool = false) async {
         guard let core, !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
-        let machines = core.machines()
-        let seeded = machines.map { machine in
+        let seeded = (machines ?? core.machines()).map { machine in
             entries.first { $0.id == machine.id }.map { MachineFlockEntry(machine: machine, flock: $0.flock, error: $0.error) }
                 ?? MachineFlockEntry(machine: machine)
         }
