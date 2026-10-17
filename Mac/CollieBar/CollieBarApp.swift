@@ -74,6 +74,6 @@ struct MenuContent: View {
 
     private var status: String {
         if daemon.starting { return "collied: Starting…" }
-        return daemon.running ? "collied: Running" : "collied: Off"
+        return daemon.state.statusText
     }
 }

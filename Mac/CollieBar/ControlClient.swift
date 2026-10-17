@@ -69,7 +69,7 @@ enum Reply: Equatable, Sendable {
     case confirm(Candidate)
     case pairDone(paired: Bool, detail: String)
     case peers([Peer])
-    case watch(pendingApprovals: Int)
+    case watch(pendingApprovals: Int, colliedVersion: String? = nil)
     case error(String)
     case other
 
@@ -83,7 +83,7 @@ enum Reply: Equatable, Sendable {
         let reply: Reply
 
         private enum Keys: String, CodingKey {
-            case type, uri, expiresInSecs, paired, detail, peers, pendingApprovals, message
+            case type, uri, expiresInSecs, paired, detail, peers, pendingApprovals, colliedVersion, message
         }
 
         init(from decoder: any Decoder) throws {
@@ -99,7 +99,10 @@ enum Reply: Equatable, Sendable {
                     paired: try c.decode(Bool.self, forKey: .paired),
                     detail: try c.decode(String.self, forKey: .detail))
             case "peers": .peers(try c.decode([Peer].self, forKey: .peers))
-            case "watch": .watch(pendingApprovals: try c.decode(Int.self, forKey: .pendingApprovals))
+            case "watch":
+                .watch(
+                    pendingApprovals: try c.decode(Int.self, forKey: .pendingApprovals),
+                    colliedVersion: try c.decodeIfPresent(String.self, forKey: .colliedVersion))
             case "error": .error(try c.decode(String.self, forKey: .message))
             default: .other
             }
@@ -269,9 +272,17 @@ func request(_ request: Request, socket: String) async throws -> Reply {
 
 enum DaemonState: Equatable, Sendable {
     case off
-    case running(pendingApprovals: Int)
+    case running(pendingApprovals: Int, colliedVersion: String? = nil)
     /// A collied from before the watch command: running, but without the count.
     case outdated
+
+    var statusText: String {
+        switch self {
+        case .off: "collied: Off"
+        case .running(_, let version?) where !version.isEmpty: "collied \(printable(version)): Running"
+        case .running, .outdated: "collied: Running (version unavailable)"
+        }
+    }
 }
 
 /// The menu bar status, pushed by collied over one held connection. The only polling is a
@@ -284,7 +295,7 @@ func watchDaemon(socket: String, retry: Duration, update: @Sendable (DaemonState
                 try conn.send(.watch)
                 for try await line in conn.lines {
                     switch try Reply.decode(line) {
-                    case .watch(let n): await update(.running(pendingApprovals: n))
+                    case .watch(let n, let version): await update(.running(pendingApprovals: n, colliedVersion: version))
                     case .error:
                         outdated = true
                         await update(.outdated)

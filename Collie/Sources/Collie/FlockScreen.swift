@@ -39,7 +39,7 @@ struct FlockScreen: View {
             .toolbar(removing: .title)
             .refreshable {
                 for machine in machines { try? core?.reconnect(machineId: machine.id) }
-                await model.refresh(core: core)
+                await model.refresh(core: core, machines: machines)
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -69,7 +69,7 @@ struct FlockScreen: View {
             }
             .closeConfirmation($model.close, archiving: model.archiving, archiveNotice: model.archiveNotice) {
                 if let core, await model.performClose(core: core) {
-                    await model.refresh(core: core)
+                    await model.refresh(core: core, machines: machines)
                 }
             }
             .navigationDestination(for: AgentRoute.self) { route in
@@ -79,7 +79,7 @@ struct FlockScreen: View {
                         machineLabel: machines.first { $0.id == route.machineId }?.label, showsMachine: machines.count > 1,
                         neighbor: { offset in
                             // model.entries stops refreshing under a pushed agent; the core's cache follows events.
-                            let entries = core.machines().map { MachineFlockEntry(machine: $0, flock: core.cachedFlock(machineId: $0.id)) }
+                            let entries = machines.map { MachineFlockEntry(machine: $0, flock: core.cachedFlock(machineId: $0.id)) }
                             return FlockOrder.neighbor(of: route, offset: offset, in: entries)
                         },
                         switchAgent: { next in
@@ -113,14 +113,14 @@ struct FlockScreen: View {
                     layout = .grid
                 }
             }
-            .task {
+            .task(id: machines) {
                 // Events keep the cache current; no event lists shells, and an older collied sends no title change.
                 var tick = 0
                 // Offline with no error is also a node that never reaches Running (logged out, no network).
                 let nodeStart = ContinuousClock.now + .seconds(20)
                 while !Task.isCancelled {
                     let snapshot = tick % 20 == 0
-                    await model.refresh(core: core, snapshot: snapshot)
+                    await model.refresh(core: core, machines: machines, snapshot: snapshot)
                     if snapshot && persistsState {
                         AgentDrafts.prune(model.entries, file: AgentDrafts.file)
                         if core != nil {
@@ -140,7 +140,7 @@ struct FlockScreen: View {
                         ContinuousClock.now < next, !Task.isCancelled
                     {
                         try? await Task.sleep(for: .milliseconds(250))
-                        await model.refresh(core: core, snapshot: false, cacheOnly: true)
+                        await model.refresh(core: core, machines: machines, snapshot: false, cacheOnly: true)
                     }
                     try? await Task.sleep(until: next)
                 }

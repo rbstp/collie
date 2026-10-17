@@ -6,6 +6,7 @@ import "CollieTray/Printable.js" as Printable
 ShellRoot {
   id: harness
   property var states: []
+  property var statuses: []
   property var notes: ({})
 
   function note(key, value) {
@@ -24,6 +25,7 @@ ShellRoot {
       }
     }
     onWatchConnChanged: if (svc.watchConn && !harness.notes.started) harness.note("attempts", (harness.notes.attempts || 0) + 1)
+    onStatusTextChanged: harness.statuses = harness.statuses.concat([svc.statusText])
     onPendingChanged: harness.states = harness.states.concat([svc.state + ":" + svc.pending])
     onPhaseChanged: {
       if (phase === "confirm") {
@@ -61,14 +63,14 @@ ShellRoot {
     onTriggered: {
       harness.tick++
       if (harness.tick === 4) svc.pairStart()
-      if (harness.tick === 60) svc.refresh()
-      if (harness.tick === 65) {
+      if (harness.tick === 80) svc.refresh()
+      if (harness.tick === 85) {
         harness.note("peers", svc.peers.map(function(p) { return Printable.printable(p.label) }))
         svc.lastError = "unsettled"
         svc.toggle()
       }
-      if (harness.tick === 85) harness.note("busyAfterToggle", svc.busy)
-      if (harness.tick === 90) harness.finish()
+      if (harness.tick === 105) harness.note("busyAfterToggle", svc.busy)
+      if (harness.tick === 110) harness.finish()
     }
   }
   Timer { interval: 25000; running: true; onTriggered: harness.finish() }
@@ -78,7 +80,7 @@ ShellRoot {
     {
       harness.note("lastError", svc.lastError)
       harness.note("printable", Printable.printable("ab\u202ecd\u2019\u{1f600}\n\u0301"))
-      console.log("RESULT " + JSON.stringify({ states: harness.states, notes: harness.notes }))
+      console.log("RESULT " + JSON.stringify({ states: harness.states, statuses: harness.statuses, notes: harness.notes }))
       Qt.quit()
     }
   }

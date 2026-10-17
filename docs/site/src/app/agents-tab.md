@@ -9,6 +9,12 @@ Pull down to retry every machine, or tap a machine's header to retry that one.
 <img class="screenshot-dark" src="../images/agents-dark.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">
 </div>
 
+## Machine order
+
+Open **Machines**, tap **Edit**, then drag the reorder handles to arrange your machines. Tap **Done** to finish. The order stays on this phone across app restarts and applies to the grouped Agents layouts, Usage and navigation between agents on different machines. Offline machines keep their positions, newly paired machines are added at the end, and removing a machine removes it from the order.
+
+Each machine keeps its existing agent order. Inbox continues to rank agents by status and priority across machines.
+
 ## Layouts
 
 The Agents tab has three layouts.

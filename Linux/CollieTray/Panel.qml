@@ -23,7 +23,7 @@ Panel {
   function status() {
     if (!svc) return "collied: Off"
     if (svc.starting) return "collied: Starting…"
-    return svc.running ? "collied: Running" : "collied: Off"
+    return svc.statusText
   }
 
   function escapeKey() {
