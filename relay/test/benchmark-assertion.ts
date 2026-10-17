@@ -6,7 +6,7 @@ export async function signedAssertion(key: CryptoKey, challenge: string, counter
   new DataView(auth.buffer).setUint32(33, counter);
   const clientHash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes(challenge)));
   const message = new Uint8Array(69); message.set(auth); message.set(clientHash, 37);
-  const signature = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, message));
+  const signature = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, await crypto.subtle.digest('SHA-256', message)));
   const integer = (part: Uint8Array) => {
     let first = 0; while (first < 31 && part[first] === 0) first++;
     const value = [...part.slice(first)]; if (value[0] & 128) value.unshift(0);

@@ -50,7 +50,7 @@ async function setup() {
   async function proof(challenge: string) {
     const count = Buffer.alloc(4); count.writeUInt32BE(++counter);
     const auth = Buffer.concat([Buffer.from(await crypto.subtle.digest('SHA-256', bytes('TESTTEAM01.dev.rbstp.collie'))), Buffer.from([0]), count]);
-    const signature = sign('sha256', Buffer.concat([auth, Buffer.from(await crypto.subtle.digest('SHA-256', bytes(challenge)))]), key);
+    const signature = sign('sha256', Buffer.from(await crypto.subtle.digest('SHA-256', Buffer.concat([auth, Buffer.from(await crypto.subtle.digest('SHA-256', bytes(challenge)))]))), key);
     return base64url(Buffer.concat([Buffer.from([0xa2]), item(bytes('signature'), 0x60), item(signature, 0x40),
       item(bytes('authenticatorData'), 0x60), item(auth, 0x40)]));
   }

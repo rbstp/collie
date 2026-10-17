@@ -28,7 +28,7 @@ async function assertion(key: CryptoKey, challenge: string, counter: number, ext
   const count = new Uint8Array(4); new DataView(count.buffer).setUint32(0, counter);
   const authData = concat(await sha256(bytes(app)), new Uint8Array([extensions ? 128 : 0]), count,
     ...(extensions ? [encode(extensions)] : []));
-  const raw = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, concat(authData, await sha256(bytes(challenge)))));
+  const raw = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, await sha256(concat(authData, await sha256(bytes(challenge))))));
   const integer = (value: Uint8Array) => {
     let start = 0; while (start < value.length - 1 && value[start] === 0) start++;
     const data = value.slice(start); return new asn.Integer({ valueHex: data[0] & 128 ? concat(new Uint8Array([0]), data).buffer : data.buffer });
@@ -76,6 +76,15 @@ test('assertions verify actual signatures and reject stale counters, wrong app, 
   await assert.rejects(verifyAssertion(signed, publicKey, 6, await sha256(bytes('other')), policy));
   await assert.rejects(verifyAssertion(await assertion(other.privateKey, 'one-time', 8), publicKey, 6, await sha256(bytes('one-time')), policy));
   await assert.rejects(verifyAssertion(await assertion(keys.privateKey, 'one-time', 8, undefined, 'OTHERTEAM1.dev.rbstp.collie'), publicKey, 6, await sha256(bytes('one-time')), policy));
+});
+test('fixed assertions require the Apple nonce and allow the retained AT flag without credential bytes', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/assertions.json', import.meta.url), 'utf8'));
+  const hash = await sha256(bytes(fixture.challenge));
+  for (const proof of fixture.proofs) {
+    const verified = verifyAssertion(proof.assertion, fixture.publicKey, 0, hash, { ...policy, appId: fixture.appId });
+    if (proof.accepted) assert.equal(await verified, 1, proof.name);
+    else await assert.rejects(verified, undefined, proof.name);
+  }
 });
 test('documented authenticator extensions are parsed and enforced without assuming a fixed length', async () => {
   const keys = await keyPair();
