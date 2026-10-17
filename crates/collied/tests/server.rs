@@ -114,8 +114,12 @@ fn server_end_to_end() {
         .create(&root.0)
         .unwrap();
 
+    // Registration order gives the phone user 2, matching the Mac's fixture owner.
     let mac = start_node(&root.0, "it-mac", &control.url, &auth_key);
+    wait_ready(&mac, 0);
     let phone = start_node(&root.0, "it-phone", &control.url, &auth_key);
+    wait_ready(&mac, 1);
+    wait_ready(&phone, 1);
     let intruder = start_node(&root.0, "it-intruder", &control.url, &auth_key);
     let mac_st = wait_ready(&mac, 2);
     let phone_st = wait_ready(&phone, 2);
@@ -1845,10 +1849,9 @@ fn wait_ready(node: &Node, peers: usize) -> Status {
                 .self_node
                 .as_ref()
                 .is_some_and(|s| s.tailscale_ips.as_ref().is_some_and(|ips| !ips.is_empty()))
-            && st
-                .peer
-                .as_ref()
-                .is_some_and(|p| p.len() >= peers && p.values().all(|p| p.tailscale_ips.is_some()));
+            && st.peer.as_ref().map_or(peers == 0, |p| {
+                p.len() >= peers && p.values().all(|p| p.tailscale_ips.is_some())
+            });
         if ready {
             return st;
         }
