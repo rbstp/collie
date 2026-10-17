@@ -34,7 +34,7 @@ actor SimulatorRelayAttestation: RelayAttesting {
         auth.append(0)
         auth.append(contentsOf: [UInt8(counter >> 24), UInt8(truncatingIfNeeded: counter >> 16),
                                 UInt8(truncatingIfNeeded: counter >> 8), UInt8(truncatingIfNeeded: counter)])
-        let signature = try key.signature(for: auth + hash).derRepresentation
+        let signature = try key.signature(for: Data(SHA256.hash(data: auth + hash))).derRepresentation
         func item(_ data: Data, kind: UInt8) -> Data {
             let header: Data = data.count < 24 ? Data([kind | UInt8(data.count)]) : Data([kind | 24, UInt8(data.count)])
             return header + data

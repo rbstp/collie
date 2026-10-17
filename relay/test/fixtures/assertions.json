@@ -1,0 +1,27 @@
+{
+  "appId": "TESTTEAM01.dev.rbstp.collie",
+  "challenge": "assertion-regression-challenge",
+  "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEMrz3GHx8_5RC9mH21DjTjZKhid_8IPYOOYRzuZ_dLy9KpzMC4Uk6IaSIrhB1OaCUTMwObG3NjLthbVtmcw_ztw",
+  "proofs": [
+    {
+      "name": "ordinary",
+      "assertion": "omlzaWduYXR1cmVYRjBEAiBkOESZf8qxCz5_qNGk8nyhuYqpdYNe3u992KgB61F7OgIgGVzzLAvWCK_qyFATHJ6zTTFJXh54lTd9jbEm74UhbXBxYXV0aGVudGljYXRvckRhdGFYJSWFEM_FRatHVgYrA73-x882Z5DIgddEvuL6lx1CQmoHAAAAAAE",
+      "accepted": true
+    },
+    {
+      "name": "retained AT flag",
+      "assertion": "omlzaWduYXR1cmVYRzBFAiAHNhtYy_-wDqFH10jxCJvou1MRRq-jXlfL2SUrZOLE1QIhAOPb9hb5Jsd3tRuoErg-OZEvSgftpcGCWx2NX22clbnLcWF1dGhlbnRpY2F0b3JEYXRhWCUlhRDPxUWrR1YGKwO9_sfPNmeQyIHXRL7i-pcdQkJqB0AAAAAB",
+      "accepted": true
+    },
+    {
+      "name": "unhashed concatenation",
+      "assertion": "omlzaWduYXR1cmVYRjBEAiAMtvi4VsLiYt_YvRRxrUVRmOk6NNREopo4ZXyNkTTtYgIgSRF9tNnPQC1ANzFp6tMW0fRNnZJn-up5RsI_IEHh-pJxYXV0aGVudGljYXRvckRhdGFYJSWFEM_FRatHVgYrA73-x882Z5DIgddEvuL6lx1CQmoHAAAAAAE",
+      "accepted": false
+    },
+    {
+      "name": "unexpected credential bytes",
+      "assertion": "omlzaWduYXR1cmVYRjBEAiBduCI2mib1x5aa4d-3Q8vx7MDe_G8aNVM07WVQQFIBDwIgRUL-8acWQEoVJOAnv8mxEGnVszpicQxTqGUCO3gOU4BxYXV0aGVudGljYXRvckRhdGFYJyWFEM_FRatHVgYrA73-x882Z5DIgddEvuL6lx1CQmoHQAAAAAEAAA",
+      "accepted": false
+    }
+  ]
+}

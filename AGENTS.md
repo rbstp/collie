@@ -32,6 +32,7 @@ Guidance for coding agents working in this repository. User-facing documentation
 
 When the CollieCore framework and the Xcode project are already current, `just --no-deps sim="<simulator>" ios-test` skips rebuilding them. Flags go before variable overrides.
 
+- Before asking the user to start a release acceptance test, verify the exact TestFlight build is processed and installable, matching desktop artifacts are published and verified, and any required public endpoint passes TLS and protocol checks.
 - UI tests must not format fixture text into assertion messages (CodeQL flags it).
 - Captured fixtures (for example `crates/collied/tests/fixtures`) must be scrubbed of personal paths, names and secrets before they are committed.
 - When a test needs a live herdr, create a scratch workspace (`herdr workspace create ... --label <name>`) and close it afterwards. Never send input to panes you did not create, and do not modify the user's agent CLI configuration.
