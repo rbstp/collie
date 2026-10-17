@@ -89,9 +89,6 @@ jobs:
       - name: test VM harness isolation
         run: python3 scripts/test-vm-simulator.py
 
-      - name: test local tailnet control
-        run: go -C crates/tailnet/testcontrol test ./...
-
       - name: install the rust toolchain
         run: rustup toolchain install
 
@@ -107,6 +104,9 @@ jobs:
             target
           key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch', 'crates/tailnet/testcontrol/go.sum') }}
           restore-keys: rust-
+
+      - name: test local tailnet control
+        run: go -C crates/tailnet/testcontrol test ./...
 
       - name: install just, cargo-deny and cargo-nextest
         run: |
