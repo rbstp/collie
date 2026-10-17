@@ -16,6 +16,7 @@ This builds CollieBar, signs it with your Developer ID and installs it to `~/App
 
 ## Use
 
+- The menu status shows the running daemon's version, for example **collied 0.1.1: Running**. An older daemon that does not report its version shows **version unavailable**. When stopped, it shows **collied: Off**.
 - The icon is bright while `collied` runs, dim when it is off, and shows a dot while an approval is pending.
 - While the daemon is off, **Set Up…** opens its interactive setup in Terminal. If the daemon is missing, install it first. Complete setup in Terminal, then return to the menu. You can use it again to sign in after expiry; if the daemon is running, turn it off first. During Starting, wait for it to finish or use `collied stop` followed by `collied setup` in Terminal.
 - The menu turns `collied` off and on, pairs a phone, lists the paired phones, opens the audit log and quits. Quitting also stops `collied`.
