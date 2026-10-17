@@ -196,6 +196,8 @@ actor RelayEnrollment {
     private let persist: @Sendable (RelayEnrollmentState) throws -> Void
     private let gate = RelayControlGate()
     private let environment: String
+    private var registeredTokenEvents: [String: UInt64] = [:]
+    private var pendingTokenEvents: [String: UInt64] = [:]
 
     init(
         state: RelayEnrollmentState, environment: String, attestation: any RelayAttesting = DeviceRelayAttestation(),
@@ -210,7 +212,7 @@ actor RelayEnrollment {
 
     func snapshot() -> RelayEnrollmentState { state }
 
-    func register(pairingId: String, activityId: String? = nil, destination: String) async throws -> RelayRouteGrant {
+    func register(pairingId: String, activityId: String? = nil, destination: String, tokenEvent: UInt64 = 0) async throws -> RelayRouteGrant {
         await gate.enter()
         do {
             try Task.checkCancellation()
@@ -220,12 +222,16 @@ actor RelayEnrollment {
                 throw RelayEnrollmentError.removedPairing
             }
             try await enroll()
-            if let pending = state.pendingRoutes.first(where: { $0.pairingId == pairingId && $0.activityId == activityId }),
-                pending.destination != destination
-            {
-                _ = try await registerRoute(pairingId: pairingId, activityId: activityId, destination: pending.destination)
+            if let pending = state.pendingRoutes.first(where: { $0.pairingId == pairingId && $0.activityId == activityId }) {
+                // A recovered older request cannot fulfill a token event received after it began.
+                let event = pendingTokenEvents[pending.routeId] ?? 0
+                let recovered = try await registerRoute(pairingId: pairingId, activityId: activityId, destination: pending.destination)
+                registeredTokenEvents[recovered.routeId] = max(registeredTokenEvents[recovered.routeId] ?? 0, event)
             }
-            let grant = try await registerRoute(pairingId: pairingId, activityId: activityId, destination: destination)
+            let routeId = state.routes.first { $0.pairingId == pairingId && $0.activityId == activityId }?.grant.routeId
+            let refresh = tokenEvent > (routeId.flatMap { registeredTokenEvents[$0] } ?? 0)
+            let grant = try await registerRoute(pairingId: pairingId, activityId: activityId, destination: destination, refresh: refresh, tokenEvent: tokenEvent)
+            registeredTokenEvents[grant.routeId] = max(registeredTokenEvents[grant.routeId] ?? 0, tokenEvent)
             await gate.leave()
             return grant
         } catch {
@@ -240,26 +246,29 @@ actor RelayEnrollment {
             + [state.previousGrantExpiry ?? 0, state.installationRevocationExpiry ?? 0]).max() ?? 0
     }
 
-    private func registerRoute(pairingId: String, activityId: String?, destination: String) async throws -> RelayRouteGrant {
+    private func registerRoute(pairingId: String, activityId: String?, destination: String, refresh: Bool = false, tokenEvent: UInt64 = 0) async throws -> RelayRouteGrant {
         let expired = lastGrantExpiry <= UInt64(Date().timeIntervalSince1970)
-        do { return try await issueRoute(pairingId: pairingId, activityId: activityId, destination: destination) }
+        do { return try await issueRoute(pairingId: pairingId, activityId: activityId, destination: destination, refresh: refresh, tokenEvent: tokenEvent) }
         catch RelayEnrollmentError.unauthorized where expired {
             state = RelayEnrollmentState()
+            registeredTokenEvents.removeAll()
+            pendingTokenEvents.removeAll()
             try persist(state)
             try await enroll()
-            return try await issueRoute(pairingId: pairingId, activityId: activityId, destination: destination)
+            return try await issueRoute(pairingId: pairingId, activityId: activityId, destination: destination, refresh: refresh, tokenEvent: tokenEvent)
         }
     }
 
-    private func issueRoute(pairingId: String, activityId: String?, destination: String) async throws -> RelayRouteGrant {
+    private func issueRoute(pairingId: String, activityId: String?, destination: String, refresh: Bool, tokenEvent: UInt64) async throws -> RelayRouteGrant {
         let old = state.routes.first { $0.pairingId == pairingId && $0.activityId == activityId }
-        if let old, old.destination == destination, !old.grant.needsRenewal {
+        let pending = state.pendingRoutes.first { $0.pairingId == pairingId && $0.activityId == activityId }
+        if pending == nil, !refresh, let old, old.destination == destination, !old.grant.needsRenewal {
             return old.grant
         }
-        let pending = state.pendingRoutes.first { $0.pairingId == pairingId && $0.activityId == activityId }
         let routeId = pending?.routeId ?? old?.grant.routeId ?? UUID().uuidString.lowercased()
         let expectedGeneration = pending?.expectedGeneration ?? old?.grant.generation ?? 0
         if pending == nil {
+            pendingTokenEvents[routeId] = tokenEvent
             state.pendingRoutes.append(RelayPendingRoute(pairingId: pairingId, activityId: activityId, destination: destination,
                                    routeId: routeId, expectedGeneration: expectedGeneration, expiresAt: UInt64(Date().timeIntervalSince1970) + 30 * 86400))
             try persist(state)
@@ -276,10 +285,13 @@ actor RelayEnrollment {
             let expiresAt = result.expiresAt, token.count <= 2048
         else { throw RelayEnrollmentError.invalidResponse }
         let grant = RelayRouteGrant(token: token, routeId: routeId, generation: generation, expiresAt: expiresAt)
-        state.routes.removeAll { $0.pairingId == pairingId && $0.activityId == activityId }
-        state.pendingRoutes.removeAll { $0.pairingId == pairingId && $0.activityId == activityId }
-        state.routes.append(RelayRoute(pairingId: pairingId, activityId: activityId, destination: destination, grant: grant))
-        try persist(state)
+        var next = state
+        next.routes.removeAll { $0.pairingId == pairingId && $0.activityId == activityId }
+        next.pendingRoutes.removeAll { $0.pairingId == pairingId && $0.activityId == activityId }
+        next.routes.append(RelayRoute(pairingId: pairingId, activityId: activityId, destination: destination, grant: grant))
+        try persist(next)
+        state = next
+        pendingTokenEvents.removeValue(forKey: routeId)
         return grant
     }
 
@@ -291,10 +303,16 @@ actor RelayEnrollment {
                 + state.pendingRoutes.filter { $0.pairingId == pairingId }.map(\.expiresAt)).max() ?? UInt64(Date().timeIntervalSince1970)
             if !next.pendingPairingRevocations.contains(pairingId) { next.pendingPairingRevocations.append(pairingId) }
             next.pendingRevocationExpiry[pairingId] = max(next.pendingRevocationExpiry[pairingId] ?? 0, expiry)
+            let routeIds = Set(next.routes.filter { $0.pairingId == pairingId }.map(\.grant.routeId)
+                               + next.pendingRoutes.filter { $0.pairingId == pairingId }.map(\.routeId))
             next.routes.removeAll { $0.pairingId == pairingId }
             next.pendingRoutes.removeAll { $0.pairingId == pairingId }
             try persist(next)
             state = next
+            for id in routeIds {
+                registeredTokenEvents.removeValue(forKey: id)
+                pendingTokenEvents.removeValue(forKey: id)
+            }
             await gate.leave()
         } catch { await gate.leave(); throw error }
     }
@@ -310,6 +328,8 @@ actor RelayEnrollment {
             if state.requiresPairing {
                 let expiry = lastGrantExpiry
                 state = RelayEnrollmentState()
+                registeredTokenEvents.removeAll()
+                pendingTokenEvents.removeAll()
                 state.previousGrantExpiry = expiry
                 try persist(state)
             }
@@ -321,10 +341,12 @@ actor RelayEnrollment {
         await gate.enter()
         do {
             for route in state.routes where route.pairingId == pairingId && route.activityId == activityId {
+                registeredTokenEvents.removeValue(forKey: route.grant.routeId)
                 state.pendingRouteRevocations.append(RelayPendingRouteRevocation(pairingId: pairingId, routeId: route.grant.routeId,
                     generation: route.grant.generation, expiresAt: route.grant.expiresAt))
             }
             for route in state.pendingRoutes where route.pairingId == pairingId && route.activityId == activityId {
+                pendingTokenEvents.removeValue(forKey: route.routeId)
                 state.pendingRouteRevocations.append(RelayPendingRouteRevocation(pairingId: pairingId, routeId: route.routeId,
                     generation: route.expectedGeneration + 1, expiresAt: route.expiresAt))
             }
@@ -393,6 +415,8 @@ actor RelayEnrollment {
                 return
             } catch RelayEnrollmentError.unauthorized {
                 state = RelayEnrollmentState()
+                registeredTokenEvents.removeAll()
+                pendingTokenEvents.removeAll()
                 state.keyId = try await attestation.generateKey()
                 try persist(state)
             }
@@ -454,6 +478,8 @@ actor RelayEnrollment {
         if let expiry = state.previousGrantExpiry, expiry <= now { state.previousGrantExpiry = nil }
         if state.pendingInstallationRevocation, (state.installationRevocationExpiry ?? UInt64.max) <= now {
             state = RelayEnrollmentState()
+            registeredTokenEvents.removeAll()
+            pendingTokenEvents.removeAll()
             try persist(state)
             return
         }
@@ -473,6 +499,8 @@ actor RelayEnrollment {
             let result = try await control(common("revoke_installation"))
             guard result.result == "revoked" else { throw RelayEnrollmentError.rejected }
             state = RelayEnrollmentState()
+            registeredTokenEvents.removeAll()
+            pendingTokenEvents.removeAll()
             try persist(state)
             return
         }

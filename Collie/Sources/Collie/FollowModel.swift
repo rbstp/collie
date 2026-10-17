@@ -77,6 +77,7 @@ final class FollowModel {
     private let core: (any ActivityCore)?
     private var relay: RelayEnrollment?
     private var relayRegistered: [String: RelayRouteGrant] = [:]
+    private var relayTokenEvents: [String: UInt64] = [:]
     private var relayRefreshing = false
     private var relayRetryAt = Date.distantPast
     private let approvals: ApprovalsModel?
@@ -293,7 +294,9 @@ final class FollowModel {
         watchers[activity.id] = Task { [weak self] in
             let tokens = Task {
                 for await token in activity.pushTokenUpdates {
-                    await self?.register(activity, token: token)
+                    guard let self else { return }
+                    self.relayTokenEvents[activity.id, default: 0] += 1
+                    await self.register(activity, token: token)
                 }
             }
             defer { tokens.cancel() }
@@ -328,7 +331,8 @@ final class FollowModel {
             let grant: RelayRouteGrant?
             if core?.pushMode(machineId: activity.attributes.machineId) == .relay {
                 guard let relay else { return }
-                grant = try await relay.register(pairingId: activity.attributes.machineId, activityId: activity.id, destination: hex)
+                grant = try await relay.register(pairingId: activity.attributes.machineId, activityId: activity.id, destination: hex,
+                                                 tokenEvent: relayTokenEvents[activity.id] ?? 0)
                 if relayRegistered[activity.id] == grant { return }
             } else { grant = nil }
             guard !Task.isCancelled, activity.isLive, list.contains(agent), activity.pushToken == token,
@@ -359,6 +363,7 @@ final class FollowModel {
     private func forget(machineId: String, activityId: String) {
         watchers.removeValue(forKey: activityId)?.cancel()
         relayRegistered.removeValue(forKey: activityId)
+        relayTokenEvents.removeValue(forKey: activityId)
         if let relay {
             Task { try? await relay.revokeActivity(pairingId: machineId, activityId: activityId) }
         }
