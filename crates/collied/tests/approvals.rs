@@ -1150,6 +1150,14 @@ async fn codex_attention_preview_excludes_user_input_for_direct_and_relay_delive
                 "Storage is healthy. Review the results above.",
             ),
             (
+                include_str!("fixtures/codex/question-0.162.1.detection.txt"),
+                "Which preview should the demo display?",
+            ),
+            (
+                "  Question 1/2 (2 unanswered)\n  Old preview question?\n\n  › 1. Blue\n    2. Green\n\n  Question 2/2 (1 unanswered)\n  Current question still rendering?\n\n  tab to add notes | enter to submit answer | esc to interrupt\n",
+                "Blocked in api",
+            ),
+            (
                 "› Is storage healthy?\n  including cached files\n",
                 "Blocked in api",
             ),
@@ -1167,13 +1175,16 @@ async fn codex_attention_preview_excludes_user_input_for_direct_and_relay_delive
             let display = open_display(&rig.notification_key, &alert.payload, 1);
             assert_eq!(display["body"], expected);
             assert_eq!(display["offersApproval"], false);
+            assert_eq!(display["terminalId"], approval.terminal_id.as_str());
             assert_eq!(display["approvalId"], approval.approval_id.as_str());
             assert_eq!(
                 alert.payload["aps"]["alert"],
                 json!({"title":"Collie","body":"An agent needs attention"})
             );
             let wire = alert.payload.to_string();
-            assert!(!wire.contains("storage") && !wire.contains("Storage"));
+            assert!(
+                !wire.contains("storage") && !wire.contains("Storage") && !wire.contains("preview")
+            );
             assert!(rig.mutations().is_empty());
         }
     }

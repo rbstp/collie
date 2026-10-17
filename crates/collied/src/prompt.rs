@@ -608,21 +608,63 @@ fn is_tip(raw: &str) -> bool {
 /// with `…`.
 pub fn context(kind: &str, text: &str) -> String {
     let region = after_last_rule(text);
-    let end = region
-        .iter()
-        .rposition(|l| {
-            option_line(l).is_some_and(|(_, n, _)| n == 1)
-                || (kind == "codex"
-                    && l.trim_start()
-                        .strip_prefix('›')
-                        .and_then(option_line)
-                        .is_some_and(|(_, n, _)| n == 1))
-        })
-        .unwrap_or(region.len());
+    let structured_question = kind == "codex"
+        && region
+            .iter()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .is_some_and(|l| {
+                matches!(
+                    l.trim(),
+                    "tab to add notes | enter to submit answer | esc to interrupt"
+                        | "tab or esc to clear notes | enter to submit answer"
+                )
+            });
+    let region = if structured_question {
+        let Some(heading) = region
+            .iter()
+            .rposition(|l| l.trim_start().starts_with("Question "))
+        else {
+            return String::new();
+        };
+        if !codex_question_heading(region[heading].trim()) {
+            return String::new();
+        }
+        &region[heading + 1..]
+    } else {
+        region.as_slice()
+    };
+    let option_one = |l: &&str| {
+        option_line(l).is_some_and(|(_, n, _)| n == 1)
+            || (kind == "codex"
+                && l.trim_start()
+                    .strip_prefix('›')
+                    .and_then(option_line)
+                    .is_some_and(|(_, n, _)| n == 1))
+    };
+    let end = if structured_question {
+        region.iter().position(option_one)
+    } else {
+        region.iter().rposition(option_one)
+    }
+    .unwrap_or(region.len());
     let has_options = end < region.len();
     let mut region = &region[..end];
     if kind == "codex" {
-        if codex_question_open(text) {
+        if structured_question {
+            if !has_options
+                || region
+                    .iter()
+                    .any(|l| l.trim_start().starts_with(['›', '•']))
+            {
+                return String::new();
+            }
+        } else if region
+            .iter()
+            .any(|l| l.trim_start().starts_with("Question "))
+        {
+            return String::new();
+        } else if codex_question_open(text) {
             let question_end = region
                 .iter()
                 .rposition(|l| l.contains("enter submit") && l.contains("main prompt"))
@@ -683,7 +725,11 @@ pub fn context(kind: &str, text: &str) -> String {
     let lines: Vec<String> = region
         .iter()
         .enumerate()
-        .filter(|(i, l)| first.zip(last).is_some_and(|(f, e)| f < *i && *i < e) || !is_tip(l))
+        .filter(|(i, l)| {
+            structured_question
+                || first.zip(last).is_some_and(|(f, e)| f < *i && *i < e)
+                || !is_tip(l)
+        })
         .map(|(_, l)| clean(l))
         .filter(|l| !is_border(l) || l.is_empty())
         .collect();
@@ -707,24 +753,53 @@ pub fn context(kind: &str, text: &str) -> String {
                 rest.next().map(|target| format!("{tool}: {target}"))
             }
         });
-    let out = action
-        .or_else(|| question.map(|q| lines[q].clone()))
-        .unwrap_or_else(|| {
-            let header = &lines[head];
-            if kind == "codex" {
-                return header.strip_prefix("• ").unwrap_or_default().to_owned();
-            }
-            match lines[head + 1..].iter().find(|l| !l.is_empty()) {
-                Some(next) if header.ends_with(':') => format!("{header} {next}"),
-                _ => header.clone(),
-            }
-        });
+    let out = if structured_question {
+        lines[head..]
+            .iter()
+            .filter(|l| !l.is_empty())
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        action
+            .or_else(|| question.map(|q| lines[q].clone()))
+            .unwrap_or_else(|| {
+                let header = &lines[head];
+                if kind == "codex" {
+                    return header.strip_prefix("• ").unwrap_or_default().to_owned();
+                }
+                match lines[head + 1..].iter().find(|l| !l.is_empty()) {
+                    Some(next) if header.ends_with(':') => format!("{header} {next}"),
+                    _ => header.clone(),
+                }
+            })
+    };
     if out.chars().count() <= MAX_CONTEXT_CHARS {
         return out;
     }
     let mut cut: String = out.chars().take(MAX_CONTEXT_CHARS - 1).collect();
     cut.push('…');
     cut
+}
+
+fn codex_question_heading(line: &str) -> bool {
+    let Some((index, rest)) = line
+        .strip_prefix("Question ")
+        .and_then(|s| s.split_once('/'))
+    else {
+        return false;
+    };
+    let Some((total, unanswered)) = rest.split_once(" (") else {
+        return false;
+    };
+    let Some(unanswered) = unanswered.strip_suffix(" unanswered)") else {
+        return false;
+    };
+    matches!(
+        (index.parse::<usize>(), total.parse::<usize>(), unanswered.parse::<usize>()),
+        (Ok(index), Ok(total), Ok(unanswered))
+            if index > 0 && index <= total && unanswered > 0 && unanswered <= total
+    )
 }
 
 /// The end of the dialog, whole lines only (a line is cut only when it alone does not
@@ -1193,6 +1268,76 @@ mod tests {
     use super::fixtures::*;
     use super::*;
     use Decision::*;
+
+    #[test]
+    fn codex_structured_question_context() {
+        // Codex 0.162.1 pane.read source=detection, with the transcript scrubbed.
+        let text = include_str!("../tests/fixtures/codex/question-0.162.1.detection.txt");
+        let question = "Which preview should the demo display?";
+        assert_eq!(context("codex", text), question);
+        assert_eq!(
+            context(
+                "codex",
+                &text.replace(question, "Which preview should\n  the demo display?")
+            ),
+            question
+        );
+        assert_eq!(
+            context("codex", &text.replace(question, "Choose a preview")),
+            "Choose a preview"
+        );
+        assert_eq!(
+            context(
+                "codex",
+                &text.replace("Question 1/1 (1 unanswered)", "Question 2/3 (2 unanswered)")
+            ),
+            question
+        );
+        let footer = "tab to add notes | enter to submit answer | esc to interrupt";
+        assert_eq!(
+            context(
+                "codex",
+                &text.replace(
+                    footer,
+                    "› A typed note?\n\n  tab or esc to clear notes | enter to submit answer"
+                )
+            ),
+            question
+        );
+        for ambiguous in [
+            text.replace("  Question 1/1 (1 unanswered)\n", ""),
+            text.replace(question, ""),
+            text.replace(question, "› Is this a user prompt?"),
+            text.replace("Question 1/1 (1 unanswered)", "Question 2/1 (1 unanswered)"),
+            text.replace(footer, ""),
+            text.replace(footer, "Unrecognized footer"),
+            text.replace("  › 1.", "  › First:"),
+            format!("{text}\n› A new user prompt?\n"),
+        ] {
+            assert_eq!(context("codex", &ambiguous), "");
+        }
+        let old = "  Question 1/1 (1 unanswered)\n  An old question?\n\n  › 1. Old option\n";
+        assert_eq!(context("codex", &format!("{old}\n{text}")), question);
+        assert_eq!(
+            context("codex", &format!("{text}\n› New task\n• New response.")),
+            ""
+        );
+    }
+
+    #[test]
+    fn codex_incomplete_question_never_reuses_prior_choices() {
+        let old = include_str!("../tests/fixtures/codex/question-0.162.1.detection.txt");
+        for heading in [
+            "Question 2/2 (1 unanswered)",
+            "Question 2/x (1 unanswered)",
+            "Question 3/2 (1 unanswered)",
+        ] {
+            let current = format!(
+                "  {heading}\n  Current question still rendering?\n\n  tab to add notes | enter to submit answer | esc to interrupt\n"
+            );
+            assert_eq!(context("codex", &format!("{old}\n{current}")), "");
+        }
+    }
 
     #[test]
     fn codex_context_never_uses_the_user_turn() {

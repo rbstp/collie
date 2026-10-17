@@ -1,0 +1,13 @@
+› Prepare the preview demo
+
+• An earlier question: Which cache should be cleared?
+
+  Question 1/1 (1 unanswered)
+  Which preview should the demo display?
+
+  › 1. Blue (Recommended)  Display the blue preview.
+    2. Green               Display the green preview.
+    3. Amber               Display the amber preview.
+    4. None of the above   Optionally, add details in notes (tab)
+
+  tab to add notes | enter to submit answer | esc to interrupt
