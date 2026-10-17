@@ -632,7 +632,7 @@ fn push_detail(push: &push::Status) -> String {
             push.grant_expires_at
                 .map_or_else(|| "not registered".into(), |t| t.to_string())
         ));
-        detail.push_str(", shared installation budget 1000 total/700 routine per UTC day; remaining budget not reported");
+        detail.push_str(", shared installation budget 1000 total/700 routine per UTC day");
     }
     if let Some(last) = push.health.last_send_ms {
         detail.push_str(&format!(", last attempt at {last} ms"));
