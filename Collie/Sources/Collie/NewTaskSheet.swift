@@ -356,7 +356,7 @@ struct NewTaskSheet: View {
                 }
             }
             .safeAreaPadding(.bottom, editingPrompt ? 48 : 0)
-            .modifier(KeepsPromptVisible(editing: editingPrompt && verticalSizeClass == .compact))
+            .modifier(KeepsPromptVisible(editing: editingPrompt))
             .safeAreaInset(edge: .top) {
                 if let repository = model.cloning {
                     HStack(spacing: 10) {
