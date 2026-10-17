@@ -455,6 +455,8 @@ enabled = true   # false, the default, when the section or the key is absent
 
 ## ColliePush (notification service extension)
 
+Codex attention context excludes the user-input region before an assistant response. Existing question and action extraction takes priority within that response; an ambiguous screen uses the encrypted `Blocked in <workspace>` fallback. Completion alerts remain generic workspace completion messages. Both direct APNs and relay delivery encrypt the selected context before sending. This changes no wire fields and needs no protocol version bump.
+
 - Pure Swift, never links CollieCore; shares only `Sources/Shared`, the App Group `group.dev.rbstp.collie` and the notification keys' Keychain access group with the app. No network.
 - It authenticates the full display envelope against node, thread, event and approval IDs, then replaces title/body and restores the terminal ID locally. Only authenticated offered decisions add the approval category. On failure or timeout, the original generic alert has no controls.
 - collie-core mirrors the last connection result per machine node ID (`last_ok_ms`, `last_fail_ms`, nothing else) to `reachability.json` in the App Group. If the alert's `node_id` last failed, the NSE appends " (machine may be unreachable, open collie to check)" to the body. Everything else passes through unchanged.

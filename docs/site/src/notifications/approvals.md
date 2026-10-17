@@ -13,7 +13,7 @@ For Claude Code:
 
 `collied` re-reads the screen before it answers. If the prompt changed in the meantime, the answer is refused as superseded rather than pressed into the new prompt.
 
-Codex and Copilot CLI send blocked notifications without Approve or Deny. Answer them in the session.
+Codex and Copilot CLI send blocked notifications without Approve or Deny. Answer them in the session. Codex previews use the pending question, action or recognizable assistant response. An ambiguous screen shows `Blocked in <workspace>` instead of the user's input.
 
 The notification is removed once the agent moves on, on a best-effort basis.
 
