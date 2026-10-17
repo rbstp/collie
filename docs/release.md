@@ -118,6 +118,7 @@ The certificate and the profiles expire after a year; renew them and update thei
 - Version: the latest `v*` tag bumped by minor when any commit since that tag (or the pull request title) is a `feat`, by patch otherwise. Build number: the workflow run number.
 - A manual run (Actions, testflight, Run workflow, on `master` only) ships the given version, for example `1.0.0`.
 - After the upload, the workflow pushes the tag `v<version>`.
+- Add `[ios-only]` to a pull request title to upload and tag its iOS build without dispatching desktop releases. Ordinary pull requests and manual TestFlight runs still dispatch matching desktop builds.
 
 ## iOS release notes
 

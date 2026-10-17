@@ -282,7 +282,7 @@ jobs:
 
   desktop-release:
     needs: build-ship
-    if: ${{ github.repository == 'rbstp/collie' && github.ref == 'refs/heads/master' }}
+    if: ${{ github.repository == 'rbstp/collie' && github.ref == 'refs/heads/master' && !contains(github.event.pull_request.title, '[ios-only]') }}
     runs-on: ubuntu-24.04
     permissions:
       actions: write
