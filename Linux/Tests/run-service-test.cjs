@@ -67,13 +67,25 @@ async function run() {
 
     check(failures, result !== null, `harness printed no RESULT:\n${text.slice(-3000)}`);
     if (result) {
-      const { states, notes } = result;
-      const wanted = ["running:0", "running:2", "off:0", "outdated:0", "running:0"];
+      const { states, statuses, notes } = result;
+      const wanted = ["running:0", "running:2", "off:0", "outdated:0", "running:0", "off:0", "running:0"];
       let position = 0;
       for (const state of states) {
         if (state === wanted[position]) position++;
       }
       check(failures, position === wanted.length, `watch states ${JSON.stringify(states)} lack ${JSON.stringify(wanted)} in order`);
+      const wantedStatuses = [
+        "collied 0.1.1: Running",
+        "collied: Off",
+        "collied: Running (version unavailable)",
+        "collied: Off",
+        "collied 0.1.2: Running",
+      ];
+      let statusPosition = 0;
+      for (const status of statuses) {
+        if (status === wantedStatuses[statusPosition]) statusPosition++;
+      }
+      check(failures, statusPosition === wantedStatuses.length, `version statuses ${JSON.stringify(statuses)} lack ${JSON.stringify(wantedStatuses)} in order`);
       check(failures, notes.answeredBeforeArmed === false, "Pair answered before it was armed");
       check(failures, notes.answered === true, "Pair not answered once armed");
       check(failures, notes.answeredBeforeClick === false, "Pair confirmed on its own once armed");

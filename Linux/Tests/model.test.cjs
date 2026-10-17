@@ -29,6 +29,17 @@ test("replies decode like CollieBar's fixtures", () => {
   assert.equal(M.parseReply("null").type, "invalid");
 });
 
+test("status uses the running daemon version and handles older replies", () => {
+  const current = M.parseReply('{"type":"watch","pending_approvals":3,"collied_version":"0.1.1"}');
+  assert.equal(M.statusText("running", current.collied_version), "collied 0.1.1: Running");
+  const old = M.parseReply('{"type":"watch","pending_approvals":0}');
+  assert.equal(M.statusText("running", old.collied_version), "collied: Running (version unavailable)");
+  assert.equal(M.statusText("running", ""), "collied: Running (version unavailable)");
+  assert.equal(M.statusText("outdated", "0.1.1"), "collied: Running (version unavailable)");
+  assert.equal(M.statusText("off", "0.1.1"), "collied: Off");
+  assert.equal(M.statusText("running", printable("0.1.1\n")), "collied 0.1.1\\n: Running");
+});
+
 test("terminal key change matches collied", () => {
   const c = (terminal_key, previous_terminal_key) => M.terminalKeyChange({ terminal_key, previous_terminal_key });
   assert.equal(c(null, null), "none");
