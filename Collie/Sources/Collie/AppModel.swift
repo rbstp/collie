@@ -207,7 +207,8 @@ final class AppModel {
     }
 
     func reloadMachines() {
-        let ordered = machineOrder.sorted(core?.machines() ?? [])
+        guard let core else { return }
+        let ordered = machineOrder.sorted(core.machines())
         let ids = ordered.map(\.id)
         if machineOrder.ids != ids {
             machineOrder.ids = ids
