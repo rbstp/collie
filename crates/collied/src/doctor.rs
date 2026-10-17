@@ -184,11 +184,11 @@ async fn check_gh() -> (Status, String) {
     let Some(gh) = crate::drive::gh() else {
         return (
             Status::Warn,
-            "not in /opt/homebrew/bin, /usr/local/bin or /usr/bin; agents show no pull request"
+            "not in /opt/homebrew/bin, /usr/local/bin, /usr/bin or ~/.local/bin; agents show no pull request"
                 .to_owned(),
         );
     };
-    if crate::pulls::signed_in(gh).await {
+    if crate::pulls::signed_in(&gh).await {
         (Status::Ok, format!("{gh}, signed in"))
     } else {
         (

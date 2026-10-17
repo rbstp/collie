@@ -1877,9 +1877,16 @@ fn checkout_removed(repo: &Cwd, checkout: &Cwd) -> bool {
         })
 }
 
-pub(crate) fn gh() -> Option<&'static str> {
+pub(crate) fn gh() -> Option<String> {
     ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
         .into_iter()
+        .map(str::to_owned)
+        .chain(crate::config::home_dir().ok().and_then(|home| {
+            home.join(".local/bin/gh")
+                .into_os_string()
+                .into_string()
+                .ok()
+        }))
         .find(|path| Path::new(path).is_file())
 }
 
@@ -1960,7 +1967,7 @@ async fn pull_request_head(checkout: &Cwd, number: u64) -> Result<pulls::Head, F
             "gh is not installed on the machine",
         );
     };
-    let head = pulls::head(gh, checkout, number)
+    let head = pulls::head(&gh, checkout, number)
         .await
         .map_err(|message| invalid(&message))?;
     checked_branch(checkout, &head.branch).await?;
@@ -2074,6 +2081,7 @@ async fn track_pull_request(checkout: &Cwd, number: u64, head: &pulls::Head) -> 
 async fn clone_repository(source: &CloneSource, target: &Cwd) -> Result<(), String> {
     let deadline = tokio::time::Instant::now() + CLONE_TIMEOUT;
     let gh = gh().filter(|_| source.github_repo().is_some());
+    let gh = gh.as_deref();
     let mut result = run_clone(clone_command(source, target, gh), deadline).await;
     if gh.is_some() && gh_signed_out(&result, target) {
         result = run_clone(clone_command(source, target, None), deadline)
@@ -2141,7 +2149,7 @@ async fn run_clone(
 }
 
 async fn run_poi(repo: &Cwd) -> Result<(), &'static str> {
-    let mut command = crate::pulls::gh_command(gh().unwrap_or("gh"));
+    let mut command = crate::pulls::gh_command(gh().as_deref().unwrap_or("gh"));
     command.arg("poi").current_dir(repo.as_str());
     let output = timeout(Duration::from_secs(60), command.output())
         .await
