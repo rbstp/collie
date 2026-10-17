@@ -19,18 +19,30 @@ pub enum State {
 }
 
 /// The service runs this path: a build output would be replaced by the next cargo build
-/// (and on macOS left unsigned), and a symlink could point at one.
+/// (and on macOS left unsigned), and a symlink could point at one. Linux packages own
+/// the regular /usr/bin/collied instead.
 pub fn installed_exe() -> anyhow::Result<PathBuf> {
-    let installed = crate::config::home_dir()?.join(".cargo/bin/collied");
     let exe = std::env::current_exe()?.canonicalize()?;
+    #[cfg(target_os = "linux")]
+    {
+        let packaged = Path::new("/usr/bin/collied");
+        if matches_installed(packaged, &exe) {
+            return Ok(exe);
+        }
+    }
+    let installed = crate::config::home_dir()?.join(".cargo/bin/collied");
     anyhow::ensure!(
-        installed.symlink_metadata().is_ok_and(|m| m.is_file())
-            && installed.canonicalize().ok().as_ref() == Some(&exe),
+        matches_installed(&installed, &exe),
         "{} is not {}",
         exe.display(),
         installed.display()
     );
     Ok(exe)
+}
+
+fn matches_installed(installed: &Path, exe: &Path) -> bool {
+    installed.symlink_metadata().is_ok_and(|m| m.is_file())
+        && installed.canonicalize().ok().as_deref() == Some(exe)
 }
 
 fn built_ms(exe: &Path) -> anyhow::Result<u64> {
@@ -62,6 +74,22 @@ fn decide(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_executable_must_be_the_same_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let installed = dir.path().join("collied");
+        let other = dir.path().join("other");
+        let link = dir.path().join("link");
+        std::fs::write(&installed, b"installed").unwrap();
+        std::fs::write(&other, b"other").unwrap();
+        std::os::unix::fs::symlink(&installed, &link).unwrap();
+        let exe = installed.canonicalize().unwrap();
+        assert!(matches_installed(&installed, &exe));
+        assert!(!matches_installed(&other, &exe));
+        assert!(!matches_installed(&link, &exe));
+        assert!(!matches_installed(&dir.path().join("missing"), &exe));
+    }
 
     #[test]
     fn state_follows_service_job_and_binary() {

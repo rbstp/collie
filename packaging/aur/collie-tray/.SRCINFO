@@ -1,0 +1,20 @@
+pkgbase = collie-tray
+	pkgdesc = Collie bar widget for Omarchy 4
+	pkgver = 0.1.2
+	pkgrel = 1
+	url = https://collie.rbstp.dev
+	arch = any
+	license = Apache-2.0
+	depends = collied-bin=0.1.2
+	depends = quickshell
+	depends = qrencode
+	depends = less
+	depends = jq
+	depends = bash
+	options = !debug
+	source = https://github.com/rbstp/collie/releases/download/v0.1.2/CollieTray-0.1.2-omarchy.tar.gz
+	source = collie-tray-activate
+	sha256sums = cd9faed120231de459e2022e6461aa8e2011c53ef06a3e0df315a203837a5b35
+	sha256sums = 62ee5a47be94557c3203801126d90d959da0a423ff3869b795667ef5fd2ac06c
+
+pkgname = collie-tray
