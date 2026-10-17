@@ -47,7 +47,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.ref }}
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           submodules: true
 
       - name: work out the version
