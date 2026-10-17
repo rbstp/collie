@@ -28,7 +28,7 @@ enum MenuIcon {
         switch state {
         case .off: "collie: off"
         case .outdated: "collie: running"
-        case .running(let n) where n > 0: "collie: running, \(pendingText(n))"
+        case .running(let n, _) where n > 0: "collie: running, \(pendingText(n))"
         case .running: "collie: running"
         }
     }

@@ -205,8 +205,9 @@ async fn scenario(
     assert!(matches!(
         watch.call(&Request::Watch).await.unwrap(),
         Reply::Watch {
-            pending_approvals: 0
-        }
+            pending_approvals: 0,
+            collied_version: Some(ref version),
+        } if version == env!("CARGO_PKG_VERSION")
     ));
     // A watcher that goes away ends its task; the pairing below still gets its window.
     let mut gone = Client::connect(&control).await.unwrap();
@@ -432,8 +433,9 @@ async fn scenario(
             .unwrap()
             .unwrap(),
         Reply::Watch {
-            pending_approvals: 1
-        }
+            pending_approvals: 1,
+            collied_version: Some(ref version),
+        } if version == env!("CARGO_PKG_VERSION")
     ));
     let mut ws = open(&phone, &target).await;
     send(&mut ws, hello_frame(protocol::PROTOCOL_VERSION)).await;
@@ -1102,7 +1104,10 @@ async fn scenario(
             .await
             .unwrap()
             .unwrap();
-        let Reply::Watch { pending_approvals } = reply else {
+        let Reply::Watch {
+            pending_approvals, ..
+        } = reply
+        else {
             panic!("not a watch reply: {reply:?}");
         };
         if pending_approvals == 0 {

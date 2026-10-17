@@ -35,6 +35,17 @@ struct ControlWireTests {
         #expect(try decode(#"{"type":"peers","owner_user_id":null,"peers":[]}"#) == .peers([]))
     }
 
+    @Test func watchVersionComesFromTheRunningDaemon() throws {
+        #expect(
+            try decode(#"{"type":"watch","pending_approvals":2,"collied_version":"0.1.1"}"#)
+                == .watch(pendingApprovals: 2, colliedVersion: "0.1.1"))
+        #expect(DaemonState.running(pendingApprovals: 2, colliedVersion: "0.1.1").statusText == "collied 0.1.1: Running")
+        #expect(DaemonState.running(pendingApprovals: 0).statusText == "collied: Running (version unavailable)")
+        #expect(DaemonState.running(pendingApprovals: 0, colliedVersion: "").statusText == "collied: Running (version unavailable)")
+        #expect(DaemonState.outdated.statusText == "collied: Running (version unavailable)")
+        #expect(DaemonState.off.statusText == "collied: Off")
+    }
+
     @Test func candidateDecodesWithAndWithoutOptionalKeys() throws {
         let base = #""device_label":"iPhone","node_name":"phone","stable_id":"nP","login":"me","user_id":7,"tls_key":"k""#
         guard case .confirm(let old) = try decode("{\"type\":\"confirm\",\(base)}") else {

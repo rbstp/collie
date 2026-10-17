@@ -33,6 +33,12 @@ function label(state, pending) {
   return "collie: running"
 }
 
+function statusText(state, version) {
+  if (state === "off") return "collied: Off"
+  if (state === "running" && version) return "collied " + version + ": Running"
+  return "collied: Running (version unavailable)"
+}
+
 function absolute(dir) {
   return typeof dir === "string" && dir.charAt(0) === "/" ? dir : ""
 }
@@ -123,6 +129,7 @@ if (typeof module !== "undefined")
     terminalKeyChange: terminalKeyChange,
     pendingText: pendingText,
     label: label,
+    statusText: statusText,
     unitPath: unitPath,
     unquote: unquote,
     unitInfo: unitInfo,

@@ -45,14 +45,17 @@ async function watch(socket, reader) {
   const number = ++seen.watch;
   save();
   if (number === 1) {
-    send(socket, { type: "watch", pending_approvals: 0 });
+    send(socket, { type: "watch", pending_approvals: 0, collied_version: "0.1.1" });
     await sleep(300);
-    send(socket, { type: "watch", pending_approvals: 2 });
+    send(socket, { type: "watch", pending_approvals: 2, collied_version: "0.1.1" });
     await sleep(500);
   } else if (number === 2) {
     send(socket, { type: "error", message: "unknown variant `watch`" });
-  } else {
+  } else if (number === 3) {
     send(socket, { type: "watch", pending_approvals: 0 });
+    await sleep(300);
+  } else {
+    send(socket, { type: "watch", pending_approvals: 0, collied_version: "0.1.2" });
     await rest(reader);
   }
 }

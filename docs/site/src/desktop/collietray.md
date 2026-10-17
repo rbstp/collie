@@ -18,6 +18,7 @@ This copies the widget to `~/.config/omarchy/plugins/rbstp.collie` and puts it o
 
 ## Use
 
+- The menu status shows the running daemon's version, for example **collied 0.1.1: Running**. An older daemon that does not report its version shows **version unavailable**. When stopped, it shows **collied: Off**.
 - The icon is bright while `collied` runs, dim when it is off, and shows a dot while an approval is pending.
 - The menu turns `collied` off and on, pairs a phone, lists the paired phones, opens the audit log and quits.
 - **Quit** stops `collied` and takes the widget off the bar. Bring it back with:

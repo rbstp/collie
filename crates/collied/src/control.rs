@@ -141,6 +141,8 @@ pub enum Reply {
     Noted,
     Watch {
         pending_approvals: usize,
+        #[serde(default)]
+        collied_version: Option<String>,
     },
     Error {
         message: String,
@@ -441,6 +443,7 @@ async fn watch_pending(
             w,
             &Reply::Watch {
                 pending_approvals: n,
+                collied_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
             },
         )
         .await
@@ -611,12 +614,20 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_string(&want).unwrap(), line);
         }
+        assert!(matches!(
+            serde_json::from_str::<Reply>(r#"{"type":"watch","pending_approvals":1}"#).unwrap(),
+            Reply::Watch {
+                pending_approvals: 1,
+                collied_version: None,
+            }
+        ));
         assert_eq!(
             serde_json::to_string(&Reply::Watch {
-                pending_approvals: 1
+                pending_approvals: 1,
+                collied_version: Some("0.1.1".to_owned()),
             })
             .unwrap(),
-            r#"{"type":"watch","pending_approvals":1}"#
+            r#"{"type":"watch","pending_approvals":1,"collied_version":"0.1.1"}"#
         );
     }
 }

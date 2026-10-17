@@ -44,7 +44,7 @@ final class Daemon {
     var running: Bool { state != .off }
 
     var pendingApprovals: Int {
-        if case .running(let n) = state { n } else { 0 }
+        if case .running(let n, _) = state { n } else { 0 }
     }
 
     private func apply(_ new: DaemonState) {

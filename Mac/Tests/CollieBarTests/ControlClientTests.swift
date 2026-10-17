@@ -144,10 +144,10 @@ struct ControlClientTests {
 
         let daemon = await server.accept()
         #expect(await daemon.next() == #"{"cmd":"watch"}"#)
-        try daemon.reply(#"{"type":"watch","pending_approvals":0}"#)
-        #expect(await seen.next() == .running(pendingApprovals: 0))
-        try daemon.reply(#"{"type":"watch","pending_approvals":1}"#)
-        #expect(await seen.next() == .running(pendingApprovals: 1))
+        try daemon.reply(#"{"type":"watch","pending_approvals":0,"collied_version":"0.1.1"}"#)
+        #expect(await seen.next() == .running(pendingApprovals: 0, colliedVersion: "0.1.1"))
+        try daemon.reply(#"{"type":"watch","pending_approvals":1,"collied_version":"0.1.1"}"#)
+        #expect(await seen.next() == .running(pendingApprovals: 1, colliedVersion: "0.1.1"))
         daemon.close()
         #expect(await seen.next() == .off, "EOF means collied stopped")
 
@@ -158,6 +158,8 @@ struct ControlClientTests {
         #expect(await seen.next() == .outdated, "an older collied still runs")
         let again = await server.accept()
         #expect(await again.next() == #"{"cmd":"watch"}"#)
+        try again.reply(#"{"type":"watch","pending_approvals":0,"collied_version":"0.1.2"}"#)
+        #expect(await seen.next() == .running(pendingApprovals: 0, colliedVersion: "0.1.2"))
         server.stop()
         again.close()
         #expect(await seen.next() == .off)
