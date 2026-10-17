@@ -1,11 +1,13 @@
 # Requirements
 
+This page describes the next matching phone and desktop candidate; user-owned setup is unreleased. Published desktop v0.1.0 still uses tagged nodes. Follow the [v0.1.0 tailnet procedure](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md) until both peers are updated.
+
 ## To run collie
 
 - **A machine for the agents**: an Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager. Intel Macs are not supported. On Linux, `collied` is built and tested on Arch Linux.
 - **herdr 0.9.5**, the version `collied` is tested against.
 - **An iPhone on iOS 26 or later.** An Apple Watch on watchOS 26 or later is optional.
-- **A Tailscale account** whose policy file you can edit.
+- **A personal Tailscale account**, used inside Collie on both devices. Compatible existing policies need no edit; restrictive policies may require an administrator-provided TCP 8457 grant. No OS VPN profile or standalone Tailscale app is required.
 - **An Apple Developer account**, with a Developer ID Application certificate (`collied` is always signed on macOS, never on Linux) and an APNs key if you want push notifications.
 - **Optional, for the Linux bar widget**: Omarchy 4 (its shell runs on Quickshell 0.3) with `qrencode`, which Omarchy installs.
 

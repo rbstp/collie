@@ -26,7 +26,7 @@ Your agents' transcripts and your files stay where the agents keep them; `collie
 
 **On your iPhone**, the app keeps:
 
-- its Tailscale node keys and the machines you paired, in a state folder excluded from iCloud and Finder backups;
+- its Tailscale node keys and the machines you paired, including a Tailscale user ID ownership pin in the upcoming user-owned setup, in a state folder excluded from iCloud and Finder backups;
 - its signing keys and per-machine notification keys, in the iPhone's Keychain, available on this device only and not synced. The TLS signing key is generated in the Secure Enclave and cannot be exported;
 - your settings, saved prompts, key shortcuts and other preferences, and unsent drafts (with their attachments for up to 23 hours). These can be included in your device and iCloud backups.
 
@@ -42,7 +42,7 @@ Conversation history and the summary lines shown in the Inbox are never written 
 
 ## Tailscale
 
-Both the app and `collied` embed a Tailscale client. You sign in to your own Tailscale account, and Tailscale's coordination service learns about these devices as it does for any device on your tailnet. Traffic between your devices is encrypted with WireGuard and may pass through Tailscale's relay servers when a direct connection is not possible; the relays cannot read it. Log upload to Tailscale is turned off in both embedded clients. Tailscale's handling of your account and device data is covered by [Tailscale's privacy policy](https://tailscale.com/privacy-policy).
+Both the app and `collied` embed their own Tailscale client. Published desktop v0.1.0 uses a tagged node; the upcoming coordinated phone/desktop candidate uses user-owned nodes signed in with the same personal account. Neither flow installs or requires an OS VPN profile, and a separate corporate VPN client keeps its own account and state. You sign in to your own Tailscale account, and Tailscale's coordination service learns about these devices as it does for any device on your tailnet. Traffic between your devices is encrypted with WireGuard and may pass through Tailscale's relay servers when a direct connection is not possible; the relays cannot read it. Log upload to Tailscale is turned off in both embedded clients. Tailscale's handling of your account and device data is covered by [Tailscale's privacy policy](https://tailscale.com/privacy-policy).
 
 ## Push notifications
 

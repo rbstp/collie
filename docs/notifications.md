@@ -52,6 +52,8 @@ Apple can still observe delivery destinations, opaque machine/thread/approval/ev
 
 Simulator unit checks verify the codec and neutral state separately from real APNs delivery. Locked/pre-first-unlock display, notification actions, and remote activity update/end behavior require physical iPhone validation; prior navigation observations above do not validate this new encrypted codec.
 
+Every one-shot background approval or approval-list connection checks the saved positive Tailscale owner against the phone's current embedded user, the machine's untagged same-user netmap entry and fresh unshared whois, plus the existing StableID, independent TLS key and paired hello. Missing/zero old owner pins require explicit re-pairing. Expired sign-in returns unauthorized and asks the user to open Collie; it never starts browser sign-in or requires an OS VPN toggle from a notification.
+
 ## Relay delivery and validation
 
 `[push.relay]` selects the publisher sender and `[apns]` selects direct APNs. They cannot be enabled together. `collied setup` offers the relay without importing credentials; use `collied setup --direct-apns` for a self-built app. `collied apns test` uses the selected mode. Relay availability still depends on the attested phone/control integration, the publisher deployment and the real-device/Free-account gates in [relay.md](relay.md); configuring a sender alone proves none of those.

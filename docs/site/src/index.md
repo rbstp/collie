@@ -22,7 +22,7 @@ collie lets you watch and steer your [herdr](https://github.com/herdrdev/herdr) 
 
 collie never opens a port on your network and does not use the Tailscale app.
 
-1. `collied` embeds its own Tailscale node, tagged `tag:collie-mac` or `tag:collie-linux`. It listens on TCP port 8457 inside the tailnet only.
+1. In the next matching candidate, `collied` embeds its own Tailscale node, owned by your personal Tailscale user. Published desktop v0.1.0 still uses the [tagged setup](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md). It listens on TCP port 8457 inside the tailnet only.
 2. The Collie app embeds a second Tailscale node that belongs to you. It only dials out to the machine.
 3. Every connection is checked with Tailscale's whois before anything else: the phone must be untagged, owned by you and paired with this machine.
 4. Inside the tunnel, both sides prove their keys with mutual TLS. The machine's key is pinned from the pairing QR code; the phone's key lives in its Secure Enclave and never leaves it.

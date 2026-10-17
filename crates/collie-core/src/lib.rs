@@ -208,16 +208,16 @@ impl From<ConnectError> for CoreError {
     }
 }
 
-/// Pairing is where a new machine's policy, tag or service mistakes show up, so these
+/// Pairing is where a new machine's sign-in, policy or service mistakes show up, so these
 /// name the likely fix.
 fn pair_error(e: ConnectError, port: u16) -> CoreError {
     match e {
         ConnectError::Pin(PinError::MissingPeer { host }) => CoreError::Unreachable {
             message: format!(
-                "{host} is not visible to this phone on the tailnet: check the policy grant to tag:collie-mac or tag:collie-linux on TCP {port}, and that the machine is logged in to this tailnet (collied setup checks both)"
+                "{host} is not visible to this phone on the tailnet: sign in inside Collie on both devices with the same personal Tailscale account; a restrictive policy may need TCP {port} between your user-owned devices (collied setup checks sign-in)"
             ),
         },
-        ConnectError::Pin(p @ PinError::Untagged { .. }) => CoreError::PinViolation {
+        ConnectError::Pin(p @ PinError::Ownership { .. }) => CoreError::PinViolation {
             message: format!("{p}: run collied setup on it"),
         },
         ConnectError::Dial(why) => CoreError::Unreachable {
@@ -3061,12 +3061,13 @@ impl Inner {
         let node = lock(&self.node).clone().ok_or(CoreError::NotRunning)?;
         let identity = lock(&self.identity).clone();
         let terminal_key = lock(&self.terminal_key).clone();
-        let (mut session, _, kind) = conn::open(
+        let (mut session, _, kind, owner_user_id) = conn::open(
             node,
             &self.node,
             &invite.host,
             invite.port,
             &invite.node_id,
+            None,
             None,
             invite.key.as_str(),
             identity,
@@ -3094,6 +3095,7 @@ impl Inner {
             port: invite.port,
             node_id: invite.node_id,
             kind,
+            owner_user_id,
             key: invite.key.as_str().to_owned(),
             terminal_key: terminal_key.map(String::from).unwrap_or_default(),
             default_label: None,
@@ -3500,15 +3502,8 @@ mod tests {
             8457,
         );
         assert!(matches!(&missing, CoreError::Unreachable { message }
-            if message.contains("policy grant") && message.contains("TCP 8457")));
-        let untagged = pair_error(
-            PinError::Untagged {
-                host: "m".into(),
-                expected: "tag:collie-mac".into(),
-            }
-            .into(),
-            8457,
-        );
+            if message.contains("restrictive policy") && message.contains("TCP 8457")));
+        let untagged = pair_error(PinError::Ownership { host: "m".into() }.into(), 8457);
         assert!(matches!(&untagged, CoreError::PinViolation { message }
             if message.ends_with("run collied setup on it")));
         assert!(matches!(
@@ -3890,6 +3885,7 @@ mod tests {
             host: format!("{id}.tail1234.ts.net"),
             port: 8457,
             node_id: format!("n{id}"),
+            owner_user_id: 123,
             kind: MachineKind::Mac,
             key: String::new(),
             terminal_key: String::new(),
@@ -3919,6 +3915,7 @@ mod tests {
             host: format!("{id}.tail1234.ts.net"),
             port: 8457,
             node_id: format!("n{id}"),
+            owner_user_id: 123,
             kind: MachineKind::Mac,
             key: String::new(),
             terminal_key: String::new(),
@@ -3989,6 +3986,7 @@ mod tests {
             host: format!("{id}.tail1234.ts.net"),
             port: 8457,
             node_id: format!("n{id}"),
+            owner_user_id: 123,
             kind: MachineKind::Mac,
             key: String::new(),
             terminal_key: String::new(),
@@ -4098,6 +4096,7 @@ mod tests {
                 host: "m1.tail1234.ts.net".into(),
                 port: 8457,
                 node_id: "nm1".into(),
+                owner_user_id: 123,
                 kind: MachineKind::Mac,
                 key: String::new(),
                 terminal_key: String::new(),
@@ -4143,6 +4142,7 @@ mod tests {
                 host: "m1.tail1234.ts.net".into(),
                 port: 8457,
                 node_id: "nm1".into(),
+                owner_user_id: 123,
                 kind: MachineKind::Mac,
                 key: String::new(),
                 terminal_key: String::new(),
@@ -4265,6 +4265,7 @@ mod tests {
             host: format!("{id}.tail1234.ts.net"),
             port: 8457,
             node_id: format!("n{id}"),
+            owner_user_id: 123,
             kind: MachineKind::Mac,
             key: String::new(),
             terminal_key: String::new(),
@@ -4388,6 +4389,7 @@ mod tests {
                 host: "m1.tail1234.ts.net".into(),
                 port: 8457,
                 node_id: "nm1".into(),
+                owner_user_id: 123,
                 kind: MachineKind::Mac,
                 key: String::new(),
                 terminal_key: URL_SAFE_NO_PAD.encode(&paired),
@@ -4661,7 +4663,7 @@ mod tailnet_tests {
                 .expect("go build testcontrol");
             assert!(status.success());
             let mut child = Command::new(&bin)
-                .args(["-authkey", auth_key])
+                .args(["-authkey", auth_key, "-same-user"])
                 .args(args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -5202,7 +5204,7 @@ mod tailnet_tests {
 
         let key = format!("test-authkey-collie-core{}", std::process::id());
         let root = tempfile::tempdir().unwrap();
-        let control = TestControl::start(&key, root.path(), &[]);
+        let control = TestControl::start(&key, root.path(), &["-same-user"]);
         let phone_dir = root.path().join("phone");
         std::fs::create_dir(&phone_dir).unwrap();
         std::fs::set_permissions(&phone_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -5226,7 +5228,7 @@ mod tailnet_tests {
             hostname: "it-mac".into(),
             auth_key: Some(Zeroizing::new(key.clone())),
             control_url: Some(control.1.clone()),
-            advertise_tags: vec![pin::MAC_TAG.into()],
+            advertise_tags: Vec::new(),
             log_to_stderr: false,
         })
         .unwrap();
@@ -5300,7 +5302,7 @@ mod tailnet_tests {
         );
 
         assert!(
-            mac_self.tags.iter().flatten().any(|t| t == pin::MAC_TAG),
+            mac_self.tags.iter().flatten().next().is_none(),
             "testcontrol must tag the Mac: {:?}",
             mac_self.tags
         );
@@ -5553,7 +5555,7 @@ mod tailnet_tests {
         }
         let key = KEY.to_owned();
         let root = tempfile::tempdir().unwrap();
-        let control = TestControl::start(&key, root.path(), &[]);
+        let control = TestControl::start(&key, root.path(), &["-same-user"]);
         let phone_dir = root.path().join("phone");
         let group = root.path().join("group");
         std::fs::create_dir(&group).unwrap();
@@ -5574,7 +5576,7 @@ mod tailnet_tests {
             hostname: "it-mac".into(),
             auth_key: Some(Zeroizing::new(key.clone())),
             control_url: Some(control.1.clone()),
-            advertise_tags: vec![pin::MAC_TAG.into()],
+            advertise_tags: Vec::new(),
             log_to_stderr: false,
         })
         .unwrap();
@@ -5996,7 +5998,7 @@ mod tailnet_tests {
             hostname: "it-mac".into(),
             auth_key: Some(Zeroizing::new(KEY.into())),
             control_url: Some(control.1.clone()),
-            advertise_tags: vec![pin::MAC_TAG.into()],
+            advertise_tags: Vec::new(),
             log_to_stderr: false,
         })
         .unwrap();
@@ -6286,7 +6288,7 @@ mod tailnet_tests {
             hostname: "it-mac".into(),
             auth_key: Some(Zeroizing::new(KEY.into())),
             control_url: Some(control.1.clone()),
-            advertise_tags: vec![pin::MAC_TAG.into()],
+            advertise_tags: Vec::new(),
             log_to_stderr: false,
         })
         .unwrap();

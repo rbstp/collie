@@ -10,7 +10,6 @@ use common::*;
 use serde_json::json;
 use tailnet::Node;
 
-const LINUX_TAG: &str = "tag:collie-linux";
 const AGENT: &str = "term_65ce7ae4fd5731";
 const PROMPT: Duration = Duration::from_secs(2);
 
@@ -22,13 +21,7 @@ fn machines_side_by_side() {
     let t0 = Instant::now();
     let root = TempDir::new("e2em");
     let net = Net::start(&root.0);
-    let linux = start_node(
-        &root.0,
-        "collie-e2e-linux",
-        &net.key,
-        &net.url,
-        &[LINUX_TAG],
-    );
+    let linux = start_node(&root.0, "collie-e2e-linux", &net.key, &net.url, &[]);
     // The phone registers after both machines are up, so its first netmap has them.
     wait_ready(&net.mac, 0);
     wait_ready(&linux, 0);

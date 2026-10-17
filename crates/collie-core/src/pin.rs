@@ -4,9 +4,6 @@ use tailnet::{PeerStatus, Status, WhoIsNode};
 
 use crate::store::MachineKind;
 
-#[cfg(test)]
-pub const MAC_TAG: &str = "tag:collie-mac";
-
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PinError {
     #[error("{host} is not in this tailnet's netmap")]
@@ -17,39 +14,56 @@ pub enum PinError {
         expected: String,
         found: String,
     },
-    #[error("{host} is not tagged {expected}")]
-    Untagged { host: String, expected: String },
+    #[error(
+        "{host} must be an untagged, unshared node owned by this Collie sign-in; sign in with the same personal account and pair again"
+    )]
+    Ownership { host: String },
+    #[error(
+        "Collie's embedded Tailscale sign-in does not match the paired owner; sign in with the same personal account and pair again"
+    )]
+    SelfOwnership,
     #[error("{host} has no tailnet address")]
     NoAddress { host: String },
-    #[error("{host} is shared in from another tailnet")]
-    SharedIn { host: String },
+    #[error("{host} reports an unsupported platform: {os}")]
+    Platform { host: String, os: String },
     #[error("{host} did not present the key it was paired with")]
     KeyMismatch { host: String },
 }
 
 impl PinError {
-    /// A pin violation means the name now points at another node, or the machine lost
-    /// its tag: retrying cannot fix it and must not be automatic.
     pub fn is_violation(&self) -> bool {
         matches!(
             self,
             Self::NodeIdMismatch { .. }
-                | Self::Untagged { .. }
-                | Self::SharedIn { .. }
+                | Self::Ownership { .. }
+                | Self::SelfOwnership
                 | Self::KeyMismatch { .. }
+                | Self::Platform { .. }
         )
     }
 }
 
-/// The IP is taken from the netmap entry of the pinned node itself, so the
-/// connection never depends on a DNS answer. `kind` is None only when pairing, where
-/// either collie tag is accepted and the one found is returned to be pinned.
+pub fn self_user(status: &Status, owner: Option<i64>) -> Result<i64, PinError> {
+    let me = status.self_node.as_ref().ok_or(PinError::SelfOwnership)?;
+    if me.user_id <= 0
+        || me.stable_id.is_empty()
+        || me.tags.as_ref().is_some_and(|tags| !tags.is_empty())
+        || owner.is_some_and(|owner| owner <= 0 || owner != me.user_id)
+    {
+        return Err(PinError::SelfOwnership);
+    }
+    Ok(me.user_id)
+}
+
+/// The address comes from the pinned node's netmap entry, never a DNS answer.
 pub fn resolve(
     status: &Status,
     host: &str,
     node_id: &str,
     kind: Option<MachineKind>,
+    owner: Option<i64>,
 ) -> Result<(IpAddr, MachineKind), PinError> {
+    let owner = self_user(status, owner)?;
     let named: Vec<&PeerStatus> = status
         .peer
         .iter()
@@ -69,26 +83,22 @@ pub fn resolve(
             });
         }
     };
-    let pinned;
-    let accepted: &[MachineKind] = match kind {
-        Some(k) => {
-            pinned = [k];
-            &pinned
-        }
-        None => &MachineKind::ALL,
+    if peer.user_id != owner || peer.tags.as_ref().is_some_and(|tags| !tags.is_empty()) {
+        return Err(PinError::Ownership { host: host.into() });
+    }
+    let kind = match kind {
+        Some(kind) => kind,
+        None => match peer.os.to_ascii_lowercase().as_str() {
+            "macos" => MachineKind::Mac,
+            "linux" => MachineKind::Linux,
+            _ => {
+                return Err(PinError::Platform {
+                    host: host.into(),
+                    os: peer.os.clone(),
+                });
+            }
+        },
     };
-    let found = accepted
-        .iter()
-        .copied()
-        .find(|k| peer.tags.iter().flatten().any(|t| t == k.tag()))
-        .ok_or_else(|| PinError::Untagged {
-            host: host.into(),
-            expected: accepted
-                .iter()
-                .map(|k| k.tag())
-                .collect::<Vec<_>>()
-                .join(" or "),
-        })?;
     let ips = peer.tailscale_ips.as_deref().unwrap_or_default();
     let ip = ips
         .iter()
@@ -96,11 +106,9 @@ pub fn resolve(
         .or_else(|| ips.first())
         .copied()
         .ok_or(PinError::NoAddress { host: host.into() })?;
-    Ok((ip, found))
+    Ok((ip, kind))
 }
 
-/// Applied to whois of the resolved IP and to the node ID the machine reports in hello, so
-/// a shared-in node or a stale netmap entry cannot stand in for the pinned machine.
 pub fn verify_node(found: &str, host: &str, node_id: &str) -> Result<(), PinError> {
     if found != node_id {
         return Err(PinError::NodeIdMismatch {
@@ -112,10 +120,15 @@ pub fn verify_node(found: &str, host: &str, node_id: &str) -> Result<(), PinErro
     Ok(())
 }
 
-pub fn verify_whois(who: &WhoIsNode, host: &str, node_id: &str) -> Result<(), PinError> {
+pub fn verify_whois(
+    who: &WhoIsNode,
+    host: &str,
+    node_id: &str,
+    owner: i64,
+) -> Result<(), PinError> {
     verify_node(&who.stable_id, host, node_id)?;
-    if who.sharer != 0 {
-        return Err(PinError::SharedIn { host: host.into() });
+    if !who.is_owned_by(owner) {
+        return Err(PinError::Ownership { host: host.into() });
     }
     Ok(())
 }
@@ -123,227 +136,210 @@ pub fn verify_whois(who: &WhoIsNode, host: &str, node_id: &str) -> Result<(), Pi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
-    const HOST: &str = "mac.tail1234.ts.net";
+    const HOST: &str = "mac.test.ts.net";
 
-    fn status(peers: &[(&str, &str, &[&str], &[&str])]) -> Status {
-        let peers: serde_json::Map<String, serde_json::Value> = peers
-            .iter()
-            .map(|(id, dns, tags, ips)| {
-                (
-                    format!("nodekey:{id}"),
-                    serde_json::json!({
-                        "ID": id,
-                        "DNSName": dns,
-                        "Tags": tags,
-                        "TailscaleIPs": ips,
-                    }),
-                )
-            })
-            .collect();
-        serde_json::from_value(serde_json::json!({
+    fn status() -> Status {
+        serde_json::from_value(json!({
             "BackendState": "Running",
-            "Self": {"ID": "nPHONE", "DNSName": "phone.tail1234.ts.net."},
-            "Peer": peers,
+            "Self": {"ID": "nPHONE", "UserID": 7, "TailscaleIPs": ["100.64.0.2"]},
+            "Peer": {"key": {"ID": "nMAC", "DNSName": "mac.test.ts.net.",
+                "UserID": 7, "OS": "macOS", "TailscaleIPs": ["fd7a:115c:a1e0::1", "100.64.0.1"]}}
         }))
         .unwrap()
     }
 
-    #[test]
-    fn pinned_tagged_mac_resolves_to_ipv4() {
-        let st = status(&[
-            ("nOTHER", "other.tail1234.ts.net.", &[], &["100.64.0.9"]),
-            (
-                "nMAC",
-                "mac.tail1234.ts.net.",
-                &[MAC_TAG],
-                &["fd7a:115c:a1e0::1", "100.64.0.1"],
-            ),
-        ]);
-        assert_eq!(
-            resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)),
-            Ok(("100.64.0.1".parse().unwrap(), MachineKind::Mac))
-        );
-        assert_eq!(
-            resolve(&st, "MAC.tail1234.ts.net", "nMAC", Some(MachineKind::Mac)),
-            Ok(("100.64.0.1".parse().unwrap(), MachineKind::Mac))
-        );
+    fn whois() -> WhoIsNode {
+        serde_json::from_value(json!({"StableID": "nMAC", "Name": HOST, "User": 7})).unwrap()
     }
 
     #[test]
-    fn wrong_stable_id_is_a_violation() {
-        let st = status(&[(
-            "nIMPOSTOR",
-            "mac.tail1234.ts.net.",
-            &[MAC_TAG],
-            &["100.64.0.7"],
-        )]);
-        let err = resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)).unwrap_err();
-        assert_eq!(
-            err,
-            PinError::NodeIdMismatch {
-                host: HOST.into(),
-                expected: "nMAC".into(),
-                found: "nIMPOSTOR".into()
-            }
-        );
-        assert!(err.is_violation());
-    }
-
-    #[test]
-    fn untagged_mac_is_a_violation() {
-        let st = status(&[("nMAC", "mac.tail1234.ts.net.", &[], &["100.64.0.1"])]);
-        let err = resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)).unwrap_err();
-        assert_eq!(
-            err,
-            PinError::Untagged {
-                host: HOST.into(),
-                expected: MAC_TAG.into()
-            }
-        );
-        assert!(err.is_violation());
-        let st = status(&[(
-            "nMAC",
-            "mac.tail1234.ts.net.",
-            &["tag:collie-macx"],
-            &["100.64.0.1"],
-        )]);
-        assert!(
-            resolve(&st, HOST, "nMAC", Some(MachineKind::Mac))
-                .unwrap_err()
-                .is_violation()
-        );
-    }
-
-    #[test]
-    fn missing_peer_is_transient() {
-        let st = status(&[("nMAC", "mac2.tail1234.ts.net.", &[MAC_TAG], &["100.64.0.1"])]);
-        let err = resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)).unwrap_err();
-        assert_eq!(err, PinError::MissingPeer { host: HOST.into() });
-        assert!(!err.is_violation());
-        let empty: Status =
-            serde_json::from_str(r#"{"BackendState":"Running","Peer":null}"#).unwrap();
-        assert!(matches!(
-            resolve(&empty, HOST, "nMAC", Some(MachineKind::Mac)),
-            Err(PinError::MissingPeer { .. })
-        ));
-    }
-
-    #[test]
-    fn stable_id_elsewhere_in_netmap_does_not_count() {
-        let st = status(&[
-            (
-                "nMAC",
-                "renamed.tail1234.ts.net.",
-                &[MAC_TAG],
-                &["100.64.0.1"],
-            ),
-            (
-                "nIMPOSTOR",
-                "mac.tail1234.ts.net.",
-                &[MAC_TAG],
-                &["100.64.0.7"],
-            ),
-        ]);
-        assert!(matches!(
-            resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)),
-            Err(PinError::NodeIdMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn no_address() {
-        let st = status(&[("nMAC", "mac.tail1234.ts.net.", &[MAC_TAG], &[])]);
-        assert_eq!(
-            resolve(&st, HOST, "nMAC", Some(MachineKind::Mac)),
-            Err(PinError::NoAddress { host: HOST.into() })
-        );
-    }
-
-    #[test]
-    fn pairing_accepts_either_tag_and_reports_which() {
-        let tagged =
-            |tags: &[&str]| status(&[("nM", "mac.tail1234.ts.net.", tags, &["100.64.0.1"])]);
-        let ip: IpAddr = "100.64.0.1".parse().unwrap();
-        for kind in MachineKind::ALL {
-            let st = tagged(&[kind.tag()]);
-            assert_eq!(resolve(&st, HOST, "nM", None), Ok((ip, kind)));
-            assert_eq!(resolve(&st, HOST, "nM", Some(kind)), Ok((ip, kind)));
-        }
-        for tags in [
-            &[][..],
-            &["tag:collie-linuxx"],
-            &["tag:collie-phone"],
-            &["tag:collie"],
-        ] {
-            let err = resolve(&tagged(tags), HOST, "nM", None).unwrap_err();
-            assert!(err.is_violation(), "{tags:?}");
+    fn same_user_pairing_and_reconnect_keep_exact_node_and_prefer_ipv4() {
+        let st = status();
+        for owner in [None, Some(7)] {
             assert_eq!(
-                err.to_string(),
-                format!("{HOST} is not tagged tag:collie-mac or tag:collie-linux")
+                resolve(&st, HOST, "nMAC", None, owner),
+                Ok(("100.64.0.1".parse().unwrap(), MachineKind::Mac))
             );
         }
+        assert!(
+            resolve(
+                &st,
+                "MAC.TEST.TS.NET",
+                "nMAC",
+                Some(MachineKind::Mac),
+                Some(7)
+            )
+            .is_ok()
+        );
+        assert_eq!(verify_whois(&whois(), HOST, "nMAC", 7), Ok(()));
     }
 
     #[test]
-    fn a_paired_machine_must_keep_its_kind() {
-        let linux = status(&[(
-            "nM",
-            "mac.tail1234.ts.net.",
-            &["tag:collie-linux"],
-            &["100.64.0.1"],
-        )]);
-        let err = resolve(&linux, HOST, "nM", Some(MachineKind::Mac)).unwrap_err();
+    fn unknown_or_changed_phone_owner_never_upgrades_a_saved_pairing() {
+        for owner in [0, -1, 8] {
+            assert_eq!(
+                resolve(&status(), HOST, "nMAC", Some(MachineKind::Mac), Some(owner)),
+                Err(PinError::SelfOwnership)
+            );
+        }
+        for user in [0, -1, 8] {
+            let mut st = status();
+            st.self_node.as_mut().unwrap().user_id = user;
+            assert_eq!(
+                resolve(&st, HOST, "nMAC", None, Some(7)),
+                Err(PinError::SelfOwnership)
+            );
+        }
+        let mut st = status();
+        st.self_node = None;
         assert_eq!(
-            err,
-            PinError::Untagged {
-                host: HOST.into(),
-                expected: MAC_TAG.into()
-            }
+            resolve(&st, HOST, "nMAC", None, None),
+            Err(PinError::SelfOwnership)
         );
-        assert!(err.is_violation());
-        let mac = status(&[("nM", "mac.tail1234.ts.net.", &[MAC_TAG], &["100.64.0.1"])]);
+        let mut st = status();
+        st.self_node.as_mut().unwrap().tags = Some(vec!["tag:phone".into()]);
+        assert_eq!(
+            resolve(&st, HOST, "nMAC", None, None),
+            Err(PinError::SelfOwnership)
+        );
+    }
+
+    #[test]
+    fn foreign_zero_and_tagged_machine_fail_before_dial() {
+        for user in [0, -1, 8] {
+            let mut st = status();
+            st.peer
+                .as_mut()
+                .unwrap()
+                .values_mut()
+                .next()
+                .unwrap()
+                .user_id = user;
+            assert!(matches!(
+                resolve(&st, HOST, "nMAC", None, None),
+                Err(PinError::Ownership { .. })
+            ));
+        }
+        let mut st = status();
+        st.peer.as_mut().unwrap().values_mut().next().unwrap().tags =
+            Some(vec!["tag:collie-mac".into()]);
+        assert!(matches!(
+            resolve(&st, HOST, "nMAC", Some(MachineKind::Mac), Some(7)),
+            Err(PinError::Ownership { .. })
+        ));
+    }
+
+    #[test]
+    fn fresh_whois_cannot_replace_owner_node_or_sharing() {
+        for user in [0, -1, 8] {
+            let mut who = whois();
+            who.user = user;
+            assert!(matches!(
+                verify_whois(&who, HOST, "nMAC", 7),
+                Err(PinError::Ownership { .. })
+            ));
+        }
+        let mut who = whois();
+        who.sharer = 9;
+        assert!(verify_whois(&who, HOST, "nMAC", 7).is_err());
+        let mut who = whois();
+        who.tags = Some(vec!["tag:collie-mac".into()]);
+        assert!(verify_whois(&who, HOST, "nMAC", 7).is_err());
+        let mut who = whois();
+        who.stable_id = "nOTHER".into();
+        assert!(matches!(
+            verify_whois(&who, HOST, "nMAC", 7),
+            Err(PinError::NodeIdMismatch { .. })
+        ));
+        assert!(verify_whois(&whois(), HOST, "nMAC", 0).is_err());
+    }
+
+    #[test]
+    fn missing_peer_is_transient_but_reused_name_is_a_violation() {
+        let mut st = status();
+        st.peer = None;
         assert!(
-            resolve(&mac, HOST, "nM", Some(MachineKind::Linux))
+            !resolve(&st, HOST, "nMAC", None, None)
                 .unwrap_err()
                 .is_violation()
         );
-    }
-
-    fn whois(id: &str, sharer: i64) -> WhoIsNode {
-        serde_json::from_value(serde_json::json!({
-            "StableID": id,
-            "Name": "mac.tail1234.ts.net.",
-            "User": 7,
-            "Sharer": sharer,
-            "Tags": [MAC_TAG],
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn whois_must_match_pin_and_not_be_shared_in() {
-        assert_eq!(verify_whois(&whois("nMAC", 0), HOST, "nMAC"), Ok(()));
-        let err = verify_whois(&whois("nOTHER", 0), HOST, "nMAC").unwrap_err();
-        assert!(matches!(err, PinError::NodeIdMismatch { .. }));
-        let err = verify_whois(&whois("nMAC", 42), HOST, "nMAC").unwrap_err();
-        assert_eq!(err, PinError::SharedIn { host: HOST.into() });
-        assert!(err.is_violation());
-        let without_sharer: WhoIsNode = serde_json::from_value(serde_json::json!({
-            "StableID": "nMAC", "Name": "mac.", "User": 7
-        }))
-        .unwrap();
-        assert_eq!(verify_whois(&without_sharer, HOST, "nMAC"), Ok(()));
-    }
-
-    #[test]
-    fn hello_node_id_must_match_pin() {
-        assert_eq!(verify_node("nMAC", HOST, "nMAC"), Ok(()));
+        let mut st = status();
+        st.peer
+            .as_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap()
+            .stable_id = "nOTHER".into();
+        assert!(
+            resolve(&st, HOST, "nMAC", None, None)
+                .unwrap_err()
+                .is_violation()
+        );
         assert!(
             verify_node("nOTHER", HOST, "nMAC")
                 .unwrap_err()
                 .is_violation()
         );
         assert!(verify_node("", HOST, "nMAC").unwrap_err().is_violation());
+    }
+
+    #[test]
+    fn platform_is_presentation_and_never_relaxes_ownership() {
+        let mut st = status();
+        let peer = st.peer.as_mut().unwrap().values_mut().next().unwrap();
+        peer.os = "linux".into();
+        assert_eq!(
+            resolve(&st, HOST, "nMAC", None, None).unwrap().1,
+            MachineKind::Linux
+        );
+        assert_eq!(
+            resolve(&st, HOST, "nMAC", Some(MachineKind::Mac), Some(7))
+                .unwrap()
+                .1,
+            MachineKind::Mac
+        );
+        st.peer
+            .as_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap()
+            .os
+            .clear();
+        assert!(matches!(
+            resolve(&st, HOST, "nMAC", None, None),
+            Err(PinError::Platform { .. })
+        ));
+        assert!(resolve(&st, HOST, "nMAC", Some(MachineKind::Mac), Some(7)).is_ok());
+        st.peer
+            .as_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap()
+            .user_id = 8;
+        assert!(matches!(
+            resolve(&st, HOST, "nMAC", Some(MachineKind::Mac), Some(7)),
+            Err(PinError::Ownership { .. })
+        ));
+    }
+
+    #[test]
+    fn missing_address_is_transient() {
+        let mut st = status();
+        st.peer
+            .as_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap()
+            .tailscale_ips = None;
+        assert!(matches!(
+            resolve(&st, HOST, "nMAC", None, None),
+            Err(PinError::NoAddress { .. })
+        ));
     }
 }

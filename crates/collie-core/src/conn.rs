@@ -288,10 +288,11 @@ pub async fn open(
     port: u16,
     node_id: &str,
     kind: Option<MachineKind>,
+    owner: Option<i64>,
     key: &str,
     identity: Option<Arc<CertifiedKey>>,
     dial_offline: bool,
-) -> Result<(Session<Stream>, HelloResult, MachineKind), ConnectError> {
+) -> Result<(Session<Stream>, HelloResult, MachineKind, i64), ConnectError> {
     let key = KeyPin::new(key).map_err(|_| ConnectError::PairAgain)?;
     let identity = identity.ok_or(ConnectError::NoIdentity)?;
     let n = node.clone();
@@ -302,7 +303,17 @@ pub async fn open(
     if status.backend_state != BackendState::Running {
         return Err(ConnectError::Offline);
     }
-    let (ip, kind) = pin::resolve(&status, host, node_id, kind)?;
+    let owner = pin::self_user(&status, owner)?;
+    let n = node.clone();
+    let self_status = status.clone();
+    let verified = blocking(move || n.owned_user(&self_status))
+        .await
+        .map_err(|_| pin::PinError::SelfOwnership)?
+        .map_err(|_| pin::PinError::SelfOwnership)?;
+    if verified != owner {
+        return Err(pin::PinError::SelfOwnership.into());
+    }
+    let (ip, kind) = pin::resolve(&status, host, node_id, kind, Some(owner))?;
     let online = status
         .peer
         .iter()
@@ -316,14 +327,14 @@ pub async fn open(
         .await
         .map_err(|e| ConnectError::Dial(e.to_string()))?
         .map_err(|e| ConnectError::Dial(e.to_string()))?;
-    pin::verify_whois(&who.node, host, node_id)?;
+    pin::verify_whois(&who.node, host, node_id, owner)?;
     let stream = dial(&node, slot, SocketAddr::new(ip, port)).await?;
     drop(node);
     let stream = tls(stream, host, key, identity).await?;
     let mut session = Session::connect(stream, host, port).await?;
     let hello = session.hello().await?;
     pin::verify_node(&hello.machine.node_id, host, node_id)?;
-    Ok((session, hello, kind))
+    Ok((session, hello, kind, owner))
 }
 
 pub(crate) async fn tls(
@@ -677,6 +688,7 @@ async fn supervise(
                 machine.port,
                 &machine.node_id,
                 Some(machine.kind),
+                Some(machine.owner_user_id),
                 &machine.key,
                 key,
                 dial_offline,
@@ -695,12 +707,12 @@ async fn supervise(
         ) {
             reach.record(
                 &machine.node_id,
-                matches!(&opened, Ok((_, hello, _)) if hello.paired),
+                matches!(&opened, Ok((_, hello, _, _)) if hello.paired),
             );
         }
         let err = match opened {
-            Ok((_, hello, _)) if !hello.paired => ConnectError::Session(SessionError::NotPaired),
-            Ok((session, hello, _)) => {
+            Ok((_, hello, _, _)) if !hello.paired => ConnectError::Session(SessionError::NotPaired),
+            Ok((session, hello, _, _)) => {
                 lock(&shared.link).push_mode = hello.push_mode;
                 lock(&shared.flock).new_connection();
                 shared.set(LinkPhase::Connected, None);
@@ -1185,6 +1197,7 @@ mod tests {
             host: "m".into(),
             port: 0,
             node_id: "n".into(),
+            owner_user_id: 123,
             kind: MachineKind::Mac,
             key: String::new(),
             terminal_key: String::new(),
@@ -1240,6 +1253,7 @@ mod tests {
             host: "m".into(),
             port: 0,
             node_id: "n".into(),
+            owner_user_id: 123,
             kind: MachineKind::Mac,
             key: String::new(),
             terminal_key: String::new(),

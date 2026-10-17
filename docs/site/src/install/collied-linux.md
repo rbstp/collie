@@ -1,6 +1,8 @@
 # collied on Linux
 
-`collied` runs as a systemd user unit. Linux x86_64 download packaging targets glibc 2.39+ and systemd 255+: see [Desktop release downloads](../reference/desktop-releases.md). The first public release still needs clean-machine verification. Once available, extract its daemon archive and run `bash install.sh --replace`, then `~/.cargo/bin/collied setup`. A Rust toolchain or checkout is not required for those downloads.
+This page describes the next matching phone and desktop candidate; user-owned setup is unreleased. Published desktop v0.1.0 still uses tagged nodes. Follow the [v0.1.0 tailnet procedure](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md) until both peers are updated.
+
+`collied` runs as a systemd user unit. Linux x86_64 download packaging targets glibc 2.39+ and systemd 255+: see [Desktop release downloads](../reference/desktop-releases.md). Published daemon archives include `install.sh`; extract an archive and run `bash install.sh --replace`, then `~/.cargo/bin/collied setup`. A Rust toolchain or checkout is not required for those downloads. Acceptance of the downloaded binary on a clean Linux machine remains pending.
 
 The source installation remains available below.
 
@@ -23,7 +25,7 @@ The source installation remains available below.
 
 Setup runs the same steps as [on macOS](collied-macos.md#what-setup-does), with these differences:
 
-- `collied login` tags the node `tag:collie-linux`, and `collied` refuses to run until the node has that tag.
+- `collied login` signs in Collie's separate embedded user-owned node. Use the same personal account as Collie on the phone; no system Tailscale client is required.
 - `collied service install` writes the systemd user unit `~/.config/systemd/user/collied.service`.
 - Publisher relay mode needs no APNs key. With `collied setup --direct-apns` for a self-built app, the APNs key is stored as a systemd user credential, encrypted with the host key and sealed to the TPM2 when one is usable. Where `systemd-creds` cannot encrypt, it falls back to a file readable only by your user. `collied doctor` reports which one you have.
 
