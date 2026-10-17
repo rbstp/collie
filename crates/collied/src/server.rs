@@ -698,14 +698,14 @@ async fn pull_requests(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             let quiet = |a: &herdr::AgentInfo| lock(&state.transcripts).quiet(a);
             agents.retain(|a| drive::worktree_settled(&snapshot, &a.terminal_id, &quiet));
         }
-        let Some((linked, seen, merged)) = read_pulls(&state, gh, &agents).await else {
+        let Some((linked, seen, merged)) = read_pulls(&state, &gh, &agents).await else {
             continue;
         };
         if phone && lock(&state.pulls).link(linked, &seen) {
             let _ = state.events.send(Event::FlockChanged {});
         }
         for (agent, root, number) in &merged {
-            archive_merged(&state, gh, agent, root, *number).await;
+            archive_merged(&state, &gh, agent, root, *number).await;
         }
     }
 }
@@ -841,7 +841,7 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                 continue;
             }
             let read = match drive::gh() {
-                Some(gh) => pr_watch::fetch(gh, &watch.url, &state.cfg.data_dir).await,
+                Some(gh) => pr_watch::fetch(&gh, &watch.url, &state.cfg.data_dir).await,
                 None => None,
             };
             ended |= lock(&state.pulls)
@@ -2142,7 +2142,7 @@ impl Session<'_> {
                 "gh is not installed on the machine",
             );
         };
-        if !pulls::signed_in(gh).await {
+        if !pulls::signed_in(&gh).await {
             return err(
                 ErrorCode::InvalidParams,
                 "gh is not signed in; run `gh auth login` on the machine",

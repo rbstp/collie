@@ -4,7 +4,7 @@ This page describes the next matching phone and desktop candidate; user-owned se
 
 ## To run collie
 
-- **A machine for the agents**: an Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager. Intel Macs are not supported. On Linux, `collied` is built and tested on Arch Linux.
+- **A machine for the agents**: an Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager. Intel Macs are not supported. Linux testing is limited to Arch Linux with Omarchy; other distributions have not been validated.
 - **herdr 0.9.5**, the version `collied` is tested against.
 - **An iPhone on iOS 26 or later.** An Apple Watch on watchOS 26 or later is optional.
 - **A personal Tailscale account**, used inside Collie on both devices. Compatible existing policies need no edit; restrictive policies may require an administrator-provided TCP 8457 grant. No OS VPN profile or standalone Tailscale app is required.
@@ -13,6 +13,10 @@ This page describes the next matching phone and desktop candidate; user-owned se
 
 > [!NOTE]
 > On Linux, the encrypted APNs key needs systemd 256 or later (`systemd-creds --user`). Older versions fall back to a file readable only by your user.
+
+## Tested agent integrations
+
+Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agent integrations, but those have not been validated with Collie. The feature coverage differs between the [Claude Code](../agents/claude-code.md), [Codex](../agents/codex.md) and [Copilot CLI](../agents/copilot.md) integrations.
 
 ## To build on macOS
 
