@@ -451,7 +451,7 @@ impl Approvals {
             menu,
             offered,
             snippet,
-            context: prompt::context(&text),
+            context: prompt::context(kind, &text),
         })
     }
 

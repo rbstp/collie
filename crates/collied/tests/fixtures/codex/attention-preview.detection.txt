@@ -1,0 +1,6 @@
+› Review storage usage
+  including cached files
+
+• Storage is healthy. Review the results above.
+
+›

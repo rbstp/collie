@@ -296,12 +296,20 @@ fn relabel(text: &str, f: impl Fn(&str) -> String) -> String {
 
 #[derive(Default)]
 struct Apns {
+    relay: bool,
     sent: Mutex<Vec<(String, Alert)>>,
     live_fails: Mutex<Option<Rejection>>,
     live_attempts: AtomicUsize,
 }
 
 impl Sender for Apns {
+    fn mode(&self) -> protocol::PushMode {
+        if self.relay {
+            protocol::PushMode::Relay
+        } else {
+            protocol::PushMode::Direct
+        }
+    }
     fn send<'a>(
         &'a self,
         device: &'a Device,
@@ -356,9 +364,16 @@ impl Rig {
     }
 
     async fn start_with_budget(ttl: Duration, budget: Option<Duration>) -> Self {
+        Self::start_with_delivery(ttl, budget, false).await
+    }
+
+    async fn start_with_delivery(ttl: Duration, budget: Option<Duration>, relay: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let herdr = Mock::start(dir.path());
-        let apns = Arc::new(Apns::default());
+        let apns = Arc::new(Apns {
+            relay,
+            ..Apns::default()
+        });
         let push = Push::open(
             dir.path().join("push.json"),
             Some(apns.clone()),
@@ -374,7 +389,13 @@ impl Rig {
             ApnsEnvironment::Sandbox,
             notification_key.clone(),
             false,
-            None,
+            relay.then(|| protocol::RelayGrant {
+                token: protocol::RelaySendToken::new(format!("v1.key.YQ.{}", "A".repeat(43)))
+                    .unwrap(),
+                route_id: protocol::RelayRouteId::new("route").unwrap(),
+                generation: 1,
+                expires_at: collied::now_ms() / 1000 + 86400,
+            }),
         )
         .unwrap();
         let audit = dir.path().join("audit.log");
@@ -1118,6 +1139,44 @@ async fn unknown_prompts_get_a_notification_without_actions() {
         ErrorCode::InvalidParams
     );
     assert!(rig.mutations().is_empty());
+}
+
+#[tokio::test]
+async fn codex_attention_preview_excludes_user_input_for_direct_and_relay_delivery() {
+    for relay in [false, true] {
+        for (text, expected) in [
+            (
+                include_str!("fixtures/codex/attention-preview.detection.txt"),
+                "Storage is healthy. Review the results above.",
+            ),
+            (
+                "› Is storage healthy?\n  including cached files\n",
+                "Blocked in api",
+            ),
+        ] {
+            let mut rig = Rig::start_with_delivery(TTL, None, relay).await;
+            rig.herdr.with(|h| {
+                h.agent["agent"] = json!("codex");
+                h.rule = "osc_title_blocked".into();
+                h.text = text.into();
+            });
+            let approval = rig.needed().await;
+            assert!(approval.options.is_empty() && approval.choices.is_empty());
+            let alerts = rig.alerts(1).await;
+            let alert = &alerts[0].1;
+            let display = open_display(&rig.notification_key, &alert.payload, 1);
+            assert_eq!(display["body"], expected);
+            assert_eq!(display["offersApproval"], false);
+            assert_eq!(display["approvalId"], approval.approval_id.as_str());
+            assert_eq!(
+                alert.payload["aps"]["alert"],
+                json!({"title":"Collie","body":"An agent needs attention"})
+            );
+            let wire = alert.payload.to_string();
+            assert!(!wire.contains("storage") && !wire.contains("Storage"));
+            assert!(rig.mutations().is_empty());
+        }
+    }
 }
 
 #[tokio::test]

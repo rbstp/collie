@@ -34,6 +34,8 @@ Selecting another tab or session, or pressing Back to return to the Agents list,
 
 The iPhone has no separate Approvals tab. In-session approval controls, notification actions, Live Activities, and the Apple Watch approval list remain available. Structured approval actions still require their existing authentication and approval checks; manual terminal input is separate.
 
+Attention previews prefer the pending question or action. Codex conversation screens exclude the user input marked with `›` and use the following assistant response marked with `•`; an ambiguous screen falls back to `Blocked in <workspace>`. Completion alerts remain `Done in <workspace>` without a reply excerpt. Direct APNs and relay delivery carry the same encrypted preview. iPhone and Apple Watch display the authenticated notification text; CollieBar and CollieTray do not send desktop notifications. An iPhone notification mirrored to macOS carries the same preview.
+
 ## Observations from device testing
 
 - The generic test reached the iPhone and opened the app, but did not open a session because its payload had no session target.
