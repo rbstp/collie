@@ -141,6 +141,50 @@ test('route limits roll back counters and independent rotation and revocation re
     assert.equal((await f.execute({ ...f.common, op: 'route', pairing_id: 'pair_0', route_id: 'app_0', expected_generation: 2, kind: 'app', destination: 'e'.repeat(64) })).status, 410);
   } finally { await f.runtime.dispose(); }
 });
+test('another attested installation cannot adopt, rotate or revoke foreign routes and pairings', async () => {
+  const f = await controlFixture();
+  try {
+    const keys = await keyPair();
+    const keyId = base64url(await sha256(new Uint8Array(await crypto.subtle.exportKey('raw', keys.publicKey))));
+    const publicKey = base64url(new Uint8Array(await crypto.subtle.exportKey('spki', keys.publicKey)));
+    await f.db.batch([
+      f.db.prepare("INSERT INTO installations VALUES ('other', 0)"),
+      f.db.prepare(`INSERT INTO attestations (installation_id,key_id,public_key,receipt,environment,last_nonce,retain_until)
+        VALUES ('other', ?, ?, 'test-receipt', 'development', 'initial', ?)`)
+        .bind(keyId, publicKey, Math.floor(Date.now() / 1000) + 37 * 86400),
+      f.db.prepare("INSERT INTO installation_usage VALUES ('other', 0, 0, 0)")
+    ]);
+    const common = { ...f.common, installation_id: 'other', key_id: keyId };
+    let counter = 0;
+    const execute = async (operation: Operation) => {
+      const response = await f.post('challenge', operation); assert.equal(response.status, 200);
+      const challenge = (await response.json()).challenge;
+      return f.post('control', { operation, challenge, assertion: await assertion(keys.privateKey, challenge, ++counter) });
+    };
+    const owned: Operation = { ...common, op: 'route', pairing_id: 'other_machine', route_id: 'other_app',
+      expected_generation: 0, kind: 'app', destination: 'b'.repeat(64) };
+    assert.equal((await execute(owned)).status, 200);
+    const originalRoute = await f.db.prepare("SELECT * FROM routes WHERE id = 'route'").first();
+    const originalPairing = await f.db.prepare("SELECT * FROM pairings WHERE id = 'machine'").first();
+    for (const operation of [
+      { ...owned, pairing_id: 'machine', route_id: 'adopted' },
+      { ...owned, route_id: 'route', expected_generation: 1 }
+    ]) assert.equal((await execute(operation)).status, 410);
+    assert.equal((await f.db.prepare("SELECT COUNT(*) n FROM routes WHERE id = 'adopted'").first())!.n, 0);
+    assert.equal((await f.db.prepare("SELECT counter FROM attestations WHERE installation_id = 'other'").first())!.counter, 1);
+    assert.equal((await execute({ ...common, op: 'revoke_route', pairing_id: 'machine', route_id: 'route', expected_generation: 1 })).status, 200);
+    assert.equal((await execute({ ...common, op: 'revoke_pairing', pairing_id: 'machine' })).status, 200);
+    assert.deepEqual(await f.db.prepare("SELECT * FROM routes WHERE id = 'route'").first(), originalRoute);
+    assert.deepEqual(await f.db.prepare("SELECT * FROM pairings WHERE id = 'machine'").first(), originalPairing);
+    const victim: Operation = { ...f.common, op: 'revoke_installation' };
+    const challenge = (await (await f.post('challenge', victim)).json()).challenge;
+    assert.equal((await f.post('control', { operation: victim, challenge, assertion: await assertion(keys.privateKey, challenge, ++counter) })).status, 401);
+    assert.equal((await f.db.prepare("SELECT counter FROM attestations WHERE installation_id = 'phone'").first())!.counter, 0);
+    assert.equal((await f.db.prepare("SELECT epoch FROM installations WHERE id = 'phone'").first())!.epoch, 0);
+    assert.equal((await execute({ ...owned, expected_generation: 1, destination: 'c'.repeat(64) })).status, 200);
+    assert.equal((await f.db.prepare("SELECT generation FROM routes WHERE id = 'other_app'").first())!.generation, 2);
+  } finally { await f.runtime.dispose(); }
+});
 test('eight active activities are bounded and rejected registration rolls back every state change', async () => {
   const f = await controlFixture();
   try {
