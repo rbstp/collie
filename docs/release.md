@@ -119,17 +119,17 @@ The certificate and the profiles expire after a year; renew them and update thei
 - A manual run (Actions, testflight, Run workflow, on `master` only) ships the given version, for example `1.0.0`.
 - After the upload, the workflow pushes the tag `v<version>`.
 
-## Debug symbols
-
-Before each TestFlight upload, the workflow retains an `ios-symbols-<version>-<build>-<attempt>` Actions artifact for 90 days. It contains only the archive's dSYM bundles and a `build.txt` manifest with the source commit, app version/build and symbol UUIDs. It excludes the app archive, provisioning profiles and signing credentials. Download the artifact from that exact workflow run and keep a private copy if support is needed beyond its retention period.
-
-Match the app UUID in a device report to `build.txt` or `xcrun dwarfdump --uuid <app.dSYM>` before symbolicating. Do not substitute symbols from another build or a rebuilt binary unless its UUID matches. Device reports and captured logs stay private; do not attach them to public issues or release artifacts.
-
 ## App icon and TestFlight
 
 - The icon is a single 1024x1024 universal image, `Collie/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png`; Xcode derives every other size. The app's `Info.plist` sets `CFBundleIconName` to `AppIcon` and `project.yml` sets `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`: App Store validation rejects an upload whose icon is only in the asset catalog without `CFBundleIconName`.
 
 The iOS app embeds the watch app, so every iOS build, test and archive also builds for watchOS: both workflows install the watchOS platform on the `xcode-27` runner when it is missing. The watch app has its own copy of the icon, `Collie/CollieWatch/Assets.xcassets/AppIcon.appiconset/AppIcon.png`.
+
+## Debug symbols
+
+Before each TestFlight upload, the workflow retains an `ios-symbols-<version>-<build>-<attempt>` Actions artifact for 90 days. It contains only the archive's dSYM bundles and a `build.txt` manifest with the source commit, app version/build and symbol UUIDs. It excludes the app archive, provisioning profiles and signing credentials. Download the artifact from that exact workflow run and keep a private copy if support is needed beyond its retention period.
+
+Match the app UUID in a device report to `build.txt` or `xcrun dwarfdump --uuid <app.dSYM>` before symbolicating. Do not substitute symbols from another build or a rebuilt binary unless its UUID matches. Device reports and captured logs stay private; do not attach them to public issues or release artifacts.
 
 ## Export compliance
 
