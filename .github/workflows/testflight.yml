@@ -223,6 +223,31 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
 
+      - name: prepare the debug symbols
+        id: symbols
+        run: |
+          symbols="$(mktemp -d "$RUNNER_TEMP/ios-symbols.XXXXXX")"
+          app=".build/Collie.xcarchive/Products/Applications/Collie.app/Info.plist"
+          test -d .build/Collie.xcarchive/dSYMs/Collie.app.dSYM
+          version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app")"
+          build="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$app")"
+          ditto .build/Collie.xcarchive/dSYMs "$symbols/dSYMs"
+          {
+            printf 'source_sha=%s\n' "$(git rev-parse HEAD)"
+            printf 'version=%s\n' "$version"
+            printf 'build=%s\n' "$build"
+            xcrun dwarfdump --uuid "$symbols"/dSYMs/*.dSYM
+          } > "$symbols/build.txt"
+          echo "path=$symbols" >> "$GITHUB_OUTPUT"
+
+      - name: keep the debug symbols
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-symbols-${{ steps.version.outputs.version }}-${{ github.run_number }}-${{ github.run_attempt }}
+          path: ${{ steps.symbols.outputs.path }}
+          if-no-files-found: error
+          retention-days: 90
+
       - name: upload to testflight
         run: |
           xcodebuild -exportArchive -archivePath .build/Collie.xcarchive \
