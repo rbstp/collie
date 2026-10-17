@@ -1,5 +1,7 @@
 # Configuration
 
+This page describes the next matching phone and desktop candidate; user-owned setup is unreleased. Published desktop v0.1.0 still uses tagged nodes. Follow the [v0.1.0 tailnet procedure](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md) until both peers are updated.
+
 ## Where things live
 
 | | macOS | Linux |
@@ -31,7 +33,7 @@ enabled = false                # plain shells from the phone; see Terminals
 [push.relay]                  # publisher app; no APNs key
 ```
 
-- **`owner_user_id`** is the numeric Tailscale user ID of the only person allowed to use this `collied`. Without it, the first phone you confirm at pairing sets the owner. Read the ID from the pairing prompt or `collied peers list`; copying it here keeps the owner pinned even if the paired phones file is deleted.
+- **`owner_user_id`** is the numeric Tailscale user ID of the only person allowed to use this `collied`. It must match collied's actual positive embedded Tailscale user. Without it, that verified self user still binds the gate before first pairing; a phone cannot choose the owner. Read the ID from the pairing prompt or `collied peers list`; copying it here keeps the owner pinned even if the paired phones file is deleted.
 - **`[tasks] agents`** limits which agents New task can start, the first being the default.
 - **`[terminals]`**: see [Terminals](../install/terminals.md).
 - **`[push.relay]` or `[apns]`** (mutually exclusive): see [Push notifications](../install/push.md).

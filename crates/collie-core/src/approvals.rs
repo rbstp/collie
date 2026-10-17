@@ -404,6 +404,7 @@ async fn open(
             machine.port,
             &machine.node_id,
             Some(machine.kind),
+            Some(machine.owner_user_id),
             &machine.key,
             identity,
             true,
@@ -411,12 +412,12 @@ async fn open(
     )
     .await?;
     let session = match opened {
-        Ok((_, hello, _)) if !hello.paired => {
+        Ok((_, hello, _, _)) if !hello.paired => {
             return Err(BackgroundOutcome::Unauthorized {
                 message: SessionError::NotPaired.to_string(),
             });
         }
-        Ok((session, _, _)) => session,
+        Ok((session, _, _, _)) => session,
         Err(e) if e.is_auth() => {
             return Err(BackgroundOutcome::Unauthorized {
                 message: e.to_string(),
@@ -555,6 +556,7 @@ async fn node_up(
                         &machine.host,
                         &machine.node_id,
                         Some(machine.kind),
+                        Some(machine.owner_user_id),
                     ) {
                         Ok(_) => return Ok(node),
                         Err(e) if e.is_violation() => {

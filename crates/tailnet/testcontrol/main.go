@@ -14,6 +14,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
+	"strings"
+	"sync"
 
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/stunserver"
@@ -27,6 +30,10 @@ func main() {
 	authKey := flag.String("authkey", "", "auth key every node must present")
 	offline := flag.Bool("offline", false, "report every peer offline, as a stale netmap would")
 	sameUser := flag.Bool("same-user", false, "own every node by one user")
+	linuxNode := flag.String("linux-node", "", "report this test node as Linux")
+	macNode := flag.String("mac-node", "", "report this test node as macOS")
+	denyPeers := flag.Bool("deny-peers", false, "deny all peer traffic after two nodes register")
+	nodeUser := flag.String("node-user", "", "assign hostname=userID for an ownership fixture")
 	vmDir := flag.String("vm-dir", "", "private VM test marker directory; use fixed loopback ports")
 	stunOnly := flag.Bool("stun-only", false, "serve only guest-local VM STUN")
 	flag.Parse()
@@ -101,6 +108,52 @@ func main() {
 		// Non-nil so a node registering with RequestTags gets those tags.
 		TagOwners: map[string][]string{},
 		Logf:      logger.Discard,
+	}
+	var userHostname string
+	var userID int64
+	if *nodeUser != "" {
+		hostname, value, found := strings.Cut(*nodeUser, "=")
+		user, err := strconv.ParseInt(value, 10, 64)
+		if !found || hostname == "" || err != nil || user <= 0 {
+			log.Fatal("-node-user requires hostname=positiveUserID")
+		}
+		userHostname, userID = hostname, user
+	}
+	control.HoldMapRequest = func(request *tailcfg.MapRequest) func() {
+		if info := request.Hostinfo; info != nil {
+			if *linuxNode != "" && info.Hostname == *linuxNode {
+				info.OS = "linux"
+			}
+			if *macNode != "" && info.Hostname == *macNode {
+				info.OS = "macOS"
+			}
+		}
+		if userHostname != "" {
+			node := control.Node(request.NodeKey)
+			if node != nil && node.Hostinfo.Hostname() == userHostname && node.User != tailcfg.UserID(userID) {
+				node.User = tailcfg.UserID(userID)
+				control.UpdateNode(node)
+			}
+		}
+		return nil
+	}
+	var denied sync.Once
+	control.ModifyFirstMapResponse = func(response *tailcfg.MapResponse, request *tailcfg.MapRequest) {
+		if *denyPeers && control.NumNodes() >= 2 {
+			denied.Do(func() {
+				for _, node := range control.AllNodes() {
+					update, err := control.MapResponse(&tailcfg.MapRequest{NodeKey: node.Key})
+					if err != nil || update == nil {
+						log.Fatal("cannot construct deny-policy fixture")
+					}
+					update.PacketFilter = nil
+					update.PacketFilters = map[string][]tailcfg.FilterRule{"base": {}}
+					control.AddRawMapResponse(node.Key, update)
+				}
+			})
+			response.PacketFilter = nil
+			response.PacketFilters = map[string][]tailcfg.FilterRule{"base": {}}
+		}
 	}
 	control.HTTPTestServer = httptest.NewUnstartedServer(control)
 	if *vmDir != "" {

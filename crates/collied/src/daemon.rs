@@ -11,11 +11,6 @@ use crate::control;
 use crate::server::{self, ServerConfig};
 use crate::{approvals, herdr, push, terminal};
 
-/// The tag this machine's node advertises and must carry before it serves.
-#[cfg(target_os = "macos")]
-pub const NODE_TAG: &str = "tag:collie-mac";
-#[cfg(target_os = "linux")]
-pub const NODE_TAG: &str = "tag:collie-linux";
 const POLL: Duration = Duration::from_millis(250);
 const LOGIN_ERROR: &str = "You are logged out. The last login error was: ";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -49,7 +44,7 @@ fn mac_node(
         hostname: config.tailnet.hostname(),
         auth_key,
         control_url,
-        advertise_tags: vec![NODE_TAG.to_owned()],
+        advertise_tags: Vec::new(),
         log_to_stderr: false,
     })?;
     Ok((node, lock, custom_control))
@@ -78,7 +73,6 @@ pub async fn login(
     };
     node.start()?;
     let deadline = Instant::now() + LOGIN_TIMEOUT;
-    let port = config.tailnet.port;
     let mut shown_url = String::new();
     let mut shown_error = String::new();
     let mut warned_approval = false;
@@ -87,7 +81,8 @@ pub async fn login(
         match st.backend_state {
             BackendState::Running if st.self_node.is_some() => {
                 print_identity(&st);
-                return check_tag(&st, data_dir, port);
+                return check_identity(&node, &st, data_dir, config.tailnet.owner_user_id)
+                    .map(|_| ());
             }
             BackendState::NeedsMachineAuth if !warned_approval => {
                 println!("This machine needs approval by a tailnet admin; waiting.");
@@ -118,44 +113,38 @@ pub async fn login(
             && e != shown_error
         {
             println!("Tailscale login error: {e}");
-            anyhow::ensure!(
-                !tag_error(e),
-                "your user may not own {NODE_TAG}. {}",
-                policy_help(port)
-            );
             shown_error = e.to_owned();
         }
         anyhow::ensure!(
             Instant::now() < deadline,
-            "login did not complete within 10 minutes (state {:?}). If you signed in, check that your user is a tag owner of {NODE_TAG}. {}",
-            st.backend_state,
-            policy_help(port)
+            "login did not complete within 10 minutes (state {:?}); sign in to Collie with the same personal Tailscale account on this machine and the phone",
+            st.backend_state
         );
         tokio::time::sleep(POLL).await;
     }
 }
 
-/// A node without the tag is user-owned: the phone refuses it, and the policy grant on
-/// port 8457 does not cover it. Logging in again does not change the tags of a node that
-/// is already registered, so the way out is a new node.
-fn check_tag(st: &Status, data_dir: &Path, port: u16) -> anyhow::Result<()> {
-    let tags = st
-        .self_node
-        .as_ref()
-        .and_then(|n| n.tags.clone())
-        .unwrap_or_default();
-    anyhow::ensure!(
-        tags.iter().any(|t| t == NODE_TAG),
-        "this node is registered without {NODE_TAG} (tags: {}). Remove it in the Tailscale admin console (Machines), delete {}, make sure your user is a tag owner of {NODE_TAG}, then run collied login; phones must pair again. {}",
-        if tags.is_empty() {
-            "none".to_owned()
+fn check_identity(
+    node: &Node,
+    status: &Status,
+    data_dir: &Path,
+    configured_owner: Option<i64>,
+) -> anyhow::Result<i64> {
+    let owner = node.owned_user(status).with_context(|| {
+        if status.self_node.as_ref().is_some_and(|me| me.tags.as_ref().is_some_and(|tags| !tags.is_empty())) {
+            format!(
+                "This Collie node is tagged and is not converted automatically: stop collied, remove only Collie's node in the Tailscale admin console, delete {}, then run collied setup and pair phones again. Leave the system Tailscale VPN and its state unchanged",
+                data_dir.join(config::TSNET_DIR).display()
+            )
         } else {
-            tags.join(", ")
-        },
-        data_dir.join(config::TSNET_DIR).display(),
-        policy_help(port)
+            "Could not verify Collie's embedded Tailscale ownership. Check its sign-in and retry collied setup with the same personal account; do not delete node state for a transient status or whois failure".to_owned()
+        }
+    })?;
+    anyhow::ensure!(
+        configured_owner.is_none_or(|configured| configured == owner),
+        "owner_user_id in collied.toml differs from Collie's embedded Tailscale user; not serving"
     );
-    Ok(())
+    Ok(owner)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -195,21 +184,12 @@ fn login_error(health: &[String]) -> Option<&str> {
     health.iter().find_map(|h| h.strip_prefix(LOGIN_ERROR))
 }
 
-/// Tailscale's text: "requested tags [tag:collie-mac] are invalid or not permitted".
-fn tag_error(e: &str) -> bool {
-    e.contains(NODE_TAG) || e.to_ascii_lowercase().contains("tags")
-}
-
-/// The tailnet policy entries this machine needs.
 pub fn policy_snippet(port: u16) -> String {
     format!(
-        r#"  "tagOwners": {{
-    "{NODE_TAG}": ["you@example.com"],
-  }},
-  "grants": [
+        r#"  "grants": [
     {{
-      "src": ["you@example.com"],
-      "dst": ["{NODE_TAG}"],
+      "src": ["autogroup:member"],
+      "dst": ["autogroup:self"],
       "ip": ["tcp:{port}"],
     }},
   ],"#
@@ -218,7 +198,7 @@ pub fn policy_snippet(port: u16) -> String {
 
 pub fn policy_help(port: u16) -> String {
     format!(
-        "The tailnet policy needs these entries (Tailscale admin console, Access controls), with your login instead of you@example.com; the full policy, with tests, is in docs/tailnet.md:\n\n{}\n",
+        "Sign in inside Collie on the phone and this machine with the same personal Tailscale account. No system VPN profile or standalone Tailscale app is needed. Existing policies that allow your own devices to connect need no changes. A restrictive policy may need an administrator to allow TCP {port} between your user-owned devices; merge these entries into the existing policy, never replace it. See docs/tailnet.md:\n\n{}\n",
         policy_snippet(port)
     )
 }
@@ -254,7 +234,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
     loop {
         let st = node.status()?;
         if st.backend_state == BackendState::Running && st.self_node.is_some() {
-            check_tag(&st, data_dir, config.tailnet.port)?;
+            check_identity(&node, &st, data_dir, config.tailnet.owner_user_id)?;
             break;
         }
         anyhow::ensure!(
@@ -374,8 +354,7 @@ mod tests {
         for line in snippet.lines().map(str::trim).filter(|l| l.len() > 3) {
             assert!(docs.contains(line), "docs/tailnet.md lacks {line}");
         }
-        assert!(snippet.contains(&format!("\"{NODE_TAG}\": [\"you@example.com\"],")));
-        assert!(snippet.contains(&format!("\"dst\": [\"{NODE_TAG}\"],")));
+        assert!(snippet.contains("autogroup:self"));
     }
 
     #[test]
@@ -389,11 +368,5 @@ mod tests {
             ])),
             Some("requested tags [tag:collie-mac] are invalid or not permitted")
         );
-        assert!(tag_error(&format!(
-            "requested tags [{NODE_TAG}] are invalid or not permitted"
-        )));
-        assert!(!tag_error(
-            "coordination server outage, try again at a later stage"
-        ));
     }
 }

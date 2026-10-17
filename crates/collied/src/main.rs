@@ -29,7 +29,7 @@ enum Command {
         #[arg(long, help = "Use your own APNs key for a self-built app")]
         direct_apns: bool,
     },
-    /// Join the tailnet as tag:collie-mac on macOS, tag:collie-linux on Linux
+    /// Sign Collie into a personal tailnet without changing the system VPN
     /// (interactive, or COLLIE_TS_AUTHKEY).
     Login,
     /// Run the daemon.

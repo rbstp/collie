@@ -14,6 +14,7 @@ Record the exact build, source SHA, deployment version, operator and evidence li
 | Production trust | Current physical-device and TestFlight App Attest under the publisher App ID; reject development/simulator proofs; actual profile/signature entitlements and retained replay/revocation state |
 | Push privacy and delivery | Every alert, background clear and Live Activity update/end; safe extension/widget failure; locked/pre-first-unlock behavior; real production APNs receipt on the submitted build |
 | Compatibility and recovery | Both supported app/daemon upgrade orders, route renewal/revocation and 1027/429/D1 outage behavior; direct sessions remain usable |
+| Personal embedded connectivity ([#389](https://github.com/rbstp/collie/issues/389)) | Independently reviewed same-user pairing/reconnect/background ownership gates; real iPhone and Mac use without an OS VPN profile or standalone Tailscale client, including a Mac with its separate corporate VPN active; expiry/sign-in recovery and revocation. Static/mocked/Simulator checks do not satisfy physical coexistence acceptance |
 | Review access | Release sample on simulator and signed iPhone, reset/exit without real effects, real-hardware video; App Review decision about the sample and Tailscale login |
 | Desktop installation | Published signed/notarized macOS downloads and Linux packages with tested requirements/install/update instructions; verify the exact linked assets |
 | Disclosures and operation | Published policy matches actual deployed retention/logging; App Privacy and privacy-manifest review; tested incident and credential rotation procedures |
@@ -40,7 +41,7 @@ Description:
 
 > Follow coding agents on your own Mac or Linux machine from iPhone. Read conversations and terminal output, send prompts, review Git changes and respond to pending approvals. Keep track of work with notifications, Live Activities and Apple Watch.
 >
-> Collie connects to your machines through your Tailscale account. Real use requires Tailscale, its documented tailnet policy, and herdr plus collied on a supported machine. Explore the built-in sample workspace without an account or computer. Sample actions are simulated.
+> Collie connects to your machines through your Tailscale account. Real use requires signing in inside Collie with the same personal Tailscale account on both devices, plus herdr and collied on a supported machine. No OS VPN profile or standalone Tailscale app is required. Compatible personal tailnet policies need no edits; restrictive administrator policies may still need a TCP 8457 grant. Explore the built-in sample workspace without an account or computer. Sample actions are simulated.
 >
 > Commands, conversations and files travel between your devices over an authenticated encrypted connection. Notification content is encrypted on your machine and decrypted on your phone. The push service handles delivery metadata as described in the privacy policy.
 
@@ -58,7 +59,7 @@ The following is a draft for the final validated binary, not an instruction to s
 >
 > Outside the sample, confirmed paired-machine controls can send prompts, terminal input and files, create or resume agent tasks and worktrees, clone repositories, inspect Git changes and pull requests, and approve or deny pending actions. These actions operate on the paired computer as its user. The configured coding agents contact their own AI services; Collie does not supply an AI account.
 >
-> Real use requires the user's Tailscale account, tailnet policy, herdr and collied. Desktop software and installation requirements are documented at https://collie.rbstp.dev/ . The macOS menu app and Linux Omarchy widget are desktop companions. Collie does not sell accounts or AI access. Agents use the services and credentials configured on the user's machine.
+> Real use signs Collie's independent embedded nodes into the same personal Tailscale account and requires herdr and collied. It does not require an OS VPN profile or change a Mac's separate corporate Tailscale account. Restrictive tailnet policies may need an administrator-provided TCP 8457 grant. Desktop software and installation requirements are documented at https://collie.rbstp.dev/ . The macOS menu app and Linux Omarchy widget are desktop companions. Collie does not sell accounts or AI access. Agents use the services and credentials configured on the user's machine.
 >
 > The sample demonstrates interface workflows. It does not reproduce genuine device attestation, pairing, background pushes or Live Activities. The submission's attached real-device video and validation record cover those workflows. Approval decisions always use the authenticated device connection; a push does not authorize a command.
 

@@ -1,5 +1,7 @@
 # Troubleshooting
 
+This page describes the next matching phone and desktop candidate; user-owned setup is unreleased. Published desktop v0.1.0 still uses tagged nodes. Follow the [v0.1.0 tailnet procedure](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md) until both peers are updated.
+
 Start with `collied doctor` on the machine. Each line is `ok`, `warn` or `fail`, with the name of the check. Then find your symptom below.
 
 ```sh
@@ -48,7 +50,7 @@ herdr reads Codex's status from its screen. If a Codex agent stays `unknown`, or
 
 - **The window closed**: a pairing window lasts 120 seconds and the first attempt closes it, right or wrong. Run `collied pair` again.
 - **No answer on the machine**: without a `y` within 60 seconds, the answer is no.
-- **Another user**: `collied` only accepts the owner (`owner_user_id`, or the user of the first confirmed phone). Sign in to Tailscale in the app with the owner's account.
+- **Another user**: `collied` only accepts the owner (its verified embedded Tailscale user, also checked against configured and stored owner pins). Sign in to Tailscale in the app with the owner's account.
 - **A tagged or shared-in phone**: the phone's node must be untagged and belong to your tailnet. Do not sign the app in with a tagged auth key.
 - **The policy blocks the port**: check the `reach` line and the [tailnet policy](install/tailnet-policy.md).
 

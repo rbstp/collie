@@ -1,0 +1,14 @@
+--- tsnet.orig.go
++++ tsnet.go
+@@ -985,6 +985,11 @@
+ 	prefs.ControlURL = s.getControlURL()
+ 	prefs.RunWebClient = s.RunWebClient
+ 	prefs.AdvertiseTags = s.AdvertiseTags
++	if s.AdvertiseTags == nil {
++		// collie: rejecting an old tagged node must not first clear its tag
++		// requests and force reauthentication before ownership is checked.
++		prefs.AdvertiseTags = lb.Prefs().AdvertiseTags().AsSlice()
++	}
+ 	authKey, err := s.resolveAuthKey()
+ 	if err != nil {
+ 		return fmt.Errorf("error resolving auth key: %w", err)

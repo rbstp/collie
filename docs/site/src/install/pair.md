@@ -1,5 +1,7 @@
 # Pair a phone
 
+This page describes the next matching phone and desktop candidate; user-owned setup is unreleased. Published desktop v0.1.0 still uses tagged nodes. Follow the [v0.1.0 tailnet procedure](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md) until both peers are updated.
+
 Pairing records the phone's keys on the machine and the machine's keys on the phone. Each machine is paired on its own.
 
 1. On the machine, start a pairing window. Use one of:
@@ -12,7 +14,7 @@ Pairing records the phone's keys on the machine and the machine's keys on the ph
 The window stays open for 120 seconds, and the first attempt closes it, right or wrong. If you do not answer within 60 seconds, the answer is no.
 
 > [!WARNING]
-> Until the first pairing, `collied` has no owner yet. Check that the login name on the confirmation prompt is yours. The first phone you confirm sets the owner, unless `owner_user_id` is set in `collied.toml`.
+> The owner is bound to collied's verified embedded Tailscale user before the first pairing. Sign in inside Collie with that same personal account and check that the confirmation prompt shows your login. The pairing code and local confirmation are still required.
 
 ## Pair again
 

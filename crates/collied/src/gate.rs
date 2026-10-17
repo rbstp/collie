@@ -10,9 +10,8 @@ pub enum Decision {
     Reject(&'static str),
 }
 
-/// Runs before any byte of the connection is read. `owner` is the configured owner,
-/// falling back to the one recorded at first pairing. A pairing-only session is bound to
-/// the window that admitted it.
+/// The owner is bound to this daemon's embedded node before listening. A pairing-only
+/// session is bound to the window that admitted it.
 pub fn decide(
     node: &WhoIsNode,
     owner: Option<i64>,
@@ -25,9 +24,15 @@ pub fn decide(
     if node.sharer != 0 {
         return Decision::Reject("shared-in node");
     }
-    if let Some(owner) = owner.or(store.owner_user_id)
-        && !node.is_owned_by(owner)
+    let Some(owner) = owner.filter(|owner| *owner > 0) else {
+        return Decision::Reject("no verified owner");
+    };
+    if store.owner_user_id.is_some_and(|stored| stored != owner)
+        || store.peers.iter().any(|peer| peer.user_id != owner)
     {
+        return Decision::Reject("stored owner conflict");
+    }
+    if !node.is_owned_by(owner) {
         return Decision::Reject("not the owner");
     }
     // A phone paired before mutual TLS has no key to pin: it pairs again, through a window.
@@ -94,7 +99,7 @@ mod tests {
 
     #[test]
     fn paired_owner_gets_full_session() {
-        let d = decide(&node("nPHONE", 7, 0, None), None, &store(), None);
+        let d = decide(&node("nPHONE", 7, 0, None), Some(7), &store(), None);
         assert_eq!(
             d,
             Decision::Full {
@@ -133,7 +138,7 @@ mod tests {
     fn other_users_are_rejected_once_owner_is_known() {
         let stranger = node("nOTHER", 8, 0, None);
         assert_eq!(
-            decide(&stranger, None, &store(), Some(1)),
+            decide(&stranger, Some(7), &store(), Some(1)),
             Decision::Reject("not the owner")
         );
         assert_eq!(
@@ -142,7 +147,7 @@ mod tests {
         );
         assert_eq!(
             decide(&node("nPHONE", 8, 0, None), Some(8), &store(), Some(1)),
-            Decision::Reject("paired node changed user")
+            Decision::Reject("stored owner conflict")
         );
     }
 
@@ -150,11 +155,11 @@ mod tests {
     fn a_phone_paired_before_mutual_tls_pairs_again() {
         let old = node("nOLD", 7, 0, None);
         assert_eq!(
-            decide(&old, None, &store(), None),
+            decide(&old, Some(7), &store(), None),
             Decision::Reject("not paired")
         );
         assert_eq!(
-            decide(&old, None, &store(), Some(2)),
+            decide(&old, Some(7), &store(), Some(2)),
             Decision::PairingOnly { window: 2 }
         );
     }
@@ -163,21 +168,53 @@ mod tests {
     fn unpaired_needs_an_open_window() {
         let fresh = node("nNEW", 7, 0, None);
         assert_eq!(
-            decide(&fresh, None, &store(), None),
+            decide(&fresh, Some(7), &store(), None),
             Decision::Reject("not paired")
         );
         assert_eq!(
-            decide(&fresh, None, &store(), Some(3)),
+            decide(&fresh, Some(7), &store(), Some(3)),
             Decision::PairingOnly { window: 3 }
         );
         let first = node("nFIRST", 42, 0, None);
         assert_eq!(
-            decide(&first, None, &Store::default(), Some(4)),
-            Decision::PairingOnly { window: 4 }
+            decide(&first, Some(7), &Store::default(), Some(4)),
+            Decision::Reject("not the owner")
         );
         assert_eq!(
             decide(&first, None, &Store::default(), None),
-            Decision::Reject("not paired")
+            Decision::Reject("no verified owner")
+        );
+    }
+    #[test]
+    fn missing_zero_and_conflicting_owner_fail_closed_before_first_pairing() {
+        for owner in [None, Some(0), Some(-1)] {
+            assert_eq!(
+                decide(
+                    &node("nFIRST", 7, 0, None),
+                    owner,
+                    &Store::default(),
+                    Some(1)
+                ),
+                Decision::Reject("no verified owner")
+            );
+        }
+        assert_eq!(
+            decide(
+                &node("nFIRST", 7, 0, None),
+                Some(7),
+                &Store {
+                    owner_user_id: Some(8),
+                    peers: vec![]
+                },
+                Some(1)
+            ),
+            Decision::Reject("stored owner conflict")
+        );
+        let mut foreign = store();
+        foreign.peers[0].user_id = 8;
+        assert_eq!(
+            decide(&node("nPHONE", 7, 0, None), Some(7), &foreign, Some(1)),
+            Decision::Reject("stored owner conflict")
         );
     }
 }

@@ -30,8 +30,6 @@ pub const KNOBS: [(&str, &str); 2] = [
 pub const PORT: u16 = protocol::DEFAULT_PORT;
 pub const WATCHDOG: Duration = Duration::from_secs(240);
 pub const LABEL: &str = "E2E iPhone";
-// The tag collie-core's pin requires of the Mac node, whatever OS the test runs on.
-pub const PHONE_PINNED_TAG: &str = "tag:collie-mac";
 pub const PROBE: &str = "E2E probe";
 pub const SNAPSHOT: &str = include_str!("../../../collied/tests/fixtures/session.snapshot.json");
 
@@ -152,9 +150,23 @@ impl Net {
     }
 
     pub fn with_key(root: &Path, key: String) -> Self {
-        let control = TestControl::start(&key, root);
+        Self::with_control_args(
+            root,
+            key,
+            &[
+                "-same-user",
+                "-mac-node",
+                "collie-e2e-mac",
+                "-linux-node",
+                "collie-e2e-linux",
+            ],
+        )
+    }
+
+    pub fn with_control_args(root: &Path, key: String, args: &[&str]) -> Self {
+        let control = TestControl::start(&key, root, args);
         let url = control.url.clone();
-        let mac = start_node(root, "collie-e2e-mac", &key, &url, &[PHONE_PINNED_TAG]);
+        let mac = start_node(root, "collie-e2e-mac", &key, &url, &[]);
         Self {
             _control: control,
             key,
@@ -294,7 +306,7 @@ pub struct TestControl {
 }
 
 impl TestControl {
-    fn start(auth_key: &str, dir: &Path) -> Self {
+    fn start(auth_key: &str, dir: &Path, args: &[&str]) -> Self {
         let bin = dir.join("testcontrol");
         let status = Command::new(std::env::var("GO").unwrap_or_else(|_| "go".into()))
             .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../tailnet/testcontrol"))
@@ -307,10 +319,10 @@ impl TestControl {
             .expect("go build testcontrol");
         assert!(status.success(), "go build testcontrol: {status}");
         // The helper exits when its stdin closes, so it dies with this process. One user
-        // owns every node, as on a personal tailnet: the phones and the Mac's tag owner
-        // share a user ID, so the gate is exercised on pairing state and tags.
+        // owns every embedded node, as on a personal tailnet.
         let mut child = Command::new(&bin)
-            .args(["-authkey", auth_key, "-same-user"])
+            .args(["-authkey", auth_key])
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

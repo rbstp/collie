@@ -463,7 +463,8 @@ X11Forwarding no
         raise RuntimeError('unexpected isolated guest IP or host key')
     known = logdir / 'known_hosts'
     private(known, f'[{address}]:2222 {hostkey}\n')
-    ssh = ['/usr/bin/ssh', '-F', '/dev/null', '-i', str(key), '-p', '2222', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=yes', '-o', f'UserKnownHostsFile={known}', '-o', 'ForwardAgent=no', '-o', 'ExitOnForwardFailure=yes', '-o', 'GatewayPorts=no']
+    proxy = shlex.join(['/usr/bin/env', f'TART_HOME={ROOT / "tart"}', 'TART_NO_AUTO_PRUNE=1', str(TART), 'exec', '-i', GUEST, '/usr/bin/nc', '127.0.0.1', '2222'])
+    ssh = ['/usr/bin/ssh', '-F', '/dev/null', '-i', str(key), '-p', '2222', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=yes', '-o', f'UserKnownHostsFile={known}', '-o', 'ForwardAgent=no', '-o', 'ExitOnForwardFailure=yes', '-o', 'GatewayPorts=no', '-o', f'ProxyCommand={proxy}']
     remote = [*ssh, f'admin@{address}']
     def ssh_ready():
         result = run([*remote, 'true'], check=False, timeout=10)

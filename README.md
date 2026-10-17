@@ -15,7 +15,7 @@ Documentation: <https://collie.rbstp.dev>
 
 - An Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.5
 - An iPhone on iOS 26 or later, and optionally an Apple Watch on watchOS 26 or later
-- A Tailscale account whose policy file you can edit
+- A personal Tailscale account used inside Collie on both devices; restrictive policies may require an administrator-provided TCP 8457 grant (next matching candidate; released v0.1.0 still needs the [tagged setup](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md))
 - An Apple Developer account with a Developer ID Application certificate, and an APNs key for direct push with a self-built app; publisher relay mode needs no APNs key
 - To build: Rust, Go, [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st); on macOS also Xcode 27, [XcodeGen](https://github.com/yonaskolb/XcodeGen) and `jq`; on Linux a C compiler and libclang
 

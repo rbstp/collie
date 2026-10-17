@@ -87,7 +87,7 @@ pub async fn run(host: &mut impl Host) -> anyhow::Result<bool> {
     }
     if status.user_peers == Some(0) {
         host.say(&format!(
-            "\nNo device of yours can reach this machine yet. If your phone is signed in to Tailscale, the policy lacks the grant. {}",
+            "\nNo other user-owned device is visible yet. Sign in inside Collie on your phone with the same account; a restrictive policy can also hide peers. {}",
             crate::daemon::policy_help(status.port)
         ));
     }

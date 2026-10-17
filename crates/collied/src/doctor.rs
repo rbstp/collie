@@ -546,27 +546,17 @@ async fn check_daemon(r: &mut Report, data_dir: &Path) -> Option<u64> {
     } else {
         Status::Fail
     };
-    let tag = crate::daemon::NODE_TAG;
     match info.tags.as_deref() {
-        None => r.line(
-            Status::Warn,
-            "tag",
-            "not reported: the node status failed, or the daemon predates this check (restart it)",
+        None => r.line(Status::Warn, "ownership", "node status unavailable"),
+        Some([]) => r.line(
+            Status::Ok,
+            "ownership",
+            "Collie's embedded node is user-owned",
         ),
-        Some(tags) if tags.iter().any(|t| t == tag) => {
-            r.line(Status::Ok, "tag", format!("node tagged {tag}"))
-        }
-        Some(tags) => r.line(
+        Some(_) => r.line(
             Status::Fail,
-            "tag",
-            format!(
-                "node not tagged {tag} (tags: {}); see collied login",
-                if tags.is_empty() {
-                    "none".to_owned()
-                } else {
-                    tags.join(", ")
-                }
-            ),
+            "ownership",
+            "Collie's node is tagged; see collied login",
         ),
     }
     r.line(
@@ -588,14 +578,14 @@ async fn check_daemon(r: &mut Report, data_dir: &Path) -> Option<u64> {
             Status::Warn,
             "reach",
             format!(
-                "no device of yours can reach this node: the policy lacks the grant to {tag} on TCP {}, or your phone is not signed in to Tailscale yet (collied setup prints the policy entries)",
+                "no other device of yours is visible: sign in inside Collie on the phone with the same account; a restrictive policy may need TCP {} between your user-owned devices",
                 info.port
             ),
         ),
         Some(n) => r.line(
             Status::Ok,
             "reach",
-            format!("{n} untagged device(s) can reach this node"),
+            format!("{n} same-user device(s) visible in the netmap"),
         ),
         None => {}
     }

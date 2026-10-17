@@ -145,6 +145,7 @@ async fn scenario(
     let mac_self = mac_st.self_node.unwrap();
     let phone_self = phone_st.self_node.unwrap();
     let intruder_self = intruder_st.self_node.unwrap();
+    assert_eq!(mac_self.user_id, phone_self.user_id);
     assert_ne!(phone_self.user_id, intruder_self.user_id);
     let mac_ip = mac_self
         .tailscale_ips
@@ -1876,7 +1877,7 @@ impl TestControl {
         assert!(status.success(), "go build testcontrol: {status}");
         // The helper exits when its stdin closes, so it dies with this process.
         let mut child = Command::new(&bin)
-            .args(["-authkey", auth_key])
+            .args(["-authkey", auth_key, "-node-user", "it-mac=2"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

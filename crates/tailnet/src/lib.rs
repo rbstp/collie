@@ -26,6 +26,8 @@ pub use listeners::{kernel_tcp_listeners, udp_listeners};
 pub enum Error {
     #[error("tailscale: {0}")]
     Tailscale(String),
+    #[error("{0}")]
+    Identity(&'static str),
     #[error("tailscale call failed with errno {0}")]
     Errno(c_int),
     #[error("state dir {0} must be a directory with mode 0700 owned by the current user")]
@@ -139,6 +141,34 @@ impl Node {
         let json = self
             .json_call(|out| unsafe { sys::tailscale_whois_json(self.sd(), addr.as_ptr(), out) })?;
         Ok(serde_json::from_str(&json)?)
+    }
+
+    pub fn owned_user(&self, status: &Status) -> Result<i64> {
+        let me = status
+            .self_node
+            .as_ref()
+            .filter(|me| {
+                status.backend_state == BackendState::Running
+                    && me.user_id > 0
+                    && !me.stable_id.is_empty()
+                    && me.tags.as_ref().is_none_or(Vec::is_empty)
+            })
+            .ok_or(Error::Identity("Collie's embedded Tailscale node must be signed in as an untagged user-owned device"))?;
+        let ip = me
+            .tailscale_ips
+            .iter()
+            .flatten()
+            .next()
+            .ok_or(Error::Identity(
+                "Collie's embedded Tailscale node has no address",
+            ))?;
+        let who = self.whois(&ip.to_string())?;
+        if who.node.stable_id != me.stable_id || !who.node.is_owned_by(me.user_id) {
+            return Err(Error::Identity(
+                "Collie's embedded Tailscale self identity does not match its owner",
+            ));
+        }
+        Ok(me.user_id)
     }
 
     /// Blocking; call from a blocking context.
@@ -383,6 +413,8 @@ pub struct PeerStatus {
     pub dns_name: String,
     #[serde(rename = "UserID", default)]
     pub user_id: i64,
+    #[serde(rename = "OS", default)]
+    pub os: String,
     #[serde(rename = "TailscaleIPs", default)]
     pub tailscale_ips: Option<Vec<IpAddr>>,
     #[serde(default)]
@@ -426,7 +458,10 @@ pub struct WhoIsNode {
 impl WhoIsNode {
     /// Owned by `owner` directly: not tagged (tags replace user ownership) and not shared in.
     pub fn is_owned_by(&self, owner: i64) -> bool {
-        self.tags.as_ref().is_none_or(Vec::is_empty) && self.sharer == 0 && self.user == owner
+        owner > 0
+            && self.tags.as_ref().is_none_or(Vec::is_empty)
+            && self.sharer == 0
+            && self.user == owner
     }
 }
 
@@ -467,6 +502,8 @@ mod tests {
         assert!(!node(8, 0, None).is_owned_by(7));
         assert!(!node(7, 9, None).is_owned_by(7));
         assert!(!node(7, 0, Some(vec!["tag:collie-phone".into()])).is_owned_by(7));
+        assert!(!node(0, 0, None).is_owned_by(0));
+        assert!(!node(-1, 0, None).is_owned_by(-1));
     }
 
     #[test]

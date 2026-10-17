@@ -238,6 +238,20 @@ impl State {
         }
     }
 
+    fn peer_identity(&self, addr: &str) -> anyhow::Result<WhoIs> {
+        let status = self.node.status()?;
+        let owner = self.node.owned_user(&status)?;
+        anyhow::ensure!(
+            self.cfg.owner_user_id == Some(owner)
+                && status
+                    .self_node
+                    .as_ref()
+                    .is_some_and(|me| me.stable_id == self.machine.node_id),
+            "Collie's embedded Tailscale identity changed; restart and sign in again"
+        );
+        Ok(self.node.whois(addr)?)
+    }
+
     fn peers_path(&self) -> PathBuf {
         self.cfg.data_dir.join(config::PEERS_FILE)
     }
@@ -340,7 +354,10 @@ impl State {
                     Some(st.peer.map_or(0, |peers| {
                         peers
                             .values()
-                            .filter(|p| p.tags.as_ref().is_none_or(Vec::is_empty))
+                            .filter(|p| {
+                                p.user_id == self.cfg.owner_user_id.unwrap_or(0)
+                                    && p.tags.as_ref().is_none_or(Vec::is_empty)
+                            })
                             .count()
                     })),
                 ),
@@ -493,7 +510,7 @@ pub async fn start(
 /// tailnet one.
 pub async fn start_with(
     node: Node,
-    cfg: ServerConfig,
+    mut cfg: ServerConfig,
     herdr_socket: PathBuf,
     tasks: &config::TasksConfig,
     apns: Option<Arc<dyn push::Sender>>,
@@ -516,6 +533,7 @@ pub async fn start_with(
         "tailnet node is {:?}, not Running",
         st.backend_state
     );
+    let owner = node.owned_user(&st)?;
     let me = st
         .self_node
         .ok_or_else(|| anyhow::anyhow!("tailnet status has no self node"))?;
@@ -526,12 +544,14 @@ pub async fn start_with(
     );
     let peers_lock = peers::lock(&cfg.data_dir.join(config::PEERS_LOCK))?;
     let store = peers::load(&cfg.data_dir.join(config::PEERS_FILE))?;
-    if let (Some(configured), Some(stored)) = (cfg.owner_user_id, store.owner_user_id) {
-        anyhow::ensure!(
-            configured == stored,
-            "owner_user_id {configured} in the config differs from {stored} in peers.json"
-        );
-    }
+    anyhow::ensure!(
+        cfg.owner_user_id
+            .is_none_or(|configured| configured == owner)
+            && store.owner_user_id.is_none_or(|stored| stored == owner)
+            && store.peers.iter().all(|peer| peer.user_id == owner),
+        "Collie's embedded Tailscale user differs from the configured or paired owner; not serving, reset and pair again explicitly"
+    );
+    cfg.owner_user_id = Some(owner);
     let peers = Arc::new(Mutex::new(store));
     let audit = Arc::new(Audit::open(&cfg.data_dir.join(config::AUDIT_FILE))?);
     let push = {
@@ -980,12 +1000,12 @@ async fn connection(
     // still count against MAX_CONNECTIONS.
     let permit = Arc::new(permit);
     let who = {
-        let node = state.node.clone();
+        let state = state.clone();
         let addr = addr_text.clone();
         let held = permit.clone();
         let lookup = tokio::task::spawn_blocking(move || {
             let _held = held;
-            node.whois(&addr)
+            state.peer_identity(&addr)
         });
         tokio::time::timeout(WHOIS_TIMEOUT, lookup).await
     };
@@ -1030,6 +1050,26 @@ async fn connection(
         }
         Err(_) => {
             state.audit_reject(addr, &name, "tls handshake timed out");
+            return;
+        }
+    };
+    let refreshed = {
+        let state = state.clone();
+        let addr = addr_text.clone();
+        let held = permit.clone();
+        tokio::time::timeout(
+            WHOIS_TIMEOUT,
+            tokio::task::spawn_blocking(move || {
+                let _held = held;
+                state.peer_identity(&addr)
+            }),
+        )
+        .await
+    };
+    let who = match refreshed {
+        Ok(Ok(Ok(refreshed))) if refreshed.node.stable_id == who.node.stable_id => refreshed,
+        _ => {
+            state.audit_reject(addr, &name, "tailnet identity changed during the handshake");
             return;
         }
     };
