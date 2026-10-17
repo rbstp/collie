@@ -18,6 +18,7 @@ Guidance for coding agents working in this repository. User-facing documentation
 - Never use em dashes anywhere: code, comments, docs, commit messages, pull requests and issues.
 - No migration code. There is a single user; a format change means re-pairing, not migrating.
 - UI: no sheep or flock branding in UI text. Follow the existing SwiftUI and Liquid Glass patterns (`docs/reviews/liquid-glass.md`).
+- Keep CollieBar (`Mac/`) and CollieTray (`Linux/`) behavior aligned: when changing either desktop bar, apply the equivalent change to both where applicable, including their documentation and tests.
 
 ## Build and test
 
