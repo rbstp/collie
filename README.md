@@ -19,6 +19,8 @@ Documentation: <https://collie.rbstp.dev>
 - An Apple Developer account with a Developer ID Application certificate, and an APNs key for direct push with a self-built app; publisher relay mode needs no APNs key
 - To build: Rust, Go, [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st); on macOS also Xcode 27, [XcodeGen](https://github.com/yonaskolb/XcodeGen) and `jq`; on Linux a C compiler and libclang
 
+Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agent integrations, but those have not been validated with Collie. Linux testing is limited to Arch Linux with Omarchy; other distributions have not been validated.
+
 The full list is in [Requirements](https://collie.rbstp.dev/install/requirements.html). The justfile and `Collie/project.yml` use the maintainer's Apple team ID and `dev.rbstp` bundle identifiers: change them to your own before building.
 
 ## Quick start

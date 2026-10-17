@@ -71,6 +71,7 @@
 - [Simulator relay testing](reference/simulator.md)
 - [VM and host Simulator testing](reference/vm-simulator.md)
 - [Release](reference/release.md)
+- [iOS release notes](reference/ios-release-notes.md)
 - [Desktop releases](reference/desktop-releases.md)
 - [App Store release plan](reference/app-store.md)
 - [Public submission preparation](reference/public-submission.md)

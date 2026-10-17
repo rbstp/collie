@@ -18,6 +18,8 @@ collie lets you watch and steer your [herdr](https://github.com/herdrdev/herdr) 
 - Review an agent's Git changes and send line comments back to it.
 - Follow plan usage for Claude Code and Codex on the phone and on a watch complication.
 
+Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more integrations, but those have not been validated with Collie. Linux testing is limited to Arch Linux with Omarchy; other distributions have not been validated. See [Requirements](install/requirements.md).
+
 ## How the phone reaches your machine
 
 collie never opens a port on your network and does not use the Tailscale app.
