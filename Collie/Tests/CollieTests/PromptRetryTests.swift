@@ -372,13 +372,15 @@ private func leave(_ model: AgentModel) async {
     let resends = PromptResends()
     let (first, send) = await waitingModel(core, resends: resends)
     await leave(first)
+    core.state.withLock { $0.link = .connecting }
     let second = await retryingModel(core, TestClock(), resends: resends) { _ in }
     #expect(second.draft == "fix the build")
     #expect(second.sendingPrompt)
     #expect(second.retrying)
 
     core.set(error: nil)
-    resends.wake(route("term_1"))
+    core.state.withLock { $0.link = .connected }
+    second.poll()
     await send.value
     await poll { !second.sendingPrompt }
     #expect(second.draft.isEmpty)
