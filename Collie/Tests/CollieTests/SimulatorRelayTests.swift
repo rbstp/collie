@@ -35,8 +35,9 @@ final class SimulatorRelayTests: XCTestCase {
             XCTAssertTrue(remaining.isEmpty)
             XCTAssertEqual(auth.prefix(32), Data(SHA256.hash(data: Data("TESTTEAM01.dev.rbstp.collie".utf8))))
             XCTAssertEqual(auth.suffix(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }, expected)
-            XCTAssertTrue(key.publicKey.isValidSignature(signature, for: auth + hash))
-            XCTAssertFalse(key.publicKey.isValidSignature(signature, for: auth + Data(repeating: 0, count: 32)))
+            XCTAssertTrue(key.publicKey.isValidSignature(signature, for: Data(SHA256.hash(data: auth + hash))))
+            XCTAssertFalse(key.publicKey.isValidSignature(signature, for: auth + hash))
+            XCTAssertFalse(key.publicKey.isValidSignature(signature, for: Data(SHA256.hash(data: auth + Data(repeating: 0, count: 32)))))
             XCTAssertEqual(try JSONDecoder().decode(UInt32.self, from: Data(contentsOf: counter)), expected)
         }
         try JSONEncoder().encode(UInt32.max).write(to: counter)

@@ -93,7 +93,8 @@ function extensions(reader: CborReader, flags: number, policy: AttestationPolicy
 async function authenticator(input: Uint8Array<ArrayBuffer>, policy: AttestationPolicy, attested: boolean): Promise<{ counter: number; reader: CborReader; flags: number }> {
   require(input.length >= 37 && equal(input.slice(0, 32), await sha256(bytes(policy.appId))));
   const flags = input[32];
-  require((flags & 64) === (attested ? 64 : 0) && (flags & 0x3e) === 0);
+  // Apple assertions can retain the AT flag without including credential data.
+  require((!attested || (flags & 64) !== 0) && (flags & 0x3e) === 0);
   const counter = new DataView(input.buffer, input.byteOffset + 33, 4).getUint32(0);
   return { counter, reader: new CborReader(input.slice(37)), flags };
 }
@@ -190,6 +191,6 @@ export async function verifyAssertion(encoded: string, publicKey: string, previo
   require(auth.counter > previousCounter);
   extensions(auth.reader, auth.flags, policy);
   const key = await crypto.subtle.importKey('spki', decode(publicKey), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
-  require(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, signature(binary(value.get('signature'))), concat(authData, clientHash)));
+  require(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, signature(binary(value.get('signature'))), await sha256(concat(authData, clientHash))));
   return auth.counter;
 }
