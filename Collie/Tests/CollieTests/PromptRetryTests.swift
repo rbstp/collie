@@ -324,9 +324,10 @@ private func waitingModel(
 }
 
 @MainActor
-private func leave(_ model: AgentModel) async {
+private func leave(_ model: AgentModel, _ core: FakeCore) async {
+    let watches = core.snapshot.watches.filter { $0 == model.route.terminalId }.count
     let run = Task { await model.run() }
-    try? await Task.sleep(for: .milliseconds(20))
+    await poll { core.snapshot.watches.filter { $0 == model.route.terminalId }.count > watches }
     run.cancel()
     await run.value
 }
@@ -337,7 +338,7 @@ private func leave(_ model: AgentModel) async {
     let drafts = try makeTemporaryDirectory().appending(path: "drafts.json")
     let resends = PromptResends()
     let (model, send) = await waitingModel(core, resends: resends, draftsFile: drafts)
-    await leave(model)
+    await leave(model, core)
     core.set(error: nil)
     resends.wake(route("term_1"))
     await send.value
@@ -359,7 +360,7 @@ private func leave(_ model: AgentModel) async {
     core.set(hold: true, error: unreachable)
     let send = Task { await model.sendPrompt() }
     await core.waitHeld(1)
-    await leave(model)
+    await leave(model, core)
     core.release()
     await send.value
     #expect(core.snapshot.prompts == ["fix the build", "fix the build"])
@@ -371,7 +372,7 @@ private func leave(_ model: AgentModel) async {
     let core = FakeCore()
     let resends = PromptResends()
     let (first, send) = await waitingModel(core, resends: resends)
-    await leave(first)
+    await leave(first, core)
     core.state.withLock { $0.link = .connecting }
     let second = await retryingModel(core, TestClock(), resends: resends) { _ in }
     #expect(second.draft == "fix the build")
@@ -393,7 +394,7 @@ private func leave(_ model: AgentModel) async {
     let core = FakeCore()
     let resends = PromptResends()
     let (first, send) = await waitingModel(core, resends: resends)
-    await leave(first)
+    await leave(first, core)
     core.set(error: nil)
     let second = AgentModel(core: core, route: route("term_1"), prefsFile: nil, resends: resends)
     second.draft = "something else"
@@ -418,7 +419,7 @@ private func leave(_ model: AgentModel) async {
     core.set(hold: true, error: unreachable)
     let send = Task { await model.sendPrompt() }
     await core.waitHeld(1)
-    await leave(model)
+    await leave(model, core)
     core.release()
     await send.value
     #expect(core.snapshot.prompts.count == 5)
@@ -448,7 +449,7 @@ private func leave(_ model: AgentModel) async {
     let core = FakeCore()
     let resends = PromptResends()
     let (model, send) = await waitingModel(core, resends: resends)
-    await leave(model)
+    await leave(model, core)
     #expect(resends.entries[route("term_1")]?.viewer == nil)
     let run = Task { await model.run() }
     await poll { resends.entries[route("term_1")]?.viewer === model }
@@ -466,7 +467,7 @@ private func leave(_ model: AgentModel) async {
     let core = FakeCore()
     let resends = PromptResends()
     let (model, send) = await waitingModel(core, resends: resends)
-    await leave(model)
+    await leave(model, core)
     resends.stop(route("term_1"))
     await send.value
     core.set(error: nil)
@@ -485,7 +486,7 @@ private func leave(_ model: AgentModel) async {
     core.set(hold: true)
     let send = Task { await first.sendPrompt() }
     await core.waitHeld(1)
-    await leave(first)
+    await leave(first, core)
     let second = await retryingModel(core, TestClock(), resends: resends) { _ in }
     #expect(second.draft == "fix the build")
     #expect(second.sendingPrompt)
@@ -535,7 +536,7 @@ private func leave(_ model: AgentModel) async {
     core.set(hold: true)
     let send = Task { await first.sendPrompt() }
     await core.waitHeld(1)
-    await leave(first)
+    await leave(first, core)
     other.poll()
     #expect(other.draft == "fix the build")
     #expect(other.sendingPrompt)

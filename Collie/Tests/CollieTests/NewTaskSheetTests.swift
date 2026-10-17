@@ -29,7 +29,6 @@ final class NewTaskSheetTests: XCTestCase {
             XCTAssertFalse(model.cancelled)
             XCTAssertTrue(model.canStart)
             XCTAssertEqual(model.prompt, "keep this prompt")
-            XCTAssertTrue(model.canStart)
             core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
             let route = await model.start()
             XCTAssertEqual(route, AgentRoute(machineId: "m1", terminalId: "term_new"))
