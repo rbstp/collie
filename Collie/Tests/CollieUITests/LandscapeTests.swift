@@ -92,7 +92,7 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
         let typed = typeAfterClearing("keep this prompt", into: prompt, app)
         let controls = [typed, app.buttons["Hide keyboard"], app.buttons["Attachments and saved prompts"]]
-        for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait, .landscapeRight] {
+        for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft, .portrait, .landscapeRight, .portrait] {
             rotate(orientation, app)
             XCTAssertTrue(app.navigationBars["New task"].exists, app.debugDescription)
             XCTAssertTrue(keyboard.appears(within: 5), "\(orientation.rawValue)\n\(app.debugDescription)")

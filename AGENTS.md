@@ -67,6 +67,7 @@ docs/site/check-site.sh /tmp/collie-site
 
 ## Issues, commits and pull requests
 
+- After a pull request is merged or closed, remove its clean local worktree and local branch once no active task depends on them. Preserve unique commits and required artifacts first. Keep the default branch and branches used by open pull requests.
 - Planned work is a GitHub issue in the current phase milestone (for example "Phase 7: Improvements"). The pull request body says `Closes #N`.
 - Commit messages and pull request titles are plain sentences: imperative, sentence case, no type prefix, no trailing period, like the existing history ("Keep a merged pull request until the branch moves").
 - Merging a pull request into `master` uploads a TestFlight build. Put `[skip-release]` in the title of a pull request that should not ship one (docs, CI, tests only).

@@ -746,6 +746,7 @@ On both OSes, `collied status` also prints `tags:` (`(none)` for an untagged nod
 
 ## iOS
 
+- New task scrolls the focused prompt's full input row above the keyboard after keyboard frame changes in both portrait and landscape. Rotation keeps the same text field and draft while its layout changes between a compact row and expanded rows.
 - Only the app target links CollieCore (Rust + Go). The Go runtime starts at image load through a `__mod_init_func` initializer, so the widget extension and the NSE stay pure Swift and share an App Group container (reachability hint, Live Activity state). The watch targets, CollieWatch and CollieWatchWidgets, are pure Swift too.
 - UniFFI 0.32.2 bindings compile in Swift 6 language mode, as does the app.
 - One xcframework, one static library per slice (device, simulator): the Rust staticlib bundles the Go c-archive linked by `tailscale-sys`.
