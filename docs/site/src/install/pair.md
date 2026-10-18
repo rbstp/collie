@@ -16,7 +16,10 @@ The pairing window stays open for 120 seconds, and the first attempt closes it, 
 
 ## Pair again
 
-Pair again after you delete and reinstall the app, or when the app asks you to (for example, to use [terminals](terminals.md) with a phone paired before they existed). Then remove the old phone with `collied peers revoke` and in the Tailscale admin console.
+Pair again after you delete and reinstall the app, or when the app asks you to (for example, to use [terminals](terminals.md) with a phone paired before they existed).
+
+- **After a reinstall**, the app has a new Tailscale node, and the machine still lists the old one. Before you pair, remove the old phone with `collied peers revoke` and remove its node in the Tailscale admin console.
+- **When the app asks you to pair again**, the phone keeps its node, and the new pairing replaces the old one. Do not revoke the phone or remove its node.
 
 ## Remove a machine
 
