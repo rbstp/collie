@@ -2,6 +2,42 @@ import XCTest
 
 @MainActor
 final class SampleWorkspaceTests: XCTestCase {
+    func testGridSubagentsAreAccessibleAndCappedWithoutCoveringBlockedAgents() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "screenshot-demo", withExtension: "txt"))
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path, "--subagent-demo"]
+        app.launch()
+        defer { app.terminate() }
+        let layout = app.buttons["Layout"]
+        XCTAssertTrue(layout.appears(within: 10))
+        layout.tap()
+        app.buttons["Grid"].tap()
+        let card = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
+        XCTAssertTrue(card.appears(within: 5))
+        XCTAssertNotNil(card.label.range(
+            of: #"Review approval flow, [0-9]+(?:h [0-9]+)?m, Run approval tests, [0-9]+(?:h [0-9]+)?m"#,
+            options: .regularExpression
+        ))
+        XCTAssertTrue(card.label.contains("+3 more"))
+        XCTAssertFalse(card.label.contains("Check retry handling"))
+        XCTAssertFalse(card.label.contains("5 subagents"))
+        XCTAssertFalse(card.label.contains("12k"))
+        let blocked = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "add approval tests")).firstMatch
+        XCTAssertTrue(blocked.exists)
+        XCTAssertFalse(blocked.label.contains("Review deny path"))
+        XCTAssertTrue(blocked.label.contains("1 subagent"))
+
+        card.press(forDuration: 1)
+        app.buttons["Star"].tap()
+        let expanded = app.buttons.containing(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "fix the build", "+1 more")).firstMatch
+        XCTAssertTrue(expanded.appears(within: 5))
+        XCTAssertTrue(card.label.contains("Check retry handling"))
+        XCTAssertTrue(card.label.contains("Inspect test fixtures"))
+        XCTAssertTrue(card.label.contains("+1 more"))
+        XCTAssertFalse(card.label.contains("Review documentation"))
+    }
+
     func testSampleEntryResetAndExitWithoutDeveloperArguments() {
         let app = XCUIApplication()
         app.launch()

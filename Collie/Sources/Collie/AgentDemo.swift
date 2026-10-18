@@ -26,7 +26,8 @@ struct AgentDemo: View {
         let json = try? JSONSerialization.jsonObject(with: data)
         core = DemoAgentCore(
             snapshot: json.flatMap(Self.firstText) ?? String(decoding: data, as: UTF8.self),
-            connectionError: ProcessInfo.processInfo.environment["COLLIE_DEMO_CONNECTION_ERROR"]
+            connectionError: ProcessInfo.processInfo.environment["COLLIE_DEMO_CONNECTION_ERROR"],
+            subagentDemo: arguments.contains("--subagent-demo")
         )
         _approvals = State(initialValue: arguments.contains("--approval-demo") ? ApprovalsModel(core: core, dismissResolved: { _, _ in }) : nil)
         _follows = State(initialValue: FollowModel(core: core, approvals: nil, file: nil))
@@ -124,8 +125,8 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     }
 
     #if DEBUG
-    convenience init(snapshot: String, connectionError: String? = nil) {
-        self.init(snapshot: snapshot, connectionError: connectionError, isSample: false)
+    convenience init(snapshot: String, connectionError: String? = nil, subagentDemo: Bool = false) {
+        self.init(snapshot: snapshot, connectionError: connectionError, isSample: false, subagentDemo: subagentDemo)
     }
     #endif
 
@@ -137,7 +138,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         #endif
     }
 
-    private init(snapshot: String, connectionError: String?, isSample: Bool) {
+    private init(snapshot: String, connectionError: String?, isSample: Bool, subagentDemo: Bool = false) {
         self.isSample = isSample
         self.snapshot = snapshot
         self.connectionError = connectionError
@@ -152,13 +153,19 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 terminalId: "term_demo", workspaceId: "ws_collie", kind: "claude", name: nil, title: "fix the build",
                 status: .working, statusSinceMs: now - 135_000, cwd: "/Users/demo/collie",
                 lastLine: "Running the approval tests again after the settle fix.", contextLeft: 72,
-                lastPrompt: "the approval tests are flaky, fix them", lastActivityMs: now - 4_000
+                lastPrompt: "the approval tests are flaky, fix them", lastActivityMs: now - 4_000,
+                subagents: subagentDemo ? ["Review approval flow", "Run approval tests", "Check retry handling", "Inspect test fixtures", "Review documentation"].enumerated().map { index, title in
+                    SubagentSummary(agentType: "general-purpose", title: title, activity: title, startedAtMs: now - UInt64(5 + index) * 60_000, tokens: 12_000, calledTools: true)
+                } : []
             ),
             AgentSummary(
                 terminalId: "term_2", workspaceId: "ws_collie", kind: "claude", name: nil, title: "add approval tests",
                 status: .blocked, statusSinceMs: now - 42_000, cwd: "/Users/demo/collie",
                 lastLine: "I need to run cargo test to check the new cases.", contextLeft: 38,
-                lastPrompt: "add approval tests for the deny path", lastActivityMs: now - 42_000
+                lastPrompt: "add approval tests for the deny path", lastActivityMs: now - 42_000,
+                subagents: subagentDemo ? [
+                    SubagentSummary(agentType: "general-purpose", title: "Review deny path", activity: "Reading approval tests", startedAtMs: now - 180_000, tokens: 4_000, calledTools: true)
+                ] : []
             ),
             AgentSummary(
                 terminalId: "term_3", workspaceId: "ws_site", kind: "claude", name: nil, title: "update the docs",

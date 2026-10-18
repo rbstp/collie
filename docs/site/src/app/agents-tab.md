@@ -23,6 +23,8 @@ The Agents tab has three layouts.
 
 The default. Each card is a live preview of the agent's screen. Claude Code, Codex and Copilot CLI cards keep the agent's output and drop its input box and status lines; a blocked agent's card shows its whole screen.
 
+Running subagents appear on glass at the top of the preview, with each title and elapsed time, updated every minute. A normal card shows up to two subagents and a starred card up to four, followed by "+N more" when needed. The latest output stays visible below the list; previews grow at accessibility text sizes to leave room for both. The list disappears when the subagents finish and is hidden while the agent is blocked, keeping its prompt visible. VoiceOver includes the subagents when reading the card.
+
 - **Star** a card with a long press. Starred cards lead their machine's section at twice the height. Stars are kept on the machine, shared by your phones, until the pane closes or the machine is removed.
 - **Reorder** by dragging a card to an insertion line. Moving a card between the starred and unstarred groups also stars or unstars it. The order is saved on this phone.
 

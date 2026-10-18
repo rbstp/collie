@@ -456,14 +456,18 @@ struct SubagentList: View {
 }
 
 extension SubagentSummary {
-    /// "1h 11m · ↓ 270.8k": ↓ once the subagent has called a tool, ↑ before.
-    func usage(now: Date) -> String {
+    func elapsed(now: Date) -> String {
         let minutes = max(0, Int(now.timeIntervalSince1970) - Int(startedAtMs / 1000)) / 60
-        let elapsed = switch minutes {
+        return switch minutes {
         case 0: "<1m"
         case ..<60: "\(minutes)m"
         default: "\(minutes / 60)h \(minutes % 60)m"
         }
+    }
+
+    /// "1h 11m · ↓ 270.8k": ↓ once the subagent has called a tool, ↑ before.
+    func usage(now: Date) -> String {
+        let elapsed = elapsed(now: now)
         guard tokens > 0 else { return elapsed }
         return "\(elapsed) · \(calledTools ? "↓" : "↑") \(Self.count(tokens))"
     }
