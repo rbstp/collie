@@ -27,6 +27,14 @@ public final class GhosttyTerminalUIView: UIScrollView {
         }
     }
 
+    /// Height at the top covered by an overlay; rows scroll out from under it and short content stays below it.
+    public var obscuredTop: CGFloat = 0 {
+        didSet {
+            guard obscuredTop != oldValue else { return }
+            setNeedsLayout()
+        }
+    }
+
     // Each gesture below is off while a selection is active, and while its callback is nil.
     public var onDoubleTap: (() -> Void)? {
         didSet { gesturesChanged() }
@@ -232,7 +240,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
         }
         if let copyAnchor, !menu.isHidden {
             let size = menu.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
-            let visible = bounds.inset(by: safeAreaInsets).insetBy(dx: 8, dy: 8)
+            var insets = safeAreaInsets
+            insets.top += obscuredTop
+            let visible = bounds.inset(by: insets).insetBy(dx: 8, dy: 8)
             let point = CGPoint(x: bounds.minX + copyAnchor.x, y: bounds.minY + copyAnchor.y)
             var y = point.y - 16 - size.height
             if y < visible.minY { y = point.y + 16 }
@@ -489,7 +499,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private func pinShortContent() -> Bool {
         guard refreshControl?.isRefreshing != true else { return false }
         let others = adjustedContentInset.top - contentInset.top + adjustedContentInset.bottom
-        let gap = max(0, bounds.height - others - contentSize.height)
+        let gap = max(obscuredTop, bounds.height - others - contentSize.height)
         guard abs(gap - contentInset.top) > 0.5 else { return false }
         contentInset.top = gap
         return true

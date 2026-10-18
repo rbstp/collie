@@ -72,4 +72,17 @@ private func widen(_ view: GhosttyTerminalUIView) throws {
     #expect(view.contentOffset.y == -view.adjustedContentInset.top)
     #expect(try topLine(view).hasPrefix("line 0:"))
 }
+
+@MainActor
+@Test func obscuredTopKeepsTheFirstRowReachable() throws {
+    let view = terminal()
+    view.obscuredTop = 100
+    view.layoutIfNeeded()
+    #expect(view.contentOffset.y == bottom(view))
+    #expect(view.adjustedContentInset.top == 100)
+
+    view.show(ansiSnapshot: "one\r\ntwo")
+    view.layoutIfNeeded()
+    #expect(view.contentOffset.y + view.bounds.height == view.contentSize.height)
+}
 #endif
