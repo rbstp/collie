@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use base64::Engine;
@@ -1145,7 +1145,8 @@ impl CollieCore {
 
     /// After a long background (or a suspend), when no machine is connected again
     /// [`REBIND_AFTER`] later the node is rebound, and when none has connected
-    /// [`RESTART_AFTER`] after the resume it is restarted.
+    /// [`RESTART_AFTER`] after the resume it is restarted. A node that receives only through
+    /// DERP, and on which a dial to an online machine failed before, is restarted at once.
     pub fn resume(&self, background_secs: u64) {
         // Bumped before the send: a suspend checking it under the watch lock either sees
         // it or is undone by the send.
@@ -1164,7 +1165,9 @@ impl CollieCore {
                     link.last_dial.elapsed().as_secs(),
                     link_error(c, &link)
                 );
-                (c.machine.node_id.clone(), line)
+                let failed = matches!(link.phase, LinkPhase::Connecting | LinkPhase::Waiting)
+                    && link.last_error.is_some();
+                (c.machine.node_id.clone(), line, failed)
             })
             .collect();
         for conn in &conns {
@@ -2677,6 +2680,7 @@ impl CollieCore {
                     self.inner.push.clone(),
                     self.inner.reach.clone(),
                     self.inner.suspended.subscribe(),
+                    Arc::downgrade(&self.inner),
                 );
                 lock(&conn.shared.flock).low_data = self.inner.low_data.load(Ordering::SeqCst);
                 Arc::new(conn)
@@ -2769,7 +2773,7 @@ impl Inner {
     }
 
     /// Two tsnet servers must never share the state dir, so the replacement is only
-    /// created once every other holder has let go of the old node.
+    /// created once every other holder has let go of the old node and it is closed.
     fn release(&self, old: Arc<Node>) -> Result<(), CoreError> {
         let deadline = Instant::now() + RELEASE_TIMEOUT;
         while Arc::strong_count(&old) > 1 {
@@ -2781,21 +2785,24 @@ impl Inner {
             }
             std::thread::sleep(POLL_INTERVAL);
         }
+        old.close();
         Ok(())
     }
 
     /// Replaces a node that runs but reaches no machine with a fresh one on the same state,
     /// as a relaunch would, unless another restart already replaced `suspect`. The old node
-    /// is closed once nothing holds it (the lock-screen decide holds it until it is
-    /// answered). It is kept when a machine connects meanwhile, so no session is cut, or when
-    /// the app is suspended, so a lock-screen decide waiting for the node gets it at once.
-    /// Requests queued while no machine is connected wait for the new node.
-    fn restart_node(&self, suspect: &Weak<Node>) -> Result<&'static str, CoreError> {
+    /// is closed once nothing but a dial attempt holds it (the lock-screen decide holds it
+    /// until it is answered); the close fails the attempt. It is kept when a machine
+    /// connects meanwhile, so no session is cut, or when the app is suspended, so a
+    /// lock-screen decide waiting for the node gets it at once. Requests queued while no
+    /// machine is connected wait for the new node.
+    fn restart_node(&self, suspect: &Weak<Node>) -> Result<String, CoreError> {
         let _starting = lock(&self.starting);
         let Some(old) = lock(&self.node).take_if(|n| Arc::as_ptr(n) == suspect.as_ptr()) else {
-            return Ok("already replaced");
+            return Ok("already replaced".into());
         };
-        let deadline = Instant::now() + RELEASE_TIMEOUT;
+        let t0 = Instant::now();
+        let deadline = t0 + RELEASE_TIMEOUT;
         loop {
             let released = Arc::strong_count(&old) == 1;
             let kept = if self.connected() {
@@ -2813,16 +2820,22 @@ impl Inner {
                 continue;
             };
             *lock(&self.node) = Some(old);
-            return kept;
+            return kept.map(str::to_owned);
         }
-        drop(old);
+        // Logged first: a close that never returns leaves no other trace.
+        self.log(format!(
+            "node restart: closing the old node, released after {} ms",
+            ms(t0.elapsed())
+        ));
+        old.close();
+        let closed = t0.elapsed();
         let node = Node::new(&self.config(None))?;
         node.start()?;
         *lock(&self.node) = Some(Arc::new(node));
         for conn in lock(&self.conns).values() {
             conn.resume(FOREGROUND_RECONNECT, false);
         }
-        Ok("done")
+        Ok(format!("done, closed after {} ms,", ms(closed)))
     }
 
     async fn restart(self: &Arc<Self>, why: &str, suspect: Weak<Node>) {
@@ -2830,7 +2843,7 @@ impl Inner {
         let inner = self.clone();
         let result = blocking(move || inner.restart_node(&suspect)).await;
         let outcome = match result {
-            Ok(Ok(outcome)) => outcome.to_owned(),
+            Ok(Ok(outcome)) => outcome,
             Ok(Err(e)) => e.to_string(),
             Err(e) => e.to_string(),
         };
@@ -2852,6 +2865,27 @@ impl Inner {
             Err(e) => e.to_string(),
         };
         self.log(format!("node start ({why}): {outcome}"));
+    }
+
+    /// A node start or restart is under way: a link waiting for the node is not offline.
+    pub(crate) fn node_starting(&self) -> bool {
+        matches!(self.starting.try_lock(), Err(TryLockError::WouldBlock))
+    }
+
+    /// From a link whose dial failed past the resume grace: the node is restarted when it
+    /// is [`deaf`], as a resume would.
+    pub(crate) async fn dial_failed(self: Arc<Self>, node_id: String) {
+        let Some(node) = lock(&self.node).clone() else {
+            return;
+        };
+        let suspect = Arc::downgrade(&node);
+        let status = tokio::time::timeout(KICK_TIMEOUT, blocking(move || node.status())).await;
+        if let Ok(Ok(Ok(status))) = status
+            && deaf(&status, &[node_id])
+            && !self.connected()
+        {
+            self.restart("dial failed, receive stopped", suspect).await;
+        }
     }
 
     fn connected(&self) -> bool {
@@ -2899,7 +2933,7 @@ impl Inner {
         background: Duration,
         suspended: bool,
         epoch: u64,
-        links: Vec<(String, String)>,
+        links: Vec<(String, String, bool)>,
     ) {
         self.start_missing_node("resume").await;
         let mut line = format!(
@@ -2907,20 +2941,20 @@ impl Inner {
             background.as_secs(),
             if suspended { ", suspended" } else { "" }
         );
-        let mut peers = None;
+        let mut status = None;
         let node = lock(&self.node).clone();
         let started = node.as_ref().map(Arc::downgrade).unwrap_or_default();
         match node {
             None => line += " no node",
             Some(node) => {
                 match tokio::time::timeout(KICK_TIMEOUT, blocking(move || node.status())).await {
-                    Ok(Ok(Ok(status))) => {
+                    Ok(Ok(Ok(s))) => {
                         line += &format!(
                             " node {:?}, health {:?}",
-                            status.backend_state,
-                            status.health.unwrap_or_default()
+                            s.backend_state,
+                            s.health.as_deref().unwrap_or_default()
                         );
-                        peers = status.peer;
+                        status = Some(s);
                     }
                     Ok(Ok(Err(e))) => line += &format!(" node status failed: {e}"),
                     Ok(Err(e)) => line += &format!(" node status failed: {e}"),
@@ -2928,15 +2962,23 @@ impl Inner {
                 }
             }
         }
-        for (node_id, link) in links {
-            let online = peers
+        let mut failed = Vec::new();
+        for (node_id, link, dial_failed) in links {
+            let online = status
                 .iter()
-                .flat_map(|p| p.values())
+                .flat_map(|s| s.peer.iter().flat_map(|p| p.values()))
                 .find(|p| p.stable_id == node_id)
                 .map(|p| p.online);
             line += &format!("; {link}, online {online:?}");
+            if dial_failed {
+                failed.push(node_id);
+            }
         }
         self.log(line);
+        if status.as_ref().is_some_and(|s| deaf(s, &failed)) && !self.connected() {
+            self.restart("resume, receive stopped", started).await;
+            return;
+        }
         if !suspended && background < FOREGROUND_RECONNECT {
             return;
         }
@@ -3188,6 +3230,26 @@ fn request_error(conn: &Conn, e: RequestError) -> CoreError {
             message: last.unwrap_or_else(|| "timed out waiting for the machine".into()),
         },
     }
+}
+
+/// wireguard-go never restarts a receive func that returned an error (reads fail once iOS
+/// defuncts the suspended app's UDP sockets), and a rebind replaces the sockets without
+/// restarting it, so the node receives only through DERP until it is replaced. Tailscale's
+/// health check reports it within a minute. Most resumes on such a node still connect at once;
+/// once a dial to a machine Tailscale reports online has failed on it (`failed`), it stayed
+/// unreachable until a restart.
+fn deaf(status: &tailnet::Status, failed: &[String]) -> bool {
+    let stopped = status
+        .health
+        .iter()
+        .flatten()
+        .any(|h| h.starts_with("The MagicSock function ") && h.contains(" is not running"));
+    stopped
+        && status
+            .peer
+            .iter()
+            .flat_map(|p| p.values())
+            .any(|p| p.online && failed.contains(&p.stable_id))
 }
 
 fn link_error(conn: &Conn, link: &Link) -> Option<String> {
@@ -3522,6 +3584,34 @@ mod tests {
             pair_error(ConnectError::Offline, 8457),
             CoreError::NotRunning
         ));
+    }
+
+    #[test]
+    fn only_a_deaf_node_that_failed_an_online_machine_restarts_at_once() {
+        // Health text from a phone's resume diagnostics.
+        const IPV4: &str = "The MagicSock function ReceiveIPv4 is not running. You might experience connectivity issues.";
+        const IPV6: &str = "The MagicSock function ReceiveIPv6 is not running. You might experience connectivity issues.";
+        const DNS: &str = "Tailscale failed to fetch the DNS configuration of your device: getting OS base config is not supported";
+        let status = |health: &[&str]| -> tailnet::Status {
+            serde_json::from_value(serde_json::json!({
+                "BackendState": "Running",
+                "Health": health,
+                "Peer": {
+                    "k1": {"ID": "nMAC", "Online": true},
+                    "k2": {"ID": "nLINUX", "Online": false},
+                },
+            }))
+            .unwrap()
+        };
+        let failed = |ids: &[&str]| ids.iter().map(|&id| id.to_owned()).collect::<Vec<_>>();
+        assert!(deaf(&status(&[IPV4, DNS]), &failed(&["nMAC"])));
+        assert!(deaf(&status(&[DNS, IPV6]), &failed(&["nLINUX", "nMAC"])));
+        assert!(
+            !deaf(&status(&[IPV4, DNS]), &[]),
+            "most resumes on such a node connect through DERP"
+        );
+        assert!(!deaf(&status(&[IPV4]), &failed(&["nLINUX"])));
+        assert!(!deaf(&status(&[DNS]), &failed(&["nMAC"])));
     }
 
     #[test]
@@ -3902,6 +3992,42 @@ mod tests {
         assert!(low_data("m2"), "a conn made later starts in Low Data Mode");
         core.set_low_data(false);
         assert!(!low_data("m1") && !low_data("m2"));
+    }
+
+    #[test]
+    fn a_link_waiting_for_a_node_start_or_restart_is_not_offline() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("s");
+        ensure_private_dir(&state).unwrap();
+        MachineStore::new(state.clone())
+            .save(&[Machine {
+                id: "m1".into(),
+                label: "mac".into(),
+                host: "m1.tail1234.ts.net".into(),
+                port: 8457,
+                node_id: "nm1".into(),
+                owner_user_id: 123,
+                kind: MachineKind::Mac,
+                key: String::new(),
+                terminal_key: String::new(),
+                default_label: None,
+            }])
+            .unwrap();
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        let conn = core.conn("m1").unwrap();
+        let reaches = |phase: LinkPhase| {
+            conn.reconnect_now();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while lock(&conn.shared.link).phase != phase {
+                assert!(Instant::now() < deadline, "never {phase:?}");
+                std::thread::sleep(POLL_INTERVAL);
+            }
+        };
+        reaches(LinkPhase::Offline);
+        let starting = lock(&core.inner.starting);
+        reaches(LinkPhase::Connecting);
+        drop(starting);
+        reaches(LinkPhase::Offline);
     }
 
     #[test]
@@ -5269,7 +5395,9 @@ mod tailnet_tests {
             let identity = lock(&core.inner.identity).clone().unwrap();
             async move {
                 let addr = std::net::SocketAddr::new(mac_ip, DEFAULT_PORT);
-                let stream = conn::dial(&node, &slot, addr).await.unwrap();
+                let stream = conn::dial(&Arc::downgrade(&node), &slot, addr)
+                    .await
+                    .unwrap();
                 let stream = conn::tls(stream, &host, mac_pin(), identity).await.unwrap();
                 let mut session = Session::connect(stream, &host, DEFAULT_PORT).await.unwrap();
                 session.hello().await.unwrap()
@@ -6108,9 +6236,9 @@ mod tailnet_tests {
         drop(held);
         let (outcome, took) = restart.join().unwrap().unwrap();
         println!("node restart took {took:?}");
-        assert_eq!(
-            outcome, "done",
-            "a request queued with nothing connected does not hold it up"
+        assert!(
+            outcome.starts_with("done, "),
+            "a request queued with nothing connected does not hold it up: {outcome}"
         );
         assert!(took < RELEASE_TIMEOUT);
         assert!(old.upgrade().is_none(), "the old node is closed");
@@ -6326,7 +6454,12 @@ mod tailnet_tests {
             async move {
                 let t0 = Instant::now();
                 let addr = std::net::SocketAddr::new(mac_ip, DEFAULT_PORT + 1);
-                (conn::dial(&node, &slot, addr).await.is_err(), t0.elapsed())
+                (
+                    conn::dial(&Arc::downgrade(&node), &slot, addr)
+                        .await
+                        .is_err(),
+                    t0.elapsed(),
+                )
             }
         });
         std::thread::sleep(Duration::from_secs(1));
@@ -6345,12 +6478,26 @@ mod tailnet_tests {
         let restart = poll("a node restart while dials fail", || {
             lock(&logged)
                 .iter()
-                .find(|l| l.starts_with("node restart"))
+                .find(|l| l.starts_with("node restart (resume): "))
                 .cloned()
         });
         assert!(
-            restart.starts_with("node restart (resume): done in "),
+            restart.starts_with("node restart (resume): done, closed after "),
             "{restart}"
+        );
+        let closing = lock(&logged)
+            .iter()
+            .find(|l| l.starts_with("node restart: closing"))
+            .cloned()
+            .unwrap();
+        let released: u64 = closing
+            .strip_prefix("node restart: closing the old node, released after ")
+            .and_then(|r| r.strip_suffix(" ms"))
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or_else(|| panic!("{closing}"));
+        assert!(
+            released < 2000,
+            "the dial in flight does not hold the old node: {closing}"
         );
         assert!(t0.elapsed() >= RESTART_AFTER, "{:?}", t0.elapsed());
         drop(core);

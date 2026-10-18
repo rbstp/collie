@@ -1,0 +1,40 @@
+diff --git a/tailscale.go b/tailscale.go
+--- a/tailscale.go
++++ b/tailscale.go
+@@ -46,6 +46,11 @@
+ 	mu      sync.Mutex // guards lastErr; C callers use one handle from many threads
+ 	lastErr string
+ 	started bool
++	// Cancelled first on close: netstack's close aborts only the endpoints
++	// registered when it starts, then waits for those registered later, so a
++	// dial racing it would hold the close up to the dial's own timeout.
++	closing context.Context
++	close   context.CancelFunc
+ }
+ 
+ func getServer(sd C.int) *server {
+@@ -121,6 +126,7 @@
+ 	sd := servers.next
+ 	servers.next++
+ 	s := &server{s: &tsnet.Server{UserLogf: logger.Discard}}
++	s.closing, s.close = context.WithCancel(context.Background())
+ 	servers.m[sd] = s
+ 	return (C.int)(sd)
+ }
+@@ -163,6 +169,7 @@
+ 	if s == nil {
+ 		return C.EBADF
+ 	}
++	s.close()
+ 
+ 	// TODO: cancel Up
+ 	// TODO: close related listeners / conns.
+@@ -644,7 +651,7 @@
+ 	if s == nil {
+ 		return C.EBADF
+ 	}
+-	ctx := context.Background()
++	ctx := s.closing
+ 	if timeout > 0 {
+ 		var cancel context.CancelFunc
+ 		ctx, cancel = context.WithTimeout(ctx, timeout)
