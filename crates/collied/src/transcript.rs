@@ -1,5 +1,6 @@
 mod history;
 mod live;
+mod provider_subagents;
 mod subagents;
 
 use std::collections::{HashMap, HashSet};
@@ -58,10 +59,12 @@ struct Cached {
 pub struct Transcripts {
     claude_projects: Option<PathBuf>,
     codex_sessions: Option<PathBuf>,
+    copilot_sessions: Option<PathBuf>,
     cache: HashMap<String, Cached>,
     missed: HashSet<String>,
     usage: Usage,
     live: subagents::Live,
+    providers: provider_subagents::Live,
     panes: HashMap<String, live::Pane>,
     resolved: HashMap<String, live::Resolved>,
     /// The live session last logged per terminal, so a mismatch with herdr is logged once.
@@ -73,10 +76,12 @@ impl Transcripts {
         Self {
             claude_projects,
             codex_sessions,
+            copilot_sessions: None,
             cache: HashMap::new(),
             missed: HashSet::new(),
             usage: Usage::default(),
             live: subagents::Live::default(),
+            providers: provider_subagents::Live::default(),
             panes: HashMap::new(),
             resolved: HashMap::new(),
             noted: HashMap::new(),
@@ -103,10 +108,15 @@ impl Transcripts {
             Some(dir) => Some(PathBuf::from(dir)),
             None => crate::config::home_dir().ok().map(|h| h.join(".codex")),
         };
-        Self::new(
+        let mut transcripts = Self::new(
             crate::hooks::claude_dir().ok().map(|d| d.join("projects")),
             codex.map(|d| d.join("sessions")),
-        )
+        );
+        transcripts.copilot_sessions = std::env::var_os("COPILOT_HOME")
+            .map(PathBuf::from)
+            .or_else(|| crate::config::home_dir().ok().map(|h| h.join(".copilot")))
+            .map(|d| d.join("session-state"));
+        transcripts
     }
 
     pub fn retain(&mut self, agents: &[AgentInfo]) {
@@ -118,16 +128,17 @@ impl Transcripts {
         self.cache.retain(|id, _| live(id));
         self.missed.retain(&live);
         self.live.retain(live);
+        self.providers.retain(|id| ids.contains(id));
         let open = |t: &String| agents.iter().any(|a| &a.terminal_id == t);
         self.panes.retain(|t, _| open(t));
         self.resolved.retain(|t, _| open(t));
         self.noted.retain(|t, _| open(t));
     }
 
-    /// No subagent running; a Claude Code agent whose transcript cannot be read, or whose
+    /// No subagent running; a supported agent whose transcript cannot be read, or whose
     /// subagent scan left some out, counts as busy.
     pub fn quiet(&mut self, a: &AgentInfo) -> bool {
-        a.agent.as_deref() != Some("claude")
+        !matches!(a.agent.as_deref(), Some("claude" | "copilot" | "codex"))
             || self
                 .derive(a, true)
                 .is_some_and(|d| d.subagents.is_empty() && !d.subagents_truncated)
@@ -136,6 +147,17 @@ impl Transcripts {
     /// Cached by size and mtime, so an unchanged transcript costs one open and fstat. A
     /// transcript not found is looked for again only when `relocate`.
     pub fn derive(&mut self, a: &AgentInfo, relocate: bool) -> Option<Derived> {
+        if a.agent.as_deref() == Some("copilot") {
+            let id = session_id(a)?;
+            let (subagents, subagents_truncated) = self
+                .providers
+                .copilot(self.copilot_sessions.as_deref()?, id);
+            return Some(Derived {
+                subagents,
+                subagents_truncated,
+                ..Derived::default()
+            });
+        }
         let kind = match a.agent.as_deref()? {
             "claude" => Kind::Claude,
             "codex" => Kind::Codex,
@@ -174,18 +196,19 @@ impl Transcripts {
             return None;
         };
         self.missed.remove(id);
-        let (window, subagents) = match kind {
+        let (window, subagents, subagents_truncated) = match kind {
             Kind::Claude => {
                 self.usage.refresh();
                 let sessions = self.sessions_dir();
-                (
-                    self.usage.window(id),
-                    self.live.running(sessions.as_deref(), &path, id),
-                )
+                let subagents = self.live.running(sessions.as_deref(), &path, id);
+                (self.usage.window(id), subagents, self.live.truncated(id))
             }
-            Kind::Codex => (None, Vec::new()),
+            Kind::Codex => {
+                let (subagents, truncated) =
+                    self.providers.codex(self.codex_sessions.as_deref()?, id);
+                (None, subagents, truncated)
+            }
         };
-        let subagents_truncated = self.live.truncated(id);
         if let Some(c) = self
             .cache
             .get(id)
@@ -1048,7 +1071,7 @@ mod tests {
             "9f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
             "/Users/me/src/collie"
         )));
-        assert!(t.quiet(&agent(
+        assert!(!t.quiet(&agent(
             "copilot",
             "9f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
             "/Users/me/src/collie"

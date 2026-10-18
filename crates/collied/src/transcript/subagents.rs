@@ -440,7 +440,7 @@ fn activity(tool: &str, input: &Value) -> Option<String> {
     bounded(&text, ACTIVITY_CHARS)
 }
 
-fn bounded(text: &str, max: usize) -> Option<String> {
+pub(super) fn bounded(text: &str, max: usize) -> Option<String> {
     let line = text.lines().map(prompt::clean).find(|l| !l.is_empty())?;
     Some(if line.chars().count() > max {
         line.chars().take(max - 1).chain(['…']).collect()
@@ -450,7 +450,7 @@ fn bounded(text: &str, max: usize) -> Option<String> {
 }
 
 /// `2026-10-13T21:44:05.123Z`, as Claude Code writes it.
-fn timestamp_ms(s: &str) -> Option<u64> {
+pub(super) fn timestamp_ms(s: &str) -> Option<u64> {
     let b = s.as_bytes();
     if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || !s.ends_with('Z') {
         return None;

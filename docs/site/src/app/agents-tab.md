@@ -50,6 +50,12 @@ Swipe a row to the right and choose **Snooze** to hide it for 1 hour, 4 hours, u
 
 A small ring shows how much context a Claude Code or Codex agent has left, read from its transcript on the machine.
 
+## Running subagents
+
+Claude Code, GitHub Copilot CLI and Codex report their running subagents with a title and elapsed time. Finished or interrupted work disappears; a follow-up starts a new elapsed time for the same child.
+
+Copilot CLI uses the child names in the current session's local event log. Codex uses child thread metadata and turn events, not the text of the parent's reply. Unrelated sessions, idle children and sessions without a live provider lock are excluded. A large event log may take several refreshes to catch up before children appear. Older Codex forks without an explicit inherited-history boundary are not reported.
+
 ## Agent actions
 
 Long-press an agent, or use the agent screen's menu, to:
