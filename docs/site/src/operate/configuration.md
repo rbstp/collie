@@ -1,6 +1,6 @@
 # Configuration
 
-This page describes the next matching phone and desktop candidate; user-owned setup is unreleased. Published desktop v0.1.0 still uses tagged nodes. Follow the [v0.1.0 tailnet procedure](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md) until both peers are updated.
+`collied` keeps its settings in `collied.toml`, next to its node state, paired phones and audit log.
 
 ## Where things live
 
@@ -15,7 +15,7 @@ This page describes the next matching phone and desktop candidate; user-owned se
 
 ## collied.toml
 
-Every section is optional. Restart `collied` (`collied stop`, then `collied start`) after a change.
+Every section is optional. After a change, restart `collied` with `collied stop`, then `collied start`.
 
 ```toml
 [tailnet]
@@ -33,7 +33,7 @@ enabled = false                # plain shells from the phone; see Terminals
 [push.relay]                  # publisher app; no APNs key
 ```
 
-- **`owner_user_id`** is the numeric Tailscale user ID of the only person allowed to use this `collied`. It must match collied's actual positive embedded Tailscale user. Without it, that verified self user still binds the gate before first pairing; a phone cannot choose the owner. Read the ID from the pairing prompt or `collied peers list`; copying it here keeps the owner pinned even if the paired phones file is deleted.
-- **`[tasks] agents`** limits which agents New task can start, the first being the default.
+- **`owner_user_id`** is the numeric Tailscale user ID of the only person allowed to use this `collied`. It must match the account `collied` is signed in with, or `collied` refuses to start. Without it, `collied` still takes its signed-in account as the owner before the first pairing, and a phone cannot choose another. Read the ID from the pairing prompt or `collied peers list`. Setting it here keeps the owner pinned even if the paired phones file is deleted.
+- **`[tasks] agents`** limits which agents New task can start. The first one is the default.
 - **`[terminals]`**: see [Terminals](../install/terminals.md).
-- **`[push.relay]` or `[apns]`** (mutually exclusive): see [Push notifications](../install/push.md).
+- **`[push.relay]` or `[apns]`**, never both: see [Push notifications](../install/push.md).

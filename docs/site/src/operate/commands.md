@@ -1,5 +1,7 @@
 # Commands
 
+You control `collied` from a terminal on the machine. [CollieBar](../desktop/colliebar.md) and [CollieTray](../desktop/collietray.md) offer the everyday ones from a menu.
+
 | Command | What it does |
 |---|---|
 | `collied setup` | Interactive setup: login, service, doctor, publisher relay push and pairing. Safe to run again |
@@ -15,10 +17,10 @@
 | `collied service install` | Installs the launchd agent (macOS) or systemd user unit (Linux) |
 | `collied service uninstall` | Stops and removes the launchd agent or systemd user unit |
 | `collied apns import <file>` | Imports the APNs key |
-| `collied apns test` | Sends an encrypted test through the selected relay or direct mode; acceptance does not confirm display |
+| `collied apns test` | Sends an encrypted test alert through the configured relay or direct mode. It reports that the send was accepted, not that the phone showed it |
 
 ## Reading `collied doctor`
 
-Each line is `ok`, `warn` or `fail` with a check name and a detail. Start every investigation here: [Troubleshooting](../troubleshooting.md) is organized by symptom and names the doctor line to look at.
+When something goes wrong, start with `collied doctor`. Each line is `ok`, `warn` or `fail`, with a check name and a detail. [Troubleshooting](../troubleshooting.md) is organized by symptom and names the line to look at.
 
-The push detail reports the active mode, registration counts, earliest relay grant expiry, last actual send error and bounded in-memory retry state. Relay daily quotas are shared across the installation's machines. Remaining budget is unknown locally; a quota response supplies the reset time. Times are Unix seconds for grant expiry and Unix milliseconds for attempts/retries. No grant, destination token or payload is printed.
+The push line reports the active mode, registration counts, the earliest relay grant expiry, the last send error and pending retries. Grant expiry is in Unix seconds, and attempt and retry times are in Unix milliseconds. The line never prints a grant, a destination token or a payload. All machines paired with a phone share its daily relay quotas. `collied` cannot know how much quota is left, but when the relay reports a quota reached, the push line shows when it resets.
