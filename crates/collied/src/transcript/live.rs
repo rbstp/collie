@@ -1114,6 +1114,7 @@ mod tests {
             before: None,
             after: None,
             query: None,
+            latest: false,
         };
         let page = t.history_reader().history(&a, &params);
         assert!(
@@ -1359,6 +1360,7 @@ mod tests {
             before: None,
             after: None,
             query: None,
+            latest: false,
         };
         let page = t.history_reader().history(&a, &params);
         assert!(

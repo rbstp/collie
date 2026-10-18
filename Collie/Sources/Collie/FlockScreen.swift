@@ -179,6 +179,7 @@ struct FlockScreen: View {
             )
             .task(id: core != nil && scenePhase == .active && !newTask && !showsUsage) {
                 guard let core, scenePhase == .active, !newTask, !showsUsage else { return }
+                previews.showChat(DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat)
                 await previews.run(core: core)
             }
         case .inbox:

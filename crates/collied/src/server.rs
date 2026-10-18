@@ -2931,6 +2931,7 @@ mod tests {
             before: Some("private-cursor".into()),
             after: None,
             query: Some("private-query".into()),
+            latest: false,
         });
         assert_eq!(audit_target(&request).as_deref(), Some("t1"));
     }

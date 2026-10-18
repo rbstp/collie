@@ -65,6 +65,8 @@ final class FakeCore: AgentCore {
         var reads: [String] = []
         var readLines: [UInt16?] = []
         var readError: CoreError?
+        var latest: [String: HistoryPage] = [:]
+        var latestReads: [String] = []
         var output: TerminalSnapshot?
         var outputRevision: UInt64 = 1
         var status: AgentState = .idle
@@ -173,6 +175,14 @@ final class FakeCore: AgentCore {
         }
         if let error { throw error }
         return TerminalSnapshot(terminalId: terminalId, source: source, ansi: "read \(read)", truncated: false)
+    }
+    func agentLatest(machineId: String, terminalId: String) async throws -> HistoryPage {
+        let page = state.withLock { s in
+            s.latestReads.append(terminalId)
+            return s.latest[terminalId]
+        }
+        guard let page else { throw CoreError.NotImplemented }
+        return page
     }
     func agentChanges(machineId: String, terminalId: String, root: String?, branch: Bool) async throws -> GitChanges {
         let s = state.withLock { s in
@@ -3116,4 +3126,46 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     #expect(unknown.agentKey == nil && !unknown.applies(to: "claude"))
     StripShortcuts(items: [codex, all]).save(to: file)
     #expect(StripShortcuts.load(from: file).items == [codex, all])
+}
+
+@MainActor
+@Test func gridCardsPreviewTheConversationOnlyWithChatAndHistory() async {
+    let chat = [
+        HistoryMessage(id: "u1", role: "user", text: "Fix it", tool: nil, callId: nil, truncated: false, parentCallId: nil),
+        HistoryMessage(id: "a1", role: "assistant", text: "Fixed", tool: nil, callId: nil, truncated: false, parentCallId: nil),
+    ]
+    let page = { (available: Bool) in
+        HistoryPage(
+            session: nil, available: available, unavailableReason: nil, reset: false, messages: available ? chat : [],
+            before: nil, after: nil, more: false, omitted: false
+        )
+    }
+    let core = FakeCore()
+    // t3 has no page: its collied is too old for the latest messages.
+    core.state.withLock { $0.latest = ["t1": page(true), "t2": page(false), "t4": page(true)] }
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let statuses: [(String, AgentState)] = [("t1", .working), ("t2", .working), ("t3", .working), ("t4", .blocked)]
+    let agents = statuses.map {
+        AgentSummary(terminalId: $0.0, workspaceId: "w1", kind: "claude", name: nil, title: nil, status: $0.1, statusSinceMs: 0, cwd: nil, lastLine: nil)
+    }
+    let flock = MachineFlock(machine: machine, link: .connected, lastError: nil, details: nil, workspaces: [], agents: agents, approvalsCount: 0, starred: [])
+    let model = PreviewModel()
+    model.showChat(true)
+    model.update([MachineFlockEntry(machine: machine, flock: flock)])
+    for (terminal, _) in statuses { model.appeared(route(terminal)) }
+    let run = Task { await model.run(core: core) }
+    await poll { model.screens.count == 3 && !model.chats.isEmpty }
+    #expect(core.snapshot.latestReads.sorted() == ["t1", "t2", "t3"])
+    #expect(core.snapshot.reads.sorted() == ["t2", "t3", "t4"])
+    #expect(model.conversation(route("t1"), status: .working) == chat)
+    #expect(model.conversation(route("t1"), status: .blocked) == nil)
+    #expect(model.conversation(route("t2"), status: .working) == nil)
+    #expect(model.conversation(route("t3"), status: .working) == nil)
+
+    model.showChat(false)
+    #expect(model.conversation(route("t1"), status: .working) == nil)
+    await poll { core.snapshot.reads.contains("t1") }
+    #expect(core.snapshot.latestReads.count == 3)
+    run.cancel()
+    await run.value
 }

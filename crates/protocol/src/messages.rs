@@ -94,11 +94,15 @@ pub struct HistoryParams {
     pub before: Option<String>,
     pub after: Option<String>,
     pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub latest: bool,
 }
 
 impl HistoryParams {
     pub fn is_valid(&self) -> bool {
         !(self.before.is_some() && self.after.is_some())
+            && !(self.latest
+                && (self.before.is_some() || self.after.is_some() || self.query.is_some()))
             && self
                 .before
                 .iter()
@@ -1818,8 +1822,14 @@ mod tests {
         };
         let valid = parse_client_frame(&request(serde_json::json!({"terminal_id":"t1"}))).unwrap();
         assert_eq!(valid.request.class(), MethodClass::Read);
+        parse_client_frame(&request(
+            serde_json::json!({"terminal_id":"t1","latest":true}),
+        ))
+        .unwrap();
         for extra in [
             serde_json::json!({"before":"a","after":"b"}),
+            serde_json::json!({"latest":true,"after":"b"}),
+            serde_json::json!({"latest":true,"query":"x"}),
             serde_json::json!({"query":"x".repeat(257)}),
             serde_json::json!({"before":"x".repeat(257)}),
             serde_json::json!({"path":"/private/file"}),
@@ -2060,7 +2070,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 26);
+        assert_eq!(crate::PROTOCOL_VERSION, 27);
     }
 
     #[test]

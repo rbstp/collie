@@ -291,7 +291,7 @@ async fn scenario(
         let Response::Hello(hello) = result(recv(&mut ws).await) else {
             panic!("no negotiated hello")
         };
-        assert_eq!(hello.protocol_version, 26);
+        assert_eq!(hello.protocol_version, maximum.min(27));
         assert!(hello.capabilities.is_empty());
         send(&mut ws, json!({"id":2,"method":"pair.complete","params":{"pairing_code":invite.code.as_str(),"device_label":"phone","terminal_key":format!("{}Q", "M".repeat(121))}})).await;
         assert_error(&recv(&mut ws).await, ErrorCode::NotImplemented);

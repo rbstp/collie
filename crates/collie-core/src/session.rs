@@ -1152,6 +1152,7 @@ mod tests {
                 let Response::Hello(mut result) = hello_result(true) else {
                     unreachable!()
                 };
+                result.protocol_version = maximum.min(27);
                 result.protocol_max_version = maximum;
                 result.capabilities.clear();
                 write(
@@ -1210,8 +1211,8 @@ mod tests {
             let Response::Hello(mut result) = hello_result(true) else {
                 unreachable!()
             };
-            result.protocol_version = 27;
-            result.protocol_max_version = 28;
+            result.protocol_version = 28;
+            result.protocol_max_version = 29;
             write(
                 &mut ws,
                 ServerFrame::Result {

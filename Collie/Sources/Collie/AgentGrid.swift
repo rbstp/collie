@@ -95,7 +95,8 @@ struct AgentGrid<Menu: View>: View {
         let route = AgentRoute(machineId: entry.id, terminalId: agent.terminalId)
         return NavigationLink(value: route) {
             AgentCard(
-                agent: agent, screen: previews.screens[route], workspace: entry.workspaceLabel(for: agent),
+                agent: agent, screen: previews.screens[route], conversation: previews.conversation(route, status: agent.status),
+                workspace: entry.workspaceLabel(for: agent),
                 followed: follows?.isFollowing(route) == true, starred: starred, now: now
             )
         }
@@ -190,6 +191,7 @@ extension MachineFlockEntry {
 struct AgentCard: View {
     let agent: AgentSummary
     let screen: String?
+    let conversation: [HistoryMessage]?
     let workspace: String?
     let followed: Bool
     let starred: Bool
@@ -198,9 +200,17 @@ struct AgentCard: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.openURL) private var openURL
 
+    @ViewBuilder private var preview: some View {
+        if let conversation {
+            ChatPreview(messages: conversation, lines: starred ? 6 : 3)
+        } else {
+            TerminalPreview(ansi: screen ?? "")
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            TerminalPreview(ansi: screen ?? "")
+            preview
                 .frame(height: typeSize.isAccessibilitySize && agent.status != .blocked && !agent.subagents.isEmpty
                     ? subagentPreviewHeight * (starred ? 2 : 1)
                     : (starred ? 240 : 120))
@@ -282,6 +292,35 @@ struct AgentCard: View {
                 Button("Open pull request") { openURL(url) }
             }
         }
+    }
+}
+
+/// Read-only, like `TerminalPreview`: it follows the bottom of the conversation.
+private struct ChatPreview: View {
+    let messages: [HistoryMessage]
+    let lines: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(messages, id: \.id) { message in
+                let user = message.role == "user"
+                Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text))
+                    .lineLimit(lines)
+                    .padding(user ? 6 : 0)
+                    .background {
+                        if user {
+                            RoundedRectangle(cornerRadius: 8).fill(.tint.opacity(0.1))
+                        }
+                    }
+                    .padding(.leading, user ? 16 : 0)
+                    .frame(maxWidth: .infinity, alignment: user ? .trailing : .leading)
+            }
+        }
+        .font(.caption2)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(6)
+        .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .bottom)
+        .background(.fill.tertiary)
     }
 }
 

@@ -69,7 +69,7 @@ final class SubagentListTests: XCTestCase {
             for starred in [false, true] {
                 for size in [DynamicTypeSize.large, .accessibility5] {
                     func card(_ agent: AgentSummary) -> some View {
-                        AgentCard(agent: agent, screen: output, workspace: nil, followed: false, starred: starred, now: .now)
+                        AgentCard(agent: agent, screen: output, conversation: nil, workspace: nil, followed: false, starred: starred, now: .now)
                             .environment(\.dynamicTypeSize, size)
                             .frame(width: 370)
                     }
