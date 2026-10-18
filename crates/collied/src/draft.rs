@@ -210,15 +210,27 @@ pub mod model {
     /// The rows of `text` wrapped at `width`, each after what joins it to the row above:
     /// `"\n"` for a typed newline, `" "` for a soft wrap, `""` for a split word.
     pub fn rows(text: &str, width: usize) -> Vec<(&'static str, String)> {
+        wrap(text, width)
+            .into_iter()
+            .map(|(sep, row)| match row.strip_prefix(' ') {
+                Some(rest) if sep == " " => (sep, rest.to_owned()),
+                _ => (sep, row),
+            })
+            .collect()
+    }
+
+    /// wrap-ansi's rows, where a space after a full row still starts the next one.
+    fn wrap(text: &str, width: usize) -> Vec<(&'static str, String)> {
         let mut rows: Vec<(&str, String)> = Vec::new();
         for line in text.split('\n') {
             rows.push(("\n", String::new()));
+            let mut used = 0;
             for (i, word) in line.split(' ').enumerate() {
-                let mut used = rows.last().map_or(0, |(_, r)| r.width());
-                if i > 0 && used >= width {
-                    rows.push((" ", String::new()));
-                    used = 0;
-                } else if i > 0 {
+                if i > 0 {
+                    if used >= width {
+                        rows.push((" ", String::new()));
+                        used = 0;
+                    }
                     rows.last_mut().unwrap().1.push(' ');
                     used += 1;
                 }
@@ -230,7 +242,7 @@ pub mod model {
                     }
                     for (j, c) in word.chars().enumerate() {
                         let w = c.width().unwrap_or(0);
-                        if used + w > width {
+                        if used > 0 && used + w > width {
                             rows.push((if j == 0 { " " } else { "" }, String::new()));
                             used = 0;
                         }
@@ -239,8 +251,10 @@ pub mod model {
                     }
                 } else if used > 0 && used + len > width {
                     rows.push((" ", word.to_owned()));
+                    used = len;
                 } else {
                     rows.last_mut().unwrap().1.push_str(word);
+                    used += len;
                 }
             }
         }
@@ -249,19 +263,19 @@ pub mod model {
 
     /// Whether the readers are not expected to read `text` back from its rows (issue #441):
     /// a text one space or newline apart that a reader takes first draws them too (a soft
-    /// wrap or a split word over a typed newline, a split word over a space), or
-    /// [`super::separator`] misreads a word after a full row it would overflow together
-    /// with the row's last word as a split word, or a typed newline before a word at least
-    /// a row wide as a soft wrap.
+    /// wrap or a split word over a typed newline, a split word over a space); a soft wrap
+    /// follows a full row, where the readers do not count the hidden space that starts the
+    /// next row; or a typed newline follows a full row or precedes a word at least a row
+    /// wide, which [`super::separator`] reads as a soft wrap or a split word.
     pub fn unreadable(text: &str, width: usize) -> bool {
-        let first = |row: &str| row.split(' ').next().unwrap_or_default().width();
+        let first = |line: &str| line.split(' ').next().unwrap_or_default().width();
         let lines: Vec<&str> = text.split('\n').collect();
-        let misread = rows(text, width).windows(2).any(|r| {
-            let last = r[0].1.rsplit(' ').next().unwrap_or_default().width();
-            r[1].0 == " " && r[0].1.width() >= width && last + first(&r[1].1) > width
-        }) || lines
+        let misread = wrap(text, width)
             .windows(2)
-            .any(|l| !l[0].is_empty() && first(l[1]) >= width);
+            .any(|r| r[1].1.starts_with(' ') || (r[1].0 == "\n" && r[0].1.width() >= width))
+            || lines
+                .windows(2)
+                .any(|l| !l[0].is_empty() && first(l[1]) >= width);
         let shown = |t: &str| -> Vec<String> {
             rows(t, width)
                 .into_iter()
@@ -452,6 +466,19 @@ mod tests {
             let screen = format!("{rule}\n❯ {}\n{rule}\n", rows.join("\n  "));
             prop_assert_eq!(parse(&screen), draft(&normalize(&text), rows.len()));
         }
+    }
+
+    #[test]
+    fn model_wraps_like_wrap_ansi() {
+        // wrap-ansi draws `["aaaa aaa", " b cc ", "ddd"]`.
+        assert_eq!(
+            model::rows("aaaa aaa b cc ddd", 8),
+            [
+                ("\n", "aaaa aaa".to_owned()),
+                (" ", "b cc ".to_owned()),
+                (" ", "ddd".to_owned())
+            ]
+        );
     }
 
     #[test]

@@ -1009,9 +1009,11 @@ mod tests {
                     paragraphs.iter().all(|p| {
                         !model::unreadable(p, cols - 2)
                             && !model::rows(p, cols - 2).windows(2).any(|r| {
+                                let tail = r[0].1.trim_end();
                                 r[1].0 == " "
-                                    && wide(r[0].1.trim_end().chars().next_back())
+                                    && wide(tail.chars().next_back())
                                     && wide(r[1].1.chars().next())
+                                    && tail.width() + 2 > cols - 2
                             })
                     })
                 }),
