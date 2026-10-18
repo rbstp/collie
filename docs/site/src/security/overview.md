@@ -4,7 +4,7 @@ Security is collie's first requirement: the phone can drive every agent on your 
 
 ## Network
 
-- **Tailnet only.** `collied` accepts connections only through its own Tailscale node, on one port, and opens no port on your local network.
+- **Tailnet only.** `collied` accepts application connections only through its own Tailscale node, on one port, and exposes no TCP listener on your local network. Tailscale's own UDP socket stays reachable, as the [threat model](../reference/threat-model.md) describes.
 - **Your paired phone only.** Before anything else, `collied` asks Tailscale who is connecting. It accepts only an untagged phone from your own tailnet, owned by you, that you paired and that still belongs to the account it was paired with. `collied` checks this again before every message, and revoking a phone cuts its live sessions.
 - **Mutual TLS.** Inside the tunnel, the phone pins the machine's key from the pairing QR code, and `collied` pins the phone's key, which never leaves its Secure Enclave. A stolen Tailscale node key, or a node injected by a compromised Tailscale control plane, gets no session.
 
