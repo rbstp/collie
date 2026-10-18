@@ -140,8 +140,9 @@ impl Transcripts {
                     .rev()
                 {
                     let count = match m.role.as_str() {
-                        "user" if m.tool.is_none() => &mut users,
-                        "assistant" if m.tool.is_none() => &mut replies,
+                        _ if m.tool.is_some() || m.text.trim().is_empty() => continue,
+                        "user" => &mut users,
+                        "assistant" => &mut replies,
                         _ => continue,
                     };
                     if *count == 2 {
@@ -1884,6 +1885,90 @@ mod tests {
     fn copilot_row(n: usize, text: &str) -> String {
         line(json!({"type":"assistant.message","id":format!("c{n}"),
             "data":{"content":text,"toolRequests":[],"turnId":"0"}}))
+    }
+
+    #[test]
+    fn latest_counts_only_readable_text_for_every_agent() {
+        let latest = HistoryParams {
+            latest: true,
+            ..params(None, None, None)
+        };
+        let texts = |page: HistoryPage| {
+            page.messages
+                .into_iter()
+                .map(|m| (m.role, m.text))
+                .collect::<Vec<_>>()
+        };
+        let expected: Vec<(String, String)> = vec![
+            ("user".into(), "Prompt".into()),
+            ("assistant".into(), "Answer two".into()),
+            ("assistant".into(), "Mixed".into()),
+        ];
+        let reply = |uuid: &str, content: Value| {
+            line(json!({"type":"assistant","uuid":uuid,"sessionId":CLAUDE,
+                "message":{"role":"assistant","content":content}}))
+        };
+        let tool = json!({"type":"tool_use","id":"c1","name":"Bash","input":{"command":"ls"}});
+        let claude = [
+            row(0, "Prompt"),
+            reply("a1", json!("Answer one")),
+            reply("a2", json!("Answer two")),
+            reply("a3", json!([{"type":"text","text":"Mixed"}, tool])),
+            line(
+                json!({"type":"user","uuid":"r1","sessionId":CLAUDE,"message":{"role":"user",
+                "content":[{"type":"tool_result","tool_use_id":"c1","content":"out"}]}}),
+            ),
+            reply("a4", json!([{"type":"thinking","thinking":"Hidden"}])),
+            reply("a5", json!([{"type":"text","text":" \n "}])),
+            reply("a6", json!([tool])),
+        ]
+        .concat();
+        let (_dir, t, a, _) = setup("claude", &claude);
+        assert_eq!(texts(t.history(&a, &latest)), expected);
+
+        let item = |id: &str, kind: &str, text: &str| {
+            line(
+                json!({"type":"event_msg","payload":{"type":"item_completed","thread_id":CODEX,
+                "item":{"type":kind,"id":id,"content":[{"type":"Text","text":text}]}}}),
+            )
+        };
+        let response = |payload: Value| line(json!({"type":"response_item","payload":payload}));
+        let codex = [
+            line(json!({"type":"session_meta","payload":{"id":CODEX,"cli_version":"0.160.1"}})),
+            item("u1", "UserMessage", "Prompt"),
+            item("a1", "AgentMessage", "Answer one"),
+            item("a2", "AgentMessage", "Answer two"),
+            item("a3", "AgentMessage", "Mixed"),
+            response(json!({"type":"function_call","name":"exec_command","arguments":"{}","call_id":"c1"})),
+            response(json!({"type":"function_call_output","output":"out","call_id":"c1"})),
+            response(json!({"type":"reasoning","summary":[{"type":"summary_text","text":"Hidden"}]})),
+            item("a4", "Reasoning", "Hidden"),
+            item("a5", "AgentMessage", " \n "),
+        ]
+        .concat();
+        let (_dir, t, a, _) = setup("codex", &codex);
+        assert_eq!(texts(t.history(&a, &latest)), expected);
+
+        let assistant = |id: &str, content: &str, tools: Value| {
+            line(
+                json!({"type":"assistant.message","id":id,"data":{"content":content,
+                "reasoningText":"Hidden","toolRequests":tools,"turnId":"0"}}),
+            )
+        };
+        let request = json!([{"toolCallId":"c1","name":"bash","arguments":{"command":"ls"}}]);
+        let copilot = [
+            copilot_header(),
+            line(json!({"type":"user.message","id":"u1","data":{"content":"Prompt"}})),
+            assistant("a1", "Answer one", json!([])),
+            assistant("a2", "Answer two", json!([])),
+            assistant("a3", "Mixed", request.clone()),
+            line(json!({"type":"tool.execution_complete","id":"r1",
+                "data":{"toolCallId":"c1","result":{"content":"out"}}})),
+            assistant("a4", "", request),
+            assistant("a5", " \n ", json!([])),
+        ]
+        .concat();
+        assert_eq!(texts(Copilot::new(&copilot).history(latest)), expected);
     }
 
     #[test]
