@@ -12,4 +12,4 @@ The two use the highest revision both support. Revision 26 is the first such rev
 
 You do not need to pair again: after the update, pull to refresh or reopen the app, and it connects again.
 
-When the protocol gets a new revision, the app and `collied` will keep supporting the two revisions before it, and release notes will say when support for an older one ends. A feature that changes what the two sides exchange works only when both support it; until then, the app and `collied` simply do not use it.
+When the protocol gets a new revision, the app and `collied` will keep supporting up to two earlier negotiated revisions, starting with revision 26, and release notes will say when support for an older one ends. [Negotiated protocol compatibility](../reference/architecture.md#negotiated-protocol-compatibility) has the details. A feature that changes what the two sides exchange works only when both support it; until then, the app and `collied` simply do not use it.
