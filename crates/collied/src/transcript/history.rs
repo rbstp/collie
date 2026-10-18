@@ -18,6 +18,7 @@ impl Transcripts {
     pub fn history_reader(&self) -> Self {
         Self {
             panes: self.panes.clone(),
+            copilot_sessions: self.copilot_sessions.clone(),
             ..Self::new(self.claude_projects.clone(), self.codex_sessions.clone())
         }
     }
