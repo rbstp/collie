@@ -72,6 +72,8 @@ async fn git_command(
         "-c",
         "core.fsmonitor=false",
         "-c",
+        "fetch.bundleURI=",
+        "-c",
         "diff.external=",
         "-c",
         "diff.submodule=short",
@@ -95,8 +97,10 @@ async fn git_command(
         }
     }
     // A partial clone's lazy fetch runs repository-configured programs (uploadpack,
-    // sshCommand, credential helpers). GIT_NO_LAZY_FETCH needs git 2.44; for older git, an
-    // empty GIT_ALLOW_PROTOCOL refuses every transport and outranks repository config.
+    // sshCommand, credential helpers). GIT_NO_LAZY_FETCH needs git 2.45 or a 2.39.4 to
+    // 2.44.1 security release; for older git, an empty GIT_ALLOW_PROTOCOL refuses every
+    // transport and outranks repository config, and the blank fetch.bundleURI above stops
+    // the fetch from starting git-remote-https before that check.
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -1296,6 +1300,25 @@ mod tests {
             },
         )
         .await;
+        assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn fetches_do_not_fetch_bundle_uris() {
+        let (dir, cwd, _) = repo();
+        let root = Path::new(cwd.as_str());
+        let marker = dir.path().join("helper");
+        let helper = format!("!touch {}", marker.display());
+        for (key, value) in [
+            ("fetch.bundleURI", "https://127.0.0.1:1/bundle"),
+            ("http.sslCert", "cert.pem"),
+            ("http.sslCertPasswordProtected", "true"),
+            ("credential.helper", &helper),
+        ] {
+            run(root, &["config", key, value]);
+        }
+        // A lazy fetch is a `git fetch` child inheriting the builder's environment and config.
+        let _ = git_command(&cwd, &["fetch"], 4096, &[]).await;
         assert!(!marker.exists());
     }
 

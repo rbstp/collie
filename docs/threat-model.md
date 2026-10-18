@@ -301,7 +301,7 @@ Manual keys and text intentionally have no approval-specific restrictions for Cl
 |---|---|
 | Assets | The Mac; the user's SSH keys and git credentials |
 | Attack | A repository the agent works in, or the agent itself, configures programs that collied's git reads (Git changes, archive and pull request branch checks) would run: an fsmonitor, an external diff, a textconv or clean filter, or, in a partial clone, a lazy fetch that runs `remote.<name>.uploadpack`, `core.sshCommand` or a credential helper. |
-| Mitigations | One git command builder with null stdin, no inherited `GIT_*` variables, no prompts, `core.fsmonitor=false`, `diff.external=`, `--no-ext-diff`, `--no-textconv`, blanked filter commands for `diff` and `status`, `GIT_NO_LAZY_FETCH=1` and an empty `GIT_ALLOW_PROTOCOL`, which refuses every transport whatever the repository's `protocol.*.allow` says, so a missing object fails the read instead of being fetched (built). |
+| Mitigations | One git command builder with null stdin, no inherited `GIT_*` variables, no prompts, `core.fsmonitor=false`, `diff.external=`, `--no-ext-diff`, `--no-textconv`, blanked filter commands for `diff` and `status`, `GIT_NO_LAZY_FETCH=1`, and for git without it an empty `GIT_ALLOW_PROTOCOL`, which refuses every transport whatever the repository's `protocol.*.allow` says, and a blank `fetch.bundleURI`, so a missing object fails the read instead of being fetched (built). |
 | Residual | Other git config still applies to these reads. The agent itself runs with the user's privileges, so this only keeps collied from running the repository's programs on its own. |
 | Phase | Built |
 
