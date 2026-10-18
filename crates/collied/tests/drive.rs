@@ -3896,47 +3896,57 @@ async fn copilot_scrollbar_uses_screen_columns_when_the_layout_differs() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["copilot"], &base);
-    // Copilot 1.0.100-1 in herdr 0.9.5: scrollbar at 205, pane.layout width 206.
-    let screen = include_str!("fixtures/copilot-1.0.100-1/scrollbar-inset.ansi.txt");
-    herdr.with(|h| {
-        h.snapshot["agents"][1]["agent"] = json!("copilot");
-        h.text = screen.into();
-        h.columns = Some(206);
-    });
+    herdr.with(|h| h.snapshot["agents"][1]["agent"] = json!("copilot"));
     let params = |source| ReadParams {
         terminal_id: tid(CODEX_BLOCKED),
         source,
         lines: None,
     };
-    let mut cleaned = None;
-    for source in [ReadSource::Recent, ReadSource::Visible] {
-        let Ok(Response::Terminal(read)) = drive.read(params(source), true).await else {
-            panic!("no Copilot read");
+    // Copilot 1.0.100-1 in herdr 0.9.5: inset scrollbars and tool results sharing their style.
+    for (screen, text, changed) in [
+        (
+            include_str!("fixtures/copilot-1.0.100-1/scrollbar-inset.ansi.txt"),
+            "Reading command output",
+            "Reading updated output",
+        ),
+        (
+            include_str!("fixtures/copilot-1.0.100-1/scrollbar-tool-results.ansi.txt"),
+            "└ idle",
+            "└ busy",
+        ),
+    ] {
+        let screen = format!("{screen}\u{1b}[0m\r\nend of output");
+        herdr.with(|h| {
+            h.text = screen.clone();
+            h.columns = Some(206);
+        });
+        let mut cleaned = None;
+        for source in [ReadSource::Recent, ReadSource::Visible] {
+            let Ok(Response::Terminal(read)) = drive.read(params(source), true).await else {
+                panic!("no Copilot read");
+            };
+            assert_eq!(read.ansi.matches('┃').count(), 1);
+            assert_eq!(read.ansi.replace('┃', ""), screen.replace('┃', ""));
+            assert!(read.ansi.contains(text));
+            assert!(read.ansi.contains("╻"));
+            assert!(read.ansi.contains("╹"));
+            assert!(read.ansi.ends_with("end of output"));
+            cleaned = Some(read);
+        }
+        let cleaned = cleaned.unwrap();
+        let mut watcher = drive.watch(tid(CODEX_BLOCKED), 200, false).await.unwrap();
+        let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+            panic!("no Copilot watch output");
         };
-        assert_eq!(read.ansi.matches('┃').count(), 1);
-        assert!(read.ansi.contains("Reading command output"));
-        assert!(read.ansi.contains("╻"));
-        assert!(read.ansi.contains("╹"));
-        cleaned = Some(read);
+        assert_eq!(first.ansi, cleaned.ansi);
+        herdr.with(|h| h.text = screen.replace(text, changed));
+        let Ok(Some(Watched::Patch(patch))) = next(&mut watcher).await else {
+            panic!("no changed Copilot watch output");
+        };
+        let updated = patch.apply(&first).unwrap();
+        assert_eq!(updated.ansi, first.ansi.replace(text, changed));
+        drop(watcher);
     }
-    let cleaned = cleaned.unwrap();
-    let mut watcher = drive.watch(tid(CODEX_BLOCKED), 200, false).await.unwrap();
-    let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
-        panic!("no Copilot watch output");
-    };
-    assert_eq!(first.ansi, cleaned.ansi);
-    herdr.with(|h| h.text = screen.replace("Reading command output", "Reading updated output"));
-    let Ok(Some(Watched::Patch(patch))) = next(&mut watcher).await else {
-        panic!("no changed Copilot watch output");
-    };
-    let updated = patch.apply(&first).unwrap();
-    assert_eq!(
-        updated.ansi,
-        first
-            .ansi
-            .replace("Reading command output", "Reading updated output")
-    );
-    drop(watcher);
 
     let bar = "\u{1b}[0m\u{1b}[38;2;145;152;161m┃\u{1b}[0m";
     herdr.with(|h| {
