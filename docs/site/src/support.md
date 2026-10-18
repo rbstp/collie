@@ -1,6 +1,6 @@
 # Support
 
-collie is an open source project maintained by Richard Boisvert.
+collie is an open source project maintained by Richard Boisvert. You get help through GitHub issues.
 
 ## Get help
 
