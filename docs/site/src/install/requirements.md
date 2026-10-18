@@ -1,6 +1,6 @@
 # Requirements
 
-To run collie you need a machine for the agents, an iPhone and a personal Tailscale account. To build it, you also need the tools listed further down.
+To run collie, you need the machine, phone and accounts listed first. To build it from source, you also need the tools listed further down.
 
 ## To run collie
 
