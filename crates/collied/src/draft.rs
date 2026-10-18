@@ -194,8 +194,108 @@ pub(crate) fn cells(row: &str) -> Vec<(char, bool)> {
     out
 }
 
+/// A model of Claude Code 2.1's wrap to draw screens from: wrap-ansi `{hard: true, trim:
+/// false}` with the spaces around each soft wrap hidden.
+#[cfg(test)]
+pub mod model {
+    use proptest::prelude::*;
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+    /// Lines of single-spaced words, some longer than a row or of wide characters.
+    pub fn text() -> impl Strategy<Value = String> {
+        let line = prop::collection::vec("[a-z]{1,12}|[中文]{1,4}", 0..8).prop_map(|w| w.join(" "));
+        prop::collection::vec(line, 1..4).prop_map(|l| l.join("\n"))
+    }
+
+    /// The rows of `text` wrapped at `width`, each after what joins it to the row above:
+    /// `"\n"` for a typed newline, `" "` for a soft wrap, `""` for a split word.
+    pub fn rows(text: &str, width: usize) -> Vec<(&'static str, String)> {
+        wrap(text, width)
+            .into_iter()
+            .map(|(sep, row)| match row.strip_prefix(' ') {
+                Some(rest) if sep == " " => (sep, rest.to_owned()),
+                _ => (sep, row),
+            })
+            .collect()
+    }
+
+    /// wrap-ansi's rows, where a space after a full row still starts the next one.
+    fn wrap(text: &str, width: usize) -> Vec<(&'static str, String)> {
+        let mut rows: Vec<(&str, String)> = Vec::new();
+        for line in text.split('\n') {
+            rows.push(("\n", String::new()));
+            let mut used = 0;
+            for (i, word) in line.split(' ').enumerate() {
+                if i > 0 {
+                    if used >= width {
+                        rows.push((" ", String::new()));
+                        used = 0;
+                    }
+                    rows.last_mut().unwrap().1.push(' ');
+                    used += 1;
+                }
+                let len = word.width();
+                if len > width {
+                    if (len - 1) / width < 1 + (len - (width - used) - 1) / width {
+                        rows.push((" ", String::new()));
+                        used = 0;
+                    }
+                    for (j, c) in word.chars().enumerate() {
+                        let w = c.width().unwrap_or(0);
+                        if used > 0 && used + w > width {
+                            rows.push((if j == 0 { " " } else { "" }, String::new()));
+                            used = 0;
+                        }
+                        rows.last_mut().unwrap().1.push(c);
+                        used += w;
+                    }
+                } else if used > 0 && used + len > width {
+                    rows.push((" ", word.to_owned()));
+                    used = len;
+                } else {
+                    rows.last_mut().unwrap().1.push_str(word);
+                    used += len;
+                }
+            }
+        }
+        rows
+    }
+
+    /// Whether the readers are not expected to read `text` back from its rows (issue #441):
+    /// a text one space or newline apart that a reader takes first draws them too (a soft
+    /// wrap or a split word over a typed newline, a split word over a space); a soft wrap
+    /// follows a full row, where the readers do not count the hidden space that starts the
+    /// next row; or a typed newline follows a full row or precedes a word at least a row
+    /// wide, which [`super::separator`] reads as a soft wrap or a split word.
+    pub fn unreadable(text: &str, width: usize) -> bool {
+        let first = |line: &str| line.split(' ').next().unwrap_or_default().width();
+        let lines: Vec<&str> = text.split('\n').collect();
+        let misread = wrap(text, width)
+            .windows(2)
+            .any(|r| r[1].1.starts_with(' ') || (r[1].0 == "\n" && r[0].1.width() >= width))
+            || lines
+                .windows(2)
+                .any(|l| !l[0].is_empty() && first(l[1]) >= width);
+        let shown = |t: &str| -> Vec<String> {
+            rows(t, width)
+                .into_iter()
+                .map(|(_, r)| r.trim_end().to_owned())
+                .collect()
+        };
+        let drawn = shown(text);
+        misread
+            || text.match_indices([' ', '\n']).any(|(i, sep)| {
+                let alts: &[&str] = if sep == " " { &[""] } else { &["", " "] };
+                alts.iter()
+                    .any(|alt| shown(&format!("{}{alt}{}", &text[..i], &text[i + 1..])) == drawn)
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
     use crate::drive::sanitize_ansi;
 
@@ -347,6 +447,52 @@ mod tests {
         ] {
             assert_eq!(read(ansi), draft(text, 1), "{text}");
         }
+    }
+
+    proptest! {
+        #[test]
+        fn reads_back_what_was_typed(
+            (text, width) in (model::text(), 4..24usize).prop_filter("unreadable", |(t, w)| {
+                // A run of wide characters split one column short of the edge reads as two
+                // words.
+                !model::unreadable(t, *w)
+                    && !model::rows(t, *w)
+                        .windows(2)
+                        .any(|r| r[1].0.is_empty() && r[0].1.width() < *w)
+            }),
+        ) {
+            let rows: Vec<String> = model::rows(&text, width).into_iter().map(|(_, r)| r).collect();
+            let rule = "─".repeat(width + 4);
+            let screen = format!("{rule}\n❯ {}\n{rule}\n", rows.join("\n  "));
+            prop_assert_eq!(parse(&screen), draft(&normalize(&text), rows.len()));
+        }
+    }
+
+    #[test]
+    fn model_wraps_like_wrap_ansi() {
+        // wrap-ansi draws `["aaaa aaa", " b cc ", "ddd"]`.
+        assert_eq!(
+            model::rows("aaaa aaa b cc ddd", 8),
+            [
+                ("\n", "aaaa aaa".to_owned()),
+                (" ", "b cc ".to_owned()),
+                (" ", "ddd".to_owned())
+            ]
+        );
+        // Claude Code 2.1.302 draws these at 44 columns: the space after a full row takes a
+        // column of the next row, alone on it before a word that fills a row.
+        let full = format!("{} {}", "a".repeat(20), "b".repeat(23));
+        let shown = |text: &str| -> Vec<String> {
+            model::rows(text, 44).into_iter().map(|(_, r)| r).collect()
+        };
+        assert_eq!(
+            shown(&format!("{full} {} {}", "c".repeat(20), "d".repeat(23))),
+            [full.clone(), "c".repeat(20) + " ", "d".repeat(23)]
+        );
+        assert_eq!(
+            shown(&format!("{full} {}", "c".repeat(44))),
+            [full.clone(), String::new(), "c".repeat(44)]
+        );
     }
 
     #[test]

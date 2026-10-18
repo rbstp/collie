@@ -25,6 +25,7 @@ collie-tls = { path = "crates/tls" }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 getrandom = "0.4.3"
 libc = "0.2.190"
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 protocol = { path = "crates/protocol" }
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }

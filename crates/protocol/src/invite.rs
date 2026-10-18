@@ -101,6 +101,8 @@ fn is_node_id(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     fn invite() -> PairingInvite {
@@ -136,6 +138,35 @@ mod tests {
             uri.replace("&c=", "&k="),
         ] {
             assert!(PairingInvite::parse(&bad).is_err(), "{bad}");
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn parse_never_panics(
+            uri in "\\PC*",
+            fields in "(collie://pair#)?([vhpnkcx]=[A-Za-z0-9_.%-]{0,50}&?){0,8}",
+        ) {
+            let _ = PairingInvite::parse(&uri);
+            let _ = PairingInvite::parse(&fields);
+        }
+
+        #[test]
+        fn parse_reads_back_to_uri(
+            host in "[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?){0,2}",
+            port in 1..=u16::MAX,
+            node_id in "[a-zA-Z0-9]{1,64}",
+            key in "[A-Za-z0-9_-]{43}",
+            code in "[A-Za-z0-9_-]{22}",
+        ) {
+            let invite = PairingInvite {
+                host,
+                port,
+                node_id,
+                key: KeyPin::new(key).unwrap(),
+                code: PairingCode::new(code).unwrap(),
+            };
+            prop_assert_eq!(PairingInvite::parse(&invite.to_uri()), Ok(invite));
         }
     }
 

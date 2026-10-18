@@ -140,6 +140,8 @@ fn longest_run(old: &[&str], new: &[&str]) -> (usize, usize, usize) {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     fn read(ansi: &str) -> TerminalRead {
@@ -370,6 +372,45 @@ mod tests {
             applied += usize::from(valid);
         }
         assert!(applied > 1000);
+    }
+
+    fn lines() -> impl Strategy<Value = Vec<&'static str>> {
+        prop::collection::vec(
+            prop::sample::select(&["", "─────", "> ", "a", "b", "✻ c", "d\r"][..]),
+            0..20,
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn between_then_apply_is_the_new_text(
+            [above, old, new, below] in prop::array::uniform4(lines()),
+            scrolled in 0..20usize,
+            rows in prop::array::uniform4(prop::collection::vec(0..40u32, 0..3)),
+            bars in any::<[bool; 2]>(),
+        ) {
+            let [prev_wraps, next_wraps, prev_splits, next_splits] = rows;
+            let text = |mid: &[&str], skip: usize| {
+                let lines: Vec<&str> =
+                    above.iter().skip(skip).chain(mid).chain(&below).copied().collect();
+                lines.join("\n")
+            };
+            let prev = TerminalRead {
+                wraps: prev_wraps,
+                splits: prev_splits,
+                copilot_scrollbar: bars[0],
+                ..read(&text(&old, 0))
+            };
+            let next = TerminalRead {
+                wraps: next_wraps,
+                splits: next_splits,
+                copilot_scrollbar: bars[1],
+                ..read(&text(&new, scrolled))
+            };
+            if let Some(patch) = OutputPatch::between(&prev, &next) {
+                prop_assert_eq!(patch.apply(&prev), Some(next));
+            }
+        }
     }
 
     #[test]

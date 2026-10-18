@@ -462,7 +462,10 @@ fn list_marker(s: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
+    use crate::draft::model;
 
     fn joins(rows: &[&str], cols: usize) -> (Vec<u32>, Vec<u32>) {
         soft_wraps(&rows.join("\r\n"), cols)
@@ -993,6 +996,58 @@ mod tests {
         let rows = [row.as_str(), "  文字。"];
         assert_eq!(joins(&rows, 189), (vec![], vec![1]));
         assert_eq!(joins(&rows, 190), (vec![1], vec![]));
+    }
+
+    proptest! {
+        #[test]
+        fn prose_joins_where_it_wrapped(
+            (paragraphs, cols) in (prop::collection::vec(model::text(), 1..3), 6..26usize)
+                .prop_filter("unreadable", |(paragraphs, cols)| {
+                    let wide = |c: Option<char>| c.and_then(UnicodeWidthChar::width) == Some(2);
+                    // `wide_cut` reads a soft wrap between wide characters at the edge as a
+                    // split word.
+                    paragraphs.iter().all(|p| {
+                        !model::unreadable(p, cols - 2)
+                            && !model::rows(p, cols - 2).windows(2).any(|r| {
+                                let tail = r[0].1.trim_end();
+                                r[1].0 == " "
+                                    && wide(tail.chars().next_back())
+                                    && wide(r[1].1.chars().next())
+                                    && tail.width() + 2 > cols - 2
+                            })
+                    })
+                }),
+        ) {
+            let width = cols - 2;
+            let (mut screen, mut wraps, mut splits) = (Vec::new(), Vec::new(), Vec::new());
+            for paragraph in &paragraphs {
+                for (sep, row) in model::rows(paragraph, width) {
+                    let at = u32::try_from(screen.len()).unwrap();
+                    match sep {
+                        " " => wraps.push(at),
+                        "" => splits.push(at),
+                        _ => {}
+                    }
+                    let mark = if screen.is_empty() { "⏺" } else { " " };
+                    screen.push(format!("{mark} {row}"));
+                }
+                screen.push(String::new());
+            }
+            prop_assert_eq!(soft_wraps(&screen.join("\n"), cols), (wraps, splits));
+        }
+
+        #[test]
+        fn readers_never_panic(text in crate::prompt::fixtures::screen(), cols in 0..120usize) {
+            let rows = text.split('\n').count();
+            for kind in ["claude", "codex", "copilot"] {
+                let (wraps, splits) = soft_wraps_for(kind, &text, cols);
+                for at in [wraps, splits] {
+                    prop_assert!(at.is_sorted() && at.iter().all(|&i| (i as usize) < rows));
+                }
+            }
+            prop_assert_eq!(without_copilot_scrollbar(&text, cols).split('\n').count(), rows);
+            copilot_scrollbar_columns(&text);
+        }
     }
 
     #[test]
