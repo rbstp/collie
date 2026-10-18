@@ -1145,7 +1145,8 @@ impl CollieCore {
 
     /// After a long background (or a suspend), when no machine is connected again
     /// [`REBIND_AFTER`] later the node is rebound, and when none has connected
-    /// [`RESTART_AFTER`] after the resume it is restarted.
+    /// [`RESTART_AFTER`] after the resume it is restarted. A node that receives only through
+    /// DERP, and on which a dial to an online machine failed before, is restarted at once.
     pub fn resume(&self, background_secs: u64) {
         // Bumped before the send: a suspend checking it under the watch lock either sees
         // it or is undone by the send.
@@ -1164,7 +1165,9 @@ impl CollieCore {
                     link.last_dial.elapsed().as_secs(),
                     link_error(c, &link)
                 );
-                (c.machine.node_id.clone(), line)
+                let failed = matches!(link.phase, LinkPhase::Connecting | LinkPhase::Waiting)
+                    && link.last_error.is_some();
+                (c.machine.node_id.clone(), line, failed)
             })
             .collect();
         for conn in &conns {
@@ -2899,7 +2902,7 @@ impl Inner {
         background: Duration,
         suspended: bool,
         epoch: u64,
-        links: Vec<(String, String)>,
+        links: Vec<(String, String, bool)>,
     ) {
         self.start_missing_node("resume").await;
         let mut line = format!(
@@ -2907,20 +2910,20 @@ impl Inner {
             background.as_secs(),
             if suspended { ", suspended" } else { "" }
         );
-        let mut peers = None;
+        let mut status = None;
         let node = lock(&self.node).clone();
         let started = node.as_ref().map(Arc::downgrade).unwrap_or_default();
         match node {
             None => line += " no node",
             Some(node) => {
                 match tokio::time::timeout(KICK_TIMEOUT, blocking(move || node.status())).await {
-                    Ok(Ok(Ok(status))) => {
+                    Ok(Ok(Ok(s))) => {
                         line += &format!(
                             " node {:?}, health {:?}",
-                            status.backend_state,
-                            status.health.unwrap_or_default()
+                            s.backend_state,
+                            s.health.as_deref().unwrap_or_default()
                         );
-                        peers = status.peer;
+                        status = Some(s);
                     }
                     Ok(Ok(Err(e))) => line += &format!(" node status failed: {e}"),
                     Ok(Err(e)) => line += &format!(" node status failed: {e}"),
@@ -2928,15 +2931,23 @@ impl Inner {
                 }
             }
         }
-        for (node_id, link) in links {
-            let online = peers
+        let mut failed = Vec::new();
+        for (node_id, link, dial_failed) in links {
+            let online = status
                 .iter()
-                .flat_map(|p| p.values())
+                .flat_map(|s| s.peer.iter().flat_map(|p| p.values()))
                 .find(|p| p.stable_id == node_id)
                 .map(|p| p.online);
             line += &format!("; {link}, online {online:?}");
+            if dial_failed {
+                failed.push(node_id);
+            }
         }
         self.log(line);
+        if status.as_ref().is_some_and(|s| deaf(s, &failed)) && !self.connected() {
+            self.restart("resume, receive stopped", started).await;
+            return;
+        }
         if !suspended && background < FOREGROUND_RECONNECT {
             return;
         }
@@ -3188,6 +3199,26 @@ fn request_error(conn: &Conn, e: RequestError) -> CoreError {
             message: last.unwrap_or_else(|| "timed out waiting for the machine".into()),
         },
     }
+}
+
+/// wireguard-go never restarts a receive func that returned an error (reads fail once iOS
+/// defuncts the suspended app's UDP sockets), and a rebind replaces the sockets without
+/// restarting it, so the node receives only through DERP until it is replaced. Tailscale's
+/// health check reports it within a minute. Most resumes on such a node still connect at once;
+/// once a dial to a machine Tailscale reports online has failed on it (`failed`), it stayed
+/// unreachable until a restart.
+fn deaf(status: &tailnet::Status, failed: &[String]) -> bool {
+    let stopped = status
+        .health
+        .iter()
+        .flatten()
+        .any(|h| h.starts_with("The MagicSock function ") && h.contains(" is not running"));
+    stopped
+        && status
+            .peer
+            .iter()
+            .flat_map(|p| p.values())
+            .any(|p| p.online && failed.contains(&p.stable_id))
 }
 
 fn link_error(conn: &Conn, link: &Link) -> Option<String> {
@@ -3522,6 +3553,34 @@ mod tests {
             pair_error(ConnectError::Offline, 8457),
             CoreError::NotRunning
         ));
+    }
+
+    #[test]
+    fn only_a_deaf_node_that_failed_an_online_machine_restarts_at_once() {
+        // Health text from a phone's resume diagnostics.
+        const IPV4: &str = "The MagicSock function ReceiveIPv4 is not running. You might experience connectivity issues.";
+        const IPV6: &str = "The MagicSock function ReceiveIPv6 is not running. You might experience connectivity issues.";
+        const DNS: &str = "Tailscale failed to fetch the DNS configuration of your device: getting OS base config is not supported";
+        let status = |health: &[&str]| -> tailnet::Status {
+            serde_json::from_value(serde_json::json!({
+                "BackendState": "Running",
+                "Health": health,
+                "Peer": {
+                    "k1": {"ID": "nMAC", "Online": true},
+                    "k2": {"ID": "nLINUX", "Online": false},
+                },
+            }))
+            .unwrap()
+        };
+        let failed = |ids: &[&str]| ids.iter().map(|&id| id.to_owned()).collect::<Vec<_>>();
+        assert!(deaf(&status(&[IPV4, DNS]), &failed(&["nMAC"])));
+        assert!(deaf(&status(&[DNS, IPV6]), &failed(&["nLINUX", "nMAC"])));
+        assert!(
+            !deaf(&status(&[IPV4, DNS]), &[]),
+            "most resumes on such a node connect through DERP"
+        );
+        assert!(!deaf(&status(&[IPV4]), &failed(&["nLINUX"])));
+        assert!(!deaf(&status(&[DNS]), &failed(&["nMAC"])));
     }
 
     #[test]
