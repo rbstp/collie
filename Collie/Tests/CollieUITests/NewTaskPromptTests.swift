@@ -26,7 +26,7 @@ final class NewTaskPromptTests: XCTestCase {
         XCTAssertTrue(preservedPrompt.appears(within: 10), app.debugDescription)
         let collapse = app.buttons["Hide keyboard"]
         XCTAssertTrue(collapse.appears(within: 5), app.debugDescription)
-        XCTAssertTrue(collapse.isHittable, app.debugDescription)
+        XCTAssertTrue(collapse.wait(for: \.isHittable, toEqual: true, timeout: 5), app.debugDescription)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "new-task-keyboard-collapse"
         screenshot.lifetime = .keepAlways
