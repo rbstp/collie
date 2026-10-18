@@ -1,6 +1,6 @@
 # Saved prompts
 
-Saved prompts are reusable, named prompts.
+Saved prompts let you name a prompt once and reuse it.
 
 - **Add** them in **Settings > Prompt > Saved prompts**, or from the paperclip menu in an agent or in New task.
 - **Use** one by tapping it: it fills an empty composer or is appended to your current draft. Edit it, then send.

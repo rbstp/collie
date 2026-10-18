@@ -1,6 +1,6 @@
 # Run Copilot CLI from your phone
 
-GitHub Copilot CLI agents are supported through Terminal.
+You can follow GitHub Copilot CLI agents and work with them in Terminal. Chat is not available for Copilot CLI.
 
 ## What works
 
@@ -16,12 +16,12 @@ GitHub Copilot CLI agents are supported through Terminal.
 
 ## Set up
 
-Install Copilot CLI on the machine as `copilot`, and keep it in `collied.toml`'s `[tasks] agents` list (it is there by default). herdr starts it and reads its status from the screen.
+Install Copilot CLI on the machine as `copilot`, and keep it in the `[tasks] agents` list of `collied.toml`, where it is by default. herdr starts it and reads its status from the screen.
 
 ## Terminal
 
-Copilot's scrollbar column is removed, and its prose and sent prompts wrap to the phone's width with line wrapping on.
+Terminal hides Copilot's scrollbar column. With line wrapping on, Copilot's prose and your sent prompts wrap to the phone's width.
 
 ## Startup prompts
 
-Copilot's folder trust prompt stops a new task with a message. Answer it in Terminal, with the key strip or by typing in the composer.
+When Copilot asks whether to trust the folder, the new task stops with a message. Answer the prompt in Terminal, with the key strip or by typing in the composer.

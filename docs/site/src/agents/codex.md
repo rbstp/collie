@@ -1,5 +1,7 @@
 # Run Codex from your phone
 
+You can follow Codex agents, read them in Chat and answer their prompts from the phone. Codex approvals come as blocked notifications, without Approve or Deny buttons.
+
 ## What works
 
 | Feature | Codex |
@@ -20,15 +22,15 @@
    herdr integration install codex
    ```
 
-   The hook tells herdr which Codex session runs in each pane; Chat reads that session. herdr 0.9.5 installs version 10 of the hook, which removes the turn hooks 0.9.4 added (Codex warns "clamping Interrupt hook timeout" while they remain). `collied doctor` warns when it is missing or older, once Codex has its `~/.codex` folder (or `$CODEX_HOME`).
+   The hook tells herdr which Codex session runs in each pane, and Chat reads that session. herdr 0.9.5 installs version 10 of the hook. It removes the turn hooks that herdr 0.9.4 added, which make Codex warn "clamping Interrupt hook timeout". Once Codex has its `~/.codex` folder (or `$CODEX_HOME`), `collied doctor` warns when the hook is missing or older.
 
 2. Start Codex tasks from the phone, or start Codex with `--no-daemon` yourself.
 
 ## Why `--no-daemon`
 
-New Codex tasks started from collie run `codex --no-daemon`, so each pane reports its own session, including after `/new` or a resume. This costs a server startup and some memory per window.
+collie starts new Codex tasks with `codex --no-daemon`, so each pane reports its own session, including after `/new` or a resume. Each window then starts its own server and uses some more memory.
 
-Sessions already running on a shared daemon are not changed. To move one over, finish the current turn, then relaunch it in the same pane:
+collie leaves sessions already running on a shared daemon as they are. To move one over, finish the current turn, then relaunch it in the same pane:
 
 ```sh
 codex --no-daemon resume <session-id>
@@ -38,7 +40,7 @@ Use the session's real ID, not one guessed from the folder.
 
 ## Plan usage
 
-For a credit-metered workspace, the Usage view shows the monthly used and allowed credits and the reset date. `collied` reads them from the local Codex app-server every five minutes; Codex's sign-in token stays with Codex. The row clears after you sign out or switch to an account without a monthly limit.
+For a credit-metered workspace, the Usage view shows the credits used and allowed this month, and the reset date. `collied` reads them from the local Codex app-server every five minutes, and Codex's sign-in token stays with Codex. The row clears after you sign out or switch to an account without a monthly limit.
 
 ## Status and done alerts
 
@@ -46,4 +48,4 @@ herdr reads Codex's status from its screen. If Codex statuses or done alerts loo
 
 ## Startup prompts
 
-A startup prompt, such as folder trust or Codex's update picker, stops a new task with a message. Answer it in Terminal; collie never types into the update picker.
+When a startup prompt, such as folder trust or Codex's update picker, appears, the new task stops with a message. Answer the prompt in Terminal. collie never types into the update picker.

@@ -1,6 +1,6 @@
 # Pull requests
 
-When an agent works on a branch with a GitHub pull request, collie shows it. `collied` reads it with the `gh` CLI on the machine, so `gh` must be installed and signed in. `collied doctor` warns when it is not.
+When an agent works on a branch with a GitHub pull request, collie shows the pull request and can act on it. `collied` reads it with the `gh` CLI on the machine, so `gh` must be installed and signed in; `collied doctor` warns when it is not.
 
 ## Status
 
@@ -18,19 +18,19 @@ Each prompt fills the composer with one line naming the pull request, ready for 
 
 ## Watch a pull request
 
-For a Claude Code agent with an open or draft pull request, the session menu offers **Watch PR**, checking every 2, 5, 15 or 30 minutes. `collied` keeps watching with or without the phone, and wakes the agent with a one-line prompt when:
+For a Claude Code agent with an open or draft pull request, the session menu offers **Watch PR**, which checks every 2, 5, 15 or 30 minutes. `collied` keeps watching whether or not the phone is connected, and wakes the agent with a one-line prompt when:
 
 - a check fails;
 - all required checks pass;
 - someone else comments or reviews;
 - the branch starts to conflict.
 
-It only wakes an agent that is idle or done and still on the watched branch, and sends you a "Woke" alert with a short summary. The watch stops when the pull request is merged or closed, after 10 wakes in a row made only of comments, after 8 failed reads, or when you choose **Stop watching**.
+`collied` wakes only an agent that is idle or done and still on the watched branch, and sends you a "Woke" alert with a short summary. The watch stops when you choose **Stop watching**, when the pull request is merged or closed, after 10 wakes in a row made only of comments, or after 8 failed reads.
 
 ## Archive when the pull request merges
 
 A merged pull request's badge reads **Merged**, and the session menu puts **Archive** first.
 
-Turn on **Settings > Sessions > Archive when the PR merges** to let `collied` archive the task itself. It only archives a linked worktree whose agents are all idle or done and whose checkout has no uncommitted changes, then sends an "Archived" alert. A merge is noticed within about 2 minutes.
+To let `collied` archive the task itself, turn on **Settings > Sessions > Archive when the PR merges**. `collied` notices a merge within about 2 minutes. It archives only a linked worktree whose agents are all idle or done and whose checkout has no uncommitted changes, then sends an "Archived" alert.
 
 Done, Woke and Archived alerts all follow **Settings > Notifications > Notify when an agent finishes**.
