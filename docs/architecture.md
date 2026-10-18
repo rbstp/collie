@@ -327,6 +327,8 @@ herdr reports each agent's session id (`agent_session.value` in `agent.list` and
 
 Security: [Agent transcripts on the Mac](threat-model.md#agent-transcripts-on-the-mac).
 
+Grid cards show running subagents in transcript order on glass at the top of the terminal preview: title and elapsed time only, capped at 2 rows or 4 when starred, then "+N more". The overlay leaves the bottom-following output visible below it, and the card's combined accessibility element includes the list. Previews with a list grow with accessibility text sizes so the list does not cover all the output. Elapsed time uses the grid's existing per-minute timeline with no additional reads. Blocked cards hide the list and retain the caption's subagent count so their whole terminal and prompt remain visible. An empty subagent list removes the overlay. No version bump: this uses the existing `AgentSummary.subagents` without changing collied or the wire types.
+
 ## Linked pull requests
 
 Each `Agent` can carry an optional `pull_request`: `number`, `state` (`open`, `draft`, `merged`, `closed`), `checks` (`passing`, `failing`, `pending`, `none`), `url`, `failing_checks` (the names of failing checks), `remarks` (reviews plus comments) and `conflicting`. No version bump: the fields are additive on a server-to-phone type, and both enums read an unknown value as `unknown`.

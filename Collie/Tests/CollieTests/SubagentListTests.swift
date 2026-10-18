@@ -1,4 +1,5 @@
 import CollieCore
+import GhosttyTerminal
 import SwiftUI
 import XCTest
 @testable import Collie
@@ -10,7 +11,6 @@ final class SubagentListTests: XCTestCase {
     private func subagent(_ title: String, tokens: UInt64, calledTools: Bool = true) -> SubagentSummary {
         SubagentSummary(agentType: "general-purpose", title: title, activity: "Running cargo test", startedAtMs: started, tokens: tokens, calledTools: calledTools)
     }
-
     private func at(_ seconds: Double) -> Date { Date(timeIntervalSince1970: Double(started / 1000) + seconds) }
 
     func testRowsReadLikeTheTerminalPanel() {
@@ -54,6 +54,54 @@ final class SubagentListTests: XCTestCase {
                 XCTAssertGreaterThan(list.height, line * 1.5, "\(size)")
             } else {
                 XCTAssertLessThan(list.height, line * 1.5, "\(size)")
+            }
+        }
+
+    }
+
+    func testGridPreviewKeepsLatestOutputVisibleAtAccessibilitySizes() async throws {
+        let output = (1...100).map { "Output line \($0)\r\n" }.joined()
+        let core = DemoAgentCore(snapshot: output, subagentDemo: true)
+        let sample = try XCTUnwrap(core.agentView(machineId: DemoAgentCore.machine.id, terminalId: "term_demo", afterRevision: 0)?.agent)
+        for kind in ["claude", "copilot", "codex"] {
+            var agent = sample
+            agent.kind = kind
+            for starred in [false, true] {
+                for size in [DynamicTypeSize.large, .accessibility5] {
+                    func card(_ agent: AgentSummary) -> some View {
+                        AgentCard(agent: agent, screen: output, workspace: nil, followed: false, starred: starred, now: .now)
+                            .environment(\.dynamicTypeSize, size)
+                            .frame(width: 370)
+                    }
+                    let host = UIHostingController(rootView: card(agent))
+                    try await hosting(host) { window in
+                        try await Task.sleep(for: .milliseconds(250))
+                        host.view.layoutIfNeeded()
+                        let terminal = try XCTUnwrap(descendants(host.view).compactMap { $0 as? GhosttyTerminalUIView }.first)
+                        let lineHeight = UIHostingController(rootView: Text("x").font(.caption2).environment(\.dynamicTypeSize, size))
+                            .sizeThatFits(in: CGSize(width: 370, height: CGFloat.greatestFiniteMagnitude)).height
+                        let listHeight = lineHeight * (starred ? 5 : 3) + (starred ? 8 : 4) + 12
+                        XCTAssertGreaterThan(terminal.bounds.height - listHeight, 40)
+                        XCTAssertEqual(terminal.contentOffset.y, max(terminal.contentSize.height + terminal.adjustedContentInset.bottom - terminal.bounds.height, -terminal.adjustedContentInset.top), accuracy: 1)
+                        let attachment = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                        })
+                        attachment.name = "grid-subagents-\(kind)-\(starred)-\(size)"
+                        attachment.lifetime = .keepAlways
+                        add(attachment)
+
+                        for status in [AgentState.blocked, .working] {
+                            var updated = agent
+                            updated.status = status
+                            if status == .working { updated.subagents = [] }
+                            host.rootView = card(updated)
+                            try await Task.sleep(for: .milliseconds(100))
+                            host.view.layoutIfNeeded()
+                            XCTAssertEqual(terminal.bounds.height, starred ? 240 : 120, accuracy: 1)
+                            XCTAssertEqual(terminal.contentOffset.y, max(terminal.contentSize.height + terminal.adjustedContentInset.bottom - terminal.bounds.height, -terminal.adjustedContentInset.top), accuracy: 1)
+                        }
+                    }
+                }
             }
         }
     }
