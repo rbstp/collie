@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -32,6 +32,8 @@ struct Scan {
     ordinal: u64,
     skip_line: bool,
     trusted: bool,
+    /// A verified parent relation survives a damaged or replaced rollout.
+    belongs: Option<bool>,
     history_start: u64,
     title: String,
     agent_type: String,
@@ -62,7 +64,7 @@ impl Live {
             self.copilot.remove(session);
             return (Vec::new(), false);
         }
-        let (files, truncated) = entries(&dir);
+        let (files, mut truncated) = entries(&dir);
         let epoch = files
             .iter()
             .filter(|p| {
@@ -71,14 +73,25 @@ impl Live {
                     .and_then(|n| n.strip_prefix("inuse.")?.strip_suffix(".hold"))
                     .is_some_and(|pid| pid.parse::<u32>().is_ok_and(|p| p > 0))
             })
-            .filter_map(|p| {
-                held(p)
-                    .then(|| open(p).map(|(_, _, modified)| modified))
-                    .flatten()
+            .filter_map(|p| match held(p) {
+                Some(true) => match open(p) {
+                    Some((_, _, modified)) => Some(modified),
+                    None => {
+                        truncated = true;
+                        None
+                    }
+                },
+                Some(false) => None,
+                None => {
+                    truncated = true;
+                    None
+                }
             })
             .max();
         let Some(epoch) = epoch else {
-            self.copilot.remove(session);
+            if !truncated {
+                self.copilot.remove(session);
+            }
             return (Vec::new(), truncated);
         };
         let scan = self.copilot.entry(session.to_owned()).or_default();
@@ -103,12 +116,22 @@ impl Live {
 
     pub(super) fn codex(&mut self, root: &Path, session: &str) -> (Vec<Subagent>, bool) {
         let Some(home) = root.parent() else {
-            return (Vec::new(), false);
+            return (Vec::new(), true);
         };
         let locks = home.join("thread-writer-locks");
-        if !is_session_id(session) || !directory(root) || !directory(&locks) {
+        if !is_session_id(session) {
             self.codex.remove(session);
             return (Vec::new(), false);
+        }
+        for path in [root, &locks] {
+            match std::fs::symlink_metadata(path) {
+                Ok(meta) if meta.is_dir() => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    self.codex.remove(session);
+                    return (Vec::new(), false);
+                }
+                _ => return (Vec::new(), true),
+            }
         }
         let Some((coordination, _, _)) = open(&locks.join(".coordination.lock")) else {
             return (Vec::new(), true);
@@ -117,21 +140,36 @@ impl Live {
         if coordination.try_lock_shared().is_err() {
             return (Vec::new(), true);
         }
-        if !held(&locks.join(format!("{session}.lock"))) {
-            self.codex.remove(session);
-            return (Vec::new(), false);
+        match held(&locks.join(format!("{session}.lock"))) {
+            Some(true) => {}
+            Some(false) => {
+                self.codex.remove(session);
+                return (Vec::new(), false);
+            }
+            None => return (Vec::new(), true),
         }
         let (files, mut truncated) = entries(&locks);
         let files: Vec<_> = files
             .into_iter()
             .filter(|lock| {
-                lock.file_name()
+                if !lock
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .and_then(|n| n.strip_suffix(".lock"))
                     .is_some_and(|id| is_session_id(id) && id != session)
-                    && held(lock)
+                {
+                    return false;
+                }
+                match held(lock) {
+                    Some(held) => held,
+                    None => {
+                        truncated = true;
+                        false
+                    }
+                }
             })
             .collect();
+        let listed_truncated = truncated;
         drop(coordination);
         let old = self.codex.entry(session.to_owned()).or_default();
         let mut alive = HashSet::new();
@@ -147,13 +185,17 @@ impl Live {
                 continue;
             };
             alive.insert(id.to_owned());
+            if old.len() == MAX_ENTRIES && !old.contains_key(id) {
+                truncated = true;
+                continue;
+            }
             let scan = match old.entry(id.to_owned()) {
                 std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                 std::collections::hash_map::Entry::Vacant(e) => {
                     let (path, limited) = rollout(root, id);
                     truncated |= limited;
                     let Some(path) = path else {
-                        truncated = true;
+                        // The shared daemon also holds locks for threads that never received input.
                         continue;
                     };
                     e.insert(Scan {
@@ -175,6 +217,7 @@ impl Live {
                 })
             {
                 scan.agents.clear();
+                truncated |= scan.belongs != Some(false);
                 continue;
             }
             if !scan.current() {
@@ -191,12 +234,12 @@ impl Live {
                         .filter(|(_, a)| a.running)
                         .map(|(key, a)| (key.clone(), a.summary.clone())),
                 );
-                truncated |= scan.truncated;
+                truncated |= scan.truncated || scan.belongs.is_none();
             } else {
-                truncated = true;
+                truncated |= scan.belongs != Some(false);
             }
         }
-        old.retain(|id, _| alive.contains(id));
+        old.retain(|id, _| listed_truncated || alive.contains(id));
         ordered(summaries, truncated)
     }
 }
@@ -229,6 +272,9 @@ impl Scan {
             self.ordinal = 0;
             self.skip_line = false;
             self.trusted = false;
+            if self.belongs != Some(true) {
+                self.belongs = None;
+            }
             self.truncated = false;
             self.agents.clear();
         }
@@ -423,10 +469,25 @@ impl Scan {
         let p = &v["payload"];
         if ordinal == 0 {
             let source = &p["source"]["subagent"]["thread_spawn"];
-            let belongs = v["type"] == "session_meta"
-                && p["id"] == id
-                && source["parent_thread_id"] == parent;
-            self.trusted = belongs
+            let relation = if v["type"] != "session_meta" || p["id"] != id {
+                None
+            } else if let Some(id) = source["parent_thread_id"]
+                .as_str()
+                .filter(|id| is_session_id(id))
+            {
+                Some(id == parent)
+            } else if p["source"].is_string()
+                || p["source"]["subagent"].is_string()
+                || p["source"]["subagent"]["other"].is_string()
+            {
+                Some(false)
+            } else {
+                None
+            };
+            if self.belongs != Some(true) {
+                self.belongs = relation;
+            }
+            self.trusted = relation == Some(true)
                 && (p["subagent_history_start_ordinal"].is_u64()
                     || (p["forked_from_id"].is_null() && p["history_base"].is_null()));
             self.history_start = p["subagent_history_start_ordinal"].as_u64().unwrap_or(1);
@@ -441,7 +502,7 @@ impl Scan {
                 .and_then(|s| bounded(s, 64))
                 .unwrap_or_else(|| "codex".into());
             self.trusted &= !self.title.is_empty();
-            self.truncated = belongs && !self.trusted;
+            self.truncated = self.belongs == Some(true) && !self.trusted;
         }
         if !self.trusted || ordinal < self.history_start {
             return;
@@ -518,24 +579,42 @@ fn entries(path: &Path) -> (Vec<PathBuf>, bool) {
     let Ok(files) = std::fs::read_dir(path) else {
         return (Vec::new(), true);
     };
+    let mut truncated = false;
     let mut paths: Vec<_> = files
-        .flatten()
         .take(MAX_ENTRIES + 1)
-        .map(|e| e.path())
+        .filter_map(|e| match e {
+            Ok(e) => Some(e.path()),
+            Err(_) => {
+                truncated = true;
+                None
+            }
+        })
         .collect();
-    let truncated = paths.len() > MAX_ENTRIES;
+    truncated |= paths.len() > MAX_ENTRIES;
     paths.truncate(MAX_ENTRIES);
     paths.sort();
     (paths, truncated)
 }
 
-fn held(path: &Path) -> bool {
-    open(path).is_some_and(|(file, _, _)| {
-        matches!(
-            file.try_lock_shared(),
-            Err(std::fs::TryLockError::WouldBlock)
-        )
-    })
+fn held(path: &Path) -> Option<bool> {
+    let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags.bits() as i32)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(false),
+        Err(_) => return None,
+    };
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    match file.try_lock_shared() {
+        Ok(()) => Some(false),
+        Err(std::fs::TryLockError::WouldBlock) => Some(true),
+        Err(std::fs::TryLockError::Error(_)) => None,
+    }
 }
 
 fn rollout(root: &Path, id: &str) -> (Option<PathBuf>, bool) {
@@ -550,11 +629,40 @@ fn rollout(root: &Path, id: &str) -> (Option<PathBuf>, bool) {
         let year = root.join(format!("{y:04}"));
         let month = year.join(format!("{m:02}"));
         let dir = month.join(format!("{d:02}"));
-        if ![&year, &month, &dir].into_iter().all(|p| directory(p)) {
+        let mut missing = false;
+        for path in [&year, &month, &dir] {
+            match std::fs::symlink_metadata(path) {
+                Ok(meta) if meta.is_dir() => {}
+                Ok(_) => {
+                    truncated = true;
+                    missing = true;
+                    break;
+                }
+                Err(e) => {
+                    truncated |= e.kind() != std::io::ErrorKind::NotFound;
+                    missing = true;
+                    break;
+                }
+            }
+        }
+        if missing {
             continue;
         }
-        let mut files = std::fs::read_dir(&dir).into_iter().flatten().flatten();
+        let mut files = match std::fs::read_dir(&dir) {
+            Ok(files) => files,
+            Err(_) => {
+                truncated = true;
+                continue;
+            }
+        };
         for file in files.by_ref().take(MAX_LISTED) {
+            let file = match file {
+                Ok(file) => file,
+                Err(_) => {
+                    truncated = true;
+                    continue;
+                }
+            };
             if file
                 .file_name()
                 .to_str()
@@ -948,10 +1056,183 @@ mod tests {
         assert_eq!(agents.len(), 1);
         assert!(!truncated);
         std::fs::remove_file(&s.rollout).unwrap();
-        live.retain(|_| false);
         let (agents, truncated) = s.codex(&mut live);
         assert!(agents.is_empty());
         assert!(truncated);
+    }
+
+    #[test]
+    fn codex_unborn_locks_do_not_block_unrelated_parents_or_hide_running_children() {
+        let s = Setup::new();
+        let other = "01a14efe-0000-7000-8000-000000000004";
+        let locks = s.dir.path().join("codex/thread-writer-locks");
+        let _unborn = locked(&locks.join("01a14efe-0000-7000-8000-000000000003.lock"));
+        let _other = locked(&locks.join(format!("{other}.lock")));
+        std::fs::write(&s.rollout, CODEX).unwrap();
+        let mut transcripts = super::super::Transcripts::new(None, Some(s.codex.clone()));
+        let agents: Vec<crate::herdr::AgentInfo> = [PARENT, other]
+            .into_iter()
+            .map(|id| {
+                let mut meta: Value = serde_json::from_str(CODEX.lines().next().unwrap()).unwrap();
+                meta["payload"]["id"] = id.into();
+                meta["payload"]["parent_thread_id"] = Value::Null;
+                meta["payload"]["source"] = "exec".into();
+                std::fs::write(
+                    s.rollout
+                        .with_file_name(format!("rollout-probe-{id}.jsonl")),
+                    format!("{meta}\n"),
+                )
+                .unwrap();
+                serde_json::from_value(serde_json::json!({
+                    "terminal_id": id,
+                    "workspace_id": "w1",
+                    "pane_id": "w1:p1",
+                    "agent": "codex",
+                    "agent_status": "done",
+                    "agent_session": {"value": id}
+                }))
+                .unwrap()
+            })
+            .collect();
+        assert!(transcripts.quiet(&agents[0]));
+        assert!(transcripts.quiet(&agents[1]));
+        std::fs::write(&s.rollout, prefix(CODEX, 7)).unwrap();
+        assert!(!transcripts.quiet(&agents[0]));
+        assert!(transcripts.quiet(&agents[1]));
+        append(&s.rollout, &format!("{}\n", CODEX.lines().last().unwrap()));
+        assert!(transcripts.quiet(&agents[0]));
+        assert!(transcripts.quiet(&agents[1]));
+        std::fs::remove_file(&s.rollout).unwrap();
+        assert!(!transcripts.quiet(&agents[0]));
+        assert!(transcripts.quiet(&agents[1]));
+        s.child_lock.unlock().unwrap();
+        assert!(transcripts.quiet(&agents[0]));
+    }
+
+    #[test]
+    fn codex_incomplete_and_oversized_parent_metadata_fail_closed() {
+        let s = Setup::new();
+        let mut live = Live::default();
+        std::fs::write(&s.rollout, "").unwrap();
+        assert!(s.codex(&mut live).1);
+        let header = CODEX.lines().next().unwrap();
+        std::fs::write(&s.rollout, &header[..header.len() / 2]).unwrap();
+        assert!(s.codex(&mut live).1);
+        append(
+            &s.rollout,
+            &format!(
+                "{}\n{}\n",
+                &header[header.len() / 2..],
+                CODEX.lines().nth(1).unwrap()
+            ),
+        );
+        assert_eq!(s.codex(&mut live).0.len(), 1);
+        let mut oversized: Value = serde_json::from_str(header).unwrap();
+        oversized["payload"]["base_instructions"] = "x".repeat(LINE_BYTES * 2).into();
+        std::fs::write(&s.rollout, format!("{oversized}\n")).unwrap();
+        let mut live = Live::default();
+        let (agents, truncated) = s.codex(&mut live);
+        assert!(agents.is_empty());
+        assert!(truncated);
+        assert!(s.codex(&mut live).1);
+        let mut malformed: Value = serde_json::from_str(header).unwrap();
+        malformed["payload"]["source"]["subagent"]["thread_spawn"]["parent_thread_id"] =
+            "not-a-session".into();
+        std::fs::write(&s.rollout, format!("{malformed}\n")).unwrap();
+        assert!(s.codex(&mut live).1);
+    }
+
+    #[test]
+    fn codex_known_parent_cannot_be_reclassified_by_replaced_metadata() {
+        let s = Setup::new();
+        let mut live = Live::default();
+        std::fs::write(&s.rollout, prefix(CODEX, 7)).unwrap();
+        assert_eq!(s.codex(&mut live).0.len(), 1);
+        std::fs::write(&s.rollout, prefix(CODEX, 7).replace(PARENT, SESSION)).unwrap();
+        let (agents, truncated) = s.codex(&mut live);
+        assert!(agents.is_empty());
+        assert!(truncated);
+        assert!(s.codex(&mut live).1);
+    }
+
+    #[test]
+    fn codex_failed_rollout_lookup_does_not_prove_a_lock_is_unborn() {
+        let s = Setup::new();
+        let mut live = Live::default();
+        assert!(!s.codex(&mut live).1);
+        let day = s.rollout.parent().unwrap();
+        std::fs::remove_dir(day).unwrap();
+        std::fs::write(day, "not a directory").unwrap();
+        assert!(s.codex(&mut live).1);
+        std::fs::remove_file(day).unwrap();
+        assert!(!s.codex(&mut live).1);
+        let target = day.with_extension("real");
+        std::fs::create_dir(&target).unwrap();
+        symlink(&target, day).unwrap();
+        assert!(s.codex(&mut live).1);
+    }
+
+    #[test]
+    fn codex_unknown_lock_probes_retain_verified_parentage() {
+        let s = Setup::new();
+        let mut live = Live::default();
+        std::fs::write(&s.rollout, prefix(CODEX, 7)).unwrap();
+        assert_eq!(s.codex(&mut live).0.len(), 1);
+        let locks = s.dir.path().join("codex/thread-writer-locks");
+        for id in [CHILD, PARENT] {
+            let lock = locks.join(format!("{id}.lock"));
+            let moved = lock.with_extension("moved");
+            std::fs::rename(&lock, &moved).unwrap();
+            symlink(&moved, &lock).unwrap();
+            assert!(s.codex(&mut live).1);
+            std::fs::remove_file(&s.rollout).unwrap();
+            std::fs::remove_file(&lock).unwrap();
+            std::fs::rename(moved, lock).unwrap();
+            assert!(s.codex(&mut live).1);
+            std::fs::write(&s.rollout, prefix(CODEX, 7)).unwrap();
+            assert_eq!(s.codex(&mut live).0.len(), 1);
+        }
+        s.child_lock.unlock().unwrap();
+        assert!(!s.codex(&mut live).1);
+    }
+
+    #[test]
+    fn codex_missing_registry_is_not_an_incomplete_scan() {
+        let s = Setup::new();
+        let mut live = Live::default();
+        std::fs::write(&s.rollout, prefix(CODEX, 7)).unwrap();
+        assert_eq!(s.codex(&mut live).0.len(), 1);
+        for path in [
+            s.dir.path().join("codex/thread-writer-locks"),
+            s.codex.clone(),
+        ] {
+            let moved = path.with_extension("moved");
+            std::fs::rename(&path, &moved).unwrap();
+            let (agents, truncated) = s.codex(&mut live);
+            assert!(agents.is_empty());
+            assert!(!truncated);
+            std::fs::write(&path, "not a directory").unwrap();
+            assert!(s.codex(&mut live).1);
+            std::fs::remove_file(&path).unwrap();
+            std::fs::rename(moved, path).unwrap();
+            assert_eq!(s.codex(&mut live).0.len(), 1);
+        }
+    }
+
+    #[test]
+    fn copilot_unknown_lock_probe_is_not_a_finished_session() {
+        let s = Setup::new();
+        let mut live = Live::default();
+        std::fs::write(&s.events, prefix(COPILOT, 7)).unwrap();
+        assert_eq!(s.copilot(&mut live).0.len(), 1);
+        let lock = s.events.parent().unwrap().join("inuse.12345.hold");
+        let moved = lock.with_extension("moved");
+        std::fs::rename(&lock, &moved).unwrap();
+        symlink(&moved, &lock).unwrap();
+        assert!(s.copilot(&mut live).1);
+        std::fs::remove_file(&lock).unwrap();
+        std::fs::rename(moved, lock).unwrap();
+        assert_eq!(s.copilot(&mut live).0.len(), 1);
     }
 
     #[test]

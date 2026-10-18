@@ -56,6 +56,8 @@ Claude Code, GitHub Copilot CLI and Codex report their running subagents with a 
 
 Copilot CLI uses the child names in the current session's local event log. Codex uses child thread metadata and turn events, not the text of the parent's reply. Unrelated sessions, idle children and sessions without a live provider lock are excluded. A large event log may take several refreshes to catch up before children appear. Older Codex forks without an explicit inherited-history boundary are not reported.
 
+Codex may keep locks for unused threads that never wrote a conversation. Those locks do not count as children or keep unrelated workspaces from auto-archiving. Once a child is identified, unreadable or incomplete child data still prevents auto-archiving. A child that never writes identifying metadata cannot be detected by this file-based check.
+
 ## Agent actions
 
 Long-press an agent, or use the agent screen's menu, to:
