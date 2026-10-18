@@ -369,7 +369,11 @@ impl Transcripts {
             if workspace_scalar(workspace, "id")? != id {
                 return None;
             }
-            let name = workspace_scalar(workspace, "name")?;
+            let name = if workspace.lines().any(|line| line.starts_with("name:")) {
+                Some(workspace_scalar(workspace, "name")?)
+            } else {
+                None
+            };
             let cwd = workspace_scalar(workspace, "cwd")?;
             if !Path::new(&cwd).is_absolute() {
                 return None;
@@ -388,6 +392,9 @@ impl Transcripts {
                 return None;
             }
             sessions.push(id.to_owned());
+            let Some(name) = name else {
+                continue;
+            };
             // Copilot 1.0.100-1 renders the name, optional assistant intent, then its app name.
             if title != name
                 && !title
@@ -833,6 +840,24 @@ mod tests {
         hold
     }
 
+    fn complete_copilot_session(root: &Path, id: &str) {
+        let mut complete: Value = serde_json::from_str(
+            include_str!("../../tests/fixtures/transcripts/copilot-subagents.jsonl")
+                .lines()
+                .find(|line| line.contains("\"subagent.completed\""))
+                .unwrap(),
+        )
+        .unwrap();
+        complete["agentId"] = COPILOT_CHILD.into();
+        complete["data"]["toolCallId"] = "fixture-5".into();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(root.join(id).join("events.jsonl"))
+            .unwrap()
+            .write_all(format!("{complete}\n").as_bytes())
+            .unwrap();
+    }
+
     #[test]
     fn copilot_new_selects_the_displayed_conversation_not_the_stale_herdr_id() {
         let (_dir, mut t, root, mut a) = copilot_setup();
@@ -857,24 +882,30 @@ mod tests {
         assert_eq!(d.last_line, None);
         assert!(!t.quiet(&a));
         t.retain(std::slice::from_ref(&a));
-        let mut complete: Value = serde_json::from_str(
-            include_str!("../../tests/fixtures/transcripts/copilot-subagents.jsonl")
-                .lines()
-                .find(|line| line.contains("\"subagent.completed\""))
-                .unwrap(),
-        )
-        .unwrap();
-        complete["agentId"] = COPILOT_CHILD.into();
-        complete["data"]["toolCallId"] = "fixture-5".into();
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(root.join(COPILOT_CURRENT).join("events.jsonl"))
-            .unwrap()
-            .write_all(format!("{complete}\n").as_bytes())
-            .unwrap();
+        complete_copilot_session(&root, COPILOT_CURRENT);
         assert!(t.quiet(&a));
         a.agent_session = None;
         assert_eq!(t.live_id(&a).as_deref(), Some(COPILOT_CURRENT));
+    }
+
+    #[test]
+    fn copilot_unnamed_held_sessions_do_not_hide_the_current_conversation() {
+        let (_dir, mut t, root, a) = copilot_setup();
+        let (pid, _) = own();
+        let _unnamed = copilot_session(&root, COPILOT_OLD, pid, true);
+        let _current = copilot_session(&root, COPILOT_CURRENT, pid, true);
+        let metadata = root.join(COPILOT_OLD).join("workspace.yaml");
+        let text = std::fs::read_to_string(&metadata).unwrap();
+        write(&metadata, &text.replace("name: Current conversation\n", ""));
+        pane(&mut t, &[pid]);
+        assert_eq!(t.resolve(&a, false).as_deref(), Some(COPILOT_CURRENT));
+        assert_eq!(t.derive(&a, false).unwrap().subagents.len(), 1);
+        complete_copilot_session(&root, COPILOT_CURRENT);
+        assert!(t.derive(&a, false).unwrap().subagents.is_empty());
+        t.retain(std::slice::from_ref(&a));
+        assert!(!t.quiet(&a));
+        complete_copilot_session(&root, COPILOT_OLD);
+        assert!(t.quiet(&a));
     }
 
     #[test]
@@ -918,7 +949,7 @@ mod tests {
         a.pane_id = "w1:p2".into();
         assert_eq!(t.live_id(&a), None);
         a.pane_id = "w1:p1".into();
-        pane(&mut t, &vec![pid; MAX_PIDS + 1]);
+        pane(&mut t, &[pid; MAX_PIDS + 1]);
         assert_eq!(t.live_id(&a), None);
         assert!(!t.quiet(&a));
         pane(&mut t, &[DEAD]);
@@ -1016,7 +1047,7 @@ mod tests {
         for n in 0..=MAX_LISTED / MAX_PIDS {
             std::fs::create_dir(root.join(format!("aa000000-0000-4000-8000-{n:012x}"))).unwrap();
         }
-        pane(&mut t, &vec![pid; MAX_PIDS]);
+        pane(&mut t, &[pid; MAX_PIDS]);
         assert_eq!(t.live_id(&a).as_deref(), Some(COPILOT_CURRENT));
         assert_eq!(t.live_id(&a).as_deref(), Some(COPILOT_CURRENT));
         let new = copilot_session(&root, other, pid, true);
