@@ -38,7 +38,7 @@ To uninstall, run `~/.cargo/bin/collied service uninstall`, then remove `~/.carg
 
 ## Homebrew
 
-The existing tap is [rbstp/homebrew-tap](https://github.com/rbstp/homebrew-tap). A desktop release generates formula/cask files with final asset URLs and hashes. The publisher reviews and updates that tap only after the release exists; generated assets alone do not make `brew install` available.
+The existing tap is [rbstp/homebrew-tap](https://github.com/rbstp/homebrew-tap). After publishing each combined release, a separate job running trusted `master` code verifies its published tag, source, eight-asset inventory, GitHub digests and checksums, then reads the actual `homebrew-VERSION.tar.gz`. It atomically updates only `Formula/collied.rb` and `Casks/colliebar.rb`, preserving Heed and all other tap files. Only version, URL and SHA-256 changes are automatic; changed recipe behavior needs a separate pull request. An already matching version is a no-op; older releases, conflicting same-version files and concurrent tap changes stop without forcing or retrying.
 
 Once those files are published:
 
@@ -135,6 +135,14 @@ To disable it run `omarchy plugin disable rbstp.collie`; then remove `~/.config/
 Use the protected GitHub environment `desktop-release`, restricted to master. Manually provision `DESKTOP_CERT_P12` (base64 Developer ID Application certificate and private key for team RM3UT3MMSR), `DESKTOP_CERT_PASSWORD`, and `APPLE_KEY_P8` (base64 App Store Connect API key authorized for notarization), `APPLE_KEY_ID`, `APPLE_ISSUER_ID`. Existing repository Apple API secrets can be reused; never use the iOS distribution certificate as Developer ID. The workflow imports into a temporary keychain and removes keychain/key files on exit. Signing runs only for a master dispatch or a merged master pull request, never untrusted PRs. The validation job checks out trusted master, checks source ancestry and immutable tag identity, and emits the canonical commit resolved by Git. Build and publish jobs also check out literal master first. They copy its validator outside the checkout, validate the requested commit and tag again, and only then detach to the exact Git-resolved commit. They recheck HEAD, master ancestry and tag before initializing submodules or running selected source code. This also handles older release commits that lack the current validator. Release jobs do not restore or save shared build caches.
 
 After a successful TestFlight upload and immutable tag creation, TestFlight dispatches the desktop workflow from master with the same tag and exact source SHA. A merged pull request's inherited deployment ref is still `refs/pull/N/merge`, which the master-only signing environment rejects. The dispatch uses only `actions: write`; the desktop workflow retains its source/tag validation and master-only signing environment. GitHub allows workflow dispatches created with GITHUB_TOKEN to start runs but suppresses tag-push workflows, so publishing has no tag-push dependency. Linux and macOS share one publish job that owns release creation.
+
+Before the next combined release, create a `homebrew-tap` environment in `rbstp/collie`, restrict deployments to `master`, and add `HOMEBREW_TAP_TOKEN`. Use a fine-grained personal access token owned by the tap publisher, limited to `rbstp/homebrew-tap`, with **Contents: Read and write** (and implicit metadata read access). It needs no workflow permission or Apple credentials. Enter it at the interactive prompt, never in a command argument or committed file:
+
+```sh
+gh secret set HOMEBREW_TAP_TOKEN --repo rbstp/collie --env homebrew-tap
+```
+
+The token is exposed only to the separate trusted-master tap update job, never to a release-source checkout or the signing/publishing jobs. A token-authenticated tap push starts the tap's normal style CI. If the secret is missing or an update conflicts, the tap job fails clearly after desktop publication; configure the secret or resolve the conflict, then rerun only that failed job. The existing manual alternative is to review and merge the exact two generated definitions after verifying the published release. Neither path replaces release assets or tags.
 
 For a desktop-only release, select master and supply a new version tag and its full master commit SHA:
 

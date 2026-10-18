@@ -177,7 +177,7 @@ The sample is available in Release builds on iOS Simulator and iPhone. It does n
 
 ## Desktop GitHub releases
 
-The reusable desktop workflow is called explicitly after TestFlight creates its immutable version tag. It also supports a master-only manual dispatch at an exact master SHA. One publish job owns the shared macOS/Linux release, retains signed assets on draft retries, and verifies completed releases without replacing assets. This avoids GITHUB_TOKEN tag-push suppression and duplicate release owners.
+The reusable desktop workflow is called explicitly after TestFlight creates its immutable version tag. After desktop publication, its trusted-master Homebrew job verifies the public artifacts and updates the two Collie tap definitions automatically; provision its separate token as described in [Desktop release downloads](desktop-releases.md#publisher-setup-and-release-controls). It also supports a master-only manual dispatch at an exact master SHA. One publish job owns the shared macOS/Linux release, retains signed assets on draft retries, and verifies completed releases without replacing assets. This avoids GITHUB_TOKEN tag-push suppression and duplicate release owners.
 
 See [Desktop release downloads](desktop-releases.md) for publisher Developer ID/notary secrets, notarized macOS archives and disk image, Linux runtime manifests, Homebrew tap artifacts, install/refresh commands and the clean-machine rollout gates. No signing credentials, public release or Homebrew tap update is provisioned by adding the workflow.
 

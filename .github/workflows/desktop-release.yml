@@ -231,3 +231,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
           TAG: ${{ needs.validate.outputs.tag }}
+
+  update-homebrew:
+    environment: homebrew-tap
+    if: ${{ github.repository == 'rbstp/collie' && github.ref == 'refs/heads/master' }}
+    needs: [validate, publish]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: check out trusted master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: master
+
+      - name: update the Homebrew tap from the published release
+        run: python3 scripts/desktop/update_tap.py --tag "$TAG" --sha "$SOURCE_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOMEBREW_TAP_TOKEN: '${{ secrets.HOMEBREW_TAP_TOKEN }}'
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          TAG: ${{ needs.validate.outputs.tag }}
