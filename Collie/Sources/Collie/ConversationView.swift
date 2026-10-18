@@ -243,7 +243,7 @@ struct ConversationView: View {
                 .scrollPosition(id: $visibleID, anchor: .top)
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .onScrollGeometryChange(for: ScrollEdge.self) { geo in
-                    ScrollEdge(size: geo.containerSize, atBottom: geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 60)
+                    ScrollEdge(size: geo.containerSize, atBottom: geo.contentOffset.y + geo.contentInsets.top + geo.containerSize.height >= geo.contentSize.height - 60)
                 } action: { old, new in
                     // The position follows the top row, so a rotation or the keyboard would leave the latest messages out of view.
                     if old.atBottom && old.size != new.size && submitted.isEmpty {

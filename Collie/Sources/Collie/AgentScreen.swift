@@ -20,9 +20,11 @@ struct AgentScreen: View {
     @State private var searchingChat = false
     @State private var keyboardShown = false
     @State private var height: CGFloat = 0
+    @State private var obscuredTop: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.colorScheme) private var colorScheme
 
     init(
         core: any AgentCore, route: AgentRoute, persistsState: Bool = true, approvals: ApprovalsModel?, follows: FollowModel?,
@@ -89,46 +91,59 @@ struct AgentScreen: View {
                     Text(notice).font(.footnote).padding(.horizontal).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            if showingChat && !model.isTerminal {
-                ConversationView(model: model.conversation, searching: $searchingChat, load: model.history) { showingChat = false }
-                    .environment(model)
-            } else {
-                AgentTerminal(
-                    ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
-                    perform: perform, resized: { model.fontSize = $0 }, resizeEnded: model.saveFontSize,
-                    quote: model.isTerminal ? nil : model.quote,
-                    // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
-                    neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
-                    switchAgent: switchAgent
-                ) { await model.refresh() }
-                    .overlay {
-                        if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
-                            ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
+            Group {
+                if showingChat && !model.isTerminal {
+                    ConversationView(model: model.conversation, searching: $searchingChat, load: model.history) { showingChat = false }
+                        .environment(model)
+                } else {
+                    AgentTerminal(
+                        ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
+                        perform: perform, resized: { model.fontSize = $0 }, resizeEnded: model.saveFontSize,
+                        quote: model.isTerminal ? nil : model.quote,
+                        // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
+                        neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
+                        switchAgent: switchAgent, obscuredTop: obscuredTop
+                    ) { await model.refresh() }
+                        .overlay {
+                            if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
+                                ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
+                            }
                         }
-                    }
-                    .overlay(alignment: .bottom) {
-                        GlassEffectContainer(spacing: 8) {
-                            VStack(spacing: 8) {
-                                if model.jumpBanner {
-                                    Button("Jump to bottom", systemImage: "arrow.down") {
-                                        Task { await model.jumpToBottom() }
+                        .overlay(alignment: .bottom) {
+                            GlassEffectContainer(spacing: 8) {
+                                VStack(spacing: 8) {
+                                    if model.jumpBanner {
+                                        Button("Jump to bottom", systemImage: "arrow.down") {
+                                            Task { await model.jumpToBottom() }
+                                        }
+                                        .buttonStyle(.glassProminent)
+                                        .padding(.bottom, 8)
                                     }
-                                    .buttonStyle(.glassProminent)
-                                    .padding(.bottom, 8)
-                                }
-                                if !model.noticeOptions.isEmpty {
-                                    ViewThatFits(in: .horizontal) {
-                                        HStack { noticeButtons }
-                                        VStack { noticeButtons }
+                                    if !model.noticeOptions.isEmpty {
+                                        ViewThatFits(in: .horizontal) {
+                                            HStack { noticeButtons }
+                                            VStack { noticeButtons }
+                                        }
+                                        .buttonStyle(.glassProminent)
+                                        .padding([.horizontal, .bottom], 8)
+                                        .accessibilityElement(children: .contain)
+                                        .accessibilityLabel("Claude Code notice")
                                     }
-                                    .buttonStyle(.glassProminent)
-                                    .padding([.horizontal, .bottom], 8)
-                                    .accessibilityElement(children: .contain)
-                                    .accessibilityLabel("Claude Code notice")
                                 }
                             }
                         }
-                    }
+                        .ignoresSafeArea(.container, edges: .top)
+                        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { obscuredTop = $0 }
+                }
+            }
+            .safeAreaInset(edge: .top) {
+                if !typingInLandscape, let subagents = model.agent?.subagents, !subagents.isEmpty {
+                    SubagentList(subagents: subagents)
+                        .padding(6)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10))
+                        .environment(\.colorScheme, showingChat && !model.isTerminal ? colorScheme : .dark)
+                        .padding(.horizontal)
+                }
             }
             if let notice = model.notice ?? model.blockedHint {
                 Label(notice, systemImage: "exclamationmark.triangle")
@@ -402,9 +417,6 @@ private struct AgentHeader: View {
                         .controlSize(.small)
                 }
             }
-            if let subagents = model.agent?.subagents, !subagents.isEmpty {
-                SubagentList(subagents: subagents)
-            }
             if model.link == .connecting {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
@@ -518,6 +530,7 @@ private struct AgentTerminal: UIViewRepresentable {
     let quote: (@MainActor (String) -> Void)?
     let neighbor: ((Int) -> AgentRoute?)?
     let switchAgent: (AgentRoute) -> Void
+    let obscuredTop: CGFloat
     let refresh: @MainActor () async -> Void
 
     func makeUIView(context: Context) -> GhosttyTerminalUIView {
@@ -542,6 +555,7 @@ private struct AgentTerminal: UIViewRepresentable {
         context.coordinator.refresh = refresh
         view.wraps = wraps
         view.fontSize = fontSize
+        view.obscuredTop = obscuredTop
         let (gestures, perform, resized, resizeEnded) = (gestures, perform, resized, resizeEnded)
         view.onDoubleTap = gestures.doubleTap == .none ? nil : { perform(gestures.doubleTap) }
         view.onTripleTap = gestures.tripleTap == .none ? nil : { perform(gestures.tripleTap) }
