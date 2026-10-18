@@ -60,6 +60,8 @@ When a feature or behavior changes, update its documentation in the same pull re
 - `docs/notifications.md` and the privacy policy (`docs/site/src/privacy.md`) when data handling changes or what Apple or other third parties can see changes.
 - `README.md` only for entry-point facts (what collie is, requirements, quick start, recipes, layout).
 
+User pages and the README say what users can do and see, in Joseph M. Williams's *Style* (characters as subjects, actions as verbs, point first); design detail goes to `docs/*.md`.
+
 Pages under `docs/site/src/reference/` are mdBook includes of `docs/*.md`, never copies. Check the site before pushing (mdBook 0.5.4, see `docs/deploy-pages.md`):
 
 ```sh

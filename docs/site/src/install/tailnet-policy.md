@@ -1,10 +1,10 @@
 # Tailscale sign-in and policy
 
-This page describes the next matching phone and desktop candidate; user-owned setup is unreleased. Published desktop v0.1.0 still uses tagged nodes. Follow the [v0.1.0 tailnet procedure](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md) until both peers are updated.
+Sign in with the same personal Tailscale account in two places: inside Collie on the iPhone, and through `collied setup` on the computer. Each device runs its own Tailscale node inside collie, so you need no standalone Tailscale app, VPN profile or VPN switch in Settings. A separate corporate Tailscale VPN on your Mac can stay connected: Collie does not switch its account or change its routes.
 
-Sign in inside Collie on the iPhone and through `collied setup` on the computer with the same personal Tailscale account. Both are independent user-owned embedded nodes. No standalone Tailscale app, OS VPN profile or VPN Settings toggle is needed. Your Mac's separate corporate Tailscale VPN can remain connected; Collie does not switch its account or change its routes.
+## When the policy needs a grant
 
-If the current personal tailnet permits your own devices to connect, no tag ownership or policy edit is needed. Collie never changes administrator policy. A restrictive policy can still block TCP 8457 or hide the peer: ask the administrator to allow that port between the same user's untagged devices. Merge a grant into the existing policy rather than replacing it:
+If your personal tailnet already lets your own devices connect to each other, you need no tags and no policy edit. Collie never changes the tailnet policy. A restrictive policy can still block TCP port 8457 or hide the machine from the phone. Then ask the administrator to allow that port between your own untagged devices, merging this grant into the existing policy rather than replacing it:
 
 ```hujson
 {
@@ -14,8 +14,8 @@ If the current personal tailnet permits your own devices to connect, no tag owne
 }
 ```
 
-Review the complete policy in Access controls and Preview rules. Existing broader grants still apply. User-owned desktop nodes receive their user's network privileges and normal key expiry, rather than the previous separate service-tag identity.
+Review the complete policy in Access controls and Preview rules. Broader grants you already have still apply. Your computer's node gets the same network access and normal key expiry as your other devices, not the separate tagged identity that earlier versions used.
 
-Existing tagged Collie nodes and old phone pairing records need a coordinated update and explicit reset/re-pair. Do not delete or change the system Tailscale client's state or your corporate VPN. See [Tailnet setup](../reference/tailnet.md) for exact state paths, authorization, expiry and revocation.
+## Coming from a tagged setup
 
-Actual physical-device operation alongside an active corporate VPN remains a required acceptance check before App Store submission. Local testcontrol and Simulator tests do not establish that result.
+The current `collied` refuses an existing tagged Collie node, and the app cannot reconnect with a pairing made before the change. Update both the app and `collied`, then reset the node and pair again as described in [Existing tagged installations](../reference/tailnet.md#existing-tagged-installations). Do not delete or change the system Tailscale client's state or your corporate VPN. [Tailnet setup](../reference/tailnet.md) also covers the exact state paths, authorization, expiry and revocation.
