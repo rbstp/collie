@@ -119,8 +119,10 @@ impl Node {
     /// Closes the node now, while clones may still be in a call. It waits for a call under
     /// the handle lock, so a start in progress finishes and is then shut down rather than
     /// left running unreachable; a dial holds no lock and fails, since the close cancels it
-    /// first (patch 0010). The close on drop then does nothing: libtailscale never reuses a
-    /// node's descriptor.
+    /// first (patch 0010). Only for a node whose [`Node::start`] returned: a dial or listen
+    /// on an unstarted node starts it without the lock, and libtailscale skips the shutdown
+    /// of a node it has not seen start, which tsnet forbids during a start anyway. The close
+    /// on drop then does nothing: libtailscale never reuses a node's descriptor.
     pub fn close(&self) {
         let _call = self.lock();
         unsafe { sys::tailscale_close(self.sd()) };
