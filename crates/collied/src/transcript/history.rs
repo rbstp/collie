@@ -43,6 +43,21 @@ impl Transcripts {
         })
     }
 
+    /// Copilot's `/new` can switch conversations while herdr's ID stays, so a page is
+    /// current only while the pane still selects the session it was read from.
+    pub fn history_current(&self, agent: &AgentInfo, page: &HistoryPage) -> bool {
+        let Some(session) = &page.session else {
+            return true;
+        };
+        agent.agent.as_deref() != Some("copilot")
+            || self.live_id(agent).is_some_and(|id| {
+                session
+                    .strip_prefix("copilot:")
+                    .and_then(|s| s.strip_prefix(id.as_str()))
+                    .is_some_and(|s| s.starts_with(':'))
+            })
+    }
+
     fn read_history(&self, agent: &AgentInfo, p: &HistoryParams) -> Option<HistoryPage> {
         let kind = match agent.agent.as_deref()? {
             "claude" => Kind::Claude,
@@ -698,8 +713,15 @@ fn normalize(
         Kind::Copilot => {
             let d = &v["data"];
             match v["type"].as_str() {
-                // A `source` marks text the harness injected, such as autopilot or a skill.
-                Some("user.message") if parent.is_some() || d["source"].is_null() => {
+                // Other origins are injected: autopilot, `skill-*`, and `agent-<id>` outside a child.
+                Some("user.message")
+                    if d["source"].is_null()
+                        || d["source"] == "user"
+                        || parent.is_some()
+                            && d["source"]
+                                .as_str()
+                                .is_some_and(|s| s.starts_with("agent-")) =>
+                {
                     add("user", text(&d["content"]), None, None);
                 }
                 Some("assistant.message") => {
@@ -1975,5 +1997,64 @@ mod tests {
         std::os::unix::fs::symlink(&target, c.path()).unwrap();
         let page = c.history(params(None, None, None));
         assert!(!page.available && page.messages.is_empty());
+    }
+
+    #[test]
+    fn copilot_user_provenance_is_shown_and_injected_sources_are_not() {
+        let prompt = |source: Value, agent: Option<&str>| {
+            let mut v =
+                json!({"type":"user.message","id":"p","data":{"content":"typed","source":source}});
+            if let Some(agent) = agent {
+                v["agentId"] = agent.into();
+            }
+            line(v)
+        };
+        for (source, shown) in [
+            (Value::Null, true),
+            (json!("user"), true),
+            (json!("system"), false),
+            (json!("autopilot"), false),
+            (json!("skill-fixture"), false),
+            (json!("agent-30000000-0000-4000-8000-000000000003"), false),
+        ] {
+            let c = Copilot::new(&(copilot_header() + &prompt(source.clone(), None)));
+            let p = c.history(params(None, None, None));
+            assert_eq!(p.messages.len(), usize::from(shown), "{source}");
+            let search = c.history(params(None, None, Some("TYPED")));
+            assert_eq!(search.messages.len(), usize::from(shown), "{source}");
+        }
+        let child = "30000000-0000-4000-8000-000000000003";
+        let lines = COPILOT_HISTORY.split_inclusive('\n').collect::<Vec<_>>();
+        let c = Copilot::new(
+            &(lines[..13].concat() + &prompt(json!(format!("agent-{child}")), Some(child))),
+        );
+        let last = c.history(params(None, None, None)).messages.pop().unwrap();
+        assert_eq!(
+            (last.text.as_str(), last.parent_call_id.as_deref()),
+            ("typed", Some("fixture-call-4"))
+        );
+    }
+
+    #[test]
+    fn copilot_page_read_before_a_new_session_is_not_current() {
+        let mut c = Copilot::new(&(copilot_header() + &copilot_row(1, "old")));
+        let read = c.a.clone();
+        let page = c.history(params(None, None, None));
+        assert!(c.t.history_current(&read, &page));
+        c.session(
+            "50000000-0000-4000-8000-000000000005",
+            "Next conversation",
+            &(copilot_header() + &copilot_row(2, "new")),
+        );
+        let mut now = read.clone();
+        now.terminal_title_stripped = Some("Next conversation - GitHub Copilot".into());
+        assert_eq!(now.agent_session, read.agent_session);
+        assert!(!c.t.history_current(&now, &page));
+        now.terminal_title_stripped = Some("GitHub Copilot".into());
+        assert!(!c.t.history_current(&now, &page));
+        let unavailable = c.t.history(&now, &params(None, None, None));
+        assert!(!unavailable.available);
+        assert!(c.t.history_current(&now, &unavailable));
+        assert!(c.t.history_current(&read, &page));
     }
 }
