@@ -168,7 +168,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn allows_request(&self, request: &Request) -> bool {
-        if self.version != 26 {
+        if !(26..=27).contains(&self.version) {
             return false;
         }
         match request {
@@ -185,11 +185,11 @@ impl NegotiatedProtocol {
                 self.encrypted_display && (p.relay_grant.is_none() || self.relay_grants)
             }
             Request::PairComplete(p) => self.terminal_grants || p.terminal_key.is_none(),
+            Request::AgentHistory(p) => !p.latest || self.version >= 27,
             Request::Hello(_)
             | Request::Unpair(_)
             | Request::FlockSnapshot(_)
             | Request::AgentRead(_)
-            | Request::AgentHistory(_)
             | Request::PaneRead(_)
             | Request::AgentWatch(_)
             | Request::TaskOptions(_)
@@ -236,7 +236,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn server_frame(&self, frame: &ServerFrame) -> Result<String, &'static str> {
-        if self.version != 26 {
+        if !(26..=27).contains(&self.version) {
             return Err("unsupported wire codec");
         }
         let allowed = match frame {
@@ -320,14 +320,19 @@ mod tests {
             ..HelloParams::current(Label::new("test").unwrap())
         })
         .unwrap();
-        assert_eq!(encoded, fixture()["baseline_offer"]);
-        let old: V25Hello = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(encoded, fixture()["current_offer"]);
+        let baseline = fixture()["baseline_offer"].clone();
+        let old: V25Hello = serde_json::from_value(baseline.clone()).unwrap();
         assert_eq!(old.app_version.as_str(), "test");
         assert_ne!(old.protocol_version, 25);
+        assert_eq!(
+            NegotiatedProtocol::negotiate(&offer(baseline))
+                .unwrap()
+                .version(),
+            26
+        );
         assert!(NegotiatedProtocol::negotiate(&offer(fixture()["v25_offer"].clone())).is_none());
-        let mut extra = encoded;
-        extra["protocol_min_version"] = json!(26);
-        assert!(serde_json::from_value::<V25Hello>(extra).is_err());
+        assert!(serde_json::from_value::<V25Hello>(encoded).is_err());
     }
 
     #[test]
@@ -336,7 +341,10 @@ mod tests {
             let negotiated =
                 NegotiatedProtocol::negotiate(&serde_json::from_value(offer.clone()).unwrap())
                     .unwrap();
-            assert_eq!(negotiated.version(), 26);
+            assert_eq!(
+                u64::from(negotiated.version()),
+                offer["protocol_version"].as_u64().unwrap().min(27)
+            );
             let frame = ClientFrame {
                 id: 2,
                 request: Request::TerminalLock(crate::Empty {}),
@@ -358,17 +366,18 @@ mod tests {
     fn baseline_apps_validate_retained_daemon_results_and_selected_revisions() {
         let mut result: HelloResult =
             serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
-        for maximum in [26, 27, 28] {
+        for (maximum, selected) in [(26, 26), (27, 27), (28, 27)] {
             result.protocol_max_version = maximum;
+            result.protocol_version = selected;
             assert_eq!(
                 NegotiatedProtocol::from_result(&result).unwrap().version(),
-                26
+                selected
             );
         }
-        result.protocol_version = 27;
-        assert!(NegotiatedProtocol::from_result(&result).is_none());
         result.protocol_version = 26;
-        result.protocol_min_version = 27;
+        assert!(NegotiatedProtocol::from_result(&result).is_none());
+        result.protocol_version = 27;
+        result.protocol_min_version = 28;
         assert!(NegotiatedProtocol::from_result(&result).is_none());
         result.protocol_min_version = 26;
         result
@@ -424,8 +433,35 @@ mod tests {
         assert!(legacy.client_frame(ClientFrame { id: 1, request }).is_err());
         assert_eq!(
             serde_json::to_value(&hello).unwrap(),
-            fixture()["baseline_offer"]
+            fixture()["current_offer"]
         );
+    }
+
+    #[test]
+    fn latest_history_requires_revision_27() {
+        let history = |latest| {
+            Request::AgentHistory(crate::HistoryParams {
+                terminal_id: TerminalId::new("t1").unwrap(),
+                before: None,
+                after: None,
+                query: None,
+                latest,
+            })
+        };
+        let baseline =
+            NegotiatedProtocol::negotiate(&offer(fixture()["baseline_offer"].clone())).unwrap();
+        assert!(baseline.allows_request(&history(false)));
+        assert!(!baseline.allows_request(&history(true)));
+        let encoded = baseline
+            .client_frame(ClientFrame {
+                id: 1,
+                request: history(false),
+            })
+            .unwrap();
+        assert!(!encoded.contains("latest"));
+        let current =
+            NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
+        assert!(current.allows_request(&history(true)));
     }
 
     #[test]

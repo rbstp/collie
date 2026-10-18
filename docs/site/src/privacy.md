@@ -36,7 +36,7 @@ Deleting the app removes its files, but iOS can keep the app's Keychain items on
 
 ## What goes between your phone and your machine
 
-The phone and `collied` talk only over your tailnet, inside mutual TLS. This traffic carries what you see and do in the app: the agent list, terminal screens, conversation history while Chat is open, Git diffs, pull request status, plan usage, your prompts, keys and attachments, and approval decisions. The phone also gives `collied` its push notification token and a notification key it generated, so the machine can send it encrypted alerts.
+The phone and `collied` talk only over your tailnet, inside mutual TLS. This traffic carries what you see and do in the app: the agent list, terminal screens, conversation history while Chat is open or grid cards preview it, Git diffs, pull request status, plan usage, your prompts, keys and attachments, and approval decisions. The phone also gives `collied` its push notification token and a notification key it generated, so the machine can send it encrypted alerts.
 
 `collied` never writes conversation history or the summary lines shown in the Inbox to logs, and never puts them in notifications.
 

@@ -8,6 +8,8 @@ import Observation
 /// failed, is read again every `interval`. collied audits every read, so a screen that cannot
 /// change is not re-read.
 /// A watched agent's output already in the core is used instead of a read.
+/// With Chat as the default view, a card reads the latest messages instead of the screen, except
+/// while its agent is blocked or once collied reports no history for it.
 @MainActor
 @Observable
 final class PreviewModel {
@@ -21,6 +23,8 @@ final class PreviewModel {
     static let starredLines: UInt16 = 120
 
     private(set) var screens: [AgentRoute: String] = [:]
+    private(set) var chats: [AgentRoute: [HistoryMessage]] = [:]
+    private(set) var chat = false
     /// From each machine's listing: the machine keeps them, and drops one when its pane closes.
     private(set) var starred: Set<AgentRoute> = []
 
@@ -34,6 +38,8 @@ final class PreviewModel {
     @ObservationIgnored private var readAt: [AgentRoute: ContinuousClock.Instant] = [:]
     @ObservationIgnored private var fresh: Set<AgentRoute> = []
     @ObservationIgnored private var reading: Set<AgentRoute> = []
+    /// Cleared when the status changes, as an agent may report its session later.
+    @ObservationIgnored private var terminalOnly: Set<AgentRoute> = []
     @ObservationIgnored private var runs = 0
 
     init(now: @escaping () -> ContinuousClock.Instant = { .now }) {
@@ -50,6 +56,20 @@ final class PreviewModel {
             tick()
             try? await Task.sleep(for: Self.tick)
         }
+    }
+
+    func showChat(_ on: Bool) {
+        guard chat != on else { return }
+        chat = on
+        readAt = [:]
+        fresh = []
+        terminalOnly = []
+        if !on { chats = [:] }
+    }
+
+    /// Nil keeps the terminal preview: a blocked agent's card shows its whole screen.
+    func conversation(_ route: AgentRoute, status: AgentState) -> [HistoryMessage]? {
+        chat && status != .blocked ? chats[route] : nil
     }
 
     func appeared(_ route: AgentRoute) {
@@ -100,6 +120,7 @@ final class PreviewModel {
         for (route, status) in next where statuses[route].map({ $0.status != status.status || $0.since != status.since }) == true {
             readAt[route] = nil
             fresh.remove(route)
+            terminalOnly.remove(route)
         }
         statuses = next
         let listed = Set(entries.flatMap { entry in (entry.flock?.starred ?? []).map { AgentRoute(machineId: entry.id, terminalId: $0) } })
@@ -110,8 +131,12 @@ final class PreviewModel {
         if listed != starred { starred = listed }
         readAt = readAt.filter { next[$0.key] != nil }
         fresh = fresh.filter { next[$0] != nil }
+        terminalOnly = terminalOnly.filter { next[$0] != nil }
         if screens.keys.contains(where: { next[$0] == nil }) {
             screens = screens.filter { next[$0.key] != nil }
+        }
+        if chats.keys.contains(where: { next[$0] == nil }) {
+            chats = chats.filter { next[$0.key] != nil }
         }
         return tick()
     }
@@ -126,35 +151,65 @@ final class PreviewModel {
             guard let at = readAt[route] else { return true }
             return now - at >= Self.interval && ([.working, .unknown].contains(status) || !fresh.contains(route))
         }
-        var reads: [(route: AgentRoute, lines: UInt16)] = []
+        var reads: [(route: AgentRoute, lines: UInt16, latest: Bool)] = []
         for route in due {
             readAt[route] = now
-            if let output = core.agentView(machineId: route.machineId, terminalId: route.terminalId, afterRevision: 0)?.output {
+            let lines = starred.contains(route) ? Self.starredLines : Self.lines
+            if chat, statuses[route]?.status != .blocked, !terminalOnly.contains(route) {
+                reads.append((route, lines, true))
+            } else if let output = core.agentView(machineId: route.machineId, terminalId: route.terminalId, afterRevision: 0)?.output {
                 show(output.reflowed ?? output.ansi, for: route)
                 fresh.insert(route)
             } else {
-                reads.append((route, starred.contains(route) ? Self.starredLines : Self.lines))
+                reads.append((route, lines, false))
             }
         }
         guard !reads.isEmpty else { return nil }
         reading.formUnion(reads.map(\.route))
         return Task {
-            await withTaskGroup(of: (AgentRoute, String?).self) { group in
-                for (route, lines) in reads {
+            await withTaskGroup(of: (AgentRoute, Read).self) { group in
+                for (route, lines, latest) in reads {
                     group.addTask {
-                        let read = try? await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: lines)
-                        return (route, read.map { $0.reflowed ?? $0.ansi })
+                        let screen: @Sendable () async -> String? = {
+                            let read = try? await core.agentRead(machineId: route.machineId, terminalId: route.terminalId, source: .recent, lines: lines)
+                            return read.map { $0.reflowed ?? $0.ansi }
+                        }
+                        guard latest else { return (route, .screen(await screen(), unavailable: false)) }
+                        do {
+                            let page = try await core.agentLatest(machineId: route.machineId, terminalId: route.terminalId)
+                            if !page.available { return (route, .screen(await screen(), unavailable: true)) }
+                            return (route, page.messages.isEmpty ? .screen(await screen(), unavailable: false) : .chat(page.messages))
+                        } catch CoreError.NotImplemented {
+                            return (route, .screen(await screen(), unavailable: true))
+                        } catch {
+                            return (route, .screen(nil, unavailable: false))
+                        }
                     }
                 }
-                for await (route, ansi) in group {
+                for await (route, read) in group {
                     reading.remove(route)
-                    if let ansi, statuses[route] != nil {
-                        show(ansi, for: route)
+                    guard statuses[route] != nil else { continue }
+                    switch read {
+                    case let .chat(messages):
+                        guard chat else { continue }
+                        if chats[route] != messages { chats[route] = messages }
                         fresh.insert(route)
+                    case let .screen(ansi, unavailable):
+                        if unavailable { terminalOnly.insert(route) }
+                        if unavailable || ansi != nil, chats[route] != nil { chats[route] = nil }
+                        if let ansi {
+                            show(ansi, for: route)
+                            fresh.insert(route)
+                        }
                     }
                 }
             }
         }
+    }
+
+    private enum Read: Sendable {
+        case screen(String?, unavailable: Bool)
+        case chat([HistoryMessage])
     }
 
     private func show(_ ansi: String, for route: AgentRoute) {

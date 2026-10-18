@@ -124,6 +124,53 @@ impl Transcripts {
                 line_start = Some(i + 1);
             }
         }
+        if p.latest {
+            let mut messages = Vec::new();
+            let (mut users, mut replies, mut size) = (0, 0, 0);
+            'records: for (a, b) in positions.into_iter().rev() {
+                let Ok(v) = serde_json::from_slice::<Value>(&bytes[a..b]) else {
+                    continue;
+                };
+                if matches!(kind, Kind::Copilot) && v["agentId"].is_string() {
+                    continue;
+                }
+                let fallback = (start + a as u64).to_string();
+                for m in normalize(&v, kind, id, modern, fallback, "", None)
+                    .into_iter()
+                    .rev()
+                {
+                    let count = match m.role.as_str() {
+                        "user" if m.tool.is_none() => &mut users,
+                        "assistant" if m.tool.is_none() => &mut replies,
+                        _ => continue,
+                    };
+                    if *count == 2 {
+                        continue;
+                    }
+                    size += serde_json::to_vec(&m).ok()?.len();
+                    if size > PAGE_BYTES {
+                        break 'records;
+                    }
+                    *count += 1;
+                    messages.push(m);
+                }
+                if users == 2 && replies == 2 {
+                    break;
+                }
+            }
+            messages.reverse();
+            return Some(HistoryPage {
+                session: Some(session),
+                available: true,
+                unavailable_reason: None,
+                reset: false,
+                messages,
+                before: None,
+                after: None,
+                more: false,
+                omitted: false,
+            });
+        }
         let mut omitted = false;
         let complete_end = positions.last().map_or_else(
             || line_start.map_or(start, |n| start + n as u64),
@@ -881,6 +928,7 @@ mod tests {
             before,
             after,
             query: query.map(str::to_owned),
+            latest: false,
         }
     }
 
@@ -979,6 +1027,58 @@ mod tests {
             t.history(&a, &params(None, p.after, None))
                 .messages
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn latest_reads_the_last_two_user_and_agent_messages_without_tools() {
+        let reply = |uuid: &str, content: Value| {
+            line(json!({"type":"assistant","uuid":uuid,"sessionId":CLAUDE,
+                "message":{"role":"assistant","content":content}}))
+        };
+        let (_dir, t, a, path) = setup("claude", &row(0, "Only prompt"));
+        let latest = HistoryParams {
+            latest: true,
+            ..params(None, None, None)
+        };
+        let texts = |page: HistoryPage| {
+            assert!(page.available && page.before.is_none() && page.after.is_none());
+            page.messages
+                .into_iter()
+                .map(|m| (m.role, m.text))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            texts(t.history(&a, &latest)),
+            [("user".into(), "Only prompt".into())]
+        );
+        append(
+            &path,
+            &[
+                reply("a1", json!("Reply one")),
+                row(1, "Second"),
+                reply(
+                    "a2",
+                    json!([{"type":"text","text":"Reply two"},
+                    {"type":"tool_use","id":"c1","name":"Bash","input":{"command":"ls"}}]),
+                ),
+                line(
+                    json!({"type":"user","uuid":"r1","sessionId":CLAUDE,"message":{"role":"user",
+                    "content":[{"type":"tool_result","tool_use_id":"c1","content":"out"}]}}),
+                ),
+                reply("a3", json!("Reply three")),
+                row(2, "Third"),
+            ]
+            .concat(),
+        );
+        assert_eq!(
+            texts(t.history(&a, &latest)),
+            [
+                ("user".into(), "Second".into()),
+                ("assistant".into(), "Reply two".into()),
+                ("assistant".into(), "Reply three".into()),
+                ("user".into(), "Third".into()),
+            ]
         );
     }
 

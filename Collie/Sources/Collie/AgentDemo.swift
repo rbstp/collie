@@ -279,6 +279,20 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         return HistoryPage(session: "demo", available: true, unavailableReason: nil, reset: false, messages: messages, before: nil, after: "end", more: false, omitted: false)
     }
 
+    func agentLatest(machineId: String, terminalId: String) async throws -> HistoryPage {
+        let page = try await agentHistory(machineId: machineId, terminalId: terminalId, before: nil, after: nil, query: nil)
+        var counts: [String: Int] = [:]
+        let messages = page.messages.reversed().filter { message in
+            guard message.tool == nil, ["user", "assistant"].contains(message.role) else { return false }
+            counts[message.role, default: 0] += 1
+            return counts[message.role, default: 0] <= 2
+        }
+        return HistoryPage(
+            session: page.session, available: true, unavailableReason: nil, reset: false, messages: messages.reversed(),
+            before: nil, after: nil, more: false, omitted: false
+        )
+    }
+
     private static func screenshotHistory(_ terminalId: String) -> [HistoryMessage] {
         func message(_ id: String, _ role: String, _ text: String, tool: String? = nil, call: String? = nil) -> HistoryMessage {
             HistoryMessage(id: id, role: role, text: text, tool: tool, callId: call, truncated: false, parentCallId: nil)

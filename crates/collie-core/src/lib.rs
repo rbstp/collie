@@ -1888,39 +1888,26 @@ impl CollieCore {
             before,
             after,
             query,
+            latest: false,
         };
-        if !params.is_valid() {
-            return Err(invalid("history", "invalid history request"));
-        }
-        match self
-            .call(&machine_id, Request::AgentHistory(params), CALL_TIMEOUT)
-            .await?
-        {
-            Response::History(p) => Ok(HistoryPage {
-                session: p.session,
-                available: p.available,
-                unavailable_reason: p.unavailable_reason,
-                reset: p.reset,
-                before: p.before,
-                after: p.after,
-                more: p.more,
-                omitted: p.omitted,
-                messages: p
-                    .messages
-                    .into_iter()
-                    .map(|m| HistoryMessage {
-                        id: m.id,
-                        role: m.role,
-                        text: m.text,
-                        tool: m.tool,
-                        call_id: m.call_id,
-                        truncated: m.truncated,
-                        parent_call_id: m.parent_call_id,
-                    })
-                    .collect(),
-            }),
-            other => Err(unexpected(&other).into()),
-        }
+        self.history(&machine_id, params).await
+    }
+
+    /// The last two user messages and the last two agent text messages, for a grid card.
+    pub async fn agent_latest(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+    ) -> Result<HistoryPage, CoreError> {
+        let params = protocol::HistoryParams {
+            terminal_id: TerminalId::new(terminal_id)
+                .map_err(|_| invalid("terminal_id", "invalid terminal"))?,
+            before: None,
+            after: None,
+            query: None,
+            latest: true,
+        };
+        self.history(&machine_id, params).await
     }
 
     pub async fn agent_changes(
@@ -2478,6 +2465,45 @@ impl CollieCore {
 }
 
 impl CollieCore {
+    async fn history(
+        &self,
+        machine_id: &str,
+        params: protocol::HistoryParams,
+    ) -> Result<HistoryPage, CoreError> {
+        if !params.is_valid() {
+            return Err(invalid("history", "invalid history request"));
+        }
+        match self
+            .call(machine_id, Request::AgentHistory(params), CALL_TIMEOUT)
+            .await?
+        {
+            Response::History(p) => Ok(HistoryPage {
+                session: p.session,
+                available: p.available,
+                unavailable_reason: p.unavailable_reason,
+                reset: p.reset,
+                before: p.before,
+                after: p.after,
+                more: p.more,
+                omitted: p.omitted,
+                messages: p
+                    .messages
+                    .into_iter()
+                    .map(|m| HistoryMessage {
+                        id: m.id,
+                        role: m.role,
+                        text: m.text,
+                        tool: m.tool,
+                        call_id: m.call_id,
+                        truncated: m.truncated,
+                        parent_call_id: m.parent_call_id,
+                    })
+                    .collect(),
+            }),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
     /// A grant collied no longer holds (expired, or dropped as an agent started there).
     fn locked_on<T>(&self, conn: &Conn, response: &Result<T, CoreError>) {
         if matches!(response, Err(CoreError::TerminalLocked)) {
