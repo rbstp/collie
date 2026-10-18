@@ -26,7 +26,7 @@ Your agents' transcripts and your files stay where the agents keep them; `collie
 
 **On your iPhone**, the app keeps:
 
-- its Tailscale node keys and the machines you paired, including a Tailscale user ID ownership pin in the upcoming user-owned setup, in a state folder excluded from iCloud and Finder backups;
+- its Tailscale node keys and the machines you paired, including a Tailscale user ID ownership pin in the user-owned setup, in a state folder excluded from iCloud and Finder backups;
 - its signing keys and per-machine notification keys, in the iPhone's Keychain, available on this device only and not synced. The app generates the TLS signing key in the Secure Enclave, and the key cannot be exported;
 - your settings, saved prompts, key shortcuts and other preferences, and unsent drafts (with their attachments for up to 23 hours). Your device and iCloud backups can include these.
 
@@ -42,13 +42,13 @@ The phone and `collied` talk only over your tailnet, inside mutual TLS. This tra
 
 ## Tailscale
 
-Both the app and `collied` embed their own Tailscale client. Published desktop v0.1.0 uses a tagged node; the upcoming coordinated phone/desktop candidate uses user-owned nodes signed in with the same personal account. Neither flow installs or requires an OS VPN profile, and a separate corporate VPN client keeps its own account and state.
+Both the app and `collied` embed their own Tailscale client. Desktop v0.1.0 uses a tagged node; desktop v0.1.1 and later use user-owned nodes signed in with the same personal account as the phone. Neither flow installs or requires an OS VPN profile, and a separate corporate VPN client keeps its own account and state.
 
 You sign in to your own Tailscale account, and Tailscale's coordination service learns about these devices as it does for any device on your tailnet. WireGuard encrypts the traffic between your devices. When a direct connection is not possible, that traffic may pass through Tailscale's relay servers, which cannot read it. Both embedded clients have log upload to Tailscale turned off. [Tailscale's privacy policy](https://tailscale.com/privacy-policy) covers its handling of your account and device data.
 
 ## Push notifications
 
-If you set up notifications, `collied` on your machine sends them through Apple Push Notification service. It encrypts alert titles, bodies, agent and workspace names, pull request details, pending commands, and the private attributes and initial/update/end state of Live Activities with a key generated on your phone. Only your paired machine and phone hold that key. Apple receives generic alert text and ciphertext.
+If you set up notifications, `collied` on your machine sends them through Apple Push Notification service. Alert titles, bodies, agent and workspace names, pull request details, pending commands, and the private attributes and initial/update/end state of Live Activities are encrypted with a key generated on your phone. Only your paired machine and phone hold that key. Apple receives generic alert text and ciphertext.
 
 Apple can still see notification delivery destinations, opaque machine/thread/approval/event/activity identifiers, generic categories, notification priority, timing, frequency, ciphertext size and Live Activity lifecycle. A generic alert can distinguish an agent finishing from an agent needing attention. Initial and local activity content use the same encrypted storage shape. Your phone's notification extension and widget decrypt the content locally. Before the first unlock after reboot, or if decryption fails, they show generic content without approval controls. Approval nonces and decisions travel only over your authenticated tailnet connection.
 
