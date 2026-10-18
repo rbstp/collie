@@ -479,6 +479,20 @@ mod tests {
                 (" ", "ddd".to_owned())
             ]
         );
+        // Claude Code 2.1.302 draws these at 44 columns: the space after a full row takes a
+        // column of the next row, alone on it before a word that fills a row.
+        let full = format!("{} {}", "a".repeat(20), "b".repeat(23));
+        let shown = |text: &str| -> Vec<String> {
+            model::rows(text, 44).into_iter().map(|(_, r)| r).collect()
+        };
+        assert_eq!(
+            shown(&format!("{full} {} {}", "c".repeat(20), "d".repeat(23))),
+            [full.clone(), "c".repeat(20) + " ", "d".repeat(23)]
+        );
+        assert_eq!(
+            shown(&format!("{full} {}", "c".repeat(44))),
+            [full.clone(), String::new(), "c".repeat(44)]
+        );
     }
 
     #[test]
