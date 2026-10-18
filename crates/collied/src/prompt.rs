@@ -1261,13 +1261,128 @@ pub mod fixtures {
             include_str!("../tests/fixtures/copilot/trust.detection.txt"),
         ),
     ];
+
+    /// Whole dialogs above, their rows shuffled, and fragments the readers look for.
+    pub fn screen() -> impl proptest::strategy::Strategy<Value = String> {
+        use proptest::prelude::*;
+        let dialogs = vec![
+            BASH,
+            BASH_TWO,
+            EDIT,
+            TRUST,
+            QUESTION,
+            PLAN,
+            BASH_COUNTDOWN,
+            RENAMED_IDLE_BOX,
+            CODEX_UPDATES[0],
+            CODEX[0].1,
+            COPILOT[0].1,
+        ];
+        let rows: Vec<&str> = dialogs.iter().flat_map(|d| d.lines()).collect();
+        let parts = vec![
+            " ",
+            "  ",
+            "word",
+            "❯",
+            "❯ ",
+            "1. ",
+            "2. ",
+            "⏺ ",
+            "※ ",
+            "⎿",
+            "─",
+            "──────────",
+            "│",
+            "┃",
+            "▄▄",
+            "● ",
+            "• ",
+            "› ",
+            "- ",
+            "12. ",
+            "中",
+            "\u{a0}",
+            "\r",
+            "\t",
+            "\u{1b}[",
+            "\u{1b}[0m",
+            "\u{1b}[2m",
+            "\u{1b}[38;2;1;2;3m",
+            "\u{1b}[48;2;55;55;55m",
+            "Bash(",
+            ")",
+            "(esc)",
+            "Esc to cancel",
+            "Yes",
+            "No",
+            "Tab to amend",
+            "12:34",
+            "[Image #1]",
+            "3 tasks",
+            "◻",
+            "…",
+            "ultracode",
+            "Update now",
+            "Type something.",
+        ];
+        let row = prop_oneof![
+            prop::sample::select(dialogs).prop_map(str::to_owned),
+            prop::sample::select(rows).prop_map(str::to_owned),
+            prop::collection::vec(prop::sample::select(parts), 0..8).prop_map(|p| p.concat()),
+        ];
+        prop::collection::vec(row, 0..30).prop_map(|rows| rows.join("\n"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::fixtures::*;
     use super::*;
     use Decision::*;
+
+    proptest! {
+        #[test]
+        fn readers_never_panic(
+            text in screen(),
+            rule in prop::sample::select(&[
+                None,
+                Some("bash_permission_prompt"),
+                Some("live_blocked_form"),
+                Some("legacy_no_prompt_blocker"),
+                Some(NAMED_SESSION_RULE),
+            ][..]),
+        ) {
+            for kind in ["claude", "codex", "copilot"] {
+                uses_menu(kind, rule);
+                open_to_text(kind, rule, &text);
+                settings_picker(kind, rule, &text);
+                context(kind, &text);
+                without_deny_countdown(kind, &text);
+                let (_, kept) = without_session_name(kind, rule, &text);
+                prop_assert!(text.starts_with(kept));
+            }
+            codex_question_open(&text);
+            offers_note(&text);
+            shows_dialog(&text);
+            codex_update(&text);
+            ultracode_on(&text);
+            snippet(text.lines());
+            shows_whole(&squashed_lines(&text), &text);
+            if let Some(menu) = Menu::parse(&text) {
+                menu.decisions();
+                menu.choices();
+                menu.free_text();
+                menu.tail();
+                menu.region();
+                for i in 0..menu.options.len() {
+                    menu.keys(i);
+                    menu.reads(i, &text);
+                }
+            }
+        }
+    }
 
     #[test]
     fn codex_structured_question_context() {

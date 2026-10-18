@@ -19,3 +19,6 @@ Mac/*.xcodeproj/
 
 /dist/
 scripts/desktop/__pycache__/
+
+# Local proptest failure seeds; a failure becomes an ordinary unit test instead.
+proptest-regressions/

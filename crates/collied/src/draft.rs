@@ -194,8 +194,94 @@ pub(crate) fn cells(row: &str) -> Vec<(char, bool)> {
     out
 }
 
+/// A model of Claude Code 2.1's wrap to draw screens from: wrap-ansi `{hard: true, trim:
+/// false}` with the spaces around each soft wrap hidden.
+#[cfg(test)]
+pub mod model {
+    use proptest::prelude::*;
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+    /// Lines of single-spaced words, some longer than a row or of wide characters.
+    pub fn text() -> impl Strategy<Value = String> {
+        let line = prop::collection::vec("[a-z]{1,12}|[中文]{1,4}", 0..8).prop_map(|w| w.join(" "));
+        prop::collection::vec(line, 1..4).prop_map(|l| l.join("\n"))
+    }
+
+    /// The rows of `text` wrapped at `width`, each after what joins it to the row above:
+    /// `"\n"` for a typed newline, `" "` for a soft wrap, `""` for a split word.
+    pub fn rows(text: &str, width: usize) -> Vec<(&'static str, String)> {
+        let mut rows: Vec<(&str, String)> = Vec::new();
+        for line in text.split('\n') {
+            rows.push(("\n", String::new()));
+            for (i, word) in line.split(' ').enumerate() {
+                let mut used = rows.last().map_or(0, |(_, r)| r.width());
+                if i > 0 && used >= width {
+                    rows.push((" ", String::new()));
+                    used = 0;
+                } else if i > 0 {
+                    rows.last_mut().unwrap().1.push(' ');
+                    used += 1;
+                }
+                let len = word.width();
+                if len > width {
+                    if (len - 1) / width < 1 + (len - (width - used) - 1) / width {
+                        rows.push((" ", String::new()));
+                        used = 0;
+                    }
+                    for (j, c) in word.chars().enumerate() {
+                        let w = c.width().unwrap_or(0);
+                        if used + w > width {
+                            rows.push((if j == 0 { " " } else { "" }, String::new()));
+                            used = 0;
+                        }
+                        rows.last_mut().unwrap().1.push(c);
+                        used += w;
+                    }
+                } else if used > 0 && used + len > width {
+                    rows.push((" ", word.to_owned()));
+                } else {
+                    rows.last_mut().unwrap().1.push_str(word);
+                }
+            }
+        }
+        rows
+    }
+
+    /// Whether the readers are not expected to read `text` back from its rows (issue #441):
+    /// a text one space or newline apart that a reader takes first draws them too (a soft
+    /// wrap or a split word over a typed newline, a split word over a space), or
+    /// [`super::separator`] misreads a word after a full row it would overflow together
+    /// with the row's last word as a split word, or a typed newline before a word at least
+    /// a row wide as a soft wrap.
+    pub fn unreadable(text: &str, width: usize) -> bool {
+        let first = |row: &str| row.split(' ').next().unwrap_or_default().width();
+        let lines: Vec<&str> = text.split('\n').collect();
+        let misread = rows(text, width).windows(2).any(|r| {
+            let last = r[0].1.rsplit(' ').next().unwrap_or_default().width();
+            r[1].0 == " " && r[0].1.width() >= width && last + first(&r[1].1) > width
+        }) || lines
+            .windows(2)
+            .any(|l| !l[0].is_empty() && first(l[1]) >= width);
+        let shown = |t: &str| -> Vec<String> {
+            rows(t, width)
+                .into_iter()
+                .map(|(_, r)| r.trim_end().to_owned())
+                .collect()
+        };
+        let drawn = shown(text);
+        misread
+            || text.match_indices([' ', '\n']).any(|(i, sep)| {
+                let alts: &[&str] = if sep == " " { &[""] } else { &["", " "] };
+                alts.iter()
+                    .any(|alt| shown(&format!("{}{alt}{}", &text[..i], &text[i + 1..])) == drawn)
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
     use crate::drive::sanitize_ansi;
 
@@ -346,6 +432,25 @@ mod tests {
             ),
         ] {
             assert_eq!(read(ansi), draft(text, 1), "{text}");
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn reads_back_what_was_typed(
+            (text, width) in (model::text(), 4..24usize).prop_filter("unreadable", |(t, w)| {
+                // A run of wide characters split one column short of the edge reads as two
+                // words.
+                !model::unreadable(t, *w)
+                    && !model::rows(t, *w)
+                        .windows(2)
+                        .any(|r| r[1].0.is_empty() && r[0].1.width() < *w)
+            }),
+        ) {
+            let rows: Vec<String> = model::rows(&text, width).into_iter().map(|(_, r)| r).collect();
+            let rule = "─".repeat(width + 4);
+            let screen = format!("{rule}\n❯ {}\n{rule}\n", rows.join("\n  "));
+            prop_assert_eq!(parse(&screen), draft(&normalize(&text), rows.len()));
         }
     }
 

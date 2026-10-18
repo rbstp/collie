@@ -60,7 +60,7 @@ Reference, in this repository:
 | `just setup` | Fetches the submodules |
 | `just fmt` | `cargo fmt` |
 | `just lint` | `cargo fmt --check`, clippy with `-D warnings`, `cargo deny` |
-| `just test` | All Rust tests with cargo-nextest, including end-to-end tests over a local test tailnet |
+| `just test` | All Rust tests with cargo-nextest, including end-to-end tests over a local test tailnet; property tests run 256 cases each, more with `PROPTEST_CASES` |
 | `just schema` | Regenerates the protocol JSON Schemas in `docs/protocol/` |
 | `just ios-framework` | Builds the `CollieCore` xcframework and UniFFI bindings |
 | `just ios-ghostty` | Builds libghostty-vt from its pinned commit (skipped when already built) |
