@@ -4,18 +4,18 @@ With [push notifications](../install/push.md) set up, `collied` alerts you when 
 
 ## Approval alerts
 
-When an agent blocks on a permission prompt, a notification names the tool call: the exact command or file with the [Claude Code hook](../install/claude-code.md#the-permissionrequest-hook), otherwise what was read from the screen. Tapping it opens the matching session.
+When an agent blocks on a permission prompt, a notification names the tool call. With the [Claude Code hook](../install/claude-code.md#the-permissionrequest-hook), it names the exact command or file; otherwise, it shows what `collied` read from the screen. Tapping the notification opens the matching session.
 
 For Claude Code:
 
 1. Approve or Deny from the notification, after unlocking the iPhone, or in the app.
 2. Confirm with Face ID or the passcode. Every decision asks again.
 
-`collied` re-reads the screen before it answers. If the prompt changed in the meantime, the answer is refused as superseded rather than pressed into the new prompt.
+`collied` reads the screen again before it answers. If the prompt changed in the meantime, `collied` refuses your answer as superseded rather than press it into the new prompt.
 
-Codex and Copilot CLI send blocked notifications without Approve or Deny. Answer them in the session. Codex previews use the pending question, action or recognizable assistant response. An ambiguous screen shows `Blocked in <workspace>` instead of the user's input.
+For Codex and Copilot CLI, the blocked notification has no Approve or Deny: answer it in the session. A Codex notification previews the pending question, the action or a recognizable assistant response. When the screen is ambiguous, it shows `Blocked in <workspace>` rather than your own input.
 
-The notification is removed once the agent moves on, on a best-effort basis.
+Once the agent moves on, `collied` tries to remove the notification.
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/approval-light.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, its output, and Approve, Approve always and Deny buttons">
@@ -24,12 +24,12 @@ The notification is removed once the agent moves on, on a best-effort basis.
 
 ## Answering by hand
 
-Approvals, questions and trust prompts from all three agents can also be answered with the terminal buttons, or by typing in the session composer. Typed answers are pasted into the current prompt and submitted with Enter. This does not ask for Face ID, and it is not tied to one approval: if the prompt changes, the new prompt receives your input.
+You can also answer approvals, questions and trust prompts from all three agents with the terminal buttons, or by typing in the session composer. The phone pastes a typed answer into the current prompt and submits it with Enter. Answering by hand does not ask for Face ID, and it is not tied to one approval: if the prompt changes, the new prompt receives your input.
 
 ## Done alerts
 
-When an agent finishes a turn that took 30 seconds or more, you get one alert with its name and workspace, unless it is on screen. Tapping it opens the agent. Turn them off in **Settings > Notifications > Notify when an agent finishes**.
+When an agent finishes a turn that took 30 seconds or more, you get one alert with its name and workspace, unless the agent is on screen. Tapping the alert opens the agent. To turn these alerts off, use **Settings > Notifications > Notify when an agent finishes**.
 
 ## What Apple can see
 
-Alert titles, bodies, names, pull request details and commands are encrypted with your phone's per-machine key and decrypted locally by the notification extension. Apple receives generic text and ciphertext, plus opaque IDs, urgency, timing, frequency and payload size. A failed decryption or extension timeout leaves generic text without approval controls. Details are in the [threat model](../reference/threat-model.md#apple-sees-push-payload-metadata).
+Only your phone can read alert titles, bodies, names, pull request details and commands: `collied` encrypts them with a key your phone made for this machine, and the phone decrypts them locally. Apple receives generic text and ciphertext, plus opaque IDs, urgency, timing, frequency and payload size. If the phone cannot decrypt an alert in time, it shows generic text without approval controls. The [threat model](../reference/threat-model.md#apple-sees-push-payload-metadata) has the details.

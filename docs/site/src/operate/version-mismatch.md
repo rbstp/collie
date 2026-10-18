@@ -1,6 +1,8 @@
 # Version mismatch
 
-The app and `collied` speak a versioned protocol. They negotiate the highest revision both support. Revision 26 is the first baseline, currently the only supported revision. Older exact-match installations need one update on each side. When their supported ranges do not overlap, the app stops dialing that machine and says what to update, both in the Machines tab and in the machine's header on the Agents tab.
+When the app and `collied` share no protocol revision, the app stops dialing that machine and says what to update, both in the Machines tab and in the machine's header on the Agents tab.
+
+The two use the highest revision both support. Revision 26 is the first such revision, and currently the only one. A release older than revision 26 needed an exact match, so coming from one, update each side once.
 
 | Message | Meaning | Fix |
 |---|---|---|
@@ -8,6 +10,6 @@ The app and `collied` speak a versioned protocol. They negotiate the highest rev
 | "Update the app." | `collied` is newer than the app | [Update the app](updating.md#the-app) |
 | "This app and collied on Studio use different versions. Update both." | The versions differ but `collied` did not say which it runs | Update [both](updating.md) |
 
-No new pairing is needed: after the update, pull to refresh or reopen the app and it connects again.
+You do not need to pair again: after the update, pull to refresh or reopen the app, and it connects again.
 
-New revisions will retain the current and previous two implemented negotiated revisions. Release notes announce supported-floor increases. Features also require a shared capability when their wire format differs; unsupported methods and fields are not sent.
+When the protocol gets a new revision, the app and `collied` will keep supporting up to two earlier negotiated revisions, starting with revision 26, and release notes will say when support for an older one ends. [Negotiated protocol compatibility](../reference/architecture.md#negotiated-protocol-compatibility) has the details. A feature that changes what the two sides exchange works only when both support it; until then, the app and `collied` simply do not use it.

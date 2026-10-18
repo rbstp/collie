@@ -1,10 +1,10 @@
 # Updating
 
-The app and `collied` negotiate a common protocol revision. Revision 26 is the first baseline; update both once when coming from an older exact-match installation. Later updates can be installed in either order while their supported ranges overlap. When they no longer overlap, the app tells you which one to update: see [Version mismatch](version-mismatch.md).
+You can update the app and `collied` in either order: when they connect, they agree on a protocol revision both support. If you are updating from a release older than protocol revision 26, which needed both sides to match exactly, update both once. When the two drift too far apart, the app tells you which one to update: see [Version mismatch](version-mismatch.md).
 
 ## collied
 
-Download the latest release for your operating system from [GitHub Releases](https://github.com/rbstp/collie/releases) and follow that release's installation instructions. For a source build:
+Download the latest release for your operating system from [GitHub Releases](https://github.com/rbstp/collie/releases) and follow that release's installation instructions. To update a source build:
 
 ```sh
 git pull
@@ -28,4 +28,4 @@ just ios-run-device
 
 ## herdr
 
-After updating herdr, install its Codex hook again: `herdr integration install codex`. `collied doctor` warns when the hook is missing or older.
+After you update herdr, install its Codex hook again with `herdr integration install codex`. `collied doctor` warns when the hook is missing or older.
