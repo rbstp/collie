@@ -1,6 +1,6 @@
 # Usage
 
-Switch the Agents tab to **Usage**, or swipe left, to see plan usage. There is one card per machine that has recorded a plan, with how long ago it was recorded.
+To see plan usage, switch the Agents tab to **Usage**, or swipe left. Each machine that has recorded a plan gets a card, which says how long ago it recorded it.
 
 | Agent | Shows | Source |
 |---|---|---|
@@ -12,7 +12,7 @@ Switch the Agents tab to **Usage**, or swipe left, to see plan usage. There is o
 <img class="screenshot-dark" src="../images/usage-dark.png" width="300" height="652" loading="lazy" alt="The Usage view: Claude Code's 5-hour and weekly usage limits, each with a bar and its reset time">
 </div>
 
-Each block has a bar with a tick for the time elapsed in the window, the amount used and the reset time. Usage beyond the tick means you are ahead of an even pace.
+Each block shows the amount used, the reset time and a bar with a tick for the time elapsed in the window. When usage passes the tick, you are using the plan faster than an even pace.
 
 The same readings feed the [Apple Watch](../notifications/apple-watch.md) complication and widget.
 
