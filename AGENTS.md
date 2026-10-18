@@ -74,6 +74,7 @@ docs/site/check-site.sh /tmp/collie-site
 - Commit messages and pull request titles are plain sentences: imperative, sentence case, no type prefix, no trailing period, like the existing history ("Keep a merged pull request until the branch moves").
 - Merging a pull request into `master` uploads a TestFlight build. Put `[skip-release]` in the title of a pull request that should not ship one (docs, CI, tests only).
 - Pull requests that change only `docs/site/`, `docs/deploy-pages.md`, `README.md`, `AGENTS.md` or `CLAUDE.md` skip the macOS `rust` and `ios` CI jobs (the `changes` job in `.github/workflows/ci.yml`). Any other path runs them; tests read `docs/protocol/` and `docs/tailnet.md`.
+- Keep published iOS, collied, CollieBar and CollieTray releases on the same version, tag and source commit, including UI-only changes.
 - Release details, signing and secrets: `docs/release.md`.
 
 ## Cloudflare deployments

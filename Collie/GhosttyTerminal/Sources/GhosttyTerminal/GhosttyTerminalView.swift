@@ -431,6 +431,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private func showCopy(at point: CGPoint) {
         copyAnchor = CGPoint(x: point.x - bounds.minX, y: point.y - bounds.minY)
         copyButton.configuration?.title = "Copy"
+        copyButton.configuration?.image = nil
+        copyButton.configuration?.baseForegroundColor = nil
+        copyButton.accessibilityLabel = "Copy"
         copyButton.isUserInteractionEnabled = true
         shownLink = frameData.flatMap { selection?.link(in: $0) }
         quoteButton.isHidden = onQuote == nil
@@ -454,7 +457,12 @@ public final class GhosttyTerminalUIView: UIScrollView {
         // Universal Clipboard stays on so a selection can be pasted on the Mac.
         UIPasteboard.general.string = selection.text(in: frameData)
         UINotificationFeedbackGenerator(view: self).notificationOccurred(.success, at: menu.convert(copyButton.center, to: self))
-        copyButton.configuration?.title = "Copied"
+        UIView.transition(with: copyButton, duration: 0.2, options: .transitionCrossDissolve) {
+            self.copyButton.configuration?.title = "Copied"
+            self.copyButton.configuration?.image = UIImage(systemName: "checkmark.circle.fill")
+            self.copyButton.configuration?.baseForegroundColor = .systemGreen
+        }
+        copyButton.accessibilityLabel = "Copied"
         copyButton.isUserInteractionEnabled = false
         setNeedsLayout()
         Task { [weak self] in
