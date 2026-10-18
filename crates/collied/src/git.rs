@@ -72,6 +72,8 @@ async fn git_command(
         "-c",
         "core.fsmonitor=false",
         "-c",
+        "fetch.bundleURI=",
+        "-c",
         "diff.external=",
         "-c",
         "diff.submodule=short",
@@ -94,9 +96,16 @@ async fn git_command(
             command.env_remove(key);
         }
     }
+    // A partial clone's lazy fetch runs repository-configured programs (uploadpack,
+    // sshCommand, credential helpers). GIT_NO_LAZY_FETCH needs git 2.45 or a 2.39.4 to
+    // 2.44.1 security release; for older git, an empty GIT_ALLOW_PROTOCOL refuses every
+    // transport and outranks repository config, and the blank fetch.bundleURI above stops
+    // the fetch from starting git-remote-https before that check.
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0");
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_ALLOW_PROTOCOL", "");
     tokio::time::timeout(Duration::from_secs(8), async {
         let mut child = command.spawn().map_err(|_| error("Git is unavailable"))?;
         let mut bytes = Vec::new();
@@ -1248,6 +1257,69 @@ mod tests {
                 .contains("+changed")
         );
         assert!(!root.join("executed").exists());
+    }
+
+    #[tokio::test]
+    async fn reads_do_not_lazily_fetch_missing_blobs() {
+        let (dir, cwd, _) = repo();
+        let root = Path::new(cwd.as_str());
+        std::fs::write(root.join("file"), "a\n").unwrap();
+        run(root, &["add", "."]);
+        run(root, &["commit", "-m", "a"]);
+        std::fs::write(root.join("file"), "b\n").unwrap();
+        run(root, &["commit", "-am", "b"]);
+        run(root, &["clone", "--bare", ".", "bare.git"]);
+        run(
+            root,
+            &[
+                "--git-dir=bare.git",
+                "config",
+                "uploadpack.allowFilter",
+                "true",
+            ],
+        );
+        let url = format!("file://{}", root.join("bare.git").display());
+        run(root, &["clone", "--filter=blob:none", &url, "clone"]);
+        let clone = root.join("clone");
+        run(&clone, &["reset", "--soft", "HEAD~1"]);
+        let marker = dir.path().join("fetched");
+        let uploadpack = format!("touch {}; git-upload-pack", marker.display());
+        run(&clone, &["config", "remote.origin.uploadpack", &uploadpack]);
+        run(&clone, &["config", "protocol.file.allow", "always"]);
+        let cwd = Cwd::new(clone.to_str().unwrap()).unwrap();
+        let roots = vec![clone.clone()];
+        let _ = changes(&cwd, &roots, None, GitScope::Uncommitted).await;
+        let _ = diff(
+            &cwd,
+            &roots,
+            &AgentDiffParams {
+                terminal_id: protocol::TerminalId::new("term_test").unwrap(),
+                root: cwd.clone(),
+                path: "file".into(),
+                section: GitSection::Staged,
+            },
+        )
+        .await;
+        assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn fetches_do_not_fetch_bundle_uris() {
+        let (dir, cwd, _) = repo();
+        let root = Path::new(cwd.as_str());
+        let marker = dir.path().join("helper");
+        let helper = format!("!touch {}", marker.display());
+        for (key, value) in [
+            ("fetch.bundleURI", "https://127.0.0.1:1/bundle"),
+            ("http.sslCert", "cert.pem"),
+            ("http.sslCertPasswordProtected", "true"),
+            ("credential.helper", &helper),
+        ] {
+            run(root, &["config", key, value]);
+        }
+        // A lazy fetch is a `git fetch` child inheriting the builder's environment and config.
+        let _ = git_command(&cwd, &["fetch"], 4096, &[]).await;
+        assert!(!marker.exists());
     }
 
     #[tokio::test]
