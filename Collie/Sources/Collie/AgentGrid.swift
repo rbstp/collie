@@ -187,23 +187,49 @@ extension MachineFlockEntry {
     }
 }
 
-private struct AgentCard: View {
+struct AgentCard: View {
     let agent: AgentSummary
     let screen: String?
     let workspace: String?
     let followed: Bool
     let starred: Bool
     let now: Date
+    @ScaledMetric(relativeTo: .caption2) private var subagentPreviewHeight: CGFloat = 120
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.openURL) private var openURL
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             TerminalPreview(ansi: screen ?? "")
-                .frame(height: starred ? 240 : 120)
+                .frame(height: typeSize.isAccessibilitySize && agent.status != .blocked && !agent.subagents.isEmpty
+                    ? subagentPreviewHeight * (starred ? 2 : 1)
+                    : (starred ? 240 : 120))
+                .accessibilityHidden(true)
+                .overlay(alignment: .top) {
+                    if agent.status != .blocked, !agent.subagents.isEmpty {
+                        let limit = starred ? 4 : 2
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(agent.subagents.prefix(limit).enumerated()), id: \.offset) { _, subagent in
+                                HStack(spacing: 4) {
+                                    Text(verbatim: subagent.title).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    Text(verbatim: subagent.elapsed(now: now)).monospacedDigit().fixedSize()
+                                }
+                            }
+                            if agent.subagents.count > limit {
+                                Text("+\(agent.subagents.count - limit) more")
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.white)
+                        .padding(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10))
+                        .environment(\.colorScheme, .dark)
+                    }
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .allowsHitTesting(false)
-                .accessibilityHidden(true)
             HStack(alignment: .top, spacing: 6) {
                 StatusIcon(state: agent.status).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
@@ -231,7 +257,7 @@ private struct AgentCard: View {
                             Text(verbatim: "·")
                         }
                         StatusAge(agent: agent, now: now).fixedSize()
-                        if !agent.subagents.isEmpty {
+                        if agent.status == .blocked, !agent.subagents.isEmpty {
                             Text(verbatim: "·")
                             Text(agent.subagents.count == 1 ? "1 subagent" : "\(agent.subagents.count) subagents").fixedSize()
                         }
