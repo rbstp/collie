@@ -131,7 +131,7 @@ struct ConversationView: View {
                 ContentUnavailableView {
                     Label("History unavailable", systemImage: "text.bubble")
                 } description: {
-                    Text(model.unavailableReason ?? "This session has no readable Codex or Claude Code transcript yet. Older daemons need an update for Chat.")
+                    Text(model.unavailableReason ?? "This session has no readable Claude Code, Codex or Copilot CLI transcript yet. Older daemons need an update for Chat.")
                 } actions: {
                     Button("Open Terminal", action: terminal).buttonStyle(.glass)
                 }

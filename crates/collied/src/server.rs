@@ -1366,7 +1366,25 @@ impl Session<'_> {
             return err(ErrorCode::NotPaired, "pairing revoked");
         }
         let current = self.state.drive.find_agent(&terminal).await?;
-        if identity != (current.agent, current.agent_session.map(|s| s.value)) {
+        if identity
+            != (
+                current.agent.clone(),
+                current.agent_session.clone().map(|s| s.value),
+            )
+        {
+            return err(ErrorCode::AgentNotReady, "session changed; retry history");
+        }
+        if current.agent.as_deref() != Some("copilot") {
+            return Ok(Response::History(page));
+        }
+        let reader = lock(&self.state.transcripts).history_reader();
+        let (page, same) = tokio::task::spawn_blocking(move || {
+            let same = reader.history_current(&current, &page);
+            (page, same)
+        })
+        .await
+        .map_err(|_| (ErrorCode::Internal, "history unavailable".into()))?;
+        if !same {
             return err(ErrorCode::AgentNotReady, "session changed; retry history");
         }
         Ok(Response::History(page))

@@ -1,6 +1,6 @@
 # Chat and Terminal
 
-A Claude Code or Codex session has two views: **Chat** shows the conversation, and **Terminal** shows the agent's screen. Switch between them with the toggle at the top of the session. **Settings > Sessions > Default view** picks which one opens first; Chat is the default, and the toggle in a session does not change this setting. Copilot CLI and plain terminals use Terminal only.
+A Claude Code, Codex or Copilot CLI session has two views: **Chat** shows the conversation, and **Terminal** shows the agent's screen. Switch between them with the toggle at the top of the session. **Settings > Sessions > Default view** picks which one opens first; Chat is the default, and the toggle in a session does not change this setting. Plain terminals use Terminal only.
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/chat-light.png" width="300" height="652" loading="lazy" alt="An agent's Chat view: the conversation, with the prompt field at the bottom">
@@ -22,7 +22,7 @@ Chat reads the agent's real conversation from its transcript on the machine.
 When an interactive prompt needs terminal keys, Chat offers **Continue in Terminal**.
 
 > [!NOTE]
-> Chat needs the agent's session ID from herdr's SessionStart integration. If the ID is missing, Chat says so and retries when it arrives; it never guesses a transcript from the folder. For Codex, install herdr's hook: see [Codex](../agents/codex.md).
+> Chat needs the agent's session ID from herdr's SessionStart integration. If the ID is missing, Chat says so and retries when it arrives; it never guesses a transcript from the folder. For Codex, install herdr's hook: see [Codex](../agents/codex.md). Copilot CLI needs no hook; Chat waits until it can tell which conversation the pane shows: see [Copilot CLI](../agents/copilot.md).
 
 Chat shortens very long text and marks where it cut. The phone fetches history only while Chat is open, and stops loading when you switch to Terminal or leave the app. `collied` never writes history to logs or notifications.
 

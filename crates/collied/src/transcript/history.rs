@@ -27,10 +27,12 @@ impl Transcripts {
         self.read_history(agent, params).unwrap_or(HistoryPage {
             session: None,
             available: false,
-            unavailable_reason: Some(if self.live_id(agent).is_none() {
-                "The agent has not reported its session ID to herdr. Chat cannot safely identify this conversation. Check the agent’s herdr SessionStart integration, then resume the session."
-            } else {
+            unavailable_reason: Some(if self.live_id(agent).is_some() {
                 "The transcript for this session is not readable yet. Terminal remains available."
+            } else if agent.agent.as_deref() == Some("copilot") {
+                "Chat cannot yet confirm which Copilot CLI conversation this pane shows, so it does not guess. It retries once the pane’s title shows the session’s name. Terminal remains available."
+            } else {
+                "The agent has not reported its session ID to herdr. Chat cannot safely identify this conversation. Check the agent’s herdr SessionStart integration, then resume the session."
             }.into()),
             reset: false,
             messages: vec![],
@@ -41,10 +43,26 @@ impl Transcripts {
         })
     }
 
+    /// Copilot's `/new` can switch conversations while herdr's ID stays, so a page is
+    /// current only while the pane still selects the session it was read from.
+    pub fn history_current(&self, agent: &AgentInfo, page: &HistoryPage) -> bool {
+        let Some(session) = &page.session else {
+            return true;
+        };
+        agent.agent.as_deref() != Some("copilot")
+            || self.live_id(agent).is_some_and(|id| {
+                session
+                    .strip_prefix("copilot:")
+                    .and_then(|s| s.strip_prefix(id.as_str()))
+                    .is_some_and(|s| s.starts_with(':'))
+            })
+    }
+
     fn read_history(&self, agent: &AgentInfo, p: &HistoryParams) -> Option<HistoryPage> {
         let kind = match agent.agent.as_deref()? {
             "claude" => Kind::Claude,
             "codex" => Kind::Codex,
+            "copilot" => Kind::Copilot,
             _ => return None,
         };
         let id = self.live_id(agent)?;
@@ -56,6 +74,13 @@ impl Transcripts {
         file.read_exact(&mut header).ok()?;
         let first = header.split(|b| *b == b'\n').next().unwrap_or_default();
         if matches!(kind, Kind::Codex) && header_string(first, "id").is_some_and(|s| s != id) {
+            return None;
+        }
+        if matches!(kind, Kind::Copilot)
+            && serde_json::from_slice::<Value>(first)
+                .ok()
+                .is_none_or(|v| v["type"] != "session.start" || v["data"]["sessionId"] != id)
+        {
             return None;
         }
         let modern = header_string(first, "cli_version")
@@ -110,6 +135,10 @@ impl Transcripts {
         let mut messages = Vec::new();
         let mut size = 0;
         let empty = positions.is_empty();
+        let agents = match kind {
+            Kind::Copilot => copilot_agents(&bytes, &positions),
+            _ => HashMap::new(),
+        };
         if !forward {
             positions.reverse();
         }
@@ -121,6 +150,14 @@ impl Transcripts {
             let record = serde_json::from_slice::<Value>(&bytes[a..b]);
             let fallback = (start + a as u64).to_string();
             let mut batch = match &record {
+                Ok(v) if matches!(kind, Kind::Copilot) && v["agentId"].is_string() => {
+                    match copilot_parent(v, &agents) {
+                        Some(parent) => {
+                            normalize(v, kind, id, modern, fallback, &query, Some(parent))
+                        }
+                        None => Vec::new(),
+                    }
+                }
                 Ok(v) => normalize(v, kind, id, modern, fallback, &query, None),
                 Err(_) => {
                     omitted = true;
@@ -419,6 +456,42 @@ fn steps(
     (steps, len > read)
 }
 
+/// Copilot CLI writes subagent records into the parent's file, tagged with the child's
+/// `agentId`; its prompt names no call, so the call comes from `subagent.started` or a
+/// sibling record in the same window. A child whose call is not found there is left out.
+fn copilot_agents(bytes: &[u8], positions: &[(usize, usize)]) -> HashMap<String, String> {
+    let mut agents = HashMap::new();
+    for (a, b) in positions {
+        let line = &bytes[*a..*b];
+        if !line.windows(9).any(|w| w == b"\"agentId\"") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_slice::<Value>(line) else {
+            continue;
+        };
+        if let (Some(agent), Some(call)) = (
+            v["agentId"].as_str(),
+            if v["type"] == "subagent.started" {
+                v["data"]["toolCallId"].as_str()
+            } else {
+                v["data"]["parentToolCallId"].as_str()
+            },
+        ) {
+            agents
+                .entry(agent.to_owned())
+                .or_insert_with(|| call.to_owned());
+        }
+    }
+    agents
+}
+
+fn copilot_parent<'a>(v: &'a Value, agents: &'a HashMap<String, String>) -> Option<&'a str> {
+    v["data"]["parentToolCallId"]
+        .as_str()
+        .or_else(|| agents.get(v["agentId"].as_str()?).map(String::as_str))
+        .filter(|s| !s.is_empty() && s.len() <= 128)
+}
+
 /// A subagent larger than the room left keeps its first step and its latest ones.
 fn fit(
     steps: Vec<HistoryMessage>,
@@ -511,6 +584,7 @@ fn normalize(
         Kind::Codex => v["payload"]["item"]["id"]
             .as_str()
             .or(v["payload"]["id"].as_str()),
+        Kind::Copilot => v["id"].as_str(),
     }
     .filter(|s| s.len() <= 128)
     .map(str::to_owned)
@@ -634,6 +708,56 @@ fn normalize(
                     ),
                     _ => (),
                 }
+            }
+        }
+        Kind::Copilot => {
+            let d = &v["data"];
+            match v["type"].as_str() {
+                // Other origins are injected: autopilot, `skill-*`, and `agent-<id>` outside a child.
+                Some("user.message")
+                    if d["source"].is_null()
+                        || d["source"] == "user"
+                        || parent.is_some()
+                            && d["source"]
+                                .as_str()
+                                .is_some_and(|s| s.starts_with("agent-")) =>
+                {
+                    add("user", text(&d["content"]), None, None);
+                }
+                Some("assistant.message") => {
+                    add("assistant", text(&d["content"]), None, None);
+                    for r in d["toolRequests"].as_array().into_iter().flatten() {
+                        add(
+                            "assistant",
+                            text(&r["arguments"]),
+                            Some(r["name"].as_str().unwrap_or("Tool")),
+                            r["toolCallId"].as_str(),
+                        );
+                    }
+                }
+                Some("tool.execution_complete") => {
+                    let result = &d["result"]["content"];
+                    add(
+                        "tool",
+                        text(if result.is_null() {
+                            &d["error"]["message"]
+                        } else {
+                            result
+                        }),
+                        Some("Result"),
+                        d["toolCallId"].as_str(),
+                    );
+                }
+                Some("system.notification") if parent.is_none() && query.is_empty() => {
+                    match d["kind"]["type"].as_str() {
+                        Some("agent_idle") => add("event", "Subagent finished".into(), None, None),
+                        Some("shell_completed") => {
+                            add("event", "Background task finished".into(), None, None)
+                        }
+                        _ => (),
+                    }
+                }
+                _ => (),
             }
         }
     }
@@ -1587,5 +1711,350 @@ mod tests {
             let search = t.history(&a, &params(None, None, Some(query)));
             assert_eq!(search.messages.len(), hits, "{query}");
         }
+    }
+
+    const COPILOT: &str = "20000000-0000-4000-8000-000000000002";
+    const COPILOT_HISTORY: &str =
+        include_str!("../../tests/fixtures/transcripts/copilot-history.jsonl");
+
+    struct Copilot {
+        _dir: tempfile::TempDir,
+        t: Transcripts,
+        a: AgentInfo,
+        root: PathBuf,
+        _holds: Vec<std::fs::File>,
+    }
+
+    impl Copilot {
+        /// A pane whose process holds `COPILOT`, named in the pane's title; herdr's id is stale.
+        fn new(content: &str) -> Self {
+            let (dir, mut t, mut a, _) = setup("copilot", "");
+            let root = dir.path().join("session-state");
+            t.copilot_sessions = Some(root.clone());
+            a.terminal_title_stripped = Some("Fixture conversation - GitHub Copilot".into());
+            let pid = std::process::id();
+            t.set_pane(
+                "t1".into(),
+                "w1:p1".into(),
+                Some(crate::herdr::PaneProcesses {
+                    pids: vec![pid],
+                    attach: None,
+                }),
+            );
+            let mut c = Self {
+                _dir: dir,
+                t,
+                a,
+                root,
+                _holds: vec![],
+            };
+            c.session(COPILOT, "Fixture conversation", content);
+            c
+        }
+
+        fn session(&mut self, id: &str, name: &str, content: &str) {
+            let dir = self.root.join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("workspace.yaml"),
+                format!("id: {id}\ncwd: /test\nname: {name}\n"),
+            )
+            .unwrap();
+            std::fs::write(dir.join("events.jsonl"), content.replace(COPILOT, id)).unwrap();
+            let pid = std::process::id();
+            std::fs::write(dir.join(format!("inuse.{pid}.lock")), pid.to_string()).unwrap();
+            let hold = std::fs::File::create(dir.join(format!("inuse.{pid}.hold"))).unwrap();
+            hold.lock().unwrap();
+            self._holds.push(hold);
+        }
+
+        fn path(&self) -> PathBuf {
+            self.root.join(COPILOT).join("events.jsonl")
+        }
+
+        fn history(&self, p: HistoryParams) -> HistoryPage {
+            self.t.history_reader().history(&self.a, &p)
+        }
+    }
+
+    fn copilot_header() -> String {
+        COPILOT_HISTORY.split_inclusive('\n').next().unwrap().into()
+    }
+
+    fn copilot_row(n: usize, text: &str) -> String {
+        line(json!({"type":"assistant.message","id":format!("c{n}"),
+            "data":{"content":text,"toolRequests":[],"turnId":"0"}}))
+    }
+
+    #[test]
+    fn copilot_messages_tools_results_and_subagent_steps() {
+        let c = Copilot::new(COPILOT_HISTORY);
+        let p = c.history(params(None, None, None));
+        assert!(p.available);
+        assert!(
+            p.session
+                .unwrap()
+                .starts_with(&format!("copilot:{COPILOT}:"))
+        );
+        let shown = p
+            .messages
+            .iter()
+            .map(|m| {
+                (
+                    m.role.as_str(),
+                    m.tool.as_deref(),
+                    m.call_id.as_deref(),
+                    m.parent_call_id.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let (call, child) = (Some("fixture-call-4"), Some("fixture-call-5"));
+        assert_eq!(
+            shown,
+            [
+                ("user", None, None, None),
+                ("assistant", None, None, None),
+                ("assistant", Some("bash"), Some("fixture-call-1"), None),
+                ("tool", Some("Result"), Some("fixture-call-1"), None),
+                ("assistant", Some("view"), Some("fixture-call-2"), None),
+                (
+                    "assistant",
+                    Some("apply_patch"),
+                    Some("fixture-call-3"),
+                    None
+                ),
+                ("tool", Some("Result"), Some("fixture-call-2"), None),
+                ("tool", Some("Result"), Some("fixture-call-3"), None),
+                ("assistant", Some("task"), call, None),
+                ("user", None, None, call),
+                ("tool", Some("Result"), call, None),
+                ("assistant", None, None, None),
+                ("assistant", Some("view"), child, call),
+                ("tool", Some("Result"), child, call),
+                ("assistant", None, None, call),
+                ("event", None, None, None),
+                ("assistant", None, None, None),
+            ]
+        );
+        let m = &p.messages;
+        assert_eq!(m[0].text, "List the **files** in the project");
+        assert!(m[2].text.contains("\"command\":\"ls\""));
+        assert_eq!(m[5].text, "*** Begin Patch\n*** End Patch");
+        assert_eq!(m[6].text, "Path does not exist");
+        assert_eq!(m[9].text, "Summarize the README");
+        assert_eq!(m[15].text, "Subagent finished");
+        assert_eq!(m[16].id, "fixture-26:0");
+        assert!(!m.iter().any(|m| m.text.contains("scrubbed")));
+        let search = c.history(params(None, None, Some("single HEADING")));
+        assert_eq!(search.messages.len(), 1);
+        assert_eq!(search.messages[0].parent_call_id.as_deref(), call);
+    }
+
+    #[test]
+    fn copilot_child_records_never_appear_as_the_parents_conversation() {
+        let lines = COPILOT_HISTORY.split_inclusive('\n').collect::<Vec<_>>();
+        let c = Copilot::new(&lines[..13].concat());
+        let first = c.history(params(None, None, None));
+        append(&c.path(), &lines[13..].concat());
+        let next = c.history(params(None, first.after, None));
+        assert_eq!(next.messages[0].text, "Summarize the README");
+        assert_eq!(
+            next.messages[0].parent_call_id.as_deref(),
+            Some("fixture-call-4")
+        );
+        append(&c.path(), &lines[13].replace("30000000", "40000000"));
+        let orphan = c.history(params(None, next.after, None));
+        assert!(orphan.messages.is_empty());
+        append(&c.path(), &lines[17].replace("30000000", "40000000"));
+        let sibling = c.history(params(None, orphan.after, None));
+        assert_eq!(sibling.messages.len(), 1);
+        assert_eq!(
+            sibling.messages[0].parent_call_id.as_deref(),
+            Some("fixture-call-4")
+        );
+        let all = c.history(params(None, None, None)).messages;
+        assert_eq!(all.iter().filter(|m| m.role == "user").count(), 3);
+        assert!(
+            all.iter()
+                .filter(|m| m.role == "user")
+                .skip(1)
+                .all(|m| m.parent_call_id.as_deref() == Some("fixture-call-4"))
+        );
+    }
+
+    #[test]
+    fn copilot_pages_search_partial_and_oversized_records_have_no_gaps() {
+        let c = Copilot::new(&copilot_header());
+        let path = c.path();
+        let first = c.history(params(None, None, None));
+        assert!(first.available && first.messages.is_empty());
+        for n in 0..85 {
+            append(&path, &copilot_row(n, &format!("Reply {n}")));
+        }
+        append(
+            &path,
+            &copilot_row(85, &"x".repeat(SCAN_BYTES as usize * 3)),
+        );
+        append(&path, &copilot_row(86, "Reply 86"));
+        let mut p = c.history(params(None, None, None));
+        let mut backward = p.messages.clone();
+        let mut omitted = p.omitted;
+        while p.before.is_some() {
+            p = c.history(params(p.before, None, None));
+            omitted |= p.omitted;
+            backward.splice(0..0, p.messages.clone());
+        }
+        assert!(omitted);
+        assert_eq!(backward.len(), 86);
+        assert_eq!(backward[85].id, "c86:0");
+        let mut cursor = first.after;
+        let mut forward = vec![];
+        for _ in 0..20 {
+            p = c.history(params(None, cursor, None));
+            cursor = p.after;
+            forward.extend(p.messages);
+            if !p.more {
+                break;
+            }
+        }
+        assert!(!p.more);
+        assert_eq!(backward, forward);
+        let mut p = c.history(params(None, None, Some("REPLY 42")));
+        let mut found = p.messages.clone();
+        while p.before.is_some() {
+            p = c.history(params(p.before, None, Some("REPLY 42")));
+            found.extend(p.messages.clone());
+        }
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "c42:0");
+        append(&path, copilot_row(87, "partial").trim_end());
+        let partial = c.history(params(None, cursor.clone(), None));
+        assert!(partial.messages.is_empty());
+        assert_eq!(partial.after, cursor);
+        append(&path, "\n");
+        let done = c.history(params(None, cursor, None));
+        assert_eq!(done.messages.len(), 1);
+        assert_eq!(done.messages[0].id, "c87:0");
+    }
+
+    #[test]
+    fn copilot_cursors_reset_after_a_new_session_or_replacement() {
+        let mut c = Copilot::new(&(copilot_header() + &copilot_row(1, "old")));
+        let p = c.history(params(None, None, None));
+        let other = "50000000-0000-4000-8000-000000000005";
+        c.session(
+            other,
+            "Next conversation",
+            &(copilot_header() + &copilot_row(2, "new")),
+        );
+        c.a.terminal_title_stripped = Some("Next conversation - GitHub Copilot".into());
+        let switched = c.history(params(None, p.after.clone(), None));
+        assert!(switched.reset);
+        assert_ne!(switched.session, p.session);
+        assert_eq!(switched.messages[0].text, "new");
+        c.a.terminal_title_stripped = Some("Fixture conversation - GitHub Copilot".into());
+        std::fs::rename(c.path(), c.path().with_extension("old")).unwrap();
+        std::fs::write(c.path(), copilot_header() + &copilot_row(3, "replaced")).unwrap();
+        let replaced = c.history(params(None, p.after, None));
+        assert!(replaced.reset);
+        assert_eq!(replaced.messages[0].text, "replaced");
+    }
+
+    #[test]
+    fn copilot_missing_or_ambiguous_identity_never_guesses() {
+        let mut c = Copilot::new(COPILOT_HISTORY);
+        let unconfirmed = |c: &Copilot| {
+            let page = c.history(params(None, None, None));
+            assert!(!page.available && page.messages.is_empty() && page.session.is_none());
+            assert!(
+                page.unavailable_reason
+                    .unwrap()
+                    .contains("Copilot CLI conversation")
+            );
+        };
+        c.a.terminal_title_stripped = Some("GitHub Copilot".into());
+        unconfirmed(&c);
+        c.a.terminal_title_stripped = Some("Fixture conversation - GitHub Copilot".into());
+        assert!(c.history(params(None, None, None)).available);
+        c.session(
+            "60000000-0000-4000-8000-000000000006",
+            "Fixture conversation",
+            COPILOT_HISTORY,
+        );
+        unconfirmed(&c);
+        let mut moved = c.a.clone();
+        moved.pane_id = "w1:p2".into();
+        c.a = moved;
+        unconfirmed(&c);
+    }
+
+    #[test]
+    fn copilot_transcript_must_be_the_selected_session_and_not_a_symlink() {
+        let c = Copilot::new(COPILOT_HISTORY);
+        assert!(c.history(params(None, None, None)).available);
+        let target = c.path().with_extension("secret");
+        std::fs::rename(c.path(), &target).unwrap();
+        std::os::unix::fs::symlink(&target, c.path()).unwrap();
+        let page = c.history(params(None, None, None));
+        assert!(!page.available && page.messages.is_empty());
+    }
+
+    #[test]
+    fn copilot_user_provenance_is_shown_and_injected_sources_are_not() {
+        let prompt = |source: Value, agent: Option<&str>| {
+            let mut v =
+                json!({"type":"user.message","id":"p","data":{"content":"typed","source":source}});
+            if let Some(agent) = agent {
+                v["agentId"] = agent.into();
+            }
+            line(v)
+        };
+        for (source, shown) in [
+            (Value::Null, true),
+            (json!("user"), true),
+            (json!("system"), false),
+            (json!("autopilot"), false),
+            (json!("skill-fixture"), false),
+            (json!("agent-30000000-0000-4000-8000-000000000003"), false),
+        ] {
+            let c = Copilot::new(&(copilot_header() + &prompt(source.clone(), None)));
+            let p = c.history(params(None, None, None));
+            assert_eq!(p.messages.len(), usize::from(shown), "{source}");
+            let search = c.history(params(None, None, Some("TYPED")));
+            assert_eq!(search.messages.len(), usize::from(shown), "{source}");
+        }
+        let child = "30000000-0000-4000-8000-000000000003";
+        let lines = COPILOT_HISTORY.split_inclusive('\n').collect::<Vec<_>>();
+        let c = Copilot::new(
+            &(lines[..13].concat() + &prompt(json!(format!("agent-{child}")), Some(child))),
+        );
+        let last = c.history(params(None, None, None)).messages.pop().unwrap();
+        assert_eq!(
+            (last.text.as_str(), last.parent_call_id.as_deref()),
+            ("typed", Some("fixture-call-4"))
+        );
+    }
+
+    #[test]
+    fn copilot_page_read_before_a_new_session_is_not_current() {
+        let mut c = Copilot::new(&(copilot_header() + &copilot_row(1, "old")));
+        let read = c.a.clone();
+        let page = c.history(params(None, None, None));
+        assert!(c.t.history_current(&read, &page));
+        c.session(
+            "50000000-0000-4000-8000-000000000005",
+            "Next conversation",
+            &(copilot_header() + &copilot_row(2, "new")),
+        );
+        let mut now = read.clone();
+        now.terminal_title_stripped = Some("Next conversation - GitHub Copilot".into());
+        assert_eq!(now.agent_session, read.agent_session);
+        assert!(!c.t.history_current(&now, &page));
+        now.terminal_title_stripped = Some("GitHub Copilot".into());
+        assert!(!c.t.history_current(&now, &page));
+        let unavailable = c.t.history(&now, &params(None, None, None));
+        assert!(!unavailable.available);
+        assert!(c.t.history_current(&now, &unavailable));
+        assert!(c.t.history_current(&read, &page));
     }
 }
