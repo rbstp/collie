@@ -116,6 +116,13 @@ impl Node {
         self.handle.0
     }
 
+    /// Closes the node now, while clones may still be in a call: that call fails, as does
+    /// any later one. The close on drop then does nothing, since libtailscale never reuses
+    /// a node's descriptor.
+    pub fn close(&self) {
+        unsafe { sys::tailscale_close(self.sd()) };
+    }
+
     /// Non-blocking: brings the backend up and starts interactive login if needed.
     /// Progress (`BackendState`, `AuthURL`) is observed through [`Node::status`].
     pub fn start(&self) -> Result<()> {

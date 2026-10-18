@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use collie_tls::rustls::CertificateError;
@@ -16,6 +16,7 @@ use tokio::net::UnixStream;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
+use crate::Inner;
 use crate::pin::{self, PinError};
 use crate::reach::{Reachability, now_ms};
 use crate::session::{FlockState, Reply, Seed, Session, SessionError, lock};
@@ -62,7 +63,8 @@ pub const ENDS_FILE: &str = "activity-ends.json";
 const MUTATION_ATTEMPTS: usize = 3;
 
 /// Every holder clones the outer Arc, never the inner Node, so the strong count says
-/// whether a replaced node is still open on the shared tsnet state dir.
+/// whether a replaced node is still in use, except a dial attempt: the explicit close of
+/// a replaced node cuts it short, so no restart waits on one.
 pub type NodeSlot = Arc<Mutex<Option<Arc<Node>>>>;
 
 pub type IdentitySlot = Arc<Mutex<Option<Arc<CertifiedKey>>>>;
@@ -328,8 +330,9 @@ pub async fn open(
         .map_err(|e| ConnectError::Dial(e.to_string()))?
         .map_err(|e| ConnectError::Dial(e.to_string()))?;
     pin::verify_whois(&who.node, host, node_id, owner)?;
-    let stream = dial(&node, slot, SocketAddr::new(ip, port)).await?;
+    let weak = Arc::downgrade(&node);
     drop(node);
+    let stream = dial(&weak, slot, SocketAddr::new(ip, port)).await?;
     let stream = tls(stream, host, key, identity).await?;
     let mut session = Session::connect(stream, host, port).await?;
     let hello = session.hello().await?;
@@ -364,9 +367,9 @@ pub(crate) async fn tls(
     }
 }
 
-/// No new attempt once `node` has left `slot`: a node restart waits for every holder.
+/// No new attempt once `node` has left `slot`.
 pub(crate) async fn dial(
-    node: &Arc<Node>,
+    node: &Weak<Node>,
     slot: &NodeSlot,
     addr: SocketAddr,
 ) -> Result<UnixStream, ConnectError> {
@@ -374,7 +377,9 @@ pub(crate) async fn dial(
     let mut delay = Duration::from_millis(250);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let n = node.clone();
+        let Some(n) = node.upgrade().map(|n| Node::clone(&n)) else {
+            return Err(ConnectError::Dial("the Tailscale node was replaced".into()));
+        };
         let res = blocking(move || {
             let stream = n.dial_timeout("tcp", &addr.to_string(), DIAL_ATTEMPT.min(remaining))?;
             stream.set_nonblocking(true)?;
@@ -392,7 +397,10 @@ pub(crate) async fn dial(
             return Err(ConnectError::Dial(err.to_string()));
         }
         tokio::time::sleep(delay).await;
-        if !lock(slot).as_ref().is_some_and(|n| Arc::ptr_eq(n, node)) {
+        if !lock(slot)
+            .as_ref()
+            .is_some_and(|n| Arc::as_ptr(n) == node.as_ptr())
+        {
             return Err(ConnectError::Dial(err.to_string()));
         }
         delay *= 2;
@@ -484,6 +492,7 @@ pub enum RequestError {
 }
 
 impl Conn {
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         runtime: &tokio::runtime::Handle,
         machine: Machine,
@@ -492,6 +501,7 @@ impl Conn {
         push: PushSlot,
         reach: Arc<Reachability>,
         suspended: watch::Receiver<bool>,
+        core: Weak<Inner>,
     ) -> Self {
         let shared = Arc::new(Shared {
             flock: Mutex::default(),
@@ -519,6 +529,7 @@ impl Conn {
             reconnect_rx,
             wake.clone(),
             suspended,
+            core,
         ));
         Self {
             machine,
@@ -660,6 +671,7 @@ async fn supervise(
     mut reconnect: watch::Receiver<u64>,
     wake: Arc<Notify>,
     mut suspended: watch::Receiver<bool>,
+    core: Weak<Inner>,
 ) {
     let mut backoff = Backoff::default();
     let mut peer_offline = false;
@@ -670,10 +682,19 @@ async fn supervise(
         }
         let running = lock(&slot).clone();
         let Some(node) = running else {
-            shared.set(LinkPhase::Offline, None);
+            let starting = core.upgrade().is_some_and(|c| c.node_starting());
+            shared.set(
+                if starting {
+                    LinkPhase::Connecting
+                } else {
+                    LinkPhase::Offline
+                },
+                None,
+            );
             wait(&wake, OFFLINE_POLL).await;
             continue;
         };
+        let used = Arc::downgrade(&node);
         force |= reconnect.borrow_and_update().has_changed();
         if force || !peer_offline {
             shared.set(LinkPhase::Connecting, None);
@@ -695,6 +716,15 @@ async fn supervise(
             ) => opened,
             _ = suspended.wait_for(|s| *s) => continue,
         };
+        // A restart closed the node under the attempt: no failure of the machine's.
+        if opened.is_err()
+            && !lock(&slot)
+                .as_ref()
+                .is_some_and(|n| Arc::as_ptr(n) == used.as_ptr())
+        {
+            shared.set(LinkPhase::Connecting, None);
+            continue;
+        }
         peer_offline = matches!(opened, Err(ConnectError::PeerOffline));
         let dialed = !opened.as_ref().is_err_and(ConnectError::before_dial);
         force &= !dialed;
@@ -764,6 +794,12 @@ async fn supervise(
         let Some(delay) = backoff.failed(&shared, &err, Instant::now()) else {
             return;
         };
+        if matches!(err, ConnectError::Dial(_))
+            && lock(&shared.link).phase == LinkPhase::Waiting
+            && let Some(core) = core.upgrade()
+        {
+            tokio::spawn(core.dial_failed(machine.node_id.clone()));
+        }
         wait(&wake, delay).await;
     }
 }
@@ -1211,6 +1247,7 @@ mod tests {
             PushSlot::default(),
             Arc::default(),
             suspended,
+            Weak::new(),
         );
         let timed = |wake: Arc<Notify>| {
             tokio::spawn(async move {
@@ -1267,6 +1304,7 @@ mod tests {
             PushSlot::default(),
             Arc::default(),
             suspended,
+            Weak::new(),
         ));
         lock(&conn.shared.link).phase = LinkPhase::Stopped;
         let wake = conn.wake.clone();
