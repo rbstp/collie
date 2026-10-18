@@ -1,6 +1,6 @@
 # collie
 
-collie lets you watch and steer your [herdr](https://github.com/herdrdev/herdr) coding agents from an iPhone and an Apple Watch. A small daemon, `collied`, runs on the Mac or Linux machine where herdr runs. The Collie app reaches it over your own tailnet, so you can check every agent, read its screen, send it a prompt, answer an approval from the lock screen and start new work while you are away from the keyboard.
+collie lets you watch and steer your [herdr](https://github.com/herdrdev/herdr) coding agents from an iPhone and an Apple Watch. A small daemon, `collied`, runs on the Mac or Linux machine where herdr runs, and the Collie app reaches it over your own tailnet. Away from the keyboard, you can check every agent, read its screen, send it a prompt, answer an approval from the lock screen and start new work.
 
 <div class="screenshots">
 <img class="screenshot-light" src="images/agents-light.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">
@@ -18,22 +18,22 @@ collie lets you watch and steer your [herdr](https://github.com/herdrdev/herdr) 
 - Review an agent's Git changes and send line comments back to it.
 - Follow plan usage for Claude Code and Codex on the phone and on a watch complication.
 
-Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more integrations, but those have not been validated with Collie. Linux testing is limited to Arch Linux with Omarchy; other distributions have not been validated. See [Requirements](install/requirements.md).
+Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agents, but Collie has not been validated with them. On Linux, Collie has been tested only on Arch Linux with Omarchy. See [Requirements](install/requirements.md).
 
 ## How the phone reaches your machine
 
 collie never opens a port on your network and does not use the Tailscale app.
 
-1. In the next matching candidate, `collied` embeds its own Tailscale node, owned by your personal Tailscale user. Published desktop v0.1.0 still uses the [tagged setup](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md). It listens on TCP port 8457 inside the tailnet only.
-2. The Collie app embeds a second Tailscale node that belongs to you. It only dials out to the machine.
-3. Every connection is checked with Tailscale's whois before anything else: the phone must be untagged, owned by you and paired with this machine.
-4. Inside the tunnel, both sides prove their keys with mutual TLS. The machine's key is pinned from the pairing QR code; the phone's key lives in its Secure Enclave and never leaves it.
+1. `collied` runs its own Tailscale node, signed in with your personal Tailscale account. It listens on TCP port 8457, inside the tailnet only.
+2. The Collie app runs a second Tailscale node, also signed in as you. It only dials out to the machine.
+3. Before anything else, `collied` asks Tailscale who is connecting. It accepts only an untagged phone that you own and that is paired with this machine.
+4. Inside the tunnel, the phone and the machine prove their keys to each other with mutual TLS. The phone pins the machine's key from the pairing QR code, and the phone's own key never leaves its Secure Enclave.
 
-The only socket on the real network is Tailscale's own WireGuard UDP socket. See the [Security overview](security/overview.md) for the full picture.
+The only socket on your real network is Tailscale's own WireGuard UDP socket. The [Security overview](security/overview.md) gives the full picture.
 
 ## What stays on your machine
 
-herdr, your agents, their transcripts and your files stay on the machine. The phone fetches conversation history over the encrypted session only while Chat is open, and none of it goes into logs or notifications. Push notifications go through Apple, so `collied` keeps them short: the agent and workspace names, and pull request numbers and their status, in clear, and the pending command encrypted end to end for your phone. There is no collie server and no account to create.
+herdr, your agents, their transcripts and your files stay on the machine. The phone fetches conversation history over the encrypted session only while Chat is open, and none of it goes into logs or notifications. Push notifications go through Apple, so `collied` encrypts their content: only your phone can read the agent and workspace names, pull request details and pending commands. Apple sees generic alert text, timing and size. There is no collie server and no account to create.
 
 ## The parts
 

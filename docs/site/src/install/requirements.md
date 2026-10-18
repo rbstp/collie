@@ -1,22 +1,22 @@
 # Requirements
 
-This page describes the next matching phone and desktop candidate; user-owned setup is unreleased. Published desktop v0.1.0 still uses tagged nodes. Follow the [v0.1.0 tailnet procedure](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md) until both peers are updated.
+To run collie you need a machine for the agents, an iPhone and a personal Tailscale account. To build it, you also need the tools listed further down.
 
 ## To run collie
 
-- **A machine for the agents**: an Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager. Intel Macs are not supported. Linux testing is limited to Arch Linux with Omarchy; other distributions have not been validated.
+- **A machine for the agents**: an Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager. Intel Macs are not supported. On Linux, collie has been tested only on Arch Linux with Omarchy.
 - **herdr 0.9.5**, the version `collied` is tested against.
 - **An iPhone on iOS 26 or later.** An Apple Watch on watchOS 26 or later is optional.
-- **A personal Tailscale account**, used inside Collie on both devices. Compatible existing policies need no edit; restrictive policies may require an administrator-provided TCP 8457 grant. No OS VPN profile or standalone Tailscale app is required.
+- **A personal Tailscale account**, signed in inside Collie on both the phone and the machine. You need no VPN profile and no standalone Tailscale app. Most existing policies work unchanged; a restrictive one may need an administrator to allow TCP port 8457 (see [Tailnet policy](tailnet-policy.md)).
 - **An Apple Developer account**, with a Developer ID Application certificate (`collied` is always signed on macOS, never on Linux) and an APNs key if you want push notifications.
 - **Optional, for the Linux bar widget**: Omarchy 4 (its shell runs on Quickshell 0.3) with `qrencode`, which Omarchy installs.
 
 > [!NOTE]
-> On Linux, the encrypted APNs key needs systemd 256 or later (`systemd-creds --user`). Older versions fall back to a file readable only by your user.
+> On Linux, `collied` stores the encrypted APNs key with `systemd-creds --user`, which needs systemd 256 or later. With an older systemd, it keeps the key in a file readable only by your user.
 
 ## Tested agent integrations
 
-Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agent integrations, but those have not been validated with Collie. The feature coverage differs between the [Claude Code](../agents/claude-code.md), [Codex](../agents/codex.md) and [Copilot CLI](../agents/copilot.md) integrations.
+Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agents, but Collie has not been validated with them. Each integration offers a different set of features: see [Claude Code](../agents/claude-code.md), [Codex](../agents/codex.md) and [Copilot CLI](../agents/copilot.md).
 
 ## To build on macOS
 
@@ -24,7 +24,7 @@ Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot C
 - Xcode 27 with the watchOS platform and an iPhone 18 Pro simulator
 - [just](https://github.com/casey/just), [XcodeGen](https://github.com/yonaskolb/XcodeGen), `cargo-deny`, [cargo-nextest](https://nexte.st) and `jq` (for `just ios-run-device`)
 
-The libghostty-vt build downloads its own pinned Zig.
+You do not need to install Zig: the libghostty-vt build downloads its own pinned copy.
 
 ## To build collied on Linux
 
@@ -35,4 +35,4 @@ The libghostty-vt build downloads its own pinned Zig.
 
 ## Your own identifiers
 
-The justfile and `Collie/project.yml` use the maintainer's Apple team ID and `dev.rbstp` bundle identifiers. Change them to your own before you build.
+The justfile and `Collie/project.yml` use the maintainer's Apple team ID and `dev.rbstp` bundle identifiers. Before you build, change them to your own.

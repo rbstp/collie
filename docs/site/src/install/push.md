@@ -1,31 +1,31 @@
 # Push notifications
 
-Push notifications are optional. Without them, the app still shows everything while it is open. With them, you get approval alerts, done alerts, Live Activity updates and Apple Watch alerts.
+Push notifications are optional. With them, you get approval alerts, done alerts, Live Activity updates and Apple Watch alerts. Without them, the app still shows everything while it is open.
 
 ## Publisher relay
 
-`collied setup` offers the publisher relay when no push mode is configured. It writes this section and restarts the daemon, without importing an APNs key or creating a Keychain credential:
+When no push mode is configured, `collied setup` offers the publisher relay. It writes this section and restarts `collied`; you import no APNs key and create no Keychain credential:
 
 ```toml
 [push.relay]
 ```
 
-Open the publisher app on the paired phone to register this machine's grant. The daemon sends only to `https://collie-push.rbstp.dev/v1/send`; the phone cannot choose another endpoint. App Attest enrollment and the publisher's deployment/real-device validation gates must pass before public relay delivery is available. Merely configuring the daemon does not establish enrollment or prove delivery.
+Then open the publisher app on the paired phone, which registers this machine with the relay. `collied` sends only to `https://collie-push.rbstp.dev/v1/send`, and the phone cannot choose another endpoint. The relay is not yet open to the public, so configuring `collied` does not guarantee that notifications reach your phone.
 
-Relay and direct APNs configuration are mutually exclusive. Remove `[push.relay]` before configuring `[apns]`, or remove `[apns]` before choosing the relay. Tailnet sessions, approvals, terminal/chat and desktop controls work independently of push availability.
+You can use either the relay or direct APNs, not both. Remove `[push.relay]` before you configure `[apns]`, or remove `[apns]` before you choose the relay. Sessions, approvals, Chat, terminals and desktop controls keep working whether or not push works.
 
-Relay routine Live Activity attempts are coalesced to one per 60 seconds per followed agent and phone, including unchanged refreshes. Urgent updates, ends, alerts and approval clears bypass this cadence. All machines share the phone installation's relay quotas. Outages retain only bounded in-memory work, so restarting discards it. `collied doctor` reports registrations, earliest grant expiry, last actual send error, pending work and retry/quota-reset times. Remaining server budget is not reported.
+Through the relay, a followed agent's Live Activity updates at most once a minute on each phone. This limit does not hold back urgent updates, ends, alerts or cleared approvals. All your machines share one relay quota for the phone. During an outage, `collied` keeps pending notifications in memory and retries them for a limited time, but a restart drops them. `collied doctor` reports registrations, the earliest grant expiry, the last send error, pending notifications and when it will retry or the quota resets. It cannot report how much quota is left.
 
 ## Direct APNs for a self-built app
 
-Use `collied setup --direct-apns` for your own Apple team and bundle IDs. When `[apns]` is absent, setup asks for the `.p8` file and the IDs, imports the key and restarts `collied`. The `.p8` must already be readable only by you:
+If you build the app with your own Apple team and bundle IDs, use `collied setup --direct-apns`. When `[apns]` is absent, setup asks for the `.p8` file and the IDs, imports the key and restarts `collied`. The `.p8` must already be readable only by you:
 
 ```sh
 chmod 0600 AuthKey_<KEY_ID>.p8
 collied setup --direct-apns
 ```
 
-Each direct-mode machine uses its own APNs key, so you can revoke one key without touching the others. The relay does not accept self-built app credentials.
+Give each machine its own APNs key, so you can revoke one key without touching the others. The relay does not accept a self-built app.
 
 ## Direct configuration by hand
 
@@ -51,7 +51,7 @@ Each direct-mode machine uses its own APNs key, so you can revoke one key withou
    collied apns test
    ```
 
-On macOS the key goes into the login Keychain, readable without a prompt only by the signed `collied`. Always reinstall with `just collied-install`, never `cargo install`, or the daemon cannot read the key. On Linux it becomes a systemd user credential (or a file readable only by you, as a fallback); `collied doctor` says which, and how it is sealed.
+On macOS, `collied apns import` puts the key in the login Keychain, where only the signed `collied` can read it without a prompt. Always reinstall with `just collied-install`, never `cargo install`, or `collied` cannot read the key. On Linux, the key becomes a systemd user credential, or a file readable only by you when that is not possible. `collied doctor` says which, and how it is sealed.
 
 ## Test a notification that opens a session
 
@@ -60,7 +60,7 @@ collied status
 collied apns test --terminal-id <terminal-id>
 ```
 
-Tapping that alert should open the agent's session. Test alerts carry no approval actions. More on testing in [Notifications](../reference/notifications.md), and the full Apple setup in [Release](../reference/release.md).
+Tapping that alert should open the agent's session. Test alerts carry no approval actions. [Notifications](../reference/notifications.md) has more on testing, and [Release](../reference/release.md) has the full Apple setup.
 
 > [!TIP]
-> `collied apns test` uses the selected relay or direct mode and reports that the send was accepted, not that the phone showed it. Check the phone too.
+> `collied apns test` uses the configured relay or direct mode. It reports that the send was accepted, not that the phone showed it, so check the phone too.
