@@ -322,7 +322,8 @@ struct GitDiffView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Toggle(isOn: $wraps) { Label("Wrap lines", image: "WrapLines") }.toggleStyle(.button)
+                    Button { wraps.toggle() } label: { Label(wraps ? "Wrap lines on" : "Wrap lines off", image: "WrapLines") }
+                        .tint(wraps ? Color.accentColor : .primary)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }.disabled(loading)

@@ -176,8 +176,11 @@ struct AgentScreen: View {
                 if showingChat && !model.isTerminal {
                     Button("Search conversation", systemImage: "magnifyingglass") { searchingChat.toggle() }
                 } else {
-                    Toggle(isOn: $model.wrapLines) { Label("Wrap lines", image: "WrapLines") }
-                        .toggleStyle(.button)
+                    // A button-style Toggle fills the bar item when on, and bar buttons pass only their title to accessibility.
+                    Button { model.wrapLines.toggle() } label: {
+                        Label(model.wrapLines ? "Wrap lines on" : "Wrap lines off", image: "WrapLines")
+                    }
+                    .tint(model.wrapLines ? Color.accentColor : .primary)
                 }
             }
             ToolbarItem(placement: .primaryAction) {
