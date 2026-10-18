@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/rbstp/collie/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/rbstp/collie/actions/workflows/ci.yml)
 
-collie is a remote control for [herdr](https://github.com/herdrdev/herdr) coding agents. A small daemon, `collied`, runs next to herdr on your Mac or Linux machine, and the Collie app on your iPhone and Apple Watch connects to it over your own tailnet, with no open port on your network. From the phone you can follow every Claude Code, Codex and Copilot CLI agent, read its conversation or terminal, prompt it, start new tasks and approve a blocked agent from the lock screen.
+collie is a remote control for [herdr](https://github.com/herdrdev/herdr) coding agents. A small daemon, `collied`, runs next to herdr on your Mac or Linux machine. The Collie app on your iPhone and Apple Watch connects to it over your own tailnet, with no open port on your network. From the phone, you can follow every Claude Code, Codex and Copilot CLI agent, read its conversation or terminal, prompt it, start new tasks and approve a blocked agent from the lock screen.
 
 Documentation: <https://collie.rbstp.dev>
 
@@ -15,18 +15,18 @@ Documentation: <https://collie.rbstp.dev>
 
 - An Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.5
 - An iPhone on iOS 26 or later, and optionally an Apple Watch on watchOS 26 or later
-- A personal Tailscale account used inside Collie on both devices; restrictive policies may require an administrator-provided TCP 8457 grant (next matching candidate; released v0.1.0 still needs the [tagged setup](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md))
+- A personal Tailscale account, signed in inside Collie on both devices; a restrictive tailnet policy may need an administrator to allow TCP port 8457
 - An Apple Developer account with a Developer ID Application certificate, and an APNs key for direct push with a self-built app; publisher relay mode needs no APNs key
 - To build: Rust, Go, [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st); on macOS also Xcode 27, [XcodeGen](https://github.com/yonaskolb/XcodeGen) and `jq`; on Linux a C compiler and libclang
 
-Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agent integrations, but those have not been validated with Collie. Linux testing is limited to Arch Linux with Omarchy; other distributions have not been validated.
+Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agents, but Collie has not been validated with them. On Linux, Collie has been tested only on Arch Linux with Omarchy.
 
-The full list is in [Requirements](https://collie.rbstp.dev/install/requirements.html). The justfile and `Collie/project.yml` use the maintainer's Apple team ID and `dev.rbstp` bundle identifiers: change them to your own before building.
+[Requirements](https://collie.rbstp.dev/install/requirements.html) has the full list. The justfile and `Collie/project.yml` use the maintainer's Apple team ID and `dev.rbstp` bundle identifiers: before building, change them to your own.
 
 ## Quick start
 
-1. Add the [tailnet policy](https://collie.rbstp.dev/install/tailnet-policy.html).
-2. Build, install and set up `collied` ([macOS](https://collie.rbstp.dev/install/collied-macos.html), [Linux](https://collie.rbstp.dev/install/collied-linux.html)):
+1. Check the [tailnet policy](https://collie.rbstp.dev/install/tailnet-policy.html).
+2. Install and set up `collied` from a [release download](https://github.com/rbstp/collie/releases) or from source ([macOS](https://collie.rbstp.dev/install/collied-macos.html), [Linux](https://collie.rbstp.dev/install/collied-linux.html)). From source:
 
    ```sh
    git clone --recurse-submodules https://github.com/rbstp/collie
@@ -37,17 +37,7 @@ The full list is in [Requirements](https://collie.rbstp.dev/install/requirements
    ```
 
 3. [Install the app](https://collie.rbstp.dev/install/app.html) on a connected iPhone with `just ios-run-device`, then [pair it](https://collie.rbstp.dev/install/pair.html).
-4. Optional: [push notifications](https://collie.rbstp.dev/install/push.html), the [Claude Code hook](https://collie.rbstp.dev/install/claude-code.html), [terminals](https://collie.rbstp.dev/install/terminals.html) and the [desktop companions](https://collie.rbstp.dev/desktop/colliebar.html).
-
-### Claude Code plan usage
-
-Claude Code hands the plan's limits only to the status line command. To show them in collie, add this line to your status line script, after it reads its input into `input` (for example `input=$(cat)`):
-
-```sh
-printf '%s' "$input" | ~/.cargo/bin/collied statusline >/dev/null 2>&1 &
-```
-
-It prints nothing, so the status line is unchanged. Details are in [Plan usage](https://collie.rbstp.dev/install/claude-code.html#plan-usage).
+4. Optional: [push notifications](https://collie.rbstp.dev/install/push.html), the [Claude Code hook and plan usage](https://collie.rbstp.dev/install/claude-code.html), [terminals](https://collie.rbstp.dev/install/terminals.html) and the [desktop companions](https://collie.rbstp.dev/desktop/colliebar.html).
 
 ## Documentation
 
@@ -88,9 +78,7 @@ Reference, in this repository:
 | `just tray-install` | Copies the Omarchy bar widget to `~/.config/omarchy/plugins/rbstp.collie` and puts it on the bar (Linux) |
 | `just collied-install` | Release build of `collied`, installed to `~/.cargo/bin`. On macOS it is signed and restarts the launchd agent if installed; on Linux it is unsigned and restarts the systemd user unit if active |
 
-CI runs on macOS on every pull request and on pushes to `master`: lint, the Rust tests, the GhosttyTerminal package tests, and the iOS simulator build and tests. Merging a pull request that changes code into `master` uploads a build to the maintainer's TestFlight ([docs/release.md](docs/release.md)).
-
-Attachment UI tests reuse one app launch for the keyboard-hidden and keyboard-visible cases, cancelling each picker and waiting for dismissal before continuing. CI caches only the native build directories needed for the simulator framework, excluding Xcode test results and unrelated build products. It runs `just ios-test never` to skip verbose simulator failure diagnostics (such as sysdiagnose), which can stall for ten minutes; test failures, logs and screenshots remain available in Xcode's test results. Local `just ios-test` retains those diagnostics by default.
+CI runs on macOS on every pull request and on pushes to `master`: lint, the Rust tests, the GhosttyTerminal package tests, and the iOS simulator build and tests. Merging a pull request that changes code into `master` uploads a build to the maintainer's TestFlight ([docs/release.md](docs/release.md)). [Architecture](docs/architecture.md#ios) describes how the iOS tests run in CI.
 
 ## Repository layout
 
