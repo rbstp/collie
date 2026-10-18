@@ -43,6 +43,6 @@ The composer at the bottom works in both views.
 - When a prompt cannot reach the machine, the phone sends it again up to 5 times, a minute apart or as soon as the connection is back, while the send button spins. To stop, edit the prompt or tap the spinner.
 - **Settings > Prompt** can keep the keyboard open after sending.
 - With the keyboard down, a long press on the prompt field copies it.
-- An unsent prompt stays with its agent on this phone, and so do its attachments, for up to 23 hours.
+- An unsent prompt stays with its agent on this phone. Its attachments stay for up to 23 hours.
 
 See also [Key strip and gestures](keys.md), [Dictation and attachments](dictation-attachments.md) and [Saved prompts](saved-prompts.md).
