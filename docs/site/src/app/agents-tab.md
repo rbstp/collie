@@ -54,6 +54,8 @@ A small ring shows how much context a Claude Code or Codex agent has left, read 
 
 Claude Code, GitHub Copilot CLI and Codex report their running subagents with a title and elapsed time. Finished or interrupted work disappears; a follow-up starts a new elapsed time for the same child.
 
+Copilot's `/new` changes which conversation is displayed even when the same terminal process remains open. Collie verifies the pane's process, native session metadata and current title to follow that conversation instead of an old session ID. If names are ambiguous or the title or metadata cannot be verified, Collie does not guess or report the pane as safe to auto-archive. Background work in another conversation still held by that pane also prevents auto-archiving, without appearing under the wrong conversation.
+
 Copilot CLI uses the child names in the current session's local event log. Codex uses child thread metadata and turn events, not the text of the parent's reply. Unrelated sessions, idle children and sessions without a live provider lock are excluded. A large event log may take several refreshes to catch up before children appear. Older Codex forks without an explicit inherited-history boundary are not reported.
 
 Codex may keep locks for unused threads that never wrote a conversation. Those locks do not count as children or keep unrelated workspaces from auto-archiving. Once a child is identified, unreadable or incomplete child data still prevents auto-archiving. A child that never writes identifying metadata cannot be detected by this file-based check.

@@ -1,11 +1,14 @@
-use std::io::{Read, Seek, SeekFrom};
+use std::collections::HashMap;
+use std::io::{BufRead, Read, Seek, SeekFrom};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 use super::subagents::alive;
-use super::{Kind, Transcripts, is_file, is_session_id, open, project_dir, session_id};
+use super::{Kind, MAX_LISTED, Transcripts, is_file, is_session_id, open, project_dir, session_id};
 use crate::herdr::{AgentInfo, PaneProcesses};
 
 const SESSION_BYTES: u64 = 64 * 1024;
@@ -17,12 +20,28 @@ const MAX_SESSION_FILES: usize = 256;
 const START_SLACK_MS: u64 = 2_000;
 const PANE_EVERY: Duration = Duration::from_secs(10);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DirectoryStamp {
+    device: u64,
+    inode: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+#[derive(Default)]
+struct CopilotDirectories {
+    pids: Vec<(i32, Option<u64>)>,
+    empty: HashMap<String, DirectoryStamp>,
+}
+
 #[derive(Clone)]
 pub(super) struct Pane {
     pane_id: String,
     at: Instant,
     pids: Vec<i32>,
     attach: Option<String>,
+    truncated: bool,
+    copilot: Arc<Mutex<CopilotDirectories>>,
 }
 
 /// Rebuilt when herdr's id or the pane's pids are refreshed; followed again when the
@@ -53,7 +72,7 @@ impl Transcripts {
     pub fn stale_panes(&self, agents: &[AgentInfo]) -> Vec<(String, String)> {
         agents
             .iter()
-            .filter(|a| a.agent.as_deref() == Some("claude"))
+            .filter(|a| matches!(a.agent.as_deref(), Some("claude" | "copilot")))
             .filter(|a| {
                 self.panes
                     .get(&a.terminal_id)
@@ -69,17 +88,21 @@ impl Transcripts {
             .panes
             .remove(&terminal_id)
             .filter(|p| p.pane_id == pane_id)
-            .map(|p| (p.pids, p.attach));
-        let (pids, attach) = match procs {
-            Some(procs) => (
-                procs
-                    .pids
-                    .into_iter()
-                    .filter_map(|p| i32::try_from(p).ok())
-                    .take(MAX_PIDS)
-                    .collect(),
-                procs.attach,
-            ),
+            .map(|p| (p.pids, p.attach, p.truncated));
+        let (pids, attach, truncated) = match procs {
+            Some(procs) => {
+                let truncated = procs.pids.len() > MAX_PIDS;
+                (
+                    procs
+                        .pids
+                        .into_iter()
+                        .filter_map(|p| i32::try_from(p).ok())
+                        .take(MAX_PIDS)
+                        .collect(),
+                    procs.attach,
+                    truncated,
+                )
+            }
             None => kept.unwrap_or_default(),
         };
         self.panes.insert(
@@ -89,6 +112,8 @@ impl Transcripts {
                 at: Instant::now(),
                 pids,
                 attach,
+                truncated,
+                copilot: Arc::default(),
             },
         );
     }
@@ -96,6 +121,9 @@ impl Transcripts {
     /// For Claude Code, the session a process in the pane reports, else herdr's, then where
     /// that session's own transcript says the conversation went.
     pub(super) fn live_id(&self, a: &AgentInfo) -> Option<String> {
+        if a.agent.as_deref() == Some("copilot") {
+            return self.copilot_id(a);
+        }
         if a.agent.as_deref() != Some("claude") {
             return session_id(a).map(str::to_owned);
         }
@@ -105,6 +133,9 @@ impl Transcripts {
 
     /// `live_id`, cached per terminal.
     pub(super) fn resolve(&mut self, a: &AgentInfo, relocate: bool) -> Option<String> {
+        if a.agent.as_deref() == Some("copilot") {
+            return self.copilot_id(a);
+        }
         let herdr = session_id(a).map(str::to_owned);
         if a.agent.as_deref() != Some("claude") {
             return herdr;
@@ -214,6 +245,219 @@ impl Transcripts {
             _ => Some(found.session),
         }
     }
+
+    fn copilot_id(&self, a: &AgentInfo) -> Option<String> {
+        self.copilot_selection(a).map(|(id, _)| id)
+    }
+
+    pub(super) fn copilot_selection(&self, a: &AgentInfo) -> Option<(String, Vec<String>)> {
+        let root = self.copilot_sessions.as_deref()?;
+        std::fs::symlink_metadata(root)
+            .ok()?
+            .is_dir()
+            .then_some(())?;
+        let pane = self
+            .panes
+            .get(&a.terminal_id)
+            .filter(|p| p.pane_id == a.pane_id && !p.truncated)?;
+        let title = a
+            .terminal_title_stripped
+            .as_deref()?
+            .strip_suffix(" - GitHub Copilot")?;
+        let pids: Vec<_> = pane
+            .pids
+            .iter()
+            .copied()
+            .filter(|pid| *pid > 0 && alive(*pid))
+            .map(|pid| (pid, started_ms(pid)))
+            .collect();
+        if pids.is_empty() {
+            return None;
+        }
+        let mut cache = crate::lock(&pane.copilot);
+        if cache.pids != pids {
+            cache.empty.clear();
+            cache.pids.clone_from(&pids);
+        }
+        let mut found: Option<(String, i32, u64)> = None;
+        let mut sessions = Vec::new();
+        let (mut probes, mut claims, mut budget) = (0, 0, 1024 * 1024);
+        for (listed, entry) in std::fs::read_dir(root).ok()?.enumerate() {
+            if listed == MAX_LISTED {
+                return None;
+            }
+            let entry = entry.ok()?;
+            let name = entry.file_name();
+            let Some(id) = name.to_str().filter(|id| is_session_id(id)) else {
+                continue;
+            };
+            let dir = entry.path();
+            let metadata = std::fs::symlink_metadata(&dir).ok()?;
+            metadata.is_dir().then_some(())?;
+            let stamp = DirectoryStamp {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                modified: (metadata.mtime(), metadata.mtime_nsec()),
+                changed: (metadata.ctime(), metadata.ctime_nsec()),
+            };
+            if cache.empty.get(id) == Some(&stamp) {
+                continue;
+            }
+            cache.empty.remove(id);
+            let mut owner = None;
+            let mut markerless = true;
+            for &(pid, started) in &pids {
+                probes += 1;
+                if probes > MAX_LISTED * MAX_PIDS {
+                    return None;
+                }
+                let marker = dir.join(format!("inuse.{pid}.hold"));
+                match std::fs::symlink_metadata(&marker) {
+                    Ok(_) => markerless = false,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(_) => return None,
+                }
+                if !super::provider_subagents::held(&marker)? {
+                    continue;
+                }
+                let (_, _, modified) = open(&marker)?;
+                let marked = modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
+                let started = started?;
+                if started > marked.saturating_add(START_SLACK_MS) {
+                    continue;
+                }
+                let (file, len, _) = open(&dir.join(format!("inuse.{pid}.lock")))?;
+                if len > 32 {
+                    return None;
+                }
+                let mut bytes = Vec::new();
+                file.take(33).read_to_end(&mut bytes).ok()?;
+                if std::str::from_utf8(&bytes)
+                    .ok()?
+                    .trim()
+                    .parse::<i32>()
+                    .ok()?
+                    != pid
+                {
+                    return None;
+                }
+                owner = Some((pid, started));
+                break;
+            }
+            let Some((pid, started)) = owner else {
+                // Unlocked existing markers can become held without changing the directory.
+                if markerless && cache.empty.len() < MAX_LISTED {
+                    cache.empty.insert(id.to_owned(), stamp);
+                }
+                continue;
+            };
+            claims += 1;
+            if claims > MAX_SESSION_FILES {
+                return None;
+            }
+            let (file, len, _) = open(&dir.join("workspace.yaml"))?;
+            if len > SESSION_BYTES || len > budget {
+                return None;
+            }
+            let mut bytes = Vec::new();
+            file.take(len + 1).read_to_end(&mut bytes).ok()?;
+            budget = budget.checked_sub(bytes.len() as u64)?;
+            if bytes.len() as u64 != len {
+                return None;
+            }
+            let workspace = std::str::from_utf8(&bytes).ok()?;
+            if workspace_scalar(workspace, "id")? != id {
+                return None;
+            }
+            let name = workspace_scalar(workspace, "name")?;
+            let cwd = workspace_scalar(workspace, "cwd")?;
+            if !Path::new(&cwd).is_absolute() {
+                return None;
+            }
+            let (file, _, _) = open(&dir.join("events.jsonl"))?;
+            let limit = budget.min(SESSION_BYTES);
+            let mut reader = std::io::BufReader::with_capacity(1024, file.take(limit));
+            let mut header = Vec::new();
+            reader.read_until(b'\n', &mut header).ok()?;
+            budget -= limit - reader.into_inner().limit();
+            if header.last() != Some(&b'\n') {
+                return None;
+            }
+            let event: Value = serde_json::from_slice(&header).ok()?;
+            if event["type"] != "session.start" || event["data"]["sessionId"] != id {
+                return None;
+            }
+            sessions.push(id.to_owned());
+            // Copilot 1.0.100-1 renders the name, optional assistant intent, then its app name.
+            if title != name
+                && !title
+                    .strip_prefix(&name)
+                    .is_some_and(|rest| rest.starts_with(" - ") && rest.len() > 3)
+            {
+                continue;
+            }
+            if ![&a.foreground_cwd, &a.cwd]
+                .iter()
+                .any(|c| c.as_deref() == Some(cwd.as_str()))
+                || found
+                    .as_ref()
+                    .is_some_and(|(previous, _, _)| previous != id)
+            {
+                return None;
+            }
+            found = Some((id.to_owned(), pid, started));
+        }
+        let (id, pid, started) = found?;
+        if !alive(pid)
+            || started_ms(pid)? != started
+            || !super::provider_subagents::held(&root.join(&id).join(format!("inuse.{pid}.hold")))?
+        {
+            return None;
+        }
+        Some((id, sessions))
+    }
+}
+
+fn workspace_scalar(text: &str, key: &str) -> Option<String> {
+    if text
+        .lines()
+        .any(|line| line.starts_with([' ', '\t']) && !line.trim().is_empty())
+    {
+        return None;
+    }
+    let prefix = format!("{key}:");
+    let mut values = text.lines().filter_map(|line| line.strip_prefix(&prefix));
+    let raw = values.next()?;
+    if !raw.starts_with(' ') {
+        return None;
+    }
+    let raw = raw.trim();
+    if values.next().is_some() || raw.is_empty() {
+        return None;
+    }
+    let value = if raw.starts_with('"') {
+        serde_json::from_str::<String>(raw).ok()?
+    } else if let Some(quoted) = raw.strip_prefix('\'') {
+        let mut chars = quoted.strip_suffix('\'')?.chars();
+        let mut value = String::new();
+        while let Some(c) = chars.next() {
+            if c == '\'' && chars.next() != Some('\'') {
+                return None;
+            }
+            value.push(c);
+        }
+        value
+    } else {
+        if raw.starts_with(['|', '>', '[', '{', '!', '&', '*', '#'])
+            || raw.contains(" #")
+            || raw.contains(": ")
+            || matches!(raw, "null" | "~" | "true" | "false")
+        {
+            return None;
+        }
+        raw.to_owned()
+    };
+    (!value.is_empty() && !value.chars().any(char::is_control)).then_some(value)
 }
 
 fn unique(mut found: impl Iterator<Item = Claim>) -> Option<Claim> {
@@ -404,7 +648,10 @@ fn started_ms(pid: i32) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::symlink;
 
     use protocol::{HistoryParams, TerminalId};
 
@@ -418,6 +665,17 @@ mod tests {
     const PARKED: &str = "0d0d0d0d-0000-4000-8000-000000000003";
     const CWD: &str = "/Users/me/src/collie";
     const DEAD: i32 = 0x7fff_fff0;
+    const COPILOT_OLD: &str = "10000000-0000-4000-8000-000000000001";
+    const COPILOT_CURRENT: &str = "20000000-0000-4000-8000-000000000002";
+    const COPILOT_CHILD: &str = "30000000-0000-4000-8000-000000000003";
+    const COPILOT_OLD_META: &str =
+        include_str!("../../tests/fixtures/transcripts/copilot-new-old.workspace.yaml");
+    const COPILOT_META: &str =
+        include_str!("../../tests/fixtures/transcripts/copilot-new-current.workspace.yaml");
+    const COPILOT_OLD_EVENTS: &str =
+        include_str!("../../tests/fixtures/transcripts/copilot-new-old.jsonl");
+    const COPILOT_EVENTS: &str =
+        include_str!("../../tests/fixtures/transcripts/copilot-new-current.jsonl");
 
     fn setup() -> (tempfile::TempDir, Transcripts, PathBuf, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -516,6 +774,291 @@ mod tests {
                 attach: target.map(str::to_owned),
             }),
         );
+    }
+
+    fn copilot_setup() -> (tempfile::TempDir, Transcripts, PathBuf, AgentInfo) {
+        let (dir, mut t, _, _) = setup();
+        let root = dir.path().join("copilot/session-state");
+        std::fs::create_dir_all(&root).unwrap();
+        t.copilot_sessions = Some(root.clone());
+        let mut a = agent(COPILOT_OLD);
+        a.agent = Some("copilot".into());
+        a.terminal_title_stripped =
+            Some("Current conversation - Waiting for background agents - GitHub Copilot".into());
+        (dir, t, root, a)
+    }
+
+    fn copilot_records(fixture: &str, at: u64) -> String {
+        let (y, m, d) = super::super::civil((at / 86_400_000) as i64);
+        let timestamp = format!(
+            "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z",
+            at / 3_600_000 % 24,
+            at / 60_000 % 60,
+            at / 1000 % 60,
+            at % 1000
+        );
+        fixture
+            .lines()
+            .map(|line| {
+                let mut v: Value = serde_json::from_str(line).unwrap();
+                v["timestamp"] = timestamp.clone().into();
+                format!("{v}\n")
+            })
+            .collect()
+    }
+
+    fn copilot_session(root: &Path, id: &str, pid: i32, current: bool) -> File {
+        let (meta, records, original) = if current {
+            (COPILOT_META, COPILOT_EVENTS, COPILOT_CURRENT)
+        } else {
+            (COPILOT_OLD_META, COPILOT_OLD_EVENTS, COPILOT_OLD)
+        };
+        let dir = root.join(id);
+        write(
+            &dir.join("workspace.yaml"),
+            &meta
+                .replace(original, id)
+                .replace("/workspace/project", CWD),
+        );
+        let at = own().1;
+        write(
+            &dir.join("events.jsonl"),
+            &copilot_records(records, at).replace(original, id),
+        );
+        write(&dir.join(format!("inuse.{pid}.lock")), &format!("{pid}\n"));
+        let hold = File::create(dir.join(format!("inuse.{pid}.hold"))).unwrap();
+        hold.set_modified(UNIX_EPOCH + Duration::from_millis(at))
+            .unwrap();
+        hold.lock().unwrap();
+        hold
+    }
+
+    #[test]
+    fn copilot_new_selects_the_displayed_conversation_not_the_stale_herdr_id() {
+        let (_dir, mut t, root, mut a) = copilot_setup();
+        let (pid, _) = own();
+        let _old = copilot_session(&root, COPILOT_OLD, pid, false);
+        let _current = copilot_session(&root, COPILOT_CURRENT, pid, true);
+        pane(&mut t, &[pid]);
+        a.terminal_title_stripped = Some("Previous conversation - GitHub Copilot".into());
+        assert_eq!(t.resolve(&a, false).as_deref(), Some(COPILOT_OLD));
+        assert!(t.derive(&a, false).unwrap().subagents.is_empty());
+        assert!(!t.quiet(&a));
+        a.terminal_title_stripped =
+            Some("Current conversation - Waiting for background agents - GitHub Copilot".into());
+        assert_eq!(t.resolve(&a, false).as_deref(), Some(COPILOT_CURRENT));
+        assert_eq!(
+            t.history_reader().live_id(&a).as_deref(),
+            Some(COPILOT_CURRENT)
+        );
+        let d = t.derive(&a, false).unwrap();
+        assert_eq!(d.subagents.len(), 1);
+        assert_eq!(d.subagents[0].title, "fixture-child");
+        assert_eq!(d.last_line, None);
+        assert!(!t.quiet(&a));
+        t.retain(std::slice::from_ref(&a));
+        let mut complete: Value = serde_json::from_str(
+            include_str!("../../tests/fixtures/transcripts/copilot-subagents.jsonl")
+                .lines()
+                .find(|line| line.contains("\"subagent.completed\""))
+                .unwrap(),
+        )
+        .unwrap();
+        complete["agentId"] = COPILOT_CHILD.into();
+        complete["data"]["toolCallId"] = "fixture-5".into();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(root.join(COPILOT_CURRENT).join("events.jsonl"))
+            .unwrap()
+            .write_all(format!("{complete}\n").as_bytes())
+            .unwrap();
+        assert!(t.quiet(&a));
+        a.agent_session = None;
+        assert_eq!(t.live_id(&a).as_deref(), Some(COPILOT_CURRENT));
+    }
+
+    #[test]
+    fn copilot_rechecks_title_and_name_ambiguity_without_a_stale_selection_cache() {
+        let (_dir, mut t, root, mut a) = copilot_setup();
+        let (pid, _) = own();
+        let _old = copilot_session(&root, COPILOT_OLD, pid, false);
+        let _current = copilot_session(&root, COPILOT_CURRENT, pid, true);
+        pane(&mut t, &[pid]);
+        a.terminal_title_stripped = Some("Previous conversation - GitHub Copilot".into());
+        assert_eq!(t.resolve(&a, false).as_deref(), Some(COPILOT_OLD));
+        let meta = root.join(COPILOT_CURRENT).join("workspace.yaml");
+        let text = std::fs::read_to_string(&meta).unwrap();
+        write(
+            &meta,
+            &text.replace("Current conversation", "Previous conversation"),
+        );
+        assert_eq!(t.resolve(&a, false), None);
+        assert_eq!(t.history_reader().live_id(&a), None);
+        assert!(t.derive(&a, false).is_none());
+        assert!(!t.quiet(&a));
+        let old = root.join(COPILOT_OLD).join("workspace.yaml");
+        let text = std::fs::read_to_string(&old).unwrap();
+        write(
+            &old,
+            &text.replace("Previous conversation", "Another conversation"),
+        );
+        assert_eq!(t.resolve(&a, false).as_deref(), Some(COPILOT_CURRENT));
+    }
+
+    #[test]
+    fn copilot_requires_complete_process_identity_for_this_pane() {
+        let (_dir, mut t, root, mut a) = copilot_setup();
+        let (pid, _) = own();
+        let _current = copilot_session(&root, COPILOT_CURRENT, pid, true);
+        assert_eq!(t.live_id(&a), None);
+        assert_eq!(t.stale_panes(std::slice::from_ref(&a)).len(), 1);
+        pane(&mut t, &[pid]);
+        assert_eq!(t.stale_panes(std::slice::from_ref(&a)), []);
+        assert_eq!(t.live_id(&a).as_deref(), Some(COPILOT_CURRENT));
+        a.pane_id = "w1:p2".into();
+        assert_eq!(t.live_id(&a), None);
+        a.pane_id = "w1:p1".into();
+        pane(&mut t, &vec![pid; MAX_PIDS + 1]);
+        assert_eq!(t.live_id(&a), None);
+        assert!(!t.quiet(&a));
+        pane(&mut t, &[DEAD]);
+        assert_eq!(t.live_id(&a), None);
+    }
+
+    #[test]
+    fn copilot_rejects_foreign_and_reused_pid_claims_even_when_the_name_matches() {
+        let (_dir, mut t, root, a) = copilot_setup();
+        let (pid, started) = own();
+        let (other, _) = parent();
+        let current = copilot_session(&root, COPILOT_CURRENT, pid, true);
+        let _foreign = copilot_session(&root, CLIENT, other, true);
+        pane(&mut t, &[pid]);
+        assert_eq!(t.live_id(&a).as_deref(), Some(COPILOT_CURRENT));
+        pane(&mut t, &[pid, other]);
+        assert_eq!(t.live_id(&a), None);
+        pane(&mut t, &[pid]);
+        current
+            .set_modified(UNIX_EPOCH + Duration::from_millis(started - START_SLACK_MS - 1))
+            .unwrap();
+        assert_eq!(t.live_id(&a), None);
+        current
+            .set_modified(UNIX_EPOCH + Duration::from_millis(started))
+            .unwrap();
+        write(
+            &root.join(COPILOT_CURRENT).join(format!("inuse.{pid}.lock")),
+            &other.to_string(),
+        );
+        assert_eq!(t.live_id(&a), None);
+    }
+
+    #[test]
+    fn copilot_does_not_follow_invalid_directories_or_mismatched_headers() {
+        let (_dir, mut t, root, a) = copilot_setup();
+        let (pid, _) = own();
+        let _current = copilot_session(&root, COPILOT_CURRENT, pid, true);
+        pane(&mut t, &[pid]);
+        std::fs::create_dir(root.join("not-a-session")).unwrap();
+        assert_eq!(t.live_id(&a).as_deref(), Some(COPILOT_CURRENT));
+        let link = root.join(CLIENT);
+        symlink(root.join(COPILOT_CURRENT), &link).unwrap();
+        assert_eq!(t.live_id(&a), None);
+        assert!(!t.quiet(&a));
+        std::fs::remove_file(link).unwrap();
+        let events = root.join(COPILOT_CURRENT).join("events.jsonl");
+        let text = std::fs::read_to_string(&events).unwrap();
+        write(&events, &text.replace(COPILOT_CURRENT, COPILOT_OLD));
+        assert_eq!(t.live_id(&a), None);
+    }
+
+    #[test]
+    fn copilot_requires_matching_cwd_and_supported_native_title() {
+        let (_dir, mut t, root, mut a) = copilot_setup();
+        let (pid, _) = own();
+        let _current = copilot_session(&root, COPILOT_CURRENT, pid, true);
+        pane(&mut t, &[pid]);
+        let path = root.join(COPILOT_CURRENT).join("workspace.yaml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        write(&path, &text.replace(CWD, "/other/project"));
+        assert_eq!(t.live_id(&a), None);
+        write(
+            &path,
+            &text.replace("Current conversation", "'Current ''quoted'' conversation'"),
+        );
+        a.terminal_title_stripped = Some(
+            "Current 'quoted' conversation - Waiting for background shells - GitHub Copilot".into(),
+        );
+        assert_eq!(t.live_id(&a).as_deref(), Some(COPILOT_CURRENT));
+        a.terminal_title_stripped = Some("GitHub Copilot".into());
+        assert_eq!(t.live_id(&a), None);
+    }
+
+    #[test]
+    fn copilot_unknown_or_oversized_workspace_metadata_never_proves_quiet() {
+        let (_dir, mut t, root, a) = copilot_setup();
+        let (pid, _) = own();
+        let _current = copilot_session(&root, COPILOT_CURRENT, pid, true);
+        pane(&mut t, &[pid]);
+        let path = root.join(COPILOT_CURRENT).join("workspace.yaml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        write(&path, &(text.clone() + "name: Duplicate\n"));
+        assert_eq!(t.live_id(&a), None);
+        write(&path, &(text + &"x".repeat(SESSION_BYTES as usize)));
+        assert_eq!(t.live_id(&a), None);
+        assert!(!t.quiet(&a));
+    }
+
+    #[test]
+    fn copilot_markerless_history_cache_does_not_hide_new_or_reacquired_claims() {
+        let (_dir, mut t, root, a) = copilot_setup();
+        let (pid, _) = own();
+        let _current = copilot_session(&root, COPILOT_CURRENT, pid, true);
+        let other = "aa000000-0000-4000-8000-000000000000";
+        for n in 0..=MAX_LISTED / MAX_PIDS {
+            std::fs::create_dir(root.join(format!("aa000000-0000-4000-8000-{n:012x}"))).unwrap();
+        }
+        pane(&mut t, &vec![pid; MAX_PIDS]);
+        assert_eq!(t.live_id(&a).as_deref(), Some(COPILOT_CURRENT));
+        assert_eq!(t.live_id(&a).as_deref(), Some(COPILOT_CURRENT));
+        let new = copilot_session(&root, other, pid, true);
+        assert_eq!(t.live_id(&a), None);
+        assert!(!t.quiet(&a));
+        drop(new);
+        assert_eq!(t.live_id(&a).as_deref(), Some(COPILOT_CURRENT));
+        let reacquired = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join(other).join(format!("inuse.{pid}.hold")))
+            .unwrap();
+        reacquired.lock().unwrap();
+        assert_eq!(t.live_id(&a), None);
+    }
+
+    #[test]
+    fn copilot_wrapped_native_names_cannot_match_another_sessions_short_name() {
+        let (_dir, mut t, root, mut a) = copilot_setup();
+        let (pid, _) = own();
+        let _old = copilot_session(&root, COPILOT_OLD, pid, false);
+        let _current = copilot_session(&root, COPILOT_CURRENT, pid, true);
+        pane(&mut t, &[pid]);
+        let old = root.join(COPILOT_OLD).join("workspace.yaml");
+        let text = std::fs::read_to_string(&old).unwrap();
+        write(
+            &old,
+            &text.replace("Previous conversation", "Current conversation"),
+        );
+        let current = root.join(COPILOT_CURRENT).join("workspace.yaml");
+        let text = std::fs::read_to_string(&current).unwrap();
+        write(
+            &current,
+            &text.replace(
+                "Current conversation",
+                "Current conversation - a long title\n  continues here",
+            ),
+        );
+        a.terminal_title_stripped =
+            Some("Current conversation - a long title continues here - GitHub Copilot".into());
+        assert_eq!(t.live_id(&a), None);
+        assert!(!t.quiet(&a));
     }
 
     #[test]

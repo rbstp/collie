@@ -120,10 +120,16 @@ impl Transcripts {
     }
 
     pub fn retain(&mut self, agents: &[AgentInfo]) {
-        let ids: Vec<String> = agents
-            .iter()
-            .filter_map(|a| self.resolve(a, false))
-            .collect();
+        let mut ids = Vec::new();
+        for a in agents {
+            if a.agent.as_deref() == Some("copilot") {
+                if let Some((_, sessions)) = self.copilot_selection(a) {
+                    ids.extend(sessions);
+                }
+            } else if let Some(id) = self.resolve(a, false) {
+                ids.push(id);
+            }
+        }
         let live = |id: &String| ids.contains(id);
         self.cache.retain(|id, _| live(id));
         self.missed.retain(&live);
@@ -138,6 +144,18 @@ impl Transcripts {
     /// No subagent running; a supported agent whose transcript cannot be read, or whose
     /// subagent scan left some out, counts as busy.
     pub fn quiet(&mut self, a: &AgentInfo) -> bool {
+        if a.agent.as_deref() == Some("copilot") {
+            let Some((_, sessions)) = self.copilot_selection(a) else {
+                return false;
+            };
+            let Some(root) = self.copilot_sessions.clone() else {
+                return false;
+            };
+            return sessions.iter().all(|id| {
+                let (agents, truncated) = self.providers.copilot(&root, id);
+                agents.is_empty() && !truncated
+            });
+        }
         !matches!(a.agent.as_deref(), Some("claude" | "copilot" | "codex"))
             || self
                 .derive(a, true)
@@ -148,10 +166,10 @@ impl Transcripts {
     /// transcript not found is looked for again only when `relocate`.
     pub fn derive(&mut self, a: &AgentInfo, relocate: bool) -> Option<Derived> {
         if a.agent.as_deref() == Some("copilot") {
-            let id = session_id(a)?;
+            let id = self.resolve(a, relocate)?;
             let (subagents, subagents_truncated) = self
                 .providers
-                .copilot(self.copilot_sessions.as_deref()?, id);
+                .copilot(self.copilot_sessions.as_deref()?, &id);
             return Some(Derived {
                 subagents,
                 subagents_truncated,

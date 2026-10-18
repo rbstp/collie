@@ -596,7 +596,7 @@ fn entries(path: &Path) -> (Vec<PathBuf>, bool) {
     (paths, truncated)
 }
 
-fn held(path: &Path) -> Option<bool> {
+pub(super) fn held(path: &Path) -> Option<bool> {
     let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
     let file = match std::fs::OpenOptions::new()
         .read(true)
@@ -1251,34 +1251,28 @@ mod tests {
     }
 
     #[test]
-    fn existing_derive_populates_both_provider_arrays() {
+    fn existing_derive_populates_the_codex_array() {
         let s = Setup::new();
-        std::fs::write(&s.events, prefix(COPILOT, 7)).unwrap();
         std::fs::write(&s.rollout, prefix(CODEX, 7)).unwrap();
         let mut transcripts = super::super::Transcripts::new(None, Some(s.codex.clone()));
-        transcripts.copilot_sessions = Some(s.copilot.clone());
-        for (kind, id) in [("copilot", SESSION), ("codex", PARENT)] {
-            let agent = serde_json::from_value(serde_json::json!({
-                "terminal_id": kind,
-                "workspace_id": "w1",
-                "pane_id": "w1:p1",
-                "agent": kind,
-                "agent_status": "working",
-                "agent_session": {"value": id}
-            }))
-            .unwrap();
-            if kind == "codex" {
-                let parent = s
-                    .rollout
-                    .with_file_name(format!("rollout-probe-{PARENT}.jsonl"));
-                std::fs::write(parent, "{\"type\":\"session_meta\",\"payload\":{}}\n").unwrap();
-            }
-            assert_eq!(transcripts.derive(&agent, true).unwrap().subagents.len(), 1);
-            assert_eq!(
-                transcripts.derive(&agent, false).unwrap().subagents.len(),
-                1
-            );
-            assert!(!transcripts.quiet(&agent));
-        }
+        let agent = serde_json::from_value(serde_json::json!({
+            "terminal_id": "codex",
+            "workspace_id": "w1",
+            "pane_id": "w1:p1",
+            "agent": "codex",
+            "agent_status": "working",
+            "agent_session": {"value": PARENT}
+        }))
+        .unwrap();
+        let parent = s
+            .rollout
+            .with_file_name(format!("rollout-probe-{PARENT}.jsonl"));
+        std::fs::write(parent, "{\"type\":\"session_meta\",\"payload\":{}}\n").unwrap();
+        assert_eq!(transcripts.derive(&agent, true).unwrap().subagents.len(), 1);
+        assert_eq!(
+            transcripts.derive(&agent, false).unwrap().subagents.len(),
+            1
+        );
+        assert!(!transcripts.quiet(&agent));
     }
 }
