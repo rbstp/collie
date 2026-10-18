@@ -15,9 +15,10 @@ final class SampleWorkspaceTests: XCTestCase {
         app.buttons["Grid"].tap()
         let card = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
         XCTAssertTrue(card.appears(within: 5))
-        XCTAssertTrue(card.label.contains("Review approval flow"))
-        XCTAssertTrue(card.label.contains("Run approval tests"))
-        XCTAssertTrue(card.label.contains("5m"))
+        XCTAssertNotNil(card.label.range(
+            of: #"Review approval flow, [0-9]+(?:h [0-9]+)?m, Run approval tests, [0-9]+(?:h [0-9]+)?m"#,
+            options: .regularExpression
+        ))
         XCTAssertTrue(card.label.contains("+3 more"))
         XCTAssertFalse(card.label.contains("Check retry handling"))
         XCTAssertFalse(card.label.contains("5 subagents"))
