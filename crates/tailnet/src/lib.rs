@@ -116,10 +116,13 @@ impl Node {
         self.handle.0
     }
 
-    /// Closes the node now, while clones may still be in a call: that call fails, as does
-    /// any later one. The close on drop then does nothing, since libtailscale never reuses
-    /// a node's descriptor.
+    /// Closes the node now, while clones may still be in a call. It waits for a call under
+    /// the handle lock, so a start in progress finishes and is then shut down rather than
+    /// left running unreachable; a dial holds no lock and fails, since the close cancels it
+    /// first (patch 0010). The close on drop then does nothing: libtailscale never reuses a
+    /// node's descriptor.
     pub fn close(&self) {
+        let _call = self.lock();
         unsafe { sys::tailscale_close(self.sd()) };
     }
 
