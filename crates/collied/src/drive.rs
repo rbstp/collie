@@ -406,16 +406,19 @@ impl Driver {
     /// failed.
     async fn reflow(&self, pane_id: &str, kind: &str, read: &mut TerminalRead) -> bool {
         let cols = herdr::pane_columns(&self.herdr, pane_id).await;
+        let scrollbar_cols = if kind == "copilot" {
+            reflow::copilot_scrollbar_columns(&read.ansi)
+        } else {
+            None
+        };
         if let Ok(Some(cols)) = cols {
-            (read.wraps, read.splits) = reflow::soft_wraps_for(kind, &read.ansi, cols.into());
+            (read.wraps, read.splits) =
+                reflow::soft_wraps_for(kind, &read.ansi, scrollbar_cols.unwrap_or(cols.into()));
             read.copilot_scrollbar = kind == "copilot";
         }
         if kind == "copilot"
-            && let Some(width) = cols
-                .as_ref()
-                .ok()
-                .and_then(|cols| cols.map(usize::from))
-                .or_else(|| reflow::copilot_scrollbar_columns(&read.ansi))
+            && let Some(width) =
+                scrollbar_cols.or_else(|| cols.as_ref().ok().and_then(|cols| cols.map(usize::from)))
         {
             read.ansi = reflow::without_copilot_scrollbar(&read.ansi, width);
         }

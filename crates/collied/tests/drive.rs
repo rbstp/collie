@@ -3892,6 +3892,89 @@ async fn codex_and_copilot_reads_and_watches_mark_only_prose_wraps() {
 }
 
 #[tokio::test]
+async fn copilot_scrollbar_uses_screen_columns_when_the_layout_differs() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["copilot"], &base);
+    herdr.with(|h| h.snapshot["agents"][1]["agent"] = json!("copilot"));
+    let params = |source| ReadParams {
+        terminal_id: tid(CODEX_BLOCKED),
+        source,
+        lines: None,
+    };
+    // Copilot 1.0.100-1 in herdr 0.9.5: inset scrollbars and tool results sharing their style.
+    for (screen, text, changed) in [
+        (
+            include_str!("fixtures/copilot-1.0.100-1/scrollbar-inset.ansi.txt"),
+            "Reading command output",
+            "Reading updated output",
+        ),
+        (
+            include_str!("fixtures/copilot-1.0.100-1/scrollbar-tool-results.ansi.txt"),
+            "└ idle",
+            "└ busy",
+        ),
+    ] {
+        let screen = format!("{screen}\u{1b}[0m\r\nend of output");
+        herdr.with(|h| {
+            h.text = screen.clone();
+            h.columns = Some(206);
+        });
+        let mut cleaned = None;
+        for source in [ReadSource::Recent, ReadSource::Visible] {
+            let Ok(Response::Terminal(read)) = drive.read(params(source), true).await else {
+                panic!("no Copilot read");
+            };
+            assert_eq!(read.ansi.matches('┃').count(), 1);
+            assert_eq!(read.ansi.replace('┃', ""), screen.replace('┃', ""));
+            assert!(read.ansi.contains(text));
+            assert!(read.ansi.contains("╻"));
+            assert!(read.ansi.contains("╹"));
+            assert!(read.ansi.ends_with("end of output"));
+            cleaned = Some(read);
+        }
+        let cleaned = cleaned.unwrap();
+        let mut watcher = drive.watch(tid(CODEX_BLOCKED), 200, false).await.unwrap();
+        let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+            panic!("no Copilot watch output");
+        };
+        assert_eq!(first.ansi, cleaned.ansi);
+        herdr.with(|h| h.text = screen.replace(text, changed));
+        let Ok(Some(Watched::Patch(patch))) = next(&mut watcher).await else {
+            panic!("no changed Copilot watch output");
+        };
+        let updated = patch.apply(&first).unwrap();
+        assert_eq!(updated.ansi, first.ansi.replace(text, changed));
+        drop(watcher);
+    }
+
+    let bar = "\u{1b}[0m\u{1b}[38;2;145;152;161m┃\u{1b}[0m";
+    herdr.with(|h| {
+        h.text = format!(
+            " ● The quick brown fox jumps over the  {bar}\r\n   lazy dog keeps running.             {bar}"
+        );
+        h.columns = Some(41);
+    });
+    let Ok(Response::Terminal(read)) = drive.read(params(ReadSource::Recent), true).await else {
+        panic!("no Copilot prose read");
+    };
+    assert_eq!(
+        (read.wraps.as_slice(), read.splits.as_slice()),
+        (&[1][..], &[][..])
+    );
+    assert!(!read.ansi.contains('┃'));
+    let reflowed = read.reflowed().unwrap();
+    assert!(!reflowed.contains('\n'));
+    assert!(reflowed.contains("lazy dog keeps running."));
+    herdr.with(|h| h.text = "abc ┃\r\nxyz ┃".into());
+    let Ok(Response::Terminal(read)) = drive.read(params(ReadSource::Recent), true).await else {
+        panic!("no Copilot literal bars read");
+    };
+    assert_eq!(read.ansi, "abc ┃\r\nxyz ┃");
+    assert!(herdr.mutations().is_empty());
+}
+
+#[tokio::test]
 async fn a_terminal_watch_reads_only_under_its_grant_and_ends_when_an_agent_starts() {
     use std::sync::atomic::{AtomicBool, Ordering};
 

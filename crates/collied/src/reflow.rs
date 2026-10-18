@@ -129,7 +129,13 @@ pub fn without_copilot_scrollbar(ansi: &str, cols: usize) -> String {
             if text.width() != cols || !body.ends_with(' ') {
                 return row.to_owned();
             }
-            if body.chars().any(|c| ('\u{2500}'..='\u{257f}').contains(&c))
+            let content = body
+                .strip_prefix("   └ ")
+                .filter(|_| row.starts_with("   \u{1b}[0m\u{1b}[38;"))
+                .unwrap_or(body);
+            if content
+                .chars()
+                .any(|c| ('\u{2500}'..='\u{257f}').contains(&c))
                 && !isolated_scrollbar(row, at)
             {
                 return row.to_owned();
@@ -788,6 +794,15 @@ mod tests {
         for row in ["│ a │", "┃ a ┃", "word┃", "a ┃ b", "a┃"] {
             assert_eq!(without_copilot_scrollbar(row, 5), row);
         }
+        let gray = "\u{1b}[0m\u{1b}[38;2;145;152;161m";
+        for text in ["└ ┃ text ┃", "└ ─────┘ ┃"] {
+            let plain = format!("   {text}");
+            assert_eq!(without_copilot_scrollbar(&plain, plain.width()), plain);
+            let styled = format!("   {gray}{text}\u{1b}[0m");
+            assert_eq!(without_copilot_scrollbar(&styled, plain.width()), styled);
+        }
+        let literal = "   └ literal | pipe ┃";
+        assert_eq!(without_copilot_scrollbar(literal, literal.width()), literal);
         assert_eq!(without_copilot_scrollbar("wide界 ┃", 8), "wide界 ");
         assert_eq!(
             without_copilot_scrollbar("\u{1b}[48;2;20;27;34mabc \u{1b}[0m┃\u{1b}[0m\r", 5),
