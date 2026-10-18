@@ -45,6 +45,7 @@ pub struct Derived {
 enum Kind {
     Claude,
     Codex,
+    Copilot,
 }
 
 struct Cached {
@@ -226,6 +227,7 @@ impl Transcripts {
                     self.providers.codex(self.codex_sessions.as_deref()?, id);
                 (None, subagents, truncated)
             }
+            Kind::Copilot => return None,
         };
         if let Some(c) = self
             .cache
@@ -242,6 +244,7 @@ impl Transcripts {
         let mut derived = match kind {
             Kind::Claude => claude(&text, window),
             Kind::Codex => codex(&text),
+            Kind::Copilot => return None,
         };
         // A line longer than the tail (a large tool result) can hide the older values.
         if let Some(prev) = self.cache.get(id).map(|c| &c.derived) {
@@ -286,6 +289,13 @@ impl Transcripts {
                 by_cwd.chain(any).find(|p| is_file(p))
             }
             Kind::Codex => self.codex_rollout(id),
+            Kind::Copilot => Some(
+                self.copilot_sessions
+                    .as_ref()?
+                    .join(id)
+                    .join("events.jsonl"),
+            )
+            .filter(|p| is_file(p)),
         }
     }
 
