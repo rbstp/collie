@@ -411,7 +411,12 @@ impl Driver {
         let cols = herdr::pane_columns(&self.herdr, pane_id).await;
         let screen_cols = match kind {
             "copilot" => reflow::copilot_scrollbar_columns(&read.ansi),
-            "claude" => reflow::claude_rule_columns(&read.ansi),
+            "claude" => cols
+                .as_ref()
+                .ok()
+                .copied()
+                .flatten()
+                .and_then(|cols| reflow::claude_rule_columns(&read.ansi, cols.into())),
             _ => None,
         };
         if let Ok(Some(cols)) = cols {

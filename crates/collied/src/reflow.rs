@@ -196,8 +196,9 @@ pub fn copilot_scrollbar_columns(ansi: &str) -> Option<usize> {
 }
 
 /// Claude Code draws its input box rules at exactly the terminal width, which herdr's
-/// `pane.layout` exceeds by 1 to 3 columns.
-pub fn claude_rule_columns(ansi: &str) -> Option<usize> {
+/// `pane.layout` exceeds by 1 to 3 columns. Rules wider than `max` are scrollback from
+/// before the pane narrowed.
+pub fn claude_rule_columns(ansi: &str, max: usize) -> Option<usize> {
     let mut plain = String::new();
     ansi.split('\n')
         .filter_map(|row| {
@@ -205,6 +206,7 @@ pub fn claude_rule_columns(ansi: &str) -> Option<usize> {
             let text = plain.trim_end();
             (!text.is_empty() && text.chars().all(|c| c == '─')).then(|| text.width())
         })
+        .filter(|&width| width <= max)
         .max()
 }
 
@@ -550,9 +552,11 @@ mod tests {
     #[test]
     fn captured_korean_prose_joins_at_the_input_box_rule_width() {
         let screen = include_str!("../tests/fixtures/claude-2.1.303/korean-prose.ansi.txt");
-        assert_eq!(claude_rule_columns(screen), Some(49));
+        assert_eq!(claude_rule_columns(screen, 51), Some(49));
         let status_rule = format!("{screen}\n{}", "─".repeat(20));
-        assert_eq!(claude_rule_columns(&status_rule), Some(49));
+        assert_eq!(claude_rule_columns(&status_rule, 51), Some(49));
+        let narrowed = format!("{}\n{screen}", "─".repeat(60));
+        assert_eq!(claude_rule_columns(&narrowed, 51), Some(49));
         let rows: Vec<u32> = std::iter::once(8).chain(11..=26).collect();
         assert_eq!(soft_wraps(screen, 49), (rows.clone(), vec![]));
         let at_layout_width: Vec<u32> = rows
