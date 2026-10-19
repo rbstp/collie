@@ -75,7 +75,7 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             prev = Prev::Start;
             continue;
         }
-        if tool_header(s) {
+        if matches!(prev, Prev::Start) && tool_header(s) {
             prev = Prev::Held;
             continue;
         }
@@ -1043,6 +1043,23 @@ mod tests {
             "  ⏵⏵ auto mode on (shift+tab to cycle)",
         ];
         assert_eq!(joins(&rows, 40), (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_prose_row_that_starts_like_a_call_still_joins() {
+        let rows = [
+            "⏺ 두 쪽은 별도의 공용 서버 없이 앱 안에 내장된",
+            "  libtailscale(고정된 서브모듈에 자체 패치를",
+            "  적용한 버전)이 만든 tailnet 위에서 상호 TLS로",
+            "  서로를 인증합니다.",
+        ];
+        assert_eq!(joins(&rows, 49), (vec![1, 2, 3], vec![]));
+        let rows = [
+            "⏺ The daemon and the phone talk over a",
+            "  foo(bar) call that the core makes for",
+            "  every request.",
+        ];
+        assert_eq!(joins(&rows, 40), (vec![1, 2], vec![]));
     }
 
     #[test]
