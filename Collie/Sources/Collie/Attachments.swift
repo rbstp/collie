@@ -1,6 +1,7 @@
 import CollieCore
 import Foundation
 import ImageIO
+import Observation
 import UIKit
 import UniformTypeIdentifiers
 
@@ -68,6 +69,70 @@ struct AttachmentUpload: Equatable {
     var total: UInt64 = 0
 
     var fraction: Double? { total == 0 ? nil : Double(sent) / Double(total) }
+}
+
+/// One batch at a time, uploaded in order. A file that fails is reported and the rest still go.
+@MainActor
+@Observable
+final class AttachmentUploads {
+    private(set) var current: AttachmentUpload?
+    @ObservationIgnored private var task: Task<Void, Never>?
+
+    func start(
+        _ items: [PendingAttachment], slots: Int, core: any AgentCore, machineId: String,
+        uploaded: @escaping (AttachedFile) -> Void, failed: @escaping (String) -> Void
+    ) -> Task<Void, Never>? {
+        let slots = max(slots, 0)
+        var firstError: (any Error)? = items.count > slots ? AttachmentError.tooMany(limit: Attachment.maxPerPrompt) : nil
+        let batch = Array(items.prefix(slots))
+        guard !batch.isEmpty else {
+            if let firstError { failed(AgentModel.message(for: firstError)) }
+            return nil
+        }
+        let limit = core.maxAttachmentBytes()
+        let first = UUID()
+        current = AttachmentUpload(id: first, name: batch[0].name, count: batch.count)
+        let task = Task { [self] in
+            for (offset, item) in batch.enumerated() {
+                if Task.isCancelled { break }
+                let id = offset == 0 ? first : UUID()
+                current = AttachmentUpload(id: id, name: item.name, index: offset + 1, count: batch.count)
+                do {
+                    let data = try await item.load(limit)
+                    try Attachment.check(data, limit: limit)
+                    try Task.checkCancellation()
+                    if current?.id == id { current?.total = UInt64(data.count) }
+                    let progress = UploadProgressRelay { [weak self] sent, total in
+                        Task { @MainActor in self?.progressed(id, sent: sent, total: total) }
+                    }
+                    let path = try await core.uploadAttachment(machineId: machineId, name: item.name, data: data, progress: progress)
+                    var file = AttachedFile(path: path, name: item.name)
+                    if file.kind == .image { file.thumbnail = await Attachment.thumbnail(from: data) }
+                    try Task.checkCancellation()
+                    uploaded(file)
+                } catch {
+                    if Task.isCancelled || error is CancellationError { break }
+                    firstError = firstError ?? error
+                }
+            }
+            if !Task.isCancelled, let firstError { failed(AgentModel.message(for: firstError)) }
+            if !Task.isCancelled { current = nil }
+        }
+        self.task = task
+        return task
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+        current = nil
+    }
+
+    private func progressed(_ id: UUID, sent: UInt64, total: UInt64) {
+        guard current?.id == id, let upload = current, sent >= upload.sent else { return }
+        current?.sent = sent
+        current?.total = total
+    }
 }
 
 enum AttachmentError: LocalizedError, Equatable {

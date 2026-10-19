@@ -73,8 +73,8 @@ final class AgentModel {
     /// ↑ or ↓ moved Claude Code's highlight off what the box holds; ⇥ takes it.
     @ObservationIgnored private var menuMoved = false
     private(set) var promptError: String?
-    private(set) var upload: AttachmentUpload?
-    private var uploadTask: Task<Void, Never>?
+    private let uploads = AttachmentUploads()
+    var upload: AttachmentUpload? { uploads.current }
     private(set) var attachments: [AttachedFile] = []
 
     var blocked: BlockedInput?
@@ -818,52 +818,15 @@ final class AgentModel {
         attach([PendingAttachment(name: name, load: load)])
     }
 
-    /// One batch at a time, uploaded in order; each uploaded file joins `attachments`.
-    /// A file that fails is reported and the rest still go.
     @discardableResult
     func attach(_ items: [PendingAttachment]) -> Task<Void, Never>? {
         guard upload == nil, !items.isEmpty else { return nil }
         promptError = nil
-        let slots = max(attachmentSlots, 0)
-        var firstError: (any Error)? = items.count > slots ? AttachmentError.tooMany(limit: Attachment.maxPerPrompt) : nil
-        let batch = Array(items.prefix(slots))
-        guard !batch.isEmpty else {
-            promptError = firstError.map(Self.message(for:))
-            return nil
+        return uploads.start(items, slots: attachmentSlots, core: core, machineId: route.machineId) { file in
+            self.attachments.append(file)
+        } failed: { message in
+            self.promptError = message
         }
-        let core = core
-        let machineId = route.machineId
-        let limit = core.maxAttachmentBytes()
-        let first = UUID()
-        upload = AttachmentUpload(id: first, name: batch[0].name, count: batch.count)
-        let task = Task { [self] in
-            for (offset, item) in batch.enumerated() {
-                if Task.isCancelled { break }
-                let id = offset == 0 ? first : UUID()
-                upload = AttachmentUpload(id: id, name: item.name, index: offset + 1, count: batch.count)
-                do {
-                    let data = try await item.load(limit)
-                    try Attachment.check(data, limit: limit)
-                    try Task.checkCancellation()
-                    if upload?.id == id { upload?.total = UInt64(data.count) }
-                    let progress = UploadProgressRelay { [weak self] sent, total in
-                        Task { @MainActor in self?.uploaded(id, sent: sent, total: total) }
-                    }
-                    let path = try await core.uploadAttachment(machineId: machineId, name: item.name, data: data, progress: progress)
-                    var file = AttachedFile(path: path, name: item.name)
-                    if file.kind == .image { file.thumbnail = await Attachment.thumbnail(from: data) }
-                    try Task.checkCancellation()
-                    attachments.append(file)
-                } catch {
-                    if Task.isCancelled || error is CancellationError { break }
-                    firstError = firstError ?? error
-                }
-            }
-            if !Task.isCancelled, let firstError { promptError = Self.message(for: firstError) }
-            if !Task.isCancelled { upload = nil }
-        }
-        uploadTask = task
-        return task
     }
 
     func attachFailed(_ error: any Error) {
@@ -874,15 +837,7 @@ final class AgentModel {
     func cancelUpload() {
         guard upload != nil else { return }
         core.cancelUploads(machineId: route.machineId)
-        uploadTask?.cancel()
-        uploadTask = nil
-        upload = nil
-    }
-
-    private func uploaded(_ id: UUID, sent: UInt64, total: UInt64) {
-        guard upload?.id == id, let current = upload, sent >= current.sent else { return }
-        upload?.sent = sent
-        upload?.total = total
+        uploads.cancel()
     }
 
     @discardableResult
