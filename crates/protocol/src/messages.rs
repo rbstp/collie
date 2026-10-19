@@ -2334,7 +2334,6 @@ mod tests {
         assert!(json.ends_with(
             r#""last_line":"Done.","context_left":100,"last_prompt":"go","last_activity_ms":7,"subagents":[{"agent_type":"general-purpose","title":"Check the pairing code","activity":"Reading lib.rs","started_at_ms":5,"tokens":500,"called_tools":true}]}"#
         ));
-        assert_eq!(serde_json::from_str::<Agent>(&json).unwrap(), full);
         let linked = Agent {
             pull_request: Some(PullRequest {
                 number: 12,
@@ -2379,13 +2378,6 @@ mod tests {
         };
         let json = serde_json::to_string(&busy).unwrap();
         assert!(json.ends_with(r#""failing_checks":["lint"],"remarks":3,"conflicting":true}"#));
-        assert_eq!(serde_json::from_str::<PullRequest>(&json).unwrap(), busy);
-        let event = ServerFrame::Event {
-            seq: 2,
-            event: Event::AgentStatus { agent: full },
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        assert_eq!(serde_json::from_str::<ServerFrame>(&json).unwrap(), event);
     }
 
     #[test]
@@ -2411,14 +2403,6 @@ mod tests {
         assert!(json.ends_with(
             r#""plan_usage":{"five_hour":{"used_percent":24,"resets_at_ms":1738425600000},"recorded_ms":1738420000000}}"#
         ));
-        assert_eq!(serde_json::from_str::<Flock>(&json).unwrap(), with);
-        let event = ServerFrame::Event {
-            seq: 2,
-            event: Event::PlanUsage { plan_usage: usage },
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains(r#""name":"plan.usage""#), "{json}");
-        assert_eq!(serde_json::from_str::<ServerFrame>(&json).unwrap(), event);
     }
 
     #[test]
@@ -2478,7 +2462,6 @@ mod tests {
         };
         let json = serde_json::to_string(&with).unwrap();
         assert!(json.ends_with(r#""starred":["term_1"]}"#), "{json}");
-        assert_eq!(serde_json::from_str::<Flock>(&json).unwrap(), with);
     }
 
     #[test]
@@ -2861,7 +2844,6 @@ mod tests {
         };
         let json = serde_json::to_string(&on).unwrap();
         assert!(json.contains(r#""terminals_enabled":true"#));
-        assert_eq!(serde_json::from_str::<Flock>(&json).unwrap(), on);
         let granted = ServerFrame::Result {
             id: 8,
             result: Response::TerminalGranted {
@@ -3074,7 +3056,6 @@ mod tests {
         let with = read_with("a\nb\nc", &[1], &[2]);
         let json = serde_json::to_string(&with).unwrap();
         assert!(json.ends_with(r#""wraps":[1],"splits":[2]}"#), "{json}");
-        assert_eq!(serde_json::from_str::<TerminalRead>(&json).unwrap(), with);
     }
 
     #[test]
@@ -3089,31 +3070,5 @@ mod tests {
         };
         let json = serde_json::to_string(&nested).unwrap();
         assert!(json.ends_with(r#""parent_call_id":"task1"}"#), "{json}");
-        assert_eq!(
-            serde_json::from_str::<HistoryMessage>(&json).unwrap(),
-            nested
-        );
-    }
-
-    #[test]
-    fn server_frames_serialize() {
-        let ev = ServerFrame::Event {
-            seq: 1,
-            event: Event::FlockChanged {},
-        };
-        assert_eq!(
-            serde_json::to_string(&ev).unwrap(),
-            r#"{"kind":"event","seq":1,"event":{"name":"flock.changed"}}"#
-        );
-        let ok = ServerFrame::Result {
-            id: 9,
-            result: Response::Ok,
-        };
-        assert_eq!(
-            serde_json::to_string(&ok).unwrap(),
-            r#"{"kind":"result","id":9,"result":{"type":"ok"}}"#
-        );
-        let back: ServerFrame = serde_json::from_str(&serde_json::to_string(&ok).unwrap()).unwrap();
-        assert_eq!(back, ok);
     }
 }

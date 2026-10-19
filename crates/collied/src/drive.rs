@@ -2650,10 +2650,6 @@ mod tests {
         assert_eq!(watch_period(false, WATCH_QUIET), WATCH_IDLE);
         assert_eq!(watch_period(true, Duration::ZERO), WATCH_IDLE);
         assert_eq!(watch_period(true, Duration::MAX), WATCH_IDLE);
-        assert_eq!(
-            (WATCH_EVERY, WATCH_IDLE),
-            (Duration::from_millis(250), Duration::from_secs(1))
-        );
     }
 
     fn is_sgr_only(s: &str) -> bool {

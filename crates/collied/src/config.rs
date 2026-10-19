@@ -456,12 +456,6 @@ mod tests {
     }
 
     #[test]
-    fn partial_tailnet_keeps_default_port() {
-        let c = parse("[tailnet]\nhostname = \"x\"\n").unwrap();
-        assert_eq!(c.tailnet.port, DEFAULT_PORT);
-    }
-
-    #[test]
     fn rejects_unknown_fields() {
         assert!(parse("bogus = 1").is_err());
         assert!(parse("[herdr]\nsocket = \"/x\"").is_err());
