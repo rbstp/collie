@@ -10,7 +10,9 @@ links = "tailscale"
 build = "build.rs"
 
 [build-dependencies]
-bindgen = "0.73.2"
+# prettyplease is off: bindgen allows syn 2 or 3 and prettyplease 0.2 or 0.3 independently, and
+# cargo can resolve them to different syn majors, which fails to compile. The formatter is rustfmt.
+bindgen = { version = "0.73.2", default-features = false, features = ["logging", "runtime"] }
 
 [lints]
 workspace = true

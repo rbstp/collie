@@ -217,9 +217,11 @@ impl Node {
             sys::tailscale_listen(self.sd(), network.as_ptr(), addr.as_ptr(), &mut fd)
         })?;
         let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        // SAFETY: the OwnedFd is open and owned by the AsyncFd until it is dropped.
+        let fd = unsafe { AsyncFd::register(fd) }.map_err(std::io::Error::from)?;
         Ok(Listener {
             node: self.clone(),
-            fd: AsyncFd::new(fd)?,
+            fd,
         })
     }
 
