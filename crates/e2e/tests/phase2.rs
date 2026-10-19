@@ -167,7 +167,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     core.watch_agent(m.clone(), None, 200).await.unwrap();
     let polls = herdr.params("agent.read").len();
     herdr.with(|h| h.recent = recent(9));
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(
         herdr.params("agent.read").len(),
         polls,
@@ -195,7 +195,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     }
     println!("  session gone {:?} after suspend", t.elapsed());
     let polls = herdr.params("agent.read").len();
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(
         herdr.params("agent.read").len(),
         polls,
