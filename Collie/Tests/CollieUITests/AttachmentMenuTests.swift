@@ -29,8 +29,9 @@ final class AttachmentMenuTests: XCTestCase {
         }
         let placeholder = newTask ? "What should the agent do?" : "Prompt the agent"
         let field = app.textFields.matching(NSPredicate(format: "placeholderValue == %@ OR label == %@ OR value == %@", placeholder, placeholder, "test")).firstMatch
+        // Both composers share one menu, so each slow system picker is presented once, over the keyboard.
         for keyboard in [false, true] {
-            for choice in ["Saved prompts", "Files", "Photo Library"] {
+            for choice in keyboard ? ["Saved prompts", newTask ? "Files" : "Photo Library"] : ["Saved prompts"] {
                 XCTContext.runActivity(named: "\(choice), keyboard \(keyboard)") { _ in
                     present(choice, keyboard: keyboard, field: field, in: app)
                 }
