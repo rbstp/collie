@@ -1667,28 +1667,39 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     let file = try prefsFile()
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
     let route = AgentRoute(machineId: "m1", terminalId: "term_1")
+    let defaults = DevicePrefs()
     let model = AgentModel(core: FakeCore(), route: route, prefsFile: file)
-    model.wrapLines = false
-    model.fontSize = 14
-    #expect(DevicePrefs.load(from: file).fontSize == DevicePrefs().fontSize)
+    #expect(model.wrapLines == defaults.wrapLines && model.keepsKeyboard == defaults.keepKeyboard)
+    #expect(model.fontSize == defaults.fontSize && model.gestures == defaults.gestures)
+
+    model.wrapLines = !defaults.wrapLines
+    #expect(DevicePrefs.load(from: file).wrapLines == !defaults.wrapLines)
+    #expect(AgentModel(core: FakeCore(), route: route, prefsFile: file).wrapLines == !defaults.wrapLines)
+
+    let fontSize = defaults.fontSize + 3
+    model.fontSize = fontSize
+    #expect(DevicePrefs.load(from: file).fontSize == defaults.fontSize)
     model.saveFontSize()
 
     let gestures = TerminalGestures(doubleTap: .none, tripleTap: .escape)
     var prefs = DevicePrefs.load(from: file)
-    prefs.keepKeyboard = true
+    prefs.keepKeyboard = !defaults.keepKeyboard
     prefs.gestures = gestures
     prefs.save(to: file)
-    #expect(model.keepsKeyboard)
-    #expect(model.gestures != gestures)
+    #expect(model.keepsKeyboard == !defaults.keepKeyboard)
+    #expect(model.gestures == defaults.gestures)
     model.reloadGestures()
     #expect(model.gestures == gestures)
 
-    model.wrapLines = true
-    let saved = DevicePrefs(wrapLines: true, keepKeyboard: true, gestures: gestures, fontSize: 14)
+    model.wrapLines = defaults.wrapLines
+    var saved = defaults
+    saved.keepKeyboard = !defaults.keepKeyboard
+    saved.gestures = gestures
+    saved.fontSize = fontSize
     #expect(DevicePrefs.load(from: file) == saved)
     let reopened = AgentModel(core: FakeCore(), route: route, prefsFile: file)
-    #expect(reopened.wrapLines && reopened.keepsKeyboard)
-    #expect(reopened.fontSize == 14 && reopened.gestures == gestures)
+    #expect(reopened.wrapLines == defaults.wrapLines && reopened.keepsKeyboard == !defaults.keepKeyboard)
+    #expect(reopened.fontSize == fontSize && reopened.gestures == gestures)
 }
 
 @MainActor
