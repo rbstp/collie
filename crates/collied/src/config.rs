@@ -9,13 +9,9 @@ use protocol::DEFAULT_PORT;
 #[derive(Debug, Default, Deserialize)]
 #[serde(try_from = "RawConfig")]
 pub struct Config {
-    #[serde(default)]
     pub herdr: HerdrConfig,
-    #[serde(default)]
     pub tailnet: TailnetConfig,
-    #[serde(default)]
     pub tasks: TasksConfig,
-    #[serde(default)]
     pub terminals: TerminalsConfig,
     pub apns: Option<ApnsConfig>,
     pub push: PushConfig,

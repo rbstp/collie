@@ -61,7 +61,6 @@ struct Peer: Decodable, Equatable, Sendable {
     let label: String
     let login: String
     let stableId: String
-    let pairedAt: UInt64
 }
 
 enum Reply: Equatable, Sendable {
@@ -259,7 +258,6 @@ final class ControlConnection: Sendable {
     }
 }
 
-/// One request, its first reply line.
 func request(_ request: Request, socket: String) async throws -> Reply {
     let conn = try ControlConnection.connect(path: socket)
     defer { conn.close() }
