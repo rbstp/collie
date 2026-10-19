@@ -390,7 +390,7 @@ final class AppModel {
     private func updateRelayStatus() async {
         guard let relay else { return }
         let state = await relay.snapshot()
-        if !state.pendingPairingRevocations.isEmpty || state.pendingInstallationRevocation {
+        if !state.pendingPairingRevocations.isEmpty {
             relayStatus = "Revocation pending. Remote pushes may continue until it succeeds or the grant expires."
         } else if state.requiresPairing {
             relayStatus = "Relay key unavailable. Pair the machine again to restore notifications. Previous grants may continue until expiry."
@@ -430,7 +430,7 @@ final class AppModel {
                 relayFailures += 1
                 relayRetryAt = .now.addingTimeInterval(min(600, pow(2, Double(min(relayFailures, 7))) * 5))
                 relayStatus = "Relay notifications are unavailable. Paired sessions remain usable."
-                if let state = await relay?.snapshot(), state.requiresPairing || !state.pendingPairingRevocations.isEmpty || state.pendingInstallationRevocation {
+                if let state = await relay?.snapshot(), state.requiresPairing || !state.pendingPairingRevocations.isEmpty {
                     await updateRelayStatus()
                 }
             }
