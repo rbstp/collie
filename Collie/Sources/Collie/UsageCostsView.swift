@@ -30,12 +30,16 @@ final class UsageCostsModel {
         while !Task.isCancelled {
             do {
                 let costs = try await fetch(range, offsetMinutes)
+                // A read cannot be cancelled once sent, so a late reply for a replaced load is dropped.
+                guard !Task.isCancelled, self.range == range else { return }
                 phase = .loaded(costs)
                 guard costs.scanning else { return }
             } catch CoreError.NotImplemented {
+                guard !Task.isCancelled, self.range == range else { return }
                 phase = .outdated
                 return
             } catch {
+                guard !Task.isCancelled, self.range == range else { return }
                 guard case .loaded(let shown) = phase else {
                     phase = .failed(AgentModel.message(for: error))
                     return

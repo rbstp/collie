@@ -66,6 +66,27 @@ private func costs(scanning: Bool, cost: Double = 1.5) -> UsageCosts {
     #expect(model.phase == .failed("too many requests, try again in a moment"))
 }
 
+@MainActor private final class HeldReply {
+    var continuation: CheckedContinuation<Void, Never>?
+}
+
+@MainActor @Test func usageCostsDropALateReplyForAReplacedRange() async {
+    let model = UsageCostsModel()
+    let held = HeldReply()
+    let week = Task { @MainActor in
+        await model.load(range: .week) { _, _ in
+            await withCheckedContinuation { held.continuation = $0 }
+            return costs(scanning: false)
+        }
+    }
+    await poll { held.continuation != nil }
+    week.cancel()
+    await model.load(range: .month) { _, _ in throw CoreError.RateLimited }
+    held.continuation?.resume()
+    await week.value
+    #expect(model.phase == .failed("too many requests, try again in a moment"))
+}
+
 @Test func usageCostTotalsSaturate() {
     #expect(CostTokens(input: .max, output: 1, cacheRead: 0, cacheWrite: 0).total == .max)
 }
