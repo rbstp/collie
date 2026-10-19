@@ -247,7 +247,8 @@ struct ConversationView: View {
                 } action: { old, new in
                     // The position follows the top row, so a rotation or the keyboard would leave the latest messages out of view.
                     if old.atBottom && old.size != new.size && submitted.isEmpty {
-                        proxy.scrollTo("bottom", anchor: .bottom)
+                        // Scrolling in this same update re-applies the prompt field's stale selection, moving its caret back mid-typing.
+                        Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) }
                     } else {
                         atBottom = new.atBottom
                     }

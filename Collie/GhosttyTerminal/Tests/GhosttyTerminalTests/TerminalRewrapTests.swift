@@ -85,4 +85,18 @@ private func widen(_ view: GhosttyTerminalUIView) throws {
     view.layoutIfNeeded()
     #expect(view.contentOffset.y + view.bounds.height == view.contentSize.height)
 }
+
+@MainActor
+@Test func obscuredBottomKeepsTheLastRowReachable() throws {
+    let view = terminal()
+    view.obscuredBottom = 100
+    view.layoutIfNeeded()
+    #expect(view.adjustedContentInset.bottom == 100)
+    #expect(view.contentOffset.y == bottom(view))
+
+    view.show(ansiSnapshot: "one\r\ntwo")
+    view.layoutIfNeeded()
+    #expect(view.contentOffset.y + view.bounds.height - 100 == view.contentSize.height)
+    #expect(view.adjustedContentInset.top + view.contentSize.height + view.adjustedContentInset.bottom == view.bounds.height)
+}
 #endif

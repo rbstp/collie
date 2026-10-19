@@ -6,6 +6,7 @@ import UIKit
 /// backing store larger than the screen.
 public final class GhosttyTerminalUIView: UIScrollView {
     static let background = TerminalRGB(0x28, 0x2C, 0x34)
+    public static let backgroundColor = UIColor(background)
     static let foreground = TerminalRGB(0xFF, 0xFF, 0xFF)
 
     public var fontSize: CGFloat {
@@ -31,6 +32,16 @@ public final class GhosttyTerminalUIView: UIScrollView {
     public var obscuredTop: CGFloat = 0 {
         didSet {
             guard obscuredTop != oldValue else { return }
+            setNeedsLayout()
+        }
+    }
+
+    /// Height at the bottom covered by an overlay; the last rows scroll up from under it.
+    public var obscuredBottom: CGFloat = 0 {
+        didSet {
+            guard obscuredBottom != oldValue else { return }
+            contentInset.bottom = obscuredBottom
+            if followsBottom { scrollToBottom() }
             setNeedsLayout()
         }
     }
@@ -241,7 +252,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
         if let copyAnchor, !menu.isHidden {
             let size = menu.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
             var insets = safeAreaInsets
-            insets.top += obscuredTop
+            insets.top = max(insets.top, obscuredTop)
+            insets.bottom = max(insets.bottom, obscuredBottom)
             let visible = bounds.inset(by: insets).insetBy(dx: 8, dy: 8)
             let point = CGPoint(x: bounds.minX + copyAnchor.x, y: bounds.minY + copyAnchor.y)
             var y = point.y - 16 - size.height
