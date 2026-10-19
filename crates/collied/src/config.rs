@@ -341,23 +341,15 @@ pub fn set_apns_key(text: &str, key: &ApnsKey, insert: bool) -> Option<String> {
 
 /// Atomic replace keeping the file's mode; refuses a symlink.
 pub fn rewrite(path: &Path, text: &str) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
     let meta = std::fs::symlink_metadata(path)?;
     anyhow::ensure!(meta.is_file(), "{} is not a regular file", path.display());
-    let tmp = path.with_extension("toml.tmp");
-    let _ = std::fs::remove_file(&tmp);
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)?;
-    file.write_all(text.as_bytes())?;
-    file.set_permissions(std::fs::Permissions::from_mode(
+    crate::replace_file(
+        path,
+        &path.with_extension("toml.tmp"),
+        text.as_bytes(),
         meta.permissions().mode() & 0o777,
-    ))?;
-    file.sync_all()?;
-    std::fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))
+    )
 }
 
 impl TailnetConfig {

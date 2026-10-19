@@ -1,5 +1,4 @@
 use std::fs::OpenOptions;
-use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -168,17 +167,12 @@ pub fn install(config: Option<&Path>, data_dir: &Path) -> anyhow::Result<()> {
     if loaded(&target)? {
         bootout(&target)?;
     }
-    let tmp = path.with_extension("plist.tmp");
-    let _ = std::fs::remove_file(&tmp);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o644)
-        .open(&tmp)?;
-    file.write_all(plist(&exe, config.as_deref(), data_dir).as_bytes())?;
-    file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
-    file.sync_all()?;
-    std::fs::rename(&tmp, &path)?;
+    crate::replace_file(
+        &path,
+        &path.with_extension("plist.tmp"),
+        plist(&exe, config.as_deref(), data_dir).as_bytes(),
+        0o644,
+    )?;
     let _ = launchctl(&["enable", &target]);
     anyhow::ensure!(
         launchctl(&["bootstrap", &domain(), &path.display().to_string()])?,
