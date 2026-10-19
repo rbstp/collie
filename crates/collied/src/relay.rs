@@ -51,15 +51,7 @@ impl Relay {
                     "relay grant missing or expired; open the paired app to renew".into(),
                 )
             })?;
-        if alert.payload.to_string().len() > 4096
-            || (alert.delivery == Delivery::Alert && alert.payload.get("enc").is_none())
-            || (matches!(alert.delivery, Delivery::LiveActivity { .. })
-                && alert.payload["aps"]["content-state"].get("enc").is_none())
-        {
-            return Err(Rejection::Other(
-                "encrypted display unavailable or payload too large".into(),
-            ));
-        }
+        alert.sendable()?;
         let (push_type, priority) = match alert.delivery {
             Delivery::Alert => ("alert", 10),
             Delivery::Background => ("background", 5),

@@ -286,14 +286,7 @@ impl Driver {
 
     async fn git_checkout(&self, terminal_id: &TerminalId, auth: &Authorized) -> Result<Cwd, Fail> {
         authorized(auth)?;
-        let listed = self.find_agent(terminal_id).await?;
-        let current = herdr::agent_get(&self.herdr, &listed.pane_id)
-            .await
-            .map_err(herdr_fail)?;
-        match check_ready(&listed, &current) {
-            Ok(()) | Err((ErrorCode::AgentBlocked, _)) => {}
-            Err(e) => return Err(e),
-        }
+        let current = self.readable_agent(terminal_id).await?;
         self.checkout(&current)
     }
 
@@ -325,24 +318,34 @@ impl Driver {
         Ok(Response::GitDiff(diff))
     }
 
-    async fn ready_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
+    async fn current_agent(
+        &self,
+        terminal_id: &TerminalId,
+    ) -> Result<(AgentInfo, Result<(), Fail>), Fail> {
         let listed = self.find_agent(terminal_id).await?;
         let current = herdr::agent_get(&self.herdr, &listed.pane_id)
             .await
             .map_err(herdr_fail)?;
-        check_ready(&listed, &current)?;
-        Ok(current)
+        let ready = check_ready(&listed, &current);
+        Ok((current, ready))
+    }
+
+    async fn ready_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
+        let (current, ready) = self.current_agent(terminal_id).await?;
+        ready.map(|()| current)
+    }
+
+    async fn readable_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
+        match self.current_agent(terminal_id).await? {
+            (current, Ok(()) | Err((ErrorCode::AgentBlocked, _))) => Ok(current),
+            (_, Err(e)) => Err(e),
+        }
     }
 
     async fn writable_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
-        let listed = self.find_agent(terminal_id).await?;
-        let current = herdr::agent_get(&self.herdr, &listed.pane_id)
-            .await
-            .map_err(herdr_fail)?;
-        match check_ready(&listed, &current) {
-            Ok(()) => Ok(current),
-            Err((ErrorCode::AgentBlocked, _)) if current.agent.is_some() => Ok(current),
-            Err(e) => Err(e),
+        match self.current_agent(terminal_id).await? {
+            (current, Err((ErrorCode::AgentBlocked, _))) if current.agent.is_some() => Ok(current),
+            (current, ready) => ready.map(|()| current),
         }
     }
 
@@ -764,14 +767,7 @@ impl Driver {
     /// Navigation only, and only while Claude Code shows its banner: Ctrl+End never answers
     /// a dialog, and brings back one scrolled out of view.
     pub async fn scroll_bottom(&self, terminal_id: &TerminalId, auth: &Authorized) -> Reply {
-        let listed = self.find_agent(terminal_id).await?;
-        let current = herdr::agent_get(&self.herdr, &listed.pane_id)
-            .await
-            .map_err(herdr_fail)?;
-        match check_ready(&listed, &current) {
-            Ok(()) | Err((ErrorCode::AgentBlocked, _)) => {}
-            Err(e) => return Err(e),
-        }
+        let current = self.readable_agent(terminal_id).await?;
         if current.agent.as_deref() != Some("claude") {
             return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
         }

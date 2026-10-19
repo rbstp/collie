@@ -193,6 +193,19 @@ pub fn seal_fresh(key: &NotificationKey, approval_id: &str, body: &str) -> Optio
 }
 
 impl Alert {
+    pub(crate) fn sendable(&self) -> Result<(), Rejection> {
+        if self.payload.to_string().len() > 4096
+            || (self.delivery == Delivery::Alert && self.payload.get("enc").is_none())
+            || (matches!(self.delivery, Delivery::LiveActivity { .. })
+                && self.payload["aps"]["content-state"].get("enc").is_none())
+        {
+            return Err(Rejection::Other(
+                "encrypted display unavailable or payload too large".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn headers(&self, bundle_id: &str) -> Headers {
         let (push_type, topic, priority) = match self.delivery {
             Delivery::Alert => (PushType::Alert, bundle_id.to_owned(), 10),
@@ -962,15 +975,7 @@ impl Sender for Apns {
         alert: &'a Alert,
     ) -> BoxFuture<'a, Result<(), Rejection>> {
         Box::pin(async move {
-            if alert.payload.to_string().len() > 4096
-                || (alert.delivery == Delivery::Alert && alert.payload.get("enc").is_none())
-                || (matches!(alert.delivery, Delivery::LiveActivity { .. })
-                    && alert.payload["aps"]["content-state"].get("enc").is_none())
-            {
-                return Err(Rejection::Other(
-                    "encrypted display unavailable or payload too large".into(),
-                ));
-            }
+            alert.sendable()?;
             let headers = alert.headers(&self.bundle_id);
             let collapse_id = match headers.collapse_id.as_deref().map(CollapseId::new) {
                 Some(Ok(c)) => Some(c),

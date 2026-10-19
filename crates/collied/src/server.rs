@@ -1657,10 +1657,18 @@ impl Session<'_> {
                 });
                 return Flow::Continue;
             }
-            Request::TaskArchiveOnMerge(_) if !auth() => (
-                err(ErrorCode::NotPaired, "peer is no longer authorized"),
-                None,
-            ),
+            Request::TaskArchiveOnMerge(_)
+            | Request::PushRegister(_)
+            | Request::PushActivityToken(_)
+            | Request::PushActivityEnd(_)
+            | Request::AttachmentChunk(_)
+                if !auth() =>
+            {
+                (
+                    err(ErrorCode::NotPaired, "peer is no longer authorized"),
+                    None,
+                )
+            }
             Request::TaskArchiveOnMerge(p) => {
                 lock(&self.state.pulls).archive.set(&peer, p.enabled);
                 (Ok(Response::Ok), None)
@@ -1684,10 +1692,6 @@ impl Session<'_> {
                         .unwrap_or_else(|_| err(ErrorCode::Internal, "decision failed"));
                 (reply, Some(Origin::Ran))
             }
-            Request::PushRegister(_) if !auth() => (
-                err(ErrorCode::NotPaired, "peer is no longer authorized"),
-                None,
-            ),
             Request::PushRegister(ref p)
                 if p.relay_grant
                     .as_ref()
@@ -1714,10 +1718,6 @@ impl Session<'_> {
                         tracing::error!(error = %e, "push.register");
                         (ErrorCode::Internal, "could not store the token".to_owned())
                     }),
-                None,
-            ),
-            Request::PushActivityToken(_) | Request::PushActivityEnd(_) if !auth() => (
-                err(ErrorCode::NotPaired, "peer is no longer authorized"),
                 None,
             ),
             Request::PushActivityToken(ref p)
@@ -1790,10 +1790,6 @@ impl Session<'_> {
                 let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
                 (reply, Some(origin))
             }
-            Request::AttachmentChunk(_) if !auth() => (
-                err(ErrorCode::NotPaired, "peer is no longer authorized"),
-                None,
-            ),
             Request::AttachmentChunk(p) => (self.chunk(p).await, None),
             Request::AttachmentCommit(p) => {
                 let upload = self.state.attachments.take(self.id, &peer, &p.upload_id);
