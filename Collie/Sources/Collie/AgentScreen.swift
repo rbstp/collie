@@ -110,7 +110,8 @@ struct AgentScreen: View {
                         neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
                         switchAgent: switchAgent, obscuredTop: obscuredTop, obscuredBottom: obscuredBottom
                     ) { await model.refresh() }
-                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+                        // The keyboard too: the measured bottom inset already counts it, so a frame that stopped above it would count it twice.
+                        .ignoresSafeArea(edges: [.top, .bottom])
                         .onGeometryChange(for: EdgeInsets.self) { $0.safeAreaInsets } action: {
                             obscuredTop = $0.top
                             obscuredBottom = $0.bottom
@@ -146,6 +147,7 @@ struct AgentScreen: View {
                         }
                 }
             }
+            .scrollEdgeEffectHidden(true, for: .top)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if !typingInLandscape {
@@ -574,6 +576,7 @@ private struct AgentTerminal: UIViewRepresentable {
         let view = GhosttyTerminalUIView(fontSize: fontSize)
         // obscuredTop and obscuredBottom already include the bars and the device's safe area.
         view.contentInsetAdjustmentBehavior = .never
+        view.topEdgeEffect.isHidden = true
         let control = UIRefreshControl()
         control.tintColor = .white
         let coordinator = context.coordinator

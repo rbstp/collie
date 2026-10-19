@@ -68,7 +68,6 @@ final class LandscapeTests: XCTestCase {
             XCTAssertTrue(eventually {
                 controls.allSatisfy { shown($0, app) && $0.frame.maxY <= keyboard.frame.minY + 1 }
                     && escape.frame.minY - max(terminal.frame.minY, header.exists ? header.frame.maxY : 0) > 24
-                    && terminal.frame.maxY <= keyboard.frame.minY + 1
             }, "\(orientation.rawValue)\n\(app.debugDescription)")
         }
         app.buttons["Hide keyboard"].tap()
