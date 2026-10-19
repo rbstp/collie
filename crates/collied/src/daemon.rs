@@ -80,9 +80,11 @@ pub async fn login(
         let st = node.status()?;
         match st.backend_state {
             BackendState::Running if st.self_node.is_some() => {
-                print_identity(&st);
-                return check_identity(&node, &st, data_dir, config.tailnet.owner_user_id)
-                    .map(|_| ());
+                let identity = check_identity(&node, &st, data_dir, config.tailnet.owner_user_id);
+                if !own_whois_pending(&identity, deadline) {
+                    print_identity(&st);
+                    return identity.map(|_| ());
+                }
             }
             BackendState::NeedsMachineAuth if !warned_approval => {
                 println!("This machine needs approval by a tailnet admin; waiting.");
@@ -122,6 +124,30 @@ pub async fn login(
         );
         tokio::time::sleep(POLL).await;
     }
+}
+
+async fn wait_identity(
+    deadline: Instant,
+    mut poll: impl FnMut() -> anyhow::Result<Option<i64>>,
+) -> anyhow::Result<i64> {
+    loop {
+        let identity = poll();
+        if !own_whois_pending(&identity, deadline)
+            && let Some(owner) = identity?
+        {
+            return Ok(owner);
+        }
+        tokio::time::sleep(POLL).await;
+    }
+}
+
+// A restarted node starts Running on Tailscale's netmap disk cache, which can lack
+// the user profiles, so whois of its own address is "peer not found" until control
+// sends the live map. Waiting accepts nothing: only a later full check can pass.
+fn own_whois_pending<T>(identity: &anyhow::Result<T>, deadline: Instant) -> bool {
+    identity.as_ref().is_err_and(
+        |e| matches!(e.downcast_ref(), Some(tailnet::Error::Tailscale(m)) if m == "peer not found"),
+    ) && Instant::now() < deadline
 }
 
 fn check_identity(
@@ -231,19 +257,19 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
     let (node, _lock, _) = mac_node(data_dir, config, None)?;
     node.start()?;
     let deadline = Instant::now() + RUN_START_TIMEOUT;
-    loop {
+    wait_identity(deadline, || {
         let st = node.status()?;
         if st.backend_state == BackendState::Running && st.self_node.is_some() {
-            check_identity(&node, &st, data_dir, config.tailnet.owner_user_id)?;
-            break;
+            return check_identity(&node, &st, data_dir, config.tailnet.owner_user_id).map(Some);
         }
         anyhow::ensure!(
             Instant::now() < deadline,
             "tailnet node is {:?} after 60 s; not listening (run `collied login`)",
             st.backend_state
         );
-        tokio::time::sleep(POLL).await;
-    }
+        Ok(None)
+    })
+    .await?;
     let env = herdr::SocketEnv::from_process();
     let herdr_socket = herdr::resolve_socket_path(config.herdr.session.as_deref(), &env)?;
     let apns = push::sender(config)?;
@@ -284,6 +310,48 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unverified(e: tailnet::Error) -> anyhow::Result<Option<i64>> {
+        Err(anyhow::Error::new(e).context("Could not verify Collie's embedded Tailscale ownership"))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn identity_waits_for_own_whois_after_restart() {
+        let mut polls = 0;
+        let owner = wait_identity(Instant::now() + RUN_START_TIMEOUT, || {
+            polls += 1;
+            match polls {
+                1 => Ok(None),
+                2 | 3 => unverified(tailnet::Error::Tailscale("peer not found".into())),
+                _ => Ok(Some(7)),
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!((owner, polls), (7, 4));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn identity_fails_closed_on_mismatch_and_after_deadline() {
+        let mut polls = 0;
+        let err = wait_identity(Instant::now() + RUN_START_TIMEOUT, || {
+            polls += 1;
+            unverified(tailnet::Error::Identity("mismatch"))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(polls, 1);
+        assert!(err.downcast_ref::<tailnet::Error>().is_some());
+
+        let deadline = Instant::now() + POLL;
+        let err = wait_identity(deadline, || {
+            unverified(tailnet::Error::Tailscale("peer not found".into()))
+        })
+        .await
+        .unwrap_err();
+        assert!(Instant::now() >= deadline);
+        assert!(err.to_string().starts_with("Could not verify"));
+    }
 
     #[test]
     fn login_browser_opens_once_even_when_open_fails() {
