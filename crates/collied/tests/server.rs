@@ -906,7 +906,7 @@ async fn scenario(
     assert!(saved().get(reused).is_none());
     set_extra(None);
     // A whole reconcile after the change sends its flock.changed before the next sessions
-    // open; `ws` closes with it still queued.
+    // open.
     let ticked = calls("agent.list") + 2;
     let deadline = Instant::now() + Duration::from_secs(5);
     while calls("agent.list") < ticked {
@@ -925,6 +925,23 @@ async fn scenario(
     let mut newest = open(&phone, &target).await;
     send(&mut newest, hello_frame(protocol::PROTOCOL_VERSION)).await;
     result(recv(&mut newest).await);
+    // The reconcile's flock.changed events can still be queued ahead of the close.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while let Some(Ok(Message::Text(t))) = tokio::time::timeout_at(deadline, ws.next())
+        .await
+        .expect("connection still open")
+    {
+        assert!(
+            matches!(
+                serde_json::from_str(&t),
+                Ok(ServerFrame::Event {
+                    event: Event::FlockChanged {},
+                    ..
+                })
+            ),
+            "unexpected frame {t}"
+        );
+    }
     assert_closed(&mut ws).await;
     let mut ws = newest;
 
@@ -1676,7 +1693,6 @@ async fn assert_closed(ws: &mut Ws) {
     loop {
         match tokio::time::timeout(Duration::from_secs(10), ws.next()).await {
             Ok(None | Some(Err(_)) | Some(Ok(Message::Close(_)))) => return,
-            Ok(Some(Ok(Message::Text(t)))) if t.starts_with(r#"{"kind":"event","#) => {}
             Ok(Some(Ok(Message::Text(t)))) => panic!("unexpected frame {t}"),
             Ok(Some(Ok(_))) => {}
             Err(_) => panic!("connection still open"),
