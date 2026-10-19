@@ -199,11 +199,13 @@ pub fn copilot_scrollbar_columns(ansi: &str) -> Option<usize> {
 /// `pane.layout` exceeds by 1 to 3 columns.
 pub fn claude_rule_columns(ansi: &str) -> Option<usize> {
     let mut plain = String::new();
-    ansi.split('\n').rev().find_map(|row| {
-        plain_text(row, &mut plain);
-        let text = plain.trim_end();
-        (!text.is_empty() && text.chars().all(|c| c == '─')).then(|| text.width())
-    })
+    ansi.split('\n')
+        .filter_map(|row| {
+            plain_text(row, &mut plain);
+            let text = plain.trim_end();
+            (!text.is_empty() && text.chars().all(|c| c == '─')).then(|| text.width())
+        })
+        .max()
 }
 
 fn isolated_scrollbar(row: &str, at: usize) -> bool {
@@ -549,6 +551,8 @@ mod tests {
     fn captured_korean_prose_joins_at_the_input_box_rule_width() {
         let screen = include_str!("../tests/fixtures/claude-2.1.303/korean-prose.ansi.txt");
         assert_eq!(claude_rule_columns(screen), Some(49));
+        let status_rule = format!("{screen}\n{}", "─".repeat(20));
+        assert_eq!(claude_rule_columns(&status_rule), Some(49));
         let rows: Vec<u32> = std::iter::once(8).chain(11..=26).collect();
         assert_eq!(soft_wraps(screen, 49), (rows.clone(), vec![]));
         let at_layout_width: Vec<u32> = rows
