@@ -89,6 +89,9 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
 private final class SegmentedControl: UISegmentedControl {
     private var activeTouches = 0
 
+    // UIKit's bottom alignment inset is drawn over, which left the control a point taller and lower than the glass beside it.
+    override var alignmentRectInsets: UIEdgeInsets { .zero }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         activeTouches += touches.count
         super.touchesBegan(touches, with: event)
