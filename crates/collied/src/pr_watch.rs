@@ -883,7 +883,7 @@ mod tests {
         );
         let own = review(
             &reviewed,
-            "RBSTP",
+            "VIEWER",
             &format!("{url}#pullrequestreview-2"),
             "2026-10-14T00:00:01Z",
         );
