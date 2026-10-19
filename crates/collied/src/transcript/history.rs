@@ -618,7 +618,7 @@ pub(super) fn command(s: &str) -> Option<String> {
 }
 
 /// Claude 5.1 and later write the progress update before a tool call as a second thinking block.
-fn writes_updates_as_thinking(model: &str) -> bool {
+pub(super) fn writes_updates_as_thinking(model: &str) -> bool {
     let number = |p: Option<&str>| {
         let p = p?;
         let n = p.bytes().take_while(u8::is_ascii_digit).count();
