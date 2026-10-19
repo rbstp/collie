@@ -670,7 +670,8 @@ async fn scenario(
         drop(gone);
         tokio::time::sleep(Duration::from_millis(200)).await;
         let before = reads();
-        tokio::time::sleep(Duration::from_millis(1100)).await;
+        // Over two reads at the 250 ms rate of a screen that just changed.
+        tokio::time::sleep(Duration::from_millis(600)).await;
         assert_eq!(reads(), before, "disconnected session kept reading");
     }
 
@@ -904,8 +905,14 @@ async fn scenario(
     }
     assert!(saved().get(reused).is_none());
     set_extra(None);
-    // The reconcile's flock.changed for the closed pane.
-    while let Ok(Some(_)) = tokio::time::timeout(Duration::from_secs(3), ws.next()).await {}
+    // A whole reconcile after the change sends its flock.changed before the next sessions
+    // open; `ws` closes with it still queued.
+    let ticked = calls("agent.list") + 2;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls("agent.list") < ticked {
+        assert!(Instant::now() < deadline, "no reconcile tick");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     println!("a fifth session from one node evicts its oldest");
     let mut extra = Vec::new();
@@ -1669,6 +1676,7 @@ async fn assert_closed(ws: &mut Ws) {
     loop {
         match tokio::time::timeout(Duration::from_secs(10), ws.next()).await {
             Ok(None | Some(Err(_)) | Some(Ok(Message::Close(_)))) => return,
+            Ok(Some(Ok(Message::Text(t)))) if t.starts_with(r#"{"kind":"event","#) => {}
             Ok(Some(Ok(Message::Text(t)))) => panic!("unexpected frame {t}"),
             Ok(Some(Ok(_))) => {}
             Err(_) => panic!("connection still open"),
