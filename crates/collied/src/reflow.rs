@@ -14,18 +14,22 @@ enum Prev {
 
 /// The rows of a Claude Code read (split on `\n`) that continue a paragraph it wrapped at the
 /// pane's `cols`, as `(wraps, splits)` of a `TerminalRead`. Only prose under an indent-0 `⏺`
-/// or `※` row counts; a row that only might continue the one above never does. A shaded sent
-/// prompt joins only after a row Claude Code ended with a space in the text's style.
+/// or `※` row counts; a row that only might continue the one above never does. A numbered item
+/// continues past its number or, as Claude Code 2.1.303 drew items with blank rows between
+/// them, under it. A shaded sent prompt, wrapped at `cols - 3`, joins only after a row Claude
+/// Code ended with a space in the text's style.
 pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let (mut wraps, mut splits) = (Vec::new(), Vec::new());
     let mut prose = false;
     let mut prompt: Option<bool> = None;
     let mut prev = Prev::Start;
     let mut wrap = Wrap::default();
+    let mut numbered = None;
     let (mut plain, mut tail) = (String::new(), String::new());
     let rows: Vec<&str> = ansi.split('\n').collect();
     for (i, &row) in rows.iter().enumerate() {
         let mut above = std::mem::take(&mut wrap);
+        let item = numbered.take();
         plain_text(row, &mut plain);
         let trimmed = plain.trim_end();
         let s = trimmed.trim_start_matches(' ');
@@ -50,7 +54,7 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             continue;
         }
         if let Some(spaced) = prompt.filter(|_| shaded_start(row)) {
-            let width = cols.saturating_sub(2);
+            let width = cols.saturating_sub(3);
             if spaced
                 && ind == 2
                 && matches!(prev, Prev::Row(2))
@@ -81,11 +85,17 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
         }
         if let Some(len) = list_marker(s) {
             let rest = s[len..].trim_start_matches(' ');
+            numbered = s
+                .starts_with(|c: char| c.is_ascii_digit())
+                .then(|| (ind, s.to_owned()));
             prev = row_above(&mut tail, rest, ind + s[..s.len() - rest.len()].width());
             continue;
         }
         prev = match prev {
-            Prev::Row(hang) if hang == ind => {
+            Prev::Row(hang) if hang == ind || item.as_ref().is_some_and(|(at, _)| *at == ind) => {
+                if let Some((_, item)) = item.filter(|_| hang != ind) {
+                    tail = item;
+                }
                 let width = cols.saturating_sub(ind);
                 if tail.width() <= width {
                     let at = u32::try_from(i).unwrap_or(u32::MAX);
@@ -567,6 +577,16 @@ mod tests {
     }
 
     #[test]
+    fn captured_numbered_items_and_sent_prompt_join_at_the_input_box_rule_width() {
+        let reply = include_str!("../tests/fixtures/claude-2.1.303/reply-list.ansi.txt");
+        assert_eq!(claude_rule_columns(reply, 206), Some(206));
+        assert_eq!(soft_wraps(reply, 206), (vec![3, 6, 9, 12], vec![]));
+        let sent = include_str!("../tests/fixtures/claude-2.1.303/sent-prompt.ansi.txt");
+        assert_eq!(claude_rule_columns(sent, 206), Some(206));
+        assert_eq!(soft_wraps(sent, 206), (vec![3], vec![]));
+    }
+
+    #[test]
     fn captured_codex_prose_joins_at_the_pane_width() {
         let screen = include_str!("../tests/fixtures/codex-2026-10-09/prose.ansi.txt");
         assert_eq!(soft_wraps_for("codex", screen, 186), (vec![1], vec![]));
@@ -1007,6 +1027,8 @@ mod tests {
             "  and the next paragraph.",
             "  - an item that ends at the very edge.",
             "  - Next item.",
+            "  3. A short numbered item.",
+            "  Next row at the marker's indent.",
             "  * a Jira item that runs on and on to the",
             "  next row which also runs onto the next",
             "  row.",
