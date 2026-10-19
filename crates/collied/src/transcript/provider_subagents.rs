@@ -11,6 +11,9 @@ use super::subagents::{bounded, timestamp_ms};
 use super::{MAX_LISTED, civil, is_session_id, open, uuid_v7_ms};
 
 const READ_BYTES: u64 = 512 * 1024;
+// One events.jsonl carries every child's records and reaches tens of MB; a fresh scan shows
+// nothing until caught up, so it must catch up within a few 1 s refreshes.
+const COPILOT_READ_BYTES: u64 = 16 * 1024 * 1024;
 const LINE_BYTES: usize = 64 * 1024;
 const MAX_FILES: usize = 8;
 const MAX_ENTRIES: usize = 256;
@@ -102,7 +105,9 @@ impl Live {
                 ..Scan::default()
             };
         }
-        let caught_up = scan.read(|s, v, ordinal| s.copilot(v, ordinal, session, epoch));
+        let caught_up = scan.read(COPILOT_READ_BYTES, |s, v, ordinal| {
+            s.copilot(v, ordinal, session, epoch)
+        });
         // A later unread completion must not leave an old start displayed as running.
         (
             if caught_up {
@@ -227,7 +232,7 @@ impl Live {
                 }
                 opened += 1;
             }
-            if scan.read(|s, v, ordinal| s.codex(v, ordinal, id, session)) {
+            if scan.read(READ_BYTES, |s, v, ordinal| s.codex(v, ordinal, id, session)) {
                 summaries.extend(
                     scan.agents
                         .iter()
@@ -255,7 +260,7 @@ impl Scan {
             })
     }
 
-    fn read(&mut self, mut apply: impl FnMut(&mut Self, &Value, u64)) -> bool {
+    fn read(&mut self, budget: u64, mut apply: impl FnMut(&mut Self, &Value, u64)) -> bool {
         if self.current() {
             return true;
         }
@@ -291,7 +296,7 @@ impl Scan {
         let mut bytes = Vec::new();
         if file.seek(SeekFrom::Start(self.offset)).is_err()
             || file
-                .take(READ_BYTES.min(len.saturating_sub(self.offset)))
+                .take(budget.min(len.saturating_sub(self.offset)))
                 .read_to_end(&mut bytes)
                 .is_err()
         {
@@ -994,7 +999,10 @@ mod tests {
         let s = Setup::new();
         let mut live = Live::default();
         std::fs::write(&s.events, prefix(COPILOT, 2)).unwrap();
-        append(&s.events, &"x".repeat(READ_BYTES as usize + LINE_BYTES));
+        append(
+            &s.events,
+            &"x".repeat(COPILOT_READ_BYTES as usize + LINE_BYTES),
+        );
         append(
             &s.events,
             &format!("\n{}\n", COPILOT.lines().nth(10).unwrap()),
@@ -1002,7 +1010,7 @@ mod tests {
         let (agents, truncated) = s.copilot(&mut live);
         assert!(agents.is_empty());
         assert!(truncated);
-        assert!(live.copilot[SESSION].offset <= READ_BYTES);
+        assert!(live.copilot[SESSION].offset <= COPILOT_READ_BYTES);
         let (agents, truncated) = s.copilot(&mut live);
         assert!(agents.is_empty());
         assert!(!truncated);
@@ -1012,6 +1020,29 @@ mod tests {
         assert_eq!(s.copilot(&mut live).0.len(), 1);
         live.retain(|_| false);
         assert!(live.copilot.is_empty());
+    }
+
+    #[test]
+    fn copilot_shows_a_new_subagent_behind_a_long_history_on_the_first_refresh() {
+        let s = Setup::new();
+        let mut live = Live::default();
+        let filler = format!(
+            "{}\n",
+            serde_json::json!({"type": "session.info", "data": {"message": "x".repeat(LINE_BYTES / 2)}})
+        );
+        std::fs::write(
+            &s.events,
+            format!(
+                "{}{}{}\n",
+                prefix(COPILOT, 1),
+                filler.repeat(8 * 1024 * 1024 / filler.len()),
+                COPILOT.lines().nth(1).unwrap()
+            ),
+        )
+        .unwrap();
+        let (agents, truncated) = s.copilot(&mut live);
+        assert_eq!(agents.len(), 1);
+        assert!(!truncated);
     }
 
     #[test]
