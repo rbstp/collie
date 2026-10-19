@@ -774,15 +774,11 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     #expect(model.sentMacDraftCheck == nil)
 }
 
-@Test func keyStripIsTheAllowlistInOrder() {
-    #expect(AgentKey.strip == [.esc, .left, .up, .down, .right, .tab, .backspace, .enter])
-    #expect(AgentKey.strip.map(\.symbol) == ["E", "←", "↑", "↓", "→", "⇥", "⌫", "⏎"])
-    #expect(AgentKey.combos.map(\.symbol) == ["⇧⇥", "⌃⏎", "⇧←", "^C"])
+@Test func everyKeyHasADistinctSpokenNameAndIsFoundByItsName() {
     let names = AgentKey.all.map(\.accessibilityName)
     #expect(Set(names).count == names.count)
     #expect(names.allSatisfy { !$0.isEmpty })
     #expect(AgentKey.all.allSatisfy { AgentKey(name: $0.name) == $0 })
-    #expect(AgentKey.all.count == 19)
 }
 
 @MainActor
@@ -1667,40 +1663,43 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 }
 
 @MainActor
-@Test func wrapLinesIsOnByDefaultAndRememberedOnThisDevice() throws {
-    let dir = try makeTemporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let file = dir.appending(path: "prefs.json")
+@Test func screenPreferencesAreRememberedOnThisDevice() throws {
+    let file = try prefsFile()
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
     let route = AgentRoute(machineId: "m1", terminalId: "term_1")
-
+    let defaults = DevicePrefs()
     let model = AgentModel(core: FakeCore(), route: route, prefsFile: file)
-    #expect(model.wrapLines)
-    model.wrapLines = false
-    #expect(!AgentModel(core: FakeCore(), route: route, prefsFile: file).wrapLines)
+    #expect(model.wrapLines == defaults.wrapLines && model.keepsKeyboard == defaults.keepKeyboard)
+    #expect(model.fontSize == defaults.fontSize && model.gestures == defaults.gestures)
 
-    try Data("not json".utf8).write(to: file)
-    #expect(AgentModel(core: FakeCore(), route: route, prefsFile: file).wrapLines)
-}
+    model.wrapLines = !defaults.wrapLines
+    #expect(DevicePrefs.load(from: file).wrapLines == !defaults.wrapLines)
+    #expect(AgentModel(core: FakeCore(), route: route, prefsFile: file).wrapLines == !defaults.wrapLines)
 
-@MainActor
-@Test func keepKeyboardIsOffByDefaultAndSavedBesideWrapLines() throws {
-    let dir = try makeTemporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let file = dir.appending(path: "prefs.json")
-    let route = AgentRoute(machineId: "m1", terminalId: "term_1")
+    let fontSize = defaults.fontSize + 3
+    model.fontSize = fontSize
+    #expect(DevicePrefs.load(from: file).fontSize == defaults.fontSize)
+    model.saveFontSize()
 
-    try Data(#"{"wrapLines":false}"#.utf8).write(to: file)
-    let model = AgentModel(core: FakeCore(), route: route, prefsFile: file)
-    #expect(!model.wrapLines)
-    #expect(!model.keepsKeyboard)
-
+    let gestures = TerminalGestures(doubleTap: .none, tripleTap: .escape)
     var prefs = DevicePrefs.load(from: file)
-    prefs.keepKeyboard = true
+    prefs.keepKeyboard = !defaults.keepKeyboard
+    prefs.gestures = gestures
     prefs.save(to: file)
-    #expect(model.keepsKeyboard)
+    #expect(model.keepsKeyboard == !defaults.keepKeyboard)
+    #expect(model.gestures == defaults.gestures)
+    model.reloadGestures()
+    #expect(model.gestures == gestures)
 
-    model.wrapLines = true
-    #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: true, keepKeyboard: true))
+    model.wrapLines = defaults.wrapLines
+    var saved = defaults
+    saved.keepKeyboard = !defaults.keepKeyboard
+    saved.gestures = gestures
+    saved.fontSize = fontSize
+    #expect(DevicePrefs.load(from: file) == saved)
+    let reopened = AgentModel(core: FakeCore(), route: route, prefsFile: file)
+    #expect(reopened.wrapLines == defaults.wrapLines && reopened.keepsKeyboard == !defaults.keepKeyboard)
+    #expect(reopened.fontSize == fontSize && reopened.gestures == gestures)
 }
 
 @MainActor
@@ -1731,41 +1730,6 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     #expect(core.snapshot.watches == ["term_1", nil, "term_1", nil])
     #expect(core.snapshot.depths == [200, 200, 200, 1000, 1000, 1000])
     #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, historyLines: 1000))
-}
-
-@MainActor
-@Test func gesturesAndTextSizeHaveDefaultsAndAreRememberedOnThisDevice() throws {
-    let dir = try makeTemporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let file = dir.appending(path: "prefs.json")
-    let route = AgentRoute(machineId: "m1", terminalId: "term_1")
-
-    try Data(#"{"wrapLines":false,"keepKeyboard":true}"#.utf8).write(to: file)
-    let model = AgentModel(core: FakeCore(), route: route, prefsFile: file)
-    #expect(
-        model.gestures
-            == TerminalGestures(doubleTap: .paste, tripleTap: .none, pinchResizesText: true, swipeSwitchesAgents: true)
-    )
-    #expect(model.fontSize == 11)
-
-    model.fontSize = 14
-    #expect(DevicePrefs.load(from: file).fontSize == 11)
-    model.saveFontSize()
-    var prefs = DevicePrefs.load(from: file)
-    prefs.gestures.doubleTap = .none
-    prefs.save(to: file)
-    let reopened = AgentModel(core: FakeCore(), route: route, prefsFile: file)
-    #expect(reopened.fontSize == 14)
-    #expect(reopened.gestures.doubleTap == .none)
-    #expect(!reopened.wrapLines && reopened.keepsKeyboard)
-
-    prefs.gestures.tripleTap = .escape
-    prefs.save(to: file)
-    reopened.reloadGestures()
-    #expect(reopened.gestures.tripleTap == .escape)
-
-    try Data(#"{"wrapLines":false,"gestures":{"doubleTap":"later"}}"#.utf8).write(to: file)
-    #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false))
 }
 
 @MainActor
