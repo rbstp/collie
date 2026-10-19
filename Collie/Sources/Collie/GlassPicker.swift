@@ -88,12 +88,14 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
 /// the frame is restored because UIKit grows the re-added control to its own height.
 private final class SegmentedControl: UISegmentedControl {
     private var activeTouches = 0
+    private var reset: DispatchWorkItem?
 
     // UIKit's bottom alignment inset is drawn over, which left the control a point taller and lower than the glass beside it.
     override var alignmentRectInsets: UIEdgeInsets { .zero }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         activeTouches += touches.count
+        reset?.cancel()
         super.touchesBegan(touches, with: event)
     }
 
@@ -109,12 +111,16 @@ private final class SegmentedControl: UISegmentedControl {
 
     private func released(_ touches: Set<UITouch>) {
         activeTouches = max(0, activeTouches - touches.count)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self, activeTouches == 0, let superview else { return }
+        guard activeTouches == 0 else { return }
+        reset?.cancel()
+        let reset = DispatchWorkItem { [weak self] in
+            guard let self, let superview else { return }
             let frame = frame
             removeFromSuperview()
             superview.addSubview(self)
             self.frame = frame
         }
+        self.reset = reset
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: reset)
     }
 }
