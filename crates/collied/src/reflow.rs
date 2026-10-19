@@ -195,6 +195,17 @@ pub fn copilot_scrollbar_columns(ansi: &str) -> Option<usize> {
         .find_map(|(width, count)| (count > 1).then_some(width))
 }
 
+/// Claude Code draws its input box rules at exactly the terminal width, which herdr's
+/// `pane.layout` exceeds by 1 to 3 columns.
+pub fn claude_rule_columns(ansi: &str) -> Option<usize> {
+    let mut plain = String::new();
+    ansi.split('\n').rev().find_map(|row| {
+        plain_text(row, &mut plain);
+        let text = plain.trim_end();
+        (!text.is_empty() && text.chars().all(|c| c == '─')).then(|| text.width())
+    })
+}
+
 fn isolated_scrollbar(row: &str, at: usize) -> bool {
     row[..at].rsplit_once("\u{1b}[").is_some_and(|(head, sgr)| {
         head.ends_with("\u{1b}[0m") && sgr.starts_with("38;") && sgr.ends_with('m')
@@ -532,6 +543,19 @@ mod tests {
             soft_wraps_for("claude", &LIVE.join("\r\n"), 189),
             joins(LIVE, 189)
         );
+    }
+
+    #[test]
+    fn captured_korean_prose_joins_at_the_input_box_rule_width() {
+        let screen = include_str!("../tests/fixtures/claude-2.1.303/korean-prose.ansi.txt");
+        assert_eq!(claude_rule_columns(screen), Some(49));
+        let rows: Vec<u32> = std::iter::once(8).chain(11..=26).collect();
+        assert_eq!(soft_wraps(screen, 49), (rows.clone(), vec![]));
+        let at_layout_width: Vec<u32> = rows
+            .into_iter()
+            .filter(|i| ![16, 20, 22, 26].contains(i))
+            .collect();
+        assert_eq!(soft_wraps(screen, 51), (at_layout_width, vec![]));
     }
 
     #[test]
