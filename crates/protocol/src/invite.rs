@@ -107,7 +107,7 @@ mod tests {
 
     fn invite() -> PairingInvite {
         PairingInvite {
-            host: "collie-devolutions496.tail1234.ts.net".into(),
+            host: "collie-work-mac.tail1234.ts.net".into(),
             port: DEFAULT_PORT,
             node_id: "nAbC123CNTRL".into(),
             key: KeyPin::new("K".repeat(43)).unwrap(),

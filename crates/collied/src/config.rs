@@ -639,8 +639,8 @@ mod tests {
     #[test]
     fn hostname_sanitized() {
         assert_eq!(
-            default_hostname("Richards-MacBook-Pro.local"),
-            "collie-richards-macbook-pro"
+            default_hostname("Alexs-MacBook-Pro.local"),
+            "collie-alexs-macbook-pro"
         );
         assert_eq!(default_hostname("Mac Studio_2"), "collie-mac-studio-2");
         assert_eq!(default_hostname("-x-"), "collie-x");
