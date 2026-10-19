@@ -48,7 +48,8 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             let body = s.strip_prefix(['⏺', '※']);
             prose = body.is_some();
             prev = match body.map(|b| b.trim_start_matches([' ', '\u{a0}'])) {
-                Some(b) if !tool_header(b) => row_above(&mut tail, b, 2),
+                Some(b) if !tool_header(b) => item_above(&mut tail, &mut numbered, b, 2)
+                    .unwrap_or_else(|| row_above(&mut tail, b, 2)),
                 _ => Prev::Held,
             };
             continue;
@@ -83,12 +84,8 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             prev = Prev::Held;
             continue;
         }
-        if let Some(len) = list_marker(s) {
-            let rest = s[len..].trim_start_matches(' ');
-            numbered = s
-                .starts_with(|c: char| c.is_ascii_digit())
-                .then(|| (ind, s.to_owned()));
-            prev = row_above(&mut tail, rest, ind + s[..s.len() - rest.len()].width());
+        if let Some(row) = item_above(&mut tail, &mut numbered, s, ind) {
+            prev = row;
             continue;
         }
         prev = match prev {
@@ -469,6 +466,24 @@ fn row_above(tail: &mut String, text: &str, hang: usize) -> Prev {
     Prev::Row(hang)
 }
 
+fn item_above(
+    tail: &mut String,
+    numbered: &mut Option<(usize, String)>,
+    s: &str,
+    ind: usize,
+) -> Option<Prev> {
+    let len = list_marker(s)?;
+    let rest = s[len..].trim_start_matches(' ');
+    *numbered = s
+        .starts_with(|c: char| c.is_ascii_digit())
+        .then(|| (ind, s.to_owned()));
+    Some(row_above(
+        tail,
+        rest,
+        ind + s[..s.len() - rest.len()].width(),
+    ))
+}
+
 /// The characters `draft::cells` reads from `row`, without CR, into `out`.
 fn plain_text(row: &str, out: &mut String) {
     out.clear();
@@ -584,6 +599,25 @@ mod tests {
         let sent = include_str!("../tests/fixtures/claude-2.1.303/sent-prompt.ansi.txt");
         assert_eq!(claude_rule_columns(sent, 206), Some(206));
         assert_eq!(soft_wraps(sent, 206), (vec![3], vec![]));
+    }
+
+    #[test]
+    fn a_reply_that_starts_with_a_list_joins_its_first_item() {
+        let reply =
+            include_str!("../tests/fixtures/claude-2.1.303/reply-starts-with-list.ansi.txt");
+        assert_eq!(soft_wraps(reply, 206), (vec![1, 3, 5, 7], vec![]));
+        let rows = [
+            "⏺ 1. The first item runs on to the next",
+            "  row under its number.",
+            "",
+            "  2. The second item.",
+            "⏺ - A bullet that wraps onto a row under",
+            "    its text.",
+            "⏺ 1. A short first item.",
+            "     Next row at the text's indent.",
+            "  Next row at the number's indent.",
+        ];
+        assert_eq!(wraps(&rows, 40), [1, 5]);
     }
 
     #[test]
