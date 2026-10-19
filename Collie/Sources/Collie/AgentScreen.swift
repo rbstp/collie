@@ -115,6 +115,7 @@ struct AgentScreen: View {
                             obscuredTop = $0.top
                             obscuredBottom = $0.bottom
                         }
+                        .background { Color(uiColor: GhosttyTerminalUIView.backgroundColor).ignoresSafeArea() }
                         .overlay {
                             if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
                                 ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)

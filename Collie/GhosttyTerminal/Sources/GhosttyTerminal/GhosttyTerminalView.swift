@@ -6,6 +6,7 @@ import UIKit
 /// backing store larger than the screen.
 public final class GhosttyTerminalUIView: UIScrollView {
     static let background = TerminalRGB(0x28, 0x2C, 0x34)
+    public static let backgroundColor = UIColor(background)
     static let foreground = TerminalRGB(0xFF, 0xFF, 0xFF)
 
     public var fontSize: CGFloat {

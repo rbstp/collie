@@ -64,12 +64,6 @@ final class SampleWorkspaceTests: XCTestCase {
         let prompt = app.textFields["Prompt the agent"]
         prompt.tap()
         prompt.typeText("Show sample result")
-        // The simulator can scramble fast keystrokes while the conversation re-anchors under the growing composer.
-        let typed = app.textFields.matching(NSPredicate(format: "value == %@", "Show sample result")).firstMatch
-        for _ in 0..<3 where !typed.appears(within: 5) {
-            app.buttons["Clear text"].tap()
-            prompt.typeText("Show sample result")
-        }
         app.buttons["Send"].tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Simulated response to: Show sample result")).firstMatch.appears(within: 10))
         let screenshot = XCTAttachment(screenshot: app.screenshot())
