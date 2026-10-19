@@ -46,9 +46,7 @@ struct RelayEnrollmentState: Codable, Sendable {
     var previousGrantExpiry: UInt64?
     var pendingRevocationExpiry: [String: UInt64] = [:]
     var pendingRouteRevocations: [RelayPendingRouteRevocation] = []
-    var installationRevocationExpiry: UInt64?
     var pendingPairingRevocations: [String] = []
-    var pendingInstallationRevocation = false
 }
 
 enum RelayEnrollmentError: Error {
@@ -218,7 +216,7 @@ actor RelayEnrollment {
             try Task.checkCancellation()
             guard !state.requiresPairing else { throw RelayEnrollmentError.pairAgain }
             try await retryRevocations()
-            guard !state.pendingPairingRevocations.contains(pairingId), !state.pendingInstallationRevocation else {
+            guard !state.pendingPairingRevocations.contains(pairingId) else {
                 throw RelayEnrollmentError.removedPairing
             }
             try await enroll()
@@ -243,7 +241,7 @@ actor RelayEnrollment {
     private var lastGrantExpiry: UInt64 {
         (state.routes.map(\.grant.expiresAt) + state.pendingRoutes.map(\.expiresAt)
             + Array(state.pendingRevocationExpiry.values) + state.pendingRouteRevocations.map(\.expiresAt)
-            + [state.previousGrantExpiry ?? 0, state.installationRevocationExpiry ?? 0]).max() ?? 0
+            + [state.previousGrantExpiry ?? 0]).max() ?? 0
     }
 
     private func registerRoute(pairingId: String, activityId: String?, destination: String, refresh: Bool = false, tokenEvent: UInt64 = 0) async throws -> RelayRouteGrant {
@@ -358,22 +356,6 @@ actor RelayEnrollment {
         } catch { await gate.leave(); throw error }
     }
 
-    func revokeInstallation() async throws {
-        await gate.enter()
-        do {
-            state.installationRevocationExpiry = lastGrantExpiry
-            state.pendingInstallationRevocation = true
-            state.routes.removeAll()
-            state.pendingRoutes.removeAll()
-            try persist(state)
-            try await retryRevocations()
-            await gate.leave()
-        } catch {
-            await gate.leave()
-            throw error
-        }
-    }
-
     func retryPendingRevocations() async throws {
         await gate.enter()
         do { try await retryRevocations(); await gate.leave() }
@@ -476,31 +458,14 @@ actor RelayEnrollment {
         state.pendingRevocationExpiry = state.pendingRevocationExpiry.filter { $0.value > now }
         state.pendingRouteRevocations.removeAll { $0.expiresAt <= now }
         if let expiry = state.previousGrantExpiry, expiry <= now { state.previousGrantExpiry = nil }
-        if state.pendingInstallationRevocation, (state.installationRevocationExpiry ?? UInt64.max) <= now {
-            state = RelayEnrollmentState()
-            registeredTokenEvents.removeAll()
-            pendingTokenEvents.removeAll()
-            try persist(state)
-            return
-        }
         if previousCount != state.pendingPairingRevocations.count + state.pendingRouteRevocations.count || previousExpiry != state.previousGrantExpiry {
             try persist(state)
         }
         guard state.enrolled else {
-            guard !state.pendingPairingRevocations.isEmpty || !state.pendingRouteRevocations.isEmpty || state.pendingInstallationRevocation else { return }
+            guard !state.pendingPairingRevocations.isEmpty || !state.pendingRouteRevocations.isEmpty else { return }
             state.pendingPairingRevocations.removeAll()
             state.pendingRevocationExpiry.removeAll()
             state.pendingRouteRevocations.removeAll()
-            state.pendingInstallationRevocation = false
-            try persist(state)
-            return
-        }
-        if state.pendingInstallationRevocation {
-            let result = try await control(common("revoke_installation"))
-            guard result.result == "revoked" else { throw RelayEnrollmentError.rejected }
-            state = RelayEnrollmentState()
-            registeredTokenEvents.removeAll()
-            pendingTokenEvents.removeAll()
             try persist(state)
             return
         }
