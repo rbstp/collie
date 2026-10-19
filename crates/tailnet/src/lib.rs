@@ -217,9 +217,12 @@ impl Node {
             sys::tailscale_listen(self.sd(), network.as_ptr(), addr.as_ptr(), &mut fd)
         })?;
         let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        // SAFETY: libtailscale never closes the listener fd it returns; only this OwnedFd
+        // closes it, after deregistration.
+        let fd = unsafe { AsyncFd::register(fd) }.map_err(std::io::Error::from)?;
         Ok(Listener {
             node: self.clone(),
-            fd: AsyncFd::new(fd)?,
+            fd,
         })
     }
 
