@@ -560,7 +560,7 @@ mod tests {
         assert!(AgentKind::new("Claude").is_err());
         assert!(Cwd::new("relative/path").is_err());
         assert!(Label::new(" padded").is_err());
-        assert!(Label::new("Richard's iPhone").is_ok());
+        assert!(Label::new("Alex's iPhone").is_ok());
         assert!(Label::new("iPhone\u{202E}enohPi").is_err());
         assert!(Label::new("i\u{200B}Phone").is_err());
         assert!(Label::new("iPhone\u{E0041}").is_err());
