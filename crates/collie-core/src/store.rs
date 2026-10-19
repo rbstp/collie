@@ -12,14 +12,10 @@ pub struct Machine {
     pub host: String,
     pub port: u16,
     pub node_id: String,
-    #[serde(default)]
     #[uniffi(default = 0)]
     pub owner_user_id: i64,
     /// Presentation only; authorization uses the paired user, StableID and TLS key.
-    #[serde(default)]
     pub kind: MachineKind,
-    /// Empty for a pairing made before mutual TLS, which must pair again.
-    #[serde(default)]
     pub key: String,
     /// The terminal key this phone sent at pairing, base64url; empty when it sent none.
     #[serde(default)]
@@ -32,12 +28,9 @@ pub struct Machine {
     pub default_label: Option<String>,
 }
 
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 #[serde(rename_all = "lowercase")]
 pub enum MachineKind {
-    #[default]
     Mac,
     Linux,
 }
@@ -174,21 +167,9 @@ mod tests {
     }
 
     #[test]
-    fn entries_from_before_linux_support_are_macs() {
+    fn linux_kind_round_trips() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(
-            dir.path().join(FILE),
-            br#"[{"id":"a","label":"mac","host":"mac.tail1234.ts.net","port":8457,"node_id":"nMAC"}]"#,
-        )
-        .unwrap();
         let store = MachineStore::new(dir.path().to_owned());
-        assert_eq!(
-            store.load().unwrap(),
-            vec![Machine {
-                owner_user_id: 0,
-                ..machine("a")
-            }]
-        );
         let linux = Machine {
             kind: MachineKind::Linux,
             ..machine("b")
@@ -200,6 +181,16 @@ mod tests {
                 .contains(r#""kind": "linux""#)
         );
         assert_eq!(store.load().unwrap(), vec![linux]);
+    }
+
+    #[test]
+    fn an_entry_missing_a_field_sets_the_list_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = br#"[{"id":"a","label":"mac","host":"mac.tail1234.ts.net","port":8457,"node_id":"nMAC"}]"#;
+        fs::write(dir.path().join(FILE), old).unwrap();
+        let store = MachineStore::new(dir.path().to_owned());
+        assert_eq!(store.load().unwrap(), Vec::new());
+        assert_eq!(fs::read(dir.path().join(CORRUPT)).unwrap(), old);
     }
 
     #[test]
@@ -239,12 +230,5 @@ mod tests {
         assert_eq!(a.len(), 32);
         assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
-    }
-    #[test]
-    fn legacy_pairing_has_no_inferred_owner() {
-        let mut saved = serde_json::to_value(machine("legacy")).unwrap();
-        saved.as_object_mut().unwrap().remove("owner_user_id");
-        let legacy: Machine = serde_json::from_value(saved).unwrap();
-        assert_eq!(legacy.owner_user_id, 0);
     }
 }

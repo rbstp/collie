@@ -609,7 +609,7 @@ Doctor's `reach` line reports same-user untagged netmap peers. Zero can mean a p
 
 collied runs on Linux with the same protocol, gate, allowlist and approvals as on macOS. What differs: the build, the paths, the service manager, the listener check and where the APNs key lives. Built and tested on Arch (systemd 261, herdr 0.9.3).
 
-The phone records the verified positive embedded Tailscale user in `machines.json`. Missing/zero legacy owner pins require explicit re-pairing, never inference from a new login. Pairing, reconnects and one-shot background approval/list sessions require the current phone self user and the machine's netmap and fresh whois ownership to match; both nodes must be untagged and unshared. StableID, independent TLS key and hello identity checks remain. `kind` comes from netmap OS metadata at pairing and is presentation only; reconnects retain the existing display kind even if OS metadata changes.
+The phone records the verified positive embedded Tailscale user in `machines.json`. A zero owner pin requires explicit re-pairing, never inference from a new login, and a `machines.json` missing a field is set aside, so its machines are paired again. Pairing, reconnects and one-shot background approval/list sessions require the current phone self user and the machine's netmap and fresh whois ownership to match; both nodes must be untagged and unshared. StableID, independent TLS key and hello identity checks remain. `kind` comes from netmap OS metadata at pairing and is presentation only; reconnects retain the existing display kind even if OS metadata changes.
 
 ### Platforms and build
 
