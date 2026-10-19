@@ -1,6 +1,6 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::draft::separator;
+use crate::draft::{Wrap, separator};
 
 enum Prev {
     /// A row here may start a paragraph.
@@ -21,8 +21,11 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let mut prose = false;
     let mut prompt: Option<bool> = None;
     let mut prev = Prev::Start;
+    let mut wrap = Wrap::default();
     let (mut plain, mut tail) = (String::new(), String::new());
-    for (i, row) in ansi.split('\n').enumerate() {
+    let rows: Vec<&str> = ansi.split('\n').collect();
+    for (i, &row) in rows.iter().enumerate() {
+        let mut above = std::mem::take(&mut wrap);
         plain_text(row, &mut plain);
         let trimmed = plain.trim_end();
         let s = trimmed.trim_start_matches(' ');
@@ -72,7 +75,7 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             prev = Prev::Start;
             continue;
         }
-        if tool_header(s) {
+        if matches!(prev, Prev::Start) && tool_header(s) {
             prev = Prev::Held;
             continue;
         }
@@ -86,12 +89,36 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                 let width = cols.saturating_sub(ind);
                 if tail.width() <= width {
                     let at = u32::try_from(i).unwrap_or(u32::MAX);
-                    match separator(&tail, s, width) {
-                        " " if wide_cut(&tail, s, width) => splits.push(at),
+                    let below = || {
+                        rows[i + 1..].iter().map(move |r| {
+                            let mut text = String::new();
+                            plain_text(r, &mut text);
+                            let body = text.trim_end().trim_start_matches(' ');
+                            if text.trim_end().len() - body.len() == ind
+                                && list_marker(body).is_none()
+                                && !body.starts_with('⎿')
+                                && !body.starts_with(|c| ('\u{2500}'..='\u{257f}').contains(&c))
+                                && !tool_header(body)
+                            {
+                                body.to_owned()
+                            } else {
+                                String::new()
+                            }
+                        })
+                    };
+                    let row = above;
+                    match above.join(&tail, s, below(), width) {
+                        " " if wide_word_cut(&tail, s, width)
+                            && row.continues(&tail, s, below(), width) =>
+                        {
+                            splits.push(at);
+                            above = row.split(&tail);
+                        }
                         " " => wraps.push(at),
                         "" => splits.push(at),
                         _ => {}
                     }
+                    wrap = above;
                 }
                 row_above(&mut tail, s, ind)
             }
@@ -166,6 +193,21 @@ pub fn copilot_scrollbar_columns(ansi: &str) -> Option<usize> {
         .into_iter()
         .rev()
         .find_map(|(width, count)| (count > 1).then_some(width))
+}
+
+/// Claude Code draws its input box rules at exactly the terminal width, which herdr's
+/// `pane.layout` exceeds by 1 to 3 columns. Rules wider than `max` are scrollback from
+/// before the pane narrowed.
+pub fn claude_rule_columns(ansi: &str, max: usize) -> Option<usize> {
+    let mut plain = String::new();
+    ansi.split('\n')
+        .filter_map(|row| {
+            plain_text(row, &mut plain);
+            let text = plain.trim_end();
+            (!text.is_empty() && text.chars().all(|c| c == '─')).then(|| text.width())
+        })
+        .filter(|&width| width <= max)
+        .max()
 }
 
 fn isolated_scrollbar(row: &str, at: usize) -> bool {
@@ -447,6 +489,14 @@ fn wide_cut(tail: &str, next: &str, width: usize) -> bool {
     wide(tail.chars().next_back()) && wide(next.chars().next()) && tail.width() + 2 > width
 }
 
+/// A [`wide_cut`] that wrap-ansi makes only inside a word longer than a row. Codex wraps with
+/// textwrap, which also breaks between ideographs, so `tui_wraps` keeps [`wide_cut`].
+fn wide_word_cut(tail: &str, next: &str, width: usize) -> bool {
+    let last = tail.rsplit(' ').next().unwrap_or_default().width();
+    let first = next.split(' ').next().unwrap_or_default().width();
+    wide_cut(tail, next, width) && tail.width() + 1 == width && last + first > width
+}
+
 /// The byte length of a list marker such as `-`, `•` or `12.` that a space follows.
 fn list_marker(s: &str) -> Option<usize> {
     let digits = s.bytes().take_while(u8::is_ascii_digit).count();
@@ -497,6 +547,23 @@ mod tests {
             soft_wraps_for("claude", &LIVE.join("\r\n"), 189),
             joins(LIVE, 189)
         );
+    }
+
+    #[test]
+    fn captured_korean_prose_joins_at_the_input_box_rule_width() {
+        let screen = include_str!("../tests/fixtures/claude-2.1.303/korean-prose.ansi.txt");
+        assert_eq!(claude_rule_columns(screen, 51), Some(49));
+        let status_rule = format!("{screen}\n{}", "─".repeat(20));
+        assert_eq!(claude_rule_columns(&status_rule, 51), Some(49));
+        let narrowed = format!("{}\n{screen}", "─".repeat(60));
+        assert_eq!(claude_rule_columns(&narrowed, 51), Some(49));
+        let rows: Vec<u32> = std::iter::once(8).chain(11..=26).collect();
+        assert_eq!(soft_wraps(screen, 49), (rows.clone(), vec![]));
+        let at_layout_width: Vec<u32> = rows
+            .into_iter()
+            .filter(|i| ![16, 20, 22, 26].contains(i))
+            .collect();
+        assert_eq!(soft_wraps(screen, 51), (at_layout_width, vec![]));
     }
 
     #[test]
@@ -574,6 +641,18 @@ mod tests {
         assert_eq!(
             soft_wraps_for("codex", &rows.join("\r\n"), 25),
             (vec![3], vec![])
+        );
+    }
+
+    #[test]
+    fn codex_splits_between_ideographs_cut_short_of_the_edge() {
+        let rows = [
+            format!("• 运行 cargo tests {}", "之".repeat(10)),
+            "  后检查结果。".to_owned(),
+        ];
+        assert_eq!(
+            soft_wraps_for("codex", &rows.join("\r\n"), 40),
+            (vec![], vec![1])
         );
     }
 
@@ -967,6 +1046,23 @@ mod tests {
     }
 
     #[test]
+    fn a_prose_row_that_starts_like_a_call_still_joins() {
+        let rows = [
+            "⏺ 두 쪽은 별도의 공용 서버 없이 앱 안에 내장된",
+            "  libtailscale(고정된 서브모듈에 자체 패치를",
+            "  적용한 버전)이 만든 tailnet 위에서 상호 TLS로",
+            "  서로를 인증합니다.",
+        ];
+        assert_eq!(joins(&rows, 49), (vec![1, 2, 3], vec![]));
+        let rows = [
+            "⏺ The daemon and the phone talk over a",
+            "  foo(bar) call that the core makes for",
+            "  every request.",
+        ];
+        assert_eq!(joins(&rows, 40), (vec![1, 2], vec![]));
+    }
+
+    #[test]
     fn rows_wider_than_the_pane_never_join() {
         let wide = format!("⏺ {}", "word ".repeat(10));
         let rows = [wide.as_str(), "  next"];
@@ -991,6 +1087,50 @@ mod tests {
     }
 
     #[test]
+    fn rows_after_a_full_row_hold_a_column_less() {
+        // Claude Code 2.1.302 replied with these at 46 columns.
+        let row = |mark: &str, text: &str| format!("{mark} {text}");
+        let (a, b, c, d) = (
+            "a".repeat(20),
+            "b".repeat(25),
+            "c".repeat(20),
+            "d".repeat(25),
+        );
+        let rows = [row("⏺", &format!("{a} {b}")), row(" ", &c), row(" ", &d)];
+        assert_eq!(
+            joins(&rows.each_ref().map(String::as_str), 48),
+            (vec![1, 2], vec![])
+        );
+        for (first, next) in [
+            (
+                "한국어 한국어 한국어 한국어 한국어 문장 한국어",
+                "다음 문장",
+            ),
+            ("한국어 한국어 한국어 한국어 한국어 대한민국어", "다음"),
+        ] {
+            let rows = [row("⏺", first), row(" ", next)];
+            assert_eq!(
+                joins(&rows.each_ref().map(String::as_str), 48),
+                (vec![1], vec![])
+            );
+        }
+    }
+
+    #[test]
+    fn a_full_row_does_not_read_ahead_into_a_list() {
+        let url = format!("https://example.com/{}", "a".repeat(26));
+        let rows = [
+            "⏺ Run this:".to_owned(),
+            format!("  {url}"),
+            "  - item".to_owned(),
+        ];
+        assert_eq!(
+            joins(&rows.each_ref().map(String::as_str), 48),
+            (vec![1], vec![])
+        );
+    }
+
+    #[test]
     fn wide_characters_cut_short_of_the_edge_split() {
         let row = format!("⏺ {}", "中".repeat(93));
         let rows = [row.as_str(), "  文字。"];
@@ -1003,37 +1143,55 @@ mod tests {
         fn prose_joins_where_it_wrapped(
             (paragraphs, cols) in (prop::collection::vec(model::text(), 1..3), 6..26usize)
                 .prop_filter("unreadable", |(paragraphs, cols)| {
-                    let wide = |c: Option<char>| c.and_then(UnicodeWidthChar::width) == Some(2);
-                    // `wide_cut` reads a soft wrap between wide characters at the edge as a
-                    // split word.
+                    // The readers do not follow a word over a row a run of wide characters
+                    // left one column short, and a blank row (only the hidden space after a
+                    // full row) ends a paragraph.
                     paragraphs.iter().all(|p| {
-                        !model::unreadable(p, cols - 2)
-                            && !model::rows(p, cols - 2).windows(2).any(|r| {
-                                let tail = r[0].1.trim_end();
-                                r[1].0 == " "
-                                    && wide(tail.chars().next_back())
-                                    && wide(r[1].1.chars().next())
-                                    && tail.width() + 2 > cols - 2
-                            })
+                        let rows = model::rows(p, cols - 2);
+                        !rows
+                            .windows(2)
+                            .any(|r| r[1].0.is_empty() && r[0].1.trim_end().width() < cols - 2)
+                            && !rows.iter().any(|(sep, r)| *sep == " " && r.is_empty())
                     })
                 }),
         ) {
             let width = cols - 2;
-            let (mut screen, mut wraps, mut splits) = (Vec::new(), Vec::new(), Vec::new());
+            let (mut screen, mut drawn) = (Vec::new(), Vec::new());
             for paragraph in &paragraphs {
-                for (sep, row) in model::rows(paragraph, width) {
-                    let at = u32::try_from(screen.len()).unwrap();
-                    match sep {
-                        " " => wraps.push(at),
-                        "" => splits.push(at),
-                        _ => {}
-                    }
-                    let mark = if screen.is_empty() { "⏺" } else { " " };
+                let rows = model::rows(paragraph, width);
+                for (k, (_, row)) in rows.iter().enumerate() {
+                    let mark = if k == 0 { "⏺" } else { " " };
                     screen.push(format!("{mark} {row}"));
                 }
+                drawn.push((screen.len() - rows.len(), paragraph, rows));
                 screen.push(String::new());
             }
-            prop_assert_eq!(soft_wraps(&screen.join("\n"), cols), (wraps, splits));
+            let (wraps, splits) = soft_wraps(&screen.join("\n"), cols);
+            let mut joined = 0;
+            for (at, paragraph, rows) in drawn {
+                let mut read = String::new();
+                for (k, (_, row)) in rows.iter().enumerate() {
+                    let i = u32::try_from(at + k).unwrap();
+                    if k > 0 {
+                        joined += usize::from(wraps.contains(&i) || splits.contains(&i));
+                        read.push_str(if wraps.contains(&i) {
+                            " "
+                        } else if splits.contains(&i) {
+                            ""
+                        } else {
+                            "\n"
+                        });
+                    }
+                    read.push_str(row.trim_end());
+                }
+                prop_assert!(
+                    read == *paragraph || model::reads_first(paragraph, &read, width),
+                    "{:?} read as {:?}",
+                    paragraph,
+                    read
+                );
+            }
+            prop_assert_eq!(joined, wraps.len() + splits.len());
         }
 
         #[test]

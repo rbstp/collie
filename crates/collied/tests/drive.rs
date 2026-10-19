@@ -3769,6 +3769,37 @@ async fn claude_prose_wrapped_at_the_pane_width_is_marked() {
 }
 
 #[tokio::test]
+async fn claude_prose_uses_the_input_box_rule_width_when_the_layout_differs() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| {
+        h.text = include_str!("fixtures/claude-2.1.303/korean-prose.ansi.txt").into();
+        h.columns = Some(51);
+    });
+    let rows: Vec<u32> = std::iter::once(8).chain(11..=26).collect();
+    let Ok(Response::Terminal(read)) = drive
+        .read(
+            ReadParams {
+                terminal_id: tid(CLAUDE),
+                source: ReadSource::Recent,
+                lines: None,
+            },
+            true,
+        )
+        .await
+    else {
+        panic!("no Claude read");
+    };
+    assert_eq!((read.wraps, read.splits), (rows.clone(), vec![]));
+    let mut watcher = drive.watch(tid(CLAUDE), 200, false).await.unwrap();
+    let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+        panic!("no Claude watch output");
+    };
+    assert_eq!((first.wraps, first.splits), (rows, vec![]));
+}
+
+#[tokio::test]
 async fn codex_and_copilot_reads_and_watches_mark_only_prose_wraps() {
     let herdr = Mock::start();
     let (_d, base) = root();
