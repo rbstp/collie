@@ -182,22 +182,10 @@ pub fn decrypt(name: &str, credential: &[u8]) -> anyhow::Result<Zeroizing<Vec<u8
 
 /// Writes the credential 0600 at `path` (never through a symlink, never over a file).
 pub fn store(path: &Path, credential: &[u8]) -> anyhow::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         crate::ensure_private_dir(dir)?;
     }
-    let tmp = path.with_extension("cred.tmp");
-    let _ = std::fs::remove_file(&tmp);
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-        .open(&tmp)
-        .with_context(|| format!("create {}", tmp.display()))?;
-    file.write_all(credential)?;
-    file.sync_all()?;
-    std::fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))
+    crate::replace_file(path, &path.with_extension("cred.tmp"), credential, 0o600)
 }
 
 #[cfg(test)]

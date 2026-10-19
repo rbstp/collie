@@ -1,6 +1,3 @@
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -331,17 +328,12 @@ pub fn install(config: Option<&Path>, data_dir: &Path) -> anyhow::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("service.tmp");
-    let _ = std::fs::remove_file(&tmp);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o644)
-        .open(&tmp)?;
-    file.write_all(text.as_bytes())?;
-    file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
-    file.sync_all()?;
-    std::fs::rename(&tmp, &path)?;
+    crate::replace_file(
+        &path,
+        &path.with_extension("service.tmp"),
+        text.as_bytes(),
+        0o644,
+    )?;
     anyhow::ensure!(
         systemctl(&["daemon-reload"])?,
         "systemctl --user daemon-reload failed"
@@ -492,6 +484,8 @@ pub fn uninstall() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     const NASTY: &str = "/home/me/a b\"$HOME%h\\;.toml";

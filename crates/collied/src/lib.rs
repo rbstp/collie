@@ -37,10 +37,10 @@ pub mod transcript;
 pub mod turns;
 pub mod usage;
 
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+use std::io::Write;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
-#[cfg(target_os = "linux")]
 use anyhow::Context;
 
 /// A systemd tool by absolute path (never PATH): `/usr/bin`, then `/bin` (Debian
@@ -91,6 +91,23 @@ pub fn ensure_private_dir(dir: &Path) -> anyhow::Result<()> {
         dir.display()
     );
     Ok(())
+}
+
+/// Written to a fresh 0600 `tmp` (never through a symlink), given `mode`, synced, then renamed
+/// over `path`.
+pub(crate) fn replace_file(path: &Path, tmp: &Path, bytes: &[u8], mode: u32) -> anyhow::Result<()> {
+    let _ = std::fs::remove_file(tmp);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(tmp)
+        .with_context(|| format!("create {}", tmp.display()))?;
+    file.write_all(bytes)?;
+    file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+    file.sync_all()?;
+    std::fs::rename(tmp, path).with_context(|| format!("replace {}", path.display()))
 }
 
 /// For the Mac pairing prompt: format characters (bidi overrides, zero-width) and other
