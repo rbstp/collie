@@ -850,8 +850,11 @@ async fn expired_approvals_are_rejected_and_reissued_with_a_fresh_alert() {
         2,
         "the reissued approval replaces the dead alert"
     );
+    assert_eq!(alerts[0].1.payload["approval_id"], a.approval_id.as_str());
     assert_eq!(alerts[1].1.payload["approval_id"], b.approval_id.as_str());
-    assert_eq!(alerts[1].1.collapse_id, alerts[0].1.collapse_id);
+    let collapse = alerts[0].1.collapse_id.as_deref();
+    assert!(collapse.is_some_and(|id| !id.is_empty()), "{alerts:?}");
+    assert_eq!(alerts[1].1.collapse_id.as_deref(), collapse);
 
     tokio::time::sleep(Duration::from_millis(250)).await;
     rig.observe().await;
