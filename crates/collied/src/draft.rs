@@ -90,9 +90,17 @@ pub fn parse(ansi: &str) -> Option<InputBox> {
         .collect();
     let width = plain[bottom].width().saturating_sub(4);
     let mut text = String::new();
+    let mut wrap = Wrap::default();
+    let mut after_hidden = false;
     for (i, line) in lines.iter().enumerate() {
-        if i > 0 {
-            text.push_str(separator(&lines[i - 1], line, width));
+        if i > 0 && !std::mem::take(&mut after_hidden) {
+            let prev = &lines[i - 1];
+            after_hidden = line.is_empty() && wrap.blank(prev, &lines[i + 1..], width);
+            text.push_str(if after_hidden {
+                " "
+            } else {
+                wrap.join(prev, line, &lines[i + 1..], width)
+            });
         }
         text.push_str(line);
     }
@@ -110,11 +118,9 @@ pub fn parse(ansi: &str) -> Option<InputBox> {
     }))
 }
 
-/// Claude Code 2.1 wraps the draft with wrap-ansi `{hard: true, trim: false}` at the
-/// terminal width (the rule's) minus 4 and hides the spaces around each soft wrap. A soft
-/// wrap is a row the next word did not fit on, or a full row that split a word longer
-/// than a row; a row starting with a space follows a typed newline. A typed newline right
-/// where the next word would not have fit reads as a space.
+/// A soft wrap is a row the next word did not fit on, or a full row that split a word
+/// longer than a row; a row starting with a space follows a typed newline. A typed newline
+/// right where the next word would not have fit reads as a space.
 pub(crate) fn separator(prev: &str, next: &str, width: usize) -> &'static str {
     if width == 0 || prev.is_empty() || next.is_empty() || next.starts_with(char::is_whitespace) {
         return "\n";
@@ -129,6 +135,198 @@ pub(crate) fn separator(prev: &str, next: &str, width: usize) -> &'static str {
     } else {
         "\n"
     }
+}
+
+/// Claude Code 2.1 wraps the draft at the terminal width (the rule's) minus 4, and its
+/// prose, with wrap-ansi `{hard: true, trim: false}` and hides the spaces around each soft
+/// wrap. After a full row, the space before the next word still takes the next row's first
+/// column, unseen, so that row holds one column less. This is what a row leaves for the one
+/// below it.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Wrap {
+    hidden: bool,
+    /// Where the word this row starts with began, and its width on the rows above.
+    first: (Start, usize),
+}
+
+/// wrap-ansi starts a word longer than a row where it is, after its space, unless that
+/// takes more rows than starting it on a new row; a word that does not fit moves to a new row.
+#[derive(Debug, Clone, Copy)]
+enum Start {
+    At(usize),
+    /// Moved off a row with this many columns used, its space included.
+    Moved(usize),
+}
+
+impl Default for Start {
+    fn default() -> Self {
+        Start::At(0)
+    }
+}
+
+impl Wrap {
+    /// Whether `prev`, the row this describes, is full and the blank row after it holds only
+    /// the hidden space: the word the first of `below` starts with would not fit after it.
+    pub(crate) fn blank<S: AsRef<str>>(
+        &mut self,
+        prev: &str,
+        below: impl IntoIterator<Item = S>,
+        width: usize,
+    ) -> bool {
+        let mut below = below.into_iter();
+        let Some(next) = below.next() else {
+            return false;
+        };
+        let next = next.as_ref();
+        let (used, start, len) = self.last_word(prev);
+        let blank = width > 0
+            && !prev.is_empty()
+            && used >= width
+            && fits(start, len, width)
+            && !next.is_empty()
+            && !next.starts_with(char::is_whitespace)
+            && ends(next, below, width)
+                .last()
+                .is_some_and(|l| pushed(1, l, width));
+        if blank {
+            *self = Wrap {
+                hidden: false,
+                first: (Start::Moved(1), 0),
+            };
+        }
+        blank
+    }
+
+    /// What joins `next` to `prev`, the row this describes: `"\n"` for a typed newline,
+    /// `" "` for a soft wrap, `""` for a split word. `below` are the rows after `next`, onto
+    /// which the word `next` starts with may split. Where the rows could come from more than
+    /// one text: a full row of one word, not after a hidden space, splits onto the next as
+    /// far as the rows allow; a word reads as long as that, then after a soft wrap rather
+    /// than a typed newline; after any other full row, a soft wrap reads before a split word.
+    pub(crate) fn join<S: AsRef<str>>(
+        &mut self,
+        prev: &str,
+        next: &str,
+        below: impl IntoIterator<Item = S>,
+        width: usize,
+    ) -> &'static str {
+        let row = std::mem::take(self);
+        if width == 0 || prev.is_empty() || next.is_empty() || next.starts_with(char::is_whitespace)
+        {
+            return "\n";
+        }
+        let (used, start, len) = row.last_word(prev);
+        let one_word = !prev.contains(' ');
+        let ends = ends(next, below, width);
+        let sep = if used >= width {
+            let split = splits(start, len, ends, width);
+            if split && one_word && !row.hidden {
+                ""
+            } else if fits(start, len, width) && next.width() < width {
+                " "
+            } else if split {
+                ""
+            } else {
+                "\n"
+            }
+        } else if ends.last().is_some_and(|l| pushed(used + 1, l, width)) {
+            " "
+        } else {
+            "\n"
+        };
+        *self = match sep {
+            "" => row.split(prev),
+            " " if used >= width => Wrap {
+                hidden: true,
+                first: (Start::At(1), 0),
+            },
+            " " => Wrap {
+                hidden: false,
+                first: (Start::Moved(used + 1), 0),
+            },
+            _ => Wrap::default(),
+        };
+        sep
+    }
+
+    /// Whether the word `prev`, the row this describes, ends with may split onto `next` and
+    /// the rows `below` it.
+    pub(crate) fn continues<S: AsRef<str>>(
+        self,
+        prev: &str,
+        next: &str,
+        below: impl IntoIterator<Item = S>,
+        width: usize,
+    ) -> bool {
+        let (_, start, len) = self.last_word(prev);
+        splits(start, len, ends(next, below, width), width)
+    }
+
+    /// The row after `prev`, the row this describes, where a split word joins them.
+    pub(crate) fn split(self, prev: &str) -> Wrap {
+        let (_, start, len) = self.last_word(prev);
+        Wrap {
+            hidden: false,
+            first: (start, len),
+        }
+    }
+
+    /// The columns `prev` uses, and where the word it ends with began and how wide it is so
+    /// far.
+    fn last_word(self, prev: &str) -> (usize, Start, usize) {
+        let used = usize::from(self.hidden) + prev.width();
+        let last = prev.rsplit(' ').next().unwrap_or_default().width();
+        if prev.contains(' ') {
+            (used, Start::At(used - last), last)
+        } else {
+            (used, self.first.0, self.first.1 + last)
+        }
+    }
+}
+
+/// Whether wrap-ansi moves a word `len` columns wide to a new row when `used` columns of the
+/// row hold the text before it and its space.
+fn pushed(used: usize, len: usize, width: usize) -> bool {
+    if len > width {
+        (len - 1) / width < 1 + (len + used - width - 1) / width
+    } else {
+        used + len > width
+    }
+}
+
+fn splits(start: Start, len: usize, mut ends: impl Iterator<Item = usize>, width: usize) -> bool {
+    ends.any(|l| len + l > width && fits(start, len + l, width))
+}
+
+fn fits(start: Start, len: usize, width: usize) -> bool {
+    match start {
+        Start::At(at) => !pushed(at, len, width),
+        Start::Moved(from) => pushed(from, len, width),
+    }
+}
+
+/// The widths the word `row` starts with may have: it ends on `row` unless that is a full
+/// row of it, then on each full row of it below.
+fn ends<S: AsRef<str>>(
+    row: &str,
+    below: impl IntoIterator<Item = S>,
+    width: usize,
+) -> impl Iterator<Item = usize> {
+    let mut below = below.into_iter();
+    let mut row = Some(row.to_owned());
+    let mut len = 0;
+    std::iter::from_fn(move || {
+        let text = row.take()?;
+        let first = text.split(' ').next().unwrap_or_default();
+        if first.is_empty() {
+            return None;
+        }
+        len += first.width();
+        if first.len() == text.len() && text.width() >= width {
+            row = below.next().map(|next| next.as_ref().to_owned());
+        }
+        Some(len)
+    })
 }
 
 /// Trailing whitespace is not something a screen read can tell apart from padding.
@@ -261,34 +459,55 @@ pub mod model {
         rows
     }
 
-    /// Whether the readers are not expected to read `text` back from its rows (issue #441):
-    /// a text one space or newline apart that a reader takes first draws them too (a soft
-    /// wrap or a split word over a typed newline, a split word over a space); a soft wrap
-    /// follows a full row, where the readers do not count the hidden space that starts the
-    /// next row; or a typed newline follows a full row or precedes a word at least a row
-    /// wide, which [`super::separator`] reads as a soft wrap or a split word.
-    pub fn unreadable(text: &str, width: usize) -> bool {
-        let first = |line: &str| line.split(' ').next().unwrap_or_default().width();
-        let lines: Vec<&str> = text.split('\n').collect();
-        let misread = wrap(text, width)
-            .windows(2)
-            .any(|r| r[1].1.starts_with(' ') || (r[1].0 == "\n" && r[0].1.width() >= width))
-            || lines
-                .windows(2)
-                .any(|l| !l[0].is_empty() && first(l[1]) >= width);
-        let shown = |t: &str| -> Vec<String> {
-            rows(t, width)
-                .into_iter()
-                .map(|(_, r)| r.trim_end().to_owned())
-                .collect()
+    /// Whether `read`, which a reader took from the rows of `text`, draws them too and reads
+    /// first where the two part, in the order [`super::Wrap::join`] gives, with a run of wide
+    /// characters one column short of the edge splitting first, as `reflow` reads it.
+    pub fn reads_first(text: &str, read: &str, width: usize) -> bool {
+        let read = format!("{}{}", read.trim_end(), &text[text.trim_end().len()..]);
+        let (typed, other) = (rows(text, width), rows(&read, width));
+        let shown = |rows: &[(&str, String)]| -> Vec<String> {
+            rows.iter().map(|(_, r)| r.trim_end().to_owned()).collect()
         };
-        let drawn = shown(text);
-        misread
-            || text.match_indices([' ', '\n']).any(|(i, sep)| {
-                let alts: &[&str] = if sep == " " { &[""] } else { &["", " "] };
-                alts.iter()
-                    .any(|alt| shown(&format!("{}{alt}{}", &text[..i], &text[i + 1..])) == drawn)
-            })
+        let Some(k) = (1..typed.len()).find(|&k| other.get(k).is_some_and(|o| o.0 != typed[k].0))
+        else {
+            return false;
+        };
+        if shown(&typed) != shown(&other) {
+            return false;
+        }
+        let one_word = !wrap(text, width)[k - 1].1.trim_end().contains(' ');
+        let above = typed[k - 1].1.trim_end();
+        let wide = |c: Option<char>| c.and_then(UnicodeWidthChar::width) == Some(2);
+        let cut = above.width() + 1 == width
+            && wide(above.chars().next_back())
+            && wide(typed[k].1.chars().next());
+        let rank = |sep: &str| match sep {
+            "\n" => 0,
+            "" if cut => 3,
+            "" if one_word => 2,
+            " " if !one_word => 2,
+            _ => 1,
+        };
+        let word = |rows: &[(&str, String)]| {
+            let mut j = k + usize::from(rows[k].1.trim_end().is_empty());
+            let mut len = 0;
+            while let Some((_, row)) = rows.get(j) {
+                let row = row.trim_end();
+                let first = row.split(' ').next().unwrap_or_default();
+                len += first.width();
+                j += 1;
+                if first.len() < row.len() || rows.get(j).is_none_or(|r| !r.0.is_empty()) {
+                    break;
+                }
+            }
+            len
+        };
+        let (a, b) = (typed[k].0, other[k].0);
+        if a.is_empty() || b.is_empty() {
+            rank(b) > rank(a)
+        } else {
+            (word(&other), rank(b)) > (word(&typed), rank(a))
+        }
     }
 }
 
@@ -406,6 +625,38 @@ mod tests {
     }
 
     #[test]
+    fn rows_after_a_full_row_hold_a_column_less() {
+        // Claude Code 2.1.302 draws these at 44 columns.
+        let (a, b, c20, c22, c44, d23) = (
+            "a".repeat(20),
+            "b".repeat(23),
+            "c".repeat(20),
+            "c".repeat(22),
+            "c".repeat(44),
+            "d".repeat(23),
+        );
+        let full = format!("{a} {b}");
+        let rule = "─".repeat(48);
+        let read = |rows: &[&str]| parse(&format!("{rule}\n❯ {}\n{rule}\n", rows.join("\n  ")));
+        assert_eq!(read(&[&full, &c22]), draft(&format!("{full} {c22}"), 2));
+        assert_eq!(
+            read(&["aaaa", &"b".repeat(44), "bbbbbb"]),
+            draft(&format!("aaaa\n{}", "b".repeat(50)), 3),
+            "a typed newline before a word that would have started on the row"
+        );
+        assert_eq!(read(&[&full, "", &c44]), draft(&format!("{full} {c44}"), 3));
+        assert_eq!(
+            read(&[&full, &c20, &d23]),
+            draft(&format!("{full} {c20} {d23}"), 3)
+        );
+        assert_eq!(
+            read(&[&full, &format!("{c20} {d23}")]),
+            draft(&format!("{full}\n{c20} {d23}"), 2),
+            "a soft-wrapped row after a full row cannot fill the box"
+        );
+    }
+
+    #[test]
     fn slash_command_screens() {
         for (ansi, text) in [
             (
@@ -455,16 +706,25 @@ mod tests {
             (text, width) in (model::text(), 4..24usize).prop_filter("unreadable", |(t, w)| {
                 // A run of wide characters split one column short of the edge reads as two
                 // words.
-                !model::unreadable(t, *w)
-                    && !model::rows(t, *w)
-                        .windows(2)
-                        .any(|r| r[1].0.is_empty() && r[0].1.width() < *w)
+                !model::rows(t, *w)
+                    .windows(2)
+                    .any(|r| r[1].0.is_empty() && r[0].1.width() < *w)
             }),
         ) {
             let rows: Vec<String> = model::rows(&text, width).into_iter().map(|(_, r)| r).collect();
             let rule = "─".repeat(width + 4);
             let screen = format!("{rule}\n❯ {}\n{rule}\n", rows.join("\n  "));
-            prop_assert_eq!(parse(&screen), draft(&normalize(&text), rows.len()));
+            let Some(InputBox::Draft(read)) = parse(&screen) else {
+                return Err(TestCaseError::fail("no draft"));
+            };
+            prop_assert_eq!(read.lines, rows.len());
+            let typed = normalize(&text);
+            prop_assert!(
+                read.text == typed || model::reads_first(&text, &read.text, width),
+                "{:?} read as {:?}",
+                typed,
+                read.text
+            );
         }
     }
 
