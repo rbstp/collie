@@ -617,6 +617,27 @@ pub(super) fn command(s: &str) -> Option<String> {
     Some(line.trim().to_owned())
 }
 
+/// Claude 5.1 and later write the progress update before a tool call as a second thinking block.
+pub(super) fn writes_updates_as_thinking(model: &str) -> bool {
+    let number = |p: Option<&str>| {
+        let p = p?;
+        let n = p.bytes().take_while(u8::is_ascii_digit).count();
+        (1..=2).contains(&n).then(|| p[..n].parse::<u32>().ok())?
+    };
+    let mut parts = model.split('-');
+    if parts.next() != Some("claude")
+        || !parts
+            .next()
+            .is_some_and(|f| !f.is_empty() && f.bytes().all(|b| b.is_ascii_lowercase()))
+    {
+        return false;
+    }
+    let Some(major) = number(parts.next()) else {
+        return false;
+    };
+    (major, number(parts.next()).unwrap_or(0)) >= (5, 1)
+}
+
 fn normalize(
     v: &Value,
     kind: Kind,
@@ -702,9 +723,18 @@ fn normalize(
                 add(role, text(content), None, None);
             }
             if let Some(blocks) = content.as_array() {
-                for b in blocks {
+                let first = v["apiBlockIndex"].as_u64().unwrap_or(0);
+                let updates = parent.is_none()
+                    && v["message"]["model"]
+                        .as_str()
+                        .is_some_and(writes_updates_as_thinking);
+                for (i, b) in blocks.iter().enumerate() {
                     match b["type"].as_str() {
                         Some("text") => add(role, text(&b["text"]), None, None),
+                        // Thinking blocks lead a message, so a later one follows another thinking block.
+                        Some("thinking") if updates && first + i as u64 > 0 => {
+                            add(role, text(&b["thinking"]), None, None)
+                        }
                         Some("tool_use") => add(
                             "assistant",
                             text(&b["input"]),
@@ -976,6 +1006,107 @@ mod tests {
                     .any(|m| m.text.contains("environment_context")
                         || m.text.contains("Subagent report"))
             );
+        }
+    }
+
+    #[test]
+    fn claude_progress_updates_written_as_thinking_show_as_agent_text() {
+        let fixture =
+            include_str!("../../tests/fixtures/transcripts/claude-thinking-updates.jsonl");
+        let update = "The timeout comes from the retry loop, so I'll read its test next.\n\n";
+        let rows = |page: HistoryPage| {
+            page.messages
+                .into_iter()
+                .map(|m| (m.role, m.tool, m.text))
+                .collect::<Vec<_>>()
+        };
+        let (_dir, t, a, _) = setup("claude", fixture);
+        let page = rows(t.history(&a, &params(None, None, None)));
+        assert_eq!(page.len(), 7);
+        assert_eq!(page[1], ("assistant".into(), None, update.into()));
+        assert_eq!(page[2].1.as_deref(), Some("Bash"));
+        assert!(!page.iter().any(|m| m.2.contains("stays hidden")));
+        let latest = HistoryParams {
+            latest: true,
+            ..params(None, None, None)
+        };
+        let replies = rows(t.history(&a, &latest))
+            .into_iter()
+            .filter(|m| m.0 == "assistant")
+            .map(|m| m.2)
+            .collect::<Vec<_>>();
+        assert_eq!(replies, [update, "The retry loop never resets its timer."]);
+
+        let (_dir, t, a, _) = setup(
+            "claude",
+            &fixture.replace("claude-opus-5-5", "claude-opus-5"),
+        );
+        let page = rows(t.history(&a, &params(None, None, None)));
+        assert_eq!(page.len(), 6);
+        assert!(!page.iter().any(|m| m.2 == update));
+    }
+
+    #[test]
+    fn only_a_later_thinking_block_of_a_main_thread_5_1_message_is_shown() {
+        let record = |model: &str, index: Option<u64>, content: Value| {
+            let mut v = json!({"type":"assistant","uuid":"a1","sessionId":CLAUDE,
+                "message":{"model":model,"role":"assistant","content":content}});
+            if let Some(i) = index {
+                v["apiBlockIndex"] = i.into();
+            }
+            v
+        };
+        let shown = |v: &Value, parent: Option<&str>| {
+            normalize(v, Kind::Claude, CLAUDE, false, "f".into(), "", parent)
+                .into_iter()
+                .filter(|m| m.tool.is_none())
+                .map(|m| m.text)
+                .collect::<Vec<_>>()
+        };
+        let thinking = |s: &str| json!({"type":"thinking","thinking":s,"signature":"c2ln"});
+        let tool = json!({"type":"tool_use","id":"c1","name":"Bash","input":{}});
+        let both = json!([thinking("Reasoning"), thinking("Update"), tool]);
+        assert_eq!(
+            shown(&record("claude-opus-5-5", None, both.clone()), None),
+            ["Update"]
+        );
+        assert!(shown(&record("claude-opus-5-5", None, both.clone()), Some("c0")).is_empty());
+        assert!(shown(&record("claude-opus-5", None, both), None).is_empty());
+        let lone = json!([thinking("Reasoning")]);
+        assert!(shown(&record("claude-fable-5-1", Some(0), lone.clone()), None).is_empty());
+        assert!(shown(&record("claude-fable-5-1", None, lone), None).is_empty());
+        let later = json!([thinking("Update")]);
+        assert_eq!(
+            shown(&record("claude-fable-5-1", Some(1), later.clone()), None),
+            ["Update"]
+        );
+        assert!(shown(&record("claude-haiku-4-5-20251001", Some(1), later), None).is_empty());
+    }
+
+    #[test]
+    fn claude_models_from_5_1_write_updates_as_thinking() {
+        for model in [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-fable-5-1",
+            "claude-opus-5-1-20261001",
+            "claude-opus-5-5[1m]",
+            "claude-opus-6",
+            "claude-opus-10-0",
+        ] {
+            assert!(writes_updates_as_thinking(model), "{model}");
+        }
+        for model in [
+            "claude-opus-5",
+            "claude-opus-5-20260101",
+            "claude-haiku-4-5-20251001",
+            "claude-sonnet-4-20250514",
+            "claude-3-5-sonnet-20241022",
+            "<synthetic>",
+            "gpt-5-5",
+            "",
+        ] {
+            assert!(!writes_updates_as_thinking(model), "{model}");
         }
     }
 

@@ -718,7 +718,21 @@ fn claude(text: &str, known_window: Option<u64>) -> Derived {
                     d.context_left = Some(percent(window.saturating_sub(used), window));
                 }
                 if d.last_line.is_none() {
-                    d.last_line = blocks_line(&m["content"], "text");
+                    let first = v["apiBlockIndex"].as_u64().unwrap_or(0);
+                    let updates = m["model"]
+                        .as_str()
+                        .is_some_and(history::writes_updates_as_thinking);
+                    d.last_line = m["content"].as_array().and_then(|blocks| {
+                        blocks.iter().enumerate().rev().find_map(|(i, b)| {
+                            match b["type"].as_str() {
+                                Some("text") => first_line(b["text"].as_str()?),
+                                Some("thinking") if updates && first + i as u64 > 0 => {
+                                    first_line(b["thinking"].as_str()?)
+                                }
+                                _ => None,
+                            }
+                        })
+                    });
                 }
             }
             Some("user") if main && d.last_prompt.is_none() && v["origin"]["kind"] == "human" => {
@@ -852,6 +866,20 @@ mod tests {
         assert_eq!(
             (d.context_left, d.last_line.as_deref()),
             (Some(94), Some("**Fixed** the flaky test."))
+        );
+    }
+
+    #[test]
+    fn claude_last_line_includes_a_progress_update_written_as_thinking() {
+        let fixture = include_str!("../tests/fixtures/transcripts/claude-thinking-updates.jsonl");
+        let running = fixture.lines().take(4).collect::<Vec<_>>().join("\n");
+        let update = "The timeout comes from the retry loop, so I'll read its test next.";
+        assert_eq!(claude(&running, None).last_line.as_deref(), Some(update));
+        let older = running.replace("claude-opus-5-5", "claude-opus-5");
+        assert_eq!(claude(&older, None).last_line, None);
+        assert_eq!(
+            claude(fixture, None).last_line.as_deref(),
+            Some("The retry loop never resets its timer.")
         );
     }
 
