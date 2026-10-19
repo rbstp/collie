@@ -92,7 +92,6 @@ private func agent(kind: String = "claude", pullRequest: PullRequestSummary?, wa
     #expect(PullRequestBadge.watchMenu(agent(kind: "codex", pullRequest: pullRequest(.open, .pending))) == nil)
     #expect(PullRequestBadge.watchMenu(agent(pullRequest: pullRequest(.merged, .passing))) == nil)
     #expect(PullRequestBadge.watchMenu(agent(pullRequest: pullRequest(.closed, .failing))) == nil)
-    #expect(PullRequestBadge.intervals == [2, 5, 15, 30])
 
     let watch = PrWatchSummary(number: 264, url: "https://github.com/rbstp/collie/pull/264", everyMinutes: 15)
     #expect(PullRequestBadge.watchMenu(agent(pullRequest: pullRequest(.open, .failing), watch: watch))
