@@ -694,6 +694,19 @@ impl Approvals {
             audit(why);
             fail(code, message)
         };
+        let failed = |why: &str, e: herdr::Error| -> Reply {
+            self.finish(terminal, &id, ApprovalOutcome::Superseded);
+            audit(why);
+            Err(herdr_fail(e))
+        };
+        let revoked = || {
+            reject(
+                ApprovalOutcome::Superseded,
+                ErrorCode::NotPaired,
+                "rejected: peer no longer authorized",
+                "peer is no longer authorized",
+            )
+        };
         if crate::now_ms() >= approval.expires_at_ms {
             return reject(
                 ApprovalOutcome::Expired,
@@ -768,11 +781,7 @@ impl Approvals {
         };
         let now = match tokio::time::timeout_at(budget, self.current(terminal)).await {
             Ok(Ok(now)) => now,
-            Ok(Err(e)) => {
-                self.finish(terminal, &id, ApprovalOutcome::Superseded);
-                audit("failed: herdr unavailable");
-                return Err(herdr_fail(e));
-            }
+            Ok(Err(e)) => return failed("failed: herdr unavailable", e),
             Err(_) => return superseded("superseded: herdr too slow"),
         };
         let now =
@@ -784,12 +793,7 @@ impl Approvals {
             return superseded("superseded: herdr too slow");
         }
         if !auth() {
-            return reject(
-                ApprovalOutcome::Superseded,
-                ErrorCode::NotPaired,
-                "rejected: peer no longer authorized",
-                "peer is no longer authorized",
-            );
+            return revoked();
         }
         // A note is typed into the option's own field: Deny goes by arrows, never Esc.
         let (nav, confirm) = match (choice, &amend) {
@@ -803,11 +807,7 @@ impl Approvals {
                 .await
             {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    self.finish(terminal, &id, ApprovalOutcome::Superseded);
-                    audit("failed: keys not sent");
-                    return Err(herdr_fail(e));
-                }
+                Ok(Err(e)) => return failed("failed: keys not sent", e),
                 Err(_) => return superseded(&format!("superseded: herdr too slow {}", sent(&nav))),
             }
             // Never one call with the arrows and Enter: arrows that were lost or landed on
@@ -821,12 +821,7 @@ impl Approvals {
                 return superseded(&format!("superseded: cursor not on target {}", sent(&nav)));
             }
             if !auth() {
-                return reject(
-                    ApprovalOutcome::Superseded,
-                    ErrorCode::NotPaired,
-                    "rejected: peer no longer authorized",
-                    "peer is no longer authorized",
-                );
+                return revoked();
             }
             // An elapsed timeout_at still polls its future once, which can send the key.
             if tokio::time::Instant::now() >= budget {
@@ -840,12 +835,7 @@ impl Approvals {
         // whole prompt.
         if let Some((placeholder, shown, note)) = &amend {
             if !auth() {
-                return reject(
-                    ApprovalOutcome::Superseded,
-                    ErrorCode::NotPaired,
-                    "rejected: peer no longer authorized",
-                    "peer is no longer authorized",
-                );
+                return revoked();
             }
             if tokio::time::Instant::now() >= budget {
                 return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
@@ -858,11 +848,7 @@ impl Approvals {
             .await
             {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    self.finish(terminal, &id, ApprovalOutcome::Superseded);
-                    audit(&format!("failed: tab not sent {}", sent(&nav)));
-                    return Err(herdr_fail(e));
-                }
+                Ok(Err(e)) => return failed(&format!("failed: tab not sent {}", sent(&nav)), e),
                 Err(_) => {
                     return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
                 }
@@ -881,12 +867,7 @@ impl Approvals {
                 ));
             }
             if !auth() {
-                return reject(
-                    ApprovalOutcome::Superseded,
-                    ErrorCode::NotPaired,
-                    "rejected: peer no longer authorized",
-                    "peer is no longer authorized",
-                );
+                return revoked();
             }
             if tokio::time::Instant::now() >= budget {
                 return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
@@ -895,11 +876,7 @@ impl Approvals {
                 .await
             {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    self.finish(terminal, &id, ApprovalOutcome::Superseded);
-                    audit(&format!("failed: note not sent {}", sent(&keys)));
-                    return Err(herdr_fail(e));
-                }
+                Ok(Err(e)) => return failed(&format!("failed: note not sent {}", sent(&keys)), e),
                 Err(_) => {
                     return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
                 }
@@ -913,12 +890,7 @@ impl Approvals {
                 return superseded(&format!("superseded: note not shown {}", sent(&keys)));
             }
             if !auth() {
-                return reject(
-                    ApprovalOutcome::Superseded,
-                    ErrorCode::NotPaired,
-                    "rejected: peer no longer authorized",
-                    "peer is no longer authorized",
-                );
+                return revoked();
             }
             if tokio::time::Instant::now() >= budget {
                 return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
