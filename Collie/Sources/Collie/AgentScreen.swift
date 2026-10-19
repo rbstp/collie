@@ -20,6 +20,7 @@ struct AgentScreen: View {
     @State private var keyboardShown = false
     @State private var height: CGFloat = 0
     @State private var obscuredTop: CGFloat = 0
+    @State private var obscuredBottom: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -64,11 +65,10 @@ struct AgentScreen: View {
 
     private var typingInLandscape: Bool { keyboardShown && verticalSizeClass == .compact }
 
+    private var barScheme: ColorScheme { showingChat && !model.isTerminal ? colorScheme : .dark }
+
     var body: some View {
         VStack(spacing: 0) {
-            if !typingInLandscape {
-                AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil, showingChat: $showingChat)
-            }
             if let notice = model.paneNotice {
                 PaneCard(model: model, notice: notice)
             }
@@ -101,7 +101,7 @@ struct AgentScreen: View {
                         quote: model.isTerminal ? nil : model.quote,
                         // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
                         neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
-                        switchAgent: switchAgent, obscuredTop: obscuredTop
+                        switchAgent: switchAgent, obscuredTop: obscuredTop, obscuredBottom: obscuredBottom
                     ) { await model.refresh() }
                         .overlay {
                             if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
@@ -131,38 +131,53 @@ struct AgentScreen: View {
                                 }
                             }
                         }
-                        .ignoresSafeArea(.container, edges: .top)
-                        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { obscuredTop = $0 }
-                }
-            }
-            .safeAreaInset(edge: .top) {
-                if !typingInLandscape, let subagents = model.agent?.subagents, !subagents.isEmpty {
-                    SubagentList(subagents: subagents)
-                        .padding(6)
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10))
-                        .environment(\.colorScheme, showingChat && !model.isTerminal ? colorScheme : .dark)
-                        .padding(.horizontal)
-                }
-            }
-            if let notice = model.notice ?? model.blockedHint {
-                Label(notice, systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
-                    .padding(.top, 6)
-            }
-            if showingChat && !model.isTerminal && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown) {
-                Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
-                    .font(.footnote).buttonStyle(.glass).padding(.top, 6)
-            }
-            GlassEffectContainer(spacing: 4) {
-                VStack(spacing: 0) {
-                    if model.keysShown && (!showingChat || model.isTerminal) { KeyStrip(model: model) }
-                    PromptBar(model: model, keysAvailable: !showingChat || model.isTerminal)
+                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+                        .onGeometryChange(for: EdgeInsets.self) { $0.safeAreaInsets } action: {
+                            obscuredTop = $0.top
+                            obscuredBottom = $0.bottom
+                        }
                 }
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !typingInLandscape {
+                VStack(spacing: 0) {
+                    AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil, showingChat: $showingChat)
+                    if let subagents = model.agent?.subagents, !subagents.isEmpty {
+                        SubagentList(subagents: subagents)
+                            .padding(.horizontal)
+                            .padding(.bottom, 6)
+                    }
+                }
+                .background { SessionBarGlass().ignoresSafeArea(edges: .top) }
+                .environment(\.colorScheme, barScheme)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if let notice = model.notice ?? model.blockedHint {
+                    Label(notice, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                        .padding(.top, 6)
+                }
+                if showingChat && !model.isTerminal && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown) {
+                    Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
+                        .font(.footnote).buttonStyle(.glass).padding(.top, 6)
+                }
+                GlassEffectContainer(spacing: 4) {
+                    VStack(spacing: 0) {
+                        if model.keysShown && (!showingChat || model.isTerminal) { KeyStrip(model: model) }
+                        PromptBar(model: model, keysAvailable: !showingChat || model.isTerminal)
+                    }
+                }
+            }
+            .background { SessionBarGlass().ignoresSafeArea(edges: .bottom) }
+            .environment(\.colorScheme, barScheme)
+        }
+        .toolbarColorScheme(barScheme, for: .navigationBar)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -438,6 +453,18 @@ private struct AgentHeader: View {
     }
 }
 
+private struct SessionBarGlass: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            // Apple's guidance for clear glass: a dimming layer behind it keeps text legible over bright or busy content.
+            (colorScheme == .dark ? Color.black.opacity(0.6) : Color.white.opacity(0.7))
+            Color.clear.glassEffect(.clear, in: .rect)
+        }
+    }
+}
+
 struct SubagentList: View {
     let subagents: [SubagentSummary]
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -532,10 +559,13 @@ private struct AgentTerminal: UIViewRepresentable {
     let neighbor: ((Int) -> AgentRoute?)?
     let switchAgent: (AgentRoute) -> Void
     let obscuredTop: CGFloat
+    let obscuredBottom: CGFloat
     let refresh: @MainActor () async -> Void
 
     func makeUIView(context: Context) -> GhosttyTerminalUIView {
         let view = GhosttyTerminalUIView(fontSize: fontSize)
+        // obscuredTop and obscuredBottom already include the bars and the device's safe area.
+        view.contentInsetAdjustmentBehavior = .never
         let control = UIRefreshControl()
         control.tintColor = .white
         let coordinator = context.coordinator
@@ -557,6 +587,7 @@ private struct AgentTerminal: UIViewRepresentable {
         view.wraps = wraps
         view.fontSize = fontSize
         view.obscuredTop = obscuredTop
+        view.obscuredBottom = obscuredBottom
         let (gestures, perform, resized, resizeEnded) = (gestures, perform, resized, resizeEnded)
         view.onDoubleTap = gestures.doubleTap == .none ? nil : { perform(gestures.doubleTap) }
         view.onTripleTap = gestures.tripleTap == .none ? nil : { perform(gestures.tripleTap) }

@@ -35,6 +35,16 @@ public final class GhosttyTerminalUIView: UIScrollView {
         }
     }
 
+    /// Height at the bottom covered by an overlay; the last rows scroll up from under it.
+    public var obscuredBottom: CGFloat = 0 {
+        didSet {
+            guard obscuredBottom != oldValue else { return }
+            contentInset.bottom = obscuredBottom
+            if followsBottom { scrollToBottom() }
+            setNeedsLayout()
+        }
+    }
+
     // Each gesture below is off while a selection is active, and while its callback is nil.
     public var onDoubleTap: (() -> Void)? {
         didSet { gesturesChanged() }
@@ -241,7 +251,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
         if let copyAnchor, !menu.isHidden {
             let size = menu.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
             var insets = safeAreaInsets
-            insets.top += obscuredTop
+            insets.top = max(insets.top, obscuredTop)
+            insets.bottom = max(insets.bottom, obscuredBottom)
             let visible = bounds.inset(by: insets).insetBy(dx: 8, dy: 8)
             let point = CGPoint(x: bounds.minX + copyAnchor.x, y: bounds.minY + copyAnchor.y)
             var y = point.y - 16 - size.height
