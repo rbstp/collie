@@ -42,7 +42,6 @@ struct ControlWireTests {
         #expect(DaemonState.running(pendingApprovals: 2, colliedVersion: "0.1.1").statusText == "collied 0.1.1: Running")
         #expect(DaemonState.running(pendingApprovals: 0).statusText == "collied: Running (version unavailable)")
         #expect(DaemonState.running(pendingApprovals: 0, colliedVersion: "").statusText == "collied: Running (version unavailable)")
-        #expect(DaemonState.outdated.statusText == "collied: Running (version unavailable)")
         #expect(DaemonState.off.statusText == "collied: Off")
     }
 

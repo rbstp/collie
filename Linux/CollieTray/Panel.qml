@@ -181,10 +181,6 @@ Panel {
           spacing: Style.space(6)
 
           Line {
-            visible: !!root.svc && root.svc.state === "outdated"
-            text: "Update collied (just collied-install)"
-          }
-          Line {
             visible: !!root.svc && root.svc.state === "running" && root.svc.pending > 0
             text: root.svc ? Model.pendingText(root.svc.pending) : ""
           }

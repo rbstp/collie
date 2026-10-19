@@ -155,7 +155,7 @@ struct ControlClientTests {
         #expect(await old.next() == #"{"cmd":"watch"}"#)
         try old.reply(#"{"type":"error","message":"unknown variant `watch`"}"#)
         old.close()
-        #expect(await seen.next() == .outdated, "an older collied still runs")
+        #expect(await seen.next() == .off, "an error reply is not a running collied")
         let again = await server.accept()
         #expect(await again.next() == #"{"cmd":"watch"}"#)
         try again.reply(#"{"type":"watch","pending_approvals":0,"collied_version":"0.1.2"}"#)

@@ -271,14 +271,12 @@ func request(_ request: Request, socket: String) async throws -> Reply {
 enum DaemonState: Equatable, Sendable {
     case off
     case running(pendingApprovals: Int, colliedVersion: String? = nil)
-    /// A collied from before the watch command: running, but without the count.
-    case outdated
 
     var statusText: String {
         switch self {
         case .off: "collied: Off"
         case .running(_, let version?) where !version.isEmpty: "collied \(printable(version)): Running"
-        case .running, .outdated: "collied: Running (version unavailable)"
+        case .running: "collied: Running (version unavailable)"
         }
     }
 }
@@ -287,23 +285,18 @@ enum DaemonState: Equatable, Sendable {
 /// failing connect every `retry` while collied is off.
 func watchDaemon(socket: String, retry: Duration, update: @Sendable (DaemonState) async -> Void) async {
     while !Task.isCancelled {
-        var outdated = false
         if let conn = try? ControlConnection.connect(path: socket) {
             do {
                 try conn.send(.watch)
                 for try await line in conn.lines {
-                    switch try Reply.decode(line) {
-                    case .watch(let n, let version): await update(.running(pendingApprovals: n, colliedVersion: version))
-                    case .error:
-                        outdated = true
-                        await update(.outdated)
-                    default: break
+                    if case .watch(let n, let version) = try Reply.decode(line) {
+                        await update(.running(pendingApprovals: n, colliedVersion: version))
                     }
                 }
             } catch {}
             conn.close()
         }
-        if !outdated { await update(.off) }
+        await update(.off)
         try? await Task.sleep(for: retry)
     }
 }

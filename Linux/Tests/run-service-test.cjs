@@ -68,7 +68,7 @@ async function run() {
     check(failures, result !== null, `harness printed no RESULT:\n${text.slice(-3000)}`);
     if (result) {
       const { states, statuses, notes } = result;
-      const wanted = ["running:0", "running:2", "off:0", "outdated:0", "running:0", "off:0", "running:0"];
+      const wanted = ["running:0", "running:2", "off:0", "running:0", "off:0", "running:0"];
       let position = 0;
       for (const state of states) {
         if (state === wanted[position]) position++;

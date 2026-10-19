@@ -29,9 +29,6 @@ struct MenuContent: View {
 
     var body: some View {
         Text(verbatim: status)
-        if daemon.state == .outdated {
-            Text("Update collied (just collied-install)")
-        }
         if daemon.pendingApprovals > 0 {
             Text(verbatim: MenuIcon.pendingText(daemon.pendingApprovals))
         }
