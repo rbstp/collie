@@ -27,13 +27,13 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
     @ScaledMetric(relativeTo: .subheadline) private var fontSize = 15
     @Environment(\.controlSize) private var controlSize
 
-    func makeUIView(context: Context) -> UISegmentedControl {
-        let control = UISegmentedControl()
+    func makeUIView(context: Context) -> SegmentedControl {
+        let control = SegmentedControl()
         control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
         return control
     }
 
-    func updateUIView(_ control: UISegmentedControl, context: Context) {
+    func updateUIView(_ control: SegmentedControl, context: Context) {
         context.coordinator.parent = self
         if control.numberOfSegments != options.count {
             control.removeAllSegments()
@@ -63,7 +63,7 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
         control.accessibilityLabel = String(localized: String.LocalizationValue(title), locale: context.environment.locale)
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISegmentedControl, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: SegmentedControl, context: Context) -> CGSize? {
         CGSize(width: expands ? proposal.width ?? uiView.intrinsicContentSize.width : uiView.intrinsicContentSize.width,
                height: controlSize == .small ? max(34, fontSize + 16) : max(44, fontSize + 24))
     }
@@ -80,5 +80,47 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
             guard parent.options.indices.contains(control.selectedSegmentIndex) else { return }
             parent.selection = parent.options[control.selectedSegmentIndex].1
         }
+    }
+}
+
+/// In a toolbar, UIKit leaves the press lens over the selection after a tap, which keeps the selected label
+/// in its pressed tint until the control leaves the window. Re-adding it once the lens has settled resets it;
+/// the frame is restored because UIKit grows the re-added control to its own height.
+private final class SegmentedControl: UISegmentedControl {
+    private var activeTouches = 0
+    private var reset: DispatchWorkItem?
+
+    // UIKit's bottom alignment inset is drawn over, which left the control a point taller and lower than the glass beside it.
+    override var alignmentRectInsets: UIEdgeInsets { .zero }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        activeTouches += touches.count
+        reset?.cancel()
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        released(touches)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        released(touches)
+    }
+
+    private func released(_ touches: Set<UITouch>) {
+        activeTouches = max(0, activeTouches - touches.count)
+        guard activeTouches == 0 else { return }
+        reset?.cancel()
+        let reset = DispatchWorkItem { [weak self] in
+            guard let self, let superview else { return }
+            let frame = frame
+            removeFromSuperview()
+            superview.addSubview(self)
+            self.frame = frame
+        }
+        self.reset = reset
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: reset)
     }
 }
