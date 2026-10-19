@@ -208,10 +208,8 @@ Item {
     onFileChanged: reload()
   }
 
-  // An open watch connection is a running collied; one older than watch answers an error.
   // A Socket never connects again after a failed attempt, so each attempt gets a new one.
   property var watchConn: null
-  property bool outdated: false
 
   function watch() {
     if (watchConn) return
@@ -221,19 +219,13 @@ Item {
       if (watchConn !== s) return
       watchConn = null
       s.destroy()
-      if (!outdated) apply("off", 0)
+      apply("off", 0)
       retryTimer.restart()
     }
     s.lineReceived.connect(function(line) {
       if (watchConn !== s) return
       var r = Model.parseReply(line)
-      if (r.type === "watch") {
-        outdated = false
-        apply("running", Number(r.pending_approvals) || 0, r.collied_version)
-      } else if (r.type === "error") {
-        outdated = true
-        apply("outdated", 0)
-      }
+      if (r.type === "watch") apply("running", Number(r.pending_approvals) || 0, r.collied_version)
     })
     s.connectionStateChanged.connect(function() {
       if (s.connected) {
@@ -242,10 +234,7 @@ Item {
       } else drop()
     })
     s.error.connect(function() {
-      if (!s.connected) {
-        outdated = false
-        drop()
-      }
+      if (!s.connected) drop()
     })
     s.connected = true
   }

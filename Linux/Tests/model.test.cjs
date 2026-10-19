@@ -35,7 +35,6 @@ test("status uses the running daemon version and handles older replies", () => {
   const old = M.parseReply('{"type":"watch","pending_approvals":0}');
   assert.equal(M.statusText("running", old.collied_version), "collied: Running (version unavailable)");
   assert.equal(M.statusText("running", ""), "collied: Running (version unavailable)");
-  assert.equal(M.statusText("outdated", "0.1.1"), "collied: Running (version unavailable)");
   assert.equal(M.statusText("off", "0.1.1"), "collied: Off");
   assert.equal(M.statusText("running", printable("0.1.1\n")), "collied 0.1.1\\n: Running");
 });
@@ -101,7 +100,6 @@ test("qrencode's matrix becomes rows of modules", () => {
 
 test("labels and countdowns", () => {
   assert.equal(M.label("off", 0), "collie: off");
-  assert.equal(M.label("outdated", 0), "collie: running");
   assert.equal(M.label("running", 1), "collie: running, 1 approval pending");
   assert.equal(M.label("running", 2), "collie: running, 2 approvals pending");
   assert.equal(M.secondsLeft(10500, 0), 11);
