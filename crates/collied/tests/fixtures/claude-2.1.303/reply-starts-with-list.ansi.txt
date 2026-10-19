@@ -1,0 +1,51 @@
+[0m[38;2;255;255;255m⏺ [0m1. Start by freezing the main branch and making sure the code is ready to ship. Run the full test suite locally and in CI, fix any failing or flaky tests, and run the linter and formatter so the codebase
+     is clean. Then check the open issues and pull requests to confirm that everything planned for this release has been merged and nothing half-finished is going out by accident.
+  2. Next, bump the version number in every place it lives, such as the package manifest, the [0m[38;2;177;185;249m--version [0moutput, and any embedded constants, and follow semantic versioning so users can tell what kind of
+     changes to expect. Update the CHANGELOG with a dated entry that lists new features, fixes, and breaking changes in plain language, then commit those edits with a clear release commit message.
+  3. After that, create an annotated git tag for the new version and push both the commit and the tag to the remote repository. Let your CI pipeline, or a local release script, build the binaries or
+     packages for each supported platform, generate checksums, and sign the artifacts if your project does that, so users can check that what they download matches exactly what you built.
+  4. Finally, publish the release by uploading the artifacts to GitHub Releases and pushing the package to its registry, such as npm, PyPI, crates.io, or a Homebrew tap. Install the published version on a
+     clean machine or container and run a quick smoke test of the main commands. Then announce the release, link the changelog, and watch the issue tracker for regressions over the next few days.
+
+[0m[38;2;153;153;153m✻ Cooked for 7s · done 5:29 PM[0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[0m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+❯ 
+[0m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[1m[38;5;4mOpus 5.5[0m[38;2;153;153;153m high  [0m[1m[38;5;2m░░░░░4% [0m[1m[38;5;4m20s[0m[38;2;153;153;153m | 5h [0m[1m[38;5;2m19%[0m[38;2;153;153;153m (3h30m) · 7d [0m[1m[38;5;2m3%[0m[38;2;153;153;153m | Est. usage: $0.09[0m
+  [0m[38;2;153;153;153m⏸ manual mode on[0m
