@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated: October 18, 2026.
+Last updated: October 19, 2026.
 
 This policy covers the Collie app for iPhone and Apple Watch, its notification extension and widgets, and `collied`, the daemon you run on your own Mac or Linux machine.
 
@@ -18,7 +18,7 @@ This policy covers the Collie app for iPhone and Apple Watch, its notification e
 - its configuration and its Tailscale node keys;
 - the paired phones, and each phone's push notification token and notification key;
 - the audit log, and its service log (the user journal on Linux);
-- recorded plan usage;
+- recorded plan usage, and token counts from your agents' transcripts for the last 32 days, by transcript, model and quarter hour, without any message text;
 - starred agents, and the pull requests you watch, with their URLs;
 - attachments you sent from the phone, deleted after 24 hours.
 
@@ -36,7 +36,7 @@ Deleting the app removes its files, but iOS can keep the app's Keychain items on
 
 ## What goes between your phone and your machine
 
-The phone and `collied` talk only over your tailnet, inside mutual TLS. This traffic carries what you see and do in the app: the agent list, terminal screens, conversation history while Chat is open or grid cards preview it, Git diffs, pull request status, plan usage, your prompts, keys and attachments, and approval decisions. The phone also gives `collied` its push notification token and a notification key it generated, so the machine can send it encrypted alerts.
+The phone and `collied` talk only over your tailnet, inside mutual TLS. This traffic carries what you see and do in the app: the agent list, terminal screens, conversation history while Chat is open or grid cards preview it, Git diffs, pull request status, plan usage, token counts and estimated costs (numbers, model names and dates only, for which the phone sends its current time zone offset so days end at your midnight), your prompts, keys and attachments, and approval decisions. The phone also gives `collied` its push notification token and a notification key it generated, so the machine can send it encrypted alerts.
 
 `collied` never writes conversation history or the summary lines shown in the Inbox to logs, and never puts them in notifications.
 

@@ -450,7 +450,7 @@ pub(super) fn bounded(text: &str, max: usize) -> Option<String> {
 }
 
 /// `2026-10-13T21:44:05.123Z`, as Claude Code writes it.
-pub(super) fn timestamp_ms(s: &str) -> Option<u64> {
+pub(crate) fn timestamp_ms(s: &str) -> Option<u64> {
     let b = s.as_bytes();
     if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || !s.ends_with('Z') {
         return None;

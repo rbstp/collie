@@ -390,6 +390,45 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
 
     func flock(machineId: String) async throws -> MachineFlock { demoFlock }
 
+    func usageCosts(machineId: String, range: CostRange, utcOffsetMinutes: Int16) async throws -> UsageCosts {
+        let count = switch range {
+        case .today: 1
+        case .week: 7
+        case .month: 30
+        }
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        let pattern = [8.42, 12.95, 6.10, 15.31, 9.84, 11.27, 7.56]
+        let days = (0..<count).map { index in
+            let date = calendar.date(byAdding: .day, value: index - count + 1, to: today) ?? today
+            let parts = calendar.dateComponents([.year, .month, .day], from: date)
+            return DayCost(
+                date: String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0),
+                costUsd: pattern[index % pattern.count]
+            )
+        }
+        let total = days.map(\.costUsd).reduce(0, +)
+        let scale = UInt64(count)
+        let models = [
+            ModelCost(agent: "claude", model: "claude-opus-5-5", tokens: CostTokens(input: 1_200 * scale, output: 210_000 * scale, cacheRead: 9_800_000 * scale, cacheWrite: 310_000 * scale), costUsd: total * 0.72, cacheSavingsUsd: total * 4.1),
+            ModelCost(agent: "codex", model: "gpt-6.1-sol", tokens: CostTokens(input: 1_100_000 * scale, output: 160_000 * scale, cacheRead: 6_400_000 * scale, cacheWrite: 0), costUsd: total * 0.2, cacheSavingsUsd: total * 0.9),
+            ModelCost(agent: "copilot", model: "claude-opus-5.5", tokens: CostTokens(input: 300 * scale, output: 40_000 * scale, cacheRead: 1_900_000 * scale, cacheWrite: 90_000 * scale), costUsd: total * 0.08, cacheSavingsUsd: total * 0.4),
+        ]
+        return UsageCosts(
+            scanning: false,
+            tokens: models.reduce(into: CostTokens(input: 0, output: 0, cacheRead: 0, cacheWrite: 0)) { sum, m in
+                sum.input += m.tokens.input
+                sum.output += m.tokens.output
+                sum.cacheRead += m.tokens.cacheRead
+                sum.cacheWrite += m.tokens.cacheWrite
+            },
+            costUsd: total,
+            cacheSavingsUsd: total * 5.4,
+            days: days,
+            models: models
+        )
+    }
+
     func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String {
         let total = UInt64(data.count)
         for step in 1...10 {

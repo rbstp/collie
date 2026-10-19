@@ -1144,7 +1144,7 @@ mod tests {
 
     #[tokio::test]
     async fn negotiated_terminal_opt_out_keeps_ordinary_calls_usable() {
-        for maximum in [26, 27, 28] {
+        for maximum in [26, 27, 28, 29] {
             let (session, server) = pair_of(Some(WS_SUBPROTOCOL)).await;
             let (mut session, mut ws) = (session.unwrap(), server.unwrap());
             let server = tokio::spawn(async move {
@@ -1152,7 +1152,7 @@ mod tests {
                 let Response::Hello(mut result) = hello_result(true) else {
                     unreachable!()
                 };
-                result.protocol_version = maximum.min(27);
+                result.protocol_version = maximum.min(28);
                 result.protocol_max_version = maximum;
                 result.capabilities.clear();
                 write(
@@ -1191,6 +1191,19 @@ mod tests {
                     ..
                 }
             ));
+            if maximum < 28 {
+                let costs = Request::UsageCosts(protocol::UsageCostsParams {
+                    range: protocol::CostRange::Today,
+                    utc_offset_minutes: 0,
+                });
+                assert!(matches!(
+                    session.call(costs, CALL_TIMEOUT).await,
+                    Err(SessionError::Server {
+                        code: ErrorCode::NotImplemented,
+                        ..
+                    })
+                ));
+            }
             assert_eq!(
                 session
                     .call(Request::FlockSnapshot(Empty {}), CALL_TIMEOUT)
@@ -1211,8 +1224,8 @@ mod tests {
             let Response::Hello(mut result) = hello_result(true) else {
                 unreachable!()
             };
-            result.protocol_version = 28;
-            result.protocol_max_version = 29;
+            result.protocol_version = 29;
+            result.protocol_max_version = 30;
             write(
                 &mut ws,
                 ServerFrame::Result {

@@ -1,38 +1,43 @@
 import CollieCore
 import SwiftUI
 
-/// The Agents tab's Usage view: one card per machine with the plan usage collied last recorded.
+/// The Agents tab's Usage view: one card per machine with the plan usage collied last recorded,
+/// then its tokens and estimated cost.
 struct UsageSections: View {
     let entries: [MachineFlockEntry]
+    let core: (any FlockCore)?
+    var refresh = 0
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        let recorded = entries.compactMap { entry in entry.flock?.planUsage.map { (entry, $0) } }
-        if recorded.isEmpty {
-            Text("No plan usage recorded").foregroundStyle(.secondary)
+        if entries.isEmpty {
+            NoMachines()
         }
-        ForEach(recorded, id: \.0.id) { entry, usage in
+        ForEach(entries) { entry in
             Section {
                 TimelineView(.everyMinute) { context in
                     let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout())
                     layout {
                         MachineName(machine: entry.machine).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                         if !dynamicTypeSize.isAccessibilitySize { Spacer() }
-                        Text(usage.age(now: context.date)).font(.caption).foregroundStyle(.secondary)
+                        Text(entry.flock?.planUsage?.age(now: context.date) ?? "No plan usage recorded").font(.caption).foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(entry.machine.label), \(usage.spokenAge(now: context.date))")
+                    .accessibilityLabel("\(entry.machine.label), \(entry.flock?.planUsage?.spokenAge(now: context.date) ?? "no plan usage recorded")")
                 }
-                TimelineView(.everyMinute) { context in
-                    VStack(alignment: .leading, spacing: 12) {
-                        if usage.fiveHour != nil || usage.sevenDay != nil {
-                            SubscriptionUsage(usage: usage, now: context.date)
-                        }
-                        if let codex = usage.codex, codex.resetsAtMs > context.date.unixMs {
-                            CodexSubscriptionUsage(usage: codex, now: context.date)
+                if let usage = entry.flock?.planUsage {
+                    TimelineView(.everyMinute) { context in
+                        VStack(alignment: .leading, spacing: 12) {
+                            if usage.fiveHour != nil || usage.sevenDay != nil {
+                                SubscriptionUsage(usage: usage, now: context.date)
+                            }
+                            if let codex = usage.codex, codex.resetsAtMs > context.date.unixMs {
+                                CodexSubscriptionUsage(usage: codex, now: context.date)
+                            }
                         }
                     }
                 }
+                UsageCostsCard(core: core, machineId: entry.machine.id, link: entry.flock?.link, refresh: refresh)
             }
             .opacity(entry.linkDown ? 0.5 : 1)
         }

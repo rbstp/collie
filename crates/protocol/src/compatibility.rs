@@ -168,7 +168,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn allows_request(&self, request: &Request) -> bool {
-        if !(26..=27).contains(&self.version) {
+        if !(26..=28).contains(&self.version) {
             return false;
         }
         match request {
@@ -186,6 +186,7 @@ impl NegotiatedProtocol {
             }
             Request::PairComplete(p) => self.terminal_grants || p.terminal_key.is_none(),
             Request::AgentHistory(p) => !p.latest || self.version >= 27,
+            Request::UsageCosts(_) => self.version >= 28,
             Request::Hello(_)
             | Request::Unpair(_)
             | Request::FlockSnapshot(_)
@@ -236,7 +237,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn server_frame(&self, frame: &ServerFrame) -> Result<String, &'static str> {
-        if !(26..=27).contains(&self.version) {
+        if !(26..=28).contains(&self.version) {
             return Err("unsupported wire codec");
         }
         let allowed = match frame {
@@ -244,6 +245,7 @@ impl NegotiatedProtocol {
                 Response::TerminalChallenge { .. } | Response::TerminalGranted { .. } => {
                     self.terminal_grants
                 }
+                Response::UsageCosts(_) => self.version >= 28,
                 Response::Hello(_)
                 | Response::Paired { .. }
                 | Response::Flock(_)
@@ -343,7 +345,7 @@ mod tests {
                     .unwrap();
             assert_eq!(
                 u64::from(negotiated.version()),
-                offer["protocol_version"].as_u64().unwrap().min(27)
+                offer["protocol_version"].as_u64().unwrap().min(28)
             );
             let frame = ClientFrame {
                 id: 2,
@@ -366,7 +368,7 @@ mod tests {
     fn baseline_apps_validate_retained_daemon_results_and_selected_revisions() {
         let mut result: HelloResult =
             serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
-        for (maximum, selected) in [(26, 26), (27, 27), (28, 27)] {
+        for (maximum, selected) in [(26, 26), (27, 27), (28, 28), (29, 28)] {
             result.protocol_max_version = maximum;
             result.protocol_version = selected;
             assert_eq!(
@@ -462,6 +464,51 @@ mod tests {
         let current =
             NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
         assert!(current.allows_request(&history(true)));
+    }
+
+    #[test]
+    fn usage_costs_require_revision_28() {
+        let request = Request::UsageCosts(crate::UsageCostsParams {
+            range: crate::CostRange::Week,
+            utc_offset_minutes: -240,
+        });
+        let reply = ServerFrame::Result {
+            id: 1,
+            result: Response::UsageCosts(crate::UsageCosts {
+                scanning: false,
+                tokens: crate::CostTokens::default(),
+                cost_usd: 0.0,
+                cache_savings_usd: 0.0,
+                days: Vec::new(),
+                models: Vec::new(),
+            }),
+        };
+        let mut result: HelloResult =
+            serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
+        result.protocol_max_version = 27;
+        result.protocol_version = 27;
+        let previous = NegotiatedProtocol::from_result(&result).unwrap();
+        assert!(!previous.allows_request(&request));
+        assert!(
+            previous
+                .client_frame(ClientFrame {
+                    id: 1,
+                    request: request.clone()
+                })
+                .is_err()
+        );
+        assert!(previous.server_frame(&reply).is_err());
+        let current =
+            NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
+        assert_eq!(current.version(), 28);
+        let encoded = current
+            .client_frame(ClientFrame { id: 1, request })
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&encoded).unwrap(),
+            json!({"id":1,"method":"usage.costs","params":{"range":"7d","utc_offset_minutes":-240}})
+        );
+        assert!(current.server_frame(&reply).is_ok());
     }
 
     #[test]

@@ -16,6 +16,8 @@ use crate::herdr::AgentInfo;
 use crate::prompt;
 use crate::usage::Usage;
 
+pub(crate) use subagents::timestamp_ms;
+
 /// Only the end is read: transcripts reach tens of MB, and what is shown sits near the end.
 const TAIL_BYTES: u64 = 1 << 20;
 pub const MAX_TEXT_CHARS: usize = 160;
@@ -97,6 +99,14 @@ impl Transcripts {
     /// For the reconcile tick: one fstat, the recorded plan when it changed since it last said so.
     pub fn plan_moved(&mut self) -> Option<Option<protocol::PlanUsage>> {
         self.usage.plan_moved().then(|| self.usage.plan())
+    }
+
+    pub fn cost_roots(&self) -> crate::costs::Roots {
+        crate::costs::Roots {
+            claude: self.claude_projects.clone(),
+            codex: self.codex_sessions.clone(),
+            copilot: self.copilot_sessions.clone(),
+        }
     }
 
     pub fn plan(&mut self) -> Option<protocol::PlanUsage> {
@@ -615,7 +625,7 @@ fn uuid_v7_ms(id: &str) -> Option<u64> {
 }
 
 /// Days since 1970-01-01 to a proleptic Gregorian date (Howard Hinnant's `civil_from_days`).
-fn civil(days: i64) -> (i64, u32, u32) {
+pub(crate) fn civil(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);

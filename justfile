@@ -9,6 +9,14 @@ setup:
 schema:
     cargo run -q -p protocol --features schema --bin protocol-schema docs/protocol
 
+litellm_commit := "0675c22d56a2c8592c6c716cd60177406a9751b9"
+
+# The Claude and OpenAI chat prices from LiteLLM's table at `litellm_commit`, bundled in collied.
+prices:
+    curl -fsSL "https://raw.githubusercontent.com/BerriAI/litellm/{{ litellm_commit }}/model_prices_and_context_window.json" \
+        | jq -S 'with_entries(select((.key | test("^[a-z0-9][a-z0-9.-]*$")) and (.value | type == "object") and (.value.litellm_provider == "anthropic" or .value.litellm_provider == "openai") and (.value.mode == "chat" or .value.mode == "responses") and (.value.input_cost_per_token | type == "number") and (.value.output_cost_per_token | type == "number"))) | map_values({input_cost_per_token, output_cost_per_token, cache_read_input_token_cost, cache_creation_input_token_cost, cache_creation_input_token_cost_above_1hr, input_cost_per_token_above_272k_tokens, output_cost_per_token_above_272k_tokens, cache_read_input_token_cost_above_272k_tokens, cache_creation_input_token_cost_above_272k_tokens, fast: .provider_specific_entry.fast} | with_entries(select(.value != null)))' \
+        > crates/collied/data/prices.json
+
 fmt:
     cargo fmt --all
 

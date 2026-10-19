@@ -21,6 +21,7 @@ struct FlockScreen: View {
     @State private var snoozed = SnoozedAgents.load(from: SnoozedAgents.file)
     @State private var gridOrder = GridOrder.load(from: GridOrder.file)
     @State private var showsUsage = false
+    @State private var usageRefresh = 0
     @State private var dragging: GridDrag?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -29,7 +30,7 @@ struct FlockScreen: View {
         NavigationStack(path: $path) {
             TabView(selection: $showsUsage) {
                 agents.background(GridPageLock(locked: dragging != nil || (layout == .inbox && !showsUsage))).tag(false)
-                List { UsageSections(entries: model.entries) }.tag(true)
+                List { UsageSections(entries: model.entries, core: core, refresh: usageRefresh) }.tag(true)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .springLoadingBehavior(.disabled)
@@ -40,6 +41,7 @@ struct FlockScreen: View {
             .refreshable {
                 for machine in machines { try? core?.reconnect(machineId: machine.id) }
                 await model.refresh(core: core, machines: machines)
+                usageRefresh += 1
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {

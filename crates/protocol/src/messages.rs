@@ -139,6 +139,84 @@ pub struct HistoryPage {
     pub omitted: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub enum CostRange {
+    #[serde(rename = "today")]
+    Today,
+    #[serde(rename = "7d")]
+    Week,
+    #[serde(rename = "30d")]
+    Month,
+}
+
+impl CostRange {
+    pub fn days(self) -> u32 {
+        match self {
+            Self::Today => 1,
+            Self::Week => 7,
+            Self::Month => 30,
+        }
+    }
+}
+
+/// `utc_offset_minutes` is the phone's, so days end at the phone's midnight.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct UsageCostsParams {
+    pub range: CostRange,
+    #[cfg_attr(feature = "schema", schemars(range(min = -1080, max = 1080)))]
+    pub utc_offset_minutes: i16,
+}
+
+impl UsageCostsParams {
+    pub fn is_valid(&self) -> bool {
+        (-1080..=1080).contains(&self.utc_offset_minutes)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct CostTokens {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+/// Estimated at API list prices from transcripts; `None` when the model has no known price.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct ModelCost {
+    pub agent: String,
+    pub model: String,
+    pub tokens: CostTokens,
+    pub cost_usd: Option<f64>,
+    pub cache_savings_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct DayCost {
+    /// `YYYY-MM-DD` at the requested offset.
+    pub date: String,
+    pub cost_usd: f64,
+}
+
+/// Totals cover every model, including those beyond the listed ones and those without a price.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct UsageCosts {
+    /// A scan is still reading transcripts; the figures so far are partial.
+    pub scanning: bool,
+    pub tokens: CostTokens,
+    pub cost_usd: f64,
+    pub cache_savings_usd: f64,
+    pub days: Vec<DayCost>,
+    pub models: Vec<ModelCost>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct ClientFrame {
@@ -176,6 +254,8 @@ pub enum Request {
     AgentDiff(AgentDiffParams),
     #[serde(rename = "agent.draft")]
     AgentDraft(AgentTarget),
+    #[serde(rename = "usage.costs")]
+    UsageCosts(UsageCostsParams),
 
     #[serde(rename = "agent.prompt")]
     AgentPrompt(AgentPromptParams),
@@ -261,6 +341,7 @@ impl Request {
         "agent.changes",
         "agent.diff",
         "agent.draft",
+        "usage.costs",
         "agent.prompt",
         "agent.send_keys",
         "agent.type_text",
@@ -309,6 +390,7 @@ impl Request {
             Self::AgentChanges(_) => "agent.changes",
             Self::AgentDiff(_) => "agent.diff",
             Self::AgentDraft(_) => "agent.draft",
+            Self::UsageCosts(_) => "usage.costs",
             Self::AgentPrompt(_) => "agent.prompt",
             Self::AgentSendKeys(_) => "agent.send_keys",
             Self::AgentTypeText(_) => "agent.type_text",
@@ -356,6 +438,7 @@ impl Request {
             | Self::AgentChanges(_)
             | Self::AgentDiff(_)
             | Self::AgentDraft(_)
+            | Self::UsageCosts(_)
             | Self::ApprovalList(_) => MethodClass::Read,
             Self::AgentPrompt(_)
             | Self::AgentSendKeys(_)
@@ -1083,6 +1166,7 @@ pub enum Response {
     GitChanges(GitChanges),
     GitDiff(GitDiff),
     History(HistoryPage),
+    UsageCosts(UsageCosts),
     TaskWorktrees {
         source: Cwd,
         worktrees: Vec<TaskWorktreeInfo>,
@@ -1782,6 +1866,7 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
         Request::Hello(p) => p.is_valid(),
         Request::AgentRead(p) | Request::PaneRead(p) => p.is_valid(),
         Request::AgentHistory(p) => p.is_valid(),
+        Request::UsageCosts(p) => p.is_valid(),
         Request::AgentSendKeys(p) => p.is_valid(),
         Request::AgentTypeText(p) => p.is_valid(),
         Request::TerminalRun(p) => p.is_valid(),
@@ -2070,7 +2155,37 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 27);
+        assert_eq!(crate::PROTOCOL_VERSION, 28);
+    }
+
+    #[test]
+    fn usage_costs_are_a_bounded_read() {
+        let costs = |params: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"usage.costs","params":{params}}}"#
+            ))
+        };
+        let frame = costs(r#"{"range":"30d","utc_offset_minutes":330}"#).unwrap();
+        assert_eq!(frame.request.class(), MethodClass::Read);
+        assert_eq!(
+            frame.request,
+            Request::UsageCosts(UsageCostsParams {
+                range: CostRange::Month,
+                utc_offset_minutes: 330
+            })
+        );
+        for params in [
+            r#"{"range":"today","utc_offset_minutes":1081}"#,
+            r#"{"range":"1y","utc_offset_minutes":0}"#,
+            r#"{"range":"today"}"#,
+            r#"{"range":"today","utc_offset_minutes":0,"path":"/etc"}"#,
+        ] {
+            assert_eq!(
+                costs(params).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{params}"
+            );
+        }
     }
 
     #[test]
