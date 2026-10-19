@@ -194,6 +194,19 @@ test('another attested installation cannot adopt, rotate or revoke foreign route
     assert.equal((await f.db.prepare("SELECT generation FROM routes WHERE id = 'other_app'").first())!.generation, 2);
   } finally { await f.runtime.dispose(); }
 });
+test('a revoked installation cannot request challenges or commit controls', async () => {
+  const f = await controlFixture();
+  try {
+    const op: Operation = { ...f.common, op: 'revoke_pairing', pairing_id: 'machine' };
+    const challenge = (await (await f.post('challenge', op)).json()).challenge;
+    await f.db.prepare("UPDATE attestations SET revoked = 1 WHERE installation_id = 'phone'").run();
+    for (const operation of [op, { ...f.common, op: 'route', pairing_id: 'machine', route_id: 'route', expected_generation: 1, kind: 'app', destination: 'b'.repeat(64) }])
+      assert.equal((await f.post('challenge', operation)).status, 401);
+    assert.equal((await f.post('control', { operation: op, challenge, assertion: await assertion(f.keys.privateKey, challenge, 1) })).status, 401);
+    assert.equal((await f.db.prepare('SELECT counter FROM attestations').first())!.counter, 0);
+    assert.equal((await f.db.prepare("SELECT epoch FROM pairings WHERE id = 'machine'").first())!.epoch, 0);
+  } finally { await f.runtime.dispose(); }
+});
 test('eight active activities are bounded and rejected registration rolls back every state change', async () => {
   const f = await controlFixture();
   try {
