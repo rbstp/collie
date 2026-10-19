@@ -7,6 +7,7 @@ pub mod attachments;
 pub mod audit;
 pub mod config;
 pub mod control;
+pub mod costs;
 #[cfg(target_os = "linux")]
 pub mod creds;
 pub mod daemon;

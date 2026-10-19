@@ -36,6 +36,7 @@ use crate::approvals::{self, Approvals};
 use crate::attachments::{self, Attachments};
 use crate::audit::Audit;
 use crate::control::{self, Candidate, PairAttempt, StatusInfo};
+use crate::costs::Costs;
 use crate::drive::{self, Authorized, Driver, Origin, Reply, Watched, Watcher};
 use crate::flock::{self, Baseline, Stars, StatusTracker};
 use crate::gate::{self, Decision};
@@ -200,6 +201,7 @@ pub struct State {
     tracker: Mutex<StatusTracker>,
     stars: Mutex<Stars>,
     transcripts: Mutex<Transcripts>,
+    costs: Arc<Costs>,
     live: Mutex<activity::Live>,
     turns: Mutex<Turns>,
     pulls: Mutex<Pulls>,
@@ -592,6 +594,10 @@ pub async fn start_with(
     let listener = node.listen("tcp", &format!(":{}", cfg.port))?;
     let transcripts =
         Transcripts::from_env().with_usage(cfg.data_dir.join(crate::usage::USAGE_FILE));
+    let costs = Arc::new(Costs::new(
+        cfg.data_dir.join(crate::costs::INDEX_FILE),
+        transcripts.cost_roots(),
+    ));
     let tracker = StatusTracker::load(cfg.data_dir.join(config::STATUS_FILE));
     let stars = Stars::load(cfg.data_dir.join(config::STARS_FILE));
     let watches = Watches::load(cfg.data_dir.join(config::WATCHES_FILE));
@@ -620,6 +626,7 @@ pub async fn start_with(
         tracker: Mutex::new(tracker),
         stars: Mutex::new(stars),
         transcripts: Mutex::new(transcripts),
+        costs,
         live: Mutex::new(activity::Live::default()),
         turns: Mutex::new(Turns::default()),
         pulls: Mutex::new(Pulls::new(watches, archive)),
@@ -1348,6 +1355,18 @@ impl Session<'_> {
         }
     }
 
+    /// Answers at once with what the index holds; a scan, cold or not, runs on its own thread.
+    async fn usage_costs(&self, p: protocol::UsageCostsParams) -> drive::Reply {
+        let costs = self.state.costs.clone();
+        costs.refresh();
+        let summary = tokio::task::spawn_blocking(move || {
+            costs.summary(p.range, p.utc_offset_minutes, crate::now_ms())
+        })
+        .await
+        .map_err(|_| (ErrorCode::Internal, "usage unavailable".into()))?;
+        Ok(Response::UsageCosts(summary))
+    }
+
     async fn history(&self, p: protocol::HistoryParams, auth: &drive::Authorized) -> drive::Reply {
         if !auth() {
             return err(ErrorCode::NotPaired, "pairing revoked");
@@ -1544,6 +1563,7 @@ impl Session<'_> {
             Request::AgentWatch(p) => (self.watch(p).await, None),
             Request::TaskOptions(_) => (drive.task_options().await, None),
             Request::AgentDraft(p) => (drive.draft(&p.terminal_id).await, None),
+            Request::UsageCosts(p) => (self.usage_costs(p).await, None),
             Request::AgentPrompt(p) => {
                 let (op_id, d) = (p.op_id.clone(), drive.clone());
                 let op = self.audited(method, target.clone(), async move {
@@ -1865,7 +1885,12 @@ impl Session<'_> {
     async fn finish(&mut self, method: &str, done: Finished) -> Flow {
         let quiet = matches!(
             method,
-            "hello" | "flock.snapshot" | "approval.list" | "attachment.chunk" | "attachment.abort"
+            "hello"
+                | "flock.snapshot"
+                | "approval.list"
+                | "usage.costs"
+                | "attachment.chunk"
+                | "attachment.abort"
         ) || (method == "terminal.challenge" && done.reply.is_ok());
         if !quiet && done.origin != Some(Origin::Ran) {
             let mut result = outcome(&done.reply);

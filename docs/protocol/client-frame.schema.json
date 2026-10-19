@@ -428,6 +428,14 @@
       "minLength": 3,
       "type": "string"
     },
+    "CostRange": {
+      "enum": [
+        "today",
+        "7d",
+        "30d"
+      ],
+      "type": "string"
+    },
     "Cwd": {
       "maxLength": 1024,
       "pattern": "^/",
@@ -1124,6 +1132,26 @@
       "pattern": "^[0-9a-f]{32}$",
       "type": "string"
     },
+    "UsageCostsParams": {
+      "additionalProperties": false,
+      "description": "`utc_offset_minutes` is the phone's, so days end at the phone's midnight.",
+      "properties": {
+        "range": {
+          "$ref": "#/$defs/CostRange"
+        },
+        "utc_offset_minutes": {
+          "format": "int16",
+          "maximum": 1080,
+          "minimum": -1080,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "range",
+        "utc_offset_minutes"
+      ],
+      "type": "object"
+    },
     "WorkspaceCloseParams": {
       "additionalProperties": false,
       "description": "`confirm` must be `true`; anything else yields `confirm_required`.",
@@ -1332,6 +1360,22 @@
         },
         "params": {
           "$ref": "#/$defs/AgentTarget"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "usage.costs",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/UsageCostsParams"
         }
       },
       "required": [

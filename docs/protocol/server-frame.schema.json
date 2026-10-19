@@ -402,10 +402,58 @@
       ],
       "type": "object"
     },
+    "CostTokens": {
+      "properties": {
+        "cache_read": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_write": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cache_read",
+        "cache_write"
+      ],
+      "type": "object"
+    },
     "Cwd": {
       "maxLength": 1024,
       "pattern": "^/",
       "type": "string"
+    },
+    "DayCost": {
+      "properties": {
+        "cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "date": {
+          "description": "`YYYY-MM-DD` at the requested offset.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "date",
+        "cost_usd"
+      ],
+      "type": "object"
     },
     "Decision": {
       "oneOf": [
@@ -998,6 +1046,40 @@
       ],
       "type": "object"
     },
+    "ModelCost": {
+      "description": "Estimated at API list prices from transcripts; `None` when the model has no known price.",
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "cache_savings_usd": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cost_usd": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "tokens": {
+          "$ref": "#/$defs/CostTokens"
+        }
+      },
+      "required": [
+        "agent",
+        "model",
+        "tokens"
+      ],
+      "type": "object"
+    },
     "Nonce": {
       "pattern": "^[A-Za-z0-9_-]{43}$",
       "type": "string"
@@ -1345,6 +1427,19 @@
           "properties": {
             "type": {
               "const": "history",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/UsageCosts",
+          "properties": {
+            "type": {
+              "const": "usage_costs",
               "type": "string"
             }
           },
@@ -1822,6 +1917,47 @@
     "UploadId": {
       "pattern": "^[0-9a-f]{32}$",
       "type": "string"
+    },
+    "UsageCosts": {
+      "description": "Totals cover every model, including those beyond the listed ones and those without a price.",
+      "properties": {
+        "cache_savings_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "cost_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "days": {
+          "items": {
+            "$ref": "#/$defs/DayCost"
+          },
+          "type": "array"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/ModelCost"
+          },
+          "type": "array"
+        },
+        "scanning": {
+          "description": "A scan is still reading transcripts; the figures so far are partial.",
+          "type": "boolean"
+        },
+        "tokens": {
+          "$ref": "#/$defs/CostTokens"
+        }
+      },
+      "required": [
+        "scanning",
+        "tokens",
+        "cost_usd",
+        "cache_savings_usd",
+        "days",
+        "models"
+      ],
+      "type": "object"
     },
     "UsageWindow": {
       "properties": {

@@ -1,6 +1,6 @@
 # Usage
 
-To see plan usage, switch the Agents tab to **Usage**, or swipe left. Each machine that has recorded a plan gets a card, which says how long ago it recorded it.
+To see plan usage and token cost, switch the Agents tab to **Usage**, or swipe left. Each machine gets a card, which says how long ago it recorded its plan usage.
 
 | Agent | Shows | Source |
 |---|---|---|
@@ -14,7 +14,22 @@ To see plan usage, switch the Agents tab to **Usage**, or swipe left. Each machi
 
 Each block shows the amount used, the reset time and a bar with a tick for the time elapsed in the window. When usage passes the tick, you are using the plan faster than an even pace.
 
-The same readings feed the [Apple Watch](../notifications/apple-watch.md) complication and widget.
+## Tokens and cost
+
+Below the plan usage, each card shows the tokens the machine's agents used and what they would have cost at API prices. Choose **Today**, **7 days** or **30 days** above it.
+
+- The total is the estimated cost, with what cache reads saved compared with the input price.
+- Input, output, cache read and cache write give the tokens.
+- For 7 and 30 days, a bar chart gives the cost of each day.
+- Each model gets a row with its agent, its tokens and its cost. A model without a known price shows its tokens and "No price".
+
+`collied` counts the tokens in the Claude Code, Codex and Copilot CLI transcripts on the machine, subagents included. The first time, it reads them in the background, and the card says "Scanning" while the totals grow. After that it reads only what the agents wrote since. Days end at midnight where your phone is.
+
+The cost is an estimate, not your bill: a subscription charges differently, and Copilot bills premium requests, so its cost is what the same tokens would cost from the API. The prices come from a snapshot of LiteLLM's price table that ships with `collied`, so updating `collied` updates them.
+
+If the card asks you to update `collied`, the machine runs a release too old to count tokens: [update collied](../operate/updating.md#collied) there.
+
+The plan readings above also feed the [Apple Watch](../notifications/apple-watch.md) complication and widget.
 
 <div class="screenshots">
 <img src="../images/watch-widget.png" width="208" height="248" loading="lazy" alt="The Plan usage widget on the Apple Watch: three gauges, Claude 5-hour, Claude weekly and Codex monthly, each with a reset countdown">

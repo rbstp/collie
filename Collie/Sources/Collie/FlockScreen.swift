@@ -29,7 +29,7 @@ struct FlockScreen: View {
         NavigationStack(path: $path) {
             TabView(selection: $showsUsage) {
                 agents.background(GridPageLock(locked: dragging != nil || (layout == .inbox && !showsUsage))).tag(false)
-                List { UsageSections(entries: model.entries) }.tag(true)
+                List { UsageSections(entries: model.entries, core: core) }.tag(true)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .springLoadingBehavior(.disabled)

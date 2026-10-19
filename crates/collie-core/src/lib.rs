@@ -712,6 +712,47 @@ pub struct HistoryPage {
     pub omitted: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum CostRange {
+    Today,
+    Week,
+    Month,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, uniffi::Record)]
+pub struct CostTokens {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+/// `cost_usd` is `None` when collied has no price for the model.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ModelCost {
+    pub agent: String,
+    pub model: String,
+    pub tokens: CostTokens,
+    pub cost_usd: Option<f64>,
+    pub cache_savings_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DayCost {
+    pub date: String,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct UsageCosts {
+    pub scanning: bool,
+    pub tokens: CostTokens,
+    pub cost_usd: f64,
+    pub cache_savings_usd: f64,
+    pub days: Vec<DayCost>,
+    pub models: Vec<ModelCost>,
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct GitDiff {
     pub patch: String,
@@ -1891,6 +1932,63 @@ impl CollieCore {
             latest: false,
         };
         self.history(&machine_id, params).await
+    }
+
+    /// Estimated token cost by day and model; a machine below revision 28 is refused locally.
+    pub async fn usage_costs(
+        &self,
+        machine_id: String,
+        range: CostRange,
+        utc_offset_minutes: i16,
+    ) -> Result<UsageCosts, CoreError> {
+        let params = protocol::UsageCostsParams {
+            range: match range {
+                CostRange::Today => protocol::CostRange::Today,
+                CostRange::Week => protocol::CostRange::Week,
+                CostRange::Month => protocol::CostRange::Month,
+            },
+            utc_offset_minutes,
+        };
+        if !params.is_valid() {
+            return Err(invalid("utc_offset_minutes", "invalid time zone offset"));
+        }
+        let tokens = |t: protocol::CostTokens| CostTokens {
+            input: t.input,
+            output: t.output,
+            cache_read: t.cache_read,
+            cache_write: t.cache_write,
+        };
+        match self
+            .call(&machine_id, Request::UsageCosts(params), CALL_TIMEOUT)
+            .await?
+        {
+            Response::UsageCosts(c) => Ok(UsageCosts {
+                scanning: c.scanning,
+                tokens: tokens(c.tokens),
+                cost_usd: c.cost_usd,
+                cache_savings_usd: c.cache_savings_usd,
+                days: c
+                    .days
+                    .into_iter()
+                    .map(|d| DayCost {
+                        date: d.date,
+                        cost_usd: d.cost_usd,
+                    })
+                    .collect(),
+                models: c
+                    .models
+                    .into_iter()
+                    .map(|m| ModelCost {
+                        agent: m.agent,
+                        model: m.model,
+                        tokens: tokens(m.tokens),
+                        cost_usd: m.cost_usd,
+                        cache_savings_usd: m.cache_savings_usd,
+                    })
+                    .collect(),
+            }),
+            other => Err(unexpected(&other).into()),
+        }
     }
 
     /// The last two user messages and the last two agent text messages, for a grid card.

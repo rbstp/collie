@@ -87,6 +87,8 @@ final class FakeCore: AgentCore {
         var link = LinkPhase.connected
         var heldOps: Set<String> = []
         var resends: [String] = []
+        var costs: UsageCosts?
+        var costRanges: [CostRange] = []
     }
 
     let state = Mutex(State())
@@ -175,6 +177,14 @@ final class FakeCore: AgentCore {
         }
         if let error { throw error }
         return TerminalSnapshot(terminalId: terminalId, source: source, ansi: "read \(read)", truncated: false)
+    }
+    func usageCosts(machineId: String, range: CostRange, utcOffsetMinutes: Int16) async throws -> UsageCosts {
+        let costs = state.withLock { s in
+            s.costRanges.append(range)
+            return s.costs
+        }
+        guard let costs else { throw CoreError.NotImplemented }
+        return costs
     }
     func agentLatest(machineId: String, terminalId: String) async throws -> HistoryPage {
         let page = state.withLock { s in
