@@ -1,8 +1,8 @@
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::DirBuilderExt;
-use std::os::unix::net::UnixStream as StdUnixStream;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[allow(dead_code)]
+mod common;
+
+use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,6 +10,7 @@ use collied::approvals::Approvals;
 use collied::audit::Audit;
 use collied::drive::{Authorized, Driver};
 use collied::herdr;
+use common::{HerdrSession, herdr_installed};
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, ApprovalDecideParams,
     ApprovalOutcome, Cwd, Decision, ErrorCode, Event, Key, Label, OpId, PaneCloseParams,
@@ -20,14 +21,7 @@ use tokio::sync::broadcast;
 
 #[test]
 fn live_herdr_drive() {
-    let installed = Command::new("herdr")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !installed {
-        println!("skipped: herdr is not installed");
+    if !herdr_installed() {
         return;
     }
     let mut session = HerdrSession::start("drv");
@@ -70,20 +64,9 @@ const FAKE_SCREEN: &str = "\
 
 #[test]
 fn live_herdr_approval() {
-    let installed = Command::new("herdr")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !installed {
-        println!("skipped: herdr is not installed");
+    if !herdr_installed() {
         return;
     }
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("collied=debug")
-        .with_test_writer()
-        .try_init();
     let mut session = HerdrSession::start("apv");
     let bin = session.root.join("bin/claude");
     std::fs::write(&bin, FAKE_CLAUDE).unwrap();
@@ -150,8 +133,7 @@ async fn approval_scenario(session: &HerdrSession, input: ApprovalInput) {
         .expect("the fake claude never showed as blocked");
     let workspaces = herdr::workspace_list(socket).await.unwrap();
 
-    let audit_dir = tempfile::tempdir().unwrap();
-    let audit = Arc::new(Audit::open(&audit_dir.path().join("audit.log")).unwrap());
+    let audit = Arc::new(Audit::open(&session.root.join("audit.log")).unwrap());
     let (tx, mut events) = broadcast::channel(16);
     let approvals = Approvals::new(socket.clone(), "nMAC".into(), tx, audit, None);
     approvals.observe(&agents, &workspaces).await;
@@ -515,107 +497,4 @@ fn which(bin: &str) -> bool {
         .stdout(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
-}
-
-/// A dedicated named herdr session in its own HOME and XDG dirs with a scrubbed
-/// environment, so neither `--session` precedence nor an inherited HERDR_SOCKET_PATH
-/// can ever reach the user's default session.
-/// `root/bin` comes first on the session's PATH, for executables a test provides.
-struct HerdrSession {
-    child: Child,
-    root: PathBuf,
-    work: PathBuf,
-    name: String,
-    socket: PathBuf,
-}
-
-impl HerdrSession {
-    fn start(tag: &str) -> Self {
-        let pid = std::process::id();
-        // sun_path is 104 bytes on macOS and herdr nests its socket four levels deep.
-        let root = PathBuf::from(format!("/tmp/c{tag}-{pid}"));
-        let _ = std::fs::remove_dir_all(&root);
-        let work = root.join("work");
-        for dir in [&root, &root.join("home"), &root.join("bin"), &work] {
-            std::fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
-        }
-        let name = format!("collied-{tag}-{pid}");
-        let socket = root.join("herdr/sessions").join(&name).join("herdr.sock");
-        let child = herdr_cmd(&root)
-            .args(["--session", &name, "server"])
-            .env("HERDR_STARTUP_CWD", &work)
-            .env("SHELL", "/bin/sh")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let session = Self {
-            child,
-            root,
-            work,
-            name,
-            socket,
-        };
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while !pings(&session.socket) {
-            assert!(Instant::now() < deadline, "dedicated herdr never answered");
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        session
-    }
-
-    fn stop(&mut self) -> bool {
-        let _ = herdr_cmd(&self.root)
-            .args(["session", "stop", &self.name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        let deadline = Instant::now() + Duration::from_secs(15);
-        while Instant::now() < deadline {
-            if self.child.try_wait().ok().flatten().is_some() {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        false
-    }
-}
-
-impl Drop for HerdrSession {
-    fn drop(&mut self) {
-        if self.child.try_wait().ok().flatten().is_none() && !self.stop() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
-}
-
-fn herdr_cmd(root: &Path) -> Command {
-    let mut path = std::ffi::OsString::from(root.join("bin"));
-    path.push(":");
-    path.push(std::env::var_os("PATH").unwrap_or_default());
-    let mut cmd = Command::new("herdr");
-    cmd.env_clear()
-        .env("PATH", path)
-        .env("HOME", root.join("home"))
-        .env("XDG_CONFIG_HOME", root)
-        .env("XDG_STATE_HOME", root.join("state"));
-    cmd
-}
-
-fn pings(socket: &Path) -> bool {
-    let Ok(mut conn) = StdUnixStream::connect(socket) else {
-        return false;
-    };
-    let _ = conn.set_read_timeout(Some(Duration::from_secs(5)));
-    if conn
-        .write_all(b"{\"id\":\"live\",\"method\":\"ping\",\"params\":{}}\n")
-        .is_err()
-    {
-        return false;
-    }
-    let mut line = String::new();
-    BufReader::new(conn).read_line(&mut line).is_ok() && line.contains("\"pong\"")
 }

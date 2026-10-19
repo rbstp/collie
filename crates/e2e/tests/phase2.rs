@@ -651,7 +651,7 @@ fn live_herdr_drive() {
         return;
     }
     let t0 = Instant::now();
-    let mut herdr = HerdrSession::start();
+    let mut herdr = HerdrSession::start("e2e");
     let fake_pi = herdr.root.join("bin/pi");
     std::fs::write(
         &fake_pi,
@@ -695,7 +695,7 @@ async fn live_scenario(
     herdr: &HerdrSession,
     pi_is_fake: bool,
 ) {
-    let work = herdr.root.join("collie-e2e");
+    let work = herdr.work.clone();
     let project = work.join("proj");
     std::fs::create_dir(&project).unwrap();
     std::os::unix::fs::symlink(herdr.root.join("home"), work.join("escape")).unwrap();

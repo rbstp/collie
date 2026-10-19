@@ -15,7 +15,7 @@ fn live_terminal() {
     if !herdr_installed() || !in_child("live_terminal") {
         return;
     }
-    let mut herdr = HerdrSession::start();
+    let mut herdr = HerdrSession::start("e2e");
     let root = TempDir::new("e2e-terminal");
     let net = Net::start(&root.0);
     wait_ready(&net.mac, 0);

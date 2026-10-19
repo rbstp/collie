@@ -350,21 +350,22 @@ impl Drop for TestControl {
 pub struct HerdrSession {
     child: Child,
     pub root: PathBuf,
+    pub work: PathBuf,
     pub name: String,
     pub socket: PathBuf,
 }
 
 impl HerdrSession {
-    pub fn start() -> Self {
+    pub fn start(tag: &str) -> Self {
         let pid = std::process::id();
         // sun_path is 104 bytes on macOS and herdr nests its socket four levels deep.
-        let root = PathBuf::from(format!("/tmp/ce2e-{pid}"));
+        let root = PathBuf::from(format!("/tmp/c{tag}-{pid}"));
         let _ = std::fs::remove_dir_all(&root);
         let work = root.join("collie-e2e");
         for dir in [&root, &root.join("home"), &root.join("bin"), &work] {
             std::fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
         }
-        let name = format!("collie-e2e-{pid}");
+        let name = format!("collie-{tag}-{pid}");
         let socket = root.join("herdr/sessions").join(&name).join("herdr.sock");
         let child = isolated("herdr", &root)
             .args(["--session", &name, "server"])
@@ -378,6 +379,7 @@ impl HerdrSession {
         let session = Self {
             child,
             root,
+            work,
             name,
             socket,
         };

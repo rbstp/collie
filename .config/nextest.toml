@@ -15,5 +15,5 @@ filter = 'test(/end_to_end|phase3_expired_approvals/)'
 priority = 100
 
 [[profile.default.overrides]]
-filter = 'binary_id(e2e::*) | binary_id(tailnet::end_to_end) | binary_id(collied::server) | test(tailnet_tests::)'
+filter = '(binary_id(e2e::*) - binary_id(e2e::live_herdr)) | binary_id(tailnet::end_to_end) | binary_id(collied::server) | test(tailnet_tests::)'
 test-group = 'tailnet'
