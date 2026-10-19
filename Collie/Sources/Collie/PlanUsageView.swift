@@ -6,9 +6,13 @@ import SwiftUI
 struct UsageSections: View {
     let entries: [MachineFlockEntry]
     let core: (any FlockCore)?
+    var refresh = 0
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
+        if entries.isEmpty {
+            NoMachines()
+        }
         ForEach(entries) { entry in
             Section {
                 TimelineView(.everyMinute) { context in
@@ -33,7 +37,7 @@ struct UsageSections: View {
                         }
                     }
                 }
-                UsageCostsCard(core: core, machineId: entry.machine.id)
+                UsageCostsCard(core: core, machineId: entry.machine.id, link: entry.flock?.link, refresh: refresh)
             }
             .opacity(entry.linkDown ? 0.5 : 1)
         }

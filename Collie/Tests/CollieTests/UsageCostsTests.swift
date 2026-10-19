@@ -47,6 +47,29 @@ private func costs(scanning: Bool, cost: Double = 1.5) -> UsageCosts {
     #expect(model.phase == .loaded(costs(scanning: false)))
 }
 
+@MainActor @Test func usageCostsRetryAFailedReadDuringAScan() async {
+    let model = UsageCostsModel()
+    var calls = 0
+    await model.load(range: .week, every: .zero) { _, _ in
+        calls += 1
+        if calls == 2 { throw CoreError.RateLimited }
+        return costs(scanning: calls < 3)
+    }
+    #expect(calls == 3)
+    #expect(model.phase == .loaded(costs(scanning: false)))
+}
+
+@MainActor @Test func usageCostsDropTheFiguresOfAnotherRange() async {
+    let model = UsageCostsModel()
+    await model.load(range: .week) { _, _ in costs(scanning: false) }
+    await model.load(range: .month) { _, _ in throw CoreError.RateLimited }
+    #expect(model.phase == .failed("too many requests, try again in a moment"))
+}
+
+@Test func usageCostTotalsSaturate() {
+    #expect(CostTokens(input: .max, output: 1, cacheRead: 0, cacheWrite: 0).total == .max)
+}
+
 @Test func usageCostRowsNameTheAgentAndAModelWithoutAPrice() {
     let rows = costs(scanning: false).models
     #expect(rows.map(\.agentName) == ["Claude Code", "Copilot CLI"])

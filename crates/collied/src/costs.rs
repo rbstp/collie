@@ -6,9 +6,9 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::UNIX_EPOCH;
+use std::time::{Instant, UNIX_EPOCH};
 
 use protocol::{CostRange, CostTokens, DayCost, ModelCost, UsageCosts};
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ use crate::lock;
 use crate::transcript::{civil, open, timestamp_ms};
 
 pub const INDEX_FILE: &str = "usage-costs.json";
-const INDEX_VERSION: u32 = 1;
+const INDEX_VERSION: u32 = 2;
 const SLOT_MS: u64 = 15 * 60_000;
 const DAY_MS: i64 = 86_400_000;
 /// The longest range plus the widest phone offset: nothing older is ever shown.
@@ -30,7 +30,9 @@ const MAX_FILES: usize = 20_000;
 const MAX_DEPTH: usize = 5;
 const MAX_MODELS: usize = 32;
 const MAX_MODEL_CHARS: usize = 64;
-const RESCAN_MS: u64 = 15_000;
+const RESCAN: std::time::Duration = std::time::Duration::from_secs(15);
+/// OpenAI prices a call with more input than this, cached input included, at its long context rates.
+const LONG_INPUT: u64 = 272_000;
 
 /// LiteLLM's Claude and OpenAI chat prices, from `just prices`.
 static PRICES: LazyLock<HashMap<String, Price>> = LazyLock::new(|| {
@@ -96,26 +98,38 @@ struct Price {
     cache_read_input_token_cost: Option<f64>,
     cache_creation_input_token_cost: Option<f64>,
     cache_creation_input_token_cost_above_1hr: Option<f64>,
+    input_cost_per_token_above_272k_tokens: Option<f64>,
+    output_cost_per_token_above_272k_tokens: Option<f64>,
+    cache_read_input_token_cost_above_272k_tokens: Option<f64>,
+    cache_creation_input_token_cost_above_272k_tokens: Option<f64>,
     fast: Option<f64>,
 }
 
 impl Price {
     /// Cost and what the cache reads saved against the input rate. Cached input the table
     /// does not price separately costs the input rate, never nothing.
-    fn cost(&self, t: &Tokens, fast: bool) -> (f64, f64) {
+    fn cost(&self, t: &Tokens, fast: bool, long: bool) -> (f64, f64) {
         let scale = self
             .fast
             .filter(|f| fast && f.is_finite() && *f > 0.0)
             .unwrap_or(1.0);
-        let input = self.input_cost_per_token;
-        let read = self.cache_read_input_token_cost.unwrap_or(input);
-        let write = self.cache_creation_input_token_cost.unwrap_or(input);
+        let tier = |rate: Option<f64>| rate.filter(|_| long);
+        let input =
+            tier(self.input_cost_per_token_above_272k_tokens).unwrap_or(self.input_cost_per_token);
+        let output = tier(self.output_cost_per_token_above_272k_tokens)
+            .unwrap_or(self.output_cost_per_token);
+        let read = tier(self.cache_read_input_token_cost_above_272k_tokens)
+            .or(self.cache_read_input_token_cost)
+            .unwrap_or(input);
+        let write = tier(self.cache_creation_input_token_cost_above_272k_tokens)
+            .or(self.cache_creation_input_token_cost)
+            .unwrap_or(input);
         let write_1h = self
             .cache_creation_input_token_cost_above_1hr
             .unwrap_or(write);
         let hour = t.cache_write_1h.min(t.cache_write);
         let cost = t.input as f64 * input
-            + t.output as f64 * self.output_cost_per_token
+            + t.output as f64 * output
             + t.cache_read as f64 * read
             + (t.cache_write - hour) as f64 * write
             + hour as f64 * write_1h;
@@ -163,6 +177,8 @@ struct Bucket {
     model: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     fast: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    long: bool,
     tokens: Tokens,
 }
 
@@ -180,8 +196,9 @@ struct Entry {
     #[serde(default)]
     last: Option<u64>,
     buckets: Vec<Bucket>,
-    /// Claude records this file counted first, by `message.id` and `requestId`, with their slot.
-    keys: Vec<(u64, u32)>,
+    /// Claude records this file counted first, by `message.id` and `requestId`, with their
+    /// slot and the output counted so far.
+    keys: Vec<(u64, u32, u64)>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -201,7 +218,7 @@ struct State {
 impl State {
     fn forget(&mut self, path: &str) {
         if let Some(e) = self.index.files.remove(path) {
-            for (k, _) in e.keys {
+            for (k, _, _) in e.keys {
                 self.seen.remove(&k);
             }
             self.changed = true;
@@ -235,35 +252,57 @@ impl State {
         entry.offset = read.offset;
         entry.model = read.parser.model;
         entry.last = read.parser.last;
-        let mut at: HashMap<(u32, String, bool), usize> = entry
+        let mut at: HashMap<(u32, String, bool, bool), usize> = entry
             .buckets
             .iter()
             .enumerate()
-            .map(|(i, b)| ((b.slot, b.model.clone(), b.fast), i))
+            .map(|(i, b)| ((b.slot, b.model.clone(), b.fast, b.long), i))
+            .collect();
+        let mut owned: HashMap<u64, usize> = entry
+            .keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (k.0, i))
             .collect();
         for r in read.parser.records {
-            let slot = (r.ms / SLOT_MS) as u32;
+            let mut slot = (r.ms / SLOT_MS) as u32;
             if slot < cutoff {
                 continue;
             }
+            let mut tokens = r.tokens;
             if let Some(k) = r.key {
-                if !self.seen.insert(k) {
+                if let Some(&i) = owned.get(&k) {
+                    // A streamed message's earlier block records carry a partial output count.
+                    let (_, first, counted) = entry.keys[i];
+                    if tokens.output <= counted {
+                        continue;
+                    }
+                    entry.keys[i].2 = tokens.output;
+                    tokens = Tokens {
+                        output: tokens.output - counted,
+                        ..Tokens::default()
+                    };
+                    slot = first;
+                } else if !self.seen.insert(k) {
                     continue;
+                } else {
+                    owned.insert(k, entry.keys.len());
+                    entry.keys.push((k, slot, tokens.output));
                 }
-                entry.keys.push((k, slot));
             }
             let i = *at
-                .entry((slot, r.model.clone(), r.fast))
+                .entry((slot, r.model.clone(), r.fast, r.long))
                 .or_insert_with(|| {
                     entry.buckets.push(Bucket {
                         slot,
                         model: r.model,
                         fast: r.fast,
+                        long: r.long,
                         tokens: Tokens::default(),
                     });
                     entry.buckets.len() - 1
                 });
-            entry.buckets[i].tokens.add(&r.tokens);
+            entry.buckets[i].tokens.add(&tokens);
         }
         self.changed = true;
     }
@@ -272,7 +311,7 @@ impl State {
         for e in self.index.files.values_mut() {
             let (buckets, keys) = (e.buckets.len(), e.keys.len());
             e.buckets.retain(|b| b.slot >= cutoff);
-            e.keys.retain(|(k, slot)| {
+            e.keys.retain(|(k, slot, _)| {
                 *slot >= cutoff || {
                     self.seen.remove(k);
                     false
@@ -291,31 +330,29 @@ pub struct Roots {
 }
 
 impl Roots {
-    fn files(&self) -> Vec<(PathBuf, Agent)> {
+    /// Files modified since `keep`, and whether no root hit the file cap.
+    fn files(&self, keep: u64) -> (Vec<(PathBuf, Agent)>, bool) {
         let mut out = Vec::new();
-        if let Some(root) = &self.claude {
-            walk(root, 0, Agent::Claude, |n| n.ends_with(".jsonl"), &mut out);
-        }
-        if let Some(root) = &self.codex {
-            let rollout = |n: &str| n.starts_with("rollout-") && n.ends_with(".jsonl");
-            walk(root, 0, Agent::Codex, rollout, &mut out);
-        }
-        if let Some(root) = &self.copilot {
-            walk(root, 0, Agent::Copilot, |n| n == "events.jsonl", &mut out);
-        }
+        let mut complete = true;
+        let mut add = |root: &Option<PathBuf>, agent: Agent, wanted: fn(&str) -> bool| {
+            let Some(root) = root else { return };
+            let mut found = Vec::new();
+            walk(root, 0, keep, wanted, &mut found);
+            complete &= found.len() < MAX_FILES;
+            out.extend(found.into_iter().map(|p| (p, agent)));
+        };
+        add(&self.claude, Agent::Claude, |n| n.ends_with(".jsonl"));
+        add(&self.codex, Agent::Codex, |n| {
+            n.starts_with("rollout-") && n.ends_with(".jsonl")
+        });
+        add(&self.copilot, Agent::Copilot, |n| n == "events.jsonl");
         out.sort();
-        out
+        (out, complete)
     }
 }
 
-/// Never through a symlink or into a hidden folder.
-fn walk(
-    dir: &Path,
-    depth: usize,
-    agent: Agent,
-    wanted: fn(&str) -> bool,
-    out: &mut Vec<(PathBuf, Agent)>,
-) {
+/// Never through a symlink or into a hidden folder; at most `MAX_FILES` per root.
+fn walk(dir: &Path, depth: usize, keep: u64, wanted: fn(&str) -> bool, out: &mut Vec<PathBuf>) {
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         if out.len() >= MAX_FILES {
             return;
@@ -326,9 +363,18 @@ fn walk(
         };
         let Ok(kind) = e.file_type() else { continue };
         if kind.is_dir() && depth < MAX_DEPTH {
-            walk(&e.path(), depth + 1, agent, wanted, out);
-        } else if kind.is_file() && wanted(name) {
-            out.push((e.path(), agent));
+            walk(&e.path(), depth + 1, keep, wanted, out);
+        } else if kind.is_file()
+            && wanted(name)
+            && e.metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .is_some_and(|t| {
+                    t.duration_since(UNIX_EPOCH)
+                        .is_ok_and(|d| d.as_millis() as u64 >= keep)
+                })
+        {
+            out.push(e.path());
         }
     }
 }
@@ -337,6 +383,7 @@ struct Record {
     ms: u64,
     model: String,
     fast: bool,
+    long: bool,
     tokens: Tokens,
     key: Option<u64>,
 }
@@ -440,6 +487,7 @@ impl Parser {
             ms,
             model,
             fast: false,
+            long: n("input_tokens") > LONG_INPUT,
             tokens: Tokens {
                 input: n("input_tokens").saturating_sub(read).saturating_sub(write),
                 output: n("output_tokens"),
@@ -475,6 +523,7 @@ fn claude(text: &str) -> Option<Record> {
         ms,
         model: model_id(message.model.as_deref()),
         fast: usage.speed.as_deref() == Some("fast"),
+        long: false,
         tokens: Tokens {
             input: usage.input_tokens.unwrap_or(0),
             output: usage.output_tokens.unwrap_or(0),
@@ -502,6 +551,7 @@ fn copilot(text: &str) -> Option<Record> {
         ms: timestamp_ms(v["timestamp"].as_str()?)?,
         model: model_id(u["model"].as_str()),
         fast: false,
+        long: n("inputTokens") > LONG_INPUT,
         tokens: Tokens {
             input: n("inputTokens").saturating_sub(read).saturating_sub(write),
             output: n("outputTokens"),
@@ -567,14 +617,14 @@ pub struct Costs {
     roots: Roots,
     state: Mutex<State>,
     scanning: AtomicBool,
-    finished_ms: AtomicU64,
+    finished: Mutex<Option<Instant>>,
 }
 
 struct Scanned<'a>(&'a Costs);
 
 impl Drop for Scanned<'_> {
     fn drop(&mut self) {
-        self.0.finished_ms.store(crate::now_ms(), Ordering::SeqCst);
+        *lock(&self.0.finished) = Some(Instant::now());
         self.0.scanning.store(false, Ordering::SeqCst);
     }
 }
@@ -586,13 +636,13 @@ impl Costs {
             roots,
             state: Mutex::new(State::default()),
             scanning: AtomicBool::new(false),
-            finished_ms: AtomicU64::new(0),
+            finished: Mutex::new(None),
         }
     }
 
     /// Starts a scan on its own thread unless one runs or one finished moments ago; never waits.
     pub fn refresh(self: &Arc<Self>) {
-        if crate::now_ms() < self.finished_ms.load(Ordering::SeqCst) + RESCAN_MS
+        if lock(&self.finished).is_some_and(|t| t.elapsed() < RESCAN)
             || self.scanning.swap(true, Ordering::SeqCst)
         {
             return;
@@ -623,7 +673,7 @@ impl Costs {
         let seen = index
             .files
             .values()
-            .flat_map(|e| e.keys.iter().map(|(k, _)| *k))
+            .flat_map(|e| e.keys.iter().map(|k| k.0))
             .collect();
         *lock(&self.state) = State {
             loaded: true,
@@ -638,8 +688,8 @@ impl Costs {
         self.load();
         let keep = now.saturating_sub(KEEP_MS);
         let cutoff = (keep / SLOT_MS) as u32;
-        let files = self.roots.files();
-        {
+        let (files, complete) = self.roots.files(keep);
+        if complete {
             let listed: HashSet<&str> = files.iter().filter_map(|(p, _)| p.to_str()).collect();
             let mut st = lock(&self.state);
             let gone: Vec<String> = st
@@ -692,19 +742,22 @@ impl Costs {
             };
             lock(&self.state).merge(key, read, start == 0, cutoff);
         }
-        let mut st = lock(&self.state);
-        st.prune(cutoff);
-        if st.changed {
-            match serde_json::to_vec(&st.index) {
-                Ok(bytes) => {
-                    let tmp = self.path.with_extension("json.tmp");
-                    match crate::replace_file(&self.path, &tmp, &bytes, 0o600) {
-                        Ok(()) => st.changed = false,
-                        Err(e) => tracing::warn!(error = %e, "could not save the usage cost index"),
-                    }
-                }
-                Err(e) => tracing::warn!(error = %e, "could not encode the usage cost index"),
+        let bytes = {
+            let mut st = lock(&self.state);
+            st.prune(cutoff);
+            if !st.changed {
+                return;
             }
+            st.changed = false;
+            serde_json::to_vec(&st.index)
+        };
+        let saved = bytes.map_err(anyhow::Error::from).and_then(|bytes| {
+            let tmp = self.path.with_extension("json.tmp");
+            crate::replace_file(&self.path, &tmp, &bytes, 0o600)
+        });
+        if let Err(e) = saved {
+            lock(&self.state).changed = true;
+            tracing::warn!(error = %e, "could not save the usage cost index");
         }
     }
 
@@ -726,7 +779,7 @@ impl Costs {
                 let (tokens, cost, saved) = models.entry((e.agent, &b.model)).or_default();
                 tokens.add(&b.tokens);
                 if let Some(price) = price(&b.model) {
-                    let (c, s) = price.cost(&b.tokens, b.fast);
+                    let (c, s) = price.cost(&b.tokens, b.fast, b.long);
                     *cost += c;
                     *saved += s;
                     daily[(d - first) as usize] += c;
@@ -751,7 +804,12 @@ impl Costs {
                 }
             })
             .collect();
-        let sum = |t: &CostTokens| t.input + t.output + t.cache_read + t.cache_write;
+        let sum = |t: &CostTokens| {
+            t.input
+                .saturating_add(t.output)
+                .saturating_add(t.cache_read)
+                .saturating_add(t.cache_write)
+        };
         rows.sort_by(|a, b| {
             b.cost_usd
                 .unwrap_or(-1.0)
@@ -791,6 +849,8 @@ mod tests {
     const RESUMED: &str = include_str!("../tests/fixtures/transcripts/claude-costs-resumed.jsonl");
     const CODEX: &str = include_str!("../tests/fixtures/transcripts/codex-costs.jsonl");
     const COPILOT: &str = include_str!("../tests/fixtures/transcripts/copilot-costs.jsonl");
+    const SUBAGENT: &str =
+        include_str!("../tests/fixtures/transcripts/claude-costs-subagent.jsonl");
     const COPILOT_SUBAGENTS: &str =
         include_str!("../tests/fixtures/transcripts/copilot-subagents.jsonl");
 
@@ -997,6 +1057,72 @@ mod tests {
     }
 
     #[test]
+    fn a_streamed_message_counts_its_final_output_once() {
+        let s = setup();
+        let before = row(&s.scan(), "claude", "claude-opus-5-5").tokens.clone();
+        let subagents = s
+            .project
+            .join("10000000-0000-4000-8000-0000000000c1/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        let agent = subagents.join("agent-a1b2c3d4e5f6a7b8c.jsonl");
+        let (first, last) = SUBAGENT.split_once('\n').unwrap();
+        std::fs::write(&agent, format!("{first}\n")).unwrap();
+        let partial = row(&s.scan(), "claude", "claude-opus-5-5").tokens.clone();
+        assert_eq!(partial.output, before.output + 21);
+        append(&agent, last);
+        let done = row(&s.scan(), "claude", "claude-opus-5-5").tokens.clone();
+        assert_eq!(done.output, before.output + 234);
+        assert_eq!(done.input, before.input + 2);
+        assert_eq!(done.cache_read, before.cache_read + 75_954);
+
+        std::fs::remove_file(&agent).unwrap();
+        s.scan();
+        std::fs::write(subagents.join("agent-b1b2c3d4e5f6a7b8c.jsonl"), SUBAGENT).unwrap();
+        assert_eq!(row(&s.scan(), "claude", "claude-opus-5-5").tokens, done);
+    }
+
+    #[test]
+    fn long_codex_and_copilot_calls_use_the_long_context_rates() {
+        let s = setup();
+        let base = row(&s.scan(), "codex", "gpt-6-astra").cost_usd.unwrap();
+        append(
+            &s.codex,
+            r#"{"timestamp":"2026-10-18T12:20:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":303500,"cached_input_tokens":101400,"output_tokens":110,"total_tokens":303610},"last_token_usage":{"input_tokens":300000,"cached_input_tokens":100000,"cache_write_input_tokens":0,"output_tokens":10,"total_tokens":300010}}}}
+"#,
+        );
+        let astra = price("gpt-6-astra").unwrap();
+        let long = |rate: Option<f64>| rate.unwrap();
+        let expected = 200_000.0 * long(astra.input_cost_per_token_above_272k_tokens)
+            + 10.0 * long(astra.output_cost_per_token_above_272k_tokens)
+            + 100_000.0 * long(astra.cache_read_input_token_cost_above_272k_tokens);
+        let cost = row(&s.scan(), "codex", "gpt-6-astra").cost_usd.unwrap();
+        assert!((cost - base - expected).abs() < 1e-9);
+        let t = Tokens {
+            input: 1_000,
+            output: 1_000,
+            cache_read: 1_000,
+            cache_write: 0,
+            cache_write_1h: 0,
+        };
+        assert!(astra.cost(&t, false, true).0 > astra.cost(&t, false, false).0);
+        let opus = price("claude-opus-5-5").unwrap();
+        assert_eq!(opus.cost(&t, false, true), opus.cost(&t, false, false));
+        assert!(copilot(r#"{"type":"session.usage_record","timestamp":"2026-10-18T12:00:00.000Z","data":{"usage":{"model":"gpt-6.1-sol","inputTokens":272001,"outputTokens":1}}}"#).unwrap().long);
+    }
+
+    #[test]
+    fn huge_counts_saturate() {
+        let s = setup();
+        append(
+            &s.resumed(),
+            &format!("{}\n", claude_record("msg_cost_big", u64::MAX, 1)),
+        );
+        let c = s.scan();
+        assert_eq!(c.tokens.input, u64::MAX);
+        assert_eq!(c.models[0].tokens.input, u64::MAX);
+    }
+
+    #[test]
     fn a_shrunk_or_replaced_file_is_read_again_from_the_start() {
         let s = setup();
         s.scan();
@@ -1089,7 +1215,7 @@ mod tests {
         std::fs::create_dir(&hidden).unwrap();
         std::fs::write(hidden.join("copy.jsonl"), CLAUDE).unwrap();
         std::fs::write(s.project.join("notes.txt"), CLAUDE).unwrap();
-        let files = s.roots.files();
+        let files = s.roots.files(0).0;
         assert_eq!(files.len(), 4);
         assert!(
             files
@@ -1150,17 +1276,17 @@ mod tests {
             cache_write: 1_000,
             cache_write_1h: 0,
         };
-        let (standard, saved) = opus.cost(&t, false);
-        let (fast, fast_saved) = opus.cost(&t, true);
+        let (standard, saved) = opus.cost(&t, false, false);
+        let (fast, fast_saved) = opus.cost(&t, true, false);
         assert!((fast - 2.0 * standard).abs() < 1e-12);
         assert!((fast_saved - 2.0 * saved).abs() < 1e-12);
         let sol = price("gpt-6.1-sol").unwrap();
-        assert_eq!(sol.cost(&t, true), sol.cost(&t, false));
+        assert_eq!(sol.cost(&t, true, false), sol.cost(&t, false, false));
         let hour = Tokens {
             cache_write_1h: 1_000,
             ..t
         };
-        assert!((opus.cost(&hour, false).0 - standard - 1_000.0 * 3e-6).abs() < 1e-12);
+        assert!((opus.cost(&hour, false, false).0 - standard - 1_000.0 * 3e-6).abs() < 1e-12);
     }
 
     #[test]

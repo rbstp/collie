@@ -13,14 +13,20 @@ final class UsageCostsModel {
     }
 
     private(set) var phase: Phase = .loading
+    private var range: CostRange?
 
-    /// Reads again while collied is still scanning, so the totals grow as it goes.
+    /// Reads again while collied is still scanning, so the totals grow as it goes. A failed read
+    /// keeps the figures of the same range, and retries while they are still partial.
     func load(
         range: CostRange,
         offsetMinutes: Int16 = Int16(TimeZone.current.secondsFromGMT() / 60),
         every interval: Duration = .seconds(2),
         fetch: (CostRange, Int16) async throws -> UsageCosts
     ) async {
+        if self.range != range {
+            self.range = range
+            phase = .loading
+        }
         while !Task.isCancelled {
             do {
                 let costs = try await fetch(range, offsetMinutes)
@@ -30,9 +36,11 @@ final class UsageCostsModel {
                 phase = .outdated
                 return
             } catch {
-                if case .loaded = phase { return }
-                phase = .failed(AgentModel.message(for: error))
-                return
+                guard case .loaded(let shown) = phase else {
+                    phase = .failed(AgentModel.message(for: error))
+                    return
+                }
+                guard shown.scanning else { return }
             }
             try? await Task.sleep(for: interval)
         }
@@ -63,7 +71,12 @@ extension ModelCost {
 }
 
 extension CostTokens {
-    var total: UInt64 { input + output + cacheRead + cacheWrite }
+    var total: UInt64 {
+        [output, cacheRead, cacheWrite].reduce(input) { sum, n in
+            let (added, overflow) = sum.addingReportingOverflow(n)
+            return overflow ? .max : added
+        }
+    }
 }
 
 extension DayCost {
@@ -79,6 +92,8 @@ extension DayCost {
 struct UsageCostsCard: View {
     let core: (any AgentCore)?
     let machineId: String
+    var link: LinkPhase?
+    var refresh = 0
     @State private var range: CostRange = .week
     @State private var model = UsageCostsModel()
 
@@ -101,10 +116,7 @@ struct UsageCostsCard: View {
                 }
             }
             .accessibilityElement(children: .combine)
-            Picker("Range", selection: $range) {
-                ForEach([CostRange.today, .week, .month], id: \.self) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
+            GlassPicker(title: "Range", selection: $range, options: [CostRange.today, .week, .month].map { ($0.title, $0) })
             switch model.phase {
             case .loading:
                 ProgressView().frame(maxWidth: .infinity)
@@ -117,7 +129,7 @@ struct UsageCostsCard: View {
             }
         }
         .padding(.vertical, 4)
-        .task(id: range) {
+        .task(id: CostsRead(range: range, link: link, refresh: refresh)) {
             guard let core else { return }
             let machineId = machineId
             await model.load(range: range) { range, offset in
@@ -127,8 +139,15 @@ struct UsageCostsCard: View {
     }
 }
 
+private struct CostsRead: Equatable {
+    let range: CostRange
+    let link: LinkPhase?
+    let refresh: Int
+}
+
 private struct CostsDetail: View {
     let costs: UsageCosts
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -167,9 +186,10 @@ private struct CostsDetail: View {
             }
             ForEach(costs.models, id: \.self) { row in
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(row.model).font(.subheadline).lineLimit(1).truncationMode(.middle)
-                        Spacer()
+                    let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+                    layout {
+                        Text(row.model).font(.subheadline).lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1).truncationMode(.middle)
+                        if !dynamicTypeSize.isAccessibilitySize { Spacer() }
                         Text(row.costText).font(.subheadline.monospacedDigit()).foregroundStyle(row.costUsd == nil ? .secondary : .primary)
                     }
                     Text("\(row.agentName) · \(UsageCostsCard.tokens(row.tokens.total)) tokens")

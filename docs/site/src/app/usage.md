@@ -23,7 +23,7 @@ Below the plan usage, each card shows the tokens the machine's agents used and w
 - For 7 and 30 days, a bar chart gives the cost of each day.
 - Each model gets a row with its agent, its tokens and its cost. A model without a known price shows its tokens and "No price".
 
-`collied` counts the tokens in the Claude Code, Codex and Copilot CLI transcripts on the machine, subagents included. The first time, it reads them in the background, and the card says "Scanning" while the totals grow. After that it reads only what the agents wrote since. Days end at midnight where your phone is.
+`collied` counts the tokens in the Claude Code, Codex and Copilot CLI transcripts on the machine, subagents included. The first time, it reads them in the background, and the card says "Scanning" while the totals grow. After that it reads only what the agents wrote since. Days end at midnight where your phone is now.
 
 The cost is an estimate, not your bill: a subscription charges differently, and Copilot bills premium requests, so its cost is what the same tokens would cost from the API. The prices come from a snapshot of LiteLLM's price table that ships with `collied`, so updating `collied` updates them.
 
