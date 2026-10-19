@@ -15,7 +15,7 @@ export interface ControlEnv extends CryptoBinding {
 }
 interface Common { v: 1; op: string; installation_id: string; key_id: string; environment: Environment }
 export type Operation = Common & (
-  { op: 'enroll' | 'revoke_installation' }
+  { op: 'enroll' }
   | { op: 'revoke_pairing'; pairing_id: string }
   | { op: 'revoke_route'; pairing_id: string; route_id: string; expected_generation: number }
   | { op: 'route'; pairing_id: string; route_id: string; expected_generation: number; kind: 'app' | 'liveactivity'; destination: string }
@@ -32,7 +32,7 @@ export function operation(value: unknown): Operation | null {
     || typeof value.key_id !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value.key_id)
     || !['production', 'development'].includes(value.environment as string)) return null;
   const common = ['v', 'op', 'installation_id', 'key_id', 'environment'];
-  if (value.op === 'enroll' || value.op === 'revoke_installation') {
+  if (value.op === 'enroll') {
     if (!exact(value, common)) return null;
   } else if (value.op === 'revoke_pairing') {
     if (!exact(value, [...common, 'pairing_id']) || !opaque(value.pairing_id)) return null;
@@ -85,8 +85,8 @@ async function challenge(token: unknown, op: Operation, env: ControlEnv, now: nu
 export async function commitControl(env: ControlEnv, op: Exclude<Operation, { op: 'enroll' }>, proof: Challenge, counter: number, now: number): Promise<Grant | null> {
   const db = env.DB;
   const statements = [db.prepare(`INSERT OR REPLACE INTO control_commits
-    (installation_id, key_id, previous_counter, counter, epoch, nonce, now, expires_at, terminal_revocation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(op.installation_id, op.key_id, proof.previous_counter, counter, proof.epoch, proof.nonce, now, proof.expires_at, Number(op.op === 'revoke_installation'))];
+    (installation_id, key_id, previous_counter, counter, epoch, nonce, now, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(op.installation_id, op.key_id, proof.previous_counter, counter, proof.epoch, proof.nonce, now, proof.expires_at)];
   let grant: Grant | null = null;
   if (op.op === 'route') {
     const pairing = await db.prepare('SELECT installation_id, epoch, revoked FROM pairings WHERE id = ?').bind(op.pairing_id)
@@ -114,13 +114,10 @@ export async function commitControl(env: ControlEnv, op: Exclude<Operation, { op
   } else if (op.op === 'revoke_pairing') {
     statements.push(db.prepare('UPDATE pairings SET epoch = epoch + 1, revoked = 1 WHERE id = ? AND installation_id = ? AND revoked = 0')
       .bind(op.pairing_id, op.installation_id));
-  } else if (op.op === 'revoke_route') {
+  } else {
     statements.push(db.prepare(`UPDATE routes SET revoked = 1 WHERE id = ? AND pairing_id = ? AND generation = ?
       AND EXISTS (SELECT 1 FROM pairings WHERE id = ? AND installation_id = ?)`)
       .bind(op.route_id, op.pairing_id, op.expected_generation, op.pairing_id, op.installation_id));
-  } else {
-    statements.push(db.prepare('UPDATE installations SET epoch = epoch + 1 WHERE id = ? AND EXISTS (SELECT 1 FROM attestations WHERE installation_id = ? AND revoked = 0)').bind(op.installation_id, op.installation_id));
-    statements.push(db.prepare('UPDATE attestations SET revoked = 1 WHERE installation_id = ?').bind(op.installation_id));
   }
   await db.batch(statements);
   return grant;
@@ -142,7 +139,7 @@ export async function control(request: Request, env: ControlEnv, now: number,
     if (op.op === 'enroll' && (!(await env.ENROLL_LIMITER.limit({ key: `ip:${source}` })).success
       || !(await env.ENROLL_LIMITER.limit({ key: 'shared:enrollment' })).success)) return response(429, 'rate_limited', { retry_after: 60 });
     const current = await state(env, op);
-    if ((op.op !== 'enroll' && !current) || (current && ((current.revoked && op.op !== 'revoke_installation') || current.key_id !== op.key_id || current.environment !== op.environment))) return response(401, 'unauthorized');
+    if ((op.op !== 'enroll' && !current) || (current && (current.revoked || current.key_id !== op.key_id || current.environment !== op.environment))) return response(401, 'unauthorized');
     if (path === '/v1/challenge') {
       const value: Challenge = { v: 1, operation_digest: await digest(canonical(op)), installation_id: op.installation_id,
         key_id: op.key_id, previous_counter: current?.counter ?? 0, epoch: current?.epoch ?? 0,

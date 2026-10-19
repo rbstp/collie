@@ -14,6 +14,7 @@ A Claude Code, Codex or Copilot CLI session has two views: **Chat** shows the co
 Chat reads the agent's real conversation from its transcript on the machine.
 
 - Replies render as Markdown, with selectable code blocks and Copy actions.
+- Long-press a message to **Copy** or **Quote** it. Tool records and code blocks have Quote and Copy buttons.
 - Consecutive tool calls collapse into one row; expand it to see each call with its result.
 - A recent page loads first. Tap **Load older messages** for more.
 - The search button finds text across the history, with highlighted matches and previous and next buttons.
@@ -33,7 +34,7 @@ Terminal shows the last 200 lines of the agent's pane (500 or 1000 in **Settings
 - Turn on word wrapping to fit lines to the phone's width.
 - Copilot CLI's scrollbar is hidden in both wrap modes. Text and input-box borders stay visible.
 - Codex's input box and Claude Code's sent prompts keep their shaded background across wrapped lines. Codex prompt continuations wrap to the phone's width instead of keeping the desktop terminal's line breaks.
-- Long-press to select and copy text (Universal Clipboard included) or to open an http or https link. After a copy, a green checkmark and **Copied** appear briefly before the selection closes.
+- Long-press to select and copy text (Universal Clipboard included), to quote it into the prompt or to open an http or https link. After a copy, a green checkmark and **Copied** appear briefly before the selection closes. Plain terminals have no **Quote**.
 - Terminal updates up to four times a second. After 5 seconds without change, or while the iPhone is in Low Data Mode, it updates once a second.
 
 ## The prompt
@@ -41,6 +42,7 @@ Terminal shows the last 200 lines of the agent's pane (500 or 1000 in **Settings
 The composer at the bottom works in both views.
 
 - When a prompt cannot reach the machine, the phone sends it again up to 5 times, a minute apart or as soon as the connection is back, while the send button spins. To stop, edit the prompt or tap the spinner.
+- **Quote**, in Chat or in the Terminal selection menu, adds the text to the end of the prompt as a code block and places the cursor after it. Quote never sends. If the prompt would grow past 32 KiB, Collie shows an error and leaves the prompt unchanged.
 - **Settings > Prompt** can keep the keyboard open after sending.
 - With the keyboard down, a long press on the prompt field copies it.
 - An unsent prompt stays with its agent on this phone. Its attachments stay for up to 23 hours.

@@ -171,7 +171,6 @@ Every operation contains `v: 1`, `op`, opaque `installation_id`, canonical base6
 | `route` | `pairing_id`, `route_id`, `expected_generation`, `kind` (`app` or `liveactivity`), lowercase destination hex |
 | `revoke_pairing` | `pairing_id` |
 | `revoke_route` | `pairing_id`, `route_id`, `expected_generation` |
-| `revoke_installation` | None |
 
 Canonicalization sorts the operation's ASCII property names and serializes compact JSON. The server returns `challenge: c1.<key_id>.<claims>.<signature>`, with a random 32-byte nonce, canonical operation digest, installation/key identity, current durable counter/epoch and five-minute expiry. HMAC-SHA256 authenticates the exact first three segments with the same bounded key set as send grants, under the distinct `c1` domain. The phone passes SHA256 of the complete challenge string to App Attest. Issuing challenges allocates no unauthenticated D1 records. Durable key uniqueness protects initial enrollment. Later operations require the challenge's exact prior counter and epoch in the same D1 transaction that advances the counter and changes authorization. Re-signing a used challenge with a larger counter still fails. A rejected trigger aborts every write, including global and installation control quotas.
 
@@ -198,7 +197,7 @@ A 2026-10-16 local Node run of `npm run benchmark:attestation` verified the comp
 
 The first isolated Free Worker enrollment benchmark failed its CPU acceptance gate: only 45 of 100 complete Apple verifications succeeded, with 55 CPU-limit errors; all 100 invalid-nonce cases exceeded CPU limits. These are failed validation results, not authorization to expose enrollment, remove verification checks or enable billing. The direct Worker verifier remains a validation implementation until a separately reviewed Free-plan design passes complete cold/warm and hostile-input measurements.
 
-The phone integration requests publisher grants only after a paired daemon negotiates both concrete capabilities and reports actual relay mode. Direct/disabled/older senders do not trigger public enrollment. A lost installation-revocation response can be retried with a fresh assertion after revocation, but that retired installation still cannot register or send. Missing expired server state may enroll afresh only when every locally known grant and ambiguous registration is expired; transient failures preserve identity. Invalid App Attest keys require explicit pairing again, retain the last possible grant expiry and do not claim earlier remote authority disappeared. Wire pairing IDs hash the installation and local confirmed pairing, so fresh installations cannot collide with retained old pairing records.
+The phone integration requests publisher grants only after a paired daemon negotiates both concrete capabilities and reports actual relay mode. Direct/disabled/older senders do not trigger public enrollment. Missing expired server state may enroll afresh only when every locally known grant and ambiguous registration is expired; transient failures preserve identity. Invalid App Attest keys require explicit pairing again, retain the last possible grant expiry and do not claim earlier remote authority disappeared. Wire pairing IDs hash the installation and local confirmed pairing, so fresh installations cannot collide with retained old pairing records.
 
 ## Daemon sender
 
