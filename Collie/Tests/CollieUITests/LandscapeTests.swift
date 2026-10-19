@@ -40,7 +40,8 @@ final class LandscapeTests: XCTestCase {
         let terminalView = app.buttons["Terminal"].firstMatch
         XCTAssertTrue(terminalView.appears(within: 10), app.debugDescription)
         terminalView.tap()
-        let terminal = app.scrollViews.firstMatch
+        // The keyboard's candidate bar is a scroll view too, in its own window.
+        let terminal = app.windows.firstMatch.scrollViews.firstMatch
         XCTAssertTrue(terminal.appears(within: 5), app.debugDescription)
         let portraitWidth = terminal.frame.width
         rotate(.landscapeLeft, app)
@@ -55,16 +56,19 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
         let draft = typeAfterClearing("keep this draft", into: field, app)
         let dictation = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Dictate in")).firstMatch
+        let escape = app.buttons["Escape"]
+        let header = app.buttons["Terminal"].firstMatch
         let controls = [
             draft, app.buttons["Send"], app.buttons["Hide keyboard"], app.buttons["Attachments and saved prompts"], dictation,
-            app.buttons["Escape"], app.buttons["Control Return"]
+            escape, app.buttons["Control Return"]
         ]
         for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait, .landscapeRight] {
             rotate(orientation, app)
             XCTAssertTrue(keyboard.appears(within: 5), "\(orientation.rawValue)\n\(app.debugDescription)")
             XCTAssertTrue(eventually {
                 controls.allSatisfy { shown($0, app) && $0.frame.maxY <= keyboard.frame.minY + 1 }
-                    && terminal.frame.height > 40 && terminal.frame.maxY <= keyboard.frame.minY + 1
+                    && escape.frame.minY - max(terminal.frame.minY, header.exists ? header.frame.maxY : 0) > 24
+                    && terminal.frame.maxY <= keyboard.frame.minY + 1
             }, "\(orientation.rawValue)\n\(app.debugDescription)")
         }
         app.buttons["Hide keyboard"].tap()

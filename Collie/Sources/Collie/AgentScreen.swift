@@ -67,6 +67,13 @@ struct AgentScreen: View {
 
     private var barScheme: ColorScheme { showingChat && !model.isTerminal ? colorScheme : .dark }
 
+    private var cardsAboveContent: Bool {
+        model.paneNotice != nil
+            || approvals.map { !$0.items(machineId: model.route.machineId, terminalId: model.route.terminalId).isEmpty || $0.notice != nil } ?? false
+    }
+
+    private var headerScheme: ColorScheme { cardsAboveContent ? colorScheme : barScheme }
+
     var body: some View {
         VStack(spacing: 0) {
             if let notice = model.paneNotice {
@@ -103,6 +110,11 @@ struct AgentScreen: View {
                         neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
                         switchAgent: switchAgent, obscuredTop: obscuredTop, obscuredBottom: obscuredBottom
                     ) { await model.refresh() }
+                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+                        .onGeometryChange(for: EdgeInsets.self) { $0.safeAreaInsets } action: {
+                            obscuredTop = $0.top
+                            obscuredBottom = $0.bottom
+                        }
                         .overlay {
                             if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
                                 ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
@@ -131,11 +143,6 @@ struct AgentScreen: View {
                                 }
                             }
                         }
-                        .ignoresSafeArea(.container, edges: [.top, .bottom])
-                        .onGeometryChange(for: EdgeInsets.self) { $0.safeAreaInsets } action: {
-                            obscuredTop = $0.top
-                            obscuredBottom = $0.bottom
-                        }
                 }
             }
         }
@@ -149,8 +156,8 @@ struct AgentScreen: View {
                             .padding(.bottom, 6)
                     }
                 }
-                .background { SessionBarGlass().ignoresSafeArea(edges: .top) }
-                .environment(\.colorScheme, barScheme)
+                .background { SessionBarGlass().ignoresSafeArea(edges: [.top, .horizontal]) }
+                .environment(\.colorScheme, headerScheme)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -174,10 +181,10 @@ struct AgentScreen: View {
                     }
                 }
             }
-            .background { SessionBarGlass().ignoresSafeArea(edges: .bottom) }
+            .background { SessionBarGlass().ignoresSafeArea(edges: [.bottom, .horizontal]) }
             .environment(\.colorScheme, barScheme)
         }
-        .toolbarColorScheme(barScheme, for: .navigationBar)
+        .toolbarColorScheme(headerScheme, for: .navigationBar)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)

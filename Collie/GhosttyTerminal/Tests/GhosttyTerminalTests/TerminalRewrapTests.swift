@@ -93,5 +93,9 @@ private func widen(_ view: GhosttyTerminalUIView) throws {
     view.layoutIfNeeded()
     #expect(view.adjustedContentInset.bottom == 100)
     #expect(view.contentOffset.y == bottom(view))
+
+    view.show(ansiSnapshot: "one\r\ntwo")
+    view.layoutIfNeeded()
+    #expect(view.contentOffset.y + view.bounds.height - 100 == view.contentSize.height)
 }
 #endif
