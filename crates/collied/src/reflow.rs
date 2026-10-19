@@ -94,7 +94,12 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                             let mut text = String::new();
                             plain_text(r, &mut text);
                             let body = text.trim_end().trim_start_matches(' ');
-                            if text.trim_end().len() - body.len() == ind {
+                            if text.trim_end().len() - body.len() == ind
+                                && list_marker(body).is_none()
+                                && !body.starts_with('⎿')
+                                && !body.starts_with(|c| ('\u{2500}'..='\u{257f}').contains(&c))
+                                && !tool_header(body)
+                            {
                                 body.to_owned()
                             } else {
                                 String::new()
@@ -103,7 +108,7 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                     };
                     let row = above;
                     match above.join(&tail, s, below(), width) {
-                        " " if wide_cut(&tail, s, width)
+                        " " if wide_word_cut(&tail, s, width)
                             && row.continues(&tail, s, below(), width) =>
                         {
                             splits.push(at);
@@ -463,16 +468,18 @@ fn tool_header(s: &str) -> bool {
     (args.len() < s.len() && args.starts_with('(')) || s.contains(" (MCP)(")
 }
 
-/// A word of wide characters longer than a row, cut where the next one no longer fits, one
-/// column short of `width`.
+/// A run of wide characters cut where the next one no longer fits, one column short of `width`.
 fn wide_cut(tail: &str, next: &str, width: usize) -> bool {
     let wide = |c: Option<char>| c.and_then(UnicodeWidthChar::width) == Some(2);
+    wide(tail.chars().next_back()) && wide(next.chars().next()) && tail.width() + 2 > width
+}
+
+/// A [`wide_cut`] that wrap-ansi makes only inside a word longer than a row. Codex wraps with
+/// textwrap, which also breaks between ideographs, so `tui_wraps` keeps [`wide_cut`].
+fn wide_word_cut(tail: &str, next: &str, width: usize) -> bool {
     let last = tail.rsplit(' ').next().unwrap_or_default().width();
     let first = next.split(' ').next().unwrap_or_default().width();
-    wide(tail.chars().next_back())
-        && wide(next.chars().next())
-        && tail.width() + 1 == width
-        && last + first > width
+    wide_cut(tail, next, width) && tail.width() + 1 == width && last + first > width
 }
 
 /// The byte length of a list marker such as `-`, `•` or `12.` that a space follows.
@@ -602,6 +609,18 @@ mod tests {
         assert_eq!(
             soft_wraps_for("codex", &rows.join("\r\n"), 25),
             (vec![3], vec![])
+        );
+    }
+
+    #[test]
+    fn codex_splits_between_ideographs_cut_short_of_the_edge() {
+        let rows = [
+            format!("• 运行 cargo tests {}", "之".repeat(10)),
+            "  后检查结果。".to_owned(),
+        ];
+        assert_eq!(
+            soft_wraps_for("codex", &rows.join("\r\n"), 40),
+            (vec![], vec![1])
         );
     }
 
@@ -1046,6 +1065,20 @@ mod tests {
                 (vec![1], vec![])
             );
         }
+    }
+
+    #[test]
+    fn a_full_row_does_not_read_ahead_into_a_list() {
+        let url = format!("https://example.com/{}", "a".repeat(26));
+        let rows = [
+            "⏺ Run this:".to_owned(),
+            format!("  {url}"),
+            "  - item".to_owned(),
+        ];
+        assert_eq!(
+            joins(&rows.each_ref().map(String::as_str), 48),
+            (vec![1], vec![])
+        );
     }
 
     #[test]
