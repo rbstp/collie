@@ -1,6 +1,6 @@
 # Tailnet setup
 
-This page describes the next matching phone and desktop candidate; user-owned setup is unreleased. Published desktop v0.1.0 still uses tagged nodes. Follow the [v0.1.0 tailnet procedure](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md) until both peers are updated.
+Desktop v0.1.1 and later, with the matching phone app, use user-owned nodes. An install set up with v0.1.0 that has not been reset and re-paired yet still has a tagged desktop node: the [v0.1.0 tailnet procedure](https://github.com/rbstp/collie/blob/v0.1.0/docs/tailnet.md) describes it, and [Existing tagged installations](#existing-tagged-installations) explains the reset.
 
 Collie embeds independent Tailscale nodes through libtailscale (tsnet, userspace netstack). Sign in inside Collie on the phone and through `collied setup` on the computer with the same personal Tailscale account. Fresh nodes are user-owned and untagged. No tag ownership setup is needed.
 

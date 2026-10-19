@@ -185,11 +185,11 @@ test('another attested installation cannot adopt, rotate or revoke foreign route
     assert.equal((await execute({ ...common, op: 'revoke_pairing', pairing_id: 'machine' })).status, 200);
     assert.deepEqual(await f.db.prepare("SELECT * FROM routes WHERE id = 'route'").first(), originalRoute);
     assert.deepEqual(await f.db.prepare("SELECT * FROM pairings WHERE id = 'machine'").first(), originalPairing);
-    const victim: Operation = { ...f.common, op: 'revoke_installation' };
+    const victim: Operation = { ...f.common, op: 'revoke_pairing', pairing_id: 'machine' };
     const challenge = (await (await f.post('challenge', victim)).json()).challenge;
     assert.equal((await f.post('control', { operation: victim, challenge, assertion: await assertion(keys.privateKey, challenge, ++counter) })).status, 401);
     assert.equal((await f.db.prepare("SELECT counter FROM attestations WHERE installation_id = 'phone'").first())!.counter, 0);
-    assert.equal((await f.db.prepare("SELECT epoch FROM installations WHERE id = 'phone'").first())!.epoch, 0);
+    assert.equal((await f.db.prepare("SELECT revoked FROM pairings WHERE id = 'machine'").first())!.revoked, 0);
     assert.equal((await execute({ ...owned, expected_generation: 1, destination: 'c'.repeat(64) })).status, 200);
     assert.equal((await f.db.prepare("SELECT generation FROM routes WHERE id = 'other_app'").first())!.generation, 2);
   } finally { await f.runtime.dispose(); }
@@ -265,18 +265,6 @@ test('complete Apple fixture verifies pinned certificate chains, authenticator n
   receipt[receipt.length - 12] ^= 1;
   await assert.rejects(verifyAttestation(base64url(encode(object)), key, hash, context, time));
 });
-test('lost installation-revocation responses recover with a fresh assertion without reopening routes or incrementing the epoch twice', async () => {
-  const f = await controlFixture();
-  try {
-    const op: Operation = { ...f.common, op: 'revoke_installation' };
-    assert.equal((await f.execute(op)).status, 200);
-    assert.equal((await f.execute(op)).status, 200);
-    assert.equal((await f.db.prepare('SELECT epoch FROM installations').first()).epoch, 1);
-    assert.equal((await f.db.prepare('SELECT counter FROM attestations').first()).counter, 2);
-    assert.equal((await f.post('challenge', { ...f.common, op: 'route', pairing_id: 'machine', route_id: 'route', expected_generation: 1,
-      kind: 'app', destination: 'b'.repeat(64) })).status, 401);
-  } finally { await f.runtime.dispose(); }
-});
 
 test('shared control and enrollment admission rejects rotating sources before database or crypto work', async () => {
   for (const path of ['challenge', 'control']) for (const enrollment of [false, true]) {
@@ -297,7 +285,7 @@ test('shared control and enrollment admission rejects rotating sources before da
     };
     const worker = createWorker();
     const post = (ip: string) => {
-      const operation = { v: 1, op: enrollment ? 'enroll' : 'revoke_installation',
+      const operation = { v: 1, op: enrollment ? 'enroll' : 'revoke_pairing', ...(enrollment ? {} : { pairing_id: 'machine' }),
         installation_id: ip.replaceAll('.', '_'), key_id: 'A'.repeat(43), environment: 'development' };
       return worker.fetch(new Request(`https://relay.example/v1/${path}`, {
         method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip },
