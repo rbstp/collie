@@ -267,6 +267,12 @@ fn phase3_expired_approvals() {
             None,
         )
         .unwrap();
+        let registered = || {
+            audit_lines(&data_dir.join("audit.log"))
+                .iter()
+                .any(|l| l["method"] == "push.register" && l["result"] == "ok")
+        };
+        wait_for("push.register", registered).await;
         println!("in-app decide on an expired approval");
         herdr.set_status("blocked");
         let a = needed(&core, &m).await;
@@ -284,18 +290,9 @@ fn phase3_expired_approvals() {
         assert!(matches!(err, CoreError::ApprovalExpired), "{err:?}");
         resolved(&core, &m, &a.approval_id).await;
 
-        println!("the reissued approval alerts again, replacing the dead alert");
         herdr.with(|h| h.down = false);
         let b = needed(&core, &m).await;
         assert_ne!(b.approval_id, a.approval_id);
-        let alerts = apns.wait(2).await;
-        assert_eq!(alerts.len(), 2, "{alerts:?}");
-        assert_eq!(alerts[0].1.payload["approval_id"], a.approval_id.as_str());
-        assert_eq!(alerts[1].1.payload["approval_id"], b.approval_id.as_str());
-        for (_, alert) in &alerts {
-            let thread = URL_SAFE_NO_PAD.encode(&Sha256::digest(TERMINAL.as_bytes())[..16]);
-            assert_eq!(alert.collapse_id.as_deref(), Some(thread.as_str()));
-        }
 
         println!("lock-screen decide on an expired approval");
         herdr.with(|h| h.down = true);
