@@ -1,5 +1,4 @@
 import CollieCore
-import PhotosUI
 import SwiftUI
 
 struct NewTaskSheet: View {
@@ -8,7 +7,6 @@ struct NewTaskSheet: View {
     @State private var model: NewTaskModel
     @State private var startTask: Task<Void, Never>?
     @State private var pickingPhoto = false
-    @State private var photos: [PhotosPickerItem] = []
     @State private var pickingFile = false
     @State private var pickingPrompt = false
     @State private var dictationExpanded = false
@@ -406,35 +404,11 @@ struct NewTaskSheet: View {
                     }
                 }
             }
-            .photosPicker(
-                isPresented: $pickingPhoto, selection: $photos, maxSelectionCount: max(model.attachmentSlots, 1),
-                matching: .images
-            )
-            .onChange(of: photos) { _, items in
-                guard !items.isEmpty else { return }
-                photos = []
-                let now = Date.now
-                model.attach(items.enumerated().map { offset, item in
-                    PendingAttachment(name: Attachment.photoName(at: now, index: offset + 1)) { _ in
-                        guard let data = try await item.loadTransferable(type: Data.self) else {
-                            throw AttachmentError.unreadablePhoto
-                        }
-                        return try Attachment.jpeg(from: data)
-                    }
-                })
-            }
-            .fileImporter(isPresented: $pickingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-                switch result {
-                case .success(let urls):
-                    model.attach(urls.map { url in
-                        PendingAttachment(name: Attachment.suggestedName(url.lastPathComponent)) { limit in
-                            try Attachment.read(url, limit: limit)
-                        }
-                    })
-                case .failure(let error):
-                    model.attachFailed(error)
-                }
-            }
+            .modifier(AttachmentPickers(pickingPhoto: $pickingPhoto, pickingFile: $pickingFile, slots: model.attachmentSlots) {
+                model.attach($0)
+            } failed: {
+                model.attachFailed($0)
+            })
             .onChange(of: scenePhase) { _, phase in model.dictation.scenePhaseChanged(to: phase) }
             .onChange(of: model.prompt.isEmpty) { _, empty in
                 if empty && !model.dictation.isActive { dictationExpanded = false }

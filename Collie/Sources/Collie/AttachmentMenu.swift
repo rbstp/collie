@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -137,5 +138,42 @@ final class AttachmentMenuButton: UIButton {
         } else {
             present()
         }
+    }
+}
+
+struct AttachmentPickers: ViewModifier {
+    @Binding var pickingPhoto: Bool
+    @Binding var pickingFile: Bool
+    let slots: Int
+    let attach: ([PendingAttachment]) -> Void
+    let failed: (any Error) -> Void
+    @State private var photos: [PhotosPickerItem] = []
+
+    func body(content: Content) -> some View {
+        content
+            .photosPicker(isPresented: $pickingPhoto, selection: $photos, maxSelectionCount: max(slots, 1), matching: .images)
+            .onChange(of: photos) { _, items in
+                guard !items.isEmpty else { return }
+                photos = []
+                let now = Date.now
+                attach(items.enumerated().map { offset, item in
+                    PendingAttachment(name: Attachment.photoName(at: now, index: offset + 1)) { _ in
+                        guard let data = try await item.loadTransferable(type: Data.self) else { throw AttachmentError.unreadablePhoto }
+                        return try Attachment.jpeg(from: data)
+                    }
+                })
+            }
+            .fileImporter(isPresented: $pickingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+                switch result {
+                case .success(let urls):
+                    attach(urls.map { url in
+                        PendingAttachment(name: Attachment.suggestedName(url.lastPathComponent)) { limit in
+                            try Attachment.read(url, limit: limit)
+                        }
+                    })
+                case .failure(let error):
+                    failed(error)
+                }
+            }
     }
 }
