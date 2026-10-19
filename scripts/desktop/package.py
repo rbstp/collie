@@ -37,15 +37,12 @@ def metadata(version, sha, platform, binary=None):
     protocol = re.search(r"pub const PROTOCOL_VERSION: u32 = (\d+);", (ROOT / "crates/protocol/src/lib.rs").read_text())
     if not protocol:
         raise ValueError("cannot determine protocol version")
-    minimum = protocol[1]
-    compatibility = ROOT / "crates/protocol/src/compatibility.rs"
-    if compatibility.exists():
-        floor = re.search(r"pub const PROTOCOL_MIN_VERSION: u32 = (\d+);", compatibility.read_text())
-        if not floor:
-            raise ValueError("cannot determine protocol floor")
-        minimum = floor[1]
+    floor = re.search(r"pub const PROTOCOL_MIN_VERSION: u32 = (\d+);",
+                      (ROOT / "crates/protocol/src/compatibility.rs").read_text())
+    if not floor:
+        raise ValueError("cannot determine protocol floor")
     result = dict(version=version, source_sha=sha, platform=platform,
-                  protocol_min=int(minimum), protocol_max=int(protocol[1]))
+                  protocol_min=int(floor[1]), protocol_max=int(protocol[1]))
     if platform == "linux-x86_64":
         symbols = run("readelf", "--version-info", str(binary))
         versions = re.findall(r"\bGLIBC_(\d+\.\d+)(?:\.\d+)?\b", symbols)

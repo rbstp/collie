@@ -271,7 +271,6 @@ enum TabCreatedResult {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkspaceCreated {
-    pub workspace: WorkspaceInfo,
     pub root_pane: PaneInfo,
 }
 

@@ -529,7 +529,6 @@ struct StatusIcon: View {
     }
 }
 
-/// Context left in the agent's window: a static arc, unlike the working spinner.
 struct ContextRing: View {
     static let size: CGFloat = 14
     let left: UInt8

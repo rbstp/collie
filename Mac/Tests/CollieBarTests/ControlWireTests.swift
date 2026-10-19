@@ -31,7 +31,7 @@ struct ControlWireTests {
         let peers = try decode(
             #"{"type":"peers","owner_user_id":7,"peers":[{"stable_id":"nP","user_id":7,"login":"me@example.com","#
                 + #""label":"iPhone","paired_at":1700000000000,"tls_key":"k","terminal_key":null}]}"#)
-        #expect(peers == .peers([Peer(label: "iPhone", login: "me@example.com", stableId: "nP", pairedAt: 1_700_000_000_000)]))
+        #expect(peers == .peers([Peer(label: "iPhone", login: "me@example.com", stableId: "nP")]))
         #expect(try decode(#"{"type":"peers","owner_user_id":null,"peers":[]}"#) == .peers([]))
     }
 

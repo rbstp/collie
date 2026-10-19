@@ -439,7 +439,6 @@ private struct AgentHeader: View {
     }
 }
 
-/// One line per running Claude Code subagent, laid out like Claude Code's agent panel.
 struct SubagentList: View {
     let subagents: [SubagentSummary]
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -1055,7 +1054,6 @@ struct DictationButton: View {
     }
 }
 
-/// The waveform button grows into the dictation bar and shrinks back, with the stop control where the button was.
 struct DictationControl: View {
     let dictation: DictationModel
     let disabled: Bool

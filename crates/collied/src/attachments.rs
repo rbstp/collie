@@ -222,10 +222,6 @@ impl Attachments {
         Ok(store)
     }
 
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     pub fn begin(
         &self,
         session: u64,
@@ -551,9 +547,9 @@ mod tests {
         assert_eq!(std::fs::read(&done.path).unwrap(), data);
         assert_eq!(mode(&done.path), 0o600);
         assert_eq!(mode(done.path.parent().unwrap()), 0o700);
-        assert_eq!(done.path.parent().unwrap().parent().unwrap(), store.root());
+        assert_eq!(done.path.parent().unwrap().parent().unwrap(), &store.root);
         assert!(!done.path.with_file_name(PART).exists());
-        assert!(stored_bytes(store.root()) >= data.len() as u64);
+        assert!(stored_bytes(&store.root) >= data.len() as u64);
     }
 
     #[test]
@@ -567,7 +563,7 @@ mod tests {
         let err = lock(&upload).commit().err().unwrap();
         assert_eq!(err.0, ErrorCode::ChecksumMismatch);
         drop(upload);
-        assert_eq!(entries(store.root()), 0);
+        assert_eq!(entries(&store.root), 0);
 
         let id = store
             .begin(1, PEER, &name("a.txt"), 4, &sha(b"abcd"))
@@ -579,7 +575,7 @@ mod tests {
             ErrorCode::InvalidParams
         );
         drop(upload);
-        assert_eq!(entries(store.root()), 0);
+        assert_eq!(entries(&store.root), 0);
     }
 
     #[test]
@@ -618,7 +614,7 @@ mod tests {
             store.chunk(1, PEER, &id, 1, b"x").unwrap_err().0,
             ErrorCode::NotFound
         );
-        assert_eq!(entries(store.root()), 0, "session close drops its uploads");
+        assert_eq!(entries(&store.root), 0, "session close drops its uploads");
     }
 
     #[test]
@@ -654,7 +650,7 @@ mod tests {
             "200 MiB reserved by uploads in flight"
         );
         store.end_session(5);
-        let big = store.root().join("0123456789abcdef");
+        let big = store.root.join("0123456789abcdef");
         std::fs::create_dir(&big).unwrap();
         File::create(big.join("old.bin"))
             .unwrap()
@@ -675,11 +671,11 @@ mod tests {
         let digest = sha(b"x");
         store.begin(1, PEER, &name("a"), 1, &digest).unwrap();
         for i in 0..MAX_STORED_ENTRIES - 2 {
-            let dir = store.root().join(format!("{i:016x}"));
+            let dir = store.root.join(format!("{i:016x}"));
             std::fs::create_dir(&dir).unwrap();
             std::fs::write(dir.join("f"), b"x").unwrap();
         }
-        assert!(stored_bytes(store.root()) >= 512 * (MAX_STORED_ENTRIES as u64 - 2));
+        assert!(stored_bytes(&store.root) >= 512 * (MAX_STORED_ENTRIES as u64 - 2));
         store.begin(2, PEER, &name("b"), 1, &digest).unwrap();
         assert_eq!(
             store.begin(3, PEER, &name("c"), 1, &digest).unwrap_err().0,
@@ -701,7 +697,7 @@ mod tests {
             store.chunk(1, PEER, &id, 1, b"b").unwrap_err().0,
             ErrorCode::NotFound
         );
-        assert_eq!(entries(store.root()), 0);
+        assert_eq!(entries(&store.root), 0);
     }
 
     #[test]
@@ -714,24 +710,24 @@ mod tests {
         let outside = tmp.path().join("outside");
         std::fs::create_dir(&outside).unwrap();
         std::fs::write(outside.join("keep"), b"k").unwrap();
-        std::os::unix::fs::symlink(&outside, store.root().join("link")).unwrap();
-        let stale = store.root().join("fedcba9876543210");
+        std::os::unix::fs::symlink(&outside, store.root.join("link")).unwrap();
+        let stale = store.root.join("fedcba9876543210");
         std::fs::create_dir(&stale).unwrap();
         std::fs::write(stale.join(PART), b"half").unwrap();
 
         store.sweep(SystemTime::now(), false);
-        assert_eq!(entries(store.root()), 4, "nothing is old yet");
+        assert_eq!(entries(&store.root), 4, "nothing is old yet");
         store.sweep(SystemTime::now(), true);
         assert!(!stale.exists(), "partial from a previous run");
         assert!(kept.path.exists());
         store.sweep(SystemTime::now() + RETENTION, false);
         assert!(!kept.path.exists());
-        assert!(!store.root().join("link").exists());
+        assert!(!store.root.join("link").exists());
         assert!(
             outside.join("keep").exists(),
             "the symlink target is untouched"
         );
         store.chunk(2, PEER, &live, 0, b"y").unwrap();
-        assert_eq!(entries(store.root()), 1, "the upload in flight stays");
+        assert_eq!(entries(&store.root), 1, "the upload in flight stays");
     }
 }
