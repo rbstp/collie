@@ -122,7 +122,19 @@ jobs:
             xcrun simctl runtime delete "$id"
           done
           xcodebuild -downloadPlatform watchOS
-          xcrun simctl runtime list
+          # The download returns while the new runtime is still being copied into place.
+          sdk="$(xcrun --sdk watchsimulator --show-sdk-version)"
+          for _ in $(seq 60); do
+            xcrun simctl runtime list -j | jq -r '.[] | select(.platformIdentifier == "com.apple.platform.watchsimulator")
+              | "watchOS \(.version) (\(.build)): \(.state)"'
+            if xcrun simctl list runtimes -j | jq -e --arg v "$sdk" 'any(.runtimes[];
+              .platform == "watchOS" and .isAvailable and (.version == $v or (.version | startswith($v + "."))))' >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "no watchOS $sdk simulator runtime became available within 10 minutes"
+          exit 1
 
       # The recipe uses the first iPhone 18 Pro Max and its first paired watch; the published watch shots are 46 mm.
       - name: pair the simulators
