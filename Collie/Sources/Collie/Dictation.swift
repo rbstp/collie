@@ -92,6 +92,8 @@ final class DictationModel {
     private var tail = ""
     private var finalized = ""
     private var volatile = ""
+    private(set) var clearArmed = false
+    private var disarm: Task<Void, Never>?
     private var write: (@MainActor (String) -> Void)?
 
     init(engine: any DictationEngine, language: DictationLanguage, prefsFile: URL?) {
@@ -178,11 +180,15 @@ final class DictationModel {
                 if levels.count > 120 { levels.removeFirst(levels.count - 120) }
             }
         case .volatile(let text):
+            let shown = output
             volatile = text
+            if output != shown { clearArmed = false }
             write?(output)
         case .final(let text):
+            let shown = output
             finalized = Self.join(finalized, text)
             volatile = ""
+            if output != shown { clearArmed = false }
             write?(output)
         }
     }
@@ -199,6 +205,25 @@ final class DictationModel {
             levels.removeAll()
             if let session { Task { await session.finish() } }
         }
+    }
+
+    /// The first tap arms; a second within a few seconds, before new text, empties the field and listens again.
+    /// A new session, because the recognizer may still deliver words heard before the clear.
+    func clear() {
+        guard phase != .idle, phase != .finishing, let write else { return }
+        guard clearArmed else {
+            clearArmed = true
+            disarm?.cancel()
+            disarm = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                self?.clearArmed = false
+            }
+            return
+        }
+        cancel()
+        start("", "", write: write)
+        write("")
     }
 
     func cancel() {
@@ -227,6 +252,7 @@ final class DictationModel {
 
     private func end() {
         phase = .idle
+        clearArmed = false
         levels.removeAll()
         session?.cancel()
         session = nil
