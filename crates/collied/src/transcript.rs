@@ -687,20 +687,22 @@ fn claude_window(model: &str, used: u64) -> u64 {
 fn claude(text: &str, known_window: Option<u64>) -> Derived {
     let mut d = Derived::default();
     let mut compacted = None;
-    let lines = text
-        .lines()
-        .rev()
-        .filter(|l| {
-            l.contains("assistant")
-                || l.contains("human")
-                || l.contains("last-prompt")
-                || l.contains("compact_boundary")
-        })
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok());
-    for v in lines {
+    let mut summary = None;
+    for l in text.lines().rev() {
         if done(&d) {
             break;
         }
+        let replied = d.context_left.is_some() && d.last_line.is_some();
+        if !(l.contains("human")
+            || l.contains("last-prompt")
+            || l.contains("bash-input")
+            || !replied && (l.contains("assistant") || l.contains("compact_boundary")))
+        {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(l) else {
+            continue;
+        };
         let main = v["isSidechain"] != true;
         match v["type"].as_str() {
             // No assistant usage follows a compaction until the next reply: its size is here.
@@ -745,23 +747,42 @@ fn claude(text: &str, known_window: Option<u64>) -> Derived {
                     });
                 }
             }
+            // A `!` command has no origin, so only the last-prompt record names it.
+            Some("user")
+                if main
+                    && d.last_prompt.is_none()
+                    && summary.is_some()
+                    && history::local(&v).is_some_and(|s| s.starts_with("<bash-input>")) =>
+            {
+                d.last_prompt = summary.take();
+            }
             Some("user") if main && d.last_prompt.is_none() && v["origin"]["kind"] == "human" => {
                 let content = &v["message"]["content"];
                 let local = history::local(&v);
                 if local.is_some_and(|s| s.starts_with("<local-command-stdout>")) {
                     continue;
                 }
-                d.last_prompt = match content.as_str() {
+                d.last_prompt = summary.take().or_else(|| match content.as_str() {
                     Some(s) => local.and_then(history::command).or_else(|| first_line(s)),
                     None => blocks_line(content, "text"),
-                };
+                });
             }
-            Some("last-prompt") if d.last_prompt.is_none() => {
-                d.last_prompt = v["lastPrompt"].as_str().and_then(first_line);
+            Some("attachment") if main && d.last_prompt.is_none() => {
+                if let Some(prompt) = history::queued_prompt(&v) {
+                    d.last_prompt = match prompt.as_str() {
+                        Some(s) => first_line(s),
+                        None => blocks_line(prompt, "text"),
+                    };
+                }
+            }
+            // Claude Code keeps rewriting the turn's first prompt here, also after a mid-turn prompt.
+            Some("last-prompt") if d.last_prompt.is_none() && summary.is_none() => {
+                summary = v["lastPrompt"].as_str().and_then(first_line);
             }
             _ => {}
         }
     }
+    d.last_prompt = d.last_prompt.or(summary);
     d
 }
 
@@ -925,6 +946,65 @@ mod tests {
                 .as_deref(),
             Some("older")
         );
+    }
+
+    #[test]
+    fn claude_prompt_follows_prompts_sent_mid_turn() {
+        let first = r#"{"type":"user","isSidechain":false,"origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"why does the pairing test hang"}}"#;
+        let summary = r#"{"type":"last-prompt","lastPrompt":"why does the pairing test hang","sessionId":"s"}"#;
+        let queued = |prompt: &str, mode: &str, kind: &str, sidechain: bool| {
+            format!(
+                r#"{{"type":"attachment","isSidechain":{sidechain},"attachment":{{"type":"queued_command","prompt":{prompt},"commandMode":"{mode}","origin":{{"kind":"{kind}"}}}}}}"#
+            )
+        };
+        let mid = queued(
+            r#""  also check the relay timeout\nand the docs""#,
+            "prompt",
+            "human",
+            false,
+        );
+        let image = queued(
+            r#"[{"type":"image"},{"type":"text","text":"this is the screen it stops on"}]"#,
+            "prompt",
+            "human",
+            false,
+        );
+        let next = r#"{"type":"user","isSidechain":false,"origin":{"kind":"human"},"promptSource":"queued","message":{"role":"user","content":"and update the docs"}}"#;
+        let prompt = |lines: &[&str]| claude(&lines.join("\n"), None).last_prompt;
+        let relay = Some("also check the relay timeout".to_owned());
+        assert_eq!(prompt(&[first, &mid]), relay);
+        assert_eq!(prompt(&[first, &mid, summary]), relay);
+        assert_eq!(prompt(&[first, summary, &mid, summary, summary]), relay);
+        assert_eq!(
+            prompt(&[first, &mid, summary, &image, summary]).as_deref(),
+            Some("this is the screen it stops on")
+        );
+        assert_eq!(
+            prompt(&[first, &mid, summary, next]).as_deref(),
+            Some("and update the docs")
+        );
+        let bash = r#"{"type":"user","isSidechain":false,"message":{"role":"user","content":"<bash-input>git status</bash-input>"}}"#;
+        let bash_summary = r#"{"type":"last-prompt","lastPrompt":"!git status","sessionId":"s"}"#;
+        assert_eq!(
+            prompt(&[first, &mid, summary, bash, bash_summary]).as_deref(),
+            Some("!git status")
+        );
+        assert_eq!(prompt(&[first, &mid, bash]), relay);
+        assert_eq!(
+            prompt(&[summary]).as_deref(),
+            Some("why does the pairing test hang")
+        );
+        for ignored in [
+            queued(r#""Prompt""#, "prompt", "peer", false),
+            queued(r#""Prompt""#, "task-notification", "human", false),
+            queued(r#""Prompt""#, "prompt", "human", true),
+        ] {
+            assert_eq!(
+                prompt(&[first, &ignored, summary]).as_deref(),
+                Some("why does the pairing test hang"),
+                "{ignored}"
+            );
+        }
     }
 
     #[test]

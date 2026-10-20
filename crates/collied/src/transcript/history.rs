@@ -8,6 +8,8 @@ use protocol::{HistoryMessage, HistoryPage, HistoryParams};
 use serde_json::Value;
 
 use super::{Kind, Transcripts, open};
+use crate::draft::cells;
+use crate::drive::sanitize_ansi;
 use crate::herdr::AgentInfo;
 
 const SCAN_BYTES: u64 = 2 * 1024 * 1024;
@@ -597,6 +599,16 @@ pub(super) fn local(v: &Value) -> Option<&str> {
         .filter(|_| v["promptSource"].is_null() && v["isMeta"] != true)
 }
 
+/// Claude Code writes a prompt absorbed mid-turn only as this attachment, never as a user record.
+pub(super) fn queued_prompt(v: &Value) -> Option<&Value> {
+    let a = &v["attachment"];
+    (v["type"] == "attachment"
+        && a["type"] == "queued_command"
+        && a["commandMode"] == "prompt"
+        && a["origin"]["kind"] == "human")
+        .then_some(&a["prompt"])
+}
+
 pub(super) fn command(s: &str) -> Option<String> {
     if !s.starts_with("<command-name>") && !s.starts_with("<command-message>") {
         return None;
@@ -615,6 +627,31 @@ pub(super) fn command(s: &str) -> Option<String> {
         .take(120)
         .collect::<String>();
     Some(line.trim().to_owned())
+}
+
+fn bash(s: &str) -> Option<(&'static str, String)> {
+    if let Some(command) = s
+        .strip_prefix("<bash-input>")
+        .and_then(|c| c.strip_suffix("</bash-input>"))
+    {
+        return Some(("user", format!("! {}", command.trim())));
+    }
+    let (out, err) = s
+        .strip_prefix("<bash-stdout>")?
+        .strip_suffix("</bash-stderr>")?
+        .rsplit_once("</bash-stdout><bash-stderr>")?;
+    let output = [out, err]
+        .into_iter()
+        .map(|s| {
+            cells(&sanitize_ansi(s))
+                .into_iter()
+                .map(|(c, _)| c)
+                .collect::<String>()
+        })
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(("tool", output))
 }
 
 /// Claude 5.1 and later write the progress update before a tool call as a second thinking block.
@@ -714,20 +751,16 @@ fn normalize(
                     .into_iter()
                     .collect();
             }
-            let queued = &v["attachment"];
-            let (role, content) = match v["type"].as_str() {
-                Some(r @ ("user" | "assistant")) => (r, &v["message"]["content"]),
-                // Claude Code writes a prompt absorbed mid-turn only as this attachment, never as a user record.
-                Some("attachment")
-                    if queued["type"] == "queued_command"
-                        && queued["commandMode"] == "prompt"
-                        && queued["origin"]["kind"] == "human" =>
-                {
-                    ("user", &queued["prompt"])
-                }
+            let (role, content) = match (v["type"].as_str(), queued_prompt(v)) {
+                (Some(r @ ("user" | "assistant")), _) => (r, &v["message"]["content"]),
+                (_, Some(prompt)) => ("user", prompt),
                 _ => return out,
             };
-            if content.is_string() {
+            if let Some((r, body)) = local.filter(|_| role == "user").and_then(bash) {
+                if !body.is_empty() {
+                    add(r, body, (r == "tool").then_some("Result"), None);
+                }
+            } else if content.is_string() {
                 add(role, text(content), None, None);
             }
             if let Some(blocks) = content.as_array() {
@@ -2026,6 +2059,82 @@ mod tests {
             let search = t.history(&a, &params(None, None, Some(query)));
             assert_eq!(search.messages.len(), hits, "{query}");
         }
+    }
+
+    #[test]
+    fn bash_mode_output_drops_escape_sequences() {
+        let output = |out: &str, err: &str| {
+            bash(&format!(
+                "<bash-stdout>{out}</bash-stdout><bash-stderr>{err}</bash-stderr>"
+            ))
+        };
+        assert_eq!(
+            output(
+                "\u{1b}[1m\u{1b}[31mFAILED\u{1b}[0m 2 tests, see \u{1b}]8;;https://example.com/log\u{7}log\u{1b}]8;;\u{1b}\\",
+                "\u{1b}[38;2;215;119;87mwarning\u{1b}[39m: slow\u{1b}[2K"
+            ),
+            Some(("tool", "FAILED 2 tests, see log\nwarning: slow".to_owned()))
+        );
+        assert_eq!(
+            output("\u{1b}[0m", "\u{1b}[?25h"),
+            Some(("tool", String::new()))
+        );
+    }
+
+    #[test]
+    fn bash_mode_commands_show_as_the_owners_command_with_its_output_as_a_result() {
+        let fixture = include_str!("../../tests/fixtures/transcripts/claude-bash-mode.jsonl");
+        let (_dir, t, a, _path) = setup("claude", fixture);
+        let rows = |p: &HistoryParams| {
+            t.history(&a, p)
+                .messages
+                .into_iter()
+                .map(|m| (m.id, m.role, m.tool, m.text))
+                .collect::<Vec<_>>()
+        };
+        let row = |id: &str, role: &str, text: &str| {
+            let tool = (role == "tool").then(|| "Result".to_owned());
+            (id.to_owned(), role.to_owned(), tool, text.to_owned())
+        };
+        assert_eq!(
+            rows(&params(None, None, None)),
+            [
+                row("b1:0", "user", "! git status"),
+                row(
+                    "b2:0",
+                    "tool",
+                    "On branch main\nnothing to commit, working tree clean"
+                ),
+                row("b3:0", "user", "! cat missing.txt"),
+                row(
+                    "b4:0",
+                    "tool",
+                    "cat: missing.txt: No such file or directory"
+                ),
+                row("b5:0", "user", "! make build"),
+                row("b6:0", "tool", "built collied\nwarning: unused variable"),
+                row("b7:0", "user", "! touch done"),
+                row("u1:0", "user", "summarize the build warning"),
+            ]
+        );
+        assert_eq!(
+            rows(&params(None, None, Some("GIT STATUS"))),
+            [row("b1:0", "user", "! git status")]
+        );
+        for query in ["bash-", "<bash"] {
+            assert!(rows(&params(None, None, Some(query))).is_empty(), "{query}");
+        }
+        let latest = HistoryParams {
+            latest: true,
+            ..params(None, None, None)
+        };
+        assert_eq!(
+            rows(&latest),
+            [
+                row("b7:0", "user", "! touch done"),
+                row("u1:0", "user", "summarize the build warning"),
+            ]
+        );
     }
 
     const COPILOT: &str = "20000000-0000-4000-8000-000000000002";
