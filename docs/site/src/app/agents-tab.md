@@ -4,6 +4,8 @@ The **Agents** tab lists every herdr agent on every paired machine, grouped by m
 
 Pull down to retry every machine, or tap a machine's header to retry that one.
 
+In every layout and in Usage, agents scroll under the buttons at the top and the tab bar at the bottom and stay fully visible around them: no band covers either edge.
+
 <div class="screenshots">
 <img class="screenshot-light" src="../images/agents-light.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">
 <img class="screenshot-dark" src="../images/agents-dark.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">
@@ -22,8 +24,6 @@ The Agents tab has three layouts.
 ### Grid
 
 The default. Each card is a live preview of the agent's screen. Claude Code, Codex and Copilot CLI cards show the agent's output without its input box and status lines. A blocked agent's card shows its whole screen.
-
-The cards scroll under the bar at the top and the tab bar at the bottom, and stay visible through their glass.
 
 When **Settings > Sessions > Default view** is Chat, cards preview the conversation instead: your last two messages and the agent's last two replies, in order, without tool calls. A starred card shows more of each message. A blocked agent's card still shows its whole screen, so you can see the prompt. A card also shows the screen when Chat is not available for the agent, or when `collied` on its machine needs an update. When you change the setting, the grid follows it the next time you open the Agents tab.
 

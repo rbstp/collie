@@ -26,25 +26,24 @@ private struct SampleSession: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading) {
-                    Text("Sample workspace").font(.headline)
-                    Text("Simulated actions only").font(.caption).foregroundStyle(.secondary)
+        tabs
+            .tabViewBottomAccessory {
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text("Sample workspace").font(.headline)
+                        Text("Simulated actions only").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Exit", action: exit)
                 }
-                Spacer()
-                Button("Exit", action: exit).buttonStyle(.glass)
+                .padding(.horizontal)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            tabs
-        }
-        .task {
-            while !Task.isCancelled {
-                approvals.poll()
-                try? await Task.sleep(for: .milliseconds(250))
+            .task {
+                while !Task.isCancelled {
+                    approvals.poll()
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
             }
-        }
     }
 
     private var tabs: some View {

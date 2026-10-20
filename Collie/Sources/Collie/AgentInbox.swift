@@ -19,26 +19,28 @@ struct AgentInbox<Menu: View>: View {
 
     var body: some View {
         let items = InboxItem.items(in: entries)
-        VStack(spacing: 0) {
-            ScrollView(.horizontal) {
-                GlassPicker(title: "Filter", selection: $filter,
-                            options: InboxFilter.allCases.map { ($0.title, $0) })
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-            }
-            .scrollIndicators(.hidden)
-            TimelineView(InboxSchedule(wakes: snoozed.snoozes.values.map(\.wake))) { context in
-                List {
-                    if let notice {
-                        Label(notice, systemImage: "exclamationmark.triangle")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
-                    if entries.isEmpty {
-                        NoMachines()
-                    }
-                    inbox(items.filter { $0.matches(query) }, now: context.date)
+        TimelineView(InboxSchedule(wakes: snoozed.snoozes.values.map(\.wake))) { context in
+            List {
+                if let notice {
+                    Label(notice, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
                 }
+                if entries.isEmpty {
+                    NoMachines()
+                }
+                inbox(items.filter { $0.matches(query) }, now: context.date)
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                ScrollView(.horizontal) {
+                    GlassPicker(title: "Filter", selection: $filter,
+                                options: InboxFilter.allCases.map { ($0.title, $0) })
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                        // The page reaches under the navigation bar, so this scroll view would inset the filter by the bar's height.
+                        .ignoresSafeArea(edges: .vertical)
+                }
+                .scrollIndicators(.hidden)
             }
         }
         .searchable(text: $query, prompt: "Search agents")

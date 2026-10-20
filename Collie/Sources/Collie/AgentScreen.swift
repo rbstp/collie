@@ -463,7 +463,7 @@ private struct AgentHeader: View {
     }
 }
 
-struct SessionBarGlass: View {
+private struct SessionBarGlass: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
