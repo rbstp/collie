@@ -182,7 +182,7 @@ struct GridPageLock: UIViewRepresentable {
                         pager = scroll
                     }
                     scroll.isScrollEnabled = !locked
-                    // Under the bars (grid layout), the pager's automatic inset shifts its pages; the pages take the safe area themselves.
+                    // Under the bars, the pager's automatic inset shifts its pages; the pages take the safe area themselves.
                     scroll.contentInsetAdjustmentBehavior = .never
                     return
                 }

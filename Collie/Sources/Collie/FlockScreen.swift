@@ -34,7 +34,7 @@ struct FlockScreen: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             // The pager clips its pages to its frame: in the grid layout it spans the bars so the cards show through them, and Usage clips itself as before.
-            .ignoresSafeArea(edges: layout == .grid ? [.top, .bottom] : [])
+            .ignoresSafeArea(edges: layout == .grid ? .all : [])
             .springLoadingBehavior(.disabled)
             .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: showsUsage)
             .navigationTitle("Agents")
