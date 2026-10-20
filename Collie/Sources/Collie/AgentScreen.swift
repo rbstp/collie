@@ -407,11 +407,11 @@ private struct AgentHeader: View {
                 }
                 if let agent = model.agent {
                     HStack(spacing: 6) {
-                        StatusPill(state: agent.status)
+                        StatusPill(state: agent.status, onGlass: true)
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
                                 .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.primary)
                         }
                     }
                     .fixedSize()
@@ -430,15 +430,15 @@ private struct AgentHeader: View {
                 } else {
                     Spacer(minLength: 0)
                     if model.isTerminal {
-                        AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.secondary).fixedSize()
+                        AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.primary).fixedSize()
                         Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.primary)
                             .fixedSize()
                     }
                 }
                 if !model.isTerminal {
-                    // No glass backing here: next to the status pill's glass it left keyboard animations unfinished after a picker closed.
+                    // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
                     GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
                                 icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
                         .controlSize(.small)
@@ -447,7 +447,7 @@ private struct AgentHeader: View {
             if model.link == .connecting {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
-                    Text("reconnecting").font(.caption).foregroundStyle(.secondary)
+                    Text("reconnecting").font(.caption).foregroundStyle(.primary)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             } else if let link = model.link, link != .connected {
@@ -485,11 +485,11 @@ struct SubagentList: View {
                 TimelineView(.periodic(from: Date(timeIntervalSince1970: Double(subagent.startedAtMs / 1000)), by: 60)) { context in
                     let usage = Text(verbatim: subagent.usage(now: context.date))
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(spacing: 6) {
-                            Image(systemName: "circle").font(.system(size: 7)).foregroundStyle(.secondary).accessibilityHidden(true)
+                            Image(systemName: "circle").font(.system(size: 7)).foregroundStyle(.primary).accessibilityHidden(true)
                             Text(verbatim: subagent.title).lineLimit(1)
                             Spacer(minLength: 4)
                             if !typeSize.isAccessibilitySize { usage.fixedSize() }
