@@ -92,6 +92,10 @@ final class DictationModel {
     private var tail = ""
     private var finalized = ""
     private var volatile = ""
+    /// After a clear, the words still being recognized belong to the cleared text: dropped until their final result.
+    private var discarding = false
+    private var armedOutput: String?
+    private var disarm: Task<Void, Never>?
     private var write: (@MainActor (String) -> Void)?
 
     init(engine: any DictationEngine, language: DictationLanguage, prefsFile: URL?) {
@@ -101,6 +105,8 @@ final class DictationModel {
     }
 
     var isActive: Bool { phase != .idle }
+
+    var clearArmed: Bool { isActive && armedOutput == output }
 
     var output: String {
         let heard = Self.join(finalized, volatile)
@@ -125,6 +131,7 @@ final class DictationModel {
         self.tail = tail
         finalized = ""
         volatile = ""
+        discarding = false
         problem = nil
         self.write = write
         phase = .preparing(download: nil)
@@ -178,9 +185,14 @@ final class DictationModel {
                 if levels.count > 120 { levels.removeFirst(levels.count - 120) }
             }
         case .volatile(let text):
+            guard !discarding else { return }
             volatile = text
             write?(output)
         case .final(let text):
+            guard !discarding else {
+                discarding = false
+                return
+            }
             finalized = Self.join(finalized, text)
             volatile = ""
             write?(output)
@@ -199,6 +211,28 @@ final class DictationModel {
             levels.removeAll()
             if let session { Task { await session.finish() } }
         }
+    }
+
+    /// The first tap arms; a second within a few seconds, before the text changes, empties the field and keeps listening.
+    func clear() {
+        guard isActive else { return }
+        guard clearArmed else {
+            armedOutput = output
+            disarm?.cancel()
+            disarm = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                self?.armedOutput = nil
+            }
+            return
+        }
+        armedOutput = nil
+        discarding = !volatile.isEmpty
+        base = ""
+        tail = ""
+        finalized = ""
+        volatile = ""
+        write?(output)
     }
 
     func cancel() {
@@ -227,6 +261,7 @@ final class DictationModel {
 
     private func end() {
         phase = .idle
+        armedOutput = nil
         levels.removeAll()
         session?.cancel()
         session = nil

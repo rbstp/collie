@@ -870,20 +870,22 @@ private struct PromptBar: View {
                         }
                         if expanded && !model.draft.isEmpty {
                             Button {
-                                if model.isTerminal {
+                                if model.dictation.isActive {
+                                    model.dictation.clear()
+                                } else if model.isTerminal {
                                     model.draft = ""
                                 } else {
                                     model.typed("")
                                 }
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(model.dictation.clearArmed ? Color.red : Color.secondary)
                                     .frame(width: 36, height: 36)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .disabled(model.dictation.isActive || model.sendingPrompt)
-                            .accessibilityLabel("Clear text")
+                            .disabled(model.sendingPrompt)
+                            .accessibilityLabel(model.dictation.clearArmed ? "Tap again to clear text" : "Clear text")
                         }
                     }
                 }

@@ -211,6 +211,42 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
 }
 
 @MainActor
+@Test func clearDuringDictationTakesTwoTapsAndKeepsListening() async {
+    let engine = FakeDictationEngine()
+    let model = await dictating(engine)
+    await engine.send(.final("blah blah"))
+    await poll { model.draft == "fix blah blah" }
+
+    model.dictation.clear()
+    #expect(model.dictation.clearArmed)
+    #expect(model.draft == "fix blah blah")
+    await engine.send(.volatile("and"))
+    #expect(!model.dictation.clearArmed)
+    #expect(model.draft == "fix blah blah and")
+
+    model.dictation.clear()
+    model.dictation.clear()
+    #expect(model.draft.isEmpty)
+    #expect(!model.dictation.clearArmed)
+    #expect(model.dictation.phase == .listening)
+    await engine.send(.final("and more"))
+    #expect(model.draft.isEmpty)
+    await engine.send(.volatile("start"))
+    #expect(model.draft == "start")
+    await engine.send(.final("start over"))
+    #expect(model.draft == "start over")
+
+    model.dictation.clear()
+    await poll { !model.dictation.clearArmed }
+    model.dictation.clear()
+    #expect(model.draft == "start over")
+    model.dictation.stop()
+    await poll { !model.dictation.isActive }
+    #expect(!model.dictation.clearArmed)
+    #expect(model.draft == "start over")
+}
+
+@MainActor
 @Test func dictationWaitsForASendInFlight() async {
     let core = FakeCore()
     let engine = FakeDictationEngine()
