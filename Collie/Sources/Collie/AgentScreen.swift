@@ -475,7 +475,7 @@ private struct SessionBarGlass: View {
 }
 
 // Apple's guidance for clear glass: a dimming layer behind it keeps text legible over bright or busy content.
-private struct SessionBarDim: ShapeStyle {
+struct SessionBarDim: ShapeStyle {
     func resolve(in environment: EnvironmentValues) -> Color {
         environment.colorScheme == .dark ? .black.opacity(0.7) : .white.opacity(0.8)
     }
