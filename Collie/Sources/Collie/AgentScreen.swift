@@ -176,7 +176,7 @@ struct AgentScreen: View {
                 }
                 if showingChat && !model.isTerminal && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown) {
                     Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
-                        .font(.footnote).buttonStyle(.glass).padding(.top, 6)
+                        .font(.footnote).buttonStyle(.glass).background(SessionBarDim(), in: .capsule).padding(.top, 6)
                 }
                 GlassEffectContainer(spacing: 4) {
                     VStack(spacing: 0) {
@@ -466,14 +466,18 @@ private struct AgentHeader: View {
 }
 
 private struct SessionBarGlass: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
         ZStack {
-            // Apple's guidance for clear glass: a dimming layer behind it keeps text legible over bright or busy content.
-            (colorScheme == .dark ? Color.black.opacity(0.6) : Color.white.opacity(0.7))
+            Rectangle().fill(SessionBarDim())
             Color.clear.glassEffect(.clear, in: .rect)
         }
+    }
+}
+
+// Apple's guidance for clear glass: a dimming layer behind it keeps text legible over bright or busy content.
+private struct SessionBarDim: ShapeStyle {
+    func resolve(in environment: EnvironmentValues) -> Color {
+        environment.colorScheme == .dark ? .black.opacity(0.7) : .white.opacity(0.8)
     }
 }
 
@@ -701,6 +705,7 @@ private struct KeyStrip: View {
                         .buttonStyle(.glass)
                         .buttonBorderShape(.roundedRectangle(radius: 8))
                         .controlSize(.small)
+                        .background(SessionBarDim(), in: .rect(cornerRadius: 8))
                         .disabled(!model.savesPreferences)
                 }
             }
@@ -740,6 +745,7 @@ private struct StripButton: View {
                 .buttonStyle(.glass)
                 .buttonBorderShape(.roundedRectangle(radius: 8))
                 .controlSize(.small)
+                .background(SessionBarDim(), in: .rect(cornerRadius: 8))
         }
     }
 }
@@ -825,6 +831,7 @@ private struct PromptBar: View {
                             }
                         }
                         .disabled(model.upload != nil || model.sendingPrompt || !model.savesPreferences)
+                        .background(SessionBarDim(), in: Circle().inset(by: AttachmentMenuButton.outset))
                     }
                     if keysAvailable {
                         Button {
@@ -837,6 +844,7 @@ private struct PromptBar: View {
                         .buttonStyle(.glass)
                         .buttonBorderShape(.circle)
                         .controlSize(.small)
+                        .background(SessionBarDim(), in: .circle)
                         .accessibilityLabel("Keys")
                         .accessibilityAddTraits(model.keysShown ? .isSelected : [])
                     }
@@ -896,12 +904,14 @@ private struct PromptBar: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+                .background(SessionBarDim(), in: .rect(cornerRadius: 18))
                 ZStack {
                     if !model.isTerminal {
                         DictationControl(dictation: model.dictation, disabled: model.sendingPrompt || !model.savesPreferences, shown: $dictationShown) {
                             dictationExpanded = model.startDictation(at: editing ? selection : nil) != nil
                             editing = false
                         }
+                        .background(SessionBarDim(), in: .capsule)
                     }
                 }
                 HStack(spacing: 8) {
@@ -917,6 +927,7 @@ private struct PromptBar: View {
                         .buttonStyle(.glass)
                         .buttonBorderShape(.circle)
                         .controlSize(.small)
+                        .background(SessionBarDim(), in: .circle)
                         .accessibilityLabel("Hide keyboard")
                     }
                     Button {
@@ -1320,5 +1331,6 @@ private extension View {
         padding(.horizontal, 10)
             .padding(.vertical, 6)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
+            .background(SessionBarDim(), in: .rect(cornerRadius: 12))
     }
 }
