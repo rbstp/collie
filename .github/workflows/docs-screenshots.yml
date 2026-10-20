@@ -22,15 +22,32 @@ jobs:
       contents: read
 
     steps:
+      - name: check out master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: master
+
+      # Only a master commit may run here: this job reads the caches that testflight and ci restore.
+      - name: validate the source commit
+        id: source
+        run: |
+          [[ $SOURCE_SHA =~ ^[0-9a-f]{40}$ ]] || { echo "source_sha must be a full commit SHA"; exit 1; }
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/master || { echo "$SOURCE_SHA is not on master"; exit 1; }
+          echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ steps.source.outputs.sha }}
           submodules: true
 
       - name: cache the Go toolchain
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ runner.tool_cache }}/go/1.27.2/arm64
@@ -47,7 +64,7 @@ jobs:
         run: rustup toolchain install
 
       - name: cache cargo and go builds
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -76,13 +93,14 @@ jobs:
           curl -sSfL -o "$RUNNER_TEMP/pngquant.tar.bz2" https://pngquant.org/pngquant.tar.bz2
           echo "68c32e4988d3f99f79f0642a94900756b7a2a463166067c5862826ced1e0ce1e  $RUNNER_TEMP/pngquant.tar.bz2" | shasum -a 256 -c
           tar -xjf "$RUNNER_TEMP/pngquant.tar.bz2" -C "$bin" pngquant
+          "$bin/pngquant" --version
           {
             echo "$bin"
             echo "$RUNNER_TEMP/xcodegen/bin"
           } >> "$GITHUB_PATH"
 
       - name: cache libghostty-vt
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: Collie/GhosttyTerminal/GhosttyVt.xcframework
           key: ghostty-vt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ghostty/build-xcframework.sh') }}
@@ -137,26 +155,39 @@ jobs:
           persist-credentials: false
           ref: master
 
-      - name: take the captured screenshots
+      - name: download the captured screenshots
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: screenshots
-          path: docs/site/src/images
+          path: ${{ runner.temp }}/shots
+
+      # Pages serves whatever lands in docs/site/src/images, so only PNG files go there.
+      - name: take the captured screenshots
+        run: |
+          for f in "$RUNNER_TEMP"/shots/*; do
+            name="$(basename "$f")"
+            if [[ ! $name =~ ^[a-z0-9-]+\.png$ ]] || [ ! -f "$f" ] || [ -L "$f" ] \
+              || [ "$(head -c 8 "$f" | od -An -tx1 | tr -d ' \n')" != 89504e470d0a1a0a ]; then
+              echo "unexpected file in the artifact: $name"
+              exit 1
+            fi
+            cp "$f" docs/site/src/images/
+          done
 
       # A pull request opened with GITHUB_TOKEN starts no workflow, so the required checks and the pages deploy would never run.
       - name: open the pull request with auto-merge
         run: |
-          if [ -z "$(git status --porcelain -- docs/site/src/images)" ]; then
+          if [ -z "$(git status --porcelain -- 'docs/site/src/images/*.png')" ]; then
             echo "The screenshots are unchanged." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           [ -n "$GH_TOKEN" ] || { echo "DOCS_SCREENSHOTS_TOKEN is not set in the docs-screenshots environment; see docs/release.md"; exit 1; }
-          git status --short -- docs/site/src/images
+          git status --short -- 'docs/site/src/images/*.png'
           user="$(gh api user --jq '"\(.login) \(.id)"')"
           read -r login id <<< "$user"
           gh auth setup-git
           git switch -c docs-screenshots
-          git add -- docs/site/src/images
+          git add -- 'docs/site/src/images/*.png'
           git -c user.name="$login" -c user.email="$id+$login@users.noreply.github.com" \
             commit -q -m "Refresh documentation screenshots"
           git push -q --force origin docs-screenshots
