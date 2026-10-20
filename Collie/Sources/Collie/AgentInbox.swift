@@ -32,17 +32,34 @@ struct AgentInbox<Menu: View>: View {
                 inbox(items.filter { $0.matches(query) }, now: context.date)
             }
             .safeAreaInset(edge: .top, spacing: 0) {
-                ScrollView(.horizontal) {
-                    GlassPicker(title: "Filter", selection: $filter,
-                                options: InboxFilter.allCases.map { ($0.title, $0) })
-                        .padding(.horizontal)
+                VStack(spacing: 0) {
+                    ScrollView(.horizontal) {
+                        GlassPicker(title: "Filter", selection: $filter,
+                                    options: InboxFilter.allCases.map { ($0.title, $0) })
+                            .padding(.horizontal)
+                    }
+                    .scrollIndicators(.hidden)
+                    // Outside the scroll view: one that touches the bar's safe area insets its content, and the segments again.
+                    .padding(.vertical, 8)
+                    // Not .searchable: its field moves over the rows and then into the navigation bar when focused.
+                    HStack {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Search agents", text: $query)
+                            .submitLabel(.search)
+                        if !query.isEmpty {
+                            Button("Clear search", systemImage: "xmark.circle.fill") { query = "" }
+                                .labelStyle(.iconOnly)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .glassEffect(.regular, in: .capsule)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
                 }
-                .scrollIndicators(.hidden)
-                // Outside the scroll view: one that touches the bar's safe area insets its content, and the segments again.
-                .padding(.vertical, 8)
             }
         }
-        .searchable(text: $query, prompt: "Search agents")
         .confirmationDialog("Snooze until", isPresented: Binding { snoozing != nil } set: { if !$0 { snoozing = nil } },
                             titleVisibility: .visible, presenting: snoozing) { item in
             let morning = SnoozedAgents.nextMorning(after: .now)

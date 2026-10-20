@@ -34,7 +34,7 @@ final class InboxSwipeTests: XCTestCase {
         XCTAssertFalse(snooze.appears(within: 2), app.debugDescription)
     }
 
-    func testSearchKeepsTheFilterBelowTheFieldAndTheLastRowAboveTheKeyboard() throws {
+    func testSearchStaysBelowTheFilterAndTheLastRowAboveTheKeyboard() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
@@ -45,19 +45,21 @@ final class InboxSwipeTests: XCTestCase {
         XCTAssertTrue(layout.appears(within: 10), app.debugDescription)
         layout.tap()
         app.buttons["Inbox"].tap()
-        let last = app.staticTexts["The rate limiter is merged."]
-        XCTAssertTrue(last.appears(within: 5), app.debugDescription)
-        app.swipeDown()
-        let search = app.searchFields.firstMatch
+        let search = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "Search agents")).firstMatch
         XCTAssertTrue(search.appears(within: 5), app.debugDescription)
+        let before = search.frame
         search.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertEqual(search.frame, before, app.debugDescription)
         for _ in 0..<3 { app.swipeUp() }
         sleep(1)
+        XCTAssertEqual(search.frame, before, app.debugDescription)
+        let last = app.staticTexts["The rate limiter is merged."]
+        XCTAssertTrue(last.appears(within: 5), app.debugDescription)
         XCTAssertTrue(last.isHittable, app.debugDescription)
         XCTAssertLessThanOrEqual(last.frame.maxY, keyboard.frame.minY, app.debugDescription)
         let all = app.segmentedControls["Filter"].buttons.firstMatch
-        XCTAssertGreaterThanOrEqual(all.frame.minY, search.frame.maxY, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(search.frame.minY, all.frame.maxY, app.debugDescription)
     }
 }

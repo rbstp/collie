@@ -18,11 +18,6 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    Button("Explore sample workspace", systemImage: "play.rectangle", action: openSample)
-                } footer: {
-                    Text("Try simulated agents and approvals without signing in or connecting a machine.")
-                }
                 Section("Appearance") {
                     Picker("Accent color", selection: $app.accent) {
                         ForEach(AppAccent.allCases, id: \.self) { accent in
@@ -113,6 +108,11 @@ struct SettingsView: View {
                     LabeledContent("Go", value: build.go)
                     LabeledContent("Rust", value: build.rustc)
                     LabeledContent("Target", value: build.target)
+                }
+                Section {
+                    Button("Explore sample workspace", systemImage: "play.rectangle", action: openSample)
+                } footer: {
+                    Text("Try simulated agents and approvals without signing in or connecting a machine.")
                 }
             }
             .navigationTitle("Settings")

@@ -40,7 +40,7 @@ A compact list of agents, with their status as icons.
 
 ### Inbox
 
-Search agents across machines and filter them:
+Search agents across machines with the field below the filters, and filter them:
 
 - **Needs attention**: blocked agents and recent completions.
 - **Working**: agents that are working, including blocked ones.
