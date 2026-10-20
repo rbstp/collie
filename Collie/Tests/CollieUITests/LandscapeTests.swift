@@ -13,8 +13,7 @@ final class LandscapeTests: XCTestCase {
         for (layout, row) in [("Grid", "fix the build"), ("List", "fix the build"), ("Inbox", "I need to run cargo test to check the new cases.")] {
             let menu = app.buttons["Layout"]
             XCTAssertTrue(eventually { shown(menu, app) }, app.debugDescription)
-            menu.tap()
-            app.buttons[layout].tap()
+            app.choose(app.buttons[layout]) { menu.tap() }
             let element = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", row)).firstMatch
             XCTAssertTrue(eventually { shown(element, app) }, "\(layout)\n\(app.debugDescription)")
             XCTAssertTrue(app.buttons["New task"].isHittable, app.debugDescription)

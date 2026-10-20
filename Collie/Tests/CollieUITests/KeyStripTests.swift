@@ -90,7 +90,7 @@ final class KeyStripTests: XCTestCase {
     private func removeShortcuts(_ app: XCUIApplication) {
         app.buttons["Edit key shortcuts"].tap()
         let empty = app.staticTexts["No key shortcuts"]
-        for _ in 0..<20 where !empty.appears(within: 2) {
+        for _ in 0..<20 where !empty.exists {
             let row = app.cells.firstMatch
             row.swipeLeft()
             app.buttons["Delete"].tap()

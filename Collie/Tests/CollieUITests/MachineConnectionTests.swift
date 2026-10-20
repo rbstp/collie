@@ -15,8 +15,7 @@ final class MachineConnectionTests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         for layout in ["Inbox", "List", "Grid"] {
-            app.buttons["Layout"].tap()
-            app.buttons[layout].tap()
+            app.choose(app.buttons[layout]) { app.buttons["Layout"].tap() }
             XCTAssertFalse(app.buttons["Copy connection error"].exists, app.debugDescription)
             XCTAssertFalse(app.staticTexts[message].exists, app.debugDescription)
             XCTAssertFalse(app.staticTexts["Connection details"].exists)
