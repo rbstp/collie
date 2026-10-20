@@ -246,9 +246,15 @@ struct ConversationView: View {
                     ScrollEdge(size: geo.containerSize, atBottom: geo.contentOffset.y + geo.contentInsets.top + geo.containerSize.height >= geo.contentSize.height - 60)
                 } action: { old, new in
                     // The position follows the top row, so a rotation or the keyboard would leave the latest messages out of view.
-                    if old.atBottom && old.size != new.size && submitted.isEmpty {
-                        // Scrolling in this same update re-applies the prompt field's stale selection, moving its caret back mid-typing.
-                        Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) }
+                    // Not old.atBottom: a resize comes in several steps, and a step measured before a deferred scroll lands reads as scrolled up.
+                    if atBottom && old.size != new.size && submitted.isEmpty {
+                        if old.size.width != new.size.width {
+                            // Deferred after a rotation, the scroll leaves the accessibility tree on the rows shown before it.
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        } else {
+                            // Scrolling in this same update re-applies the prompt field's stale selection, moving its caret back mid-typing.
+                            Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) }
+                        }
                     } else {
                         atBottom = new.atBottom
                     }
