@@ -88,6 +88,13 @@ struct AgentGrid<Menu: View>: View {
                 .padding(.horizontal)
                 .padding(.bottom)
             }
+            .scrollEdgeEffectHidden(true, for: [.top, .bottom])
+            .safeAreaInset(edge: .top, spacing: 0) {
+                Color.clear.frame(height: 0).background { SessionBarGlass().ignoresSafeArea(edges: [.top, .horizontal]) }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Color.clear.frame(height: 0).background { SessionBarGlass().ignoresSafeArea(edges: [.bottom, .horizontal]) }
+            }
         }
     }
 

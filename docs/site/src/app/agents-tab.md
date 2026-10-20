@@ -23,6 +23,8 @@ The Agents tab has three layouts.
 
 The default. Each card is a live preview of the agent's screen. Claude Code, Codex and Copilot CLI cards show the agent's output without its input box and status lines. A blocked agent's card shows its whole screen.
 
+The cards scroll under the bar at the top and the tab bar at the bottom, and stay visible through their glass.
+
 When **Settings > Sessions > Default view** is Chat, cards preview the conversation instead: your last two messages and the agent's last two replies, in order, without tool calls. A starred card shows more of each message. A blocked agent's card still shows its whole screen, so you can see the prompt. A card also shows the screen when Chat is not available for the agent, or when `collied` on its machine needs an update. When you change the setting, the grid follows it the next time you open the Agents tab.
 
 [Running subagents](#running-subagents) appear on glass at the top of the preview. Each shows its title and elapsed time, updated every minute. A normal card lists up to two subagents and a starred card up to four, then "+N more". The latest output stays visible below the list, and at accessibility text sizes the preview grows to fit both. The list disappears when the subagents finish. While the agent is blocked, the card hides the list so the prompt stays visible. VoiceOver reads the subagents with the card.
