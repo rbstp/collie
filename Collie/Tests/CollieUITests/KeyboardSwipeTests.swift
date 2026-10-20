@@ -91,6 +91,9 @@ final class KeyboardSwipeTests: XCTestCase {
         field.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        // Focus can leave the caret at the start, and the field scrolls the caret back into view after a drag. A caret on
+        // the last visible row keeps the draft below its top either way.
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.9)).tap()
         for _ in 0..<3 {
             field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9))
                 .press(forDuration: 0.05, thenDragTo: field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)))

@@ -19,6 +19,11 @@ extension XCUIApplication {
     // XCTest's private interaction options skip those two waits: 1 skips the wait before an event, 2 skips both.
     func choose(_ item: XCUIElement, opening open: () -> Void) {
         withInteractionOptions(2, open)
+        // The item exists before the menu has laid it out, and asking a frameless item for isHittable records a failure.
+        let deadline = Date.now.addingTimeInterval(10)
+        while Date.now < deadline, !(item.exists && !item.frame.isEmpty && frame.contains(item.frame)) {
+            usleep(200_000)
+        }
         XCTAssertTrue(item.wait(for: \.isHittable, toEqual: true, timeout: 5), debugDescription)
         withInteractionOptions(1) { item.tap() }
     }
