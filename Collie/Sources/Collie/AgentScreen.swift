@@ -148,6 +148,8 @@ struct AgentScreen: View {
                                 }
                             }
                         }
+                        // The terminal is always dark: a light-mode tint (None's black) would vanish on it.
+                        .environment(\.colorScheme, .dark)
                 }
             }
             .scrollEdgeEffectHidden(true, for: .top)
