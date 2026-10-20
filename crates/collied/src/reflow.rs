@@ -217,6 +217,21 @@ pub fn claude_rule_columns(ansi: &str, max: usize) -> Option<usize> {
         .max()
 }
 
+/// Codex pads the blank rows of its composer and sent prompts with their background to
+/// exactly the terminal width, which herdr's `pane.layout` exceeds by 1 to 3 columns. Rows
+/// wider than `max` are scrollback from before the pane narrowed.
+pub fn codex_box_columns(ansi: &str, max: usize) -> Option<usize> {
+    let mut plain = String::new();
+    ansi.split('\n')
+        .filter_map(|row| {
+            plain_text(row, &mut plain);
+            (!plain.is_empty() && plain.chars().all(|c| c == ' ') && shaded_start(row))
+                .then_some(plain.len())
+        })
+        .filter(|&width| width <= max)
+        .max()
+}
+
 fn isolated_scrollbar(row: &str, at: usize) -> bool {
     row[..at].rsplit_once("\u{1b}[").is_some_and(|(head, sgr)| {
         head.ends_with("\u{1b}[0m") && sgr.starts_with("38;") && sgr.ends_with('m')
@@ -625,6 +640,26 @@ mod tests {
         let screen = include_str!("../tests/fixtures/codex-2026-10-09/prose.ansi.txt");
         assert_eq!(soft_wraps_for("codex", screen, 186), (vec![1], vec![]));
         assert_eq!(soft_wraps_for("codex", screen, 200), (vec![], vec![]));
+    }
+
+    #[test]
+    fn captured_split_codex_prose_joins_at_the_composer_width() {
+        let screen = include_str!("../tests/fixtures/codex-0.163.0/split-prose.ansi.txt");
+        assert_eq!(codex_box_columns(screen, 103), Some(101));
+        let shaded = |n| format!("\u{1b}[0m\u{1b}[48;2;51;51;60m{}\u{1b}[0m", " ".repeat(n));
+        let narrowed = format!("{}\r\n{screen}", shaded(150));
+        assert_eq!(codex_box_columns(&narrowed, 103), Some(101));
+        assert_eq!(codex_box_columns(&" ".repeat(102), 103), None);
+        let rows: Vec<u32> = std::iter::once(3).chain(7..=16).chain(19..=28).collect();
+        assert_eq!(soft_wraps_for("codex", screen, 101), (rows.clone(), vec![]));
+        let at_layout_width: Vec<u32> = rows
+            .into_iter()
+            .filter(|i| ![8, 10, 11, 22, 24].contains(i))
+            .collect();
+        assert_eq!(
+            soft_wraps_for("codex", screen, 103),
+            (at_layout_width, vec![])
+        );
     }
 
     #[test]

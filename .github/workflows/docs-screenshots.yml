@@ -1,0 +1,216 @@
+name: docs screenshots
+run-name: "[docs-screenshots] - capturing ${{ inputs.source_sha || github.sha }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: commit to capture, for example the one TestFlight shipped (default, the head of the selected branch)
+        required: false
+        type: string
+
+concurrency:
+  group: docs-screenshots
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: xcode-27
+    permissions:
+      contents: read
+
+    steps:
+      - name: check out master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: master
+
+      # Only a master commit may run here: this job reads the caches that testflight and ci restore.
+      - name: validate the source commit
+        id: source
+        run: |
+          [[ $SOURCE_SHA =~ ^[0-9a-f]{40}$ ]] || { echo "source_sha must be a full commit SHA"; exit 1; }
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/master || { echo "$SOURCE_SHA is not on master"; exit 1; }
+          echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ steps.source.outputs.sha }}
+          submodules: true
+
+      - name: cache the Go toolchain
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.tool_cache }}/go/1.27.2/arm64
+            ${{ runner.tool_cache }}/go/1.27.2/arm64.complete
+          key: go-toolchain-${{ runner.os }}-${{ runner.arch }}-1.27.2
+
+      - name: set up go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.2
+          cache: false
+
+      - name: install the rust toolchain
+        run: rustup toolchain install
+
+      - name: cache cargo and go builds
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+            target/release
+            target/aarch64-apple-ios-sim
+          key: ios-sim-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch') }}
+          restore-keys: ios-sim-
+
+      # pngquant.org publishes its macOS build (3.0.3) only at this unversioned URL; a new upload fails the checksum.
+      - name: install just, xcodegen and pngquant
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -sSfL -o "$RUNNER_TEMP/just.tar.gz" \
+            https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-aarch64-apple-darwin.tar.gz
+          echo "50ae3e996c974a0bf32ea7d10f495070df33f1b43e0616b2769e3d4821ed8f48  $RUNNER_TEMP/just.tar.gz" | shasum -a 256 -c
+          tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$bin" just
+          curl -sSfL -o "$RUNNER_TEMP/xcodegen.zip" \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
+          echo "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          curl -sSfL -o "$RUNNER_TEMP/pngquant.tar.bz2" https://pngquant.org/pngquant.tar.bz2
+          echo "68c32e4988d3f99f79f0642a94900756b7a2a463166067c5862826ced1e0ce1e  $RUNNER_TEMP/pngquant.tar.bz2" | shasum -a 256 -c
+          tar -xjf "$RUNNER_TEMP/pngquant.tar.bz2" -C "$bin" pngquant
+          "$bin/pngquant" --version
+          {
+            echo "$bin"
+            echo "$RUNNER_TEMP/xcodegen/bin"
+          } >> "$GITHUB_PATH"
+
+      - name: cache libghostty-vt
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: Collie/GhosttyTerminal/GhosttyVt.xcframework
+          key: ghostty-vt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ghostty/build-xcframework.sh') }}
+
+      - name: build libghostty-vt
+        run: just ios-ghostty
+
+      - name: build the simulator xcframework
+        run: just ios-framework sim
+
+      - name: generate the project
+        run: just --no-deps ios-project
+
+      # The image's preinstalled watchOS runtime cannot keep a watch booted (its launchd_sim disappears), so replace it.
+      - name: install a fresh watchOS runtime
+        run: |
+          xcrun simctl runtime list
+          for id in $(xcrun simctl runtime list -j | jq -r '.[] | select(.platformIdentifier == "com.apple.platform.watchsimulator") | .identifier'); do
+            xcrun simctl runtime delete "$id"
+          done
+          xcodebuild -downloadPlatform watchOS
+          xcrun simctl runtime list
+
+      # The recipe uses the first iPhone 18 Pro Max and its first paired watch; the published watch shots are 46 mm.
+      - name: pair the simulators
+        run: |
+          phone="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name == "iPhone 18 Pro Max") | .udid][0] // empty')"
+          [ -n "$phone" ] || phone="$(xcrun simctl create 'iPhone 18 Pro Max' com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max)"
+          for pair in $(xcrun simctl list pairs -j | jq -r --arg phone "$phone" '.pairs | to_entries[] | select(.value.phone.udid == $phone) | .key'); do
+            xcrun simctl unpair "$pair"
+          done
+          sdk="$(xcrun --sdk watchsimulator --show-sdk-version)"
+          runtime="$(xcrun simctl list runtimes -j | jq -r --arg v "$sdk" '[.runtimes[]
+            | select(.platform == "watchOS" and .isAvailable and (.version == $v or (.version | startswith($v + "."))))
+            | .identifier][0] // empty')"
+          [ -n "$runtime" ] || { echo "no available watchOS $sdk simulator runtime"; exit 1; }
+          watch="$(xcrun simctl create 'Apple Watch Series 12 (46mm)' com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-12-46mm "$runtime")"
+          xcrun simctl pair "$watch" "$phone"
+
+      - name: capture the screenshots
+        run: just --no-deps ios-screenshots
+
+      - name: keep the screenshots
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: screenshots
+          path: docs/site/src/images/*.png
+          if-no-files-found: error
+          retention-days: 7
+
+  # The token stays out of the job that builds and runs the captured revision.
+  propose:
+    environment: docs-screenshots
+    if: ${{ github.repository == 'rbstp/collie' && github.ref == 'refs/heads/master' }}
+    needs: capture
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: check out master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: master
+
+      - name: download the captured screenshots
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: screenshots
+          path: ${{ runner.temp }}/shots
+
+      # Pages serves whatever lands in docs/site/src/images, so only PNG files go there.
+      - name: take the captured screenshots
+        run: |
+          for f in "$RUNNER_TEMP"/shots/*; do
+            name="$(basename "$f")"
+            if [[ ! $name =~ ^[a-z0-9-]+\.png$ ]] || [ ! -f "$f" ] || [ -L "$f" ] \
+              || [ "$(head -c 8 "$f" | od -An -tx1 | tr -d ' \n')" != 89504e470d0a1a0a ]; then
+              echo "unexpected file in the artifact: $name"
+              exit 1
+            fi
+            cp "$f" docs/site/src/images/
+          done
+
+      # A pull request opened with GITHUB_TOKEN starts no workflow, so the required checks and the pages deploy would never run.
+      - name: open the pull request with auto-merge
+        run: |
+          if [ -z "$(git status --porcelain -- 'docs/site/src/images/*.png')" ]; then
+            echo "The screenshots are unchanged." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [ -n "$GH_TOKEN" ] || { echo "DOCS_SCREENSHOTS_TOKEN is not set in the docs-screenshots environment; see docs/release.md"; exit 1; }
+          git status --short -- 'docs/site/src/images/*.png'
+          user="$(gh api user --jq '"\(.login) \(.id)"')"
+          read -r login id <<< "$user"
+          gh auth setup-git
+          git switch -c docs-screenshots
+          git add -- 'docs/site/src/images/*.png'
+          git -c user.name="$login" -c user.email="$id+$login@users.noreply.github.com" \
+            commit -q -m "Refresh documentation screenshots"
+          git push -q --force origin docs-screenshots
+          pr="$(gh pr list --head docs-screenshots --base master --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr" ]; then
+            pr="$(gh pr create --base master --head docs-screenshots \
+              --title "Refresh documentation screenshots [skip-release]" \
+              --body "Screenshots captured from $SOURCE_SHA by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID.")"
+          fi
+          gh pr merge "$pr" --auto --squash
+          echo "Screenshots proposed in $pr" | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_SCREENSHOTS_TOKEN }}
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}

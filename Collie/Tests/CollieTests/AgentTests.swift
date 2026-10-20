@@ -588,6 +588,25 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 }
 
 @MainActor
+@Test func aLoadedMacDraftShowsOnMoreThanOneLineUntilThePhoneEditsIt() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "one\ntwo")
+    #expect(!model.showsMacDraft)
+    await model.loadMacDraft()
+    #expect(model.showsMacDraft)
+
+    model.typed("one\ntwo!")
+    #expect(!model.showsMacDraft)
+    model.typed("one\ntwo")
+    #expect(!model.showsMacDraft)
+
+    let typed = openedAgent(core, macDraft: "from the mac")
+    typed.draft = "from the phone"
+    await typed.loadMacDraft()
+    #expect(!typed.showsMacDraft)
+}
+
+@MainActor
 @Test func macDraftIsReadOnceTheAgentIsKnown() async {
     let core = FakeCore()
     core.state.withLock {

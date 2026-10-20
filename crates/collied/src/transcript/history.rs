@@ -714,11 +714,19 @@ fn normalize(
                     .into_iter()
                     .collect();
             }
-            let role = match v["type"].as_str() {
-                Some(r @ ("user" | "assistant")) => r,
+            let queued = &v["attachment"];
+            let (role, content) = match v["type"].as_str() {
+                Some(r @ ("user" | "assistant")) => (r, &v["message"]["content"]),
+                // Claude Code writes a prompt absorbed mid-turn only as this attachment, never as a user record.
+                Some("attachment")
+                    if queued["type"] == "queued_command"
+                        && queued["commandMode"] == "prompt"
+                        && queued["origin"]["kind"] == "human" =>
+                {
+                    ("user", &queued["prompt"])
+                }
                 _ => return out,
             };
-            let content = &v["message"]["content"];
             if content.is_string() {
                 add(role, text(content), None, None);
             }
@@ -1212,6 +1220,81 @@ mod tests {
                 ("user".into(), "Third".into()),
             ]
         );
+    }
+
+    #[test]
+    fn claude_prompts_sent_mid_turn_show_once_in_order() {
+        let fixture = include_str!("../../tests/fixtures/transcripts/claude-queued-prompts.jsonl");
+        let rows = |content: &str, p: &HistoryParams| {
+            let (_dir, t, a, _) = setup("claude", content);
+            t.history(&a, p)
+                .messages
+                .into_iter()
+                .map(|m| (m.role, m.tool.unwrap_or(m.text)))
+                .collect::<Vec<_>>()
+        };
+        let row = |role: &str, text: &str| (role.to_owned(), text.to_owned());
+        let mid_turn = row("user", "also check the relay timeout");
+        assert_eq!(
+            rows(fixture, &params(None, None, None)),
+            [
+                row("user", "why does the pairing test hang"),
+                row("assistant", "Bash"),
+                row("tool", "Result"),
+                mid_turn.clone(),
+                row("user", "this is the screen it stops on"),
+                row("user", "[Image attachment]"),
+                row(
+                    "assistant",
+                    "The relay timeout is 30 seconds, and the hang is in the handshake."
+                ),
+                row("user", "and update the docs"),
+                row("assistant", "Updated the pairing page."),
+            ]
+        );
+        assert_eq!(
+            rows(fixture, &params(None, None, Some("RELAY TIMEOUT")))[0],
+            mid_turn
+        );
+        let working = fixture.split_inclusive('\n').take(9).collect::<String>();
+        let latest = HistoryParams {
+            latest: true,
+            ..params(None, None, None)
+        };
+        assert_eq!(
+            rows(&working, &latest),
+            [row("user", "why does the pairing test hang"), mid_turn]
+        );
+    }
+
+    #[test]
+    fn only_human_prompt_queued_commands_show() {
+        let shown = |attachment: Value, sidechain: bool| {
+            let v = json!({"type":"attachment","uuid":"q1","isSidechain":sidechain,
+                "sessionId":CLAUDE,"attachment":attachment});
+            normalize(&v, Kind::Claude, CLAUDE, false, "f".into(), "", None)
+                .into_iter()
+                .map(|m| (m.role, m.text))
+                .collect::<Vec<_>>()
+        };
+        let queued = |mode: &str, origin: Value| json!({"type":"queued_command","prompt":"Prompt","commandMode":mode,"origin":origin});
+        assert_eq!(
+            shown(queued("prompt", json!({"kind":"human"})), false),
+            [("user".to_owned(), "Prompt".to_owned())]
+        );
+        for hidden in [
+            queued("prompt", json!({"kind":"peer","from":"a1"})),
+            queued("prompt", json!({"kind":"coordinator"})),
+            queued("prompt", json!({"kind":"auto-continuation"})),
+            queued("prompt", Value::Null),
+            queued("task-notification", json!({"kind":"human"})),
+            json!({"type":"queued_command","prompt":"Prompt","origin":{"kind":"human"}}),
+            json!({"type":"edited_text_file","prompt":"Prompt","commandMode":"prompt",
+                "origin":{"kind":"human"}}),
+        ] {
+            assert!(shown(hidden.clone(), false).is_empty(), "{hidden}");
+        }
+        assert!(shown(queued("prompt", json!({"kind":"human"})), true).is_empty());
     }
 
     #[test]

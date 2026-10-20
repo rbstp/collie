@@ -407,11 +407,11 @@ private struct AgentHeader: View {
                 }
                 if let agent = model.agent {
                     HStack(spacing: 6) {
-                        StatusPill(state: agent.status)
+                        StatusPill(state: agent.status, onGlass: true)
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
                                 .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.primary)
                         }
                     }
                     .fixedSize()
@@ -430,15 +430,15 @@ private struct AgentHeader: View {
                 } else {
                     Spacer(minLength: 0)
                     if model.isTerminal {
-                        AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.secondary).fixedSize()
+                        AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.primary).fixedSize()
                         Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.primary)
                             .fixedSize()
                     }
                 }
                 if !model.isTerminal {
-                    // No glass backing here: next to the status pill's glass it left keyboard animations unfinished after a picker closed.
+                    // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
                     GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
                                 icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
                         .controlSize(.small)
@@ -447,7 +447,7 @@ private struct AgentHeader: View {
             if model.link == .connecting {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
-                    Text("reconnecting").font(.caption).foregroundStyle(.secondary)
+                    Text("reconnecting").font(.caption).foregroundStyle(.primary)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             } else if let link = model.link, link != .connected {
@@ -485,11 +485,11 @@ struct SubagentList: View {
                 TimelineView(.periodic(from: Date(timeIntervalSince1970: Double(subagent.startedAtMs / 1000)), by: 60)) { context in
                     let usage = Text(verbatim: subagent.usage(now: context.date))
                         .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(spacing: 6) {
-                            Image(systemName: "circle").font(.system(size: 7)).foregroundStyle(.secondary).accessibilityHidden(true)
+                            Image(systemName: "circle").font(.system(size: 7)).foregroundStyle(.primary).accessibilityHidden(true)
                             Text(verbatim: subagent.title).lineLimit(1)
                             Spacer(minLength: 4)
                             if !typeSize.isAccessibilitySize { usage.fixedSize() }
@@ -776,6 +776,10 @@ private struct PromptBar: View {
         copiedAt = .now
     }
 
+    private var reading: Bool {
+        !editing && !model.draft.isEmpty && !model.dictation.isActive
+    }
+
     private var expanded: Bool {
         editing || typingCommand || model.dictation.isActive || dictationShown || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
     }
@@ -846,13 +850,13 @@ private struct PromptBar: View {
                                 model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: typed),
                                 selection: $selection, axis: .vertical
                             )
-                                .lineLimit(expanded ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
+                                .lineLimit(expanded || model.showsMacDraft ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
                                 .focused($editing)
                                 .disabled(model.dictation.isActive)
+                                .foregroundStyle(reading ? Color.clear : Color.primary)
                                 .overlay(alignment: .trailing) {
-                                    if !editing && !model.draft.isEmpty && !model.dictation.isActive {
-                                        Color.clear
-                                            .contentShape(Rectangle())
+                                    if reading {
+                                        DraftReader(text: model.draft)
                                             .onTapGesture { editing = true }
                                             .onLongPressGesture(perform: copyPrompt)
                                             .accessibilityHidden(true)
@@ -866,20 +870,23 @@ private struct PromptBar: View {
                         }
                         if expanded && !model.draft.isEmpty {
                             Button {
-                                if model.isTerminal {
+                                if model.dictation.isActive {
+                                    model.dictation.clear()
+                                } else if model.isTerminal {
                                     model.draft = ""
                                 } else {
                                     model.typed("")
                                 }
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(model.dictation.clearArmed ? Color.red : Color.secondary)
                                     .frame(width: 36, height: 36)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .disabled(model.dictation.isActive || model.sendingPrompt)
+                            .disabled(model.sendingPrompt || model.dictation.phase == .finishing)
                             .accessibilityLabel("Clear text")
+                            .accessibilityValue(model.dictation.clearArmed ? "Tap again to clear" : "")
                         }
                     }
                 }
@@ -969,6 +976,29 @@ private struct PromptBar: View {
             if !active && model.draft.isEmpty { dictationExpanded = false }
         }
         .onDisappear { dictationExpanded = false }
+    }
+}
+
+/// The unfocused prompt, which a drag scrolls without focusing the field and opening the keyboard. UIKit, not
+/// Text, so it wraps like the field: Text moves a word down rather than leave it alone on the last line.
+private struct DraftReader: UIViewRepresentable {
+    let text: String
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isSelectable = false
+        view.backgroundColor = .clear
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.font = .preferredFont(forTextStyle: .body)
+        view.adjustsFontForContentSizeCategory = true
+        view.textColor = .label
+        return view
+    }
+
+    func updateUIView(_ view: UITextView, context: Context) {
+        if view.text != text { view.text = text }
     }
 }
 

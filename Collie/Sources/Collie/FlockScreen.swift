@@ -470,9 +470,10 @@ private struct KindLabelStyle: LabelStyle {
 struct StatusPill: View {
     let state: AgentState
     var title: String? = nil
+    var onGlass = false
 
     var body: some View {
-        Label {
+        let pill = Label {
             Text(title ?? state.label.capitalized)
         } icon: {
             if state == .working {
@@ -489,8 +490,15 @@ struct StatusPill: View {
             .foregroundStyle(state.color)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .darkGlass(in: .capsule)
-            .fixedSize()
+        Group {
+            if onGlass {
+                // The session header is already glass: a fill like the Chat/Terminal track beside it, not a second glass surface.
+                pill.padding(2).background(.fill.tertiary, in: .capsule)
+            } else {
+                pill.darkGlass(in: .capsule)
+            }
+        }
+        .fixedSize()
     }
 }
 
