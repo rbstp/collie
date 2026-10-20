@@ -2,7 +2,7 @@
 
 **New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick. You can start in a folder, a new folder, a fresh clone, a Git worktree or a pull request branch, or resume an earlier session.
 
-While you edit the prompt, its text and controls stay above the keyboard in portrait and landscape.
+While you edit the prompt, its text and controls stay above the keyboard in portrait and landscape. To hide the keyboard, tap the hide-keyboard button or swipe down on any field.
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/new-task-light.png" width="300" height="652" loading="lazy" alt="The New task sheet: location, folder, agent picker and prompt">

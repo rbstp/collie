@@ -40,7 +40,7 @@ A compact list of agents, with their status as icons.
 
 ### Inbox
 
-Search agents across machines with the field below the filters, and filter them:
+Search agents across machines with the field below the filters, and filter them. Swipe down on the search field to hide the keyboard.
 
 - **Needs attention**: blocked agents and recent completions.
 - **Working**: agents that are working, including blocked ones.
