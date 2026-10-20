@@ -69,6 +69,10 @@ struct ConversationRow: Identifiable {
         for message in messages {
             if let parent = message.parentCallId, let at = calls[parent] {
                 rows[at.row].tools[at.tool].steps.append(message)
+            } else if message.role == "tool", message.callId == nil, message.parentCallId == nil {
+                flush()
+                activity = [message]
+                flush()
             } else if message.tool != nil || message.parentCallId != nil {
                 activity.append(message)
             } else {

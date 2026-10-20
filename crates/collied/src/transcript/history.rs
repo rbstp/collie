@@ -8,6 +8,8 @@ use protocol::{HistoryMessage, HistoryPage, HistoryParams};
 use serde_json::Value;
 
 use super::{Kind, Transcripts, open};
+use crate::draft::cells;
+use crate::drive::sanitize_ansi;
 use crate::herdr::AgentInfo;
 
 const SCAN_BYTES: u64 = 2 * 1024 * 1024;
@@ -640,6 +642,12 @@ fn bash(s: &str) -> Option<(&'static str, String)> {
         .rsplit_once("</bash-stdout><bash-stderr>")?;
     let output = [out, err]
         .into_iter()
+        .map(|s| {
+            cells(&sanitize_ansi(s))
+                .into_iter()
+                .map(|(c, _)| c)
+                .collect::<String>()
+        })
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
@@ -2051,6 +2059,26 @@ mod tests {
             let search = t.history(&a, &params(None, None, Some(query)));
             assert_eq!(search.messages.len(), hits, "{query}");
         }
+    }
+
+    #[test]
+    fn bash_mode_output_drops_escape_sequences() {
+        let output = |out: &str, err: &str| {
+            bash(&format!(
+                "<bash-stdout>{out}</bash-stdout><bash-stderr>{err}</bash-stderr>"
+            ))
+        };
+        assert_eq!(
+            output(
+                "\u{1b}[1m\u{1b}[31mFAILED\u{1b}[0m 2 tests, see \u{1b}]8;;https://example.com/log\u{7}log\u{1b}]8;;\u{1b}\\",
+                "\u{1b}[38;2;215;119;87mwarning\u{1b}[39m: slow\u{1b}[2K"
+            ),
+            Some(("tool", "FAILED 2 tests, see log\nwarning: slow".to_owned()))
+        );
+        assert_eq!(
+            output("\u{1b}[0m", "\u{1b}[?25h"),
+            Some(("tool", String::new()))
+        );
     }
 
     #[test]
