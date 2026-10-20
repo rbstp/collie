@@ -36,11 +36,10 @@ struct AgentInbox<Menu: View>: View {
                     GlassPicker(title: "Filter", selection: $filter,
                                 options: InboxFilter.allCases.map { ($0.title, $0) })
                         .padding(.horizontal)
-                        .padding(.vertical, 8)
-                        // The page reaches under the navigation bar, so this scroll view would inset the filter by the bar's height.
-                        .ignoresSafeArea(edges: .vertical)
                 }
                 .scrollIndicators(.hidden)
+                // Outside the scroll view: one that touches the bar's safe area insets its content, and the segments again.
+                .padding(.vertical, 8)
             }
         }
         .searchable(text: $query, prompt: "Search agents")

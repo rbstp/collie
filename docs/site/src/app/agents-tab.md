@@ -4,7 +4,7 @@ The **Agents** tab lists every herdr agent on every paired machine, grouped by m
 
 Pull down to retry every machine, or tap a machine's header to retry that one.
 
-In every layout and in Usage, agents scroll under the buttons at the top and the tab bar at the bottom and stay fully visible around them: no band covers either edge.
+In every layout and in Usage, the content scrolls under the buttons at the top and the tab bar at the bottom and stays fully visible around them: no band covers either edge.
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/agents-light.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">

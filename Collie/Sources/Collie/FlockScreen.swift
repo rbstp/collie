@@ -34,7 +34,7 @@ struct FlockScreen: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             // The pager clips its pages to its frame, so it spans the bars for the pages to run under them.
-            .ignoresSafeArea()
+            .ignoresSafeArea(.container)
             .scrollEdgeEffectHidden(true, for: [.top, .bottom])
             .springLoadingBehavior(.disabled)
             .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: showsUsage)
