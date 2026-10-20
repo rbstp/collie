@@ -234,7 +234,8 @@ struct AgentCard: View {
                         .foregroundStyle(.white)
                         .padding(6)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10))
+                        .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 10))
+                        .background(SessionBarDim(), in: RoundedRectangle(cornerRadius: 10))
                         .environment(\.colorScheme, .dark)
                     }
                 }

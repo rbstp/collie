@@ -37,7 +37,7 @@ final class GlassPickerTests: XCTestCase {
                     let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
                         window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
                     }
-                    let brightness = try? selectionBrightness(controls, image: image, window: window)
+                    let brightness = try? selectionBrightness(controls.filter { $0 !== expanded }, image: image, window: window)
                     let selected = brightness?.allSatisfy { style == .dark ? $0 < 0.12 : $0 > 0.8 } == true
                     return expanded.selectedSegmentIndex == 1 && selected ? image : nil
                 }
@@ -85,7 +85,7 @@ final class GlassPickerTests: XCTestCase {
                 VStack(spacing: 24) {
                     GlassPicker(title: "View", selection: $state.selected, options: [("Agents", false), ("Usage", true)])
                     GlassPicker(title: "Session view", selection: $state.selected, options: [("Chat", false), ("Terminal", true)],
-                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
+                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")], systemSelection: true)
                         .controlSize(.small)
                 }
                 .padding()
@@ -117,8 +117,12 @@ final class GlassPickerTests: XCTestCase {
     private func assertAppearance(_ controls: [UISegmentedControl], accent: AppAccent, style: UIUserInterfaceStyle) throws {
         let expected = UIColor(accent.color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
         for control in controls {
-            let background = try XCTUnwrap(control.selectedSegmentTintColor)
-            XCTAssertEqual(background.resolvedColor(with: UITraitCollection(userInterfaceStyle: style)), style == .dark ? .black : .white)
+            if control.accessibilityLabel == "Session view" {
+                XCTAssertNil(control.selectedSegmentTintColor)
+            } else {
+                let background = try XCTUnwrap(control.selectedSegmentTintColor)
+                XCTAssertEqual(background.resolvedColor(with: UITraitCollection(userInterfaceStyle: style)), style == .dark ? .black : .white)
+            }
             XCTAssertNil(control.titleTextAttributes(for: .normal)?[.foregroundColor])
             let actual = try XCTUnwrap(control.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
             XCTAssertEqual(actual.cgColor.numberOfComponents, expected.cgColor.numberOfComponents)

@@ -169,13 +169,14 @@ struct AgentScreen: View {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
                         .foregroundStyle(.orange)
+                        .composerNoteGlass()
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)
                         .padding(.top, 6)
                 }
                 if showingChat && !model.isTerminal && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown) {
                     Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
-                        .font(.footnote).buttonStyle(.glass).padding(.top, 6)
+                        .font(.footnote).buttonStyle(.glass).background(SessionBarDim(), in: .capsule).padding(.top, 6)
                 }
                 GlassEffectContainer(spacing: 4) {
                     VStack(spacing: 0) {
@@ -184,7 +185,8 @@ struct AgentScreen: View {
                     }
                 }
             }
-            .background { SessionBarGlass().ignoresSafeArea(edges: [.bottom, .horizontal]) }
+            // Without a band, touches in the gaps between controls would reach the terminal's swipe and tap gestures.
+            .contentShape(.rect)
             .environment(\.colorScheme, barScheme)
         }
         .toolbarColorScheme(headerScheme, for: .navigationBar)
@@ -440,7 +442,7 @@ private struct AgentHeader: View {
                 if !model.isTerminal {
                     // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
                     GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
-                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
+                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")], systemSelection: true)
                         .controlSize(.small)
                 }
             }
@@ -464,14 +466,18 @@ private struct AgentHeader: View {
 }
 
 private struct SessionBarGlass: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
         ZStack {
-            // Apple's guidance for clear glass: a dimming layer behind it keeps text legible over bright or busy content.
-            (colorScheme == .dark ? Color.black.opacity(0.6) : Color.white.opacity(0.7))
+            Rectangle().fill(SessionBarDim())
             Color.clear.glassEffect(.clear, in: .rect)
         }
+    }
+}
+
+// Apple's guidance for clear glass: a dimming layer behind it keeps text legible over bright or busy content.
+struct SessionBarDim: ShapeStyle {
+    func resolve(in environment: EnvironmentValues) -> Color {
+        environment.colorScheme == .dark ? .black.opacity(0.7) : .white.opacity(0.8)
     }
 }
 
@@ -699,6 +705,7 @@ private struct KeyStrip: View {
                         .buttonStyle(.glass)
                         .buttonBorderShape(.roundedRectangle(radius: 8))
                         .controlSize(.small)
+                        .background(SessionBarDim(), in: .rect(cornerRadius: 8))
                         .disabled(!model.savesPreferences)
                 }
             }
@@ -738,6 +745,7 @@ private struct StripButton: View {
                 .buttonStyle(.glass)
                 .buttonBorderShape(.roundedRectangle(radius: 8))
                 .controlSize(.small)
+                .background(SessionBarDim(), in: .rect(cornerRadius: 8))
         }
     }
 }
@@ -787,16 +795,16 @@ private struct PromptBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let error = model.promptError {
-                Text(error).font(.footnote).foregroundStyle(.red)
+                Text(error).font(.footnote).foregroundStyle(.red).composerNoteGlass()
             }
             if model.retrying {
-                Text("Unreachable, retrying…").font(.footnote).foregroundStyle(.secondary)
+                Text("Unreachable, retrying…").font(.footnote).foregroundStyle(.secondary).composerNoteGlass()
             }
             if let upload = model.upload {
                 UploadChip(upload: upload) { model.cancelUpload() }
             }
             if let problem = model.dictation.problem {
-                DictationProblemRow(problem: problem)
+                DictationProblemRow(problem: problem).composerNoteGlass()
             }
             if !model.attachments.isEmpty {
                 ScrollView(.horizontal) {
@@ -823,6 +831,7 @@ private struct PromptBar: View {
                             }
                         }
                         .disabled(model.upload != nil || model.sendingPrompt || !model.savesPreferences)
+                        .background(SessionBarDim(), in: Circle().inset(by: AttachmentMenuButton.outset))
                     }
                     if keysAvailable {
                         Button {
@@ -835,6 +844,7 @@ private struct PromptBar: View {
                         .buttonStyle(.glass)
                         .buttonBorderShape(.circle)
                         .controlSize(.small)
+                        .background(SessionBarDim(), in: .circle)
                         .accessibilityLabel("Keys")
                         .accessibilityAddTraits(model.keysShown ? .isSelected : [])
                     }
@@ -894,12 +904,14 @@ private struct PromptBar: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+                .background(SessionBarDim(), in: .rect(cornerRadius: 18))
                 ZStack {
                     if !model.isTerminal {
                         DictationControl(dictation: model.dictation, disabled: model.sendingPrompt || !model.savesPreferences, shown: $dictationShown) {
                             dictationExpanded = model.startDictation(at: editing ? selection : nil) != nil
                             editing = false
                         }
+                        .background(SessionBarDim(), in: .capsule)
                     }
                 }
                 HStack(spacing: 8) {
@@ -915,6 +927,7 @@ private struct PromptBar: View {
                         .buttonStyle(.glass)
                         .buttonBorderShape(.circle)
                         .controlSize(.small)
+                        .background(SessionBarDim(), in: .circle)
                         .accessibilityLabel("Hide keyboard")
                     }
                     Button {
@@ -1310,5 +1323,14 @@ struct UploadChip: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .glassEffect(.regular.interactive(), in: .capsule)
+    }
+}
+
+private extension View {
+    func composerNoteGlass() -> some View {
+        padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .glassEffect(.regular, in: .rect(cornerRadius: 12))
+            .background(SessionBarDim(), in: .rect(cornerRadius: 12))
     }
 }
