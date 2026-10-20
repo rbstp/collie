@@ -45,6 +45,7 @@ The composer at the bottom works in both views.
 - When a prompt cannot reach the machine, the phone sends it again up to 5 times, a minute apart or as soon as the connection is back, while the send button spins. To stop, edit the prompt or tap the spinner.
 - **Quote**, in Chat or in the Terminal selection menu, adds the text to the end of the prompt as a code block and places the cursor after it. Quote never sends. If the prompt would grow past 32 KiB, Collie shows an error and leaves the prompt unchanged.
 - **Settings > Prompt** can keep the keyboard open after sending.
+- To hide the keyboard, tap the hide-keyboard button or swipe down on the prompt field. In a long prompt, a swipe down first scrolls back to the top, then hides the keyboard.
 - Text you left unsent in Claude Code's input box on the machine fills an empty prompt field when you open the agent, on up to five lines.
 - With the keyboard down, drag the prompt field to scroll a long prompt without opening the keyboard, tap it to edit and long-press it to copy it.
 - An unsent prompt stays with its agent on this phone. Its attachments stay for up to 23 hours.

@@ -16,6 +16,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         center.delegate = self
         DecideApprovalIntent.decide = { [app] link, decision in await app.decideFromActivity(link, decision) }
         app.watch.activate(decide: { [app] in await app.decideFromWatch($0) }, refresh: { [app] in await app.refreshForWatch() })
+        NotificationCenter.default.addObserver(forName: UIWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
+            guard let window = note.object as? UIWindow else { return }
+            MainActor.assumeIsolated { KeyboardSwipe.shared.install(on: window) }
+        }
         return true
     }
 

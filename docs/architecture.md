@@ -797,6 +797,7 @@ On both OSes, `collied status` also prints `tags:` (`(none)` for an untagged nod
 
 ## iOS
 
+- A downward swipe that starts on the focused text field or text view dismisses the keyboard, for every text input in the app. One `UISwipeGestureRecognizer` on each key window, recognized alongside every other gesture and not cancelling touches, takes only touches that land on an editable first responder (a selectable read-only text view, such as a diff, keeps its selection), and ends editing in the window. A text view scrolled below its top (a long draft) refuses the touch, so the swipe scrolls the draft until its top, and the next swipe dismisses. A press then drag (caret, selection) is not a swipe.
 - New task scrolls the focused prompt's full input row above the keyboard after keyboard frame changes in both portrait and landscape. Rotation keeps the same text field and draft while its layout changes between a compact row and expanded rows.
 - Only the app target links CollieCore (Rust + Go). The Go runtime starts at image load through a `__mod_init_func` initializer, so the widget extension and the NSE stay pure Swift and share an App Group container (reachability hint, Live Activity state). The watch targets, CollieWatch and CollieWatchWidgets, are pure Swift too.
 - UniFFI 0.32.2 bindings compile in Swift 6 language mode, as does the app.
