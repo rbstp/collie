@@ -182,6 +182,10 @@ struct GridPageLock: UIViewRepresentable {
                         pager = scroll
                     }
                     scroll.isScrollEnabled = !locked
+                    // Under the bars, the pager's automatic inset shifts its pages and its edge effects cover them; the pages take the safe area themselves.
+                    scroll.contentInsetAdjustmentBehavior = .never
+                    scroll.topEdgeEffect.isHidden = true
+                    scroll.bottomEdgeEffect.isHidden = true
                     return
                 }
                 ancestor = view.superview

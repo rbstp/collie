@@ -19,29 +19,47 @@ struct AgentInbox<Menu: View>: View {
 
     var body: some View {
         let items = InboxItem.items(in: entries)
-        VStack(spacing: 0) {
-            ScrollView(.horizontal) {
-                GlassPicker(title: "Filter", selection: $filter,
-                            options: InboxFilter.allCases.map { ($0.title, $0) })
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
+        TimelineView(InboxSchedule(wakes: snoozed.snoozes.values.map(\.wake))) { context in
+            List {
+                if let notice {
+                    Label(notice, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+                if entries.isEmpty {
+                    NoMachines()
+                }
+                inbox(items.filter { $0.matches(query) }, now: context.date)
             }
-            .scrollIndicators(.hidden)
-            TimelineView(InboxSchedule(wakes: snoozed.snoozes.values.map(\.wake))) { context in
-                List {
-                    if let notice {
-                        Label(notice, systemImage: "exclamationmark.triangle")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    ScrollView(.horizontal) {
+                        GlassPicker(title: "Filter", selection: $filter,
+                                    options: InboxFilter.allCases.map { ($0.title, $0) })
+                            .padding(.horizontal)
                     }
-                    if entries.isEmpty {
-                        NoMachines()
+                    .scrollIndicators(.hidden)
+                    // Outside the scroll view: one that touches the bar's safe area insets its content, and the segments again.
+                    .padding(.vertical, 8)
+                    // Not .searchable: its field moves over the rows and then into the navigation bar when focused.
+                    HStack {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Search agents", text: $query)
+                            .submitLabel(.search)
+                        if !query.isEmpty {
+                            Button("Clear search", systemImage: "xmark.circle.fill") { query = "" }
+                                .labelStyle(.iconOnly)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    inbox(items.filter { $0.matches(query) }, now: context.date)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .glassEffect(.regular, in: .capsule)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
                 }
             }
         }
-        .searchable(text: $query, prompt: "Search agents")
         .confirmationDialog("Snooze until", isPresented: Binding { snoozing != nil } set: { if !$0 { snoozing = nil } },
                             titleVisibility: .visible, presenting: snoozing) { item in
             let morning = SnoozedAgents.nextMorning(after: .now)

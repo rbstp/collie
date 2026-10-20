@@ -33,6 +33,9 @@ struct FlockScreen: View {
                 List { UsageSections(entries: model.entries, core: core, refresh: usageRefresh) }.tag(true)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            // The pager clips its pages to its frame, so it spans the bars for the pages to run under them.
+            .ignoresSafeArea(.container)
+            .scrollEdgeEffectHidden(true, for: [.top, .bottom])
             .springLoadingBehavior(.disabled)
             .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: showsUsage)
             .navigationTitle("Agents")
