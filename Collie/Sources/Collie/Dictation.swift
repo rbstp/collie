@@ -92,9 +92,7 @@ final class DictationModel {
     private var tail = ""
     private var finalized = ""
     private var volatile = ""
-    /// After a clear, the words still being recognized belong to the cleared text: dropped until their final result.
-    private var discarding = false
-    private var armedOutput: String?
+    private(set) var clearArmed = false
     private var disarm: Task<Void, Never>?
     private var write: (@MainActor (String) -> Void)?
 
@@ -105,8 +103,6 @@ final class DictationModel {
     }
 
     var isActive: Bool { phase != .idle }
-
-    var clearArmed: Bool { isActive && armedOutput == output }
 
     var output: String {
         let heard = Self.join(finalized, volatile)
@@ -131,7 +127,6 @@ final class DictationModel {
         self.tail = tail
         finalized = ""
         volatile = ""
-        discarding = false
         problem = nil
         self.write = write
         phase = .preparing(download: nil)
@@ -185,14 +180,11 @@ final class DictationModel {
                 if levels.count > 120 { levels.removeFirst(levels.count - 120) }
             }
         case .volatile(let text):
-            guard !discarding else { return }
+            clearArmed = false
             volatile = text
             write?(output)
         case .final(let text):
-            guard !discarding else {
-                discarding = false
-                return
-            }
+            clearArmed = false
             finalized = Self.join(finalized, text)
             volatile = ""
             write?(output)
@@ -213,26 +205,23 @@ final class DictationModel {
         }
     }
 
-    /// The first tap arms; a second within a few seconds, before the text changes, empties the field and keeps listening.
+    /// The first tap arms; a second within a few seconds, before new text, empties the field and listens again.
+    /// A new session, because the recognizer may still deliver words heard before the clear.
     func clear() {
-        guard isActive else { return }
+        guard phase != .idle, phase != .finishing, let write else { return }
         guard clearArmed else {
-            armedOutput = output
+            clearArmed = true
             disarm?.cancel()
             disarm = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(3))
                 guard !Task.isCancelled else { return }
-                self?.armedOutput = nil
+                self?.clearArmed = false
             }
             return
         }
-        armedOutput = nil
-        discarding = !volatile.isEmpty
-        base = ""
-        tail = ""
-        finalized = ""
-        volatile = ""
-        write?(output)
+        cancel()
+        start("", "", write: write)
+        write("")
     }
 
     func cancel() {
@@ -261,7 +250,7 @@ final class DictationModel {
 
     private func end() {
         phase = .idle
-        armedOutput = nil
+        clearArmed = false
         levels.removeAll()
         session?.cancel()
         session = nil

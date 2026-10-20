@@ -6,7 +6,7 @@ Tap the mic button to dictate into the prompt field, in English (US) or French (
 
 Dictated text stays in the prompt field until you send it.
 
-To start over without stopping, tap the clear button twice. The first tap turns it red, and the second empties the field while dictation keeps listening. The red button goes back to normal after a few seconds, when new words arrive, or when dictation stops, so a later single tap never clears by surprise. When you are not dictating, one tap clears the field.
+To start over in an agent's prompt field without stopping, tap the clear button twice. The first tap turns it red, and the second empties the field and starts listening again after a brief pause. The red button goes back to normal after a few seconds, when new words arrive, or when dictation stops, so a later single tap never clears by surprise. When you are not dictating, one tap clears the field.
 
 ## Attachments
 

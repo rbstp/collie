@@ -884,8 +884,9 @@ private struct PromptBar: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .disabled(model.sendingPrompt)
-                            .accessibilityLabel(model.dictation.clearArmed ? "Tap again to clear text" : "Clear text")
+                            .disabled(model.sendingPrompt || model.dictation.phase == .finishing)
+                            .accessibilityLabel("Clear text")
+                            .accessibilityValue(model.dictation.clearArmed ? "Tap again to clear" : "")
                         }
                     }
                 }
