@@ -52,6 +52,7 @@ final class AgentModel {
     private(set) var macDraft: String?
     /// The Mac's box text loaded into the field, until the phone edits it; a prompt sent from the Mac clears it.
     @ObservationIgnored private var loadedMacDraft: String?
+    var showsMacDraft: Bool { draft == loadedMacDraft }
     /// The agent's last prompt when the field was loaded or the box last checked: only a new one means the Mac sent.
     @ObservationIgnored private var seenPrompt: String?
     @ObservationIgnored private(set) var sentMacDraftCheck: Task<Void, Never>?
