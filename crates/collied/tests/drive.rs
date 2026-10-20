@@ -3800,6 +3800,37 @@ async fn claude_prose_uses_the_input_box_rule_width_when_the_layout_differs() {
 }
 
 #[tokio::test]
+async fn codex_prose_uses_the_composer_width_when_the_layout_differs() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["codex"], &base);
+    herdr.with(|h| {
+        h.text = include_str!("fixtures/codex-0.163.0/split-prose.ansi.txt").into();
+        h.columns = Some(103);
+    });
+    let rows: Vec<u32> = std::iter::once(3).chain(7..=16).chain(19..=28).collect();
+    let Ok(Response::Terminal(read)) = drive
+        .read(
+            ReadParams {
+                terminal_id: tid(CODEX_BLOCKED),
+                source: ReadSource::Recent,
+                lines: None,
+            },
+            true,
+        )
+        .await
+    else {
+        panic!("no Codex read");
+    };
+    assert_eq!((read.wraps, read.splits), (rows.clone(), vec![]));
+    let mut watcher = drive.watch(tid(CODEX_BLOCKED), 200, false).await.unwrap();
+    let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+        panic!("no Codex watch output");
+    };
+    assert_eq!((first.wraps, first.splits), (rows, vec![]));
+}
+
+#[tokio::test]
 async fn codex_and_copilot_reads_and_watches_mark_only_prose_wraps() {
     let herdr = Mock::start();
     let (_d, base) = root();

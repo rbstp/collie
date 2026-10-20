@@ -409,14 +409,11 @@ impl Driver {
     /// failed.
     async fn reflow(&self, pane_id: &str, kind: &str, read: &mut TerminalRead) -> bool {
         let cols = herdr::pane_columns(&self.herdr, pane_id).await;
+        let layout_cols = cols.as_ref().ok().copied().flatten().map(usize::from);
         let screen_cols = match kind {
             "copilot" => reflow::copilot_scrollbar_columns(&read.ansi),
-            "claude" => cols
-                .as_ref()
-                .ok()
-                .copied()
-                .flatten()
-                .and_then(|cols| reflow::claude_rule_columns(&read.ansi, cols.into())),
+            "claude" => layout_cols.and_then(|cols| reflow::claude_rule_columns(&read.ansi, cols)),
+            "codex" => layout_cols.and_then(|cols| reflow::codex_box_columns(&read.ansi, cols)),
             _ => None,
         };
         if let Ok(Some(cols)) = cols {
@@ -425,8 +422,7 @@ impl Driver {
             read.copilot_scrollbar = kind == "copilot";
         }
         if kind == "copilot"
-            && let Some(width) =
-                screen_cols.or_else(|| cols.as_ref().ok().and_then(|cols| cols.map(usize::from)))
+            && let Some(width) = screen_cols.or(layout_cols)
         {
             read.ansi = reflow::without_copilot_scrollbar(&read.ansi, width);
         }
