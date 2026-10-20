@@ -39,8 +39,8 @@ struct MachinesList: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(app.machines, id: \.id) { machine in
-                TimelineView(.periodic(from: .now, by: 2)) { _ in
-                    MachineRow(machine: machine, flock: app.core?.cachedFlock(machineId: machine.id)) {
+                TimelineView(.periodic(from: .now, by: 2)) { context in
+                    MachineRow(machine: machine, flock: app.core?.cachedFlock(machineId: machine.id), now: context.date) {
                         MachineSettingsView(app: app, machine: machine)
                     }
                 }
@@ -81,6 +81,7 @@ struct MachinesList: View {
 struct MachineRow<Destination: View>: View {
     let machine: Machine
     let flock: MachineFlock?
+    var now = Date.now
     @ViewBuilder let destination: () -> Destination
 
     var body: some View {
@@ -114,7 +115,7 @@ struct MachineRow<Destination: View>: View {
             .buttonStyle(.plain)
             .navigationLinkIndicatorVisibility(.hidden)
             if let flock, flock.link != .connecting,
-               let message = flock.reason?.label(machine: machine.label, now: .now) ?? flock.lastError {
+               let message = flock.reason?.label(machine: machine.label, now: now) ?? flock.lastError {
                 MachineConnectionDetails(message: message, error: flock.lastError ?? message)
             }
         }

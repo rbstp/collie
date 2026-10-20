@@ -4,7 +4,7 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use collie_core::{MachineFlock, MachineKind, TerminalSource};
+use collie_core::{MachineFlock, MachineKind, OfflineReason, TerminalSource};
 use collied::server::{self, ServerConfig, ServerHandle};
 use common::*;
 use serde_json::json;
@@ -121,7 +121,7 @@ fn machines_side_by_side() {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             let mac = core.cached_flock(mac_id.clone()).unwrap();
-            if format!("{:?}", mac.reason) == "Some(NotAnswering)" {
+            if matches!(mac.reason, Some(OfflineReason::NotAnswering)) {
                 return mac;
             }
             assert!(Instant::now() < deadline, "{mac:?}");

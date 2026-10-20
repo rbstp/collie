@@ -479,6 +479,12 @@ impl Link {
         }
         self.reason = None;
     }
+
+    fn version_mismatch(&mut self, collied: Option<u32>) {
+        self.set(LinkPhase::Stopped, None);
+        self.last_error = None;
+        self.version_mismatch = Some(collied);
+    }
 }
 
 pub struct Shared {
@@ -815,12 +821,7 @@ async fn supervise(
         // Only an update fixes it: answer requests at once until a resume or a pull to
         // refresh dials again.
         if let ConnectError::Session(SessionError::VersionMismatch { collied }) = err {
-            {
-                let mut link = lock(&shared.link);
-                link.phase = LinkPhase::Stopped;
-                link.last_error = None;
-                link.version_mismatch = Some(collied);
-            }
+            lock(&shared.link).version_mismatch(collied);
             loop {
                 tokio::select! {
                     () = wake.notified() => break,
@@ -1352,6 +1353,14 @@ mod tests {
         backoff.failed(&shared, &asleep, now);
         assert!(shared.resume(now));
         assert_eq!(lock(&shared.link).reason, None, "a resume dials it again");
+        backoff.failed(&shared, &asleep, now);
+        lock(&shared.link).version_mismatch(Some(1));
+        let link = lock(&shared.link);
+        assert_eq!(
+            (link.phase, link.reason, link.last_error.clone()),
+            (LinkPhase::Stopped, None, None),
+            "a mismatch found by a redial past the offline flag says to update"
+        );
     }
 
     #[test]

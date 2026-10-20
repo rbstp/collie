@@ -37,9 +37,10 @@ pub use approvals::{
     DecideStage, DecisionOutcome, MachineApprovals, PendingApproval,
 };
 pub use attachments::UploadProgress;
+pub use conn::OfflineReason;
 use conn::{
-    Conn, ConnectError, FOREGROUND_RECONNECT, IdentitySlot, Link, LinkPhase, NodeSlot,
-    OfflineReason, PushSlot, Pushes, Registrations, RequestError, blocking,
+    Conn, ConnectError, FOREGROUND_RECONNECT, IdentitySlot, Link, LinkPhase, NodeSlot, PushSlot,
+    Pushes, Registrations, RequestError, blocking,
 };
 pub use identity::IdentitySigner;
 use pin::PinError;
@@ -220,7 +221,7 @@ fn pair_error(e: ConnectError, port: u16) -> CoreError {
         ConnectError::Pin(p @ PinError::Ownership { .. }) => CoreError::PinViolation {
             message: format!("{p}: run collied setup on it"),
         },
-        ConnectError::Dial(why) => CoreError::Unreachable {
+        ConnectError::Dial(why) | ConnectError::NotAnswering(why) => CoreError::Unreachable {
             message: format!(
                 "not reachable ({why}): the machine may be off or asleep, collied may not be running, or the policy may not allow TCP {port}"
             ),
@@ -3699,6 +3700,11 @@ mod tests {
         assert!(matches!(
             pair_error(ConnectError::Dial("timeout".into()), 8457),
             CoreError::Unreachable { message } if message.contains("off or asleep")
+        ));
+        assert!(matches!(
+            pair_error(ConnectError::NotAnswering("connection was refused".into()), 8457),
+            CoreError::Unreachable { message }
+                if message.contains("collied may not be running") && message.contains("TCP 8457")
         ));
         assert!(matches!(
             pair_error(SessionError::Refused(403).into(), 8457),

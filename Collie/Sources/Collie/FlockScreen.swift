@@ -243,7 +243,7 @@ struct FlockScreen: View {
                             Button {
                                 reconnect(entry)
                             } label: {
-                                MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting)
+                                MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting, now: context.date)
                             }
                             .buttonStyle(.plain)
                         }
@@ -319,6 +319,7 @@ struct MachineHeader: View {
     let entry: MachineFlockEntry
     let approvalsCount: Int
     let showsLink: Bool
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -343,7 +344,7 @@ struct MachineHeader: View {
                     .font(.footnote)
                     .foregroundStyle(.orange)
             } else if showsLink, entry.flock?.link != .connecting, let reason = entry.flock?.reason {
-                Text(reason.label(machine: entry.machine.label, now: .now))
+                Text(reason.label(machine: entry.machine.label, now: now))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
