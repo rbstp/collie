@@ -111,10 +111,16 @@ final class GlassPickerTests: XCTestCase {
             XCTAssertNil(control.selectedSegmentTintColor)
             XCTAssertNil(control.titleTextAttributes(for: .normal)?[.foregroundColor])
             let actual = try XCTUnwrap(control.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)
-            XCTAssertEqual(actual.cgColor.numberOfComponents, expected.cgColor.numberOfComponents)
-            for (component, wanted) in zip(actual.cgColor.components ?? [], expected.cgColor.components ?? []) {
+            for (component, wanted) in zip(rgba(actual), rgba(expected)) {
                 XCTAssertEqual(component, wanted, accuracy: 0.002, "\(accent) in \(control.accessibilityLabel ?? "picker")")
             }
         }
+    }
+
+    // None's label color is grayscale while the control holds it as RGB.
+    private func rgba(_ color: UIColor) -> [CGFloat] {
+        var (red, green, blue, alpha): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return [red, green, blue, alpha]
     }
 }

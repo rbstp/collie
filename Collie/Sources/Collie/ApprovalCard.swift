@@ -136,6 +136,7 @@ private struct FeedbackField: View {
                 }
             }
             .buttonStyle(.glassProminent)
+            .onAccentFill()
             .buttonBorderShape(.circle)
             .controlSize(.small)
             .disabled(model.drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

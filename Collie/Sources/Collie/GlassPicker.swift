@@ -3,6 +3,7 @@ import UIKit
 
 extension EnvironmentValues {
     @Entry var appAccent: Color = .accentColor
+    @Entry var neutralAccent = false
 }
 
 struct GlassPicker<Selection: Hashable>: View {

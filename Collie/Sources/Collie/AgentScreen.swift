@@ -25,6 +25,7 @@ struct AgentScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.neutralAccent) private var neutralAccent
 
     init(
         core: any AgentCore, route: AgentRoute, persistsState: Bool = true, approvals: ApprovalsModel?, follows: FollowModel?,
@@ -130,6 +131,7 @@ struct AgentScreen: View {
                                             Task { await model.jumpToBottom() }
                                         }
                                         .buttonStyle(.glassProminent)
+                                        .onAccentFill()
                                         .padding(.bottom, 8)
                                     }
                                     if !model.noticeOptions.isEmpty {
@@ -138,6 +140,7 @@ struct AgentScreen: View {
                                             VStack { noticeButtons }
                                         }
                                         .buttonStyle(.glassProminent)
+                                        .onAccentFill()
                                         .padding([.horizontal, .bottom], 8)
                                         .accessibilityElement(children: .contain)
                                         .accessibilityLabel("Claude Code notice")
@@ -145,6 +148,8 @@ struct AgentScreen: View {
                                 }
                             }
                         }
+                        // The terminal is always dark: a light-mode tint (None's black) would vanish on it.
+                        .environment(\.colorScheme, .dark)
                 }
             }
             .scrollEdgeEffectHidden(true, for: .top)
@@ -206,7 +211,7 @@ struct AgentScreen: View {
                     Button { model.wrapLines.toggle() } label: {
                         Label(model.wrapLines ? "Wrap lines on" : "Wrap lines off", image: "WrapLines")
                     }
-                    .tint(model.wrapLines ? Color.accentColor : .primary)
+                    .tint(model.wrapLines ? Color.accentColor : neutralAccent ? .secondary : .primary)
                 }
             }
             ToolbarItem(placement: .primaryAction) {
@@ -652,6 +657,7 @@ private struct PaneCard: View {
                     }
                 }
                 .buttonStyle(.glassProminent)
+                .onAccentFill()
                 .controlSize(.small)
                 .disabled(model.unlocking)
             }
@@ -738,6 +744,7 @@ private struct StripButton: View {
         if selected {
             Button(action: action) { label }
                 .buttonStyle(.glassProminent)
+                .onAccentFill()
                 .buttonBorderShape(.roundedRectangle(radius: 8))
                 .controlSize(.small)
         } else {
@@ -948,6 +955,7 @@ private struct PromptBar: View {
                         }
                     }
                     .buttonStyle(.glassProminent)
+                    .onAccentFill()
                     // Enabled only so a tap stops the retry, so it keeps the look of a send in progress.
                     .tint(model.retrying ? Color(.systemGray4) : appAccent)
                     .buttonBorderShape(.circle)
