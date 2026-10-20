@@ -11,8 +11,7 @@ final class InboxSwipeTests: XCTestCase {
         defer { app.terminate() }
         let layout = app.buttons["Layout"]
         XCTAssertTrue(layout.appears(within: 10), app.debugDescription)
-        layout.tap()
-        app.buttons["Inbox"].tap()
+        app.choose(app.buttons["Inbox"]) { layout.tap() }
         let row = app.staticTexts["Dark mode follows the system setting on every page."]
         XCTAssertTrue(row.appears(within: 5), app.debugDescription)
         let snooze = app.buttons["Snooze"]
@@ -31,7 +30,7 @@ final class InboxSwipeTests: XCTestCase {
         let blocked = app.staticTexts["I need to run cargo test to check the new cases."]
         XCTAssertTrue(blocked.appears(within: 5), app.debugDescription)
         blocked.swipeRight()
-        XCTAssertFalse(snooze.appears(within: 2), app.debugDescription)
+        XCTAssertFalse(snooze.exists, app.debugDescription)
     }
 
     func testSearchStaysBelowTheFilterAndTheLastRowAboveTheKeyboard() throws {
@@ -43,8 +42,7 @@ final class InboxSwipeTests: XCTestCase {
         defer { app.terminate() }
         let layout = app.buttons["Layout"]
         XCTAssertTrue(layout.appears(within: 10), app.debugDescription)
-        layout.tap()
-        app.buttons["Inbox"].tap()
+        app.choose(app.buttons["Inbox"]) { layout.tap() }
         let search = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "Search agents")).firstMatch
         XCTAssertTrue(search.appears(within: 5), app.debugDescription)
         let before = search.frame

@@ -11,8 +11,7 @@ final class SampleWorkspaceTests: XCTestCase {
         defer { app.terminate() }
         let layout = app.buttons["Layout"]
         XCTAssertTrue(layout.appears(within: 10))
-        layout.tap()
-        app.buttons["Grid"].tap()
+        app.choose(app.buttons["Grid"]) { layout.tap() }
         let card = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
         XCTAssertTrue(card.appears(within: 5))
         XCTAssertNotNil(card.label.range(
@@ -28,8 +27,7 @@ final class SampleWorkspaceTests: XCTestCase {
         XCTAssertFalse(blocked.label.contains("Review deny path"))
         XCTAssertTrue(blocked.label.contains("1 subagent"))
 
-        card.press(forDuration: 1)
-        app.buttons["Star"].tap()
+        app.choose(app.buttons["Star"]) { card.press(forDuration: 1) }
         let expanded = app.buttons.containing(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "fix the build", "+1 more")).firstMatch
         XCTAssertTrue(expanded.appears(within: 5))
         XCTAssertTrue(card.label.contains("Check retry handling"))
@@ -47,8 +45,7 @@ final class SampleWorkspaceTests: XCTestCase {
         XCTAssertTrue(explore.appears(within: 10))
         explore.tap()
         XCTAssertTrue(app.staticTexts["Simulated actions only"].appears(within: 5))
-        app.buttons["Layout"].tap()
-        app.buttons["List"].tap()
+        app.choose(app.buttons["List"]) { app.buttons["Layout"].tap() }
         let blocked = app.staticTexts["add approval tests"].firstMatch
         XCTAssertTrue(blocked.appears(within: 5))
         blocked.tap()

@@ -13,8 +13,7 @@ final class PagerSwipeTests: XCTestCase {
         XCTAssertTrue(layout.appears(within: 10), app.debugDescription)
         let view = app.segmentedControls["View"]
         for name in ["Inbox", "Grid", "List", "Inbox", "Grid"] {
-            layout.tap()
-            app.buttons[name].tap()
+            app.choose(app.buttons[name]) { layout.tap() }
             XCTAssertTrue(view.buttons["Agents"].isSelected, app.debugDescription)
             if name == "Inbox" {
                 view.buttons["Usage"].tap()
