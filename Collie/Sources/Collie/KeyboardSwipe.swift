@@ -20,7 +20,7 @@ final class KeyboardSwipe: NSObject, UIGestureRecognizerDelegate {
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard let view = touch.view,
-              let input = sequence(first: view, next: \.superview).first(where: { $0 is UITextInput && $0.isFirstResponder })
+              let input = sequence(first: view, next: \.superview).first(where: { $0 is UITextInput && $0.isFirstResponder && ($0 as? UITextView)?.isEditable != false })
         else { return false }
         // A long draft scrolled below its top scrolls back up instead.
         guard let text = input as? UIScrollView else { return true }
