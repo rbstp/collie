@@ -159,7 +159,8 @@ struct CopyIcon: View {
             .font(.footnote.weight(.semibold))
             .foregroundStyle(copiedAt == nil ? accent : AgentState.done.color)
             .frame(minWidth: 28, minHeight: 28)
-            .darkGlass(in: .circle, interactive: true)
+            .padding(2)
+            .glassEffect(.regular.interactive(), in: .circle)
             .task(id: copiedAt) {
                 guard copiedAt != nil else { return }
                 try? await Task.sleep(for: .seconds(3))

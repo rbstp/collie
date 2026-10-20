@@ -347,25 +347,6 @@ struct MachineHeader: View {
     }
 }
 
-extension View {
-    func darkGlass(in shape: some Shape, interactive: Bool = false) -> some View {
-        modifier(DarkGlass(shape: shape, interactive: interactive))
-    }
-}
-
-private struct DarkGlass<S: Shape>: ViewModifier {
-    let shape: S
-    let interactive: Bool
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
-        content
-            .background(.black.opacity(colorScheme == .dark ? 0.69 : 0.07), in: shape)
-            .padding(2)
-            .glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
-    }
-}
-
 private struct AgentRow: View {
     let agent: AgentSummary
     let workspace: String?
@@ -471,10 +452,9 @@ private struct KindLabelStyle: LabelStyle {
 struct StatusPill: View {
     let state: AgentState
     var title: String? = nil
-    var onGlass = false
 
     var body: some View {
-        let pill = Label {
+        Label {
             Text(title ?? state.label.capitalized)
         } icon: {
             if state == .working {
@@ -491,15 +471,9 @@ struct StatusPill: View {
             .foregroundStyle(state.color)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-        Group {
-            if onGlass {
-                // The session header is already glass: a fill like the Chat/Terminal track beside it, not a second glass surface.
-                pill.padding(2).background(.fill.tertiary, in: .capsule)
-            } else {
-                pill.darkGlass(in: .capsule)
-            }
-        }
-        .fixedSize()
+            .padding(2)
+            .glassEffect(.regular, in: .capsule)
+            .fixedSize()
     }
 }
 
