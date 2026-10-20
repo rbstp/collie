@@ -16,6 +16,7 @@ Chat reads the agent's real conversation from its transcript on the machine.
 - Replies render as Markdown, with selectable code blocks and Copy actions.
 - Long-press a message to **Copy** or **Quote** it. Tool records and code blocks have Quote and Copy buttons.
 - Consecutive tool calls collapse into one row; expand it to see each call with its result.
+- A shell command you run in Claude Code with `!` shows as your message, such as `! git status`, with its output collapsed below it like a tool result.
 - A recent page loads first. Tap **Load older messages** for more.
 - The search button finds text across the history, with highlighted matches and previous and next buttons.
 - New messages arrive while you read older ones, without jumping.
