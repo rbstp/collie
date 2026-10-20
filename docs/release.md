@@ -119,7 +119,7 @@ Keep published iOS, collied, CollieBar and CollieTray releases on the same versi
 - Merging a pull request into `master` ships a build, unless its title contains `[skip-release]` or it only touches `.github/`, `docs/` (the documentation site's sources, in `docs/site/`, included), `Mac/`, `README.md`, `AGENTS.md` or `CLAUDE.md`. Changes only to `docs/site/`, `docs/deploy-pages.md`, `README.md`, `AGENTS.md` and `CLAUDE.md` also skip the macOS `ci` jobs, on pull requests and on `master`; the site has its own workflow, `pages` ([deploy-pages.md](deploy-pages.md)).
 - Version: the latest `v*` tag bumped by minor when any commit since that tag (or the pull request title) is a `feat`, by patch otherwise. Build number: the workflow run number.
 - A manual run (Actions, testflight, Run workflow, on `master` only) ships the given version, for example `1.0.0`.
-- After the upload, the workflow pushes the tag `v<version>`.
+- After the upload, the workflow pushes the tag `v<version>`, then starts the desktop release and the [documentation screenshots](#documentation-screenshots) refresh.
 
 ## iOS release notes
 
@@ -174,6 +174,25 @@ CollieWidgets went in this way. `Collie/ExportOptions.plist` maps each bundle ID
 Review notes should direct reviewers to **Explore sample workspace** on Welcome, with no account or desktop required. Existing users can open the same sample from Settings. Ask reviewers to inspect Agents, Chat, Terminal, Usage and Machines, send a sample prompt, try a terminal key, then approve or deny the blocked sample agent. The persistent sample banner identifies every action as simulated. Reset is in sample Settings and Exit returns to onboarding or the existing paired setup.
 
 The sample is available in Release builds on iOS Simulator and iPhone. It does not demonstrate real pairing, background APNs delivery, Live Activities or device attestation. Include real-hardware review evidence for those workflows. Obtain any required prior App Review approval for using the sample instead of credentials before submission; sample availability does not establish that approval. Record the actual Release simulator and signed-device validation with the submission evidence.
+
+## Documentation screenshots
+
+After a successful upload, `testflight` dispatches `.github/workflows/docs-screenshots.yml` from `master` with the shipped commit, so the images in `docs/site/src/images` (also shown by the README) match the app that shipped. It runs separately from the release: a failure shows as a failed `docs screenshots` run and never fails or holds back the build, the tag or the desktop release. It is in the `docs-screenshots` concurrency group, so a second release waits for the first refresh to finish.
+
+1. **capture**, on `xcode-27` with read-only contents and no secret: builds the simulator framework, pairs an iPhone 18 Pro Max simulator with an Apple Watch Series 12 (46mm) simulator, installs pngquant 3.0.3 from pngquant.org (checked against its SHA-256), runs `just ios-screenshots` and keeps the images as the `screenshots` artifact for 7 days. It refuses a commit that is not on `master`, and it only restores caches, never saves them, so a refresh cannot change what `testflight` and `ci` restore.
+2. **propose**, on `master` only, in the `docs-screenshots` environment: copies the artifact's PNG files onto `master` and fails on any other file. When nothing changed, it stops. Otherwise it force-pushes them to the `docs-screenshots` branch, opens (or reuses) the pull request "Refresh documentation screenshots [skip-release]" and enables auto-merge with squash. The pull request runs the normal checks (`ci` skips `rust` and `ios` for a `docs/site/` change), the merge ships no build, and its push to `master` deploys the site through `pages`.
+
+Pull requests, pushes and merges made with `GITHUB_TOKEN` start no workflow, and the repository does not let Actions create pull requests, so **propose** uses a token of the owner instead. Before the next release, create a `docs-screenshots` environment in `rbstp/collie`, restrict deployments to `master`, and add `DOCS_SCREENSHOTS_TOKEN`: a fine-grained personal access token owned by the owner, limited to `rbstp/collie`, with **Contents: Read and write** and **Pull requests: Read and write** (metadata read is implicit), and an expiration date. It needs no workflow permission. Keep the environment restricted to `master`: the owner's role bypasses the `master` ruleset, so a leaked token could push any file outside `.github/workflows/` to `master`. Renew the token before it expires. Enter it at the prompt, never in a command argument or committed file:
+
+```sh
+gh secret set DOCS_SCREENSHOTS_TOKEN --repo rbstp/collie --env docs-screenshots
+```
+
+The token is exposed only to **propose**, which never builds or runs the captured revision. Its commit is authored as the token's owner. Without the secret, **propose** fails with a message pointing here, after **capture** has kept the images.
+
+To refresh without a release, run it by hand (Actions, docs screenshots, Run workflow, on `master`), optionally with the commit to capture on `master`; the default is the head of `master`.
+
+The demo's usage reset times and the watch's clock follow the capture time, so `usage-light.png`, `usage-dark.png`, `watch-usage.png` and `watch-widget.png` change on every run, and every release opens a refresh pull request.
 
 ## Desktop GitHub releases
 

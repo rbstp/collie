@@ -35,11 +35,11 @@ jobs:
           || (github.event.pull_request.merged
               && !contains(github.event.pull_request.title, '[skip-release]')) }}
     runs-on: xcode-27
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       source_sha: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
-    permissions:
-      contents: write
 
     steps:
       - name: checkout
@@ -281,8 +281,8 @@ jobs:
           rm -f "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision
 
   desktop-release:
-    needs: build-ship
     if: ${{ github.repository == 'rbstp/collie' && github.ref == 'refs/heads/master' }}
+    needs: build-ship
     runs-on: ubuntu-24.04
     permissions:
       actions: write
@@ -293,4 +293,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.build-ship.outputs.tag }}
+          SOURCE_SHA: ${{ needs.build-ship.outputs.source_sha }}
+
+  docs-screenshots:
+    if: ${{ github.repository == 'rbstp/collie' && github.ref == 'refs/heads/master' }}
+    needs: build-ship
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+
+    steps:
+      - name: dispatch the screenshot refresh from master
+        run: gh workflow run docs-screenshots.yml --repo "$GITHUB_REPOSITORY" --ref master -f "source_sha=$SOURCE_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.build-ship.outputs.source_sha }}
