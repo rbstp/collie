@@ -180,13 +180,15 @@ final class DictationModel {
                 if levels.count > 120 { levels.removeFirst(levels.count - 120) }
             }
         case .volatile(let text):
-            clearArmed = false
+            let shown = output
             volatile = text
+            if output != shown { clearArmed = false }
             write?(output)
         case .final(let text):
-            clearArmed = false
+            let shown = output
             finalized = Self.join(finalized, text)
             volatile = ""
+            if output != shown { clearArmed = false }
             write?(output)
         }
     }
