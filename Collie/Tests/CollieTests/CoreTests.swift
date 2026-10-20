@@ -72,6 +72,18 @@ func compactElapsedFormatting(seconds: Double, compact: String, spoken: String) 
     #expect(Elapsed.spoken(.done, sinceMs: since, now: now) == "done 12 minutes ago")
 }
 
+@Test(arguments: [
+    (OfflineReason.phoneOffline, "This phone is not connected to Tailscale. Sign in again or check the network."),
+    (.asleep(lastSeenMs: 1_700_000_000_000), "Studio is asleep or off. Last seen 2 hours ago."),
+    (.asleep(lastSeenMs: nil), "Studio is asleep or off."),
+    (.notAnswering, "Studio is online, but collied is not answering. Run collied start there."),
+    (.unreachable, "Cannot reach Studio."),
+])
+func offlineReasonSaysWhyAndWhatToDo(reason: OfflineReason, expected: String) {
+    let now = Date(timeIntervalSince1970: 1_700_000_000 + 7_500)
+    #expect(reason.label(machine: "Studio", now: now) == expected)
+}
+
 @Test func titleFallsBackToNameKindThenTerminal() {
     #expect(agent("t1", .idle, since: 0, title: "fix the build").displayTitle == "fix the build")
     #expect(agent("t1", .idle, since: 0, title: "  ").displayTitle == "claude")

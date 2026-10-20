@@ -236,7 +236,9 @@ pub enum ConnectError {
     #[error("not reachable ({0})")]
     Status(String),
     #[error("not reachable, it may be off or asleep")]
-    PeerOffline,
+    PeerOffline(Option<u64>),
+    #[error("not reachable ({0})")]
+    NotAnswering(String),
     #[error("this phone's key is not loaded yet")]
     NoIdentity,
     #[error("paired before mutual TLS: run collied pair on the machine and scan its code again")]
@@ -261,12 +263,24 @@ impl ConnectError {
     fn before_dial(&self) -> bool {
         match self {
             Self::Offline
-            | Self::PeerOffline
+            | Self::PeerOffline(_)
             | Self::NoIdentity
             | Self::PairAgain
             | Self::Status(_) => true,
             Self::Pin(e) => !e.is_violation(),
-            Self::Dial(_) | Self::Session(_) => false,
+            Self::Dial(_) | Self::NotAnswering(_) | Self::Session(_) => false,
+        }
+    }
+
+    pub fn reason(&self) -> Option<OfflineReason> {
+        match self {
+            Self::Offline => Some(OfflineReason::PhoneOffline),
+            Self::PeerOffline(last_seen_ms) => Some(OfflineReason::Asleep {
+                last_seen_ms: *last_seen_ms,
+            }),
+            Self::NotAnswering(_) => Some(OfflineReason::NotAnswering),
+            Self::Dial(_) => Some(OfflineReason::Unreachable),
+            _ => None,
         }
     }
 }
@@ -316,13 +330,14 @@ pub async fn open(
         return Err(pin::PinError::SelfOwnership.into());
     }
     let (ip, kind) = pin::resolve(&status, host, node_id, kind, Some(owner))?;
-    let online = status
+    let peer = status
         .peer
         .iter()
         .flat_map(|peers| peers.values())
-        .any(|p| p.stable_id == node_id && p.online);
+        .find(|p| p.stable_id == node_id);
+    let online = peer.is_some_and(|p| p.online);
     if !online && !dial_offline {
-        return Err(ConnectError::PeerOffline);
+        return Err(ConnectError::PeerOffline(peer.and_then(|p| p.last_seen_ms)));
     }
     let n = node.clone();
     let who = blocking(move || n.whois(&ip.to_string()))
@@ -332,7 +347,12 @@ pub async fn open(
     pin::verify_whois(&who.node, host, node_id, owner)?;
     let weak = Arc::downgrade(&node);
     drop(node);
-    let stream = dial(&weak, slot, SocketAddr::new(ip, port)).await?;
+    let stream = dial(&weak, slot, SocketAddr::new(ip, port))
+        .await
+        .map_err(|e| match e {
+            ConnectError::Dial(e) if online && not_answering(&e) => ConnectError::NotAnswering(e),
+            e => e,
+        })?;
     let stream = tls(stream, host, key, identity).await?;
     let mut session = Session::connect(stream, host, port).await?;
     let hello = session.hello().await?;
@@ -365,6 +385,15 @@ pub(crate) async fn tls(
             })
         }
     }
+}
+
+/// Only the netstack's own refusal and the attempt's deadline: collied is not listening on a
+/// node that answers, or that node does not answer at all. A close of the node cancels the
+/// dial instead ("context canceled").
+fn not_answering(error: &str) -> bool {
+    ["connection was refused", "context deadline exceeded"]
+        .iter()
+        .any(|e| error.ends_with(e))
 }
 
 /// No new attempt once `node` has left `slot`.
@@ -418,10 +447,21 @@ pub enum LinkPhase {
     Stopped,
 }
 
+/// Why a link is not connected, for the cases the phone can tell apart; `None` keeps the
+/// error's own message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum OfflineReason {
+    PhoneOffline,
+    Asleep { last_seen_ms: Option<u64> },
+    NotAnswering,
+    Unreachable,
+}
+
 pub struct Link {
     pub push_mode: Option<protocol::PushMode>,
     pub phase: LinkPhase,
     pub last_error: Option<String>,
+    pub reason: Option<OfflineReason>,
     resumed: Option<Instant>,
     pub last_dial: Instant,
     /// Set while stopped on a protocol version mismatch: collied's version, if it sent one.
@@ -437,6 +477,7 @@ impl Link {
         if error.is_some() || phase == LinkPhase::Connected {
             self.last_error = error;
         }
+        self.reason = None;
     }
 }
 
@@ -463,6 +504,7 @@ impl Shared {
         }
         link.phase = LinkPhase::Connecting;
         link.last_error = None;
+        link.reason = None;
         true
     }
 }
@@ -509,6 +551,7 @@ impl Conn {
                 push_mode: None,
                 phase: LinkPhase::Connecting,
                 last_error: None,
+                reason: None,
                 resumed: None,
                 last_dial: Instant::now(),
                 version_mismatch: None,
@@ -682,15 +725,13 @@ async fn supervise(
         }
         let running = lock(&slot).clone();
         let Some(node) = running else {
-            let starting = core.upgrade().is_some_and(|c| c.node_starting());
-            shared.set(
-                if starting {
-                    LinkPhase::Connecting
-                } else {
-                    LinkPhase::Offline
-                },
-                None,
-            );
+            if core.upgrade().is_some_and(|c| c.node_starting()) {
+                shared.set(LinkPhase::Connecting, None);
+            } else {
+                let mut link = lock(&shared.link);
+                link.set(LinkPhase::Offline, None);
+                link.reason = Some(OfflineReason::PhoneOffline);
+            }
             wait(&wake, OFFLINE_POLL).await;
             continue;
         };
@@ -725,7 +766,7 @@ async fn supervise(
             shared.set(LinkPhase::Connecting, None);
             continue;
         }
-        peer_offline = matches!(opened, Err(ConnectError::PeerOffline));
+        peer_offline = matches!(opened, Err(ConnectError::PeerOffline(_)));
         let dialed = !opened.as_ref().is_err_and(ConnectError::before_dial);
         force &= !dialed;
         if dialed {
@@ -733,7 +774,7 @@ async fn supervise(
         }
         if !matches!(
             opened,
-            Err(ConnectError::Offline | ConnectError::PeerOffline)
+            Err(ConnectError::Offline | ConnectError::PeerOffline(_))
         ) {
             reach.record(
                 &machine.node_id,
@@ -794,7 +835,7 @@ async fn supervise(
         let Some(delay) = backoff.failed(&shared, &err, Instant::now()) else {
             return;
         };
-        if matches!(err, ConnectError::Dial(_))
+        if matches!(err, ConnectError::Dial(_) | ConnectError::NotAnswering(_))
             && lock(&shared.link).phase == LinkPhase::Waiting
             && let Some(core) = core.upgrade()
         {
@@ -831,8 +872,9 @@ impl Backoff {
             self.attempt = 0;
             self.grace_attempt = 0;
         }
-        if matches!(err, ConnectError::PeerOffline) {
+        if matches!(err, ConnectError::PeerOffline(_)) {
             link.set(LinkPhase::Unavailable, Some(err.to_string()));
+            link.reason = err.reason();
             if link
                 .resumed
                 .is_some_and(|at| now.saturating_duration_since(at) < RESUME_OFFLINE_POLL)
@@ -855,9 +897,11 @@ impl Backoff {
         }
         if matches!(err, ConnectError::Offline) {
             link.set(LinkPhase::Offline, None);
+            link.reason = err.reason();
             return Some(OFFLINE_POLL);
         }
         link.set(LinkPhase::Waiting, Some(err.to_string()));
+        link.reason = err.reason();
         let delay = BACKOFF[self.attempt.min(BACKOFF.len() - 1)];
         self.attempt += 1;
         Some(delay)
@@ -1021,6 +1065,7 @@ mod tests {
                 push_mode: None,
                 phase: LinkPhase::Connected,
                 last_error: None,
+                reason: None,
                 resumed: None,
                 last_dial: Instant::now(),
                 version_mismatch: None,
@@ -1159,7 +1204,7 @@ mod tests {
                 backoff
                     .failed(
                         &shared,
-                        &ConnectError::PeerOffline,
+                        &ConnectError::PeerOffline(None),
                         t0 + RESUME_OFFLINE_POLL + Duration::from_secs(i),
                     )
                     .unwrap()
@@ -1193,7 +1238,7 @@ mod tests {
         );
         for _ in 0..3 {
             assert_eq!(
-                backoff.failed(&shared, &ConnectError::PeerOffline, t1 + RESUME_GRACE),
+                backoff.failed(&shared, &ConnectError::PeerOffline(None), t1 + RESUME_GRACE),
                 Some(PEER_OFFLINE_POLL[0]),
                 "then it waits quietly again, polled quickly while the node recovers"
             );
@@ -1201,16 +1246,112 @@ mod tests {
         assert_eq!(link(&shared).0, LinkPhase::Unavailable);
         let t2 = t1 + RESUME_OFFLINE_POLL;
         assert_eq!(
-            backoff.failed(&shared, &ConnectError::PeerOffline, t2),
+            backoff.failed(&shared, &ConnectError::PeerOffline(None), t2),
             Some(PEER_OFFLINE_POLL[1]),
             "and more slowly after that"
         );
         assert_eq!(backoff.failed(&shared, &closed(), t2), Some(BACKOFF[0]));
         assert_eq!(
-            backoff.failed(&shared, &ConnectError::PeerOffline, t2),
+            backoff.failed(&shared, &ConnectError::PeerOffline(None), t2),
             Some(PEER_OFFLINE_POLL[0]),
             "a session or a dial in between restarts the offline poll"
         );
+    }
+
+    #[test]
+    fn each_failure_says_why() {
+        let host = || "mac.ts.net".to_owned();
+        let cases = [
+            (ConnectError::Offline, Some(OfflineReason::PhoneOffline)),
+            (
+                ConnectError::PeerOffline(Some(1_792_446_245_000)),
+                Some(OfflineReason::Asleep {
+                    last_seen_ms: Some(1_792_446_245_000),
+                }),
+            ),
+            (
+                ConnectError::PeerOffline(None),
+                Some(OfflineReason::Asleep { last_seen_ms: None }),
+            ),
+            (
+                ConnectError::NotAnswering("connection was refused".into()),
+                Some(OfflineReason::NotAnswering),
+            ),
+            (
+                ConnectError::Dial("no route to host".into()),
+                Some(OfflineReason::Unreachable),
+            ),
+            (ConnectError::Status("closed".into()), None),
+            (ConnectError::NoIdentity, None),
+            (ConnectError::PairAgain, None),
+            (
+                ConnectError::Pin(PinError::MissingPeer { host: host() }),
+                None,
+            ),
+            (
+                ConnectError::Pin(PinError::KeyMismatch { host: host() }),
+                None,
+            ),
+            (ConnectError::Session(SessionError::NotPaired), None),
+            (ConnectError::Session(SessionError::KeyRefused), None),
+            (
+                ConnectError::Session(SessionError::VersionMismatch { collied: Some(1) }),
+                None,
+            ),
+            (closed(), None),
+        ];
+        for (err, reason) in cases {
+            assert_eq!(err.reason(), reason, "{err:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_refusal_or_a_timeout_is_collied_not_answering() {
+        for e in [
+            "tailscale: connect tcp 100.64.0.1:8457: connection was refused",
+            "tailscale: context deadline exceeded",
+        ] {
+            assert!(not_answering(e), "{e}");
+        }
+        for e in [
+            "tailscale: context canceled",
+            "the Tailscale node was replaced",
+            "tailscale: connect tcp 100.64.0.1:8457: no route to host",
+            "tailscale call failed with errno 22",
+        ] {
+            assert!(!not_answering(e), "{e}");
+        }
+    }
+
+    #[test]
+    fn the_link_keeps_the_reason_until_the_next_attempt() {
+        let shared = shared();
+        let mut backoff = Backoff::default();
+        let now = Instant::now();
+        let asleep = ConnectError::PeerOffline(Some(1_792_446_245_000));
+        for (err, phase) in [
+            (asleep.clone(), LinkPhase::Unavailable),
+            (ConnectError::Offline, LinkPhase::Offline),
+            (
+                ConnectError::NotAnswering("connection was refused".into()),
+                LinkPhase::Waiting,
+            ),
+            (
+                ConnectError::Dial("no route to host".into()),
+                LinkPhase::Waiting,
+            ),
+            (closed(), LinkPhase::Waiting),
+        ] {
+            backoff.failed(&shared, &err, now);
+            let link = lock(&shared.link);
+            assert_eq!((link.phase, link.reason), (phase, err.reason()), "{err:?}");
+        }
+        backoff.failed(&shared, &ConnectError::Offline, now);
+        shared.set(LinkPhase::Connecting, None);
+        assert_eq!(lock(&shared.link).reason, None);
+        backoff.failed(&shared, &asleep, now);
+        assert!(shared.resume(now));
+        assert_eq!(lock(&shared.link).reason, None, "a resume dials it again");
     }
 
     #[test]

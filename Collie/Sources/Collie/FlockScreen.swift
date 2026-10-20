@@ -342,6 +342,10 @@ struct MachineHeader: View {
                 Text(message)
                     .font(.footnote)
                     .foregroundStyle(.orange)
+            } else if showsLink, entry.flock?.link != .connecting, let reason = entry.flock?.reason {
+                Text(reason.label(machine: entry.machine.label, now: .now))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -553,6 +557,21 @@ extension LinkPhase {
         case .unavailable: "offline"
         case .offline: "offline"
         case .stopped: "stopped"
+        }
+    }
+}
+
+extension OfflineReason {
+    func label(machine: String, now: Date) -> String {
+        switch self {
+        case .phoneOffline:
+            "This phone is not connected to Tailscale. Sign in again or check the network."
+        case .asleep(let lastSeenMs):
+            "\(machine) is asleep or off." + (lastSeenMs.map { " Last seen \(Elapsed.spoken(sinceMs: $0, now: now)) ago." } ?? "")
+        case .notAnswering:
+            "\(machine) is online, but collied is not answering. Run collied start there."
+        case .unreachable:
+            "Cannot reach \(machine)."
         }
     }
 }

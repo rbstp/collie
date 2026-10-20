@@ -38,8 +38,8 @@ pub use approvals::{
 };
 pub use attachments::UploadProgress;
 use conn::{
-    Conn, ConnectError, FOREGROUND_RECONNECT, IdentitySlot, Link, LinkPhase, NodeSlot, PushSlot,
-    Pushes, Registrations, RequestError, blocking,
+    Conn, ConnectError, FOREGROUND_RECONNECT, IdentitySlot, Link, LinkPhase, NodeSlot,
+    OfflineReason, PushSlot, Pushes, Registrations, RequestError, blocking,
 };
 pub use identity::IdentitySigner;
 use pin::PinError;
@@ -504,6 +504,8 @@ pub struct MachineFlock {
     pub starred: Vec<String>,
     #[uniffi(default = false)]
     pub version_mismatch: bool,
+    #[uniffi(default = None)]
+    pub reason: Option<OfflineReason>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -3384,12 +3386,13 @@ fn link_error(conn: &Conn, link: &Link) -> Option<String> {
 }
 
 fn view(conn: &Conn) -> MachineFlock {
-    let (link, last_error, version_mismatch) = {
+    let (link, last_error, version_mismatch, reason) = {
         let link = lock(&conn.shared.link);
         (
             link.phase,
             link_error(conn, &link),
             link.version_mismatch.is_some(),
+            link.reason,
         )
     };
     let guard = lock(&conn.shared.flock);
@@ -3437,6 +3440,7 @@ fn view(conn: &Conn) -> MachineFlock {
             .map(|t| t.as_str().into())
             .collect(),
         version_mismatch,
+        reason,
     }
 }
 

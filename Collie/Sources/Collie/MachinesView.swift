@@ -113,8 +113,9 @@ struct MachineRow<Destination: View>: View {
             }
             .buttonStyle(.plain)
             .navigationLinkIndicatorVisibility(.hidden)
-            if flock?.link != .connecting, let error = flock?.lastError {
-                MachineConnectionDetails(message: error)
+            if let flock, flock.link != .connecting,
+               let message = flock.reason?.label(machine: machine.label, now: .now) ?? flock.lastError {
+                MachineConnectionDetails(message: message, error: flock.lastError ?? message)
             }
         }
         .padding(10)
@@ -124,6 +125,7 @@ struct MachineRow<Destination: View>: View {
 
 private struct MachineConnectionDetails: View {
     let message: String
+    let error: String
     @State private var copiedAt: Date?
 
     var body: some View {
@@ -134,7 +136,7 @@ private struct MachineConnectionDetails: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
             Button {
-                UIPasteboard.general.string = message
+                UIPasteboard.general.string = error
                 copiedAt = .now
             } label: {
                 CopyIcon(label: "Copy connection error", copiedAt: $copiedAt)
@@ -143,7 +145,7 @@ private struct MachineConnectionDetails: View {
             }
             .buttonStyle(.plain)
         }
-        .onChange(of: message) { _, _ in copiedAt = nil }
+        .onChange(of: error) { _, _ in copiedAt = nil }
     }
 }
 

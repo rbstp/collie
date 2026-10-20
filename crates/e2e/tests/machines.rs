@@ -113,7 +113,26 @@ fn machines_side_by_side() {
 
     assert_eq!(kernel_tcp_listeners(), Vec::<String>::new());
     assert_udp_on_loopback();
+
+    println!("collied stops on the Mac while its node stays online");
     rt.block_on(mac_server.shutdown());
+    let t = Instant::now();
+    let mac = rt.block_on(async {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let mac = core.cached_flock(mac_id.clone()).unwrap();
+            if format!("{:?}", mac.reason) == "Some(NotAnswering)" {
+                return mac;
+            }
+            assert!(Instant::now() < deadline, "{mac:?}");
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    });
+    println!(
+        "  collied not answering in {:?}: {:?}",
+        t.elapsed(),
+        mac.last_error
+    );
     drop(core);
     drop(rt);
     println!("total {:?}", t0.elapsed());
