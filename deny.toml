@@ -10,6 +10,9 @@ all-features = true
 
 [advisories]
 yanked = "deny"
+ignore = [
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml is a build-time only dependency of uniffi's askama template engine, not shipped in the app or daemon; remove when uniffi drops basic-toml" },
+]
 
 [licenses]
 allow = ["Apache-2.0", "MIT", "BSD-3-Clause", "Unicode-3.0", "ISC", "MPL-2.0"]
