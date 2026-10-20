@@ -196,6 +196,17 @@ private func step(_ id: String, role: String = "assistant", tool: String? = nil,
     #expect(rows[2].message?.id == "after")
 }
 
+@Test func conversationKeepsShellOutputInItsOwnRow() {
+    let command = HistoryMessage(id: "bang", role: "user", text: "! git status", tool: nil, callId: nil, truncated: false, parentCallId: nil)
+    let rows = ConversationRow.build([
+        tool("a", call: "one"), tool("ar", call: "one", result: true), command, tool("output", result: true),
+        tool("b", call: "two"), tool("br", call: "two", result: true), message("reply"),
+    ])
+    #expect(rows.map(\.id) == ["activity:a", "message:bang", "activity:output", "activity:b", "message:reply"])
+    #expect(rows[2].tools.map { $0.records.map(\.id) } == [["output"]])
+    #expect(rows[3].tools.map { $0.records.map(\.id) } == [["b", "br"]])
+}
+
 @Test func conversationActivityKeepsItsAnchorAcrossPagesAndLiveUpdates() {
     let initial = ConversationRow.build([tool("result", call: "one", result: true)])
     let prepended = ConversationRow.build([tool("call", call: "one"), tool("result", call: "one", result: true)], previous: initial)
