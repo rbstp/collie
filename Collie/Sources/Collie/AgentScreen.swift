@@ -185,6 +185,8 @@ struct AgentScreen: View {
                     }
                 }
             }
+            // Without a band, touches in the gaps between controls would reach the terminal's swipe and tap gestures.
+            .contentShape(.rect)
             .environment(\.colorScheme, barScheme)
         }
         .toolbarColorScheme(headerScheme, for: .navigationBar)
