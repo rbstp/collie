@@ -11,11 +11,9 @@ struct GlassPicker<Selection: Hashable>: View {
     let options: [(String, Selection)]
     var expands = false
     var icons: [UIImage?] = []
-    var systemSelection = false
 
     var body: some View {
-        NativeSegmentedPicker(title: title, selection: $selection, options: options, expands: expands, icons: icons,
-                              systemSelection: systemSelection)
+        NativeSegmentedPicker(title: title, selection: $selection, options: options, expands: expands, icons: icons)
             .glassEffect(expands ? .regular : .identity)
     }
 }
@@ -26,7 +24,6 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
     let options: [(String, Selection)]
     var expands = false
     var icons: [UIImage?] = []
-    var systemSelection = false
     @ScaledMetric(relativeTo: .subheadline) private var fontSize = 15
     @Environment(\.controlSize) private var controlSize
 
@@ -44,8 +41,6 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
         }
         let font = UIFont.systemFont(ofSize: fontSize, weight: .semibold)
         // Keep the selected label's app accent explicit: native defaults lose it, and UIKit tint can change during actions.
-        // Keep Agents/Usage's selection dark, including inside glass.
-        control.selectedSegmentTintColor = systemSelection ? nil : UIColor { $0.userInterfaceStyle == .dark ? .black : .white }
         let accent = UIColor(Color(context.environment.appAccent.resolve(in: context.environment)))
         control.setTitleTextAttributes([.font: font], for: .normal)
         control.setTitleTextAttributes([.font: font, .foregroundColor: accent], for: .selected)

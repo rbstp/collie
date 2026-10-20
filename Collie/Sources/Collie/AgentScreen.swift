@@ -409,7 +409,7 @@ private struct AgentHeader: View {
                 }
                 if let agent = model.agent {
                     HStack(spacing: 6) {
-                        StatusPill(state: agent.status, onGlass: true)
+                        StatusPill(state: agent.status)
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
                                 .font(.caption.monospacedDigit())
@@ -442,7 +442,7 @@ private struct AgentHeader: View {
                 if !model.isTerminal {
                     // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
                     GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
-                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")], systemSelection: true)
+                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
                         .controlSize(.small)
                 }
             }
