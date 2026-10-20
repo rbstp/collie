@@ -169,6 +169,7 @@ struct AgentScreen: View {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
                         .foregroundStyle(.orange)
+                        .composerNoteGlass()
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)
                         .padding(.top, 6)
@@ -184,7 +185,6 @@ struct AgentScreen: View {
                     }
                 }
             }
-            .background { SessionBarGlass().ignoresSafeArea(edges: [.bottom, .horizontal]) }
             .environment(\.colorScheme, barScheme)
         }
         .toolbarColorScheme(headerScheme, for: .navigationBar)
@@ -787,16 +787,16 @@ private struct PromptBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let error = model.promptError {
-                Text(error).font(.footnote).foregroundStyle(.red)
+                Text(error).font(.footnote).foregroundStyle(.red).composerNoteGlass()
             }
             if model.retrying {
-                Text("Unreachable, retrying…").font(.footnote).foregroundStyle(.secondary)
+                Text("Unreachable, retrying…").font(.footnote).foregroundStyle(.secondary).composerNoteGlass()
             }
             if let upload = model.upload {
                 UploadChip(upload: upload) { model.cancelUpload() }
             }
             if let problem = model.dictation.problem {
-                DictationProblemRow(problem: problem)
+                DictationProblemRow(problem: problem).composerNoteGlass()
             }
             if !model.attachments.isEmpty {
                 ScrollView(.horizontal) {
@@ -1310,5 +1310,13 @@ struct UploadChip: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .glassEffect(.regular.interactive(), in: .capsule)
+    }
+}
+
+private extension View {
+    func composerNoteGlass() -> some View {
+        padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .glassEffect(.regular, in: .rect(cornerRadius: 12))
     }
 }
