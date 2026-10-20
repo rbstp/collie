@@ -688,20 +688,21 @@ fn claude(text: &str, known_window: Option<u64>) -> Derived {
     let mut d = Derived::default();
     let mut compacted = None;
     let mut summary = None;
-    let lines = text
-        .lines()
-        .rev()
-        .filter(|l| {
-            l.contains("assistant")
-                || l.contains("human")
-                || l.contains("last-prompt")
-                || l.contains("compact_boundary")
-        })
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok());
-    for v in lines {
+    for l in text.lines().rev() {
         if done(&d) {
             break;
         }
+        let replied = d.context_left.is_some() && d.last_line.is_some();
+        if !(l.contains("human")
+            || l.contains("last-prompt")
+            || l.contains("bash-input")
+            || !replied && (l.contains("assistant") || l.contains("compact_boundary")))
+        {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(l) else {
+            continue;
+        };
         let main = v["isSidechain"] != true;
         match v["type"].as_str() {
             // No assistant usage follows a compaction until the next reply: its size is here.
@@ -745,6 +746,15 @@ fn claude(text: &str, known_window: Option<u64>) -> Derived {
                         })
                     });
                 }
+            }
+            // A `!` command has no origin, so only the last-prompt record names it.
+            Some("user")
+                if main
+                    && d.last_prompt.is_none()
+                    && summary.is_some()
+                    && history::local(&v).is_some_and(|s| s.starts_with("<bash-input>")) =>
+            {
+                d.last_prompt = summary.take();
             }
             Some("user") if main && d.last_prompt.is_none() && v["origin"]["kind"] == "human" => {
                 let content = &v["message"]["content"];
@@ -973,6 +983,13 @@ mod tests {
             prompt(&[first, &mid, summary, next]).as_deref(),
             Some("and update the docs")
         );
+        let bash = r#"{"type":"user","isSidechain":false,"message":{"role":"user","content":"<bash-input>git status</bash-input>"}}"#;
+        let bash_summary = r#"{"type":"last-prompt","lastPrompt":"!git status","sessionId":"s"}"#;
+        assert_eq!(
+            prompt(&[first, &mid, summary, bash, bash_summary]).as_deref(),
+            Some("!git status")
+        );
+        assert_eq!(prompt(&[first, &mid, bash]), relay);
         assert_eq!(
             prompt(&[summary]).as_deref(),
             Some("why does the pairing test hang")
