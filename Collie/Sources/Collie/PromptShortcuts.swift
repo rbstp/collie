@@ -20,6 +20,7 @@ struct PromptShortcutsView: View {
     @State private var shortcuts = PromptShortcuts.load(from: PromptShortcuts.file)
     @State private var editing: PromptShortcut?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.neutralAccent) private var neutralAccent
 
     var body: some View {
         List {
@@ -48,7 +49,8 @@ struct PromptShortcutsView: View {
                         shortcuts.items.removeAll { $0.id == shortcut.id }
                         shortcuts.save(to: PromptShortcuts.file)
                     }
-                    Button("Edit") { editing = shortcut }.tint(Color.accentColor)
+                    .tint(.red)
+                    Button("Edit") { editing = shortcut }.tint(neutralAccent ? .gray : Color.accentColor)
                 }
             }
         }

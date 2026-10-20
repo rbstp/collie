@@ -80,4 +80,4 @@ Long-press an agent, or use the agent screen's menu, to:
 
 ## Appearance
 
-Choose an accent color in **Settings > Appearance > Accent color**: Blue (the default), Orange, Green, Red or Dark Gold. The choice applies to this phone only. Destructive actions stay red, and status colors keep their meaning.
+Choose an accent color in **Settings > Appearance > Accent color**: None, Blue (the default), Orange, Green, Red or Dark Gold. None uses the system text color, white in dark mode and black in light mode, so selected labels, buttons and icons keep the highest contrast; switches keep the system green. The choice applies to this phone only. Destructive actions stay red, and status colors keep their meaning.

@@ -59,6 +59,8 @@ struct AgentDemo: View {
         .tint(accent.color)
         .accentColor(accent.color)
         .environment(\.appAccent, accent.color)
+        .environment(\.neutralAccent, accent == .neutral)
+        .toggleStyle(AccentSwitch(tint: accent.switchTint))
         .task {
             approvals?.poll()
             follows.foreground()

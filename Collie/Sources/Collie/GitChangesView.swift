@@ -271,6 +271,7 @@ struct GitDiffView: View {
     @State private var error: String?
     @State private var loading = false
     @AppStorage("gitWrapLines") private var wraps = true
+    @Environment(\.neutralAccent) private var neutralAccent
 
     var body: some View {
         ScrollViewReader { scroll in
@@ -323,7 +324,7 @@ struct GitDiffView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button { wraps.toggle() } label: { Label(wraps ? "Wrap lines on" : "Wrap lines off", image: "WrapLines") }
-                        .tint(wraps ? Color.accentColor : .primary)
+                        .tint(wraps ? Color.accentColor : neutralAccent ? .secondary : .primary)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }.disabled(loading)
@@ -477,6 +478,7 @@ private struct GitReviewBar: View {
                 else { Label("Send feedback (\(review.comments.count))", systemImage: "text.bubble") }
             }
             .buttonStyle(.glassProminent)
+            .onAccentFill()
             .controlSize(.large)
             .disabled(review.sending || !review.ready || !agent.canSendText)
         }

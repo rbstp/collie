@@ -96,10 +96,11 @@ extension DevicePrefs {
 }
 
 enum AppAccent: String, Codable, CaseIterable {
-    case blue, orange, green, red, gold
+    case neutral, blue, orange, green, red, gold
 
     var label: String {
         switch self {
+        case .neutral: "None"
         case .blue: "Blue"
         case .orange: "Orange"
         case .green: "Green"
@@ -110,6 +111,7 @@ enum AppAccent: String, Codable, CaseIterable {
 
     var color: Color {
         switch self {
+        case .neutral: Color(uiColor: .label)
         case .blue: .blue
         case .orange: .orange
         case .green: .green
@@ -121,6 +123,30 @@ enum AppAccent: String, Codable, CaseIterable {
                     : UIColor(red: 0.50, green: 0.36, blue: 0.08, alpha: 1)
             })
         }
+    }
+
+    /// A switch's white knob vanishes on a white track, so None keeps the system's switch color.
+    var switchTint: Color { self == .neutral ? .green : color }
+}
+
+struct AccentSwitch: ToggleStyle {
+    let tint: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        Toggle(configuration).tint(tint)
+    }
+}
+
+extension View {
+    /// None fills prominent buttons white in dark mode, where their white label would vanish.
+    func onAccentFill() -> some View { modifier(OnAccentFill()) }
+}
+
+private struct OnAccentFill: ViewModifier {
+    @Environment(\.neutralAccent) private var neutral
+
+    func body(content: Content) -> some View {
+        if neutral { content.foregroundStyle(Color(uiColor: .systemBackground)) } else { content }
     }
 }
 
