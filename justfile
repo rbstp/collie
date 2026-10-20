@@ -176,8 +176,14 @@ ios-screenshots: ios-framework ios-project
     for f in "$raw"/*.png; do
         sips --resampleWidth 600 "$f" --out "$out/$(basename "$f")" >/dev/null
     done
+    # bootstatus exits 0 even when a new watch shuts down during its first-boot data migration; booting it again completes.
+    for _ in 1 2 3; do
+        xcrun simctl bootstatus "$watch" -b
+        watch_now="$(xcrun simctl list devices -j | jq -r --arg id "$watch" '.devices[][] | select(.udid == $id) | .state')"
+        [ "$watch_now" != Booted ] || break
+    done
+    [ "$watch_now" = Booted ] || { echo "the watch simulator did not stay booted ($watch_now)"; exit 1; }
     # watchOS has no light mode and no status bar override, so one copy each, with the current time.
-    xcrun simctl bootstatus "$watch" -b
     xcrun simctl install "$watch" target/ios/DerivedData/Build/Products/Debug-watchsimulator/CollieWatch.app
     for mode in widget usage; do
         SIMCTL_CHILD_COLLIE_DEMO_SCREENSHOTS="$mode" xcrun simctl launch --terminate-running-process "$watch" dev.rbstp.collie.watchkitapp >/dev/null
