@@ -32,17 +32,10 @@ final class GlassPickerTests: XCTestCase {
                 compact.selectedSegmentIndex = 1
                 compact.sendActions(for: .valueChanged)
                 XCTAssertTrue(state.selected)
-                let image = try await waitFor("selection") { () -> UIImage? in
+                _ = try await waitFor("selection") {
                     host.view.layoutIfNeeded()
-                    guard expanded.selectedSegmentIndex == 1 else { return nil }
-                    return UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-                        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-                    }
+                    return expanded.selectedSegmentIndex == 1 ? true : nil
                 }
-                let attachment = XCTAttachment(image: image)
-                attachment.name = style == .dark ? "glass-picker-dark" : "glass-picker-light"
-                attachment.lifetime = .keepAlways
-                add(attachment)
                 for accent in AppAccent.allCases {
                     state.accent = accent
                     toolbar.selectedSegmentIndex = 1 - toolbar.selectedSegmentIndex
