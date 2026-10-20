@@ -597,6 +597,16 @@ pub(super) fn local(v: &Value) -> Option<&str> {
         .filter(|_| v["promptSource"].is_null() && v["isMeta"] != true)
 }
 
+/// Claude Code writes a prompt absorbed mid-turn only as this attachment, never as a user record.
+pub(super) fn queued_prompt(v: &Value) -> Option<&Value> {
+    let a = &v["attachment"];
+    (v["type"] == "attachment"
+        && a["type"] == "queued_command"
+        && a["commandMode"] == "prompt"
+        && a["origin"]["kind"] == "human")
+        .then_some(&a["prompt"])
+}
+
 pub(super) fn command(s: &str) -> Option<String> {
     if !s.starts_with("<command-name>") && !s.starts_with("<command-message>") {
         return None;
@@ -714,17 +724,9 @@ fn normalize(
                     .into_iter()
                     .collect();
             }
-            let queued = &v["attachment"];
-            let (role, content) = match v["type"].as_str() {
-                Some(r @ ("user" | "assistant")) => (r, &v["message"]["content"]),
-                // Claude Code writes a prompt absorbed mid-turn only as this attachment, never as a user record.
-                Some("attachment")
-                    if queued["type"] == "queued_command"
-                        && queued["commandMode"] == "prompt"
-                        && queued["origin"]["kind"] == "human" =>
-                {
-                    ("user", &queued["prompt"])
-                }
+            let (role, content) = match (v["type"].as_str(), queued_prompt(v)) {
+                (Some(r @ ("user" | "assistant")), _) => (r, &v["message"]["content"]),
+                (_, Some(prompt)) => ("user", prompt),
                 _ => return out,
             };
             if content.is_string() {
