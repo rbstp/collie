@@ -225,7 +225,13 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         guard isSample else { throw CoreError.NotImplemented }
         return GitDiff(patch: "diff --git a/tests/approvals.rs b/tests/approvals.rs\n--- a/tests/approvals.rs\n+++ b/tests/approvals.rs\n@@ -1 +1 @@\n-sleep(Duration::from_millis(200)).await;\n+wait_for_approval_state().await;\n", truncated: false)
     }
-    func agentDraft(machineId: String, terminalId: String) async throws -> String? { nil }
+    func agentDraft(machineId: String, terminalId: String) async throws -> String? {
+        #if DEBUG
+        return terminalId == "term_demo" ? ProcessInfo.processInfo.environment["COLLIE_DEMO_MAC_DRAFT"] : nil
+        #else
+        return nil
+        #endif
+    }
 
     func approvalFeed(machineId: String) -> ApprovalFeed? {
         if simulation.withLock({ $0.resolved }) { return ApprovalFeed(link: .connected, pending: []) }

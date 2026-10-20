@@ -776,6 +776,10 @@ private struct PromptBar: View {
         copiedAt = .now
     }
 
+    private var reading: Bool {
+        !editing && !model.draft.isEmpty && !model.dictation.isActive
+    }
+
     private var expanded: Bool {
         editing || typingCommand || model.dictation.isActive || dictationShown || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
     }
@@ -846,13 +850,13 @@ private struct PromptBar: View {
                                 model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: typed),
                                 selection: $selection, axis: .vertical
                             )
-                                .lineLimit(expanded ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
+                                .lineLimit(expanded || model.showsMacDraft ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
                                 .focused($editing)
                                 .disabled(model.dictation.isActive)
+                                .foregroundStyle(reading ? Color.clear : Color.primary)
                                 .overlay(alignment: .trailing) {
-                                    if !editing && !model.draft.isEmpty && !model.dictation.isActive {
-                                        Color.clear
-                                            .contentShape(Rectangle())
+                                    if reading {
+                                        DraftReader(text: model.draft)
                                             .onTapGesture { editing = true }
                                             .onLongPressGesture(perform: copyPrompt)
                                             .accessibilityHidden(true)
@@ -969,6 +973,29 @@ private struct PromptBar: View {
             if !active && model.draft.isEmpty { dictationExpanded = false }
         }
         .onDisappear { dictationExpanded = false }
+    }
+}
+
+/// The unfocused prompt, which a drag scrolls without focusing the field and opening the keyboard. UIKit, not
+/// Text, so it wraps like the field: Text moves a word down rather than leave it alone on the last line.
+private struct DraftReader: UIViewRepresentable {
+    let text: String
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isSelectable = false
+        view.backgroundColor = .clear
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.font = .preferredFont(forTextStyle: .body)
+        view.adjustsFontForContentSizeCategory = true
+        view.textColor = .label
+        return view
+    }
+
+    func updateUIView(_ view: UITextView, context: Context) {
+        if view.text != text { view.text = text }
     }
 }
 
