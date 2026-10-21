@@ -228,6 +228,52 @@ test('cleanup deletes expired routes, keys, raw destinations and zeroed counters
     assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM installation_usage').first()).n, 0);
   } finally { await f.runtime.dispose(); }
 });
+test('hourly cleanup drains the worst-case backlog at the exact global caps within the seven-day bound', async () => {
+  const f = await controlFixture();
+  try {
+    // Each control or enrollment sets at most one installation's retention deadline and creates at most one route, so a
+    // window straddling one UTC midnight can make two days of them eligible at once, each with 64 pairing tombstones.
+    const controls = 1000, enrollments = 30, pairingTombstones = 64;
+    const installations = 2 * (controls + enrollments), routes = 2 * controls;
+    const start = Math.floor(Date.now() / 1000);
+    const series = (n: number) => `WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < ${n - 1})`;
+    await f.db.prepare(`${series(installations)} INSERT INTO installations SELECT 'i' || i, 0 FROM n`).run();
+    const attestations = [];
+    for (let first = 0; first < installations; first += enrollments) {
+      attestations.push(f.db.prepare("UPDATE control_usage SET enrollments = 0"));
+      attestations.push(f.db.prepare(`${series(Math.min(enrollments, installations - first))} INSERT INTO attestations
+        (installation_id,key_id,public_key,receipt,environment,last_nonce,retain_until)
+        SELECT 'i' || (i + ${first}), 'k' || (i + ${first}), 'key', 'receipt', 'development', 'nonce', ? FROM n`).bind(start - 1));
+    }
+    await f.db.batch(attestations);
+    await f.db.prepare(`${series(installations)} INSERT INTO installation_usage SELECT 'i' || i, 0, 0, 0 FROM n`).run();
+    await f.db.prepare(`${series(installations * pairingTombstones)} INSERT INTO pairings (id, installation_id, epoch, revoked)
+      SELECT 'p' || (i / ${pairingTombstones}) || '_' || (i % ${pairingTombstones}), 'i' || (i / ${pairingTombstones}), 0, i % ${pairingTombstones} < ${pairingTombstones - 8} FROM n`).run();
+    await f.db.prepare(`${series(routes)} INSERT INTO routes SELECT 'r' || i, 'p' || i || '_${pairingTombstones - 1}', 1, 'destination', 'digest', 'app', 'development', ?, 0 FROM n`)
+      .bind(start - 7 * 86400 - 1).run();
+    const count = async (table: string) => (await f.db.prepare(`SELECT COUNT(*) n FROM ${table}`).first<{ n: number }>())!.n;
+    const tables = ['routes', 'pairings', 'installation_usage', 'installations'];
+    const largest: Record<string, number> = Object.fromEntries(tables.map(t => [t, 0]));
+    let runs = 0;
+    while (await count('installations') > 1) {
+      const before = await Promise.all(tables.map(count));
+      await cleanup(f.db as unknown as D1Database, start + runs++ * 3600);
+      const after = await Promise.all(tables.map(count));
+      tables.forEach((t, i) => { largest[t] = Math.max(largest[t], before[i] - after[i]); });
+      assert.ok(runs <= 168);
+    }
+    assert.deepEqual(largest, { routes: 64, pairings: 4096, installation_usage: 64, installations: 64 });
+    assert.deepEqual(await Promise.all(tables.map(count)), [1, 1, 1, 1]);
+    assert.equal(await count('attestations'), 1);
+    // Sustained daily arrivals stay below hourly capacity, so a later day never adds more delay than this burst.
+    for (const [table, daily] of [['routes', controls], ['pairings', (controls + enrollments) * pairingTombstones],
+      ['installations', controls + enrollments]] as const) assert.ok(daily < 24 * largest[table]);
+    // One hour to the first trigger plus the route, pairing and installation stages each draining a two-day burst.
+    const hours = 1 + Math.ceil(routes / largest.routes) + Math.ceil(installations * pairingTombstones / largest.pairings)
+      + Math.ceil(installations / largest.installations);
+    assert.ok(runs + 1 <= hours && hours < 7 * 24);
+  } finally { await f.runtime.dispose(); }
+});
 test('registration recovers a lost successful response without rotating or widening its destination grant', async () => {
   const f = await controlFixture();
   try {

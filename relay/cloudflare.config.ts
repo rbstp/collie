@@ -1,4 +1,4 @@
-import { bindings, defineConfig, exports } from 'cf/config';
+import { bindings, defineConfig, exports, triggers } from 'cf/config';
 
 export default defineConfig({
   worker: {
@@ -9,6 +9,7 @@ export default defineConfig({
     previewUrls: false,
     limits: { cpuMs: 250 },
     observability: { enabled: false },
+    triggers: [triggers.scheduled({ schedule: '0 * * * *' })],
     exports: { RelayCrypto: exports.durableObject({ storage: 'sqlite' }) },
     env: {
       CRYPTO: bindings.durableObject({ worker: 'collie-push-validation', exportName: 'RelayCrypto' }),
