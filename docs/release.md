@@ -149,13 +149,15 @@ The app implements standard encryption on top of Apple's: WireGuard (Curve25519,
 - **Apple**: `Info.plist` sets [`ITSAppUsesNonExemptEncryption`](https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption) to `false`. Apple's "exempt" means exempt from uploading documentation: standard algorithms not provided by the OS need a document only for the App Store in France ([Apple's table](https://developer.apple.com/help/app-store-connect/reference/app-information/export-compliance-documentation-for-encryption)). The key answers the encryption question for every build, so TestFlight uploads never stop at Missing Compliance. Never set `true` without the matching [`ITSEncryptionExportComplianceCode`](https://developer.apple.com/documentation/bundleresources/information-property-list/itsencryptionexportcompliancecode): builds then stop at Missing Compliance, and a code Apple did not issue can fail the upload.
 - **Internal TestFlight** (today): builds reach only the owner in Canada, and [Apple](https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations) applies US export law only to distribution outside the US or Canada. Nothing else to do.
 
+Decision (owner, 2026-10-20): App Store availability is every country or region except France.
+
 Before an App Store release:
 
 1. In App Store Connect, Pricing and Availability, App Availability, choose specific countries or regions and leave out France; All Countries or Regions includes it.
 2. If App Store Connect asks about encryption (App Information, App Encryption Documentation, or Manage next to a build), answer: uses encryption, yes; algorithms, "Standard encryption algorithms instead of, or in addition to, using or accessing the encryption within Apple's operating system"; available on the App Store in France, no. No document is needed.
 3. To ship in France instead: file a declaration with [ANSSI](https://cyber.gouv.fr/reglementation/reglementation-identite-confiance-numerique/controles-reglementaires-cryptographie/controle-moyen-de-cryptologie/) (up to a month), fill in the App Description and availability, [upload the declaration](https://developer.apple.com/help/app-store-connect/manage-app-information/determine-and-upload-app-encryption-documentation) under App Encryption Documentation with France set to yes, wait for Apple's approval, then in one commit set `ITSAppUsesNonExemptEncryption` to `true` and `ITSEncryptionExportComplianceCode` to the key value Apple shows next to the approved document.
 
-An external TestFlight group is not limited by App Store availability, so leaving out France does not keep its testers out of France. Apple's France requirement names only the App Store; until that is settled, invite no external testers located in France.
+An external TestFlight group is not limited by App Store availability, so leaving out France does not keep its testers out of France. Apple's France requirement names only the App Store; until that is settled, invite no external testers located in France. Apple's TestFlight help documents no country or region setting for external testing: a public link's tester criteria cover devices and OS versions ([Invite external testers](https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers/), [TestFlight overview](https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview/)), and availability by country or region applies to the App Store ([Manage availability for your app on the App Store](https://developer.apple.com/help/app-store-connect/manage-your-apps-availability/manage-availability-for-your-app-on-the-app-store/)). A public link therefore cannot keep out testers in France.
 
 ## Adding a signed extension target
 
@@ -167,7 +169,7 @@ CollieWidgets went in this way. `Collie/ExportOptions.plist` maps each bundle ID
 
 ## Public submission
 
-[Public submission preparation](public-submission.md) contains the offline metadata, review notes, disclosure checks and operating procedures for #359. Public capacity and submission remain unapproved until its evidence gates pass.
+[Public submission preparation](public-submission.md) contains the offline metadata and disclosure checks for #359, [App Review notes](app-review.md) the review notes and submission checklist, and the [relay runbook](relay-runbook.md) the operating procedures. Public capacity and submission remain unapproved until its evidence gates pass.
 
 ## App Review sample workspace
 
