@@ -66,7 +66,7 @@ Reference, in this repository:
 | `just ios-ghostty` | Builds libghostty-vt from its pinned commit (skipped when already built) |
 | `just ios-project` | Builds libghostty-vt and generates the Xcode project with XcodeGen |
 | `just ios-test` | GhosttyTerminal package tests on macOS, then the iOS unit and UI tests on the simulator |
-| `just ios-screenshots` | Regenerates the documentation screenshots, light and dark, from the app's demo on the iPhone 18 Pro Max simulator, compressed with pngquant when installed |
+| `just ios-screenshots` | Regenerates the documentation screenshots, light and dark, from the app's demo on the iPhone 18 Pro Max simulator, compressed with pngquant when installed, and the uncompressed, full-size App Store set in `target/ios/app-store` |
 | `just ios-build-sim` | Simulator build |
 | `just ios-run-device` | Builds, installs and launches on a connected iPhone |
 | `just mac-project` | Generates the menu bar app's Xcode project (`Mac/project.yml`) |

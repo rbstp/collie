@@ -10,7 +10,7 @@ When no push mode is configured, `collied setup` offers the publisher relay. It 
 [push.relay]
 ```
 
-Then open the publisher app on the paired phone, which registers this machine with the relay. `collied` sends only to `https://collie-push.rbstp.dev/v1/send`, and the phone cannot choose another endpoint. The relay is not yet open to the public, so configuring `collied` does not guarantee that notifications reach your phone.
+Then open the publisher app on the paired phone, which registers this machine with the relay. `collied` sends only to `https://collie-push.rbstp.dev/v1/send`, and the phone cannot choose another endpoint. Notifications start once the phone has registered this machine, and `collied doctor` then lists the registration.
 
 You can use either the relay or direct APNs, not both. Remove `[push.relay]` before you configure `[apns]`, or remove `[apns]` before you choose the relay. Sessions, approvals, Chat, terminals and desktop controls keep working whether or not push works.
 
