@@ -71,7 +71,7 @@ struct AgentGrid<Menu: View>: View {
                                 Button {
                                     reconnect(entry)
                                 } label: {
-                                    MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: showsLink)
+                                    MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: showsLink, now: context.date)
                                         .font(.footnote)
                                         .foregroundStyle(.secondary)
                                 }

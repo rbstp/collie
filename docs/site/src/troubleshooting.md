@@ -8,17 +8,22 @@ collied doctor
 
 ## The machine shows offline
 
-The phone could not reach the machine over the tailnet.
+The machine's section on the Agents tab and its row on the Machines tab say why the phone cannot reach it:
 
-1. Check that the machine is awake and `collied` runs: see the `daemon` line in `collied doctor`, or `collied status`.
-2. If you ran `collied stop`, run `collied start`.
-3. If the node is logged out, run `collied login`. `collied doctor` shows this as a `warn` on the `tailnet` line saying "no node state (not logged in)", or a `fail` on the `daemon` line whose node is not `Running`.
-4. A `fail` on the `ownership` line means Collie's node is tagged: see [Existing tagged installations](reference/tailnet.md#existing-tagged-installations). `collied login` prints what to fix.
-5. A `fail` on the `tailnet` line means a problem with the node state folder itself, such as its permissions.
-6. A `warn` on the `reach` line means `collied` sees no other device of yours. Check that the phone is signed in to Tailscale in the app with the same account, then check the [tailnet policy](install/tailnet-policy.md).
-7. To retry at once, pull to refresh on the Agents tab.
+- **"This phone is not connected to Tailscale."** The phone's own node is not running. Sign in to Tailscale again in the app, or check the phone's network.
+- **"\<machine> is asleep or off. Last seen ..."** Tailscale reports the machine offline. Wake it or turn it on; the phone connects as soon as Tailscale sees it again.
+- **"\<machine> is online, but collied is not answering."** The machine is on the tailnet, but `collied` refused the connection or did not answer. Run `collied start` on the machine.
+- **"Cannot reach \<machine>."** Another network error. Copy the full error with the button on the Machines tab, then work through the checks below.
 
-The Machines tab shows each connection error in full, with a button to copy it.
+To retry at once, pull to refresh on the Agents tab.
+
+When the message does not settle it, run `collied doctor` on the machine:
+
+1. Check that the machine is awake and `collied` runs: see the `daemon` line, or `collied status`.
+2. If the node is logged out, run `collied login`. `collied doctor` shows this as a `warn` on the `tailnet` line saying "no node state (not logged in)", or a `fail` on the `daemon` line whose node is not `Running`.
+3. A `fail` on the `ownership` line means Collie's node is tagged: see [Existing tagged installations](reference/tailnet.md#existing-tagged-installations). `collied login` prints what to fix.
+4. A `fail` on the `tailnet` line means a problem with the node state folder itself, such as its permissions.
+5. A `warn` on the `reach` line means `collied` sees no other device of yours. Check that the phone is signed in to Tailscale in the app with the same account, then check the [tailnet policy](install/tailnet-policy.md).
 
 ## "Update collied" or "Update the app"
 

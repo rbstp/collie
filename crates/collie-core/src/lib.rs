@@ -37,6 +37,7 @@ pub use approvals::{
     DecideStage, DecisionOutcome, MachineApprovals, PendingApproval,
 };
 pub use attachments::UploadProgress;
+pub use conn::OfflineReason;
 use conn::{
     Conn, ConnectError, FOREGROUND_RECONNECT, IdentitySlot, Link, LinkPhase, NodeSlot, PushSlot,
     Pushes, Registrations, RequestError, blocking,
@@ -220,7 +221,7 @@ fn pair_error(e: ConnectError, port: u16) -> CoreError {
         ConnectError::Pin(p @ PinError::Ownership { .. }) => CoreError::PinViolation {
             message: format!("{p}: run collied setup on it"),
         },
-        ConnectError::Dial(why) => CoreError::Unreachable {
+        ConnectError::Dial(why) | ConnectError::NotAnswering(why) => CoreError::Unreachable {
             message: format!(
                 "not reachable ({why}): the machine may be off or asleep, collied may not be running, or the policy may not allow TCP {port}"
             ),
@@ -504,6 +505,8 @@ pub struct MachineFlock {
     pub starred: Vec<String>,
     #[uniffi(default = false)]
     pub version_mismatch: bool,
+    #[uniffi(default = None)]
+    pub reason: Option<OfflineReason>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -3384,12 +3387,13 @@ fn link_error(conn: &Conn, link: &Link) -> Option<String> {
 }
 
 fn view(conn: &Conn) -> MachineFlock {
-    let (link, last_error, version_mismatch) = {
+    let (link, last_error, version_mismatch, reason) = {
         let link = lock(&conn.shared.link);
         (
             link.phase,
             link_error(conn, &link),
             link.version_mismatch.is_some(),
+            link.reason,
         )
     };
     let guard = lock(&conn.shared.flock);
@@ -3437,6 +3441,7 @@ fn view(conn: &Conn) -> MachineFlock {
             .map(|t| t.as_str().into())
             .collect(),
         version_mismatch,
+        reason,
     }
 }
 
@@ -3695,6 +3700,11 @@ mod tests {
         assert!(matches!(
             pair_error(ConnectError::Dial("timeout".into()), 8457),
             CoreError::Unreachable { message } if message.contains("off or asleep")
+        ));
+        assert!(matches!(
+            pair_error(ConnectError::NotAnswering("connection was refused".into()), 8457),
+            CoreError::Unreachable { message }
+                if message.contains("collied may not be running") && message.contains("TCP 8457")
         ));
         assert!(matches!(
             pair_error(SessionError::Refused(403).into(), 8457),

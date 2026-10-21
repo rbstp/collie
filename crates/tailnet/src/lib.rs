@@ -251,7 +251,8 @@ impl Node {
 
     // Dials block for seconds and would stall every other call (the whois gate
     // included) behind the lock. Their message can still be replaced by a
-    // concurrent failure; it is diagnostic text only and nothing matches on it.
+    // concurrent failure; only diagnostics and the phone's offline reason read it,
+    // which at worst then name another dial's cause.
     fn check_unlocked(&self, rc: c_int) -> Result<()> {
         if rc == 0 { Ok(()) } else { Err(self.error(rc)) }
     }
@@ -440,6 +441,43 @@ pub struct PeerStatus {
     pub relay: String,
     #[serde(default)]
     pub cur_addr: String,
+    #[serde(rename = "LastSeen", default, deserialize_with = "last_seen")]
+    pub last_seen_ms: Option<u64>,
+}
+
+fn last_seen<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<u64>, D::Error> {
+    Ok(Option::<String>::deserialize(d)?
+        .as_deref()
+        .and_then(unix_ms))
+}
+
+/// RFC 3339 in UTC, as Go writes a `time.Time`, to whole seconds. Go's zero time, which
+/// Tailscale sends for a peer it has no last-seen time for, reads as none.
+fn unix_ms(s: &str) -> Option<u64> {
+    let b = s.as_bytes();
+    if b.len() < 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+        || !matches!(b[19], b'.' | b'Z')
+        || !s.ends_with('Z')
+    {
+        return None;
+    }
+    let n = |r: std::ops::Range<usize>| s.get(r)?.parse::<u64>().ok();
+    let (y, m, d) = (n(0..4)?, n(5..7)?, n(8..10)?);
+    let (h, mi, sec) = (n(11..13)?, n(14..16)?, n(17..19)?);
+    if !(1970..10000).contains(&y) || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    // Howard Hinnant's `days_from_civil`.
+    let y = if m <= 2 { y - 1 } else { y };
+    let (era, yoe) = (y / 400, y % 400);
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    Some((((days * 24 + h) * 60 + mi) * 60 + sec) * 1000)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -535,6 +573,26 @@ mod tests {
         .unwrap();
         assert!(who.node.is_owned_by(7));
         assert_eq!(who.node.stable_id, "nPHONE");
+    }
+
+    #[test]
+    fn decodes_last_seen() {
+        let st: Status = serde_json::from_str(
+            r#"{"BackendState":"Running","Self":null,"Peer":{
+                "a":{"ID":"nA","Online":false,"LastSeen":"2026-10-19T21:44:05.123456789Z"},
+                "b":{"ID":"nB","Online":false,"LastSeen":"2026-10-19T21:44:05Z"},
+                "c":{"ID":"nC","Online":true,"LastSeen":"0001-01-01T00:00:00Z"},
+                "d":{"ID":"nD","Online":true},
+                "e":{"ID":"nE","Online":false,"LastSeen":"2026-10-19T17:44:05-04:00"}
+            },"CurrentTailnet":null}"#,
+        )
+        .unwrap();
+        let seen = |id: &str| st.peer.as_ref().unwrap()[id].last_seen_ms;
+        assert_eq!(seen("a"), Some(1_792_446_245_000));
+        assert_eq!(seen("b"), Some(1_792_446_245_000));
+        assert_eq!(seen("c"), None, "Go's zero time");
+        assert_eq!(seen("d"), None, "no LastSeen");
+        assert_eq!(seen("e"), None, "not UTC");
     }
 
     #[test]

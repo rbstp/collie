@@ -39,8 +39,8 @@ struct MachinesList: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(app.machines, id: \.id) { machine in
-                TimelineView(.periodic(from: .now, by: 2)) { _ in
-                    MachineRow(machine: machine, flock: app.core?.cachedFlock(machineId: machine.id)) {
+                TimelineView(.periodic(from: .now, by: 2)) { context in
+                    MachineRow(machine: machine, flock: app.core?.cachedFlock(machineId: machine.id), now: context.date) {
                         MachineSettingsView(app: app, machine: machine)
                     }
                 }
@@ -81,6 +81,7 @@ struct MachinesList: View {
 struct MachineRow<Destination: View>: View {
     let machine: Machine
     let flock: MachineFlock?
+    var now = Date.now
     @ViewBuilder let destination: () -> Destination
 
     var body: some View {
@@ -113,8 +114,9 @@ struct MachineRow<Destination: View>: View {
             }
             .buttonStyle(.plain)
             .navigationLinkIndicatorVisibility(.hidden)
-            if flock?.link != .connecting, let error = flock?.lastError {
-                MachineConnectionDetails(message: error)
+            if let flock, flock.link != .connecting,
+               let message = flock.reason?.label(machine: machine.label, now: now) ?? flock.lastError {
+                MachineConnectionDetails(message: message, error: flock.lastError ?? message)
             }
         }
         .padding(10)
@@ -124,6 +126,7 @@ struct MachineRow<Destination: View>: View {
 
 private struct MachineConnectionDetails: View {
     let message: String
+    let error: String
     @State private var copiedAt: Date?
 
     var body: some View {
@@ -134,7 +137,7 @@ private struct MachineConnectionDetails: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
             Button {
-                UIPasteboard.general.string = message
+                UIPasteboard.general.string = error
                 copiedAt = .now
             } label: {
                 CopyIcon(label: "Copy connection error", copiedAt: $copiedAt)
@@ -143,7 +146,7 @@ private struct MachineConnectionDetails: View {
             }
             .buttonStyle(.plain)
         }
-        .onChange(of: message) { _, _ in copiedAt = nil }
+        .onChange(of: error) { _, _ in copiedAt = nil }
     }
 }
 
