@@ -67,6 +67,7 @@
 - [Tailnet setup](reference/tailnet.md)
 - [Notifications](reference/notifications.md)
 - [Push relay validation](reference/relay.md)
+- [Relay operator runbook](reference/relay-runbook.md)
 - [Free-plan relay validation](reference/reviews/relay-free-tier.md)
 - [Simulator relay testing](reference/simulator.md)
 - [VM and host Simulator testing](reference/vm-simulator.md)
@@ -75,4 +76,5 @@
 - [Desktop releases](reference/desktop-releases.md)
 - [App Store release plan](reference/app-store.md)
 - [Public submission preparation](reference/public-submission.md)
+- [App Review notes](reference/app-review.md)
 - [Documentation site](reference/deploy-pages.md)

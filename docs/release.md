@@ -167,7 +167,7 @@ CollieWidgets went in this way. `Collie/ExportOptions.plist` maps each bundle ID
 
 ## Public submission
 
-[Public submission preparation](public-submission.md) contains the offline metadata, review notes, disclosure checks and operating procedures for #359. Public capacity and submission remain unapproved until its evidence gates pass.
+[Public submission preparation](public-submission.md) contains the offline metadata and disclosure checks for #359, [App Review notes](app-review.md) the review notes and submission checklist, and the [relay runbook](relay-runbook.md) the operating procedures. Public capacity and submission remain unapproved until its evidence gates pass.
 
 ## App Review sample workspace
 
