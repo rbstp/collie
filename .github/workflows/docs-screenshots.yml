@@ -169,6 +169,14 @@ jobs:
           [ -n "$runtime" ] || { echo "no available watchOS $sdk simulator runtime"; exit 1; }
           watch="$(xcrun simctl create 'Apple Watch Series 12 (46mm)' com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-12-46mm "$runtime")"
           xcrun simctl pair "$watch" "$phone"
+          # The cryptex image behind the watchOS runtime disappears minutes after its mount, so the watch boots now and
+          # stays booted through the capture. Booting again completes a first-boot data migration that shut it down.
+          for _ in 1 2 3; do
+            xcrun simctl bootstatus "$watch" -b
+            state="$(xcrun simctl list devices -j | jq -r --arg id "$watch" '.devices[][] | select(.udid == $id) | .state')"
+            [ "$state" != Booted ] || break
+          done
+          [ "$state" = Booted ] || { echo "the watch simulator did not stay booted ($state)"; exit 1; }
 
       - name: capture the screenshots
         run: just --no-deps ios-screenshots
@@ -178,6 +186,9 @@ jobs:
         run: |
           xcrun simctl runtime list
           xcrun simctl list runtimes
+          xcrun simctl list runtimes -j | jq -r '.runtimes[] | select(.platform == "watchOS") | .bundlePath' | while read -r path; do
+            ls -d "$path" || true
+          done
 
       - name: keep the screenshots
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
