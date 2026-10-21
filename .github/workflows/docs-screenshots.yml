@@ -118,30 +118,29 @@ jobs:
       - name: install a fresh watchOS runtime
         run: |
           xcrun simctl runtime list
-          for id in $(xcrun simctl runtime list -j | jq -r '.[] | select(.platformIdentifier == "com.apple.platform.watchsimulator") | .identifier'); do
+          old=" $(xcrun simctl runtime list -j | jq -r '[.[] | select(.platformIdentifier == "com.apple.platform.watchsimulator") | .identifier] | join(" ")') "
+          for id in $old; do
             xcrun simctl runtime delete "$id"
           done
-          set -o pipefail
-          xcodebuild -downloadPlatform watchOS 2>&1 | tee "$RUNNER_TEMP/watchos-download.log"
-          set +o pipefail
-          new="$(sed -nE 's/^watchOS .* - ([0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12})$/\1/p' "$RUNNER_TEMP/watchos-download.log" | tail -n 1)"
-          [ -n "$new" ] || { echo "xcodebuild -downloadPlatform watchOS printed no runtime image identifier"; exit 1; }
-          # A deleted 24R362 image comes back as Unusable next to the download. Both serve the same runtime identifier,
-          # and the watch boot fails ("runtime path not found") when CoreSimulator resolves it to the Unusable one.
-          # The download also returns while the new image is still being copied into place.
+          xcodebuild -downloadPlatform watchOS
+          # A deleted image comes back as Unusable, so it is deleted again. The download turns "Unusable - Cryptex Mount
+          # Preferred" once CoreSimulator mounts it as a second, Ready image (about 10 minutes on the runner); that Ready
+          # image needs it, so new images are never deleted. The watchOS runtime is not available before that mount.
           sdk="$(xcrun --sdk watchsimulator --show-sdk-version)"
           ready=0
-          for _ in $(seq 60); do
+          last=
+          for _ in $(seq 120); do
             images="$(xcrun simctl runtime list -j | jq -c '[.[] | select(.platformIdentifier == "com.apple.platform.watchsimulator")]')"
-            jq -r '.[] | "\(.identifier) watchOS \(.version) (\(.build)): \(.state)"' <<< "$images"
-            if jq -e --arg new "$new" 'any(.[]; .identifier == $new)' <<< "$images" >/dev/null; then
-              for id in $(jq -r --arg new "$new" '.[] | select(.identifier != $new) | .identifier' <<< "$images"); do
-                xcrun simctl runtime delete "$id" || true
-              done
-            fi
-            if jq -e --arg new "$new" 'length == 1 and .[0].identifier == $new and .[0].state == "Ready"' <<< "$images" >/dev/null \
-              && xcrun simctl list runtimes -j | jq -e --arg v "$sdk" 'any(.runtimes[];
-                .platform == "watchOS" and .isAvailable and (.version == $v or (.version | startswith($v + "."))))' >/dev/null; then
+            runtime="$(xcrun simctl list runtimes -j | jq -r --arg v "$sdk" '[.runtimes[]
+              | select(.platform == "watchOS" and .isAvailable and (.version == $v or (.version | startswith($v + "."))))
+              | .bundlePath][0] // empty')"
+            status="$(jq -r '.[] | "\(.identifier) \(.kind) watchOS \(.version) (\(.build)): \(.state)"' <<< "$images"; echo "runtime: $runtime")"
+            [ "$status" = "$last" ] || echo "$status"
+            last="$status"
+            for id in $(jq -r '.[].identifier' <<< "$images"); do
+              case "$old" in *" $id "*) xcrun simctl runtime delete "$id" || true ;; esac
+            done
+            if jq -e 'map(select(.state == "Ready")) | length == 1' <<< "$images" >/dev/null && [ -n "$runtime" ] && [ -d "$runtime" ]; then
               ready=$((ready + 1))
               [ "$ready" -lt 3 ] || exit 0
             else
@@ -150,9 +149,10 @@ jobs:
             sleep 10
           done
           xcrun simctl runtime list
-          echo "the downloaded watchOS $sdk runtime $new did not stay the only Ready watchOS runtime within 10 minutes"
+          xcrun simctl list runtimes
+          echo "no single Ready watchOS $sdk runtime became available within 20 minutes"
           exit 1
-        timeout-minutes: 15
+        timeout-minutes: 25
 
       # The recipe uses the first iPhone 18 Pro Max and its first paired watch; the published watch shots are 46 mm.
       - name: pair the simulators
@@ -175,7 +175,9 @@ jobs:
 
       - name: list the simulator runtimes
         if: ${{ failure() }}
-        run: xcrun simctl runtime list
+        run: |
+          xcrun simctl runtime list
+          xcrun simctl list runtimes
 
       - name: keep the screenshots
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
