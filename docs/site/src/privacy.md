@@ -1,15 +1,15 @@
 # Privacy policy
 
-Last updated: October 19, 2026.
+Last updated: October 20, 2026.
 
 This policy covers the Collie app for iPhone and Apple Watch, its notification extension and widgets, and `collied`, the daemon you run on your own Mac or Linux machine.
 
 ## In short
 
-- Collie has no publisher account. Released clients use direct push delivery. A publisher push relay is under validation and is not open for public enrollment; [Publisher relay under validation](#publisher-relay-under-validation) describes its metadata handling.
+- Collie has no publisher account. Your machine sends notifications through the publisher's push relay, which `collied setup` chooses by default, or directly to Apple for a self-built app; [Push relay](#push-relay) describes what the relay sees and keeps.
 - The app talks to your own machines over your own tailnet, end to end encrypted.
-- The app contains no advertising or tracking code. Relay validation also includes a phone client for Apple App Attest and the publisher relay, separate from direct device sessions.
-- The services involved are Tailscale, to connect your devices; Apple's push notification and attestation services; Cloudflare for the relay when enabled; and, from your machine and with your own credentials, GitHub through `gh` and OpenAI through Codex, for the features described below.
+- The app contains no advertising or tracking code. To use the push relay, it proves to the relay with Apple App Attest that it is a genuine copy; this is separate from the sessions with your machines.
+- The services involved are Tailscale, to connect your devices; Apple's push notification and attestation services; Cloudflare, which hosts the push relay; and, from your machine and with your own credentials, GitHub through `gh` and OpenAI through Codex, for the features described below.
 
 ## What stays on your devices
 
@@ -48,11 +48,11 @@ You sign in to your own Tailscale account, and Tailscale's coordination service 
 
 ## Push notifications
 
-If you set up notifications, `collied` on your machine sends them through Apple Push Notification service. Alert titles, bodies, agent and workspace names, pull request details, pending commands, and the private attributes and initial/update/end state of Live Activities are encrypted with a key generated on your phone. Only your paired machine and phone hold that key. Apple receives generic alert text and ciphertext.
+If you set up notifications, `collied` on your machine sends them through Apple Push Notification service, by way of the push relay or directly. Alert titles, bodies, agent and workspace names, pull request details, pending commands, and the private attributes and initial/update/end state of Live Activities are encrypted with a key generated on your phone. Only your paired machine and phone hold that key. Apple receives generic alert text and ciphertext.
 
 Apple can still see notification delivery destinations, opaque machine/thread/approval/event/activity identifiers, generic categories, notification priority, timing, frequency, ciphertext size and Live Activity lifecycle. A generic alert can distinguish an agent finishing from an agent needing attention. Initial and local activity content use the same encrypted storage shape. Your phone's notification extension and widget decrypt the content locally. Before the first unlock after reboot, or if decryption fails, they show generic content without approval controls. Approval nonces and decisions travel only over your authenticated tailnet connection.
 
-The app keeps a protected App Group mirror of notification keys so the widget can read them. Only Collie's own targets can use this mirror, and only after the first unlock; it stays on this device and is excluded from backups. Public relay enrollment remains closed pending validation; [Publisher relay under validation](#publisher-relay-under-validation) describes the relay data flow. [Apple's privacy policy](https://www.apple.com/legal/privacy/) covers Apple's handling of APNs.
+The app keeps a protected App Group mirror of notification keys so the widget can read them. Only Collie's own targets can use this mirror, and only after the first unlock; it stays on this device and is excluded from backups. [Push relay](#push-relay) describes what the relay sees and keeps. [Apple's privacy policy](https://www.apple.com/legal/privacy/) covers Apple's handling of APNs.
 
 ## GitHub and Codex, from your machine
 
@@ -84,26 +84,26 @@ collie is a developer tool and is not directed at children.
 
 ## Changes
 
-Changes to this policy are published on this page with a new date. If a future version of collie adds a service that handles your data, such as a push relay for an App Store release, this policy will describe it before that version is released.
+Changes to this policy are published on this page with a new date. If a future version of collie adds a service that handles your data, this policy will describe it before that version is released.
 
 ## Contact
 
 Questions about this policy: open an issue on [GitHub](https://github.com/rbstp/collie/issues), or see [Support](support.md).
 
-## Publisher relay under validation
+## Push relay
 
-The repository includes a publisher push relay and an attested phone client. They are not a publicly enabled service. Current direct notification delivery sends no data to this relay. Before a relay-enabled build is distributed, the deployment settings and this policy must be checked together. Local validation does not establish automatic deletion or production availability.
+The publisher runs a push relay on Cloudflare so that your machine can send notifications to the publisher's app without holding the publisher's Apple sending key. Your machine uses the relay when its `collied.toml` has `[push.relay]`, which `collied setup` chooses by default. A machine that you set up with `[apns]` for a self-built app sends directly to Apple and sends nothing to the relay.
 
-In relay mode, the phone enrolls with Apple App Attest and authorizes routes for confirmed paired machines. The machine sends encrypted notification content through the relay instead of holding the publisher's Apple sending key. Commands, chats, files and approval decisions still travel directly over your authenticated tailnet connection. The relay receives no notification decryption key and cannot read encrypted names, text or detailed activity state.
+To use the relay, the app proves with Apple App Attest that it is a genuine copy, and then authorizes each paired machine to send to it. Your machine then sends encrypted notification content through the relay. Commands, chats, files and approval decisions still travel only over your tailnet. The relay never receives a notification key, so it cannot read the encrypted names, text or activity details.
 
-The publisher and Cloudflare process source IP addresses, app/activity notification tokens, installation/pairing/route relationships, generic push categories, opaque event identifiers, timing, frequency and ciphertext sizes. Even though the content is encrypted, this metadata exposes delivery patterns. Apple receives delivery metadata and ciphertext, and processes device/app integrity information for App Attest. The relay stores verified public keys and attestation receipts, counters, revocation state and delivery-route records in Cloudflare D1. It stores no notification payloads or decryption keys. The relay uses IP addresses for transient abuse limiting and does not store them in these D1 records.
+The publisher and Cloudflare see source IP addresses, the app's and each Live Activity's notification tokens, which installations, pairings and routes belong together, generic push categories, opaque event identifiers, timing, frequency and ciphertext sizes. Even though the content is encrypted, this metadata shows when and how often you receive notifications. Apple receives delivery metadata and ciphertext, and checks device and app integrity for App Attest.
 
-The current code retains enrollment state for at least 37 days from enrollment, and extends its deadline to the latest issued grant expiry plus seven days. Grants last 30 days. Superseding a route removes the previous destination. Other expired or revoked destinations become eligible for bounded cleanup only after expiry plus seven days. Parent key/receipt and revocation records are removed once their retention deadline and child cleanup allow it.
+The relay keeps, in Cloudflare D1, the app's verified public key and attestation receipt, replay counters, revocation records, delivery routes with their notification tokens, and daily send counts. It keeps no notification content, no decryption keys and no IP addresses; it uses IP addresses only for short-lived abuse limits.
 
-The validation configuration has no cleanup schedule, so no live deletion deadline has been established. Before public enrollment, the cleanup schedule and backlog bound must be verified, and this policy updated to state that bound. The publisher account uses Workers Paid. Cloudflare D1 [Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/) is always on and can retain restorable database history for 30 days beyond an active-database change, so removing a live record does not immediately remove it from that history.
+The relay deletes these records on a schedule. A grant lasts 30 days, and the app renews it before it expires. When the app registers a new notification token, the relay deletes the old one at once. An expired or revoked route becomes eligible for deletion seven days after its grant expires. Your installation's remaining records, including its key and receipt, become eligible seven days after its last grant expires, and no earlier than 37 days after the app first enrolled. A cleanup job runs every hour and deletes eligible records within seven days, even when the relay runs at its daily limits. So the relay deletes your records within 14 days after your last grant expires. Cloudflare D1 [Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/) keeps a restorable history of the database for 30 days, so a deleted record can remain in that history for up to 30 days after its deletion.
 
-If the relay is unreachable when you remove a pairing, the phone keeps a minimal pending revocation. A previously authorized machine may still send until remote revocation succeeds or its grant expires. Local removal does not immediately delete relay records. An inactive phone whose grants expire stops receiving relay pushes until it renews them; direct sessions remain available.
+If the relay is unreachable when you remove a pairing, the phone keeps a minimal pending revocation and retries it. Until the revocation succeeds or the grant expires, the removed machine can still send to your phone, and removing it locally does not delete its relay records at once. If you stop opening the app until your grants expire, your phone stops receiving relay notifications until the app renews them; your direct sessions keep working.
 
-The checked-in relay configuration disables observability, and the handler emits no request-body, authorization, destination or attestation logs. Provider service and security processing is separate from application logging; [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/) covers it. Before this policy can describe a live service, a future deployment must verify those settings and retention. No marketing or advertising use is implemented.
+The relay runs with Cloudflare's invocation logs and traces turned off, and its code logs no request bodies, authorization, notification tokens or attestations. Cloudflare's own service and security processing is separate; [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/) covers it. The relay has no marketing or advertising use.
 
-When `collied` is configured with `[push.relay]`, it forwards encrypted notification envelopes using this machine's destination grants from the paired phone. It keeps the grants only in its private local registration file. For retries, it holds a bounded amount of encrypted work in RAM for a limited time, and loses it on restart; it stores no payload queue on disk. Its diagnostic output contains counts, expiry/error codes and retry times, with no grants, destination tokens or notification contents. The relay remains subject to the deployment, attestation and real-device validation gates documented in the relay reference.
+When `collied` is configured with `[push.relay]`, it forwards encrypted notification envelopes using this machine's destination grants from the paired phone. It keeps the grants only in its private local registration file. For retries, it holds a bounded amount of encrypted work in RAM for a limited time, and loses it on restart; it stores no payload queue on disk. Its diagnostic output contains counts, expiry/error codes and retry times, with no grants, destination tokens or notification contents.

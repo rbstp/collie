@@ -66,7 +66,7 @@
 - [Architecture](reference/architecture.md)
 - [Tailnet setup](reference/tailnet.md)
 - [Notifications](reference/notifications.md)
-- [Push relay validation](reference/relay.md)
+- [Push relay](reference/relay.md)
 - [Free-plan relay validation](reference/reviews/relay-free-tier.md)
 - [Simulator relay testing](reference/simulator.md)
 - [VM and host Simulator testing](reference/vm-simulator.md)
