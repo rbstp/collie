@@ -198,7 +198,7 @@ The demo's usage reset times and the watch's clock follow the capture time, so `
 
 `just ios-screenshots` also writes the App Store set to `target/ios/app-store` and prints its path. Git ignores it and the `docs screenshots` workflow does not keep it. The set is the same capture as the documentation images, before resizing and compression, as PNG without alpha, which App Store Connect requires:
 
-- the twelve iPhone screenshots (Agents, Usage, New task, Chat, Terminal and an approval, light and dark) at 1320 x 2868, the native size of the iPhone 18 Pro Max simulator and a portrait size of the largest iPhone class, iPhone with Dynamic Island (large display);
+- the twelve iPhone screenshots (Agents, Usage, New task, Chat, Terminal and an approval, light and dark) at 1320 x 2868, the native size of the iPhone 18 Pro Max simulator and a portrait size of iPhone with Dynamic Island (large display) (Apple's page says iPhone Duo screenshots become required in April 2027 for apps built with the iOS 27.1 SDK or later);
 - `watch-usage.png` and `watch-widget.png` at 416 x 496, the native size of the Apple Watch Series 12 (46mm) simulator and the accepted size for Series 10, 11 and 12.
 
 Both sizes come from Apple's [screenshot specifications](https://developer.apple.com/help/app-store-connect/reference/screenshot-specifications); check them again before a submission. Locally, the recipe needs an available simulator named `iPhone 18 Pro Max` paired with a watch simulator (`xcrun simctl pair <watch> <phone>`). The phone shows the overridden 9:41 status bar; the watch shows the time of the capture, because watchOS has no status bar override.
