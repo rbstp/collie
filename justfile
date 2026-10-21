@@ -143,7 +143,7 @@ ios-test diagnostics="on-failure": ios-framework ios-project
     cd Collie/GhosttyTerminal && xcodebuild -scheme GhosttyTerminal -destination 'platform=iOS Simulator,name={{ sim }}' -derivedDataPath ../../target/ios/GhosttyTerminal CODE_SIGNING_ALLOWED=NO test
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' CODE_SIGNING_ALLOWED=NO test
 
-# The documentation screenshots, light and dark, from the demo on one fixed simulator and its paired watch.
+# The documentation screenshots, light and dark, from the demo on one fixed simulator and its paired watch, plus the App Store set in target/ios/app-store.
 ios-screenshots: ios-framework ios-project
     #!/usr/bin/env bash
     set -euo pipefail
@@ -188,9 +188,19 @@ ios-screenshots: ios-framework ios-project
     for mode in widget usage; do
         SIMCTL_CHILD_COLLIE_DEMO_SCREENSHOTS="$mode" xcrun simctl launch --terminate-running-process "$watch" dev.rbstp.collie.watchkitapp >/dev/null
         sleep 4
-        xcrun simctl io "$watch" screenshot "$out/watch-$mode.png" >/dev/null 2>&1
+        xcrun simctl io "$watch" screenshot "$raw/watch-$mode.png" >/dev/null 2>&1
+        cp "$raw/watch-$mode.png" "$out/"
     done
     xcrun simctl terminate "$watch" dev.rbstp.collie.watchkitapp
+    store="$PWD/target/ios/app-store"
+    rm -rf "$store"
+    mkdir -p "$store"
+    # App Store Connect refuses alpha; a PPM round trip drops it without loss.
+    for f in "$raw"/*.png; do
+        sips -s format pbm "$f" --out "$store/tmp.ppm" >/dev/null
+        sips -s format png "$store/tmp.ppm" --out "$store/$(basename "$f")" >/dev/null
+    done
+    rm "$store/tmp.ppm"
     if command -v pngquant >/dev/null; then
         for f in "$out"/*.png; do
             # 98 and 99: kept as is, the result would be larger or below the quality floor.
@@ -200,6 +210,7 @@ ios-screenshots: ios-framework ios-project
         echo "pngquant not found: the screenshots are not compressed (brew install pngquant)"
     fi
     du -ch "$out"/*.png | tail -n 1
+    echo "App Store screenshots: $store"
 
 # Debug build with automatic signing on the first connected iPhone. Release keeps its manual TestFlight signing.
 ios-run-device: ios-framework ios-project

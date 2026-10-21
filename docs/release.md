@@ -194,6 +194,23 @@ To refresh without a release, run it by hand (Actions, docs screenshots, Run wor
 
 The demo's usage reset times and the watch's clock follow the capture time, so `usage-light.png`, `usage-dark.png`, `watch-usage.png` and `watch-widget.png` change on every run, and every release opens a refresh pull request.
 
+## App Store screenshots
+
+`just ios-screenshots` also writes the App Store set to `target/ios/app-store` and prints its path. Git ignores it and the `docs screenshots` workflow does not keep it. The set is the same capture as the documentation images, before resizing and compression, as PNG without alpha, which App Store Connect requires:
+
+- the twelve iPhone screenshots (Agents, Usage, New task, Chat, Terminal and an approval, light and dark) at 1320 x 2868, the native size of the iPhone 18 Pro Max simulator and a portrait size of the largest iPhone class, iPhone with Dynamic Island (large display);
+- `watch-usage.png` and `watch-widget.png` at 416 x 496, the native size of the Apple Watch Series 12 (46mm) simulator and the accepted size for Series 10, 11 and 12.
+
+Both sizes come from Apple's [screenshot specifications](https://developer.apple.com/help/app-store-connect/reference/screenshot-specifications); check them again before a submission. Locally, the recipe needs an available simulator named `iPhone 18 Pro Max` paired with a watch simulator (`xcrun simctl pair <watch> <phone>`). The phone shows the overridden 9:41 status bar; the watch shows the time of the capture, because watchOS has no status bar override.
+
+To upload:
+
+1. Run `just ios-screenshots` on the commit being submitted, so the screenshots match the binary.
+2. In App Store Connect, open the app, select the iOS version being prepared and open **Previews and Screenshots**.
+3. Under iPhone, in the iPhone with Dynamic Island (large display) size, add up to 10 screenshots in display order, for example the six of one appearance. Apple names iPhone with Dynamic Island (medium display) as the required iPhone size and fills the smaller sizes with scaled screenshots of a larger one; before submitting, check that App Store Connect shows the iPhone requirement as met.
+4. Under Apple Watch, add `watch-usage.png` and `watch-widget.png`. Keep the same watch size in every localization.
+5. Save. Nothing in the repository uploads screenshots.
+
 ## Desktop GitHub releases
 
 The reusable desktop workflow is called explicitly after TestFlight creates its immutable version tag. After desktop publication, its trusted-master Homebrew job verifies the public artifacts and updates the two Collie tap definitions automatically; provision its separate token as described in [Desktop release downloads](desktop-releases.md#publisher-setup-and-release-controls). It also supports a master-only manual dispatch at an exact master SHA. One publish job owns the shared macOS/Linux release, retains signed assets on draft retries, and verifies completed releases without replacing assets. This avoids GITHUB_TOKEN tag-push suppression and duplicate release owners.
