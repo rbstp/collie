@@ -18,7 +18,7 @@ The Worker is `relay/src/worker.ts`: the public handler, the single `RelayCrypto
 | `CONTROL_LIMITER` | Rate limit, 30 per 60 s | Challenges and controls, keyed by source IP, installation and one shared key |
 | `ENROLL_LIMITER` | Rate limit, 5 per 60 s | Enrollments, keyed by source IP and one shared key |
 
-The checked-in configuration is the validation one: a placeholder database ID, `APNS_ENVIRONMENT` set to `development` and no Custom Domain. The production deployment uses a private local copy with the production database, `production`, the `collie-push.rbstp.dev` Custom Domain and the hourly cleanup trigger ([#541](https://github.com/rbstp/collie/issues/541)). The repository does not hold that copy. Every procedure below that deploys uses it unchanged, apart from the change it describes.
+The checked-in configuration is the deployment template. It has the hourly cleanup Cron trigger (`0 * * * *`), a placeholder database ID and `APNS_ENVIRONMENT` set to `development`; the production deployment replaces the database ID and sets `production` locally, never committed. The `collie-push.rbstp.dev` Custom Domain is attached to the Worker in the Cloudflare dashboard, not in the configuration.
 
 Deploy as [Relay](relay.md#operations) describes. Unset `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_API_KEY` and `CLOUDFLARE_EMAIL`, check the account with `cf auth whoami` and set the verified `CLOUDFLARE_ACCOUNT_ID`. Then, from `relay/`:
 
@@ -30,7 +30,7 @@ cf build
 cf deploy --prebuilt --no-provision --secrets-file /secure/path/secrets.json
 ```
 
-The secrets file is private JSON, mode 0600, outside the repository, and holds all five secrets. Never pass a secret value as a command argument.
+The secrets file is private JSON, mode 0600, outside the repository. `cf` merges it over the secrets the Worker already has, so put in it only the secrets being changed, and delete it after the deploy. Never pass a secret value as a command argument.
 
 ## Monitoring
 
@@ -96,11 +96,11 @@ If the old key leaked, deploy a new key at once and revoke the old one right aft
 Planned rotation:
 
 1. Deploy with the new entry first and the current one second.
-2. From an operator-owned phone, open the app, which renews its app route with the new key, then run `collied apns test` on a paired machine.
-3. Wait 30 days. Grants last 30 days and phones renew from seven days before expiry, so no unexpired grant signed with the old key remains after that. Phones that stayed closed longer have already lost relay pushes and renew when opened.
+2. On an operator-owned phone, force-quit and relaunch the app, which renews its app route with the new key, then run `collied apns test` on a paired machine.
+3. Wait 30 days. Grants last 30 days and phones renew from seven days before expiry, so no unexpired grant signed with the old key remains after that. Phones that were not launched in that time have already lost relay pushes and renew at their next launch.
 4. Deploy with only the new entry.
 
-Emergency rotation, when a key leaked: deploy with only a new entry. Every grant and pending challenge signed with the old key fails at once. Sends return `401 unauthorized`, `collied doctor` tells the user to open the paired app, and opening the app registers again.
+Emergency rotation, when a key leaked: deploy with only a new entry. Every grant and pending challenge signed with the old key fails at once. Sends return `401 unauthorized` and `collied doctor` tells the user to open the paired app. Renewal happens when the app launches, so users must force-quit and relaunch it. Live Activity routes renew only when ActivityKit supplies a new token, so a Live Activity that was running keeps failing until it ends and a new one starts.
 
 ## Revoke a pairing or an installation
 
@@ -110,16 +110,23 @@ There is no administrative endpoint or script. The relay has no accounts and no 
 
 With an exact ID, run reviewed statements against the production database. Check that each changed exactly one row.
 
-```sql
--- One pairing: the app's own revoke_pairing statement.
-UPDATE pairings SET epoch = epoch + 1, revoked = 1 WHERE id = '<pairing_id>' AND revoked = 0;
+A pairing, with the app's own `revoke_pairing` statement from `relay/src/control.ts`:
 
--- A whole installation.
-UPDATE installations SET epoch = epoch + 1 WHERE id = '<installation_id>';
-UPDATE attestations SET revoked = 1 WHERE installation_id = '<installation_id>';
+```sql
+UPDATE pairings SET epoch = epoch + 1, revoked = 1
+WHERE id = '<pairing_id>' AND installation_id = '<installation_id>' AND revoked = 0;
 ```
 
-Revoking a pairing makes its routes return `410 invalid_route`, and collied drops the grant. Revoking an installation does the same for all its routes and refuses its controls with `401 unauthorized`; that installation can never register again, and only a reinstall, which enrolls a new installation, brings relay pushes back to the phone. Never delete rows: revocation relies on the epoch and revoked flags, and a deleted pairing could be created again at epoch 0, the epoch its old grants carry. Cleanup removes revoked records after the retention delay.
+An installation, as one file run in one batch, in this order:
+
+```sql
+UPDATE attestations SET revoked = 1 WHERE installation_id = '<installation_id>' AND revoked = 0;
+UPDATE installations SET epoch = epoch + 1 WHERE id = '<installation_id>';
+```
+
+Neither installation statement is enough alone. The epoch bump alone stops existing grants, but the next challenge carries the new epoch and registers fresh routes. The `revoked` flag alone refuses controls, but sends do not check it, so existing grants keep sending. The revocation is done only when both statements report one changed row.
+
+Revoking a pairing makes its routes return `410 invalid_route`, and collied drops the grant. Revoking an installation does the same for all its routes and refuses its controls with `401 unauthorized`. It is not a ban: once the phone's last known grant has expired, the app treats `401 unauthorized` as lost state, creates a new installation and enrolls again, within the 30-a-day enrollment cap. Revocation therefore cuts a phone's relay pushes until its grants lapse, at most 30 days. Never delete rows: revocation relies on the epoch and revoked flags, and a deleted pairing could be created again at epoch 0, the epoch its old grants carry. Cleanup removes revoked records after the retention delay.
 
 To revoke everything at once, use the emergency HMAC rotation.
 
@@ -130,11 +137,11 @@ No setting stops enrollment alone. In order of reach:
 1. **Stop invitations.** In App Store Connect, disable the public TestFlight link or lower its tester limit. Testers already in keep the app.
 2. **Refuse App Attest for unknown builds.** Setting `ATTEST_BUNDLE_VERSIONS` to a version no build reports refuses enrollment, renewal and revocation from every phone whose attestation or assertion carries Apple's bundle-version extension. One without the extension still passes. Existing grants keep sending until they expire. The array cannot be empty: an empty or invalid value makes every enrollment, renewal and revocation fail with `503 unavailable`.
 3. **Lower the daily enrollment cap.** The 30-a-day cap is in the `enrollment_limit` trigger of `relay/migrations/0002_attestation.sql`. Changing it needs a new migration and a review; there is no runtime setting.
-4. **Disable the public route.** Remove the `collie-push.rbstp.dev` Custom Domain from the Worker in the dashboard (Settings, Domains & Routes), and, if the private configuration declares it, take it out there too so the next deploy does not restore it. workers.dev and preview URLs are already off, so no other public path remains. Enrollment, renewal, revocation and sends all stop; collied backs off and doctor reports the relay unavailable, while sessions, approvals, Chat and terminals over the tailnet keep working. D1 state is kept and the cleanup trigger keeps running. Add the domain back to restore service.
+4. **Disable the public route.** Remove the `collie-push.rbstp.dev` Custom Domain from the Worker in the dashboard (Settings, Domains & Routes), A deploy does not add it back, since the configuration does not declare it. workers.dev and preview URLs are already off, so no other public path remains. Enrollment, renewal, revocation and sends all stop; collied backs off and doctor reports the relay unavailable, while sessions, approvals, Chat and terminals over the tailnet keep working. D1 state is kept and the cleanup trigger keeps running. Add the domain back to restore service.
 
 ## Rollback
 
-Two ways, neither scripted in the repository:
+Stop invitations first. Then roll back in one of two ways, neither scripted in the repository:
 
 - **Cloudflare version rollback**, in the dashboard under the Worker's Deployments. A Worker version includes its bindings, secrets among them, so rolling back past an APNs or HMAC rotation restores the old secret values. Cloudflare refuses a rollback across a Durable Object class change.
 - **Redeploy a reviewed commit**: check out the earlier commit and deploy as above with the current secrets file. Prefer this when a secret has changed since the target version.
@@ -184,4 +191,4 @@ Record the UTC interval, deployment version and source commit, aggregate counts 
 
 ## Cost
 
-Workers Paid has a $5 monthly minimum. The application quotas are not a spending cap: rejected requests, challenges, invalid proofs and other account projects still count. [Budget alerts](https://developers.cloudflare.com/billing/manage/budget-alerts/) notify but never pause usage. The only hard stop is disabling the public route.
+Workers Paid has a $5 monthly minimum. The application quotas are not a spending cap: rejected requests, challenges, invalid proofs and other account projects still count. [Budget alerts](https://developers.cloudflare.com/billing/manage/budget-alerts/) notify but never pause usage. The only hard stop is disabling the public route. A failed CPU or capacity gate still blocks rollout.
