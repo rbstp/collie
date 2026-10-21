@@ -116,7 +116,6 @@ jobs:
 
       # The image's preinstalled watchOS runtime cannot keep a watch booted (its launchd_sim disappears), so replace it.
       - name: install a fresh watchOS runtime
-        timeout-minutes: 15
         run: |
           xcrun simctl runtime list
           for id in $(xcrun simctl runtime list -j | jq -r '.[] | select(.platformIdentifier == "com.apple.platform.watchsimulator") | .identifier'); do
@@ -153,6 +152,7 @@ jobs:
           xcrun simctl runtime list
           echo "the downloaded watchOS $sdk runtime $new did not stay the only Ready watchOS runtime within 10 minutes"
           exit 1
+        timeout-minutes: 15
 
       # The recipe uses the first iPhone 18 Pro Max and its first paired watch; the published watch shots are 46 mm.
       - name: pair the simulators
