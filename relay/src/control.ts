@@ -200,12 +200,13 @@ export async function control(request: Request, env: ControlEnv, now: number,
 export async function cleanup(db: D1Database, now: number): Promise<void> {
   await db.batch([
     db.prepare('DELETE FROM routes WHERE id IN (SELECT id FROM routes WHERE expires_at < ? ORDER BY expires_at LIMIT 64)').bind(now - 7 * 86400),
+    // 64 installations' worth of the 64 pairing tombstones each may hold; oldest retention first bounds deletion delay.
     db.prepare(`DELETE FROM pairings WHERE id IN (SELECT p.id FROM pairings p JOIN attestations a ON a.installation_id = p.installation_id
-      WHERE a.retain_until < ? AND NOT EXISTS (SELECT 1 FROM routes WHERE pairing_id = p.id) LIMIT 64)`).bind(now),
+      WHERE a.retain_until < ? AND NOT EXISTS (SELECT 1 FROM routes WHERE pairing_id = p.id) ORDER BY a.retain_until LIMIT 4096)`).bind(now),
     db.prepare(`DELETE FROM installation_usage WHERE installation_id IN (SELECT a.installation_id FROM attestations a
-      WHERE a.retain_until < ? AND NOT EXISTS (SELECT 1 FROM pairings WHERE installation_id = a.installation_id) LIMIT 64)`).bind(now),
+      WHERE a.retain_until < ? AND NOT EXISTS (SELECT 1 FROM pairings WHERE installation_id = a.installation_id) ORDER BY a.retain_until LIMIT 64)`).bind(now),
     db.prepare(`DELETE FROM installations WHERE id IN (SELECT a.installation_id FROM attestations a
       WHERE a.retain_until < ? AND NOT EXISTS (SELECT 1 FROM pairings WHERE installation_id = a.installation_id)
-      AND NOT EXISTS (SELECT 1 FROM installation_usage WHERE installation_id = a.installation_id) LIMIT 64)`).bind(now)
+      AND NOT EXISTS (SELECT 1 FROM installation_usage WHERE installation_id = a.installation_id) ORDER BY a.retain_until LIMIT 64)`).bind(now)
   ]);
 }
