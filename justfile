@@ -79,6 +79,7 @@ collied-install:
 
 ios_deployment_target := "26.0"
 sim := "iPhone 18 Pro"
+screenshot_watch := "true"
 xcodebuild := "xcodebuild -project Collie/Collie.xcodeproj -scheme Collie -derivedDataPath target/ios/DerivedData"
 
 ios-framework target="all" profile="release":
@@ -150,9 +151,12 @@ ios-screenshots: ios-framework ios-project
     device="iPhone 18 Pro Max"
     udid="$(xcrun simctl list devices available -j | jq -r --arg name "$device" '[.devices[][] | select(.name == $name) | .udid][0] // empty')"
     [ -n "$udid" ] || { echo "no available simulator named $device"; exit 1; }
-    watch="$(xcrun simctl list pairs -j | jq -r --arg phone "$udid" '[.pairs[] | select(.phone.udid == $phone) | .watch.udid][0] // empty')"
-    [ -n "$watch" ] || { echo "no watch simulator paired with $device (xcrun simctl pair)"; exit 1; }
-    watch_state="$(xcrun simctl list devices -j | jq -r --arg id "$watch" '.devices[][] | select(.udid == $id) | .state')"
+    watch_state=
+    if [ "{{ screenshot_watch }}" = true ]; then
+        watch="$(xcrun simctl list pairs -j | jq -r --arg phone "$udid" '[.pairs[] | select(.phone.udid == $phone) | .watch.udid][0] // empty')"
+        [ -n "$watch" ] || { echo "no watch simulator paired with $device (xcrun simctl pair)"; exit 1; }
+        watch_state="$(xcrun simctl list devices -j | jq -r --arg id "$watch" '.devices[][] | select(.udid == $id) | .state')"
+    fi
     xcrun simctl bootstatus "$udid" -b
     appearance="$(xcrun simctl ui "$udid" appearance)"
     trap 'xcrun simctl status_bar "$udid" clear; xcrun simctl ui "$udid" appearance "$appearance"; if [ "$watch_state" = Shutdown ]; then xcrun simctl shutdown "$watch" || true; fi' EXIT
@@ -176,22 +180,24 @@ ios-screenshots: ios-framework ios-project
     for f in "$raw"/*.png; do
         sips --resampleWidth 600 "$f" --out "$out/$(basename "$f")" >/dev/null
     done
-    # bootstatus exits 0 even when a new watch shuts down during its first-boot data migration; booting it again completes.
-    for _ in 1 2 3; do
-        xcrun simctl bootstatus "$watch" -b
-        watch_now="$(xcrun simctl list devices -j | jq -r --arg id "$watch" '.devices[][] | select(.udid == $id) | .state')"
-        [ "$watch_now" != Booted ] || break
-    done
-    [ "$watch_now" = Booted ] || { echo "the watch simulator did not stay booted ($watch_now)"; exit 1; }
-    # watchOS has no light mode and no status bar override, so one copy each, with the current time.
-    xcrun simctl install "$watch" target/ios/DerivedData/Build/Products/Debug-watchsimulator/CollieWatch.app
-    for mode in widget usage; do
-        SIMCTL_CHILD_COLLIE_DEMO_SCREENSHOTS="$mode" xcrun simctl launch --terminate-running-process "$watch" dev.rbstp.collie.watchkitapp >/dev/null
-        sleep 4
-        xcrun simctl io "$watch" screenshot "$raw/watch-$mode.png" >/dev/null 2>&1
-        cp "$raw/watch-$mode.png" "$out/"
-    done
-    xcrun simctl terminate "$watch" dev.rbstp.collie.watchkitapp
+    if [ "{{ screenshot_watch }}" = true ]; then
+        # bootstatus exits 0 even when a new watch shuts down during its first-boot data migration; booting it again completes.
+        for _ in 1 2 3; do
+            xcrun simctl bootstatus "$watch" -b
+            watch_now="$(xcrun simctl list devices -j | jq -r --arg id "$watch" '.devices[][] | select(.udid == $id) | .state')"
+            [ "$watch_now" != Booted ] || break
+        done
+        [ "$watch_now" = Booted ] || { echo "the watch simulator did not stay booted ($watch_now)"; exit 1; }
+        # watchOS has no light mode and no status bar override, so one copy each, with the current time.
+        xcrun simctl install "$watch" target/ios/DerivedData/Build/Products/Debug-watchsimulator/CollieWatch.app
+        for mode in widget usage; do
+            SIMCTL_CHILD_COLLIE_DEMO_SCREENSHOTS="$mode" xcrun simctl launch --terminate-running-process "$watch" dev.rbstp.collie.watchkitapp >/dev/null
+            sleep 4
+            xcrun simctl io "$watch" screenshot "$raw/watch-$mode.png" >/dev/null 2>&1
+            cp "$raw/watch-$mode.png" "$out/"
+        done
+        xcrun simctl terminate "$watch" dev.rbstp.collie.watchkitapp
+    fi
     store="$PWD/target/ios/app-store"
     rm -rf "$store"
     mkdir -p "$store"
@@ -202,9 +208,10 @@ ios-screenshots: ios-framework ios-project
     done
     rm "$store/tmp.ppm"
     if command -v pngquant >/dev/null; then
-        for f in "$out"/*.png; do
+        # Only this run's captures: compressing a committed image again can still change it.
+        for f in "$raw"/*.png; do
             # 98 and 99: kept as is, the result would be larger or below the quality floor.
-            pngquant --quality 70-90 --strip --skip-if-larger --force --ext .png "$f" || [ $? -ge 98 ]
+            pngquant --quality 70-90 --strip --skip-if-larger --force --ext .png "$out/$(basename "$f")" || [ $? -ge 98 ]
         done
     else
         echo "pngquant not found: the screenshots are not compressed (brew install pngquant)"
