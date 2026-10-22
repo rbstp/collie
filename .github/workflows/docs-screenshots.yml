@@ -114,46 +114,14 @@ jobs:
       - name: generate the project
         run: just --no-deps ios-project
 
-      # The image's preinstalled watchOS runtime cannot keep a watch booted (its launchd_sim disappears), so replace it.
-      - name: install a fresh watchOS runtime
-        run: |
-          xcrun simctl runtime list
-          for id in $(xcrun simctl runtime list -j | jq -r '.[] | select(.platformIdentifier == "com.apple.platform.watchsimulator") | .identifier'); do
-            xcrun simctl runtime delete "$id"
-          done
-          xcodebuild -downloadPlatform watchOS
-          # The download returns while the new runtime is still being copied into place.
-          sdk="$(xcrun --sdk watchsimulator --show-sdk-version)"
-          for _ in $(seq 60); do
-            xcrun simctl runtime list -j | jq -r '.[] | select(.platformIdentifier == "com.apple.platform.watchsimulator")
-              | "watchOS \(.version) (\(.build)): \(.state)"'
-            if xcrun simctl list runtimes -j | jq -e --arg v "$sdk" 'any(.runtimes[];
-              .platform == "watchOS" and .isAvailable and (.version == $v or (.version | startswith($v + "."))))' >/dev/null; then
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "no watchOS $sdk simulator runtime became available within 10 minutes"
-          exit 1
-
-      # The recipe uses the first iPhone 18 Pro Max and its first paired watch; the published watch shots are 46 mm.
-      - name: pair the simulators
+      - name: create the iPhone simulator
         run: |
           phone="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name == "iPhone 18 Pro Max") | .udid][0] // empty')"
-          [ -n "$phone" ] || phone="$(xcrun simctl create 'iPhone 18 Pro Max' com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max)"
-          for pair in $(xcrun simctl list pairs -j | jq -r --arg phone "$phone" '.pairs | to_entries[] | select(.value.phone.udid == $phone) | .key'); do
-            xcrun simctl unpair "$pair"
-          done
-          sdk="$(xcrun --sdk watchsimulator --show-sdk-version)"
-          runtime="$(xcrun simctl list runtimes -j | jq -r --arg v "$sdk" '[.runtimes[]
-            | select(.platform == "watchOS" and .isAvailable and (.version == $v or (.version | startswith($v + "."))))
-            | .identifier][0] // empty')"
-          [ -n "$runtime" ] || { echo "no available watchOS $sdk simulator runtime"; exit 1; }
-          watch="$(xcrun simctl create 'Apple Watch Series 12 (46mm)' com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Series-12-46mm "$runtime")"
-          xcrun simctl pair "$watch" "$phone"
+          [ -n "$phone" ] || xcrun simctl create 'iPhone 18 Pro Max' com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max
 
+      # The runner's watchOS runtime loses its files minutes after it is mounted (#539), so the watch shots stay as committed.
       - name: capture the screenshots
-        run: just --no-deps ios-screenshots
+        run: just --no-deps screenshot_watch=false ios-screenshots
 
       - name: keep the screenshots
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
