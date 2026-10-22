@@ -82,12 +82,16 @@ struct AgentScreen: View {
             }
             if let approvals {
                 let items = approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)
-                // Together the cards take at most a quarter of the screen, keyboard or not, so the composer stays in reach.
-                let cap = height > 0 ? height / 4 / CGFloat(max(items.count, 1)) - 8 : .infinity
+                // Together the cards take at most about a fifth of the screen, keyboard or not, so the composer stays
+                // in reach; a quarter in landscape, where a fifth leaves no room for the prompt above Approve.
+                let share = verticalSizeClass == .compact ? 0.25 : 0.211
+                let cap = height > 0 ? height * share / CGFloat(max(items.count, 1)) - 8 : .infinity
                 ForEach(items) { item in
                     ApprovalCard(model: approvals, item: item, maxHeight: cap, sendAnswer: model.typeAnswer)
                         .padding(.horizontal)
                         .padding(.vertical, 4)
+                        // Their height before the conversation's, but less when that is all there is (the keyboard up).
+                        .layoutPriority(1)
                 }
                 if let notice = approvals.notice {
                     Text(notice).font(.footnote).padding(.horizontal).frame(maxWidth: .infinity, alignment: .leading)

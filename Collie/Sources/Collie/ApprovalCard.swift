@@ -7,23 +7,29 @@ struct ApprovalCard: View {
     var maxHeight: CGFloat = .infinity
     let sendAnswer: (String) async throws -> Void
     @State private var decisionsHeight: CGFloat = 0
+    @State private var shownHeight: CGFloat = .infinity
     @FocusState private var field: String?
     @ScaledMetric(relativeTo: .caption) private var commandLine: CGFloat = 15
+    private let padding: CGFloat = 10
+    private let spacing: CGFloat = 6
 
     private var approval: PendingApproval { item.approval }
     private var expanded: Bool { model.expanded.contains(item.id) }
     private var offersDecisions: Bool { !approval.answeredInTerminal && !approval.options.isEmpty }
-    // Approve and Deny stay pinned under the scrolling prompt while the cap leaves it two command
-    // lines; below that (large text, tight landscape) they scroll with it, so all stays reachable.
-    private var pinsDecisions: Bool { offersDecisions && maxHeight - 26 - decisionsHeight >= 2 * commandLine }
+    // Approve and Deny stay pinned under the scrolling prompt while the card's height leaves it two
+    // command lines; below that (large text, tight landscape, the keyboard up) they scroll with it,
+    // so all stays reachable.
+    private var pinsDecisions: Bool {
+        offersDecisions && min(maxHeight - 2 * padding, shownHeight) - spacing - decisionsHeight >= 2 * commandLine
+    }
 
     var body: some View {
-        UpToContent(maxHeight: max(0, maxHeight - 20)) {
-            VStack(alignment: .leading, spacing: 6) {
+        UpToContent(maxHeight: max(0, maxHeight - 2 * padding)) {
+            VStack(alignment: .leading, spacing: spacing) {
                 ScrollViewReader { proxy in
                     UpToContent {
                         ScrollView {
-                            VStack(alignment: .leading, spacing: 6) {
+                            VStack(alignment: .leading, spacing: spacing) {
                                 details
                                 if offersDecisions, !pinsDecisions { decisions }
                             }
@@ -38,11 +44,10 @@ struct ApprovalCard: View {
                 if pinsDecisions { decisions }
             }
         }
-        .padding(10)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shownHeight = $0 }
+        .padding(padding)
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
         .background(SessionBarDim(), in: .rect(cornerRadius: 16))
-        // Its own height up to the cap, never squeezed by the conversation below.
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var decisions: some View {
@@ -53,7 +58,7 @@ struct ApprovalCard: View {
     }
 
     private var details: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: spacing) {
             Button {
                 withAnimation { model.toggleExpanded(item) }
             } label: {

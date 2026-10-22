@@ -128,17 +128,25 @@ final class LandscapeTests: XCTestCase {
         let send = app.buttons["Send answer"]
         XCTAssertTrue(eventually { shown(field, app) && shown(send, app) }, app.debugDescription)
         XCTAssertTrue(shown(approve, app), app.debugDescription)
+        let header = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Claude Code, ")).firstMatch
+        let prompt = app.scrollViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Claude Code, ")).firstMatch
+        let command = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Bash: ")).firstMatch
+        for _ in 0..<5 where !shown(command, app) { drag(prompt, by: -20) }
+        XCTAssertTrue(shown(command, app), app.debugDescription)
+        for _ in 0..<5 where !shown(header, app) { drag(prompt, by: 30) }
         field.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
         XCTAssertTrue(eventually {
             [field, send].allSatisfy { shown($0, app) && $0.frame.maxY <= keyboard.frame.minY + 1 }
         }, app.debugDescription)
-        XCTAssertTrue(shown(approve, app), "Approve stays pinned while typing\n\(app.debugDescription)")
-        let command = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Bash: ")).firstMatch
-        let prompt = app.scrollViews.containing(.button, identifier: "Add note").firstMatch
-        for _ in 0..<5 where !shown(command, app) { drag(prompt, by: 40) }
-        XCTAssertTrue(shown(command, app), app.debugDescription)
+        // The keyboard's own frame starts below its top strip: the card's header and the composer
+        // field being hittable is what shows nothing went under it.
+        XCTAssertTrue(shown(header, app), app.debugDescription)
+        let deny = app.buttons["Deny"]
+        for _ in 0..<8 where !(shown(approve, app) && shown(deny, app)) { drag(prompt, by: -30) }
+        XCTAssertTrue(shown(approve, app) && shown(deny, app), app.debugDescription)
+        XCTAssertTrue(shown(field, app), app.debugDescription)
     }
 
     func testApprovalCardScrollsToApproveAtLargeText() throws {

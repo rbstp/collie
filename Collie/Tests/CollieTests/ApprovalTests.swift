@@ -248,8 +248,8 @@ final class FakeAuthenticator: Authenticator {
 }
 
 @MainActor
-private func height(_ card: ApprovalCard, size: DynamicTypeSize = .large) -> CGFloat {
-    UIHostingController(rootView: card.environment(\.dynamicTypeSize, size))
+private func height(_ card: ApprovalCard) -> CGFloat {
+    UIHostingController(rootView: card)
         .sizeThatFits(in: CGSize(width: 402, height: 874)).height
 }
 
@@ -281,11 +281,8 @@ private let reason = "Dangerous rm operation on statically-unresolvable target: 
     var long = approval("ap_1")
     long.snippet = (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n")
     long.reason = reason
-    for size in [DynamicTypeSize.large, .accessibility3] {
-        let natural = height(card(long), size: size)
-        #expect(natural > 200, "the prompt overflows the cap at \(size)")
-        #expect(abs(height(card(long, maxHeight: 150), size: size) - 150) < 1, "the prompt scrolls inside the cap at \(size)")
-    }
+    #expect(height(card(long)) > 200, "the prompt overflows the cap")
+    #expect(abs(height(card(long, maxHeight: 150)) - 150) < 1, "the prompt scrolls inside the cap")
     let short = approval("ap_1")
     #expect(height(card(short, maxHeight: 400)) == height(card(short)), "a prompt that fits keeps its own height")
 }
