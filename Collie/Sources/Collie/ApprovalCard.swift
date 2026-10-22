@@ -99,7 +99,6 @@ struct ApprovalCard: View {
     }
 }
 
-/// Why the agent stopped to ask, under the command.
 struct ApprovalReason: View {
     let reason: String
 

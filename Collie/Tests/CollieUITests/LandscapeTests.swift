@@ -127,8 +127,12 @@ final class LandscapeTests: XCTestCase {
         let field = app.textFields["Type an answer"]
         let send = app.buttons["Send answer"]
         XCTAssertTrue(eventually { shown(field, app) && shown(send, app) }, app.debugDescription)
-        let cards = app.scrollViews.containing(.button, identifier: "Approve").firstMatch
-        for _ in 0..<5 where !shown(approve, app) { cards.swipeUp() }
+        let command = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Bash: ")).firstMatch
+        // In landscape, swipeUp left the cards unscrolled; a press and drag scrolls them.
+        for _ in 0..<5 where !shown(approve, app) {
+            let start = command.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -100)))
+        }
         XCTAssertTrue(shown(approve, app), app.debugDescription)
         field.tap()
         let keyboard = app.keyboards.firstMatch

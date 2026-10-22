@@ -906,10 +906,11 @@ pub fn without_deny_countdown(kind: &str, text: &str) -> String {
     text.to_owned()
 }
 
-/// `text` without Claude Code's reason for asking, and the reason. Claude Code 2.1.308
-/// prints it (its hook input has no such field) under a dialog's closing `╌` rule, at the
-/// question's margin, every row starting `│ ` as it wraps, then a blank line, the
-/// question, and option 1 of the dialog's menu. The rows are joined, terminal escape
+/// `text` without Claude Code's reason for asking, and the reason. Claude Code prints it
+/// (its hook input has no such field) under a dialog's closing `╌` rule, at the question's
+/// margin, then a blank line (or the deny countdown, taken out before), the question, and
+/// option 1 of the dialog's menu: every row starting `│ ` as it wraps (2.1.308), or plain
+/// rows (2.1.295 in an unattended session). The rows are joined, terminal escape
 /// sequences dropped and whitespace collapsed; a reason with any other control, bidi or
 /// invisible format character, or one that only repeats lines of the dialog, leaves the
 /// screen whole and gives none. Cut at [`MAX_SNIPPET_CHARS`] with `…`.
@@ -931,14 +932,20 @@ pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>)
         return unchanged();
     };
     let margin = lines[question].len() - lines[question].trim_start().len();
-    let row = |l: &'a str| {
-        (l.len() - l.trim_start().len() == margin)
-            .then(|| l.trim_start().strip_prefix("│ "))
-            .flatten()
-    };
     let end = (0..question)
         .rfind(|&i| !lines[i].trim().is_empty())
         .map_or(0, |i| i + 1);
+    let barred = end > 0 && lines[end - 1].trim_start().starts_with("│ ");
+    let row = |l: &'a str| {
+        let t = l.trim_start();
+        if l.len() - t.len() != margin {
+            None
+        } else if barred {
+            t.strip_prefix("│ ")
+        } else {
+            (!t.is_empty() && !t.starts_with('│') && !is_dashed(t)).then_some(t)
+        }
+    };
     let start = (0..end)
         .rfind(|&i| row(lines[i]).is_none())
         .map_or(0, |i| i + 1);
@@ -974,7 +981,6 @@ pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>)
     (rest, Some(cut))
 }
 
-/// `s` without CSI, OSC and two-character escape sequences.
 fn without_escapes(s: &str) -> String {
     let mut out = String::new();
     let mut chars = s.chars().peekable();
@@ -2808,15 +2814,21 @@ me@mac app % codex
             assert!(!snippet(m.tail().iter().map(String::as_str)).contains("Dangerous"));
             assert_eq!(without_reason("codex", screen), (screen.to_owned(), None));
         }
-        for screen in [
-            BASH_LIVE,
-            BASH_COUNTDOWN,
-            PLAN_LIVE,
-            QUESTION_LIVE,
-            TRUST_LIVE,
-        ] {
+        for screen in [BASH_LIVE, PLAN_LIVE, QUESTION_LIVE, TRUST_LIVE] {
             assert_eq!(without_reason("claude", screen), (screen.to_owned(), None));
         }
+        let (rest, reason) =
+            without_reason("claude", &without_deny_countdown("claude", BASH_COUNTDOWN));
+        assert_eq!(
+            reason.as_deref(),
+            Some(
+                "Dangerous rm operation on statically-unresolvable target: /tmp/planlab/scratch/*"
+            )
+        );
+        assert_eq!(
+            context("claude", &rest),
+            "Bash: Remove the scratch files\nrm -rf scratch/*"
+        );
     }
 
     #[test]
@@ -2832,6 +2844,7 @@ me@mac app % codex
             Some("Dangerous rm operation".into())
         );
         assert_eq!(why(" │ a\n │   b  c"), Some("a b c".into()));
+        assert_eq!(why(" plain\n wrapped"), Some("plain wrapped".into()));
         for unsafe_row in [
             " │ rm \u{202e}fdp.exe",
             " │ rm\u{200b}",
@@ -2859,7 +2872,8 @@ me@mac app % codex
             dialog("   │ indented past the question"),
             no_blank,
             dialog("╌╌╌\n │ inside a command block"),
-            dialog(" not │ a reason row"),
+            dialog(" │ barred\n plain"),
+            dialog(" plain\n │ barred"),
         ] {
             assert_eq!(
                 without_reason("claude", &screen),

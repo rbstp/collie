@@ -167,6 +167,7 @@ pub fn fingerprint(
     terminal_id: &str,
     session: Option<&str>,
     region: &str,
+    reason: Option<&str>,
 ) -> [u8; 32] {
     let mut h = Sha256::new();
     for part in [
@@ -175,6 +176,7 @@ pub fn fingerprint(
         terminal_id,
         session.unwrap_or(""),
         region,
+        reason.unwrap_or(""),
     ] {
         h.update((part.len() as u64).to_be_bytes());
         h.update(part.as_bytes());
@@ -435,7 +437,16 @@ impl Approvals {
         let supports_note =
             offered.iter().any(|(d, _)| prompt::amend(*d).is_some()) && prompt::offers_note(&text);
         let session = a.agent_session.as_ref().map(|s| s.value.as_str());
-        let print = |region: &str| fingerprint(kind, rule, &a.terminal_id, session, region);
+        let print = |region: &str| {
+            fingerprint(
+                kind,
+                rule,
+                &a.terminal_id,
+                session,
+                region,
+                reason.as_deref(),
+            )
+        };
         Ok(Screen {
             pane_id: a.pane_id.clone(),
             seq: a.state_change_seq,
@@ -500,8 +511,9 @@ impl Approvals {
         let context = tool
             .as_ref()
             .map_or_else(|| screen.context.clone(), hooks::context);
+        // The reason goes first: the alert and the activity cut a long context at its end.
         let context = match &screen.reason {
-            Some(reason) if !context.is_empty() => format!("{context}\n{reason}"),
+            Some(reason) if !context.is_empty() => format!("{reason}\n{context}"),
             Some(reason) => reason.clone(),
             None => context,
         };
@@ -970,16 +982,21 @@ mod tests {
 
     #[test]
     fn fingerprint_covers_every_field() {
-        let base = fingerprint("claude", Some("r"), "t", Some("s"), "q");
-        assert_eq!(base, fingerprint("claude", Some("r"), "t", Some("s"), "q"));
+        let base = fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y"));
+        assert_eq!(
+            base,
+            fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y"))
+        );
         for other in [
-            fingerprint("codex", Some("r"), "t", Some("s"), "q"),
-            fingerprint("claude", Some("r2"), "t", Some("s"), "q"),
-            fingerprint("claude", None, "t", Some("s"), "q"),
-            fingerprint("claude", Some("r"), "t2", Some("s"), "q"),
-            fingerprint("claude", Some("r"), "t", None, "q"),
-            fingerprint("claude", Some("r"), "t", Some("s"), "q2"),
-            fingerprint("claude", Some("rt"), "", Some("s"), "q"),
+            fingerprint("codex", Some("r"), "t", Some("s"), "q", Some("y")),
+            fingerprint("claude", Some("r2"), "t", Some("s"), "q", Some("y")),
+            fingerprint("claude", None, "t", Some("s"), "q", Some("y")),
+            fingerprint("claude", Some("r"), "t2", Some("s"), "q", Some("y")),
+            fingerprint("claude", Some("r"), "t", None, "q", Some("y")),
+            fingerprint("claude", Some("r"), "t", Some("s"), "q2", Some("y")),
+            fingerprint("claude", Some("rt"), "", Some("s"), "q", Some("y")),
+            fingerprint("claude", Some("r"), "t", Some("s"), "q", None),
+            fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y2")),
         ] {
             assert_ne!(base, other);
         }
