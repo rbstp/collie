@@ -46,6 +46,16 @@
             "null"
           ]
         },
+        "last_prompt_origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "name": {
           "type": [
             "string",
@@ -937,6 +947,16 @@
         "id": {
           "type": "string"
         },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "parent_call_id": {
           "type": [
             "string",
@@ -1043,6 +1063,23 @@
         "name",
         "node_id",
         "herdr_session"
+      ],
+      "type": "object"
+    },
+    "MessageOrigin": {
+      "description": "A user message collied typed itself, matched exactly against the text it remembers typing.",
+      "properties": {
+        "kind": {
+          "description": "`pr_watch`: a pull request watch woke the agent.",
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "summary"
       ],
       "type": "object"
     },

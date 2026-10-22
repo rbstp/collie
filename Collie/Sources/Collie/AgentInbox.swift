@@ -296,7 +296,12 @@ private struct InboxRow: View {
                     }
                     Text(agent.lastLine ?? agent.displayTitle).lineLimit(2)
                 }
-                if let prompt = agent.lastPrompt {
+                if let line = agent.lastPromptOrigin?.wakeLine {
+                    Text("\(Image(systemName: "eye")) \(line)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if let prompt = agent.lastPrompt {
                     Text("You: \(prompt)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)

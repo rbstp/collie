@@ -160,3 +160,8 @@ struct PullRequestBadge: View {
         case stop(String)
     }
 }
+
+extension MessageOrigin {
+    /// Nil for a kind this app does not know: the message then shows as an ordinary prompt.
+    var wakeLine: String? { kind == "pr_watch" ? "PR watch: \(summary)" : nil }
+}

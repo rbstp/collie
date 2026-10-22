@@ -123,6 +123,17 @@ pub struct HistoryMessage {
     pub truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<MessageOrigin>,
+}
+
+/// A user message collied typed itself, matched exactly against the text it remembers typing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct MessageOrigin {
+    /// `pr_watch`: a pull request watch woke the agent.
+    pub kind: String,
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1287,6 +1298,8 @@ pub struct Agent {
     pub context_left: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_prompt_origin: Option<MessageOrigin>,
     /// When the transcript last changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_activity_ms: Option<u64>,

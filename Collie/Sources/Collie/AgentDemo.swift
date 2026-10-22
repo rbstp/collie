@@ -276,7 +276,12 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         }
         let messages = after == nil && before == nil ? (1...20).flatMap { turn in
             [
-                HistoryMessage(id: "u\(turn)", role: "user", text: "Run the approval tests again, round \(turn).", tool: nil, callId: nil, truncated: false, parentCallId: nil),
+                turn == 20
+                    ? HistoryMessage(
+                        id: "u\(turn)", role: "user", text: "Pull request #264 (https://github.com/rbstp/collie/pull/264) changed: check \"ios\" failed.",
+                        tool: nil, callId: nil, truncated: false, parentCallId: nil, origin: MessageOrigin(kind: "pr_watch", summary: "CI failed on #264")
+                    )
+                    : HistoryMessage(id: "u\(turn)", role: "user", text: "Run the approval tests again, round \(turn).", tool: nil, callId: nil, truncated: false, parentCallId: nil),
                 HistoryMessage(
                     id: "a\(turn)", role: "assistant",
                     text: "Round \(turn): all 18 approval tests pass. The fixed 200 ms wait is now a poll on the approval state with a five second deadline, so a slow run still passes and a real hang still fails.",

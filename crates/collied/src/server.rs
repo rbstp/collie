@@ -42,7 +42,7 @@ use crate::flock::{self, Baseline, Stars, StatusTracker};
 use crate::gate::{self, Decision};
 use crate::pairing::{Attempt, Pairing};
 use crate::peers::{self, Peer, Store};
-use crate::pr_watch::{self, Watch, Watches};
+use crate::pr_watch::{self, Wakes, Watch, Watches};
 use crate::pulls::{self, Pulls};
 use crate::push::{self, ActivityError, Push};
 use crate::terminal::{self, Grants};
@@ -601,6 +601,7 @@ pub async fn start_with(
     let tracker = StatusTracker::load(cfg.data_dir.join(config::STATUS_FILE));
     let stars = Stars::load(cfg.data_dir.join(config::STARS_FILE));
     let watches = Watches::load(cfg.data_dir.join(config::WATCHES_FILE));
+    let wakes = Wakes::load(cfg.data_dir.join(config::WAKES_FILE));
     let archive = pulls::ArchiveOnMerge::load(cfg.data_dir.join(config::ARCHIVE_ON_MERGE_FILE));
 
     let state = Arc::new(State {
@@ -629,7 +630,7 @@ pub async fn start_with(
         costs,
         live: Mutex::new(activity::Live::default()),
         turns: Mutex::new(Turns::default()),
-        pulls: Mutex::new(Pulls::new(watches, archive)),
+        pulls: Mutex::new(Pulls::new(watches, wakes, archive)),
         events,
         drive,
         approvals,
@@ -839,6 +840,7 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             let mut pulls = lock(&state.pulls);
             if let Some(agents) = &agents {
                 ended |= pulls.watches.retain_listed(agents);
+                pulls.wakes.retain_listed(agents);
             }
             ended |= pulls.watches.retain_paired(|by| peers.get(by).is_some());
         }
@@ -881,13 +883,19 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                     watching && lock(&state.peers).get(&by).is_some()
                 })
             };
-            if pr_watch::wake(&state.drive, agent, &watch, text, &auth)
+            if pr_watch::wake(&state.drive, agent, &watch, text.clone(), &auth)
                 .await
                 .is_err()
             {
                 continue;
             }
             let summary = watch.summary();
+            lock(&state.pulls).wakes.remember(
+                &terminal_id,
+                text.as_str(),
+                summary.clone(),
+                crate::now_ms(),
+            );
             state.audit.log(
                 "collied",
                 "pr.wake",
@@ -1378,7 +1386,7 @@ impl Session<'_> {
             agent.agent.clone(),
             agent.agent_session.as_ref().map(|s| s.value.clone()),
         );
-        let page = tokio::task::spawn_blocking(move || reader.history(&agent, &p))
+        let mut page = tokio::task::spawn_blocking(move || reader.history(&agent, &p))
             .await
             .map_err(|_| (ErrorCode::Internal, "history unavailable".into()))?;
         if !auth() {
@@ -1393,6 +1401,9 @@ impl Session<'_> {
         {
             return err(ErrorCode::AgentNotReady, "session changed; retry history");
         }
+        lock(&self.state.pulls)
+            .wakes
+            .mark(terminal.as_str(), &mut page.messages);
         if current.agent.as_deref() != Some("copilot") {
             return Ok(Response::History(page));
         }

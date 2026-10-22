@@ -708,6 +708,7 @@ fn normalize(
             call_id: call_id.map(|s| s.chars().take(128).collect()),
             truncated: false,
             parent_call_id: parent.map(str::to_owned),
+            origin: None,
         });
     };
     match kind {
@@ -747,6 +748,7 @@ fn normalize(
                         call_id: None,
                         truncated: false,
                         parent_call_id: None,
+                        origin: None,
                     })
                     .into_iter()
                     .collect();
