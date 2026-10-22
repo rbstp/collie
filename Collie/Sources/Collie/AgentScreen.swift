@@ -81,18 +81,13 @@ struct AgentScreen: View {
                 PaneCard(model: model, notice: notice)
             }
             if let approvals {
-                let cards = ForEach(approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)) { item in
-                    ApprovalCard(model: approvals, item: item, sendAnswer: model.typeAnswer)
+                let items = approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)
+                // Together the cards take at most a quarter of the screen, so the composer stays in reach.
+                let cap = height > 0 ? height / 4 / CGFloat(max(items.count, 1)) - 8 : .infinity
+                ForEach(items) { item in
+                    ApprovalCard(model: approvals, item: item, maxHeight: cap, sendAnswer: model.typeAnswer)
                         .padding(.horizontal)
                         .padding(.vertical, 4)
-                }
-                if verticalSizeClass == .compact {
-                    // The cards would push the composer off screen, so they scroll within part of the height.
-                    ScrollView { VStack(spacing: 0) { cards } }
-                        .frame(maxHeight: height / (typingInLandscape ? 3 : 2))
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    cards
                 }
                 if let notice = approvals.notice {
                     Text(notice).font(.footnote).padding(.horizontal).frame(maxWidth: .infinity, alignment: .leading)

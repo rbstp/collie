@@ -263,9 +263,26 @@ final class FakeAuthenticator: Authenticator {
     asked.reason = reason
     #expect(plain.reason == nil)
     let line = UIHostingController(rootView: ApprovalReason(reason: reason))
-        .sizeThatFits(in: CGSize(width: width - 24, height: .greatestFiniteMagnitude)).height
+        .sizeThatFits(in: CGSize(width: width - 20, height: .greatestFiniteMagnitude)).height
     #expect(line > 0)
-    #expect(abs(height(asked) - height(plain) - line - 10) < 1, "one reason line under the command, nothing without one")
+    #expect(abs(height(asked) - height(plain) - line - 6) < 1, "one reason line under the command, nothing without one")
+}
+
+@MainActor
+@Test func aCappedCardScrollsItsPromptInsteadOfGrowing() {
+    let model = ApprovalsModel(core: FakeApprovalCore(), auth: FakeAuthenticator())
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "nMAC", kind: .mac, key: "")
+    var long = approval("ap_1")
+    long.snippet = (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n")
+    long.reason = "Dangerous rm operation on statically-unresolvable target: command substitution output"
+    let item = ApprovalItem(machine: machine, approval: long, link: .connected)
+    let fits = CGSize(width: 402, height: CGFloat.greatestFiniteMagnitude)
+    let uncapped = UIHostingController(rootView: ApprovalCard(model: model, item: item, sendAnswer: { _ in })).sizeThatFits(in: fits)
+    #expect(uncapped.height > 200)
+    let capped = UIHostingController(rootView: ApprovalCard(model: model, item: item, maxHeight: 150, sendAnswer: { _ in }))
+        .sizeThatFits(in: fits).height
+    #expect(capped <= 150.5, "the prompt scrolls inside the card")
+    #expect(capped > 100, "Approve and Deny stay under the prompt")
 }
 
 private func approval(

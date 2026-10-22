@@ -11,7 +11,7 @@ For Claude Code:
 1. Approve or Deny from the notification, after unlocking the iPhone, or in the app.
 2. Confirm with Face ID or the passcode. Every decision asks again.
 
-Claude Code can stop to ask even in auto or bypass mode, for example before an `rm` on a path it cannot check. When it says why, such as "Dangerous rm operation on statically-unresolvable target: command substitution output", the notification shows that reason above the command, and the approval card in the session shows it below the command with a shield symbol.
+Claude Code can stop to ask even in auto or bypass mode, for example before an `rm` on a path it cannot check. When it says why, such as "Dangerous rm operation on statically-unresolvable target: command substitution output", the notification shows that reason under the command, and the approval card in the session shows it below the command with a shield symbol.
 
 `collied` reads the screen again before it answers. If the prompt changed in the meantime, `collied` refuses your answer as superseded rather than press it into the new prompt.
 

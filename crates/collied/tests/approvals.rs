@@ -988,7 +988,7 @@ async fn claude_says_why_it_asks_on_the_approval_and_in_the_sealed_alert() {
     assert!(!a.snippet.contains("Dangerous"), "{}", a.snippet);
     assert_eq!(
         open_context(&rig.notification_key, &rig.alerts(1).await[0].1.payload),
-        json!({"v": 1, "body": format!("{why}\nBash: Remove the build directory\n{command}")})
+        json!({"v": 1, "body": format!("Bash: Remove the build directory\n{command}\n{why}")})
     );
 
     let mut rig = Rig::start(TTL).await;
@@ -1003,7 +1003,7 @@ async fn claude_says_why_it_asks_on_the_approval_and_in_the_sealed_alert() {
     assert_eq!(a.reason.as_deref(), Some(why));
     assert_eq!(
         open_context(&rig.notification_key, &rig.alerts(1).await[0].1.payload),
-        json!({"v": 1, "body": format!("{why}\nBash: {command}\nRemove the build directory")})
+        json!({"v": 1, "body": format!("Bash: {command}\nRemove the build directory\n{why}")})
     );
 
     let mut rig = Rig::start(TTL).await;
@@ -1016,12 +1016,10 @@ async fn claude_says_why_it_asks_on_the_approval_and_in_the_sealed_alert() {
         .as_str()
         .unwrap()
         .to_owned();
-    let (first, context) = body.split_once('\n').unwrap();
-    assert_eq!(
-        first, why,
-        "a context at its cap never pushes the reason out"
-    );
-    assert_eq!(context.chars().count(), collied::prompt::MAX_CONTEXT_CHARS);
+    assert_eq!(body.chars().count(), collied::prompt::MAX_CONTEXT_CHARS);
+    let context = body
+        .strip_suffix(&format!("\n{why}"))
+        .expect("a context at its cap never pushes the reason out");
     assert!(
         context.starts_with("Bash: Remove the build directory\nrm -rf") && context.ends_with('…')
     );

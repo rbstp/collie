@@ -2829,6 +2829,10 @@ me@mac app % codex
             context("claude", &rest),
             "Bash: Remove the scratch files\nrm -rf scratch/*"
         );
+        for screen in RENAMED_BASH {
+            let (_, reason) = without_reason("claude", screen);
+            assert_eq!(reason.as_deref(), Some("This command requires approval"));
+        }
     }
 
     #[test]

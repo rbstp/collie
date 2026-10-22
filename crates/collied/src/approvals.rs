@@ -511,9 +511,20 @@ impl Approvals {
         let context = tool
             .as_ref()
             .map_or_else(|| screen.context.clone(), hooks::context);
-        // The reason goes first: the alert and the activity cut a long context at its end.
+        // The phone cuts the alert body to MAX_CONTEXT_CHARS: the context is cut first, so the
+        // reason stays. The Live Activity shows only the first lines: there the command wins.
         let context = match &screen.reason {
-            Some(reason) if !context.is_empty() => format!("{reason}\n{context}"),
+            Some(reason) if !context.is_empty() => {
+                let room = prompt::MAX_CONTEXT_CHARS - reason.chars().count() - 1;
+                let context = if context.chars().count() > room {
+                    let mut cut: String = context.chars().take(room - 1).collect();
+                    cut.push('…');
+                    cut
+                } else {
+                    context
+                };
+                format!("{context}\n{reason}")
+            }
             Some(reason) => reason.clone(),
             None => context,
         };
