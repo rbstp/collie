@@ -637,7 +637,7 @@ pub(crate) fn civil(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
-fn first_line(text: &str) -> Option<String> {
+pub(crate) fn first_line(text: &str) -> Option<String> {
     let line = text.lines().map(prompt::clean).find(|l| !l.is_empty())?;
     Some(if line.chars().count() > MAX_TEXT_CHARS {
         line.chars().take(MAX_TEXT_CHARS - 1).chain(['…']).collect()

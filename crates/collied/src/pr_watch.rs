@@ -712,12 +712,14 @@ impl Wakes {
         }
     }
 
-    /// `last_prompt` is cut to one line and `MAX_TEXT_CHARS`: a cut wake is not marked.
+    /// `last_prompt` is the prompt's first line as the transcript summary cuts it, so a
+    /// prompt that differs from a wake only after that cut is marked too.
     pub fn mark_prompt(&self, agent: &mut Agent) {
-        agent.last_prompt_origin = agent
-            .last_prompt
-            .as_deref()
-            .and_then(|prompt| self.origin(agent.terminal_id.as_str(), |text| text == prompt));
+        agent.last_prompt_origin = agent.last_prompt.as_deref().and_then(|prompt| {
+            self.origin(agent.terminal_id.as_str(), |text| {
+                crate::transcript::first_line(text).as_deref() == Some(prompt)
+            })
+        });
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1279,7 +1281,7 @@ mod tests {
             kind: "pr_watch".into(),
             summary: "CI failed, checks passed on #14673".into(),
         };
-        assert_eq!(messages[0].origin, Some(origin.clone()));
+        assert_eq!(messages[0].origin, Some(origin));
         assert!(
             messages[1..].iter().all(|m| m.origin.is_none()),
             "only the exact text of a user message"
@@ -1289,26 +1291,6 @@ mod tests {
         assert_eq!(
             other[0].origin, None,
             "only on the terminal it was typed in"
-        );
-
-        let mut agent: Agent = serde_json::from_value(serde_json::json!({
-            "terminal_id": "t1", "workspace_id": "w1", "kind": "claude", "name": null,
-            "title": null, "status": "idle", "status_since_ms": 1, "cwd": null,
-            "last_line": null, "last_prompt": text.as_str(),
-        }))
-        .unwrap();
-        restarted.mark_prompt(&mut agent);
-        assert_eq!(agent.last_prompt_origin, Some(origin));
-        agent.last_prompt = Some("fix the build".into());
-        restarted.mark_prompt(&mut agent);
-        assert_eq!(agent.last_prompt_origin, None);
-        let long = format!("{} {}", text.as_str(), "x".repeat(200));
-        wakes.remember("t1", &long, String::new(), 1);
-        agent.last_prompt = Some(long.chars().take(159).chain(['…']).collect());
-        Wakes::load(path.clone()).mark_prompt(&mut agent);
-        assert_eq!(
-            agent.last_prompt_origin, None,
-            "a cut prompt is not an exact match"
         );
 
         for i in 0..WAKES_KEPT {
@@ -1327,7 +1309,47 @@ mod tests {
         wakes.retain_listed(&[]);
         assert!(Wakes::load(path.clone()).wakes.contains_key("t1"));
         wakes.retain_listed(&[listed]);
-        assert!(Wakes::load(path).is_empty(), "a closed terminal's wakes go");
+        assert!(
+            Wakes::load(path).is_empty(),
+            "a terminal missing from the agent list loses its wakes"
+        );
+    }
+
+    #[test]
+    fn the_inbox_marks_the_cut_first_line_and_accepts_a_prompt_that_differs_after_the_cut() {
+        let mut wakes = Wakes::default();
+        let long = format!("Pull request #1 ({URL}) changed: {}.", "x".repeat(200));
+        wakes.remember("t1", &long, "CI failed on #1".into(), 1);
+        let cut: String = long.chars().take(159).chain(['…']).collect();
+        let prompt = |terminal_id: &str, last_prompt: &str| {
+            let mut agent: Agent = serde_json::from_value(serde_json::json!({
+                "terminal_id": terminal_id, "workspace_id": "w1", "kind": "claude",
+                "name": null, "title": null, "status": "idle", "status_since_ms": 1,
+                "cwd": null, "last_line": null, "last_prompt": last_prompt,
+            }))
+            .unwrap();
+            wakes.mark_prompt(&mut agent);
+            agent.last_prompt_origin
+        };
+        assert_eq!(
+            prompt("t1", &cut),
+            Some(MessageOrigin {
+                kind: "pr_watch".into(),
+                summary: "CI failed on #1".into()
+            })
+        );
+        assert_eq!(prompt("t1", "fix the build"), None);
+        assert_eq!(
+            prompt("t2", &cut),
+            None,
+            "only on the terminal it was typed in"
+        );
+        let typed = format!("{}, then fix it", &long[..long.len() - 1]);
+        let typed_cut: String = typed.chars().take(159).chain(['…']).collect();
+        assert!(
+            prompt("t1", &typed_cut).is_some(),
+            "accepted: the Inbox shows only the cut line, so text after it is not compared"
+        );
     }
 
     #[test]
