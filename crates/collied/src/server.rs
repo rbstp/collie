@@ -830,8 +830,11 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             _ = interval.tick() => {}
             _ = shutdown.changed() => return,
         }
-        if lock(&state.pulls).watches.list().is_empty() {
-            continue;
+        {
+            let pulls = lock(&state.pulls);
+            if pulls.watches.list().is_empty() && pulls.wakes.is_empty() {
+                continue;
+            }
         }
         let mut ended = false;
         let agents = herdr::agent_list(&state.herdr).await.ok();

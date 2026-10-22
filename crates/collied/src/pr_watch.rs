@@ -712,13 +712,16 @@ impl Wakes {
         }
     }
 
-    /// `last_prompt` is the prompt's first line as the transcript summary cuts it.
+    /// `last_prompt` is cut to one line and `MAX_TEXT_CHARS`: a cut wake is not marked.
     pub fn mark_prompt(&self, agent: &mut Agent) {
-        agent.last_prompt_origin = agent.last_prompt.as_deref().and_then(|prompt| {
-            self.origin(agent.terminal_id.as_str(), |text| {
-                crate::transcript::first_line(text).as_deref() == Some(prompt)
-            })
-        });
+        agent.last_prompt_origin = agent
+            .last_prompt
+            .as_deref()
+            .and_then(|prompt| self.origin(agent.terminal_id.as_str(), |text| text == prompt));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.wakes.is_empty()
     }
 
     /// Like `Watches::retain_listed`: a list with no agents is not trusted.
@@ -1299,6 +1302,14 @@ mod tests {
         agent.last_prompt = Some("fix the build".into());
         restarted.mark_prompt(&mut agent);
         assert_eq!(agent.last_prompt_origin, None);
+        let long = format!("{} {}", text.as_str(), "x".repeat(200));
+        wakes.remember("t1", &long, String::new(), 1);
+        agent.last_prompt = Some(long.chars().take(159).chain(['…']).collect());
+        Wakes::load(path.clone()).mark_prompt(&mut agent);
+        assert_eq!(
+            agent.last_prompt_origin, None,
+            "a cut prompt is not an exact match"
+        );
 
         for i in 0..WAKES_KEPT {
             wakes.remember("t1", &format!("wake {i}"), String::new(), 2);
@@ -1316,10 +1327,7 @@ mod tests {
         wakes.retain_listed(&[]);
         assert!(Wakes::load(path.clone()).wakes.contains_key("t1"));
         wakes.retain_listed(&[listed]);
-        assert!(
-            Wakes::load(path).wakes.is_empty(),
-            "a closed terminal's wakes go"
-        );
+        assert!(Wakes::load(path).is_empty(), "a closed terminal's wakes go");
     }
 
     #[test]
