@@ -8,7 +8,7 @@ use serde::Deserialize;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::pr_watch::Watches;
+use crate::pr_watch::{Wakes, Watches};
 
 pub const REFRESH: Duration = Duration::from_secs(120);
 pub const MERGED_REFRESH: Duration = Duration::from_secs(30 * 60);
@@ -371,13 +371,15 @@ pub struct Pulls {
     cache: HashMap<Key, Entry>,
     linked: HashMap<String, PullRequest>,
     pub watches: Watches,
+    pub wakes: Wakes,
     pub archive: ArchiveOnMerge,
 }
 
 impl Pulls {
-    pub fn new(watches: Watches, archive: ArchiveOnMerge) -> Self {
+    pub fn new(watches: Watches, wakes: Wakes, archive: ArchiveOnMerge) -> Self {
         Self {
             watches,
+            wakes,
             archive,
             ..Self::default()
         }
@@ -390,6 +392,7 @@ impl Pulls {
     pub fn fill(&self, agent: &mut Agent) {
         agent.pull_request = self.get(agent.terminal_id.as_str());
         agent.pr_watch = self.watches.shown(agent.terminal_id.as_str());
+        self.wakes.mark_prompt(agent);
     }
 
     pub fn cached(&self, key: &Key, now: Instant) -> Option<Option<PullRequest>> {

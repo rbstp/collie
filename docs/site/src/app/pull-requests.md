@@ -25,7 +25,7 @@ For a Claude Code agent with an open or draft pull request, the session menu off
 - someone else comments or reviews;
 - the branch starts to conflict.
 
-`collied` wakes only an agent that is idle or done and still on the watched branch, and sends you a "Woke" alert with a short summary. The watch stops when you choose **Stop watching**, when the pull request is merged or closed, after 10 wakes in a row made only of comments, or after 8 failed reads.
+`collied` wakes only an agent that is idle or done and still on the watched branch, and sends you a "Woke" alert with a short summary. Chat and the grid card preview show that wake as one line with an eye and the same summary, such as "PR watch: CI failed on #123", instead of a prompt from you; in Chat, tap it to read the full prompt. The Inbox shows the same line, matching the first line of the prompt as it shows it. The watch stops when you choose **Stop watching**, when the pull request is merged or closed, after 10 wakes in a row made only of comments, or after 8 failed reads.
 
 ## Archive when the pull request merges
 

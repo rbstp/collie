@@ -5,7 +5,10 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use protocol::{AgentPromptParams, AgentStatus, ErrorCode, OpId, PrWatch, PromptText, TerminalId};
+use protocol::{
+    Agent, AgentPromptParams, AgentStatus, ErrorCode, HistoryMessage, MessageOrigin, OpId, PrWatch,
+    PromptText, TerminalId,
+};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
@@ -18,6 +21,7 @@ pub const EVERY_MINUTES: [u32; 4] = [2, 5, 15, 30];
 const COMMENT_WAKES: u32 = 10;
 const FAILED_READS: u32 = 8;
 const LISTED: usize = 10;
+const WAKES_KEPT: usize = 20;
 
 /// No body is asked for: review and comment text never reaches collied.
 const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
@@ -638,6 +642,104 @@ impl Watches {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Wake {
+    text: String,
+    summary: String,
+    at_ms: u64,
+}
+
+/// The last wake prompts typed into each terminal, kept on disk apart from the watches so
+/// Chat still knows them after the watch ends or collied restarts.
+#[derive(Default)]
+pub struct Wakes {
+    wakes: BTreeMap<String, Vec<Wake>>,
+    path: Option<PathBuf>,
+}
+
+impl Wakes {
+    pub fn load(path: PathBuf) -> Self {
+        let wakes = peers::load_json(&path).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "could not read the pull request wakes");
+            BTreeMap::new()
+        });
+        Self {
+            wakes,
+            path: Some(path),
+        }
+    }
+
+    fn save(&self) {
+        let Some(path) = self.path.as_deref() else {
+            return;
+        };
+        if let Err(e) = peers::replace_json(path, &self.wakes) {
+            tracing::warn!(error = %e, "could not save the pull request wakes");
+        }
+    }
+
+    pub fn remember(&mut self, terminal_id: &str, text: &str, summary: String, at_ms: u64) {
+        let wakes = self.wakes.entry(terminal_id.to_owned()).or_default();
+        wakes.push(Wake {
+            text: text.to_owned(),
+            summary,
+            at_ms,
+        });
+        if wakes.len() > WAKES_KEPT {
+            wakes.drain(..wakes.len() - WAKES_KEPT);
+        }
+        self.save();
+    }
+
+    fn origin(&self, terminal_id: &str, typed: impl Fn(&str) -> bool) -> Option<MessageOrigin> {
+        let wake = self
+            .wakes
+            .get(terminal_id)?
+            .iter()
+            .rev()
+            .find(|w| typed(&w.text))?;
+        Some(MessageOrigin {
+            kind: "pr_watch".into(),
+            summary: wake.summary.clone(),
+        })
+    }
+
+    pub fn mark(&self, terminal_id: &str, messages: &mut [HistoryMessage]) {
+        for m in messages {
+            if m.role == "user" && m.tool.is_none() && m.parent_call_id.is_none() {
+                m.origin = self.origin(terminal_id, |text| text == m.text);
+            }
+        }
+    }
+
+    /// `last_prompt` is the prompt's first line as the transcript summary cuts it, so a
+    /// prompt that differs from a wake only after that cut is marked too.
+    pub fn mark_prompt(&self, agent: &mut Agent) {
+        agent.last_prompt_origin = agent.last_prompt.as_deref().and_then(|prompt| {
+            self.origin(agent.terminal_id.as_str(), |text| {
+                crate::transcript::first_line(text).as_deref() == Some(prompt)
+            })
+        });
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.wakes.is_empty()
+    }
+
+    /// Like `Watches::retain_listed`: a list with no agents is not trusted.
+    pub fn retain_listed(&mut self, agents: &[AgentInfo]) {
+        if agents.is_empty() {
+            return;
+        }
+        let before = self.wakes.len();
+        self.wakes
+            .retain(|t, _| agents.iter().any(|a| a.terminal_id == *t));
+        if self.wakes.len() != before {
+            self.save();
+        }
+    }
+}
+
 /// Only an idle or done Claude Code agent still on the watched branch is woken, through
 /// `Driver::prompt` and every one of its guards: with no `expected_draft`, a box holding
 /// text refuses the prompt and is never cleared. The status is read again right before the
@@ -1143,6 +1245,111 @@ mod tests {
         assert!(watches.shown("t3").is_some());
         assert!(watches.stop("t3"));
         assert!(Watches::load(path).list().is_empty());
+    }
+
+    #[test]
+    fn only_remembered_wake_prompts_are_marked_and_they_survive_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pr-wakes.json");
+        let mut wakes = Wakes::load(path.clone());
+        let mut watch = Watch::new(URL, 14673);
+        watch.observe(read(&fixture("watch-failing.json")));
+        let text = watch.prompt().unwrap();
+        wakes.remember("t1", text.as_str(), watch.summary(), 1);
+        let message = |role: &str, text: &str| HistoryMessage {
+            id: "m".into(),
+            role: role.into(),
+            text: text.into(),
+            tool: None,
+            call_id: None,
+            truncated: false,
+            parent_call_id: None,
+            origin: None,
+        };
+        let mut messages = vec![
+            message("user", text.as_str()),
+            message("user", &format!("{} ", text.as_str())),
+            message(
+                "user",
+                "Pull request #14673 changed: check \"govulncheck\" failed.",
+            ),
+            message("assistant", text.as_str()),
+        ];
+        let restarted = Wakes::load(path.clone());
+        restarted.mark("t1", &mut messages);
+        let origin = MessageOrigin {
+            kind: "pr_watch".into(),
+            summary: "CI failed, checks passed on #14673".into(),
+        };
+        assert_eq!(messages[0].origin, Some(origin));
+        assert!(
+            messages[1..].iter().all(|m| m.origin.is_none()),
+            "only the exact text of a user message"
+        );
+        let mut other = vec![message("user", text.as_str())];
+        restarted.mark("t2", &mut other);
+        assert_eq!(
+            other[0].origin, None,
+            "only on the terminal it was typed in"
+        );
+
+        for i in 0..WAKES_KEPT {
+            wakes.remember("t1", &format!("wake {i}"), String::new(), 2);
+        }
+        let mut first = vec![message("user", text.as_str()), message("user", "wake 0")];
+        Wakes::load(path.clone()).mark("t1", &mut first);
+        assert!(first[0].origin.is_none(), "the oldest wake is dropped");
+        assert!(first[1].origin.is_some());
+
+        let listed: AgentInfo = serde_json::from_value(serde_json::json!({
+            "terminal_id": "t2", "workspace_id": "w1", "pane_id": "w1:p1",
+            "agent_status": "idle", "agent": "claude",
+        }))
+        .unwrap();
+        wakes.retain_listed(&[]);
+        assert!(Wakes::load(path.clone()).wakes.contains_key("t1"));
+        wakes.retain_listed(&[listed]);
+        assert!(
+            Wakes::load(path).is_empty(),
+            "a terminal missing from the agent list loses its wakes"
+        );
+    }
+
+    #[test]
+    fn the_inbox_marks_the_cut_first_line_and_accepts_a_prompt_that_differs_after_the_cut() {
+        let mut wakes = Wakes::default();
+        let long = format!("Pull request #1 ({URL}) changed: {}.", "x".repeat(200));
+        wakes.remember("t1", &long, "CI failed on #1".into(), 1);
+        let cut: String = long.chars().take(159).chain(['…']).collect();
+        let prompt = |terminal_id: &str, last_prompt: &str| {
+            let mut agent: Agent = serde_json::from_value(serde_json::json!({
+                "terminal_id": terminal_id, "workspace_id": "w1", "kind": "claude",
+                "name": null, "title": null, "status": "idle", "status_since_ms": 1,
+                "cwd": null, "last_line": null, "last_prompt": last_prompt,
+            }))
+            .unwrap();
+            wakes.mark_prompt(&mut agent);
+            agent.last_prompt_origin
+        };
+        assert_eq!(
+            prompt("t1", &cut),
+            Some(MessageOrigin {
+                kind: "pr_watch".into(),
+                summary: "CI failed on #1".into()
+            })
+        );
+        assert_eq!(prompt("t1", "fix the build"), None);
+        assert_eq!(
+            prompt("t2", &cut),
+            None,
+            "only on the terminal it was typed in"
+        );
+        let typed = format!("{}, then fix it", &long[..long.len() - 1]);
+        let typed_cut: String = typed.chars().take(159).chain(['…']).collect();
+        assert!(
+            prompt("t1", &typed_cut).is_some(),
+            "accepted: the Inbox shows only the cut line, so text after it is not compared"
+        );
     }
 
     #[test]

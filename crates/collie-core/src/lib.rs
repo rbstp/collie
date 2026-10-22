@@ -389,6 +389,8 @@ pub struct AgentSummary {
     #[uniffi(default = None)]
     pub last_prompt: Option<String>,
     #[uniffi(default = None)]
+    pub last_prompt_origin: Option<MessageOrigin>,
+    #[uniffi(default = None)]
     pub last_activity_ms: Option<u64>,
     #[uniffi(default = [])]
     pub subagents: Vec<SubagentSummary>,
@@ -700,6 +702,23 @@ pub struct HistoryMessage {
     pub call_id: Option<String>,
     pub truncated: bool,
     pub parent_call_id: Option<String>,
+    #[uniffi(default = None)]
+    pub origin: Option<MessageOrigin>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct MessageOrigin {
+    pub kind: String,
+    pub summary: String,
+}
+
+impl From<protocol::MessageOrigin> for MessageOrigin {
+    fn from(o: protocol::MessageOrigin) -> Self {
+        Self {
+            kind: o.kind,
+            summary: o.summary,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -2598,6 +2617,7 @@ impl CollieCore {
                         call_id: m.call_id,
                         truncated: m.truncated,
                         parent_call_id: m.parent_call_id,
+                        origin: m.origin.map(Into::into),
                     })
                     .collect(),
             }),
@@ -3477,6 +3497,7 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
         last_line: a.last_line.clone(),
         context_left: a.context_left,
         last_prompt: a.last_prompt.clone(),
+        last_prompt_origin: a.last_prompt_origin.clone().map(Into::into),
         last_activity_ms: a.last_activity_ms,
         subagents: a
             .subagents
@@ -4962,6 +4983,7 @@ mod tailnet_tests {
                 last_line: None,
                 context_left: None,
                 last_prompt: None,
+                last_prompt_origin: None,
                 last_activity_ms: None,
                 subagents: Vec::new(),
                 pull_request: None,

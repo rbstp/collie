@@ -300,11 +300,44 @@ struct ConversationRowView: View {
         Group {
             if let message = row.message, row.event {
                 Text(verbatim: message.text).font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+            } else if let message = row.message, let line = message.origin?.wakeLine {
+                ConversationWake(message: message, line: line, query: query)
             } else if let message = row.message {
                 ConversationMessage(message: message, query: query)
             } else {
                 ConversationActivity(tools: row.tools, steps: row.subagentSteps)
             }
+        }
+    }
+}
+
+private struct ConversationWake: View {
+    let message: HistoryMessage
+    let line: String
+    let query: String
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                expanded.toggle()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "eye")
+                    Text(verbatim: line).lineLimit(1)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2)
+                }
+                .font(.footnote)
+            }
+            .buttonStyle(.glass)
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            if expanded {
+                ConversationMarkdown(text: message.text, query: query)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contextMenu {
+            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
         }
     }
 }

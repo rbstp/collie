@@ -195,6 +195,7 @@ pub fn map_agent(
         last_line: derived.last_line,
         context_left: derived.context_left,
         last_prompt: derived.last_prompt,
+        last_prompt_origin: None,
         last_activity_ms: derived.last_activity_ms,
         subagents: derived.subagents,
         pull_request: None,

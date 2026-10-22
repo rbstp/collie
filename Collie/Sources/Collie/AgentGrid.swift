@@ -305,16 +305,22 @@ private struct ChatPreview: View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(messages, id: \.id) { message in
                 let user = message.role == "user"
-                Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text))
-                    .lineLimit(lines)
-                    .padding(user ? 6 : 0)
-                    .background {
-                        if user {
-                            RoundedRectangle(cornerRadius: 8).fill(.tint.opacity(0.1))
-                        }
+                Group {
+                    if let line = message.origin?.wakeLine {
+                        Text("\(Image(systemName: "eye")) \(line)").lineLimit(1)
+                    } else {
+                        Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text))
+                            .lineLimit(lines)
                     }
-                    .padding(.leading, user ? 16 : 0)
-                    .frame(maxWidth: .infinity, alignment: user ? .trailing : .leading)
+                }
+                .padding(user ? 6 : 0)
+                .background {
+                    if user {
+                        RoundedRectangle(cornerRadius: 8).fill(.tint.opacity(0.1))
+                    }
+                }
+                .padding(.leading, user ? 16 : 0)
+                .frame(maxWidth: .infinity, alignment: user ? .trailing : .leading)
             }
         }
         .font(.caption2)
