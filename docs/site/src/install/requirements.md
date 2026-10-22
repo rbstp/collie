@@ -28,7 +28,7 @@ You do not need to install Zig: the libghostty-vt build downloads its own pinned
 
 ## To build collied on Linux
 
-- Rust (the version in `rust-toolchain.toml`) and Go 1.27.2 or later
+- Rust (the version in `rust-toolchain.toml`) and Go 1.27.3 or later
 - A C compiler and libclang
 - [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st)
 - Node, for `just tray-test`
