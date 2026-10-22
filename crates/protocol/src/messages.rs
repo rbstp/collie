@@ -1674,6 +1674,10 @@ pub struct Approval {
     pub workspace_label: String,
     pub snippet: String,
     pub tool: Option<PendingTool>,
+    /// Why Claude Code asked, as its dialog says: one line of at most 200 characters with
+    /// no control, bidi or invisible format character. Absent when it gives none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     pub options: Vec<Decision>,
     /// The menu on screen, in order, whenever collied could read one.
     #[serde(default)]
@@ -2829,6 +2833,7 @@ mod tests {
             !approval.accepts_input && !approval.has_text_field && !approval.supports_note,
             "an older collied takes no input the phone can count on"
         );
+        assert_eq!(approval.reason, None);
     }
 
     #[test]

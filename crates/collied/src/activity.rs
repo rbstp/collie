@@ -449,6 +449,7 @@ mod tests {
             workspace_label: "api".into(),
             snippet: "SECRET snippet".into(),
             tool: None,
+            reason: None,
             options: vec![],
             choices: vec![],
             accepts_input: false,

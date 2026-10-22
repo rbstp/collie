@@ -219,6 +219,24 @@ mod tests {
     }
 
     #[test]
+    fn the_hook_input_has_no_reason_but_names_the_dialog_that_shows_one() {
+        let raw = include_str!("../tests/fixtures/claude-2.1.308/rm-reason.hook.json");
+        let fields: Value = serde_json::from_str(raw).unwrap();
+        assert!(
+            fields
+                .as_object()
+                .unwrap()
+                .keys()
+                .all(|k| !k.contains("reason"))
+        );
+        let input: Input = serde_json::from_str(raw).unwrap();
+        let r = report(&input.tool_name, input.tool_input).unwrap();
+        let (screen, reason) = prompt::without_reason("claude", prompt::fixtures::RM_REASON);
+        assert!(reason.is_some());
+        assert!(r.on(&dialog(&screen)));
+    }
+
+    #[test]
     fn finds_the_hook_among_others() {
         let other = json!({"type": "command", "command": "node permissionRequest.cjs"});
         let ours = json!({"type": "command", "command": "/Users/me/.cargo/bin/collied hook", "timeout": 5});

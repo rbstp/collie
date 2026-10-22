@@ -906,6 +906,109 @@ pub fn without_deny_countdown(kind: &str, text: &str) -> String {
     text.to_owned()
 }
 
+/// `text` without Claude Code's reason for asking, and the reason. Claude Code 2.1.308
+/// prints it (its hook input has no such field) under a dialog's closing `╌` rule, at the
+/// question's margin, every row starting `│ ` as it wraps, then a blank line, the
+/// question, and option 1 of the dialog's menu. The rows are joined, terminal escape
+/// sequences dropped and whitespace collapsed; a reason with any other control, bidi or
+/// invisible format character, or one that only repeats lines of the dialog, leaves the
+/// screen whole and gives none. Cut at [`MAX_SNIPPET_CHARS`] with `…`.
+pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>) {
+    let unchanged = || (text.to_owned(), None);
+    if kind != "claude" || Menu::parse_numbered(text).is_none() {
+        return unchanged();
+    }
+    let lines: Vec<&'a str> = text.lines().collect();
+    let Some(question) = lines
+        .iter()
+        .rposition(|l| option_line(l).is_some())
+        .and_then(|last| {
+            (0..=last).rfind(|&i| option_line(lines[i]).is_some_and(|(_, n, _)| n == 1))
+        })
+        .and_then(|first| first.checked_sub(1))
+        .filter(|&q| lines[q].trim_start().starts_with("Do you want to"))
+    else {
+        return unchanged();
+    };
+    let margin = lines[question].len() - lines[question].trim_start().len();
+    let row = |l: &'a str| {
+        (l.len() - l.trim_start().len() == margin)
+            .then(|| l.trim_start().strip_prefix("│ "))
+            .flatten()
+    };
+    let end = (0..question)
+        .rfind(|&i| !lines[i].trim().is_empty())
+        .map_or(0, |i| i + 1);
+    let start = (0..end)
+        .rfind(|&i| row(lines[i]).is_none())
+        .map_or(0, |i| i + 1);
+    let dialog = lines.len() - after_last_rule(text).len();
+    if end == question
+        || start == end
+        || start <= dialog
+        || !is_dashed(lines[start - 1])
+        || (dialog..start).filter(|&i| is_dashed(lines[i])).count() % 2 == 1
+    {
+        return unchanged();
+    }
+    let joined: Vec<&str> = lines[start..end].iter().filter_map(|l| row(l)).collect();
+    let reason = without_escapes(&joined.join(" "));
+    if reason.chars().any(|c| c.is_control() || is_format(c)) {
+        return unchanged();
+    }
+    let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    let rest = lines[..start]
+        .iter()
+        .chain(&lines[end..])
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if reason.is_empty() || shows_whole(&squashed_lines(&rest), &reason) {
+        return unchanged();
+    }
+    if reason.chars().count() <= MAX_SNIPPET_CHARS {
+        return (rest, Some(reason));
+    }
+    let mut cut: String = reason.chars().take(MAX_SNIPPET_CHARS - 1).collect();
+    cut.push('…');
+    (rest, Some(cut))
+}
+
+/// `s` without CSI, OSC and two-character escape sequences.
+fn without_escapes(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        let csi = match c {
+            '\u{1b}' => match chars.next() {
+                Some('[') => true,
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                            break;
+                        }
+                    }
+                    false
+                }
+                _ => false,
+            },
+            '\u{9b}' => true,
+            _ => {
+                out.push(c);
+                false
+            }
+        };
+        if csi {
+            for c in chars.by_ref() {
+                if ('\u{40}'..='\u{7e}').contains(&c) {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
 fn is_deny_countdown(line: &str) -> bool {
     let Some(time) = line
         .strip_prefix(DENY_COUNTDOWN.0)
@@ -1125,6 +1228,12 @@ pub mod fixtures {
         include_str!("../tests/fixtures/claude-2.1.289/bash-amend-yes.detection.txt");
     pub const BASH_AMEND_TYPED_LIVE: &str =
         include_str!("../tests/fixtures/claude-2.1.289/bash-amend-yes-typed.detection.txt");
+    // Claude Code 2.1.308 asking for a guarded `rm` with its reason under the command, at
+    // full width and wrapped in a narrow pane.
+    pub const RM_REASON: &str =
+        include_str!("../tests/fixtures/claude-2.1.308/rm-reason.detection.txt");
+    pub const RM_REASON_WRAPPED: &str =
+        include_str!("../tests/fixtures/claude-2.1.308/rm-reason-wrapped.detection.txt");
     // The plan prompt (herdr rule legacy_no_prompt_blocker), indented by 2 columns, and
     // the same with feedback typed into its third option.
     pub const PLAN_LIVE: &str = include_str!("../tests/fixtures/claude-2.1.289/plan.detection.txt");
@@ -1273,6 +1382,7 @@ pub mod fixtures {
             QUESTION,
             PLAN,
             BASH_COUNTDOWN,
+            RM_REASON_WRAPPED,
             RENAMED_IDLE_BOX,
             CODEX_UPDATES[0],
             CODEX[0].1,
@@ -1360,6 +1470,7 @@ mod tests {
                 settings_picker(kind, rule, &text);
                 context(kind, &text);
                 without_deny_countdown(kind, &text);
+                without_reason(kind, &text);
                 let (_, kept) = without_session_name(kind, rule, &text);
                 prop_assert!(text.starts_with(kept));
             }
@@ -2676,6 +2787,85 @@ me@mac app % codex
         );
         for screen in RENAMED_PICKERS {
             assert!(settings_picker("claude", Some("live_blocked_form"), screen));
+        }
+    }
+
+    const RM_WHY: &str =
+        "Dangerous rm operation on statically-unresolvable target: command substitution output";
+
+    #[test]
+    fn claude_says_why_it_asks_under_the_command() {
+        for screen in [RM_REASON, RM_REASON_WRAPPED] {
+            let (rest, reason) = without_reason("claude", screen);
+            assert_eq!(reason.as_deref(), Some(RM_WHY));
+            assert!(!rest.contains("Dangerous"));
+            let m = Menu::parse(&rest).unwrap();
+            assert_eq!(m.decisions(), [(Approve, 0), (Deny, 1)]);
+            assert_eq!(
+                context("claude", &rest),
+                "Bash: Remove the build directory\nrm -rf \"$(printf build)\""
+            );
+            assert!(!snippet(m.tail().iter().map(String::as_str)).contains("Dangerous"));
+            assert_eq!(without_reason("codex", screen), (screen.to_owned(), None));
+        }
+        for screen in [
+            BASH_LIVE,
+            BASH_COUNTDOWN,
+            PLAN_LIVE,
+            QUESTION_LIVE,
+            TRUST_LIVE,
+        ] {
+            assert_eq!(without_reason("claude", screen), (screen.to_owned(), None));
+        }
+    }
+
+    #[test]
+    fn a_reason_is_one_safe_line_that_says_something_new() {
+        let dialog = |rows: &str| {
+            format!(
+                "out\n────\n Bash command\n Remove it\n╌╌╌\n rm -rf \"$(printf build)\"\n╌╌╌\n{rows}\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend"
+            )
+        };
+        let why = |rows: &str| without_reason("claude", &dialog(rows)).1;
+        assert_eq!(
+            why(" │ Dangerous \u{1b}[1mrm\u{1b}[0m \u{9b}2Kop\u{1b}]8;;https://x\u{7}eration"),
+            Some("Dangerous rm operation".into())
+        );
+        assert_eq!(why(" │ a\n │   b  c"), Some("a b c".into()));
+        for unsafe_row in [
+            " │ rm \u{202e}fdp.exe",
+            " │ rm\u{200b}",
+            " │ rm \u{7}x",
+            " │ rm\tx",
+        ] {
+            let screen = dialog(unsafe_row);
+            assert_eq!(without_reason("claude", &screen), (screen.clone(), None));
+        }
+        let long: Vec<String> = (0..8)
+            .map(|i| format!(" │ {i} {}", "x".repeat(40)))
+            .collect();
+        let cut = why(&long.join("\n")).unwrap();
+        assert_eq!(cut.chars().count(), MAX_SNIPPET_CHARS);
+        assert!(cut.starts_with("0 xxx") && cut.ends_with('…'));
+        for repeat in [
+            " │ rm -rf \"$(printf build)\"",
+            " │ Remove it",
+            " │ Bash command",
+        ] {
+            assert_eq!(why(repeat), None, "{repeat}");
+        }
+        let no_blank = dialog(" │ no blank line").replace("line\n\n", "line\n");
+        for screen in [
+            dialog("   │ indented past the question"),
+            no_blank,
+            dialog("╌╌╌\n │ inside a command block"),
+            dialog(" not │ a reason row"),
+        ] {
+            assert_eq!(
+                without_reason("claude", &screen),
+                (screen.clone(), None),
+                "{screen}"
+            );
         }
     }
 }

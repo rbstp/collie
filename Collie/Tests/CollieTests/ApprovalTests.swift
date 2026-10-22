@@ -1,5 +1,6 @@
 import CollieCore
 import Foundation
+import SwiftUI
 import Synchronization
 import Testing
 import UserNotifications
@@ -244,6 +245,27 @@ final class FakeAuthenticator: Authenticator {
         }
         held.forEach { $0.resume() }
     }
+}
+
+@MainActor
+@Test func theCardShowsWhyUnderTheCommandOnlyWhenTheAgentGaveAReason() {
+    let model = ApprovalsModel(core: FakeApprovalCore(), auth: FakeAuthenticator())
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "nMAC", kind: .mac, key: "")
+    let width: CGFloat = 402
+    let height = { (approval: PendingApproval) in
+        let item = ApprovalItem(machine: machine, approval: approval, link: .connected)
+        return UIHostingController(rootView: ApprovalCard(model: model, item: item, sendAnswer: { _ in }))
+            .sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height
+    }
+    let reason = "Dangerous rm operation on statically-unresolvable target: command substitution output"
+    let plain = approval("ap_1")
+    var asked = plain
+    asked.reason = reason
+    #expect(plain.reason == nil)
+    let line = UIHostingController(rootView: ApprovalReason(reason: reason))
+        .sizeThatFits(in: CGSize(width: width - 24, height: .greatestFiniteMagnitude)).height
+    #expect(line > 0)
+    #expect(abs(height(asked) - height(plain) - line - 10) < 1, "one reason line under the command, nothing without one")
 }
 
 private func approval(

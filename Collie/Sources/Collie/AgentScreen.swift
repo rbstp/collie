@@ -84,7 +84,7 @@ struct AgentScreen: View {
                 let cards = ForEach(approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)) { item in
                     ApprovalCard(model: approvals, item: item, sendAnswer: model.typeAnswer)
                         .padding(.horizontal)
-                        .background(Color.red.opacity(0.08))
+                        .padding(.vertical, 4)
                 }
                 if verticalSizeClass == .compact {
                     // The cards would push the composer off screen, so they scroll within part of the height.

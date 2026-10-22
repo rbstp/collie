@@ -1467,6 +1467,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             workspace_label: "api".into(),
             snippet: "rm -rf build SNIPPET".into(),
             tool: None,
+            reason: None,
             options,
             choices: vec![protocol::ApprovalChoice {
                 index: 0,

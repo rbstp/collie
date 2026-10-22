@@ -1,0 +1,18 @@
+{
+  "session_id": "70de2c8e-3a1c-4f91-b96a-2b66abb291bf",
+  "transcript_path": "/Users/me/.claude/projects/-tmp-rmcase/70de2c8e-3a1c-4f91-b96a-2b66abb291bf.jsonl",
+  "cwd": "/tmp/rmcase",
+  "scratchpad_dir": "/tmp/claude/-tmp-rmcase/70de2c8e-3a1c-4f91-b96a-2b66abb291bf/scratchpad",
+  "prompt_id": "35568577-34b9-4706-aa78-6c943f34f1f0",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "rm -rf \"$(printf build)\"",
+    "description": "Remove the build directory"
+  },
+  "permission_suggestions": []
+}

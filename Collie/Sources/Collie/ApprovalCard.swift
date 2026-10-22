@@ -10,11 +10,11 @@ struct ApprovalCard: View {
     private var expanded: Bool { model.expanded.contains(item.id) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Button {
                 withAnimation { model.toggleExpanded(item) }
             } label: {
-                HStack(alignment: .firstTextBaseline) {
+                HStack(alignment: .center, spacing: 10) {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -28,9 +28,14 @@ struct ApprovalCard: View {
                     }
                     Spacer()
                     TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text("\(Image(systemName: "timer")) \(Countdown.string(untilMs: approval.expiresAtMs, now: context.date))")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                        Label(Countdown.string(untilMs: approval.expiresAtMs, now: context.date), systemImage: "timer")
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(AgentState.blocked.color)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .padding(2)
+                            .glassEffect(.regular, in: .capsule)
+                            .fixedSize()
                     }
                 }
                 .contentShape(Rectangle())
@@ -53,6 +58,9 @@ struct ApprovalCard: View {
                     .padding(8)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 8))
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if let reason = approval.reason {
+                ApprovalReason(reason: reason)
             }
             if approval.supportsNote, model.noting.contains(item.id) {
                 NoteField(model: model, item: item)
@@ -85,7 +93,29 @@ struct ApprovalCard: View {
                 FeedbackField(model: model, item: item, sendAnswer: sendAnswer)
             }
         }
-        .padding(.vertical, 4)
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .background(SessionBarDim(), in: .rect(cornerRadius: 20))
+    }
+}
+
+/// Why the agent stopped to ask, under the command.
+struct ApprovalReason: View {
+    let reason: String
+
+    var body: some View {
+        Label {
+            Text(verbatim: reason)
+        } icon: {
+            Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.orange)
+        }
+        .font(.footnote)
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Reason: \(reason)")
     }
 }
 

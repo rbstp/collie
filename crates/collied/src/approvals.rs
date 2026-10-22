@@ -59,6 +59,7 @@ struct Screen {
     /// The fingerprint with the menu cursor on each option in turn.
     cursor_at: Vec<[u8; 32]>,
     snippet: String,
+    reason: Option<String>,
     context: String,
 }
 
@@ -67,6 +68,7 @@ impl Screen {
     /// reissue an approval.
     fn shows_same(&self, other: &Screen) -> bool {
         self.snippet == other.snippet
+            && self.reason == other.reason
             && self.offered == other.offered
             && self.menu.as_ref().map(|m| &m.options) == other.menu.as_ref().map(|m| &m.options)
             && self.accepts_input == other.accepts_input
@@ -410,7 +412,8 @@ impl Approvals {
         let matched = explain.matched_rule.map(|r| r.id);
         let detected = herdr::detection_text(&self.herdr, &a.pane_id).await?;
         let (rule, form) = prompt::without_session_name(kind, matched.as_deref(), &detected);
-        let text = prompt::without_deny_countdown(kind, form);
+        let (text, reason) =
+            prompt::without_reason(kind, &prompt::without_deny_countdown(kind, form));
         let menu = prompt::uses_menu(kind, rule)
             .then(|| Menu::parse(&text))
             .flatten();
@@ -451,6 +454,7 @@ impl Approvals {
             menu,
             offered,
             snippet,
+            reason,
             context: prompt::context(kind, &text),
         })
     }
@@ -483,6 +487,7 @@ impl Approvals {
             workspace_label: workspace_label(&a.workspace_id, workspaces),
             snippet: screen.snippet.clone(),
             tool: tool.clone(),
+            reason: screen.reason.clone(),
             options: screen.offered.iter().map(|(d, _)| *d).collect(),
             choices: screen.menu.as_ref().map_or_else(Vec::new, Menu::choices),
             accepts_input: screen.accepts_input,
@@ -495,6 +500,11 @@ impl Approvals {
         let context = tool
             .as_ref()
             .map_or_else(|| screen.context.clone(), hooks::context);
+        let context = match &screen.reason {
+            Some(reason) if !context.is_empty() => format!("{context}\n{reason}"),
+            Some(reason) => reason.clone(),
+            None => context,
+        };
         let alert = {
             let mut inner = self.lock();
             if inner.pending.contains_key(&a.terminal_id) {
