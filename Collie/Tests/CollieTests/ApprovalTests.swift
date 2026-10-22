@@ -248,41 +248,46 @@ final class FakeAuthenticator: Authenticator {
 }
 
 @MainActor
-@Test func theCardShowsWhyUnderTheCommandOnlyWhenTheAgentGaveAReason() {
-    let model = ApprovalsModel(core: FakeApprovalCore(), auth: FakeAuthenticator())
+private func height(_ card: ApprovalCard, size: DynamicTypeSize = .large) -> CGFloat {
+    UIHostingController(rootView: card.environment(\.dynamicTypeSize, size))
+        .sizeThatFits(in: CGSize(width: 402, height: 874)).height
+}
+
+@MainActor
+private func card(_ approval: PendingApproval, maxHeight: CGFloat = .infinity) -> ApprovalCard {
     let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "nMAC", kind: .mac, key: "")
-    let width: CGFloat = 402
-    let height = { (approval: PendingApproval) in
-        let item = ApprovalItem(machine: machine, approval: approval, link: .connected)
-        return UIHostingController(rootView: ApprovalCard(model: model, item: item, sendAnswer: { _ in }))
-            .sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height
-    }
-    let reason = "Dangerous rm operation on statically-unresolvable target: command substitution output"
+    return ApprovalCard(
+        model: ApprovalsModel(core: FakeApprovalCore(), auth: FakeAuthenticator()),
+        item: ApprovalItem(machine: machine, approval: approval, link: .connected), maxHeight: maxHeight, sendAnswer: { _ in }
+    )
+}
+
+private let reason = "Dangerous rm operation on statically-unresolvable target: command substitution output"
+
+@MainActor
+@Test func theCardShowsWhyUnderTheCommandOnlyWhenTheAgentGaveAReason() {
     let plain = approval("ap_1")
     var asked = plain
     asked.reason = reason
     #expect(plain.reason == nil)
     let line = UIHostingController(rootView: ApprovalReason(reason: reason))
-        .sizeThatFits(in: CGSize(width: width - 20, height: .greatestFiniteMagnitude)).height
+        .sizeThatFits(in: CGSize(width: 382, height: CGFloat.greatestFiniteMagnitude)).height
     #expect(line > 0)
-    #expect(abs(height(asked) - height(plain) - line - 6) < 1, "one reason line under the command, nothing without one")
+    #expect(abs(height(card(asked)) - height(card(plain)) - line - 6) < 1, "one reason line under the command, nothing without one")
 }
 
 @MainActor
 @Test func aCappedCardScrollsItsPromptInsteadOfGrowing() {
-    let model = ApprovalsModel(core: FakeApprovalCore(), auth: FakeAuthenticator())
-    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "nMAC", kind: .mac, key: "")
     var long = approval("ap_1")
     long.snippet = (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n")
-    long.reason = "Dangerous rm operation on statically-unresolvable target: command substitution output"
-    let item = ApprovalItem(machine: machine, approval: long, link: .connected)
-    let fits = CGSize(width: 402, height: CGFloat.greatestFiniteMagnitude)
-    let uncapped = UIHostingController(rootView: ApprovalCard(model: model, item: item, sendAnswer: { _ in })).sizeThatFits(in: fits)
-    #expect(uncapped.height > 200)
-    let capped = UIHostingController(rootView: ApprovalCard(model: model, item: item, maxHeight: 150, sendAnswer: { _ in }))
-        .sizeThatFits(in: fits).height
-    #expect(capped <= 150.5, "the prompt scrolls inside the card")
-    #expect(capped > 100, "Approve and Deny stay under the prompt")
+    long.reason = reason
+    for size in [DynamicTypeSize.large, .accessibility3] {
+        let natural = height(card(long), size: size)
+        #expect(natural > 200, "the prompt overflows the cap at \(size)")
+        #expect(abs(height(card(long, maxHeight: 150), size: size) - 150) < 1, "the prompt scrolls inside the cap at \(size)")
+    }
+    let short = approval("ap_1")
+    #expect(height(card(short, maxHeight: 400)) == height(card(short)), "a prompt that fits keeps its own height")
 }
 
 private func approval(

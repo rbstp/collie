@@ -127,8 +127,6 @@ final class LandscapeTests: XCTestCase {
         let field = app.textFields["Type an answer"]
         let send = app.buttons["Send answer"]
         XCTAssertTrue(eventually { shown(field, app) && shown(send, app) }, app.debugDescription)
-        let cards = app.scrollViews.containing(.button, identifier: "Approve").firstMatch
-        for _ in 0..<5 where !shown(approve, app) { cards.swipeUp() }
         XCTAssertTrue(shown(approve, app), app.debugDescription)
         field.tap()
         let keyboard = app.keyboards.firstMatch
@@ -136,6 +134,30 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(eventually {
             [field, send].allSatisfy { shown($0, app) && $0.frame.maxY <= keyboard.frame.minY + 1 }
         }, app.debugDescription)
+        XCTAssertTrue(shown(approve, app), "Approve stays pinned while typing\n\(app.debugDescription)")
+        let command = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Bash: ")).firstMatch
+        let prompt = app.scrollViews.containing(.button, identifier: "Add note").firstMatch
+        for _ in 0..<5 where !shown(command, app) { drag(prompt, by: 40) }
+        XCTAssertTrue(shown(command, app), app.debugDescription)
+    }
+
+    func testApprovalCardScrollsToApproveAtLargeText() throws {
+        let app = try launchDemo(["--approval-demo", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXL"])
+        defer { app.terminate() }
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
+        let approve = app.buttons["Approve"]
+        XCTAssertTrue(approve.appears(within: 10), app.debugDescription)
+        let prompt = app.scrollViews.containing(.button, identifier: "Approve").firstMatch
+        for _ in 0..<10 where !shown(approve, app) { drag(prompt, by: -60) }
+        XCTAssertTrue(shown(approve, app), app.debugDescription)
+        let field = app.textFields["Type an answer"]
+        XCTAssertTrue(shown(field, app), app.debugDescription)
+    }
+
+    /// A press and drag: XCUITest's swipes left the approval card unscrolled in landscape.
+    private func drag(_ element: XCUIElement, by dy: CGFloat) {
+        let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: dy)))
     }
 
     private func launchDemo(_ arguments: [String] = []) throws -> XCUIApplication {

@@ -6,28 +6,50 @@ struct ApprovalCard: View {
     let item: ApprovalItem
     var maxHeight: CGFloat = .infinity
     let sendAnswer: (String) async throws -> Void
+    @State private var decisionsHeight: CGFloat = 0
+    @FocusState private var field: String?
+    @ScaledMetric(relativeTo: .caption) private var commandLine: CGFloat = 15
 
     private var approval: PendingApproval { item.approval }
     private var expanded: Bool { model.expanded.contains(item.id) }
-    private var pinsDecisions: Bool { !approval.answeredInTerminal && !approval.options.isEmpty }
+    private var offersDecisions: Bool { !approval.answeredInTerminal && !approval.options.isEmpty }
+    // Approve and Deny stay pinned under the scrolling prompt while the cap leaves it two command
+    // lines; below that (large text, tight landscape) they scroll with it, so all stays reachable.
+    private var pinsDecisions: Bool { offersDecisions && maxHeight - 26 - decisionsHeight >= 2 * commandLine }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Approve and Deny stay pinned under the prompt, which scrolls once the card hits its cap.
-            ViewThatFits(in: .vertical) {
-                details
-                ScrollView { details }.scrollBounceBehavior(.basedOnSize)
-            }
-            if pinsDecisions {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    DecisionButtons(model: model, item: item, expired: approval.expiresAtMs <= context.date.unixMs)
+        UpToContent(maxHeight: max(0, maxHeight - 20)) {
+            VStack(alignment: .leading, spacing: 6) {
+                ScrollViewReader { proxy in
+                    UpToContent {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 6) {
+                                details
+                                if offersDecisions, !pinsDecisions { decisions }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .scrollBounceBehavior(.basedOnSize)
+                    }
+                    .onChange(of: field) { _, field in
+                        if let field { withAnimation { proxy.scrollTo(field, anchor: .bottom) } }
+                    }
                 }
+                if pinsDecisions { decisions }
             }
         }
-        .frame(maxHeight: max(0, maxHeight - 20))
         .padding(10)
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
         .background(SessionBarDim(), in: .rect(cornerRadius: 16))
+        // Its own height up to the cap, never squeezed by the conversation below.
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var decisions: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            DecisionButtons(model: model, item: item, expired: approval.expiresAtMs <= context.date.unixMs)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { decisionsHeight = $0 }
     }
 
     private var details: some View {
@@ -85,7 +107,7 @@ struct ApprovalCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if approval.supportsNote, model.noting.contains(item.id) {
-                NoteField(model: model, item: item)
+                NoteField(model: model, item: item, field: $field)
             }
             if approval.answeredInTerminal {
                 Label("Use the terminal buttons or type an answer", systemImage: "terminal")
@@ -107,9 +129,24 @@ struct ApprovalCard: View {
                     .disabled(model.steps[item.id] != nil)
             }
             if approval.takesFeedback {
-                FeedbackField(model: model, item: item, sendAnswer: sendAnswer)
+                FeedbackField(model: model, item: item, field: $field, sendAnswer: sendAnswer)
             }
         }
+    }
+}
+
+/// Its one subview's ideal height, at most `maxHeight` and what it is offered: unlike a frame's
+/// `maxHeight`, it never grows past the content, and a scroll view in it is as tall as its content.
+private struct UpToContent: Layout {
+    var maxHeight: CGFloat = .infinity
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let ideal = subviews[0].sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        return CGSize(width: proposal.width ?? ideal.width, height: min(ideal.height, maxHeight, proposal.height ?? .infinity))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
     }
 }
 
@@ -143,6 +180,7 @@ extension ApprovalsModel {
 private struct NoteField: View {
     let model: ApprovalsModel
     let item: ApprovalItem
+    let field: FocusState<String?>.Binding
 
     var body: some View {
         HStack(spacing: 8) {
@@ -150,11 +188,13 @@ private struct NoteField: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.footnote)
                 .submitLabel(.done)
+                .focused(field, equals: "note")
             Button("Remove note", systemImage: "xmark.circle.fill") { model.toggleNote(item) }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
         }
+        .id("note")
         .disabled(model.steps[item.id] != nil)
     }
 }
@@ -162,6 +202,7 @@ private struct NoteField: View {
 private struct FeedbackField: View {
     let model: ApprovalsModel
     let item: ApprovalItem
+    let field: FocusState<String?>.Binding
     let sendAnswer: (String) async throws -> Void
 
     var body: some View {
@@ -170,6 +211,7 @@ private struct FeedbackField: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.footnote)
                 .submitLabel(.send)
+                .focused(field, equals: "answer")
                 .onSubmit { Task { await model.sendFeedback(item, send: sendAnswer) } }
             Button {
                 Task { await model.sendFeedback(item, send: sendAnswer) }
@@ -187,6 +229,7 @@ private struct FeedbackField: View {
             .disabled(model.drafts[item.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel("Send answer")
         }
+        .id("answer")
         .disabled(item.unreachable || model.steps[item.id] != nil)
     }
 }

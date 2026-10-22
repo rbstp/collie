@@ -82,7 +82,7 @@ struct AgentScreen: View {
             }
             if let approvals {
                 let items = approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)
-                // Together the cards take at most a quarter of the screen, so the composer stays in reach.
+                // Together the cards take at most a quarter of the screen, keyboard or not, so the composer stays in reach.
                 let cap = height > 0 ? height / 4 / CGFloat(max(items.count, 1)) - 8 : .infinity
                 ForEach(items) { item in
                     ApprovalCard(model: approvals, item: item, maxHeight: cap, sendAnswer: model.typeAnswer)
@@ -190,7 +190,14 @@ struct AgentScreen: View {
             .environment(\.colorScheme, barScheme)
         }
         .toolbarColorScheme(headerScheme, for: .navigationBar)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+        .background {
+            // The whole screen, bars included: the keyboard must not shrink the cards' cap.
+            Color.clear
+                .ignoresSafeArea(.keyboard)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height + $0.safeAreaInsets.top + $0.safeAreaInsets.bottom } action: {
+                    height = $0
+                }
+        }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
