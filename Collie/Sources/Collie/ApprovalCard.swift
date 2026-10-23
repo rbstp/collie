@@ -8,6 +8,7 @@ struct ApprovalCard: View {
     let sendAnswer: (String) async throws -> Void
     @State private var decisionsHeight: CGFloat = 0
     @State private var shownHeight: CGFloat = .infinity
+    @State private var moreBelow = false
     @FocusState private var field: String?
     @ScaledMetric(relativeTo: .caption) private var commandLine: CGFloat = 15
     private let padding: CGFloat = 10
@@ -17,8 +18,8 @@ struct ApprovalCard: View {
     private var expanded: Bool { model.expanded.contains(item.id) }
     private var offersDecisions: Bool { !approval.answeredInTerminal && !approval.options.isEmpty }
     // Approve and Deny stay pinned under the scrolling prompt while the card's height leaves it two
-    // command lines; below that (large text, tight landscape, the keyboard up) they scroll with it,
-    // so all stays reachable.
+    // command lines; below that (tight landscape, the keyboard up) they scroll with it, so all stays
+    // reachable.
     private var pinsDecisions: Bool {
         offersDecisions && min(maxHeight - 2 * padding, shownHeight) - spacing - decisionsHeight >= 2 * commandLine
     }
@@ -36,6 +37,14 @@ struct ApprovalCard: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .scrollBounceBehavior(.basedOnSize)
+                        // A fade where the prompt goes on below: a hard cut at the edge read as a clipped snippet box.
+                        .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.maxY < $0.contentSize.height - 1 } action: { moreBelow = $1 }
+                        .mask {
+                            VStack(spacing: 0) {
+                                Rectangle()
+                                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: moreBelow ? 16 : 0)
+                            }
+                        }
                     }
                     .onChange(of: field) { _, field in
                         if let field { withAnimation { proxy.scrollTo(field, anchor: .bottom) } }
@@ -45,9 +54,8 @@ struct ApprovalCard: View {
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shownHeight = $0 }
-        .padding(padding)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
-        .background(SessionBarDim(), in: .rect(cornerRadius: 16))
+        .padding(.vertical, padding)
+        .padding(.horizontal)
     }
 
     private var decisions: some View {
@@ -240,16 +248,13 @@ private struct FeedbackField: View {
 }
 
 private struct DecisionButtons: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let model: ApprovalsModel
     let item: ApprovalItem
     let expired: Bool
 
     var body: some View {
-        let layout = dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
         GlassEffectContainer(spacing: 8) {
-            layout {
+            HStack(spacing: 8) {
                 ForEach(item.approval.options, id: \.self) { decision in
                     Button(role: decision == .deny ? .destructive : nil) {
                         Task { await model.decide(item, decision) }
@@ -259,8 +264,8 @@ private struct DecisionButtons: View {
                                 ProgressView()
                             } else {
                                 Text(decision.title)
-                                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                                    .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 1 : 0.6)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.6)
                             }
                         }
                         .frame(maxWidth: .infinity)

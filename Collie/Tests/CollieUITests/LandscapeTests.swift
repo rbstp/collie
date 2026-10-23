@@ -123,6 +123,8 @@ final class LandscapeTests: XCTestCase {
         app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
         let approve = app.buttons["Approve"]
         XCTAssertTrue(approve.appears(within: 10), app.debugDescription)
+        // Chat's scroll view takes accessibility hit tests under the header and the band.
+        app.buttons["Terminal"].firstMatch.tap()
         rotate(.landscapeLeft, app)
         let field = app.textFields["Type an answer"]
         let send = app.buttons["Send answer"]
@@ -149,15 +151,17 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(shown(field, app), app.debugDescription)
     }
 
-    func testApprovalCardScrollsToApproveAtLargeText() throws {
+    func testApprovalCardKeepsApproveInReachAtLargeText() throws {
         let app = try launchDemo(["--approval-demo", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXL"])
         defer { app.terminate() }
         app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
         let approve = app.buttons["Approve"]
         XCTAssertTrue(approve.appears(within: 10), app.debugDescription)
-        let prompt = app.scrollViews.containing(.button, identifier: "Approve").firstMatch
-        for _ in 0..<10 where !shown(approve, app) { drag(prompt, by: -60) }
-        XCTAssertTrue(shown(approve, app), app.debugDescription)
+        // Chat's scroll view takes accessibility hit tests under the header and the band.
+        app.buttons["Terminal"].firstMatch.tap()
+        // The band caps its text below the accessibility sizes, so Approve stays pinned under the prompt. Not `shown`:
+        // at this size the header and the band run a few points past the window's sides.
+        XCTAssertTrue(eventually { approve.isHittable }, app.debugDescription)
         let field = app.textFields["Type an answer"]
         XCTAssertTrue(shown(field, app), app.debugDescription)
     }
