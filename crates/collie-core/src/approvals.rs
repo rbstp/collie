@@ -79,6 +79,9 @@ pub struct PendingApproval {
     pub snippet: String,
     pub tool_name: Option<String>,
     pub tool_summary: Option<String>,
+    /// Why Claude Code asked, as its dialog says; absent from an older collied.
+    #[uniffi(default = None)]
+    pub reason: Option<String>,
     pub options: Vec<ApprovalDecision>,
     /// The menu as collied read it, also when it offers no `options`.
     pub choices: Vec<ApprovalChoice>,
@@ -103,6 +106,7 @@ impl From<&Approval> for PendingApproval {
             snippet: a.snippet.clone(),
             tool_name: a.tool.as_ref().map(|t| t.name.clone()),
             tool_summary: a.tool.as_ref().map(|t| t.summary.clone()),
+            reason: a.reason.clone(),
             options: a
                 .options
                 .iter()

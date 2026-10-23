@@ -243,6 +243,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 approvalId: "ap_demo", terminalId: "term_2", agentLabel: "Claude Code", workspaceLabel: "collie",
                 snippet: (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n"),
                 toolName: "Bash", toolSummary: "cargo test -p collied --test approvals -- --nocapture",
+                reason: "Command is not read-only, requires further permission checks",
                 options: [.approve, .approveAlways, .deny], choices: [], acceptsInput: true, hasTextField: false,
                 supportsNote: true, createdAtMs: now, expiresAtMs: now + 600_000
             ),

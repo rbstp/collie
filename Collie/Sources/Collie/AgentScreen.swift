@@ -68,35 +68,12 @@ struct AgentScreen: View {
 
     private var barScheme: ColorScheme { showingChat && !model.isTerminal ? colorScheme : .dark }
 
-    private var cardsAboveContent: Bool {
-        model.paneNotice != nil
-            || approvals.map { !$0.items(machineId: model.route.machineId, terminalId: model.route.terminalId).isEmpty || $0.notice != nil } ?? false
-    }
-
-    private var headerScheme: ColorScheme { cardsAboveContent ? colorScheme : barScheme }
+    private var headerScheme: ColorScheme { model.paneNotice != nil ? colorScheme : barScheme }
 
     var body: some View {
         VStack(spacing: 0) {
             if let notice = model.paneNotice {
                 PaneCard(model: model, notice: notice)
-            }
-            if let approvals {
-                let cards = ForEach(approvals.items(machineId: model.route.machineId, terminalId: model.route.terminalId)) { item in
-                    ApprovalCard(model: approvals, item: item, sendAnswer: model.typeAnswer)
-                        .padding(.horizontal)
-                        .background(Color.red.opacity(0.08))
-                }
-                if verticalSizeClass == .compact {
-                    // The cards would push the composer off screen, so they scroll within part of the height.
-                    ScrollView { VStack(spacing: 0) { cards } }
-                        .frame(maxHeight: height / (typingInLandscape ? 3 : 2))
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    cards
-                }
-                if let notice = approvals.notice {
-                    Text(notice).font(.footnote).padding(.horizontal).frame(maxWidth: .infinity, alignment: .leading)
-                }
             }
             Group {
                 if showingChat && !model.isTerminal {
@@ -155,13 +132,33 @@ struct AgentScreen: View {
             .scrollEdgeEffectHidden(true, for: .top)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if !typingInLandscape {
+            let items = approvals?.items(machineId: model.route.machineId, terminalId: model.route.terminalId) ?? []
+            if !typingInLandscape || !items.isEmpty || approvals?.notice != nil {
                 VStack(spacing: 0) {
-                    AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil, showingChat: $showingChat)
-                    if let subagents = model.agent?.subagents, !subagents.isEmpty {
-                        SubagentList(subagents: subagents)
-                            .padding(.horizontal)
-                            .padding(.bottom, 6)
+                    if !typingInLandscape {
+                        AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil, showingChat: $showingChat)
+                        if let subagents = model.agent?.subagents, !subagents.isEmpty {
+                            SubagentList(subagents: subagents)
+                                .padding(.horizontal)
+                                .padding(.bottom, 6)
+                        }
+                    }
+                    // The approval cards share the header's surface, so the content runs under them as under the header.
+                    if let approvals {
+                        // Together the cards take at most about a fifth of the screen, keyboard or not, so the composer stays
+                        // in reach; a quarter in landscape, where a fifth leaves no room for the prompt above Approve.
+                        let share = verticalSizeClass == .compact ? 0.25 : 0.211
+                        let cap = height > 0 ? height * share / CGFloat(max(items.count, 1)) : .infinity
+                        Group {
+                            ForEach(items) { item in
+                                ApprovalCard(model: approvals, item: item, maxHeight: cap, sendAnswer: model.typeAnswer)
+                            }
+                            if let notice = approvals.notice {
+                                Text(notice).font(.footnote).padding([.horizontal, .bottom]).frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        // Accessibility sizes left a fifth of the screen too small for the prompt and its decisions.
+                        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
                     }
                 }
                 .background { SessionBarGlass().ignoresSafeArea(edges: [.top, .horizontal]) }
@@ -195,7 +192,14 @@ struct AgentScreen: View {
             .environment(\.colorScheme, barScheme)
         }
         .toolbarColorScheme(headerScheme, for: .navigationBar)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+        .background {
+            // The whole screen, bars included: the keyboard must not shrink the cards' cap.
+            Color.clear
+                .ignoresSafeArea(.keyboard)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height + $0.safeAreaInsets.top + $0.safeAreaInsets.bottom } action: {
+                    height = $0
+                }
+        }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)

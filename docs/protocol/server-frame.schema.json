@@ -178,6 +178,13 @@
           },
           "type": "array"
         },
+        "reason": {
+          "description": "Why Claude Code asked, as its dialog says: one line of at most 200 characters with\nno control, bidi or invisible format character. Absent when it gives none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "snippet": {
           "type": "string"
         },

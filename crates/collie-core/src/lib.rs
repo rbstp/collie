@@ -5043,6 +5043,7 @@ mod tailnet_tests {
             workspace_label: "collie".into(),
             snippet: "Run cargo test?".into(),
             tool: None,
+            reason: None,
             options: vec![protocol::Decision::Approve, protocol::Decision::Deny],
             choices: Vec::new(),
             accepts_input: false,

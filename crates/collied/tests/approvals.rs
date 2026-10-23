@@ -50,6 +50,9 @@ const TRUST_OPTIONS: [&str; 2] = ["No, exit", "Yes, I trust this folder"];
 const BASH_LIVE: &str = include_str!("fixtures/claude-2.1.289/bash.detection.txt");
 const PLAN_LIVE: &str = include_str!("fixtures/claude-2.1.289/plan.detection.txt");
 
+// Claude Code 2.1.308 asking for a guarded `rm`, with its reason under the command.
+const RM_REASON: &str = include_str!("fixtures/claude-2.1.308/rm-reason.detection.txt");
+
 // Claude Code 2.1.294 in herdr 0.9.3, each `blocked` under live_blocked_form: `/effort`,
 // `/config`'s time format picker, and `/ide`, which connects an IDE and keeps alerting.
 const EFFORT: &str = include_str!("fixtures/claude-2.1.294/effort.detection.txt");
@@ -965,6 +968,60 @@ async fn a_hook_report_names_only_the_prompt_that_shows_it() {
     assert_eq!(
         c.tool, None,
         "a report never names a later prompt with another call"
+    );
+}
+
+#[tokio::test]
+async fn claude_says_why_it_asks_on_the_approval_and_in_the_sealed_alert() {
+    let why =
+        "Dangerous rm operation on statically-unresolvable target: command substitution output";
+    let command = "rm -rf \"$(printf build)\"";
+    let mut rig = Rig::start(TTL).await;
+    live(&rig);
+    let a = rig.needed().await;
+    assert_eq!(a.reason, None, "no reason, no change");
+
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| h.text = RM_REASON.into());
+    let a = rig.needed().await;
+    assert_eq!(a.reason.as_deref(), Some(why));
+    assert!(!a.snippet.contains("Dangerous"), "{}", a.snippet);
+    assert_eq!(
+        open_context(&rig.notification_key, &rig.alerts(1).await[0].1.payload),
+        json!({"v": 1, "body": format!("Bash: Remove the build directory\n{command}\n{why}")})
+    );
+
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| h.text = RM_REASON.into());
+    let report = Report::new(
+        "Bash",
+        vec![command.into(), "Remove the build directory".into()],
+    );
+    rig.approvals.hook("sess-1".into(), report.unwrap());
+    let a = rig.needed().await;
+    assert_eq!(a.tool.map(|t| t.name), Some("Bash".into()));
+    assert_eq!(a.reason.as_deref(), Some(why));
+    assert_eq!(
+        open_context(&rig.notification_key, &rig.alerts(1).await[0].1.payload),
+        json!({"v": 1, "body": format!("Bash: {command}\nRemove the build directory\n{why}")})
+    );
+
+    let mut rig = Rig::start(TTL).await;
+    let long = format!("rm -rf \"$(printf {})\"", "b".repeat(700));
+    rig.herdr
+        .with(|h| h.text = RM_REASON.replace("rm -rf \"$(printf build)\"", &long));
+    let a = rig.needed().await;
+    assert_eq!(a.reason.as_deref(), Some(why));
+    let body = open_context(&rig.notification_key, &rig.alerts(1).await[0].1.payload)["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(body.chars().count(), collied::prompt::MAX_CONTEXT_CHARS);
+    let context = body
+        .strip_suffix(&format!("\n{why}"))
+        .expect("a context at its cap never pushes the reason out");
+    assert!(
+        context.starts_with("Bash: Remove the build directory\nrm -rf") && context.ends_with('…')
     );
 }
 

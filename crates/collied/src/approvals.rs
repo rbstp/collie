@@ -59,6 +59,7 @@ struct Screen {
     /// The fingerprint with the menu cursor on each option in turn.
     cursor_at: Vec<[u8; 32]>,
     snippet: String,
+    reason: Option<String>,
     context: String,
 }
 
@@ -67,6 +68,7 @@ impl Screen {
     /// reissue an approval.
     fn shows_same(&self, other: &Screen) -> bool {
         self.snippet == other.snippet
+            && self.reason == other.reason
             && self.offered == other.offered
             && self.menu.as_ref().map(|m| &m.options) == other.menu.as_ref().map(|m| &m.options)
             && self.accepts_input == other.accepts_input
@@ -165,6 +167,7 @@ pub fn fingerprint(
     terminal_id: &str,
     session: Option<&str>,
     region: &str,
+    reason: Option<&str>,
 ) -> [u8; 32] {
     let mut h = Sha256::new();
     for part in [
@@ -173,6 +176,7 @@ pub fn fingerprint(
         terminal_id,
         session.unwrap_or(""),
         region,
+        reason.unwrap_or(""),
     ] {
         h.update((part.len() as u64).to_be_bytes());
         h.update(part.as_bytes());
@@ -410,7 +414,8 @@ impl Approvals {
         let matched = explain.matched_rule.map(|r| r.id);
         let detected = herdr::detection_text(&self.herdr, &a.pane_id).await?;
         let (rule, form) = prompt::without_session_name(kind, matched.as_deref(), &detected);
-        let text = prompt::without_deny_countdown(kind, form);
+        let (text, reason) =
+            prompt::without_reason(kind, &prompt::without_deny_countdown(kind, form));
         let menu = prompt::uses_menu(kind, rule)
             .then(|| Menu::parse(&text))
             .flatten();
@@ -432,7 +437,16 @@ impl Approvals {
         let supports_note =
             offered.iter().any(|(d, _)| prompt::amend(*d).is_some()) && prompt::offers_note(&text);
         let session = a.agent_session.as_ref().map(|s| s.value.as_str());
-        let print = |region: &str| fingerprint(kind, rule, &a.terminal_id, session, region);
+        let print = |region: &str| {
+            fingerprint(
+                kind,
+                rule,
+                &a.terminal_id,
+                session,
+                region,
+                reason.as_deref(),
+            )
+        };
         Ok(Screen {
             pane_id: a.pane_id.clone(),
             seq: a.state_change_seq,
@@ -451,6 +465,7 @@ impl Approvals {
             menu,
             offered,
             snippet,
+            reason,
             context: prompt::context(kind, &text),
         })
     }
@@ -483,6 +498,7 @@ impl Approvals {
             workspace_label: workspace_label(&a.workspace_id, workspaces),
             snippet: screen.snippet.clone(),
             tool: tool.clone(),
+            reason: screen.reason.clone(),
             options: screen.offered.iter().map(|(d, _)| *d).collect(),
             choices: screen.menu.as_ref().map_or_else(Vec::new, Menu::choices),
             accepts_input: screen.accepts_input,
@@ -495,6 +511,23 @@ impl Approvals {
         let context = tool
             .as_ref()
             .map_or_else(|| screen.context.clone(), hooks::context);
+        // The phone cuts the alert body to MAX_CONTEXT_CHARS: the context is cut first, so the
+        // reason stays. The Live Activity shows only the first lines: there the command wins.
+        let context = match &screen.reason {
+            Some(reason) if !context.is_empty() => {
+                let room = prompt::MAX_CONTEXT_CHARS - reason.chars().count() - 1;
+                let context = if context.chars().count() > room {
+                    let mut cut: String = context.chars().take(room - 1).collect();
+                    cut.push('…');
+                    cut
+                } else {
+                    context
+                };
+                format!("{context}\n{reason}")
+            }
+            Some(reason) => reason.clone(),
+            None => context,
+        };
         let alert = {
             let mut inner = self.lock();
             if inner.pending.contains_key(&a.terminal_id) {
@@ -960,16 +993,21 @@ mod tests {
 
     #[test]
     fn fingerprint_covers_every_field() {
-        let base = fingerprint("claude", Some("r"), "t", Some("s"), "q");
-        assert_eq!(base, fingerprint("claude", Some("r"), "t", Some("s"), "q"));
+        let base = fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y"));
+        assert_eq!(
+            base,
+            fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y"))
+        );
         for other in [
-            fingerprint("codex", Some("r"), "t", Some("s"), "q"),
-            fingerprint("claude", Some("r2"), "t", Some("s"), "q"),
-            fingerprint("claude", None, "t", Some("s"), "q"),
-            fingerprint("claude", Some("r"), "t2", Some("s"), "q"),
-            fingerprint("claude", Some("r"), "t", None, "q"),
-            fingerprint("claude", Some("r"), "t", Some("s"), "q2"),
-            fingerprint("claude", Some("rt"), "", Some("s"), "q"),
+            fingerprint("codex", Some("r"), "t", Some("s"), "q", Some("y")),
+            fingerprint("claude", Some("r2"), "t", Some("s"), "q", Some("y")),
+            fingerprint("claude", None, "t", Some("s"), "q", Some("y")),
+            fingerprint("claude", Some("r"), "t2", Some("s"), "q", Some("y")),
+            fingerprint("claude", Some("r"), "t", None, "q", Some("y")),
+            fingerprint("claude", Some("r"), "t", Some("s"), "q2", Some("y")),
+            fingerprint("claude", Some("rt"), "", Some("s"), "q", Some("y")),
+            fingerprint("claude", Some("r"), "t", Some("s"), "q", None),
+            fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y2")),
         ] {
             assert_ne!(base, other);
         }

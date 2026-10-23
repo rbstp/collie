@@ -1,5 +1,6 @@
 import CollieCore
 import Foundation
+import SwiftUI
 import Synchronization
 import Testing
 import UserNotifications
@@ -244,6 +245,46 @@ final class FakeAuthenticator: Authenticator {
         }
         held.forEach { $0.resume() }
     }
+}
+
+@MainActor
+private func height(_ card: ApprovalCard) -> CGFloat {
+    UIHostingController(rootView: card)
+        .sizeThatFits(in: CGSize(width: 402, height: 874)).height
+}
+
+@MainActor
+private func card(_ approval: PendingApproval, maxHeight: CGFloat = .infinity) -> ApprovalCard {
+    let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "nMAC", kind: .mac, key: "")
+    return ApprovalCard(
+        model: ApprovalsModel(core: FakeApprovalCore(), auth: FakeAuthenticator()),
+        item: ApprovalItem(machine: machine, approval: approval, link: .connected), maxHeight: maxHeight, sendAnswer: { _ in }
+    )
+}
+
+private let reason = "Dangerous rm operation on statically-unresolvable target: command substitution output"
+
+@MainActor
+@Test func theCardShowsWhyUnderTheCommandOnlyWhenTheAgentGaveAReason() {
+    let plain = approval("ap_1")
+    var asked = plain
+    asked.reason = reason
+    #expect(plain.reason == nil)
+    let line = UIHostingController(rootView: ApprovalReason(reason: reason))
+        .sizeThatFits(in: CGSize(width: 382, height: CGFloat.greatestFiniteMagnitude)).height
+    #expect(line > 0)
+    #expect(abs(height(card(asked)) - height(card(plain)) - line - 6) < 1, "one reason line under the command, nothing without one")
+}
+
+@MainActor
+@Test func aCappedCardScrollsItsPromptInsteadOfGrowing() {
+    var long = approval("ap_1")
+    long.snippet = (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n")
+    long.reason = reason
+    #expect(height(card(long)) > 200, "the prompt overflows the cap")
+    #expect(abs(height(card(long, maxHeight: 150)) - 150) < 1, "the prompt scrolls inside the cap")
+    let short = approval("ap_1")
+    #expect(height(card(short, maxHeight: 400)) == height(card(short)), "a prompt that fits keeps its own height")
 }
 
 private func approval(

@@ -1320,6 +1320,12 @@ mod tests {
         let mut wakes = Wakes::default();
         let long = format!("Pull request #1 ({URL}) changed: {}.", "x".repeat(200));
         wakes.remember("t1", &long, "CI failed on #1".into(), 1);
+        wakes.remember(
+            "t1",
+            "Pull request #2 changed: CI failed.",
+            "CI failed on #2".into(),
+            2,
+        );
         let cut: String = long.chars().take(159).chain(['…']).collect();
         let prompt = |terminal_id: &str, last_prompt: &str| {
             let mut agent: Agent = serde_json::from_value(serde_json::json!({
@@ -1337,6 +1343,14 @@ mod tests {
                 kind: "pr_watch".into(),
                 summary: "CI failed on #1".into()
             })
+        );
+        assert_eq!(
+            prompt("t1", "Pull request #2 changed: CI failed."),
+            Some(MessageOrigin {
+                kind: "pr_watch".into(),
+                summary: "CI failed on #2".into()
+            }),
+            "a short wake is its own first line"
         );
         assert_eq!(prompt("t1", "fix the build"), None);
         assert_eq!(
