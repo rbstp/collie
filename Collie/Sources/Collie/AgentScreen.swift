@@ -119,7 +119,8 @@ struct AgentScreen: View {
                                         .buttonStyle(.glassProminent)
                                         .onAccentFill()
                                         .padding([.horizontal, .bottom], 8)
-                                                                .accessibilityLabel("Claude Code notice")
+                                        .accessibilityElement(children: .contain)
+                                        .accessibilityLabel("Claude Code notice")
                                     }
                                 }
                             }
