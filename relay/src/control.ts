@@ -9,7 +9,7 @@ export interface ControlEnv extends CryptoBinding {
   APNS_ENVIRONMENT: Environment;
   APNS_TEAM_ID: string;
   SEND_HMAC_KEYS: string;
-  ATTEST_BUNDLE_VERSIONS?: string;
+  ATTEST_MIN_BUNDLE_VERSION?: string;
   CONTROL_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
   ENROLL_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
 }

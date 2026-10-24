@@ -27,7 +27,7 @@ async function setup() {
   const publicKey = base64url(new Uint8Array(await crypto.subtle.exportKey('spki', keys.publicKey)));
   const key = createPrivateKey({ key: await crypto.subtle.exportKey('jwk', keys.privateKey), format: 'jwk' });
   const cryptoEnv = { APNS_TEAM_ID: 'TESTTEAM01', APNS_KEY_ID: 'TESTKEY001', APNS_PRIVATE_KEY: await privateKey(),
-    APNS_ENVIRONMENT: 'development' as const, ATTEST_BUNDLE_VERSIONS: '["1"]' };
+    APNS_ENVIRONMENT: 'development' as const, ATTEST_MIN_BUNDLE_VERSION: '1' };
   const runtime = await simulatorRuntime(cryptoEnv);
   const db = await runtime.getD1Database('DB');
   await provisionSimulator(db, { installationId: 'phone', keyId, publicKey });
@@ -98,7 +98,7 @@ test('production entry rejects local identity enrollment, assertions and separat
   try {
     await migration(production.db);
     const env = { ...production.env, SEND_HMAC_KEYS: JSON.stringify({ production: base64url(new Uint8Array(32).fill(9)) }),
-      APNS_ENVIRONMENT: 'production' as const, ATTEST_BUNDLE_VERSIONS: '["1"]',
+      APNS_ENVIRONMENT: 'production' as const, ATTEST_MIN_BUNDLE_VERSION: '1',
       CONTROL_LIMITER: { async limit() { return { success: true }; } }, ENROLL_LIMITER: { async limit() { return { success: true }; } } };
     let forwarded = false;
     const worker = createWorker(async () => { forwarded = true; return new Response(); }, () => now);

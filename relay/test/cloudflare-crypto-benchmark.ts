@@ -16,7 +16,7 @@ export class BenchmarkCrypto extends RelayCrypto {
     try {
       return await verifyAttestation(encoded, 'zgSY9YSD-7TaDXssY6WlOPVS1K3Lmk-pFhlcSWE-ZV0',
         bytes(invalid ? 'invalid_server_challenge' : 'example_server_challenge'),
-        { appId: '1234567890.com.example.myapp', environment: 'production', bundleVersions: ['1'], validationCategories: [1] },
+        { appId: '1234567890.com.example.myapp', environment: 'production', minBundleVersion: 1, validationCategories: [1] },
         Date.parse('2026-04-21T18:13:13Z') / 1000);
     } catch { return null; }
   }

@@ -33,7 +33,7 @@ if (mode === 'init') {
   if (real && !/^[A-Z0-9]{10}$/.test(process.env.COLLIE_SIMULATOR_APNS_KEY_ID ?? '')) throw new Error('APNs key ID required');
   const cryptoEnv = { APNS_ENVIRONMENT: 'development' as const, APNS_TEAM_ID: identity.teamId,
     APNS_KEY_ID: real ? process.env.COLLIE_SIMULATOR_APNS_KEY_ID! : 'SIMULATOR1', APNS_PRIVATE_KEY: signingKey,
-    ATTEST_BUNDLE_VERSIONS: '["1"]' };
+    ATTEST_MIN_BUNDLE_VERSION: '1' };
   const runtime = await simulatorRuntime(cryptoEnv, resolve(root, 'd1'));
   const db = await runtime.getD1Database('DB');
   await provisionSimulator(db, identity);

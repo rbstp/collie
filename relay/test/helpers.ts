@@ -43,11 +43,11 @@ export async function fixture() {
     return {
       providerToken(time: number) { return provider.token(time); },
       async attest(encoded: string, keyId: string, hash: Uint8Array<ArrayBuffer>) {
-        try { return await verifyAttestation(encoded, keyId, hash, attestationPolicy({ ...env, ATTEST_BUNDLE_VERSIONS: '["1"]' }), Math.floor(Date.now() / 1000)); }
+        try { return await verifyAttestation(encoded, keyId, hash, attestationPolicy({ ...env, ATTEST_MIN_BUNDLE_VERSION: '1' }), Math.floor(Date.now() / 1000)); }
         catch { return null; }
       },
       async assertion(encoded: string, publicKey: string, previousCounter: number, hash: Uint8Array<ArrayBuffer>) {
-        try { return await verifyAssertion(encoded, publicKey, previousCounter, hash, attestationPolicy({ ...env, ATTEST_BUNDLE_VERSIONS: '["1"]' })); }
+        try { return await verifyAssertion(encoded, publicKey, previousCounter, hash, attestationPolicy({ ...env, ATTEST_MIN_BUNDLE_VERSION: '1' })); }
         catch { return null; }
       }
     };

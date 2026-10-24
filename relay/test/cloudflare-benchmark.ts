@@ -26,7 +26,7 @@ export function createAttestationBenchmark() {
           try {
             await verifyAttestation(body.attestation, 'zgSY9YSD-7TaDXssY6WlOPVS1K3Lmk-pFhlcSWE-ZV0', bytes('example_server_challenge'),
               { appId: body.invalid ? 'TESTTEAM01.dev.rbstp.collie' : '1234567890.com.example.myapp', environment: 'production',
-                bundleVersions: ['1'], validationCategories: [1] }, Date.parse('2026-04-21T18:13:13Z') / 1000);
+                minBundleVersion: 1, validationCategories: [1] }, Date.parse('2026-04-21T18:13:13Z') / 1000);
             return result('verified');
           } catch { return result('rejected'); }
         }

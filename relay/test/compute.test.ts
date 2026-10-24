@@ -22,7 +22,7 @@ before(async () => {
   runtime = new Miniflare({ modules: true, script: bundled.outputFiles[0].text, compatibilityDate: '2026-08-06',
     durableObjects: { CRYPTO: { className: 'RelayCrypto', useSQLite: true }, HISTORICAL: { className: 'HistoricalFixture', useSQLite: true } },
     bindings: { APNS_TEAM_ID: 'TESTTEAM01', APNS_KEY_ID: 'TESTKEY001', APNS_PRIVATE_KEY: await privateKey(),
-      APNS_ENVIRONMENT: 'development', ATTEST_BUNDLE_VERSIONS: '["1"]' } });
+      APNS_ENVIRONMENT: 'development', ATTEST_MIN_BUNDLE_VERSION: '1' } });
   actor = (await runtime.getDurableObjectNamespace('CRYPTO')).getByName('relay-crypto');
   historical = (await runtime.getDurableObjectNamespace('HISTORICAL')).getByName('fixture');
   sample = base64url(new Uint8Array(Buffer.from(await readFile(new URL('./fixtures/apple-attestation.b64', import.meta.url), 'utf8'), 'base64')));
@@ -110,7 +110,7 @@ test('real actor assertion verification retains D1 replay guards and never accep
     const keyId = base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', await crypto.subtle.exportKey('raw', keys.publicKey))));
     await f.db.prepare(`INSERT INTO attestations (installation_id,key_id,public_key,receipt,environment,last_nonce,retain_until)
       VALUES ('phone', ?, ?, 'fixture', 'development', 'initial', ?)`).bind(keyId, publicKey, now + 37 * 86400).run();
-    const env = { ...f.env, CRYPTO: await runtime.getDurableObjectNamespace('CRYPTO'), ATTEST_BUNDLE_VERSIONS: '["1"]',
+    const env = { ...f.env, CRYPTO: await runtime.getDurableObjectNamespace('CRYPTO'), ATTEST_MIN_BUNDLE_VERSION: '1',
       CONTROL_LIMITER: { async limit() { return { success: true }; } }, ENROLL_LIMITER: { async limit() { return { success: true }; } } };
     const worker = createWorker();
     const post = (path: string, body: unknown) => worker.fetch(new Request(`https://local/v1/${path}`, {

@@ -8,6 +8,7 @@ import { CborReader, cbor, map } from '../src/cbor.ts';
 import { fixture } from './helpers.ts';
 import { createWorker } from '../src/index.ts';
 import { canonical, cleanup } from '../src/control.ts';
+import { attestationPolicy } from '../src/attestation-policy.ts';
 import type { Operation } from '../src/control.ts';
 
 export function encode(value: unknown): Uint8Array<ArrayBuffer> {
@@ -20,7 +21,7 @@ export function encode(value: unknown): Uint8Array<ArrayBuffer> {
   const entries = value instanceof Map ? [...value] : Object.entries(value as object);
   return concat(header(5, entries.length), ...entries.flatMap(([k, v]) => [encode(k), encode(v)]));
 }
-const policy = { appId: 'TESTTEAM01.dev.rbstp.collie', environment: 'development' as const, bundleVersions: ['1'] };
+const policy = { appId: 'TESTTEAM01.dev.rbstp.collie', environment: 'development' as const, minBundleVersion: 1 };
 async function keyPair() {
   return crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
 }
@@ -52,7 +53,7 @@ async function controlFixture() {
   await result.db.prepare(`INSERT INTO attestations (installation_id,key_id,public_key,receipt,environment,last_nonce,retain_until)
     VALUES ('phone', ?, ?, 'test-receipt', 'development', 'initial', ?)`)
     .bind(keyId, publicKey, Math.floor(Date.now() / 1000) + 37 * 86400).run();
-  const env = { ...result.env, ATTEST_BUNDLE_VERSIONS: '["1"]',
+  const env = { ...result.env, ATTEST_MIN_BUNDLE_VERSION: '1',
     CONTROL_LIMITER: { async limit() { return { success: true }; } }, ENROLL_LIMITER: { async limit() { return { success: true }; } } };
   const worker = createWorker();
   const post = (path: string, body: unknown) => worker.fetch(new Request(`https://relay.example/v1/${path}`, {
@@ -92,8 +93,43 @@ test('documented authenticator extensions are parsed and enforced without assumi
   const values = { apple_validation_category_01: new Uint8Array([3, 0, 0, 0]), apple_bundle_version_01: '1' };
   const hash = await sha256(bytes('challenge'));
   assert.equal(await verifyAssertion(await assertion(keys.privateKey, 'challenge', 1, values), publicKey, 0, hash, policy), 1);
-  await assert.rejects(verifyAssertion(await assertion(keys.privateKey, 'challenge', 1, { ...values, apple_bundle_version_01: '2' }), publicKey, 0, hash, policy));
+  await assert.rejects(verifyAssertion(await assertion(keys.privateKey, 'challenge', 1, { ...values, apple_bundle_version_01: '0' }), publicKey, 0, hash, policy));
   await assert.rejects(verifyAssertion(await assertion(keys.privateKey, 'challenge', 1, values), publicKey, 0, hash, { ...policy, environment: 'production' }));
+});
+test('the bundle version must be a whole number at or above the configured minimum', async () => {
+  const keys = await keyPair();
+  const publicKey = base64url(new Uint8Array(await crypto.subtle.exportKey('spki', keys.publicKey)));
+  const hash = await sha256(bytes('challenge'));
+  const minimum = attestationPolicy({ APNS_TEAM_ID: 'TESTTEAM01', APNS_ENVIRONMENT: 'development', ATTEST_MIN_BUNDLE_VERSION: '269' });
+  assert.equal(minimum.minBundleVersion, 269);
+  const verify = async (version: unknown) => verifyAssertion(await assertion(keys.privateKey, 'challenge', 1,
+    { apple_validation_category_01: new Uint8Array([3, 0, 0, 0]), apple_bundle_version_01: version }), publicKey, 0, hash, minimum);
+  for (const version of ['269', '270', '277', '1000', '0270', '999999999']) assert.equal(await verify(version), 1, version);
+  for (const version of ['268', '1', '0', '0268', '', '269.1', '0.1.8', '1e3', ' 269', '269 ', '+269', '-269', '0x200', 'abc', '1000000000', '0000000270', 269]) {
+    await assert.rejects(verify(version), undefined, String(version));
+  }
+});
+test('a missing or invalid minimum bundle version fails closed', async () => {
+  for (const value of [undefined, '', '0', '0269', '-1', '1.5', ' 269', '1e3', '1000000000', '["269"]']) {
+    assert.throws(() => attestationPolicy({ APNS_TEAM_ID: 'TESTTEAM01', APNS_ENVIRONMENT: 'development', ATTEST_MIN_BUNDLE_VERSION: value }), /invalid_min_bundle_version/, String(value));
+  }
+  const f = await controlFixture();
+  try {
+    const env = { ...f.env, CRYPTO: { getByName: () => ({
+      async assertion(encoded: string, publicKey: string, previous: number, hash: Uint8Array<ArrayBuffer>) {
+        return verifyAssertion(encoded, publicKey, previous, hash, attestationPolicy({ ...f.env, ATTEST_MIN_BUNDLE_VERSION: undefined }));
+      }
+    }) } };
+    const op: Operation = { ...f.common, op: 'revoke_pairing', pairing_id: 'machine' };
+    const challenge = (await (await f.post('challenge', op)).json()).challenge;
+    const result = await f.worker.fetch(new Request('https://relay.example/v1/control', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': '192.0.2.1' },
+      body: JSON.stringify({ operation: op, challenge, assertion: await assertion(f.keys.privateKey, challenge, 1) })
+    }), env as never);
+    assert.equal(result.status, 503);
+    assert.deepEqual(await result.json(), { v: 1, result: 'unavailable' });
+    assert.equal((await f.db.prepare('SELECT counter FROM attestations').first()).counter, 0);
+  } finally { await f.runtime.dispose(); }
 });
 test('bounded CBOR rejects duplicate keys, trailing data, indefinite lengths and excessive nesting', () => {
   for (const value of [new Uint8Array([0xa2, 1, 2, 1, 3]), new Uint8Array([1, 1]), new Uint8Array([0x9f, 0xff]), new Uint8Array(10).fill(0x81)]) {
@@ -306,7 +342,7 @@ test('control quota rejection rolls back the replay counter and grant mutation',
 test('complete Apple fixture verifies pinned certificate chains, authenticator nonce and independent CMS receipt in its published context', async () => {
   const sample = base64url(new Uint8Array(Buffer.from(await readFile(new URL('./fixtures/apple-attestation.b64', import.meta.url), 'utf8'), 'base64')));
   const context = { appId: '1234567890.com.example.myapp', environment: 'production' as const,
-    bundleVersions: ['1'], validationCategories: [1] };
+    minBundleVersion: 1, validationCategories: [1] };
   const key = 'zgSY9YSD-7TaDXssY6WlOPVS1K3Lmk-pFhlcSWE-ZV0';
   const time = Date.parse('2026-04-21T18:13:13Z') / 1000;
   // Apple's fixture uses these raw bytes as clientDataHash and an OS-executable validation category.

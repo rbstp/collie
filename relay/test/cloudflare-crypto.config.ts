@@ -21,7 +21,7 @@ export default defineConfig({
       APNS_TEAM_ID: bindings.text('TESTTEAM01'),
       APNS_KEY_ID: bindings.text('TESTKEY001'),
       APNS_ENVIRONMENT: bindings.text('development'),
-      ATTEST_BUNDLE_VERSIONS: bindings.text('["1"]'),
+      ATTEST_MIN_BUNDLE_VERSION: bindings.text('1'),
       SEND_LIMITER: bindings.rateLimit({ namespace: '350', simple: { limit: 60, period: 60 } }),
       CONTROL_LIMITER: bindings.rateLimit({ namespace: '353', simple: { limit: 30, period: 60 } }),
       ENROLL_LIMITER: bindings.rateLimit({ namespace: '354', simple: { limit: 5, period: 60 } })
