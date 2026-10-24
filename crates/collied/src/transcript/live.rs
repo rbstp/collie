@@ -378,7 +378,16 @@ impl Transcripts {
             if !Path::new(&cwd).is_absolute() {
                 return None;
             }
-            let (file, _, _) = open(&dir.join("events.jsonl"))?;
+            let events = dir.join("events.jsonl");
+            // Copilot 1.0.103 holds the session it started with but writes no events until a
+            // prompt; after `/new` that unnamed session stays held beside the new one.
+            if name.is_none()
+                && std::fs::symlink_metadata(&events)
+                    .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            {
+                continue;
+            }
+            let (file, _, _) = open(&events)?;
             let limit = budget.min(SESSION_BYTES);
             let mut reader = std::io::BufReader::with_capacity(1024, file.take(limit));
             let mut header = Vec::new();
@@ -906,6 +915,35 @@ mod tests {
         assert!(!t.quiet(&a));
         complete_copilot_session(&root, COPILOT_OLD);
         assert!(t.quiet(&a));
+    }
+
+    #[test]
+    fn copilot_new_before_a_prompt_follows_the_new_conversation() {
+        let (_dir, mut t, root, a) = copilot_setup();
+        let (pid, _) = own();
+        let _started = copilot_session(&root, COPILOT_OLD, pid, false);
+        let _current = copilot_session(&root, COPILOT_CURRENT, pid, true);
+        let started = root.join(COPILOT_OLD);
+        std::fs::remove_file(started.join("events.jsonl")).unwrap();
+        let metadata = started.join("workspace.yaml");
+        let text = std::fs::read_to_string(&metadata).unwrap();
+        write(
+            &metadata,
+            &text.replace("name: Previous conversation\n", ""),
+        );
+        pane(&mut t, &[pid]);
+        assert_eq!(t.resolve(&a, false).as_deref(), Some(COPILOT_CURRENT));
+        assert_eq!(
+            t.history_reader().live_id(&a).as_deref(),
+            Some(COPILOT_CURRENT)
+        );
+        assert_eq!(t.derive(&a, false).unwrap().subagents.len(), 1);
+        assert!(!t.quiet(&a));
+        t.retain(std::slice::from_ref(&a));
+        complete_copilot_session(&root, COPILOT_CURRENT);
+        assert!(t.quiet(&a));
+        write(&metadata, &text);
+        assert_eq!(t.resolve(&a, false), None);
     }
 
     #[test]
