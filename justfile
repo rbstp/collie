@@ -146,7 +146,7 @@ ios-test diagnostics="on-failure": ios-framework ios-project
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' CODE_SIGNING_ALLOWED=NO test
 
 # The documentation screenshots, light and dark, from the demo on one fixed simulator and its paired watch, plus the App Store set in target/ios/app-store.
-# With screenshot_device, only the App Store set from that simulator, in target/ios/app-store/<width>x<height>, plus the iPhone Duo set.
+# With screenshot_device, only the App Store set from that simulator, in target/ios/app-store/<width>x<height>.
 ios-screenshots: ios-framework ios-project
     #!/usr/bin/env bash
     set -euo pipefail
@@ -222,17 +222,7 @@ ios-screenshots: ios-framework ios-project
     done
     rm "$store/tmp.ppm"
     if ! $docs; then
-        # The iOS 27.2 runtime cannot create an iPhone Duo simulator: its set is this capture scaled to 2853 high and padded to 2007 wide.
-        duo="$(dirname "$store")/2007x2853"
-        rm -rf "$duo"
-        mkdir -p "$duo"
-        for f in "$store"/*.png; do
-            case "$f" in *-dark.png) pad=000000 ;; *) pad=FFFFFF ;; esac
-            sips --resampleHeight 2853 "$f" --out "$duo/tmp.png" >/dev/null
-            sips --padToHeightWidth 2853 2007 --padColor "$pad" "$duo/tmp.png" --out "$duo/$(basename "$f")" >/dev/null 2>&1
-        done
-        rm "$duo/tmp.png"
-        echo "App Store screenshots: $store $duo"
+        echo "App Store screenshots: $store"
         exit 0
     fi
     if command -v pngquant >/dev/null; then
