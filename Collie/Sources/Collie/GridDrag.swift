@@ -154,19 +154,19 @@ struct GridDropTarget: ViewModifier {
 
 struct GridPageLock: UIViewRepresentable {
     let locked: Bool
-    var leadingMargin: (CGFloat) -> Void = { _ in }
+    var listMargin: (CGFloat) -> Void = { _ in }
 
     func makeUIView(context: Context) -> Probe { Probe() }
     func updateUIView(_ view: Probe, context: Context) {
         view.locked = locked
-        view.leadingMargin = leadingMargin
+        view.listMargin = listMargin
         view.update()
     }
     static func dismantleUIView(_ view: Probe, coordinator: ()) { view.restore() }
 
     final class Probe: UIView {
         var locked = false
-        var leadingMargin: (CGFloat) -> Void = { _ in }
+        var listMargin: (CGFloat) -> Void = { _ in }
         private weak var pager: UIScrollView?
         private var reportedMargin: CGFloat?
 
@@ -177,13 +177,12 @@ struct GridPageLock: UIViewRepresentable {
 
         override func layoutSubviews() {
             super.layoutSubviews()
-            // A List on a page after the first gets a leading margin as if it sat beside the screen (8 pt short on iPhone,
-            // none on iPhone Duo); the screen's own leading margin, safe area included, is what the first page's List gets.
-            guard let pager, let screen = sequence(first: pager as UIResponder, next: \.next).lazy.compactMap({ $0 as? UIViewController }).first?.view else { return }
-            let margin = screen.directionalLayoutMargins.leading
+            // PagerListMargin adds this to each List's safe area.
+            guard let pager, let controller = sequence(first: pager as UIResponder, next: \.next).lazy.compactMap({ $0 as? UIViewController }).first else { return }
+            let margin = controller.systemMinimumLayoutMargins.leading
             guard margin != reportedMargin else { return }
             reportedMargin = margin
-            let report = leadingMargin
+            let report = listMargin
             DispatchQueue.main.async { report(margin) }
         }
 
