@@ -183,7 +183,13 @@ struct GridPageLock: UIViewRepresentable {
                     }
                     scroll.isScrollEnabled = !locked
                     // Under the bars, the pager's automatic inset shifts its pages and its edge effects cover them; the pages take the safe area themselves.
-                    scroll.contentInsetAdjustmentBehavior = .never
+                    if scroll.contentInsetAdjustmentBehavior != .never {
+                        scroll.contentInsetAdjustmentBehavior = .never
+                        // An uneven side inset, as on iPhone Duo, has already offset the first page by half of it.
+                        if scroll.bounds.width > 0 {
+                            scroll.contentOffset.x = (scroll.contentOffset.x / scroll.bounds.width).rounded() * scroll.bounds.width
+                        }
+                    }
                     scroll.topEdgeEffect.isHidden = true
                     scroll.bottomEdgeEffect.isHidden = true
                     return

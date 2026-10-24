@@ -26,6 +26,18 @@ final class PagerSwipeTests: XCTestCase {
         }
     }
 
+    func testAgentsPageStartsAtTheLeadingEdge() throws {
+        let app = XCUIApplication()
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.segmentedControls["View"].buttons["Agents"].appears(within: 10), app.debugDescription)
+        let page = app.collectionViews.firstMatch.cells.firstMatch
+        XCTAssertTrue(page.appears(within: 5), app.debugDescription)
+        XCTAssertEqual(page.frame.minX, 0, app.debugDescription)
+    }
+
     func testTappedSelectionKeepsItsColor() throws {
         let app = XCUIApplication()
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
