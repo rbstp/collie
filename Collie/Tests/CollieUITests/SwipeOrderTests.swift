@@ -68,10 +68,17 @@ final class SwipeOrderTests: XCTestCase {
     }
 
     private func drag(_ app: XCUIApplication, _ title: String, onto target: String, after: Bool) {
-        card(app, title).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
-            forDuration: 1.5, thenDragTo: card(app, target).coordinate(withNormalizedOffset: CGVector(dx: after ? 0.95 : 0.05, dy: 0.5)),
-            withVelocity: .slow, thenHoldForDuration: 1
-        )
+        // On a slow CI simulator the press can settle into the card's context menu instead of lifting the card.
+        let menu = app.buttons["Close pane"]
+        for _ in 0..<3 {
+            card(app, title).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
+                forDuration: 1.5, thenDragTo: card(app, target).coordinate(withNormalizedOffset: CGVector(dx: after ? 0.95 : 0.05, dy: 0.5)),
+                withVelocity: .slow, thenHoldForDuration: 1
+            )
+            guard menu.exists else { return }
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).tap()
+            XCTAssertTrue(menu.wait(for: \.exists, toEqual: false, timeout: 10), app.debugDescription)
+        }
     }
 
     /// The grid's titles as it shows them: by row, then left to right.
