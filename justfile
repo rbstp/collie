@@ -169,8 +169,6 @@ ios-screenshots: ios-framework ios-project
     xcrun simctl bootstatus "$udid" -b
     appearance="$(xcrun simctl ui "$udid" appearance)"
     trap 'xcrun simctl status_bar "$udid" clear; xcrun simctl ui "$udid" appearance "$appearance"; if [ "$watch_state" = Shutdown ]; then xcrun simctl shutdown "$watch" || true; fi' EXIT
-    xcrun simctl status_bar "$udid" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3 \
-        --cellularMode active --cellularBars 4 --operatorName '' --batteryState discharging --batteryLevel 100
     {{ xcodebuild }} -destination "id=$udid" CODE_SIGNING_ALLOWED=NO build-for-testing
     # A fresh install drops drafts left by other UI tests; the demo takes its accent from the prefs file.
     xcrun simctl uninstall "$udid" dev.rbstp.collie
@@ -182,8 +180,16 @@ ios-screenshots: ios-framework ios-project
     raw="$PWD/target/ios/screenshots"
     rm -rf "$raw"
     mkdir -p "$raw"
-    TEST_RUNNER_COLLIE_SCREENSHOTS="$raw" {{ xcodebuild }} -destination "id=$udid" CODE_SIGNING_ALLOWED=NO \
-        -only-testing CollieUITests/ScreenshotTests test-without-building
+    for look in light dark; do
+        # The iOS 27.2 simulator applies an appearance change at its next boot only.
+        xcrun simctl ui "$udid" appearance "$look"
+        xcrun simctl shutdown "$udid"
+        xcrun simctl bootstatus "$udid" -b
+        xcrun simctl status_bar "$udid" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3 \
+            --cellularMode active --cellularBars 4 --operatorName '' --batteryState discharging --batteryLevel 100
+        TEST_RUNNER_COLLIE_SCREENSHOTS="$raw" TEST_RUNNER_COLLIE_SCREENSHOTS_APPEARANCE="$look" {{ xcodebuild }} -destination "id=$udid" \
+            CODE_SIGNING_ALLOWED=NO -only-testing CollieUITests/ScreenshotTests test-without-building
+    done
     out=docs/site/src/images
     mkdir -p "$out"
     if $docs; then
