@@ -167,7 +167,8 @@ struct AgentScreen: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                if let notice = model.notice ?? model.blockedHint {
+                // Typing in landscape, the hint's row is what the keyboard's predictions bar leaves the approval card.
+                if let notice = model.notice ?? (typingInLandscape ? nil : model.blockedHint) {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
                         .foregroundStyle(.orange)
