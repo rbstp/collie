@@ -80,6 +80,7 @@ collied-install:
 ios_deployment_target := "26.0"
 sim := "iPhone 18 Pro"
 screenshot_watch := "true"
+screenshot_device := ""
 xcodebuild := "xcodebuild -project Collie/Collie.xcodeproj -scheme Collie -derivedDataPath target/ios/DerivedData"
 
 ios-framework target="all" profile="release":
@@ -145,23 +146,29 @@ ios-test diagnostics="on-failure": ios-framework ios-project
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' CODE_SIGNING_ALLOWED=NO test
 
 # The documentation screenshots, light and dark, from the demo on one fixed simulator and its paired watch, plus the App Store set in target/ios/app-store.
+# With screenshot_device, only the App Store set from that simulator, in target/ios/app-store/<width>x<height>.
 ios-screenshots: ios-framework ios-project
     #!/usr/bin/env bash
     set -euo pipefail
     device="iPhone 18 Pro Max"
+    docs=true
+    watch_shots="{{ screenshot_watch }}"
+    if [ -n "{{ screenshot_device }}" ]; then
+        device="{{ screenshot_device }}"
+        docs=false
+        watch_shots=false
+    fi
     udid="$(xcrun simctl list devices available -j | jq -r --arg name "$device" '[.devices[][] | select(.name == $name) | .udid][0] // empty')"
     [ -n "$udid" ] || { echo "no available simulator named $device"; exit 1; }
     watch_state=
-    if [ "{{ screenshot_watch }}" = true ]; then
+    if [ "$watch_shots" = true ]; then
         watch="$(xcrun simctl list pairs -j | jq -r --arg phone "$udid" '[.pairs[] | select(.phone.udid == $phone) | .watch.udid][0] // empty')"
         [ -n "$watch" ] || { echo "no watch simulator paired with $device (xcrun simctl pair)"; exit 1; }
         watch_state="$(xcrun simctl list devices -j | jq -r --arg id "$watch" '.devices[][] | select(.udid == $id) | .state')"
     fi
     xcrun simctl bootstatus "$udid" -b
     appearance="$(xcrun simctl ui "$udid" appearance)"
-    trap 'xcrun simctl status_bar "$udid" clear; xcrun simctl ui "$udid" appearance "$appearance"; if [ "$watch_state" = Shutdown ]; then xcrun simctl shutdown "$watch" || true; fi' EXIT
-    xcrun simctl status_bar "$udid" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3 \
-        --cellularMode active --cellularBars 4 --operatorName '' --batteryState discharging --batteryLevel 100
+    trap 'xcrun simctl status_bar "$udid" clear || true; xcrun simctl ui "$udid" appearance "$appearance"; if [ "$watch_state" = Shutdown ]; then xcrun simctl shutdown "$watch" || true; fi' EXIT
     {{ xcodebuild }} -destination "id=$udid" CODE_SIGNING_ALLOWED=NO build-for-testing
     # A fresh install drops drafts left by other UI tests; the demo takes its accent from the prefs file.
     xcrun simctl uninstall "$udid" dev.rbstp.collie
@@ -173,14 +180,24 @@ ios-screenshots: ios-framework ios-project
     raw="$PWD/target/ios/screenshots"
     rm -rf "$raw"
     mkdir -p "$raw"
-    TEST_RUNNER_COLLIE_SCREENSHOTS="$raw" {{ xcodebuild }} -destination "id=$udid" CODE_SIGNING_ALLOWED=NO \
-        -only-testing CollieUITests/ScreenshotTests test-without-building
+    for look in dark light; do
+        # The iOS 27.2 simulator applies an appearance change at its next boot only.
+        xcrun simctl ui "$udid" appearance "$look"
+        xcrun simctl shutdown "$udid"
+        xcrun simctl bootstatus "$udid" -b
+        xcrun simctl status_bar "$udid" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3 \
+            --cellularMode active --cellularBars 4 --operatorName '' --batteryState discharging --batteryLevel 100
+        TEST_RUNNER_COLLIE_SCREENSHOTS="$raw" TEST_RUNNER_COLLIE_SCREENSHOTS_APPEARANCE="$look" {{ xcodebuild }} -destination "id=$udid" \
+            CODE_SIGNING_ALLOWED=NO -only-testing CollieUITests/ScreenshotTests test-without-building
+    done
     out=docs/site/src/images
     mkdir -p "$out"
-    for f in "$raw"/*.png; do
-        sips --resampleWidth 600 "$f" --out "$out/$(basename "$f")" >/dev/null
-    done
-    if [ "{{ screenshot_watch }}" = true ]; then
+    if $docs; then
+        for f in "$raw"/*.png; do
+            sips --resampleWidth 600 "$f" --out "$out/$(basename "$f")" >/dev/null
+        done
+    fi
+    if [ "$watch_shots" = true ]; then
         # bootstatus exits 0 even when a new watch shuts down during its first-boot data migration; booting it again completes.
         for _ in 1 2 3; do
             xcrun simctl bootstatus "$watch" -b
@@ -199,6 +216,9 @@ ios-screenshots: ios-framework ios-project
         xcrun simctl terminate "$watch" dev.rbstp.collie.watchkitapp
     fi
     store="$PWD/target/ios/app-store"
+    if ! $docs; then
+        store="$store/$(sips -g pixelWidth -g pixelHeight "$raw/agents-light.png" | awk '/pixelWidth/ {w = $2} /pixelHeight/ {h = $2} END {print w "x" h}')"
+    fi
     rm -rf "$store"
     mkdir -p "$store"
     # App Store Connect refuses alpha; a PPM round trip drops it without loss.
@@ -207,6 +227,10 @@ ios-screenshots: ios-framework ios-project
         sips -s format png "$store/tmp.ppm" --out "$store/$(basename "$f")" >/dev/null
     done
     rm "$store/tmp.ppm"
+    if ! $docs; then
+        echo "App Store screenshots: $store"
+        exit 0
+    fi
     if command -v pngquant >/dev/null; then
         # Only this run's captures: compressing a committed image again can still change it.
         for f in "$raw"/*.png; do
