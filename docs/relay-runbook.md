@@ -4,7 +4,7 @@ Procedures for the publisher operating the production push relay at `collie-push
 
 ## Deployment
 
-The Worker is `relay/src/worker.ts`: the public handler, the single `RelayCrypto` Durable Object for App Attest and APNs signing, the D1 binding `DB`, three rate limiters and five secrets. `relay/cloudflare.config.ts` sets `limits.cpuMs: 250`, `observability.enabled: false`, `workersDev: false` and `previewUrls: false`.
+The Worker is `relay/src/worker.ts`: the public handler, the single `RelayCrypto` Durable Object for App Attest and APNs signing, the D1 binding `DB`, three rate limiters, four secrets and a minimum app build number. `relay/cloudflare.config.ts` sets `limits.cpuMs: 250`, `observability.enabled: false`, `workersDev: false` and `previewUrls: false`.
 
 | Binding | Kind | Purpose |
 |---|---|---|
@@ -13,12 +13,12 @@ The Worker is `relay/src/worker.ts`: the public handler, the single `RelayCrypto
 | `APNS_ENVIRONMENT` | Text | `production` or `development`; must match every grant and operation |
 | `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_PRIVATE_KEY` | Secrets | Publisher APNs key; the team ID also forms the App Attest App ID |
 | `SEND_HMAC_KEYS` | Secret | One or two HMAC keys for send grants and control challenges |
-| `ATTEST_BUNDLE_VERSIONS` | Secret | JSON array of 1 to 16 app bundle versions accepted by App Attest checks |
+| `ATTEST_MIN_BUNDLE_VERSION` | Text | Lowest app build number accepted by App Attest checks, a whole number from 1 to 999999999 |
 | `SEND_LIMITER` | Rate limit, 60 per 60 s | Sends, keyed by source IP, installation and route generation |
 | `CONTROL_LIMITER` | Rate limit, 30 per 60 s | Challenges and controls, keyed by source IP, installation and one shared key |
 | `ENROLL_LIMITER` | Rate limit, 5 per 60 s | Enrollments, keyed by source IP and one shared key |
 
-The checked-in configuration is the deployment template. It has the hourly cleanup Cron trigger (`0 * * * *`), a placeholder database ID and `APNS_ENVIRONMENT` set to `development`; the production deployment replaces the database ID and sets `production` locally, never committed. The `collie-push.rbstp.dev` Custom Domain is attached to the Worker in the Cloudflare dashboard, not in the configuration.
+The checked-in configuration is the deployment template. It has the hourly cleanup Cron trigger (`0 * * * *`), a placeholder database ID, `APNS_ENVIRONMENT` set to `development` and the production `ATTEST_MIN_BUNDLE_VERSION`; the production deployment replaces the database ID and sets `production` locally, never committed. The `collie-push.rbstp.dev` Custom Domain is attached to the Worker in the Cloudflare dashboard, not in the configuration.
 
 Deploy as [Relay](relay.md#operations) describes. Unset `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_API_KEY` and `CLOUDFLARE_EMAIL`, check the account with `cf auth whoami` and set the verified `CLOUDFLARE_ACCOUNT_ID`. Then, from `relay/`:
 
@@ -72,11 +72,11 @@ The relay records no APNs reason. It turns Apple's answers into three results: `
 
 Before raising the public TestFlight tester limit, read the last seven days. [Relay](relay.md#operations) sets the review points: peak `global_usage` total above 70% of 20,000, more than 1% of legitimate sends rejected with `daily_quota`, or more than 30 daily active phones. See [App Review notes](app-review.md#public-link-capacity) for the capacity cap.
 
-## Allow a new app build
+## Refuse old app builds
 
-App Attest checks reject an app whose bundle version is not in `ATTEST_BUNDLE_VERSIONS`, whenever Apple's attestation or assertion carries its bundle-version extension. Enrollment, renewal or revocation from such a build then returns `401 unauthorized`. Sends are unaffected: grants already issued keep working until they expire.
+App Attest checks reject an app whose bundle version is not a whole number of at most nine digits at or above `ATTEST_MIN_BUNDLE_VERSION`, whenever Apple's attestation or assertion carries its bundle-version extension. TestFlight builds use the release workflow's run number as their bundle version, so every new build passes without a relay change. Enrollment, renewal or revocation from a refused build returns `401 unauthorized`. Sends are unaffected: grants already issued keep working until they expire.
 
-Before a build reaches testers, add its bundle version, as the same kind of value as the entries already there, to the array and deploy. The array holds at most 16 entries of up to 32 letters, digits and dots. Remove a version only once no tester should still run that build, since its phones may then fail to renew or revoke and keep relay pushes only until their grants expire.
+To refuse older builds, raise the minimum in `relay/cloudflare.config.ts` through a reviewed pull request and deploy. Raise it only once no tester should still run the builds below it, since their phones may then fail to renew or revoke and keep relay pushes only until their grants expire.
 
 ## APNs key rotation
 
@@ -135,7 +135,7 @@ To revoke everything at once, use the emergency HMAC rotation.
 No setting stops enrollment alone. In order of reach:
 
 1. **Stop invitations.** In App Store Connect, disable the public TestFlight link or lower its tester limit. Testers already in keep the app.
-2. **Refuse App Attest for unknown builds.** Setting `ATTEST_BUNDLE_VERSIONS` to a version no build reports refuses enrollment, renewal and revocation from every phone whose attestation or assertion carries Apple's bundle-version extension. One without the extension still passes. Existing grants keep sending until they expire. The array cannot be empty: an empty or invalid value makes every enrollment, renewal and revocation fail with `503 unavailable`.
+2. **Refuse App Attest for current builds.** Raising `ATTEST_MIN_BUNDLE_VERSION` above the newest build refuses enrollment, renewal and revocation from every phone whose attestation or assertion carries Apple's bundle-version extension. One without the extension still passes. Existing grants keep sending until they expire. A missing or invalid value makes every enrollment, renewal and revocation fail with `503 unavailable`.
 3. **Lower the daily enrollment cap.** The 30-a-day cap is in the `enrollment_limit` trigger of `relay/migrations/0002_attestation.sql`. Changing it needs a new migration and a review; there is no runtime setting.
 4. **Disable the public route.** Remove the `collie-push.rbstp.dev` Custom Domain from the Worker in the dashboard (Settings, Domains & Routes), A deploy does not add it back, since the configuration does not declare it. workers.dev and preview URLs are already off, so no other public path remains. Enrollment, renewal, revocation and sends all stop; collied backs off and doctor reports the relay unavailable, while sessions, approvals, Chat and terminals over the tailnet keep working. D1 state is kept and the cleanup trigger keeps running. Add the domain back to restore service.
 
@@ -144,7 +144,7 @@ No setting stops enrollment alone. In order of reach:
 Stop invitations first. Then roll back in one of two ways, neither scripted in the repository:
 
 - **Cloudflare version rollback**, in the dashboard under the Worker's Deployments. A Worker version includes its bindings, secrets among them, so rolling back past an APNs or HMAC rotation restores the old secret values. Cloudflare refuses a rollback across a Durable Object class change.
-- **Redeploy a reviewed commit**: check out the earlier commit and deploy as above with the current secrets file. Prefer this when a secret has changed since the target version.
+- **Redeploy a reviewed commit**: check out the earlier commit and deploy as above with the current secrets file. Prefer this when a secret has changed since the target version. A commit from before `ATTEST_MIN_BUNDLE_VERSION` reads the `ATTEST_BUNDLE_VERSIONS` secret instead, a JSON array of exact bundle versions, so put it in the secrets file with every build testers run, or its enrollment, renewal and revocation fail with `503 unavailable`.
 
 D1 is not rolled back. The schema has only forward migrations, `0001_relay.sql` and `0002_attestation.sql`, so the target code must run on the current schema. Never restore D1 with Time Travel as a rollback: it can bring back revoked grants, spent quotas and assertion counters that replay protection relies on. After a rollback, run `collied apns test` from an operator machine and watch the status codes. If no safe version exists, disable the public route.
 

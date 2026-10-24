@@ -22,7 +22,7 @@ test('one local complete cycle uses exactly42 attempts with real actor/control/s
       format: 'esm', platform: 'neutral', mainFields: ['module', 'main'], target: 'es2024', external: ['cloudflare:workers'], write: false });
     const runtime = new Miniflare({ name: 'crypto-benchmark', unsafeInspectDurableObjects: true, modules: true, script: bundled.outputFiles[0].text,
       compatibilityDate: '2026-08-06', d1Databases: ['DB'], durableObjects: { CRYPTO: { className: 'BenchmarkCrypto', useSQLite: true } },
-      bindings: { ...secrets, APNS_TEAM_ID: 'TESTTEAM01', APNS_KEY_ID: 'TESTKEY001', APNS_ENVIRONMENT: 'development', ATTEST_BUNDLE_VERSIONS: '["1"]' },
+      bindings: { ...secrets, APNS_TEAM_ID: 'TESTTEAM01', APNS_KEY_ID: 'TESTKEY001', APNS_ENVIRONMENT: 'development', ATTEST_MIN_BUNDLE_VERSION: '1' },
       ratelimits: { SEND_LIMITER: { namespace_id: '350', simple: { limit: 60, period: 60 } },
         CONTROL_LIMITER: { namespace_id: '353', simple: { limit: 30, period: 60 } }, ENROLL_LIMITER: { namespace_id: '354', simple: { limit: 5, period: 60 } } } });
     try {

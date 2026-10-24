@@ -23,7 +23,7 @@ export function simulatorWorker(upstream: typeof fetch, clock?: () => number) {
 }
 
 export async function simulatorRuntime(env: Pick<Env,
-  'APNS_TEAM_ID' | 'APNS_KEY_ID' | 'APNS_PRIVATE_KEY' | 'APNS_ENVIRONMENT' | 'ATTEST_BUNDLE_VERSIONS'>, d1Persist?: string) {
+  'APNS_TEAM_ID' | 'APNS_KEY_ID' | 'APNS_PRIVATE_KEY' | 'APNS_ENVIRONMENT' | 'ATTEST_MIN_BUNDLE_VERSION'>, d1Persist?: string) {
   if (env.APNS_ENVIRONMENT !== 'development') throw new Error('sandbox_required');
   const bundled = await build({ entryPoints: [new URL('./compute.ts', import.meta.url).pathname], bundle: true,
     format: 'esm', platform: 'neutral', mainFields: ['module', 'main'], target: 'es2024', external: ['cloudflare:workers'], write: false });

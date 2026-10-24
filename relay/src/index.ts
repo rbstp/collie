@@ -13,7 +13,7 @@ export interface Env extends CryptoBinding {
   APNS_TEAM_ID: string;
   APNS_KEY_ID: string;
   APNS_PRIVATE_KEY: string;
-  ATTEST_BUNDLE_VERSIONS?: string;
+  ATTEST_MIN_BUNDLE_VERSION?: string;
   CONTROL_LIMITER?: Env['SEND_LIMITER'];
   ENROLL_LIMITER?: Env['SEND_LIMITER'];
 }

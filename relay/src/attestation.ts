@@ -75,7 +75,7 @@ async function chain(leaf: X509Certificate, intermediates: X509Certificate[], ro
 export interface AttestationPolicy {
   appId: string;
   environment: Environment;
-  bundleVersions: string[];
+  minBundleVersion: number;
   validationCategories?: number[];
 }
 function extensions(reader: CborReader, flags: number, policy: AttestationPolicy): void {
@@ -85,8 +85,8 @@ function extensions(reader: CborReader, flags: number, policy: AttestationPolicy
     require(category.length === 4);
     const value = new DataView(category.buffer, category.byteOffset, 4).getUint32(0, true);
     require((policy.validationCategories ?? (policy.environment === 'production' ? [2, 4] : [3])).includes(value));
-    require(typeof values.get('apple_bundle_version_01') === 'string'
-      && policy.bundleVersions.includes(values.get('apple_bundle_version_01') as string));
+    const version = values.get('apple_bundle_version_01');
+    require(typeof version === 'string' && /^[0-9]{1,9}$/.test(version) && Number(version) >= policy.minBundleVersion);
   }
   reader.finish();
 }
