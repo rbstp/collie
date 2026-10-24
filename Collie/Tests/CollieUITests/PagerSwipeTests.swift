@@ -21,7 +21,9 @@ final class PagerSwipeTests: XCTestCase {
                 app.swipeLeft()
             }
             XCTAssertTrue(view.buttons["Usage"].wait(for: \.isSelected, toEqual: true, timeout: 5), "\(name)\n\(app.debugDescription)")
-            app.swipeRight()
+            // On iPhone Pro Max the app's center lands on the Range picker, which keeps a drag that starts on it.
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.3))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 300, dy: 0)), withVelocity: .fast, thenHoldForDuration: 0)
             XCTAssertTrue(view.buttons["Agents"].wait(for: \.isSelected, toEqual: true, timeout: 5), "\(name)\n\(app.debugDescription)")
         }
     }
