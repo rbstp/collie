@@ -38,6 +38,39 @@ final class PagerSwipeTests: XCTestCase {
         XCTAssertEqual(page.frame.minX, 0, app.debugDescription)
     }
 
+    func testUsageCardsKeepTheAgentsListMargins() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        app.launch()
+        defer {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+        }
+        let layout = app.buttons["Layout"]
+        XCTAssertTrue(layout.appears(within: 10), app.debugDescription)
+        app.choose(app.buttons["List"]) { layout.tap() }
+        let view = app.segmentedControls["View"]
+        // The lists' cells, not the pager's pages.
+        let rows = app.collectionViews.firstMatch.collectionViews.cells
+        let row = rows.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
+        let card = rows.containing(NSPredicate(format: "label == %@", "5-hour usage limit")).firstMatch
+        // iPhone Duo's cover display does not rotate, so there both passes check portrait.
+        for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft] {
+            XCUIDevice.shared.orientation = orientation
+            view.buttons["Agents"].tap()
+            XCTAssertTrue(row.appears(within: 5), app.debugDescription)
+            sleep(2)
+            let agents = row.frame
+            view.buttons["Usage"].tap()
+            XCTAssertTrue(card.appears(within: 5), app.debugDescription)
+            sleep(2)
+            XCTAssertEqual(card.frame.minX, agents.minX, app.debugDescription)
+            XCTAssertEqual(card.frame.maxX, agents.maxX, app.debugDescription)
+        }
+    }
+
     func testTappedSelectionKeepsItsColor() throws {
         let app = XCUIApplication()
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))

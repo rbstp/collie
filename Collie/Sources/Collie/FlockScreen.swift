@@ -21,6 +21,7 @@ struct FlockScreen: View {
     @State private var snoozed = SnoozedAgents.load(from: SnoozedAgents.file)
     @State private var gridOrder = GridOrder.load(from: GridOrder.file)
     @State private var showsUsage = false
+    @State private var usageLeading: CGFloat?
     @State private var usageRefresh = 0
     @State private var dragging: GridDrag?
     @State private var inboxQuery = ""
@@ -34,8 +35,10 @@ struct FlockScreen: View {
     var body: some View {
         NavigationStack(path: $path) {
             TabView(selection: $showsUsage) {
-                agents.background(GridPageLock(locked: dragging != nil || (layout == .inbox && !showsUsage))).tag(false)
-                List { UsageSections(entries: model.entries, core: core, refresh: usageRefresh) }.tag(true)
+                agents.background(GridPageLock(locked: dragging != nil || (layout == .inbox && !showsUsage)) { usageLeading = $0 }).tag(false)
+                List { UsageSections(entries: model.entries, core: core, refresh: usageRefresh) }
+                    .contentMargins(.leading, usageLeading, for: .scrollContent)
+                    .tag(true)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             // The pager clips its pages to its frame, so it spans the bars for the pages to run under them.
