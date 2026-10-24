@@ -51,7 +51,7 @@ private func orderedMachine(_ id: String, label: String? = nil) -> Machine {
     #expect(model.entries.map(\.id) == ["linux", "mac"])
     #expect(model.entries.allSatisfy { $0.flock?.link == .offline })
     #expect(model.entries.allSatisfy { $0.agents.map(\.terminalId) == ["blocked", "done"] })
-    #expect(FlockOrder.neighbor(of: route("done", on: "linux"), offset: 1, in: model.entries) == route("blocked", on: "mac"))
+    #expect(FlockOrder.neighbor(of: route("done", on: "linux"), offset: 1, in: FlockOrder.routes(in: model.entries), among: model.entries) == route("blocked", on: "mac"))
 
     core.state.withLock { $0.cachedFlock?.link = .connected }
     await model.refresh(core: core, machines: ordered, snapshot: false)

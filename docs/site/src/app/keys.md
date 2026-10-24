@@ -35,3 +35,5 @@ Choose what each gesture does in **Settings > Terminal > Gestures**:
 | Pinch | Change the font size |
 | Swipe sideways | Switch agents (while lines wrap) |
 | Triple-tap | Send Esc (off by default) |
+
+Swipe left for the next agent and right for the previous one, in the order of the layout you opened the session from: the grid in your order with starred cards first, the list, or the inbox with its filter, its search and the **Snoozed** section when it is open. The session keeps the order you saw when you opened it, even when statuses change. Agents that close are skipped, and agents that start later join only when you open a session again. When you open an agent that the layout does not show, from a notification, a Live Activity or New Task, swiping follows the current layout with every agent in it.
