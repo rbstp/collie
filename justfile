@@ -80,6 +80,7 @@ collied-install:
 ios_deployment_target := "26.0"
 sim := "iPhone 18 Pro"
 screenshot_watch := "true"
+screenshot_device := ""
 xcodebuild := "xcodebuild -project Collie/Collie.xcodeproj -scheme Collie -derivedDataPath target/ios/DerivedData"
 
 ios-framework target="all" profile="release":
@@ -145,14 +146,22 @@ ios-test diagnostics="on-failure": ios-framework ios-project
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' CODE_SIGNING_ALLOWED=NO test
 
 # The documentation screenshots, light and dark, from the demo on one fixed simulator and its paired watch, plus the App Store set in target/ios/app-store.
+# With screenshot_device, only the App Store set from that simulator, in target/ios/app-store/<width>x<height>, plus the iPhone Duo set.
 ios-screenshots: ios-framework ios-project
     #!/usr/bin/env bash
     set -euo pipefail
     device="iPhone 18 Pro Max"
+    docs=true
+    watch_shots="{{ screenshot_watch }}"
+    if [ -n "{{ screenshot_device }}" ]; then
+        device="{{ screenshot_device }}"
+        docs=false
+        watch_shots=false
+    fi
     udid="$(xcrun simctl list devices available -j | jq -r --arg name "$device" '[.devices[][] | select(.name == $name) | .udid][0] // empty')"
     [ -n "$udid" ] || { echo "no available simulator named $device"; exit 1; }
     watch_state=
-    if [ "{{ screenshot_watch }}" = true ]; then
+    if [ "$watch_shots" = true ]; then
         watch="$(xcrun simctl list pairs -j | jq -r --arg phone "$udid" '[.pairs[] | select(.phone.udid == $phone) | .watch.udid][0] // empty')"
         [ -n "$watch" ] || { echo "no watch simulator paired with $device (xcrun simctl pair)"; exit 1; }
         watch_state="$(xcrun simctl list devices -j | jq -r --arg id "$watch" '.devices[][] | select(.udid == $id) | .state')"
@@ -177,10 +186,12 @@ ios-screenshots: ios-framework ios-project
         -only-testing CollieUITests/ScreenshotTests test-without-building
     out=docs/site/src/images
     mkdir -p "$out"
-    for f in "$raw"/*.png; do
-        sips --resampleWidth 600 "$f" --out "$out/$(basename "$f")" >/dev/null
-    done
-    if [ "{{ screenshot_watch }}" = true ]; then
+    if $docs; then
+        for f in "$raw"/*.png; do
+            sips --resampleWidth 600 "$f" --out "$out/$(basename "$f")" >/dev/null
+        done
+    fi
+    if [ "$watch_shots" = true ]; then
         # bootstatus exits 0 even when a new watch shuts down during its first-boot data migration; booting it again completes.
         for _ in 1 2 3; do
             xcrun simctl bootstatus "$watch" -b
@@ -199,6 +210,9 @@ ios-screenshots: ios-framework ios-project
         xcrun simctl terminate "$watch" dev.rbstp.collie.watchkitapp
     fi
     store="$PWD/target/ios/app-store"
+    if ! $docs; then
+        store="$store/$(sips -g pixelWidth -g pixelHeight "$raw/agents-light.png" | awk '/pixelWidth/ {w = $2} /pixelHeight/ {h = $2} END {print w "x" h}')"
+    fi
     rm -rf "$store"
     mkdir -p "$store"
     # App Store Connect refuses alpha; a PPM round trip drops it without loss.
@@ -207,6 +221,20 @@ ios-screenshots: ios-framework ios-project
         sips -s format png "$store/tmp.ppm" --out "$store/$(basename "$f")" >/dev/null
     done
     rm "$store/tmp.ppm"
+    if ! $docs; then
+        # The iOS 27.2 runtime cannot create an iPhone Duo simulator: its set is this capture scaled to 2853 high and padded to 2007 wide.
+        duo="$(dirname "$store")/2007x2853"
+        rm -rf "$duo"
+        mkdir -p "$duo"
+        for f in "$store"/*.png; do
+            case "$f" in *-dark.png) pad=000000 ;; *) pad=FFFFFF ;; esac
+            sips --resampleHeight 2853 "$f" --out "$duo/tmp.png" >/dev/null
+            sips --padToHeightWidth 2853 2007 --padColor "$pad" "$duo/tmp.png" --out "$duo/$(basename "$f")" >/dev/null 2>&1
+        done
+        rm "$duo/tmp.png"
+        echo "App Store screenshots: $store $duo"
+        exit 0
+    fi
     if command -v pngquant >/dev/null; then
         # Only this run's captures: compressing a committed image again can still change it.
         for f in "$raw"/*.png; do
