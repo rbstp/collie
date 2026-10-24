@@ -160,8 +160,14 @@ enum FlockOrder {
         }
     }
 
-    static func neighbor(of route: AgentRoute, offset: Int, in entries: [MachineFlockEntry]) -> AgentRoute? {
-        let routes = entries.flatMap { entry in entry.agents.map { AgentRoute(machineId: entry.id, terminalId: $0.terminalId) } }
+    static func routes(in entries: [MachineFlockEntry]) -> [AgentRoute] {
+        entries.flatMap { entry in entry.agents.map { AgentRoute(machineId: entry.id, terminalId: $0.terminalId) } }
+    }
+
+    /// Steps through `order`, past agents no longer in `entries`; the current agent keeps its place even when gone.
+    static func neighbor(of route: AgentRoute, offset: Int, in order: [AgentRoute], among entries: [MachineFlockEntry]) -> AgentRoute? {
+        let live = Set(routes(in: entries))
+        let routes = order.filter { $0 == route || live.contains($0) }
         guard let index = routes.firstIndex(of: route), routes.indices.contains(index + offset) else { return nil }
         return routes[index + offset]
     }

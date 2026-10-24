@@ -9,10 +9,10 @@ struct AgentInbox<Menu: View>: View {
     let markUnseen: (AgentSummary, AgentRoute) -> Void
     let snoozed: SnoozedAgents
     let snooze: (AgentSummary, AgentRoute, Date?) -> Void
+    @Binding var query: String
+    @Binding var filter: InboxFilter
+    @Binding var showsSnoozed: Bool
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
-    @State private var query = ""
-    @State private var filter = InboxFilter.all
-    @State private var showsSnoozed = false
     @State private var snoozing: InboxItem?
     @State private var custom: InboxItem?
     @State private var customWake = Date.now
@@ -98,10 +98,7 @@ struct AgentInbox<Menu: View>: View {
 
     @ViewBuilder
     private func inbox(_ items: [InboxItem], now: Date) -> some View {
-        let active = items.filter { snoozed.wake(of: $0.agent, route: $0.route, now: now) == nil && filter.includes($0, seen: seen, now: now) }
-        let asleep = items.compactMap { item in snoozed.wake(of: item.agent, route: item.route, now: now).map { (item, $0) } }
-            .sorted { ($0.1, $0.0.route.terminalId) < ($1.1, $1.0.route.terminalId) }
-        let groups = InboxSection.grouped(active, now: now)
+        let (groups, asleep) = InboxItem.rows(items, filter: filter, seen: seen, snoozed: snoozed, now: now)
         ForEach(InboxSection.allCases, id: \.self) { section in
             if let rows = groups[section] {
                 Section(section.title) {
@@ -131,7 +128,7 @@ struct AgentInbox<Menu: View>: View {
                 .accessibilityValue(showsSnoozed ? "Expanded" : "Collapsed")
             }
         }
-        if active.isEmpty && (asleep.isEmpty || filter != .all) && (entries.contains { $0.flock?.details != nil } || !query.isEmpty || filter != .all) {
+        if groups.isEmpty && (asleep.isEmpty || filter != .all) && (entries.contains { $0.flock?.details != nil } || !query.isEmpty || filter != .all) {
             Text(query.isEmpty && filter == .inactive ? "No inactive agents"
                  : query.isEmpty && filter == .all ? "No agents running" : "No matching agents")
                 .foregroundStyle(.secondary)
@@ -205,6 +202,15 @@ struct InboxItem: Identifiable, Equatable {
                 )
             }
         }
+    }
+
+    static func rows(_ items: [InboxItem], filter: InboxFilter, seen: SeenAgents, snoozed: SnoozedAgents, now: Date)
+        -> (active: [InboxSection: [InboxItem]], asleep: [(InboxItem, Date)])
+    {
+        let active = items.filter { snoozed.wake(of: $0.agent, route: $0.route, now: now) == nil && filter.includes($0, seen: seen, now: now) }
+        let asleep = items.compactMap { item in snoozed.wake(of: item.agent, route: item.route, now: now).map { (item, $0) } }
+            .sorted { ($0.1, $0.0.route.terminalId) < ($1.1, $1.0.route.terminalId) }
+        return (InboxSection.grouped(active, now: now), asleep)
     }
 
     func matches(_ query: String) -> Bool {

@@ -23,6 +23,11 @@ struct FlockScreen: View {
     @State private var showsUsage = false
     @State private var usageRefresh = 0
     @State private var dragging: GridDrag?
+    @State private var inboxQuery = ""
+    @State private var inboxFilter = InboxFilter.all
+    @State private var showsSnoozed = false
+    /// The order the layout showed when the session opened; nil follows the layout as it is now.
+    @State private var swipeOrder: [AgentRoute]?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -85,7 +90,9 @@ struct FlockScreen: View {
                         neighbor: { offset in
                             // model.entries stops refreshing under a pushed agent; the core's cache follows events.
                             let entries = machines.map { MachineFlockEntry(machine: $0, flock: core.cachedFlock(machineId: $0.id)) }
-                            return FlockOrder.neighbor(of: route, offset: offset, in: entries)
+                            let starred = Set(entries.flatMap { entry in (entry.flock?.starred ?? []).map { AgentRoute(machineId: entry.id, terminalId: $0) } })
+                            let order = swipeOrder ?? layoutOrder(entries, starred: starred, filtered: false)
+                            return FlockOrder.neighbor(of: route, offset: offset, in: order, among: entries)
                         },
                         switchAgent: { next in
                             // Replaces the top route, so Back still returns to this list.
@@ -162,10 +169,15 @@ struct FlockScreen: View {
                 if persistsState { DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout } }
             }
             .onChange(of: path, initial: true) { _, path in viewing(path.last) }
-            .onChange(of: path) { _, _ in navigationChanged() }
+            .onChange(of: path) { old, new in
+                // A swipe replaces the route, so it keeps the order the session opened with.
+                if old.isEmpty, let route = new.last { snapshotOrder(opening: route) }
+                navigationChanged()
+            }
             .onChange(of: reselected) { showsUsage = false }
             .onChange(of: opening, initial: true) { _, route in
                 guard let route else { return }
+                snapshotOrder(opening: route)
                 path = [route]
                 opening = nil
             }
@@ -190,7 +202,8 @@ struct FlockScreen: View {
         case .inbox:
             AgentInbox(
                 entries: model.entries, notice: model.closeNotice, follows: follows,
-                seen: seen, markUnseen: markUnseen, snoozed: snoozed, snooze: snooze, menu: menu
+                seen: seen, markUnseen: markUnseen, snoozed: snoozed, snooze: snooze,
+                query: $inboxQuery, filter: $inboxFilter, showsSnoozed: $showsSnoozed, menu: menu
             )
         case .list:
             TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -251,6 +264,30 @@ struct FlockScreen: View {
                 }
             }
         }
+    }
+
+    /// The agents in the order the current layout shows them; `filtered` applies the inbox's filter, search and collapsed snoozed section.
+    private func layoutOrder(_ entries: [MachineFlockEntry], starred: Set<AgentRoute>, filtered: Bool) -> [AgentRoute] {
+        switch layout {
+        case .grid:
+            return entries.flatMap { entry in
+                let agents = entry.gridAgents(starred: starred, order: gridOrder)
+                return (agents.starred + agents.rest).map { AgentRoute(machineId: entry.id, terminalId: $0.terminalId) }
+            }
+        case .inbox:
+            let items = InboxItem.items(in: entries).filter { !filtered || $0.matches(inboxQuery) }
+            let rows = InboxItem.rows(items, filter: filtered ? inboxFilter : .all, seen: seen, snoozed: snoozed, now: .now)
+            let asleep = filtered && !showsSnoozed ? [] : rows.asleep.map(\.0)
+            return (InboxSection.allCases.flatMap { rows.active[$0] ?? [] } + asleep).map(\.route)
+        case .list:
+            return FlockOrder.routes(in: entries)
+        }
+    }
+
+    /// A notification, a Live Activity or New Task can open an agent the layout does not show; that session follows the layout as it is now.
+    private func snapshotOrder(opening route: AgentRoute) {
+        let shown = layoutOrder(model.entries, starred: previews.starred, filtered: true)
+        swipeOrder = shown.contains(route) ? shown : nil
     }
 
     private func approvalsCount(_ entry: MachineFlockEntry) -> Int {

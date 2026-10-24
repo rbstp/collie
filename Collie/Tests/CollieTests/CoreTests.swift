@@ -22,7 +22,7 @@ private func agent(_ id: String, _ status: AgentState, since: UInt64, title: Str
     #expect(sorted.map(\.terminalId) == ["d", "b", "c", "a", "e"])
 }
 
-@Test func swipingFollowsTheAgentsListAcrossMachinesAndStopsAtEitherEnd() {
+@Test func swipingFollowsTheGivenOrderAcrossMachinesAndStopsAtEitherEnd() {
     func entry(_ id: String, _ agents: [AgentSummary]) -> MachineFlockEntry {
         let machine = Machine(id: id, label: id, host: "\(id).ts.net", port: 8457, nodeId: "n\(id)", kind: .mac, key: "")
         let flock = MachineFlock(machine: machine, link: .connected, lastError: nil, details: nil, workspaces: [], agents: agents, approvalsCount: 0)
@@ -34,12 +34,35 @@ private func agent(_ id: String, _ status: AgentState, since: UInt64, title: Str
         entry("m3", [agent("working", .working, since: 2)]),
     ]
     func route(_ machineId: String, _ terminalId: String) -> AgentRoute { AgentRoute(machineId: machineId, terminalId: terminalId) }
-    #expect(FlockOrder.neighbor(of: route("m1", "blocked"), offset: 1, in: entries) == route("m1", "idle"))
-    #expect(FlockOrder.neighbor(of: route("m1", "idle"), offset: 1, in: entries) == route("m3", "working"))
-    #expect(FlockOrder.neighbor(of: route("m3", "working"), offset: -1, in: entries) == route("m1", "idle"))
-    #expect(FlockOrder.neighbor(of: route("m3", "working"), offset: 1, in: entries) == nil)
-    #expect(FlockOrder.neighbor(of: route("m1", "blocked"), offset: -1, in: entries) == nil)
-    #expect(FlockOrder.neighbor(of: route("m3", "idle"), offset: 1, in: entries) == nil)
+    let list = FlockOrder.routes(in: entries)
+    #expect(list == [route("m1", "blocked"), route("m1", "idle"), route("m3", "working")])
+    #expect(FlockOrder.neighbor(of: route("m1", "blocked"), offset: 1, in: list, among: entries) == route("m1", "idle"))
+    #expect(FlockOrder.neighbor(of: route("m1", "idle"), offset: 1, in: list, among: entries) == route("m3", "working"))
+    #expect(FlockOrder.neighbor(of: route("m3", "working"), offset: -1, in: list, among: entries) == route("m1", "idle"))
+    #expect(FlockOrder.neighbor(of: route("m3", "working"), offset: 1, in: list, among: entries) == nil)
+    #expect(FlockOrder.neighbor(of: route("m1", "blocked"), offset: -1, in: list, among: entries) == nil)
+    #expect(FlockOrder.neighbor(of: route("m3", "idle"), offset: 1, in: list, among: entries) == nil)
+
+    let custom = [route("m3", "working"), route("m1", "idle"), route("m1", "blocked")]
+    #expect(FlockOrder.neighbor(of: route("m3", "working"), offset: 1, in: custom, among: entries) == route("m1", "idle"))
+    #expect(FlockOrder.neighbor(of: route("m1", "blocked"), offset: -1, in: custom, among: entries) == route("m1", "idle"))
+    #expect(FlockOrder.neighbor(of: route("m1", "idle"), offset: 1, in: [route("m1", "idle")], among: entries) == nil)
+    #expect(FlockOrder.neighbor(of: route("m1", "idle"), offset: 1, in: [], among: entries) == nil)
+}
+
+@Test func swipingSkipsAgentsThatLeftAndIgnoresAgentsThatCameAfterTheSessionOpened() {
+    let machine = Machine(id: "m", label: "m", host: "m.ts.net", port: 8457, nodeId: "nm", kind: .mac, key: "")
+    let flock = MachineFlock(
+        machine: machine, link: .connected, lastError: nil, details: nil, workspaces: [],
+        agents: [agent("a", .idle, since: 1), agent("c", .idle, since: 3), agent("new", .blocked, since: 4)], approvalsCount: 0
+    )
+    let entries = [MachineFlockEntry(machine: machine, flock: flock)]
+    let order = ["a", "b", "c", "d"].map { AgentRoute(machineId: "m", terminalId: $0) }
+    #expect(FlockOrder.neighbor(of: order[0], offset: 1, in: order, among: entries) == order[2])
+    #expect(FlockOrder.neighbor(of: order[2], offset: -1, in: order, among: entries) == order[0])
+    #expect(FlockOrder.neighbor(of: order[2], offset: 1, in: order, among: entries) == nil)
+    #expect(FlockOrder.neighbor(of: order[1], offset: 1, in: order, among: entries) == order[2])
+    #expect(FlockOrder.neighbor(of: order[3], offset: -1, in: order, among: entries) == order[2])
 }
 
 @Test(arguments: [
