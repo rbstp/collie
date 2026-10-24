@@ -166,6 +166,9 @@ struct FlockScreen: View {
             }
             .onChange(of: gridOrder) { _, order in if persistsState { order.save(to: GridOrder.file) } }
             .onChange(of: layout) { _, layout in
+                inboxQuery = ""
+                inboxFilter = .all
+                showsSnoozed = false
                 if persistsState { DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout } }
             }
             .onChange(of: path, initial: true) { _, path in viewing(path.last) }

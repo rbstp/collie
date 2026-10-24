@@ -13,13 +13,8 @@ final class SwipeOrderTests: XCTestCase {
         let before = gridOrder(app)
         XCTAssertEqual(before.count, titles.count, app.debugDescription)
         let moved = try XCTUnwrap(before.last)
-        let source = card(app, moved)
-        let target = card(app, before[0])
-        source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
-            forDuration: 1.5, thenDragTo: target.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)),
-            withVelocity: .slow, thenHoldForDuration: 1
-        )
-        let deadline = Date.now.addingTimeInterval(10)
+        drag(app, moved, onto: before[0], after: false)
+        var deadline = Date.now.addingTimeInterval(10)
         while Date.now < deadline, gridOrder(app).first != moved { usleep(250_000) }
         let order = gridOrder(app)
         XCTAssertEqual(order.first, moved, app.debugDescription)
@@ -27,6 +22,14 @@ final class SwipeOrderTests: XCTestCase {
 
         card(app, order[0]).tap()
         try expectSwipes(app, through: order)
+
+        // The order is kept on the simulator, and other tests expect the first cards on screen.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(card(app, moved).appears(within: 10), app.debugDescription)
+        drag(app, moved, onto: before[before.count - 2], after: true)
+        deadline = Date.now.addingTimeInterval(10)
+        while Date.now < deadline, gridOrder(app) != before { usleep(250_000) }
+        XCTAssertEqual(gridOrder(app), before, app.debugDescription)
     }
 
     func testSwipingFollowsTheFilteredInboxOrder() throws {
@@ -62,6 +65,13 @@ final class SwipeOrderTests: XCTestCase {
 
     private func card(_ app: XCUIApplication, _ title: String) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+    }
+
+    private func drag(_ app: XCUIApplication, _ title: String, onto target: String, after: Bool) {
+        card(app, title).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
+            forDuration: 1.5, thenDragTo: card(app, target).coordinate(withNormalizedOffset: CGVector(dx: after ? 0.95 : 0.05, dy: 0.5)),
+            withVelocity: .slow, thenHoldForDuration: 1
+        )
     }
 
     /// The grid's titles as it shows them: by row, then left to right.
