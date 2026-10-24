@@ -2,6 +2,10 @@ import XCTest
 
 @MainActor
 final class PagerSwipeTests: XCTestCase {
+    override func tearDown() async throws {
+        XCUIDevice.shared.orientation = .portrait
+    }
+
     func testSwipeBetweenAgentsAndUsageInEveryLayout() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -38,6 +42,49 @@ final class PagerSwipeTests: XCTestCase {
         let page = app.collectionViews.firstMatch.cells.firstMatch
         XCTAssertTrue(page.appears(within: 5), app.debugDescription)
         XCTAssertEqual(page.frame.minX, 0, app.debugDescription)
+    }
+
+    func testUsageCardsKeepTheAgentsListMargins() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        app.launch()
+        defer { app.terminate() }
+        let layout = app.buttons["Layout"]
+        XCTAssertTrue(layout.appears(within: 10), app.debugDescription)
+        app.choose(app.buttons["List"]) { layout.tap() }
+        let view = app.segmentedControls["View"]
+        // The lists' cells, not the pager's pages.
+        let rows = app.collectionViews.firstMatch.collectionViews.cells
+        let row = rows.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
+        let card = rows.containing(NSPredicate(format: "label == %@", "5-hour usage limit")).firstMatch
+        view.buttons["Usage"].tap()
+        // Each rotation happens with Usage on screen. iPhone Duo's cover display does not rotate, so there every pass is portrait.
+        for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft, .portrait] {
+            XCUIDevice.shared.orientation = orientation
+            let window = app.windows.firstMatch
+            for _ in 0..<10 where (window.frame.width > window.frame.height) != orientation.isLandscape { usleep(500_000) }
+            let usage = settledFrame(of: card, app)
+            view.buttons["Agents"].tap()
+            let agents = settledFrame(of: row, app)
+            XCTAssertEqual(usage.minX, agents.minX, "\(orientation.rawValue)\n\(app.debugDescription)")
+            XCTAssertEqual(usage.maxX, agents.maxX, "\(orientation.rawValue)\n\(app.debugDescription)")
+            view.buttons["Usage"].tap()
+        }
+    }
+
+    /// The frame once it holds still: rotation and paging move it for a while.
+    private func settledFrame(of element: XCUIElement, _ app: XCUIApplication) -> CGRect {
+        XCTAssertTrue(element.appears(within: 5), app.debugDescription)
+        var frame = element.frame
+        for _ in 0..<20 {
+            usleep(500_000)
+            let now = element.frame
+            if now == frame { break }
+            frame = now
+        }
+        return frame
     }
 
     func testTappedSelectionKeepsItsColor() throws {

@@ -154,21 +154,36 @@ struct GridDropTarget: ViewModifier {
 
 struct GridPageLock: UIViewRepresentable {
     let locked: Bool
+    var listMargin: (CGFloat) -> Void = { _ in }
 
     func makeUIView(context: Context) -> Probe { Probe() }
     func updateUIView(_ view: Probe, context: Context) {
         view.locked = locked
+        view.listMargin = listMargin
         view.update()
     }
     static func dismantleUIView(_ view: Probe, coordinator: ()) { view.restore() }
 
     final class Probe: UIView {
         var locked = false
+        var listMargin: (CGFloat) -> Void = { _ in }
         private weak var pager: UIScrollView?
+        private var reportedMargin: CGFloat?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
             update()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            // PagerListMargin adds this to each List's safe area.
+            guard let pager, let controller = sequence(first: pager as UIResponder, next: \.next).lazy.compactMap({ $0 as? UIViewController }).first else { return }
+            let margin = controller.systemMinimumLayoutMargins.leading
+            guard margin != reportedMargin else { return }
+            reportedMargin = margin
+            let report = listMargin
+            DispatchQueue.main.async { report(margin) }
         }
 
         func restore() { pager?.isScrollEnabled = true }

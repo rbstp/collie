@@ -12,6 +12,7 @@ struct AgentInbox<Menu: View>: View {
     @Binding var query: String
     @Binding var filter: InboxFilter
     @Binding var showsSnoozed: Bool
+    let margin: CGFloat?
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
     @State private var snoozing: InboxItem?
     @State private var custom: InboxItem?
@@ -31,6 +32,7 @@ struct AgentInbox<Menu: View>: View {
                 }
                 inbox(items.filter { $0.matches(query) }, now: context.date)
             }
+            .modifier(PagerListMargin(edge: .trailing, margin: margin))
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     ScrollView(.horizontal) {

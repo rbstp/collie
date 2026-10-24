@@ -21,6 +21,7 @@ struct FlockScreen: View {
     @State private var snoozed = SnoozedAgents.load(from: SnoozedAgents.file)
     @State private var gridOrder = GridOrder.load(from: GridOrder.file)
     @State private var showsUsage = false
+    @State private var listMargin: CGFloat?
     @State private var usageRefresh = 0
     @State private var dragging: GridDrag?
     @State private var inboxQuery = ""
@@ -33,9 +34,12 @@ struct FlockScreen: View {
 
     var body: some View {
         NavigationStack(path: $path) {
+            let pagerLocked = dragging != nil || (layout == .inbox && !showsUsage)
             TabView(selection: $showsUsage) {
-                agents.background(GridPageLock(locked: dragging != nil || (layout == .inbox && !showsUsage))).tag(false)
-                List { UsageSections(entries: model.entries, core: core, refresh: usageRefresh) }.tag(true)
+                agents.background(GridPageLock(locked: pagerLocked) { listMargin = $0 }).tag(false)
+                List { UsageSections(entries: model.entries, core: core, refresh: usageRefresh) }
+                    .modifier(PagerListMargin(edge: .leading, margin: listMargin))
+                    .tag(true)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             // The pager clips its pages to its frame, so it spans the bars for the pages to run under them.
@@ -206,7 +210,7 @@ struct FlockScreen: View {
             AgentInbox(
                 entries: model.entries, notice: model.closeNotice, follows: follows,
                 seen: seen, markUnseen: markUnseen, snoozed: snoozed, snooze: snooze,
-                query: $inboxQuery, filter: $inboxFilter, showsSnoozed: $showsSnoozed, menu: menu
+                query: $inboxQuery, filter: $inboxFilter, showsSnoozed: $showsSnoozed, margin: listMargin, menu: menu
             )
         case .list:
             TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -265,6 +269,7 @@ struct FlockScreen: View {
                         }
                     }
                 }
+                .modifier(PagerListMargin(edge: .trailing, margin: listMargin))
             }
         }
     }
@@ -334,6 +339,21 @@ struct FlockScreen: View {
             model.beginClose(.archive, route: route)
         }
         .tint(.red)
+    }
+}
+
+/// A List on a pager page that is off screen when SwiftUI lays it out gets the margin of where that page sits: Usage, to the
+/// right, loses its leading margin, and the Agents lists, to the left after a rotation on Usage, their trailing one. This
+/// side takes the screen's minimum margin plus the List's own safe area instead.
+struct PagerListMargin: ViewModifier {
+    let edge: HorizontalEdge
+    let margin: CGFloat?
+
+    func body(content: Content) -> some View {
+        GeometryReader { geometry in
+            let safeArea = edge == .leading ? geometry.safeAreaInsets.leading : geometry.safeAreaInsets.trailing
+            content.contentMargins(edge == .leading ? .leading : .trailing, margin.map { $0 + safeArea }, for: .scrollContent)
+        }
     }
 }
 
