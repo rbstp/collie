@@ -168,7 +168,7 @@ ios-screenshots: ios-framework ios-project
     fi
     xcrun simctl bootstatus "$udid" -b
     appearance="$(xcrun simctl ui "$udid" appearance)"
-    trap 'xcrun simctl status_bar "$udid" clear; xcrun simctl ui "$udid" appearance "$appearance"; if [ "$watch_state" = Shutdown ]; then xcrun simctl shutdown "$watch" || true; fi' EXIT
+    trap 'xcrun simctl status_bar "$udid" clear || true; xcrun simctl ui "$udid" appearance "$appearance"; if [ "$watch_state" = Shutdown ]; then xcrun simctl shutdown "$watch" || true; fi' EXIT
     {{ xcodebuild }} -destination "id=$udid" CODE_SIGNING_ALLOWED=NO build-for-testing
     # A fresh install drops drafts left by other UI tests; the demo takes its accent from the prefs file.
     xcrun simctl uninstall "$udid" dev.rbstp.collie
@@ -180,7 +180,7 @@ ios-screenshots: ios-framework ios-project
     raw="$PWD/target/ios/screenshots"
     rm -rf "$raw"
     mkdir -p "$raw"
-    for look in light dark; do
+    for look in dark light; do
         # The iOS 27.2 simulator applies an appearance change at its next boot only.
         xcrun simctl ui "$udid" appearance "$look"
         xcrun simctl shutdown "$udid"

@@ -19,6 +19,16 @@ final class ScreenshotTests: XCTestCase {
         let card = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
         XCTAssertTrue(card.appears(within: 10), app.debugDescription)
         try save("agents")
+        let shot = try XCTUnwrap(XCUIScreen.main.screenshot().image.cgImage)
+        let margin = try XCTUnwrap(shot.cropping(to: CGRect(x: shot.width / 50, y: shot.height * 4 / 5, width: 1, height: 1)))
+        var rgba: [UInt8] = [0, 0, 0, 0]
+        rgba.withUnsafeMutableBytes { bytes in
+            let context = CGContext(data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            context?.draw(margin, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        let luma = (299 * Int(rgba[0]) + 587 * Int(rgba[1]) + 114 * Int(rgba[2])) / 1000
+        XCTAssertEqual(luma < 128, suffix == "dark", "the background does not match the requested appearance")
         app.segmentedControls["View"].buttons["Usage"].tap()
         XCTAssertTrue(app.staticTexts["5-hour usage limit"].appears(within: 5), app.debugDescription)
         try save("usage")
