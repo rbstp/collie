@@ -34,7 +34,7 @@ FONTS = "Collie/GhosttyTerminal/Sources/GhosttyTerminal/Fonts"
 IOS_FILES = [
     ("Meslo LG", "Apache-2.0", f"{FONTS}/LICENSE.txt"),
     ("DejaVu and Bitstream Vera, in Meslo LG", "Bitstream-Vera AND Arev", f"{FONTS}/DejaVu-LICENSE.txt"),
-    ("Nerd Fonts glyphs, in Meslo LG", "MIT AND OFL-1.1 AND Apache-2.0 AND CC-BY-4.0 AND CC-BY-NC-ND-3.0 AND Unlicense",
+    ("Nerd Fonts glyphs, in Meslo LG", "MIT AND OFL-1.1 AND Apache-2.0 AND CC-BY-4.0 AND Unlicense",
      f"{FONTS}/NerdFonts-LICENSE.txt"),
     ("Octicons", "MIT", "Collie/Resources/Octicons-LICENSE.txt"),
 ]

@@ -11,12 +11,28 @@ IEC Power Symbols                         MIT
 Material Design Icons                     Apache 2.0
 Original Source (Seti-UI but modified)    MIT
 Octicons                                  MIT
-Pomicons                                  CC BY-NC-ND 3.0
 Powerline Extra Symbols                   MIT
 Powerline Symbols                         Free License
 Weather Icons                             SIL OFL 1.1
 
-The license files Nerd Fonts 2.3.3 ships for them follow.
+The Pomicons glyphs (U+E000 to U+E00A, CC BY-NC-ND 3.0) are removed from the bundled
+fonts, along with unmapped glyphs no layout feature reaches, by fontTools 4.67.0
+(wheel SHA-256 4304f03ed7f4ba000a8dcc941ad854bfa52e2f3b6112b8f099b6f431cf98e701):
+
+    pyftsubset <source>.ttf --output-file=<name>.ttf --unicodes='U+0000-DFFF,U+E00B-10FFFF' \
+        --layout-features='*' --glyph-names --symbol-cmap --legacy-cmap --notdef-glyph \
+        --notdef-outline --recommended-glyphs --name-IDs='*' --name-legacy --name-languages='*' \
+        --hinting --drop-tables= --passthrough-tables --no-prune-unicode-ranges \
+        --no-prune-codepage-ranges
+
+The sources are MesloLGS NF (Meslo LG 1.210, Nerd Fonts 2.3.3), SHA-256:
+
+    d97946186e97f8d7c0139e8983abf40a1d2d086924f2c5dbf1c29bd8f2c6e57d  MesloLGS-NF-Regular.ttf
+    b6c0199cf7c7483c8343ea020658925e6de0aeb318b89908152fcb4d19226003  MesloLGS-NF-Bold.ttf
+    6f357bcbe2597704e157a915625928bca38364a89c22a4ac36e7a116dcd392ef  MesloLGS-NF-Italic.ttf
+    56b4131adecec052c4b324efb818dd326d586dbc316fc68f98f1cae2eb8d1220  MesloLGS-NF-BoldItalic.ttf
+
+The license files Nerd Fonts 2.3.3 ships for the remaining glyph sources follow.
 
 ================================================================================
 LICENSE
