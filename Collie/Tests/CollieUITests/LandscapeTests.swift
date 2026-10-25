@@ -53,7 +53,7 @@ final class LandscapeTests: XCTestCase {
         field.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
-        let draft = typeAfterClearing("keep this draft", into: field, app)
+        let draft = app.type("keep this draft", into: field)
         let dictation = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Dictate in")).firstMatch
         let escape = app.buttons["Escape"]
         let header = app.buttons["Terminal"].firstMatch
@@ -69,10 +69,10 @@ final class LandscapeTests: XCTestCase {
                     && escape.frame.minY - max(terminal.frame.minY, header.exists ? header.frame.maxY : 0) > 24
             }, "\(orientation.rawValue)\n\(app.debugDescription)")
         }
-        app.buttons["Hide keyboard"].tap()
+        app.withInteractionOptions(2) { app.buttons["Hide keyboard"].tap() }
         XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
         XCTAssertTrue(draft.exists, app.debugDescription)
-        app.buttons["Chat"].firstMatch.tap()
+        app.withInteractionOptions(2) { app.buttons["Chat"].firstMatch.tap() }
         let latest = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Round 20:")).firstMatch
         XCTAssertTrue(eventually { shown(latest, app) }, app.debugDescription)
         for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft] {
@@ -92,7 +92,7 @@ final class LandscapeTests: XCTestCase {
         prompt.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
-        let typed = typeAfterClearing("keep this prompt", into: prompt, app)
+        let typed = app.type("keep this prompt", into: prompt)
         let controls = [typed, app.buttons["Hide keyboard"], app.buttons["Attachments and saved prompts"]]
         for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft, .portrait, .landscapeRight, .portrait] {
             rotate(orientation, app)
@@ -182,23 +182,11 @@ final class LandscapeTests: XCTestCase {
         return app
     }
 
-    /// Clears a draft an earlier run left, and types again when the simulator drops keystrokes.
-    private func typeAfterClearing(_ text: String, into field: XCUIElement, _ app: XCUIApplication) -> XCUIElement {
-        let clear = app.buttons["Clear text"]
-        if clear.exists { clear.tap() }
-        field.typeText(text)
-        let typed = app.textFields.matching(NSPredicate(format: "value == %@", text)).firstMatch
-        for _ in 0..<3 where !typed.appears(within: 10) {
-            clear.tap()
-            field.typeText(text)
-        }
-        XCTAssertTrue(typed.appears(within: 10), app.debugDescription)
-        return typed
-    }
-
-    // Element frames lag the rotation, so callers wait on what they check next.
+    // Element frames lag the rotation, so callers wait on what they check next. A rotation with the keyboard up in a session
+    // could leave the app never idle for the rest of the test, and XCTest then waited 60 s after every rotation and tap,
+    // so the rotation and the taps after it skip that wait (see choose).
     private func rotate(_ orientation: UIDeviceOrientation, _ app: XCUIApplication) {
-        XCUIDevice.shared.orientation = orientation
+        app.withInteractionOptions(2) { XCUIDevice.shared.orientation = orientation }
         let window = app.windows.firstMatch
         XCTAssertTrue(eventually { (window.frame.width > window.frame.height) == orientation.isLandscape }, app.debugDescription)
     }
