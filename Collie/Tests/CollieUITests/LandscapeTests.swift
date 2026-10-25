@@ -69,10 +69,10 @@ final class LandscapeTests: XCTestCase {
                     && escape.frame.minY - max(terminal.frame.minY, header.exists ? header.frame.maxY : 0) > 24
             }, "\(orientation.rawValue)\n\(app.debugDescription)")
         }
-        app.buttons["Hide keyboard"].tap()
+        app.withInteractionOptions(2) { app.buttons["Hide keyboard"].tap() }
         XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
         XCTAssertTrue(draft.exists, app.debugDescription)
-        app.buttons["Chat"].firstMatch.tap()
+        app.withInteractionOptions(2) { app.buttons["Chat"].firstMatch.tap() }
         let latest = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Round 20:")).firstMatch
         XCTAssertTrue(eventually { shown(latest, app) }, app.debugDescription)
         for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft] {
@@ -182,9 +182,11 @@ final class LandscapeTests: XCTestCase {
         return app
     }
 
-    // Element frames lag the rotation, so callers wait on what they check next.
+    // Element frames lag the rotation, so callers wait on what they check next. A rotation with the keyboard up in a session
+    // could leave the app never idle for the rest of the test, and XCTest then waited 60 s after every rotation and tap,
+    // so the rotation and the taps after it skip that wait (see choose).
     private func rotate(_ orientation: UIDeviceOrientation, _ app: XCUIApplication) {
-        XCUIDevice.shared.orientation = orientation
+        app.withInteractionOptions(2) { XCUIDevice.shared.orientation = orientation }
         let window = app.windows.firstMatch
         XCTAssertTrue(eventually { (window.frame.width > window.frame.height) == orientation.isLandscape }, app.debugDescription)
     }
