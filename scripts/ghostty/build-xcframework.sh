@@ -13,6 +13,12 @@ ZIG_SHA256=b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489
 # Render state only: no Kitty graphics (file, temp-file and shared-memory image media), no input
 # encoders, no snapshot/formatter/search. The terminal parser itself is always built.
 VT_FEATURES=-all,+render-state
+# License texts the Ghostty tree and its Zig packages leave out, at the versions the pin vendors.
+SIMDUTF_LICENSE=https://raw.githubusercontent.com/simdutf/simdutf/ca7acbcea967b5dcbab490066e99e3a6e6925539/LICENSE-MIT
+SIMDUTF_LICENSE_SHA256=fc8dbc04e03ad4efc08a647ffe7f995b811a95bc04c0e85a56d5277c6593fa5f
+UUCODE_LICENSES=https://raw.githubusercontent.com/jacobsandlund/uucode/9d55524551411b493cca41ca06363625d90aff1e/licenses
+UUCODE_UNICODE_SHA256=1eda5a3b026870c737b22e8bcd4954338612c790db688242e003f41a4fa95175
+UUCODE_HOEHRMANN_SHA256=de219cece932aad5a817bf763393d8d149d378a15d2ad5320e3331eac07626dd
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$root/target/ghostty"
@@ -21,7 +27,7 @@ out="$root/Collie/GhosttyTerminal/GhosttyVt.xcframework"
 stamp="$out/.collie-build"
 want="$GHOSTTY_COMMIT $ZIG_VERSION $VT_FEATURES"
 
-if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
+if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -d "$out/licenses" ]; then
     echo "GhosttyVt.xcframework is up to date ($GHOSTTY_COMMIT)"
     exit 0
 fi
@@ -126,5 +132,34 @@ xcodebuild -create-xcframework \
     -library "$built/ios-arm64-simulator/libghostty-vt-fat.a" -headers "$headers" \
     -library "$built/macos-arm64_x86_64/libghostty-vt.a" -headers "$headers" \
     -output "$out"
+# Read by scripts/notices.py, which names each file's license.
+licenses="$out/licenses"
+mkdir "$licenses"
+fetch() {
+    curl -fsSL --retry 3 -o "$work/license" "$1"
+    echo "$2  $work/license" | shasum -a 256 -c - >/dev/null
+    cat "$work/license"
+    rm -f "$work/license"
+}
+cp "$src/LICENSE" "$licenses/libghostty-vt"
+{
+    fetch "$SIMDUTF_LICENSE" "$SIMDUTF_LICENSE_SHA256"
+    printf '\ninclude/simdutf/internal/isadetection.h is derived from\n'
+    sed -n '/^https:\/\/github.com\/endorno\/pytorch/,/POSSIBILITY OF SUCH DAMAGE\./p' "$src/pkg/simdutf/vendor/simdutf.h"
+} >"$licenses/simdutf"
+grep -q 'Redistributions in binary form' "$licenses/simdutf"
+highway="$(sed -n 's/^ *\.hash = "\(.*\)",$/\1/p' "$src/pkg/highway/build.zig.zon")"
+cp "$src/zig-pkg/$highway/LICENSE-BSD3" "$licenses/Highway"
+{
+    cat "$src"/zig-pkg/uucode-*/LICENSE.md
+    echo
+    fetch "$UUCODE_LICENSES/LICENSE_unicode" "$UUCODE_UNICODE_SHA256"
+    echo
+    fetch "$UUCODE_LICENSES/LICENSE_Bjoern_Hoehrmann" "$UUCODE_HOEHRMANN_SHA256"
+} >"$licenses/uucode"
+# Beside the binary in Zig's tarball, one level up in Homebrew's.
+zig_license="$(dirname "$(realpath "$zig")")/LICENSE"
+[ -f "$zig_license" ] || zig_license="$(dirname "$zig_license")/../LICENSE"
+cp "$zig_license" "$licenses/Zig compiler-rt"
 echo "$want" >"$stamp"
 echo "built $out"

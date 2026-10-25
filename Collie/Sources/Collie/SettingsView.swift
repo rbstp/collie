@@ -108,6 +108,7 @@ struct SettingsView: View {
                     LabeledContent("Go", value: build.go)
                     LabeledContent("Rust", value: build.rustc)
                     LabeledContent("Target", value: build.target)
+                    NavigationLink("Acknowledgements") { AcknowledgementsView() }
                 }
                 Section {
                     Button("Explore sample workspace", systemImage: "play.rectangle", action: openSample)

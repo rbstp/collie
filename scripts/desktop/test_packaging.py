@@ -49,6 +49,19 @@ class PackageTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "version differs"):
                     package.package(args)
 
+    def test_daemon_archive_includes_third_party_notices(self):
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp)
+            binary = out / "collied"
+            binary.write_bytes(b"daemon")
+            notices = out / "notices.txt"
+            notices.write_text("notices\n")
+            args = argparse.Namespace(tag="v1.2.3", sha="a" * 40, out=out, platform="macos-arm64", binary=binary, notices=notices)
+            with patch.object(package, "identity", return_value="1.2.3"), patch.object(package, "run", return_value="collied 1.2.3"):
+                package.package(args)
+            with tarfile.open(out / "collied-1.2.3-macos-arm64.tar.gz") as archive:
+                self.assertEqual(archive.extractfile("collied-1.2.3-macos-arm64/THIRD_PARTY_NOTICES").read(), b"notices\n")
+
     def test_generated_tap_uses_final_asset_hashes_and_explicit_install(self):
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp)

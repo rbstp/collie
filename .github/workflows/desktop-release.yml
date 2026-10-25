@@ -110,7 +110,8 @@ jobs:
           ldd target/release/collied | tee /tmp/collied-libraries
           if grep -q 'not found' /tmp/collied-libraries; then exit 1; fi
           git restore Cargo.toml Cargo.lock
-          python3 scripts/desktop/package.py package --tag "$TAG" --sha "$SOURCE_SHA" --platform linux-x86_64 --binary target/release/collied --out dist
+          python3 scripts/notices.py collied target/THIRD_PARTY_NOTICES
+          python3 scripts/desktop/package.py package --tag "$TAG" --sha "$SOURCE_SHA" --platform linux-x86_64 --binary target/release/collied --notices target/THIRD_PARTY_NOTICES --out dist
           python3 scripts/desktop/package.py package --tag "$TAG" --sha "$SOURCE_SHA" --platform omarchy --out dist
         env:
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
@@ -169,6 +170,7 @@ jobs:
           python3 scripts/desktop/stamp-version.py "$TAG"
           cargo build --release -p collied --target aarch64-apple-darwin
           git restore Cargo.toml Cargo.lock
+          python3 scripts/notices.py collied target/THIRD_PARTY_NOTICES
           xcodegen generate --spec Mac/project.yml
           xcodebuild -project Mac/CollieBar.xcodeproj -scheme CollieBar -destination 'platform=macOS' -derivedDataPath target/mac-tests CODE_SIGNING_ALLOWED=NO test
           xcodebuild -project Mac/CollieBar.xcodeproj -scheme CollieBar -configuration Release -destination 'generic/platform=macOS' -derivedDataPath target/mac ARCHS=arm64 CODE_SIGNING_ALLOWED=NO MARKETING_VERSION="${TAG#v}" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" build

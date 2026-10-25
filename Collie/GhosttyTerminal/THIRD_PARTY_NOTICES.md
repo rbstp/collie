@@ -15,5 +15,5 @@ It is linked statically into Collie.app. Keep this file in sync when the pin cha
 Build-time only, not linked: the Zig toolchain, Aro and translate-c (C header translation),
 Ghostty's theme and test data.
 
-Full license texts are in each project's repository at the versions above; the MIT and BSD
-notices must be reproduced in the app's acknowledgements before App Store distribution.
+`scripts/ghostty/build-xcframework.sh` collects the license texts from the pinned sources into
+`GhosttyVt.xcframework/licenses`, and the app shows them in Settings > Acknowledgements.

@@ -70,6 +70,9 @@ struct OnboardingView: View {
                         }
                     }
                 }
+                Section {
+                    NavigationLink("Acknowledgements") { AcknowledgementsView() }
+                }
             }
             .navigationTitle("Welcome")
         }

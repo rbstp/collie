@@ -16,7 +16,7 @@ Each immutable `vMAJOR.MINOR.PATCH` release contains:
 | `homebrew-VERSION.tar.gz` | Formula/collied.rb and Casks/colliebar.rb ready for rbstp/homebrew-tap |
 | `source.json`, `SHA256SUMS` | Exact source commit and SHA-256 for every packaged download |
 
-Both daemon packages include `release.json` with the exact source SHA, version and supported protocol range. Linux additionally records the highest required GLIBC symbol and every ELF `DT_NEEDED` library. The Ubuntu 24.04 builder runs `--version`, `--help` and `ldd`, fails unresolved libraries and refuses symbols above GLIBC 2.39. Those checks establish the builder runtime, not every distribution. herdr is needed to control agents; agent CLIs and the existing tailnet policy remain separate prerequisites. No Linux arm64, Intel Mac or generic GNOME/KDE tray binary is advertised.
+Both daemon packages include `THIRD_PARTY_NOTICES`, the license of every Rust crate and Go module built into collied, and `release.json` with the exact source SHA, version and supported protocol range. Linux additionally records the highest required GLIBC symbol and every ELF `DT_NEEDED` library. The Ubuntu 24.04 builder runs `--version`, `--help` and `ldd`, fails unresolved libraries and refuses symbols above GLIBC 2.39. Those checks establish the builder runtime, not every distribution. herdr is needed to control agents; agent CLIs and the existing tailnet policy remain separate prerequisites. No Linux arm64, Intel Mac or generic GNOME/KDE tray binary is advertised.
 
 ## Install a daemon download
 

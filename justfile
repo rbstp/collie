@@ -16,6 +16,7 @@ prices:
     curl -fsSL "https://raw.githubusercontent.com/BerriAI/litellm/{{ litellm_commit }}/model_prices_and_context_window.json" \
         | jq -S 'with_entries(select((.key | test("^[a-z0-9][a-z0-9.-]*$")) and (.value | type == "object") and (.value.litellm_provider == "anthropic" or .value.litellm_provider == "openai") and (.value.mode == "chat" or .value.mode == "responses") and (.value.input_cost_per_token | type == "number") and (.value.output_cost_per_token | type == "number"))) | map_values({input_cost_per_token, output_cost_per_token, cache_read_input_token_cost, cache_creation_input_token_cost, cache_creation_input_token_cost_above_1hr, input_cost_per_token_above_272k_tokens, output_cost_per_token_above_272k_tokens, cache_read_input_token_cost_above_272k_tokens, cache_creation_input_token_cost_above_272k_tokens, fast: .provider_specific_entry.fast} | with_entries(select(.value != null)))' \
         > crates/collied/data/prices.json
+    curl -fsSL "https://raw.githubusercontent.com/BerriAI/litellm/{{ litellm_commit }}/LICENSE" > crates/collied/data/prices-LICENSE.txt
 
 fmt:
     cargo fmt --all
@@ -134,7 +135,9 @@ ios-framework target="all" profile="release":
 ios-ghostty:
     scripts/ghostty/build-xcframework.sh
 
+# Also writes the app's acknowledgements from the dependency graph; fails on a license about.toml does not accept.
 ios-project: ios-ghostty
+    python3 scripts/notices.py ios Collie/Resources/Acknowledgements.json
     xcodegen generate --spec Collie/project.yml
 
 ios-build-sim: ios-framework ios-project

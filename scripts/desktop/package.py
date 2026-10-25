@@ -82,6 +82,7 @@ def package(args):
                 raise ValueError("daemon version differs from release tag")
             shutil.copy2(args.binary, package_dir / "collied")
             shutil.copy2(ROOT / "scripts/desktop/install.sh", package_dir / "install.sh")
+            shutil.copy2(args.notices, package_dir / "THIRD_PARTY_NOTICES")
             meta = metadata(version, args.sha, args.platform, args.binary)
         shutil.copy2(ROOT / "LICENSE", package_dir / "LICENSE")
         shutil.copy2(ROOT / "docs/desktop-releases.md", package_dir / "README.md")
@@ -121,7 +122,7 @@ def homebrew(args):
       exec /bin/bash "#{{share}}/collied/install.sh" "$@"
     SH
     chmod 0755, bin/"collied-install"
-    doc.install "release.json", "README.md"
+    doc.install "release.json", "README.md", "THIRD_PARTY_NOTICES"
   end
 
   def caveats
@@ -170,10 +171,12 @@ if __name__ == "__main__":
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--platform", choices=["macos-arm64", "linux-x86_64", "omarchy"])
     parser.add_argument("--binary", type=Path)
+    # Written by scripts/notices.py in a step without signing secrets: it runs downloaded tools.
+    parser.add_argument("--notices", type=Path)
     args = parser.parse_args()
     if args.command == "package":
-        if not args.platform or (args.platform != "omarchy" and not args.binary):
-            parser.error("package requires --platform and a daemon --binary")
+        if not args.platform or (args.platform != "omarchy" and not (args.binary and args.notices)):
+            parser.error("package requires --platform, and a daemon --binary and --notices")
         package(args)
     else:
         homebrew(args)
