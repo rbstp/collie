@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 
@@ -82,6 +83,8 @@ def package(args):
                 raise ValueError("daemon version differs from release tag")
             shutil.copy2(args.binary, package_dir / "collied")
             shutil.copy2(ROOT / "scripts/desktop/install.sh", package_dir / "install.sh")
+            subprocess.check_call([sys.executable, str(ROOT / "scripts/notices.py"), "collied",
+                                   str(package_dir / "THIRD_PARTY_NOTICES")])
             meta = metadata(version, args.sha, args.platform, args.binary)
         shutil.copy2(ROOT / "LICENSE", package_dir / "LICENSE")
         shutil.copy2(ROOT / "docs/desktop-releases.md", package_dir / "README.md")
@@ -121,7 +124,7 @@ def homebrew(args):
       exec /bin/bash "#{{share}}/collied/install.sh" "$@"
     SH
     chmod 0755, bin/"collied-install"
-    doc.install "release.json", "README.md"
+    doc.install "release.json", "README.md", "THIRD_PARTY_NOTICES"
   end
 
   def caveats

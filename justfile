@@ -134,7 +134,9 @@ ios-framework target="all" profile="release":
 ios-ghostty:
     scripts/ghostty/build-xcframework.sh
 
+# Also writes the app's acknowledgements from the dependency graph; fails on a license about.toml does not accept.
 ios-project: ios-ghostty
+    python3 scripts/notices.py ios Collie/Resources/Acknowledgements.json
     xcodegen generate --spec Collie/project.yml
 
 ios-build-sim: ios-framework ios-project

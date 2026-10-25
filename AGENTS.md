@@ -9,7 +9,7 @@ Guidance for coding agents working in this repository. User-facing documentation
 - `crates/tailscale-sys`, `crates/tailnet`, `crates/tls`: libtailscale (pinned submodule plus a patch series), its safe wrapper, mutual TLS.
 - `crates/e2e`: phone core against collied over a local test tailnet.
 - `Collie/`: iOS app, extensions and Apple Watch app (XcodeGen `Collie/project.yml`). `Mac/`: the CollieBar menu bar app. `Linux/`: the CollieTray Omarchy bar widget.
-- Generated, never committed: `*.xcodeproj`, the CollieCore xcframework and bindings, the Ghostty xcframework.
+- Generated, never committed: `*.xcodeproj`, the CollieCore xcframework and bindings, the Ghostty xcframework, the app's `Acknowledgements.json`.
 
 ## Working style
 

@@ -34,6 +34,7 @@ targets:
       - path: Resources/PrivacyInfo.xcprivacy
       - path: Resources/Assets.xcassets
       - path: Resources/UsageAssets.xcassets
+      - path: Resources/Acknowledgements.json
     dependencies:
       - package: CollieCore
       - package: GhosttyTerminal

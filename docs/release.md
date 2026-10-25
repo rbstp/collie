@@ -227,6 +227,14 @@ The reusable desktop workflow is called explicitly after TestFlight creates its 
 
 See [Desktop release downloads](desktop-releases.md) for publisher Developer ID/notary secrets, notarized macOS archives and disk image, Linux runtime manifests, Homebrew tap artifacts, install/refresh commands and the clean-machine rollout gates. No signing credentials, public release or Homebrew tap update is provisioned by adding the workflow.
 
+## Third-party notices
+
+`scripts/notices.py` writes the notices from the dependency graph at build time: cargo-about 0.9.2 for the Rust crates, go-licenses v2.0.1 for libtailscale's Go modules, the Go license from the toolchain that builds it, and the license texts `scripts/ghostty/build-xcframework.sh` collects for libghostty-vt from the pinned sources. It downloads cargo-about against its pinned SHA-256 and installs go-licenses with `go install`, which checks the Go checksum database, both into `target/tools`. A license that `about.toml` does not accept, or that cannot be identified, fails the build; accept a new license there and in `deny.toml`.
+
+- `just ios-project` writes `Collie/Resources/Acknowledgements.json` (not committed), which the app shows in Acknowledgements, in Settings and on the Welcome screen: libtailscale and its Go modules for iOS, libghostty-vt and what it links, the Meslo font, Octicons and the Rust crates in CollieCore. The watch app and the extensions are pure Swift and link none of them.
+- `scripts/desktop/package.py` writes `THIRD_PARTY_NOTICES` into both collied archives: libtailscale and its Go modules for macOS and Linux, and collied's Rust crates for both targets.
+- CollieBar and CollieTray contain no third-party code, so their archives carry only the project `LICENSE`.
+
 ## Protocol compatibility
 
 The negotiated baseline is revision 26, with supported floor 26. Existing exact-match installations through revision 25 need one update on each side; pairing keys stay valid. The baseline app uses a legacy-shaped hello so a revision-25 daemon can tell it to update collied. Subsequent releases retain the current and previous two implemented negotiated revisions. Publish every floor increase here and in the release notes, after fixtures cover both upgrade orders and the removed revision's refusal. A range alone does not establish compatibility: wire codecs must gate methods, parameters, response/event fields and enum variants, with separate negotiated capabilities for new relay grant and encrypted payload formats.
