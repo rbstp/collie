@@ -18,18 +18,22 @@ final class KeyboardSwipeTests: XCTestCase {
         start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 150)), withVelocity: .fast, thenHoldForDuration: 0)
     }
 
+    // A gesture while the field still moves misses it: New task scrolls its prompt above the keyboard after the keyboard appears.
+    private func settle(_ element: XCUIElement) {
+        var frame = CGRect.null
+        for _ in 0..<10 where element.frame != frame {
+            frame = element.frame
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+    }
+
     private func typeAndSwipeDown(_ field: XCUIElement, in app: XCUIApplication) {
         XCTAssertTrue(field.appears(within: 10), app.debugDescription)
         field.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
         let typed = app.type("keep me", into: field)
-        // New task scrolls its prompt above the keyboard after the keyboard appears; a swipe during that scroll misses the field.
-        var frame = CGRect.null
-        for _ in 0..<10 where typed.frame != frame {
-            frame = typed.frame
-            Thread.sleep(forTimeInterval: 0.3)
-        }
+        settle(typed)
         swipeDown(on: typed)
         XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
         XCTAssertTrue(typed.exists, app.debugDescription)
@@ -44,8 +48,8 @@ final class KeyboardSwipeTests: XCTestCase {
         field.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
-        field.typeText("keep me")
-        let typed = app.textFields.matching(NSPredicate(format: "value == %@", "keep me")).firstMatch
+        let typed = app.type("keep me", into: field)
+        settle(typed)
         typed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 1, thenDragTo: typed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1.5)))
         XCTAssertFalse(keyboard.disappears(within: 1), app.debugDescription)

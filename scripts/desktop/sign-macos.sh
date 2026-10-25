@@ -34,7 +34,7 @@ codesign --verify --strict "$app"
 lipo "$binary" -verify_arch arm64
 lipo "$app/Contents/MacOS/CollieBar" -verify_arch arm64
 mkdir -p dist
-python3 scripts/desktop/package.py package --tag "$TAG" --sha "$SOURCE_SHA" --platform macos-arm64 --binary "$binary" --out dist
+python3 scripts/desktop/package.py package --tag "$TAG" --sha "$SOURCE_SHA" --platform macos-arm64 --binary "$binary" --notices target/THIRD_PARTY_NOTICES --out dist
 mkdir "$material/daemon"
 tar -xzf "dist/collied-${TAG#v}-macos-arm64.tar.gz" -C "$material/daemon"
 hdiutil create -volname collied -srcfolder "$material/daemon" -format UDZO "dist/collied-${TAG#v}-macos-arm64.dmg"

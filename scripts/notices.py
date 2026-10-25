@@ -30,9 +30,16 @@ GHOSTTY = {
     "uucode": "MIT AND Unicode-3.0",
     "Zig compiler-rt": "MIT",
 }
+FONTS = "Collie/GhosttyTerminal/Sources/GhosttyTerminal/Fonts"
 IOS_FILES = [
-    ("Meslo LG", "Apache-2.0", "Collie/GhosttyTerminal/Sources/GhosttyTerminal/Fonts/LICENSE.txt"),
+    ("Meslo LG", "Apache-2.0", f"{FONTS}/LICENSE.txt"),
+    ("DejaVu and Bitstream Vera, in Meslo LG", "Bitstream-Vera AND Arev", f"{FONTS}/DejaVu-LICENSE.txt"),
+    ("Nerd Fonts glyphs, in Meslo LG", "MIT AND OFL-1.1 AND Apache-2.0 AND CC-BY-4.0 AND CC-BY-NC-ND-3.0 AND Unlicense",
+     f"{FONTS}/NerdFonts-LICENSE.txt"),
     ("Octicons", "MIT", "Collie/Resources/Octicons-LICENSE.txt"),
+]
+COLLIED_FILES = [
+    ("LiteLLM model prices", "MIT", "crates/collied/data/prices-LICENSE.txt"),
 ]
 
 
@@ -86,6 +93,16 @@ def rust(manifest, targets):
         ids = list(dict.fromkeys(id for id, _ in texts[key]))
         result.append(component(*key, " AND ".join(ids), "\n\n".join(text.strip() for _, text in texts[key])))
     return sorted(result, key=lambda c: (c["name"].lower(), c["version"]))
+
+
+def rust_std():
+    version = subprocess.check_output(["rustc", "--version"], text=True).split()[1]
+    licenses = Path(subprocess.check_output(["rustc", "--print", "sysroot"], text=True).strip()) / "share/doc/rust/licenses"
+    mit = (licenses / "MIT.txt").read_text().replace("<year> <copyright holders>", "The Rust Project Developers")
+    text = ("Copyright The Rust Project Developers (see https://thanks.rust-lang.org).\n"
+            "The Rust standard library is dual-licensed under the MIT license and the Apache License 2.0.\n\n"
+            + mit.strip() + "\n\n" + (licenses / "Apache-2.0.txt").read_text())
+    return component("Rust standard library", version, "MIT OR Apache-2.0", text), licenses
 
 
 def go(platforms, tags=""):
@@ -146,14 +163,18 @@ def main():
     if len(sys.argv) != 3 or sys.argv[1] not in ("ios", "collied"):
         sys.exit("usage: notices.py ios|collied <output>")
     kind, out = sys.argv[1], Path(sys.argv[2])
+    std, licenses = rust_std()
     if kind == "ios":
         items = go([("ios", "arm64")], "ios,ts_omit_portmapper") + ghostty()
         items += [component(name, None, license, (ROOT / path).read_text()) for name, license, path in IOS_FILES]
-        items += rust("crates/collie-core/Cargo.toml", ["aarch64-apple-ios"])
+        # Meslo's file is only the Apache-2.0 header; section 4(a) asks for the full text.
+        next(c for c in items if c["name"] == "Meslo LG")["text"] += "\n" + (licenses / "Apache-2.0.txt").read_text()
+        items += [std] + rust("crates/collie-core/Cargo.toml", ["aarch64-apple-ios"])
         content = json.dumps(items, indent=1, ensure_ascii=False) + "\n"
     else:
         items = go([("darwin", "arm64"), ("linux", "amd64")])
-        items += rust("crates/collied/Cargo.toml", ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"])
+        items += [component(name, None, license, (ROOT / path).read_text()) for name, license, path in COLLIED_FILES]
+        items += [std] + rust("crates/collied/Cargo.toml", ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"])
         rule = "-" * 80
         content = "Third-party software in collied\n\n" + "".join(
             f"{rule}\n{c['name']}{' ' + c['version'] if c['version'] else ''}\nLicense: {c['license']}\n\n{c['text']}\n"
