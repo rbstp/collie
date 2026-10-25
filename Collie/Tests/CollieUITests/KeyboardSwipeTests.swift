@@ -23,10 +23,7 @@ final class KeyboardSwipeTests: XCTestCase {
         field.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
-        field.typeText("keep me")
-        // The New task prompt grows vertically and can surface as a text view.
-        let typed = app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", "keep me")).firstMatch
-        XCTAssertTrue(typed.appears(within: 5), app.debugDescription)
+        let typed = app.type("keep me", into: field)
         // New task scrolls its prompt above the keyboard after the keyboard appears; a swipe during that scroll misses the field.
         var frame = CGRect.null
         for _ in 0..<10 where typed.frame != frame {

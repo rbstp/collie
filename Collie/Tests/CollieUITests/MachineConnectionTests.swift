@@ -45,7 +45,7 @@ final class MachineConnectionTests: XCTestCase {
         let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
         XCTAssertTrue(paste.appears(within: 5), app.debugDescription)
         paste.tap()
-        let pasted = app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", message)).firstMatch
+        let pasted = app.windows.firstMatch.descendants(matching: .any).matching(NSPredicate(format: "value == %@", message)).firstMatch
         XCTAssertTrue(pasted.appears(within: 5), app.debugDescription)
     }
 }
