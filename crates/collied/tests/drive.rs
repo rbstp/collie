@@ -875,10 +875,10 @@ async fn prompt_replaces_the_draft_the_phone_saw() {
     assert_eq!(
         herdr.params("agent.send_keys"),
         vec![json!({"target": "w6:p1", "keys": [
-            "down", "down",
             "ctrl+e", "ctrl+u", "backspace",
             "ctrl+e", "ctrl+u", "backspace",
             "ctrl+e", "ctrl+u", "backspace",
+            "ctrl+k", "ctrl+k", "ctrl+k", "ctrl+k",
         ]})]
     );
     assert_eq!(

@@ -527,7 +527,8 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             (
                 "agent.send_keys".to_owned(),
                 json!({"target": "w6:p1", "keys": [
-                    "down", "ctrl+e", "ctrl+u", "backspace", "ctrl+e", "ctrl+u", "backspace"
+                    "ctrl+e", "ctrl+u", "backspace", "ctrl+e", "ctrl+u", "backspace", "ctrl+k",
+                    "ctrl+k"
                 ]})
             ),
             (
