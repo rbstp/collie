@@ -470,6 +470,13 @@ private struct KeepsPromptVisible: ViewModifier {
             content.onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { _ in
                 if editing { withAnimation { proxy.scrollTo(KeepsPromptVisible.id, anchor: .bottom) } }
             }
+            // After a rotation the notification can arrive before the form takes the keyboard's inset. That scroll then left
+            // the prompt row where UIKit keeps only the field visible, under the predictive bar. Scrolling from inside this
+            // callback was measured against the old layout, hence the next turn of the main queue.
+            .onScrollGeometryChange(for: [CGFloat].self) { [$0.containerSize.height, $0.contentInsets.bottom] } action: { _, _ in
+                guard editing else { return }
+                DispatchQueue.main.async { withAnimation { proxy.scrollTo(KeepsPromptVisible.id, anchor: .bottom) } }
+            }
         }
     }
 
