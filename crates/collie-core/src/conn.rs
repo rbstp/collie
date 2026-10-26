@@ -293,6 +293,16 @@ pub async fn blocking<T: Send + 'static>(
         .map_err(std::io::Error::other)
 }
 
+/// Only a node that answered with another identity is a violation. A failed whois is
+/// retried: a node restarted after a suspend answers "peer not found" from its netmap disk
+/// cache until control sends the live map.
+fn self_owner_error(e: tailnet::Error) -> ConnectError {
+    match e {
+        tailnet::Error::Identity(_) => pin::PinError::SelfOwnership.into(),
+        e => ConnectError::Status(e.to_string()),
+    }
+}
+
 /// Re-checks the pin against the current netmap on every connection, then dials the
 /// pinned node's tailnet IP. The node is released once dialed so a session never
 /// keeps a replaced node open.
@@ -324,8 +334,8 @@ pub async fn open(
     let self_status = status.clone();
     let verified = blocking(move || n.owned_user(&self_status))
         .await
-        .map_err(|_| pin::PinError::SelfOwnership)?
-        .map_err(|_| pin::PinError::SelfOwnership)?;
+        .map_err(|e| ConnectError::Status(e.to_string()))?
+        .map_err(self_owner_error)?;
     if verified != owner {
         return Err(pin::PinError::SelfOwnership.into());
     }
@@ -834,7 +844,15 @@ async fn supervise(
             continue;
         }
         let Some(delay) = backoff.failed(&shared, &err, Instant::now()) else {
-            return;
+            // Every dial checks again, so a resume or a manual retry dials: a stop from a
+            // transient failure must not last until the app is relaunched.
+            loop {
+                tokio::select! {
+                    () = wake.notified() => break,
+                    Some(_) = requests.recv() => {}
+                }
+            }
+            continue;
         };
         if matches!(err, ConnectError::Dial(_) | ConnectError::NotAnswering(_))
             && lock(&shared.link).phase == LinkPhase::Waiting
@@ -1465,6 +1483,74 @@ mod tests {
             .await
             .expect("a short resume wakes a parked supervisor at once")
             .unwrap();
+    }
+
+    #[test]
+    fn only_a_self_identity_mismatch_stops_the_link() {
+        assert!(self_owner_error(tailnet::Error::Identity("mismatch")).is_auth());
+        // A restarted node's own whois before control sends the live map.
+        let pending = self_owner_error(tailnet::Error::Tailscale("peer not found".into()));
+        assert!(!pending.is_auth());
+    }
+
+    #[tokio::test]
+    async fn an_auth_stop_dials_again_on_resume_or_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = Node::new(&tailnet::Config {
+            state_dir: dir.path().join("node"),
+            hostname: "phone".into(),
+            auth_key: None,
+            control_url: None,
+            advertise_tags: Vec::new(),
+            log_to_stderr: false,
+        })
+        .unwrap();
+        let (_suspend, suspended) = watch::channel(false);
+        let machine = Machine {
+            id: "m".into(),
+            label: "m".into(),
+            host: "m".into(),
+            port: 0,
+            node_id: "n".into(),
+            owner_user_id: 123,
+            kind: MachineKind::Mac,
+            // Not a pin: every dial stops with PairAgain before using the node.
+            key: String::new(),
+            terminal_key: String::new(),
+            default_label: None,
+        };
+        let conn = Arc::new(Conn::spawn(
+            &tokio::runtime::Handle::current(),
+            machine,
+            Arc::new(Mutex::new(Some(Arc::new(node)))),
+            IdentitySlot::default(),
+            PushSlot::default(),
+            Arc::default(),
+            suspended,
+            Weak::new(),
+        ));
+        let stopped = async |conn: &Conn| {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while lock(&conn.shared.link).last_error.is_none() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("the link dialed and stopped");
+            assert_eq!(lock(&conn.shared.link).phase, LinkPhase::Stopped);
+        };
+        stopped(&conn).await;
+        assert!(matches!(
+            conn.request(Request::FlockSnapshot(Empty {}), PROBE_TIMEOUT)
+                .await,
+            Err(RequestError::Stopped)
+        ));
+        lock(&conn.shared.link).last_error = None;
+        conn.resume(Duration::from_secs(300), true);
+        stopped(&conn).await;
+        lock(&conn.shared.link).last_error = None;
+        conn.reconnect_now();
+        stopped(&conn).await;
     }
 
     #[tokio::test]
