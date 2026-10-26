@@ -656,7 +656,7 @@ impl Driver {
                     "the agent's input box holds a paste, an image or another mode; nothing was sent",
                 );
             }
-            Some(InputBox::Unfocused) => return fail(ErrorCode::AgentNotReady, UNFOCUSED),
+            Some(InputBox::Unfocused) => return fail(ErrorCode::InputUnfocused, UNFOCUSED),
             None => {
                 return fail(
                     ErrorCode::DraftNotCleared,

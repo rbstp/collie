@@ -963,7 +963,7 @@ async fn prompt_refuses_a_box_that_does_not_have_the_selection() {
     ] {
         herdr.with(|h| h.text = shown.to_owned());
         let (err, message) = drive.prompt(expecting(""), &yes()).await.unwrap_err();
-        assert_eq!(err, ErrorCode::AgentNotReady);
+        assert_eq!(err, ErrorCode::InputUnfocused);
         assert!(message.contains("nothing was sent"), "{message}");
         assert_eq!(
             drive.draft(&tid(CLAUDE)).await,

@@ -703,6 +703,17 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 }
 
 @MainActor
+@Test func aSelectionBelowTheBoxKeepsThePromptAndPointsToUp() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "")
+    model.draft = "fix the build"
+    core.set(error: .InputUnfocused)
+    await model.sendPrompt()
+    #expect(model.draft == "fix the build")
+    #expect(model.promptError?.contains("Press ↑") == true)
+}
+
+@MainActor
 private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) async {
     core.state.withLock {
         $0.macDraft = ""

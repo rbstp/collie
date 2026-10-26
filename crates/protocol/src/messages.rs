@@ -1801,6 +1801,7 @@ pub enum ErrorCode {
     TerminalsDisabled,
     TerminalLocked,
     TerminalKeyMissing,
+    InputUnfocused,
     Internal,
     #[serde(other)]
     Unrecognized,

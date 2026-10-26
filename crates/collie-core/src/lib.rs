@@ -157,6 +157,10 @@ pub enum CoreError {
     #[error("Could not clear the agent's input box; nothing was sent.")]
     DraftNotCleared,
     #[error(
+        "A background task or agent below the input box is selected on the machine; nothing was sent. Press ↑ to return to the input box, then send again."
+    )]
+    InputUnfocused,
+    #[error(
         "terminals are off on this machine: set [terminals] enabled = true in collied.toml there and restart collied"
     )]
     TerminalsDisabled,
@@ -256,6 +260,7 @@ impl From<SessionError> for CoreError {
                 ErrorCode::TooLarge => Self::TooLarge { message },
                 ErrorCode::ChecksumMismatch => Self::ChecksumMismatch,
                 ErrorCode::DraftNotCleared => Self::DraftNotCleared,
+                ErrorCode::InputUnfocused => Self::InputUnfocused,
                 ErrorCode::TerminalsDisabled => Self::TerminalsDisabled,
                 ErrorCode::TerminalLocked => Self::TerminalLocked,
                 ErrorCode::TerminalKeyMissing => Self::TerminalKeyMissing,
@@ -3946,6 +3951,10 @@ mod tests {
             e.to_string(),
             "Could not clear the agent's input box; nothing was sent."
         );
+        assert!(matches!(
+            server(ErrorCode::InputUnfocused, "m"),
+            CoreError::InputUnfocused
+        ));
     }
 
     #[test]
