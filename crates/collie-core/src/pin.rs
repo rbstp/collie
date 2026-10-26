@@ -22,6 +22,8 @@ pub enum PinError {
         "Collie's embedded Tailscale sign-in does not match the paired owner; sign in with the same personal account and pair again"
     )]
     SelfOwnership,
+    #[error("this phone's Tailscale identity is not known yet")]
+    SelfUnknown,
     #[error("{host} has no tailnet address")]
     NoAddress { host: String },
     #[error("{host} reports an unsupported platform: {os}")]
@@ -44,10 +46,11 @@ impl PinError {
 }
 
 pub fn self_user(status: &Status, owner: Option<i64>) -> Result<i64, PinError> {
-    let me = status.self_node.as_ref().ok_or(PinError::SelfOwnership)?;
-    if me.user_id <= 0
-        || me.stable_id.is_empty()
-        || me.tags.as_ref().is_some_and(|tags| !tags.is_empty())
+    let me = status.self_node.as_ref().ok_or(PinError::SelfUnknown)?;
+    if me.user_id <= 0 || me.stable_id.is_empty() {
+        return Err(PinError::SelfUnknown);
+    }
+    if me.tags.as_ref().is_some_and(|tags| !tags.is_empty())
         || owner.is_some_and(|owner| owner <= 0 || owner != me.user_id)
     {
         return Err(PinError::SelfOwnership);
@@ -184,20 +187,28 @@ mod tests {
                 Err(PinError::SelfOwnership)
             );
         }
-        for user in [0, -1, 8] {
+        let mut st = status();
+        st.self_node.as_mut().unwrap().user_id = 8;
+        assert_eq!(
+            resolve(&st, HOST, "nMAC", None, Some(7)),
+            Err(PinError::SelfOwnership)
+        );
+        // Not known yet, as a node may report before it has its netmap: retried, not a stop.
+        for user in [0, -1] {
             let mut st = status();
             st.self_node.as_mut().unwrap().user_id = user;
             assert_eq!(
                 resolve(&st, HOST, "nMAC", None, Some(7)),
-                Err(PinError::SelfOwnership)
+                Err(PinError::SelfUnknown)
             );
         }
         let mut st = status();
         st.self_node = None;
         assert_eq!(
             resolve(&st, HOST, "nMAC", None, None),
-            Err(PinError::SelfOwnership)
+            Err(PinError::SelfUnknown)
         );
+        assert!(!PinError::SelfUnknown.is_violation());
         let mut st = status();
         st.self_node.as_mut().unwrap().tags = Some(vec!["tag:phone".into()]);
         assert_eq!(
