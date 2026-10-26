@@ -548,6 +548,7 @@
         "terminals_disabled",
         "terminal_locked",
         "terminal_key_missing",
+        "input_unfocused",
         "internal",
         "unrecognized"
       ],

@@ -10,6 +10,10 @@ pub enum InputBox {
     /// Holds what a screen read cannot carry back and the phone must never replace: a
     /// collapsed paste or image, or a mode other than `❯`, such as bash mode's `!`.
     Opaque,
+    /// A background task pill or agent row below the box holds the selection, as after
+    /// `down` on the box's last row: Claude Code 2.1.310 may drop a paste, and Enter opens
+    /// the task dialog or switches the view instead of sending.
+    Unfocused,
 }
 
 /// Unsent text in the input box.
@@ -65,6 +69,11 @@ pub fn parse(ansi: &str) -> Option<InputBox> {
                     .iter()
                     .all(|l| l.is_empty() || l.starts_with("  "))
         })?;
+    if ansi.split('\n').skip(bottom + 1).any(selected)
+        || plain[bottom + 1..].iter().any(|l| l.starts_with('❯'))
+    {
+        return Some(InputBox::Unfocused);
+    }
     let shown: String = plain[top + 1..bottom].join(" ");
     let shown = shown.split_whitespace().collect::<Vec<_>>().join(" ");
     if !plain[top + 1].starts_with('❯') || COLLAPSED.iter().any(|p| shown.contains(p)) {
@@ -360,12 +369,28 @@ pub fn clear_keys(lines: usize) -> Vec<&'static str> {
 /// Each character with whether SGR dim (2) is on. The input went through
 /// `drive::sanitize_ansi`, so every ESC starts a plain SGR.
 pub(crate) fn cells(row: &str) -> Vec<(char, bool)> {
+    styled(row)
+        .into_iter()
+        .map(|(c, dim, _)| (c, dim))
+        .collect()
+}
+
+/// Whether `row` draws a visible character in SGR reverse (7), how Claude Code marks a
+/// selected background task pill.
+fn selected(row: &str) -> bool {
+    styled(row)
+        .into_iter()
+        .any(|(c, _, reverse)| reverse && !c.is_whitespace())
+}
+
+/// Each character with whether SGR dim (2) and reverse (7) are on.
+fn styled(row: &str) -> Vec<(char, bool, bool)> {
     let mut out = Vec::new();
-    let mut dim = false;
+    let (mut dim, mut reverse) = (false, false);
     let mut chars = row.chars();
     while let Some(c) = chars.next() {
         if c != '\u{1b}' {
-            out.push((c, dim));
+            out.push((c, dim, reverse));
             continue;
         }
         let params: String = chars
@@ -374,13 +399,16 @@ pub(crate) fn cells(row: &str) -> Vec<(char, bool)> {
             .take_while(|&c| c != 'm')
             .collect();
         if params.is_empty() {
-            dim = false;
+            (dim, reverse) = (false, false);
         }
         let mut it = params.split(';');
         while let Some(p) = it.next() {
             match p {
-                "" | "0" | "22" => dim = false,
+                "" | "0" => (dim, reverse) = (false, false),
+                "22" => dim = false,
                 "2" => dim = true,
+                "27" => reverse = false,
+                "7" => reverse = true,
                 "38" | "48" | "58" => match it.next() {
                     Some("5") => {
                         it.next();
@@ -773,6 +801,45 @@ mod tests {
         ] {
             assert_eq!(read(&screen(RULE, rows)), Some(InputBox::Opaque), "{rows}");
         }
+    }
+
+    #[test]
+    fn queued_prompts_are_not_a_draft() {
+        assert_eq!(
+            read(include_str!(
+                "../tests/fixtures/claude-2.1.310/queued.ansi.txt"
+            )),
+            draft("", 1)
+        );
+    }
+
+    #[test]
+    fn a_selection_below_the_box_is_unfocused() {
+        for ansi in [
+            include_str!("../tests/fixtures/claude-2.1.310/queued-pill-selected.ansi.txt"),
+            include_str!("../tests/fixtures/claude-2.1.310/agent-row-selected.ansi.txt"),
+        ] {
+            assert_eq!(read(ansi), Some(InputBox::Unfocused));
+        }
+        let pill = "  ⏸ manual mode on · \u{1b}[0m\u{1b}[7m\u{1b}[38;2;0;204;204m1 shell\u{1b}[0m";
+        assert_eq!(
+            read(&format!("{RULE}\n❯ text\n{RULE}\n{pill}\n")),
+            Some(InputBox::Unfocused)
+        );
+        let colored =
+            "  \u{1b}[38;2;255;193;7m⏵⏵ auto mode on\u{1b}[0m · \u{1b}[38;5;7m1 shell\u{1b}[0m";
+        assert_eq!(
+            read(&format!("{RULE}\n❯ text\n{RULE}\n{colored}\n")),
+            draft("text", 1),
+            "a color component of 7 is not reverse"
+        );
+        assert_eq!(
+            read(&format!(
+                "{RULE}\n❯ text\n{RULE}\n\u{1b}[7m  \u{1b}[27m · 1 shell\n"
+            )),
+            draft("text", 1),
+            "reverse blanks select nothing"
+        );
     }
 
     #[test]

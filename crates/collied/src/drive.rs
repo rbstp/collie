@@ -54,6 +54,8 @@ pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
 pub const LOCKED: &str = "the terminal is locked; unlock it again";
 const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
 const COMMAND_SHOWN: &str = "a slash command shows in the input box; send it as a prompt";
+const UNFOCUSED: &str =
+    "a background task or agent below the input box is selected on the machine; nothing was sent";
 const STARTUP_PROMPT: &str = "the agent is blocked on a startup prompt; answer it in the terminal";
 pub const CODEX_UPDATE: &str = "Codex is asking to update. Answer it in Terminal.";
 pub const TOO_LONG: &str = "The line is longer than the terminal accepts before its shell prompt shows. Wait for the prompt and try again.";
@@ -583,7 +585,7 @@ impl Driver {
         let text = match a.agent.as_deref() {
             Some("claude") => match self.input_box(&a.pane_id).await? {
                 Some(InputBox::Draft(d)) => Some(d.text),
-                Some(InputBox::Opaque) | None => None,
+                Some(InputBox::Opaque | InputBox::Unfocused) | None => None,
             },
             _ => None,
         };
@@ -654,6 +656,7 @@ impl Driver {
                     "the agent's input box holds a paste, an image or another mode; nothing was sent",
                 );
             }
+            Some(InputBox::Unfocused) => return fail(ErrorCode::InputUnfocused, UNFOCUSED),
             None => {
                 return fail(
                     ErrorCode::DraftNotCleared,

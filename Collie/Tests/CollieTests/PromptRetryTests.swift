@@ -46,7 +46,7 @@ private func retryingModel(
     #expect(PromptRetry.retries(unreachable))
     #expect(PromptRetry.retries(CoreError.NotRunning))
     let refusals: [CoreError] = [
-        .AgentBlocked(message: ""), .AgentNotReady, .DraftChanged(current: "x"), .DraftNotCleared,
+        .AgentBlocked(message: ""), .AgentNotReady, .DraftChanged(current: "x"), .DraftNotCleared, .InputUnfocused,
         .InvalidInput(field: "text", message: "too long"), .RateLimited, .NotFound, .HerdrUnavailable,
         .Rejected(message: ""), .Internal(message: "unexpected reply from the machine: flock"),
         .Unauthorized(message: ""),

@@ -48,6 +48,7 @@ The composer at the bottom works in both views.
 - **Settings > Prompt** can keep the keyboard open after sending.
 - To hide the keyboard, tap the hide-keyboard button or swipe down on the prompt field. In a long prompt, a swipe down first scrolls back to the top, then hides the keyboard.
 - Text you left unsent in Claude Code's input box on the machine fills an empty prompt field when you open the agent, on up to five lines.
+- When the machine has selected a background task or agent below Claude Code's input box (with ↓ on its last line), the phone keeps the prompt and says so, because Claude Code would not send it. Press ↑ on the key strip or the machine to return to the input box, then send again.
 - With the keyboard down, drag the prompt field to scroll a long prompt without opening the keyboard, tap it to edit and long-press it to copy it.
 - An unsent prompt stays with its agent on this phone. Its attachments stay for up to 23 hours.
 

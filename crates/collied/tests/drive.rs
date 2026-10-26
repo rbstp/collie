@@ -953,6 +953,35 @@ async fn prompt_refuses_a_box_it_cannot_replace() {
 }
 
 #[tokio::test]
+async fn prompt_refuses_a_box_that_does_not_have_the_selection() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    for shown in [
+        include_str!("fixtures/claude-2.1.310/queued-pill-selected.ansi.txt"),
+        include_str!("fixtures/claude-2.1.310/agent-row-selected.ansi.txt"),
+    ] {
+        herdr.with(|h| h.text = shown.to_owned());
+        let (err, message) = drive.prompt(expecting(""), &yes()).await.unwrap_err();
+        assert_eq!(err, ErrorCode::InputUnfocused);
+        assert!(message.contains("nothing was sent"), "{message}");
+        assert_eq!(
+            drive.draft(&tid(CLAUDE)).await,
+            Ok(Response::Draft { text: None })
+        );
+    }
+    assert!(herdr.mutations().is_empty(), "{:?}", herdr.methods());
+
+    herdr.with(|h| h.text = include_str!("fixtures/claude-2.1.310/queued.ansi.txt").to_owned());
+    assert_eq!(drive.prompt(expecting(""), &yes()).await, Ok(Response::Ok));
+    assert_eq!(
+        herdr.mutations(),
+        vec!["agent.prompt"],
+        "queued prompts are left alone"
+    );
+}
+
+#[tokio::test]
 async fn prompt_is_not_sent_when_the_draft_does_not_clear() {
     let herdr = Mock::start();
     let (_d, base) = root();
