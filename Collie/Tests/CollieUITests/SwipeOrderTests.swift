@@ -10,11 +10,13 @@ final class SwipeOrderTests: XCTestCase {
         defer { app.terminate() }
         let layout = app.buttons["Layout"]
         app.choose(app.buttons["Grid"]) { layout.tap() }
+        var deadline = Date.now.addingTimeInterval(10)
+        while Date.now < deadline, gridOrder(app).count < titles.count { usleep(250_000) }
         let before = gridOrder(app)
         XCTAssertEqual(before.count, titles.count, app.debugDescription)
         let moved = try XCTUnwrap(before.last)
         drag(app, moved, onto: before[0], after: false)
-        var deadline = Date.now.addingTimeInterval(10)
+        deadline = Date.now.addingTimeInterval(10)
         while Date.now < deadline, gridOrder(app).first != moved { usleep(250_000) }
         let order = gridOrder(app)
         XCTAssertEqual(order.first, moved, app.debugDescription)
@@ -86,12 +88,16 @@ final class SwipeOrderTests: XCTestCase {
 
     /// The grid's titles as it shows them: by row, then left to right.
     private func gridOrder(_ app: XCUIApplication) -> [String] {
-        titles.compactMap { title in
-            let card = card(app, title)
-            return card.appears(within: 5) ? (title, card.frame) : nil
+        // One snapshot of the main window: a query per card's existence and frame took a dozen app snapshots per poll,
+        // and on a loaded runner one of them ended in "Timed out while evaluating UI".
+        guard let window = try? app.windows.firstMatch.snapshot() else { return [] }
+        func buttons(_ element: any XCUIElementSnapshot) -> [any XCUIElementSnapshot] {
+            (element.elementType == .button ? [element] : []) + element.children.flatMap(buttons)
         }
-        .sorted { ($0.1.minY.rounded(), $0.1.minX) < ($1.1.minY.rounded(), $1.1.minX) }
-        .map(\.0)
+        let cards = buttons(window)
+        return titles.compactMap { title in cards.first { $0.label.contains(title) }.map { (title, $0.frame) } }
+            .sorted { ($0.1.minY.rounded(), $0.1.minX) < ($1.1.minY.rounded(), $1.1.minX) }
+            .map(\.0)
     }
 
     /// Swipes left from the first agent to the last, checks the last has no next agent, then swipes back once.
