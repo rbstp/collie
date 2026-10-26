@@ -1,0 +1,25 @@
+diff --git a/go.mod b/go.mod
+index fa6132a..66a17a0 100644
+--- a/go.mod
++++ b/go.mod
+@@ -4,7 +4,7 @@ go 1.27.3
+ 
+ require (
+ 	golang.org/x/sys v0.48.0
+-	tailscale.com v1.104.1
++	tailscale.com v1.104.2
+ )
+ 
+ require (
+diff --git a/go.sum b/go.sum
+index 3db80a9..c9c1085 100644
+--- a/go.sum
++++ b/go.sum
+@@ -260,5 +260,5 @@ howett.net/plist v1.0.0 h1:7CrbWYbPPO/PyNy38b2EB/+gYbjCe2DXBxgtOOZbSQM=
+ howett.net/plist v1.0.0/go.mod h1:lqaXoTrLY4hg8tnEzNru53gicrbv7rrk+2xJA/7hw9g=
+ software.sslmate.com/src/go-pkcs12 v0.7.3 h1:JBQD3FDqYjTeyDAeZQklj2ar88ykBLtALloPJHyAauU=
+ software.sslmate.com/src/go-pkcs12 v0.7.3/go.mod h1:Qiz0EyvDRJjjxGyUQa2cCNZn/wMyzrRJ/qcDXOQazLI=
+-tailscale.com v1.104.1 h1:9GNOm9Izqll9RH5jA5NWcLiCzXi/WtqY4EHQY2Dy2zk=
+-tailscale.com v1.104.1/go.mod h1:Cb1XjScRgSOeRD7NW6uCEznme782WiOU9IxqyTWoRf0=
++tailscale.com v1.104.2 h1:zBbSW0tI4Xi2PhrZEl9yt6oWay3l8A+M8scsTnZpyAk=
++tailscale.com v1.104.2/go.mod h1:D+gqEyJjFnwIaojBLaKxUbOfEO3cRXOaFaOZ5BIvYqs=
