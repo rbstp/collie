@@ -339,15 +339,20 @@ pub fn normalize(text: &str) -> String {
         .to_owned()
 }
 
-/// Verified on Claude Code 2.x in herdr 0.9.3 for a draft of `lines` rows with the cursor
-/// anywhere: `down` to the last row (a no-op there), then per row `ctrl+e`, `ctrl+u`
-/// (clear it) and `backspace` (join it to the row above; a no-op on an empty first row).
-/// Never `ctrl+c`, which interrupts a working agent, nor `ctrl+d`, which exits Claude
-/// Code on an empty input.
+/// Verified on Claude Code 2.1.310 in herdr 0.9.5 for a draft of `lines` rows with the
+/// cursor anywhere: per row `ctrl+e`, `ctrl+u` (clear it) and `backspace` (join it to the
+/// row above; a no-op on an empty first row) empty the cursor's row and those above, then
+/// per row below it `ctrl+k` twice (join the next row, then clear it; a no-op on an empty
+/// input). Never `down`: on the last row it selects the background task pill, where the
+/// next keys open its dialog. Never `ctrl+c`, which interrupts a working agent, nor
+/// `ctrl+d`, which exits Claude Code on an empty input.
 pub fn clear_keys(lines: usize) -> Vec<&'static str> {
-    let mut keys = vec!["down"; lines.saturating_sub(1)];
+    let mut keys = Vec::new();
     for _ in 0..lines {
         keys.extend(["ctrl+e", "ctrl+u", "backspace"]);
+    }
+    for _ in 1..lines {
+        keys.extend(["ctrl+k", "ctrl+k"]);
     }
     keys
 }
@@ -830,8 +835,6 @@ mod tests {
         assert_eq!(
             clear_keys(3),
             [
-                "down",
-                "down",
                 "ctrl+e",
                 "ctrl+u",
                 "backspace",
@@ -840,13 +843,17 @@ mod tests {
                 "backspace",
                 "ctrl+e",
                 "ctrl+u",
-                "backspace"
+                "backspace",
+                "ctrl+k",
+                "ctrl+k",
+                "ctrl+k",
+                "ctrl+k"
             ]
         );
         assert!(
             clear_keys(40)
                 .iter()
-                .all(|k| ["down", "ctrl+e", "ctrl+u", "backspace"].contains(k))
+                .all(|k| ["ctrl+e", "ctrl+u", "backspace", "ctrl+k"].contains(k))
         );
     }
 }
