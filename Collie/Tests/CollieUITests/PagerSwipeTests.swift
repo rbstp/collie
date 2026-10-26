@@ -24,11 +24,11 @@ final class PagerSwipeTests: XCTestCase {
             } else {
                 app.swipeLeft()
             }
-            XCTAssertTrue(view.buttons["Usage"].wait(for: \.isSelected, toEqual: true, timeout: 5), "\(name)\n\(app.debugDescription)")
+            XCTAssertTrue(eventually { view.buttons["Usage"].isSelected }, "\(name)\n\(app.debugDescription)")
             // On iPhone Pro Max the app's center lands on the Range picker, which keeps a drag that starts on it.
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.3))
             start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 300, dy: 0)), withVelocity: .fast, thenHoldForDuration: 0)
-            XCTAssertTrue(view.buttons["Agents"].wait(for: \.isSelected, toEqual: true, timeout: 5), "\(name)\n\(app.debugDescription)")
+            XCTAssertTrue(eventually { view.buttons["Agents"].isSelected }, "\(name)\n\(app.debugDescription)")
         }
     }
 
@@ -40,8 +40,7 @@ final class PagerSwipeTests: XCTestCase {
         defer { app.terminate() }
         XCTAssertTrue(app.segmentedControls["View"].buttons["Agents"].appears(within: 10), app.debugDescription)
         let page = app.collectionViews.firstMatch.cells.firstMatch
-        XCTAssertTrue(page.appears(within: 5), app.debugDescription)
-        XCTAssertEqual(page.frame.minX, 0, app.debugDescription)
+        XCTAssertEqual(try XCTUnwrap(page.settledFrame(), app.debugDescription).minX, 0, app.debugDescription)
     }
 
     func testUsageCardsKeepTheAgentsListMargins() throws {
@@ -62,29 +61,16 @@ final class PagerSwipeTests: XCTestCase {
         view.buttons["Usage"].tap()
         // Each rotation happens with Usage on screen. iPhone Duo's cover display does not rotate, so there every pass is portrait.
         for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft, .portrait] {
-            XCUIDevice.shared.orientation = orientation
-            let window = app.windows.firstMatch
-            for _ in 0..<10 where (window.frame.width > window.frame.height) != orientation.isLandscape { usleep(500_000) }
-            let usage = settledFrame(of: card, app)
+            app.rotate(to: orientation)
+            XCTAssertNotNil(card.settledFrame(), app.debugDescription)
+            let usage = card.frame
             view.buttons["Agents"].tap()
-            let agents = settledFrame(of: row, app)
+            XCTAssertNotNil(row.settledFrame(), app.debugDescription)
+            let agents = row.frame
             XCTAssertEqual(usage.minX, agents.minX, "\(orientation.rawValue)\n\(app.debugDescription)")
             XCTAssertEqual(usage.maxX, agents.maxX, "\(orientation.rawValue)\n\(app.debugDescription)")
             view.buttons["Usage"].tap()
         }
-    }
-
-    /// The frame once it holds still: rotation and paging move it for a while.
-    private func settledFrame(of element: XCUIElement, _ app: XCUIApplication) -> CGRect {
-        XCTAssertTrue(element.appears(within: 5), app.debugDescription)
-        var frame = element.frame
-        for _ in 0..<20 {
-            usleep(500_000)
-            let now = element.frame
-            if now == frame { break }
-            frame = now
-        }
-        return frame
     }
 
     func testTappedSelectionKeepsItsColor() throws {
@@ -95,16 +81,25 @@ final class PagerSwipeTests: XCTestCase {
         defer { app.terminate() }
         let agents = app.segmentedControls["View"].buttons["Agents"]
         XCTAssertTrue(agents.appears(within: 10), app.debugDescription)
-        sleep(1)
-        let before = try labelColor(agents)
+        let before = try settledColor(agents)
         let frame = agents.frame
         agents.tap()
-        sleep(2)
-        let after = try labelColor(agents)
+        let after = try settledColor(agents)
         XCTAssertEqual(agents.frame, frame)
         for (wanted, actual) in zip(before, after) {
             XCTAssertEqual(actual, wanted, accuracy: 0.08)
         }
+    }
+
+    /// The label's color once two screenshots in a row agree: the selection animates.
+    private func settledColor(_ element: XCUIElement) throws -> [Double] {
+        var last: [Double] = []
+        XCTAssertTrue(eventually {
+            let color = (try? labelColor(element)) ?? []
+            defer { last = color }
+            return !color.isEmpty && color == last
+        })
+        return last
     }
 
     /// The most saturated pixel inside the element: its accent-colored label.

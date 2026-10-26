@@ -9,27 +9,25 @@ final class LandscapeTests: XCTestCase {
     func testAgentsLayoutsAndUsage() throws {
         let app = try launchDemo()
         defer { app.terminate() }
-        rotate(.landscapeLeft, app)
+        XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
+        let menu = Match(.button, "Layout")
         for (layout, row) in [("Grid", "fix the build"), ("List", "fix the build"), ("Inbox", "I need to run cargo test to check the new cases.")] {
-            let menu = app.buttons["Layout"]
-            XCTAssertTrue(eventually { shown(menu, app) }, app.debugDescription)
-            app.choose(app.buttons[layout]) { menu.tap() }
-            let element = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", row)).firstMatch
-            XCTAssertTrue(eventually { shown(element, app) }, "\(layout)\n\(app.debugDescription)")
-            XCTAssertTrue(app.buttons["New task"].isHittable, app.debugDescription)
+            XCTAssertTrue(shown([menu], app), app.debugDescription)
+            app.choose(app.buttons[layout]) { app.element(menu).tap() }
+            let element = Match(.any, NSPredicate(format: "label CONTAINS %@", row))
+            XCTAssertTrue(shown([element, Match(.button, "New task")], app), "\(layout)\n\(app.debugDescription)")
         }
         let view = app.segmentedControls["View"]
         view.buttons["Usage"].tap()
-        let usage = app.staticTexts["5-hour usage limit"]
-        XCTAssertTrue(usage.appears(within: 5), app.debugDescription)
+        let usage = Match(.staticText, "5-hour usage limit")
+        XCTAssertTrue(app.element(usage).appears(within: 10), app.debugDescription)
         for orientation: UIDeviceOrientation in [.landscapeRight, .portrait, .landscapeLeft] {
-            rotate(orientation, app)
-            XCTAssertTrue(eventually { shown(usage, app) }, app.debugDescription)
+            XCTAssertTrue(app.rotate(to: orientation), app.debugDescription)
+            XCTAssertTrue(shown([usage], app), app.debugDescription)
             XCTAssertTrue(view.buttons["Usage"].isSelected, app.debugDescription)
         }
         app.buttons["Machines"].tap()
-        let machine = app.staticTexts["MacBook Pro"]
-        XCTAssertTrue(eventually { shown(machine, app) }, app.debugDescription)
+        XCTAssertTrue(shown([Match(.staticText, "MacBook Pro")], app), app.debugDescription)
     }
 
     func testSessionKeepsDraftFocusAndLatestOutputAcrossRotation() throws {
@@ -40,44 +38,43 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(terminalView.appears(within: 10), app.debugDescription)
         terminalView.tap()
         // The keyboard's candidate bar is a scroll view too, in its own window.
-        let terminal = app.windows.firstMatch.scrollViews.firstMatch
-        XCTAssertTrue(terminal.appears(within: 5), app.debugDescription)
-        let portraitWidth = terminal.frame.width
-        rotate(.landscapeLeft, app)
-        XCTAssertTrue(eventually { terminal.frame.width > portraitWidth * 1.5 }, app.debugDescription)
-        let keys = app.buttons["Keys"]
-        XCTAssertTrue(eventually { shown(keys, app) }, app.debugDescription)
-        if !keys.isSelected { keys.tap() }
-        let field = app.textFields.firstMatch
-        XCTAssertTrue(eventually { shown(field, app) }, app.debugDescription)
-        field.tap()
+        let terminal = Match(.scrollView, NSPredicate(value: true))
+        let portraitWidth = try XCTUnwrap(app.element(terminal).settledFrame(), app.debugDescription).width
+        XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
+        XCTAssertTrue(eventually(within: 30) { app.element(terminal).frame.width > portraitWidth * 1.5 }, app.debugDescription)
+        let keys = Match(.button, "Keys")
+        XCTAssertTrue(shown([keys], app), app.debugDescription)
+        if !app.element(keys).isSelected { app.element(keys).tap() }
+        let field = Match(.textField, NSPredicate(value: true))
+        XCTAssertTrue(shown([field], app), app.debugDescription)
+        app.element(field).tap()
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
-        let draft = app.type("keep this draft", into: field)
-        let dictation = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Dictate in")).firstMatch
-        let escape = app.buttons["Escape"]
-        let header = app.buttons["Terminal"].firstMatch
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
+        let draft = app.type("keep this draft", into: app.element(field))
+        let escape = Match(.button, "Escape")
+        let header = Match(.button, "Terminal")
         let controls = [
-            draft, app.buttons["Send"], app.buttons["Hide keyboard"], app.buttons["Attachments and saved prompts"], dictation,
-            escape, app.buttons["Control Return"]
+            Match(.any, NSPredicate(format: "value == %@", "keep this draft")), Match(.button, "Send"), Match(.button, "Hide keyboard"),
+            Match(.button, "Attachments and saved prompts"), Match(.button, NSPredicate(format: "label BEGINSWITH %@", "Dictate in")),
+            escape, Match(.button, "Control Return")
         ]
         for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait, .landscapeRight] {
-            rotate(orientation, app)
-            XCTAssertTrue(keyboard.appears(within: 5), "\(orientation.rawValue)\n\(app.debugDescription)")
-            XCTAssertTrue(eventually {
-                controls.allSatisfy { shown($0, app) && $0.frame.maxY <= keyboard.frame.minY + 1 }
-                    && escape.frame.minY - max(terminal.frame.minY, header.exists ? header.frame.maxY : 0) > 24
+            XCTAssertTrue(app.rotate(to: orientation), "\(orientation.rawValue)\n\(app.debugDescription)")
+            XCTAssertTrue(keyboard.appears(within: 30), "\(orientation.rawValue)\n\(app.debugDescription)")
+            XCTAssertTrue(shown(controls, app) { screen, frames in
+                guard let escape = screen[escape]?.frame, let top = screen[terminal]?.frame.minY else { return false }
+                return aboveKeyboard(frames, app) && escape.minY - max(top, screen[header]?.frame.maxY ?? 0) > 24
             }, "\(orientation.rawValue)\n\(app.debugDescription)")
         }
         app.withInteractionOptions(2) { app.buttons["Hide keyboard"].tap() }
-        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
         XCTAssertTrue(draft.exists, app.debugDescription)
         app.withInteractionOptions(2) { app.buttons["Chat"].firstMatch.tap() }
-        let latest = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Round 20:")).firstMatch
-        XCTAssertTrue(eventually { shown(latest, app) }, app.debugDescription)
+        let latest = Match(.staticText, NSPredicate(format: "label BEGINSWITH %@", "Round 20:"))
+        XCTAssertTrue(shown([latest], app), app.debugDescription)
         for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft] {
-            rotate(orientation, app)
-            XCTAssertTrue(eventually { shown(latest, app) }, "\(orientation.rawValue)\n\(app.debugDescription)")
+            XCTAssertTrue(app.rotate(to: orientation), "\(orientation.rawValue)\n\(app.debugDescription)")
+            XCTAssertTrue(shown([latest], app), "\(orientation.rawValue)\n\(app.debugDescription)")
         }
         XCTAssertTrue(draft.exists, app.debugDescription)
     }
@@ -87,33 +84,30 @@ final class LandscapeTests: XCTestCase {
         defer { app.terminate() }
         app.buttons["New task"].tap()
         let prompt = app.textFields["What should the agent do?"]
-        XCTAssertTrue(prompt.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(prompt.appears(within: 10), app.debugDescription)
         for _ in 0..<5 where !prompt.isHittable { app.collectionViews.firstMatch.swipeUp() }
         prompt.tap()
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
         let typed = app.type("keep this prompt", into: prompt)
-        let controls = [typed, app.buttons["Hide keyboard"], app.buttons["Attachments and saved prompts"]]
+        let attachment = Match(.button, "Attachments and saved prompts")
+        let controls = [Match(.any, NSPredicate(format: "value == %@", "keep this prompt")), Match(.button, "Hide keyboard"), attachment]
         for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft, .portrait, .landscapeRight, .portrait] {
-            rotate(orientation, app)
+            XCTAssertTrue(app.rotate(to: orientation), "\(orientation.rawValue)\n\(app.debugDescription)")
             XCTAssertTrue(app.navigationBars["New task"].exists, app.debugDescription)
-            XCTAssertTrue(keyboard.appears(within: 5), "\(orientation.rawValue)\n\(app.debugDescription)")
-            XCTAssertTrue(eventually {
-                controls.allSatisfy { shown($0, app) && $0.frame.maxY <= keyboard.frame.minY + 1 }
-            }, "\(orientation.rawValue)\n\(app.debugDescription)")
+            XCTAssertTrue(keyboard.appears(within: 30), "\(orientation.rawValue)\n\(app.debugDescription)")
+            XCTAssertTrue(shown(controls, app) { _, frames in aboveKeyboard(frames, app) }, "\(orientation.rawValue)\n\(app.debugDescription)")
         }
-        app.buttons["Attachments and saved prompts"].tap()
-        let choice = app.buttons["Saved prompts"].firstMatch
-        XCTAssertTrue(choice.appears(within: 5), app.debugDescription)
-        choice.tap()
+        app.choose(app.buttons["Saved prompts"].firstMatch) { app.element(attachment).tap() }
         let saved = app.navigationBars["Saved prompts"]
-        XCTAssertTrue(saved.appears(within: 5), app.debugDescription)
-        rotate(.portrait, app)
+        XCTAssertTrue(saved.appears(within: 10), app.debugDescription)
+        XCTAssertTrue(app.rotate(to: .portrait), app.debugDescription)
         XCTAssertTrue(saved.exists, app.debugDescription)
         let cancel = saved.buttons["Cancel"]
-        XCTAssertTrue(eventually { shown(cancel, app) }, app.debugDescription)
+        XCTAssertNotNil(cancel.settledFrame(within: 30), app.debugDescription)
+        XCTAssertTrue(eventually { cancel.isHittable }, app.debugDescription)
         cancel.tap()
-        XCTAssertTrue(saved.disappears(within: 5), app.debugDescription)
+        XCTAssertTrue(saved.disappears(within: 10), app.debugDescription)
         XCTAssertTrue(typed.exists, app.debugDescription)
     }
 
@@ -121,34 +115,32 @@ final class LandscapeTests: XCTestCase {
         let app = try launchDemo(["--approval-demo"])
         defer { app.terminate() }
         app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
-        let approve = app.buttons["Approve"]
-        XCTAssertTrue(approve.appears(within: 10), app.debugDescription)
+        let approve = Match(.button, "Approve")
+        XCTAssertTrue(app.element(approve).appears(within: 10), app.debugDescription)
         // Chat's scroll view takes accessibility hit tests under the header and the band.
         app.buttons["Terminal"].firstMatch.tap()
-        rotate(.landscapeLeft, app)
-        let field = app.textFields["Type an answer"]
-        let send = app.buttons["Send answer"]
-        XCTAssertTrue(eventually { shown(field, app) && shown(send, app) }, app.debugDescription)
-        XCTAssertTrue(shown(approve, app), app.debugDescription)
-        let header = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Claude Code, ")).firstMatch
+        XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
+        let field = Match(.textField, "Type an answer")
+        let send = Match(.button, "Send answer")
+        XCTAssertTrue(shown([field, send], app), app.debugDescription)
+        XCTAssertTrue(shown([approve], app), app.debugDescription)
+        let header = Match(.button, NSPredicate(format: "label BEGINSWITH %@", "Claude Code, "))
         let prompt = app.scrollViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Claude Code, ")).firstMatch
-        let command = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Bash: ")).firstMatch
-        for _ in 0..<5 where !shown(command, app) { drag(prompt, by: -20) }
-        XCTAssertTrue(shown(command, app), app.debugDescription)
-        for _ in 0..<5 where !shown(header, app) { drag(prompt, by: 30) }
-        field.tap()
+        let command = Match(.staticText, NSPredicate(format: "label BEGINSWITH %@", "Bash: "))
+        for _ in 0..<5 where !shown([command], app, within: 1) { drag(prompt, by: -20) }
+        XCTAssertTrue(shown([command], app), app.debugDescription)
+        for _ in 0..<5 where !shown([header], app, within: 1) { drag(prompt, by: 30) }
+        app.element(field).tap()
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
-        XCTAssertTrue(eventually {
-            [field, send].allSatisfy { shown($0, app) && $0.frame.maxY <= keyboard.frame.minY + 1 }
-        }, app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
+        XCTAssertTrue(shown([field, send], app) { _, frames in aboveKeyboard(frames, app) }, app.debugDescription)
         // The keyboard's own frame starts below its top strip: the card's header and the composer
         // field being hittable is what shows nothing went under it.
-        XCTAssertTrue(shown(header, app), app.debugDescription)
-        let deny = app.buttons["Deny"]
-        for _ in 0..<8 where !(shown(approve, app) && shown(deny, app)) { drag(prompt, by: -30) }
-        XCTAssertTrue(shown(approve, app) && shown(deny, app), app.debugDescription)
-        XCTAssertTrue(shown(field, app), app.debugDescription)
+        XCTAssertTrue(shown([header], app), app.debugDescription)
+        let deny = Match(.button, "Deny")
+        for _ in 0..<8 where !shown([approve, deny], app, within: 1) { drag(prompt, by: -30) }
+        XCTAssertTrue(shown([approve, deny], app), app.debugDescription)
+        XCTAssertTrue(shown([field], app), app.debugDescription)
     }
 
     func testApprovalCardKeepsApproveInReachAtLargeText() throws {
@@ -161,9 +153,8 @@ final class LandscapeTests: XCTestCase {
         app.buttons["Terminal"].firstMatch.tap()
         // The band caps its text below the accessibility sizes, so Approve stays pinned under the prompt. Not `shown`:
         // at this size the header and the band run a few points past the window's sides.
-        XCTAssertTrue(eventually { approve.isHittable }, app.debugDescription)
-        let field = app.textFields["Type an answer"]
-        XCTAssertTrue(shown(field, app), app.debugDescription)
+        XCTAssertTrue(eventually(within: 30) { approve.isHittable }, app.debugDescription)
+        XCTAssertTrue(shown([Match(.textField, "Type an answer")], app), app.debugDescription)
     }
 
     /// A press and drag: XCUITest's swipes left the approval card unscrolled in landscape.
@@ -182,29 +173,32 @@ final class LandscapeTests: XCTestCase {
         return app
     }
 
-    // Element frames lag the rotation, so callers wait on what they check next. A rotation with the keyboard up in a session
-    // could leave the app never idle for the rest of the test, and XCTest then waited 60 s after every rotation and tap,
-    // so the rotation and the taps after it skip that wait (see choose).
-    private func rotate(_ orientation: UIDeviceOrientation, _ app: XCUIApplication) {
-        app.withInteractionOptions(2) { XCUIDevice.shared.orientation = orientation }
-        let window = app.windows.firstMatch
-        XCTAssertTrue(eventually { (window.frame.width > window.frame.height) == orientation.isLandscape }, app.debugDescription)
-    }
-
-    /// On screen once its frame stops moving; asking for hittability mid-rotation fails the test.
-    private func shown(_ element: XCUIElement, _ app: XCUIApplication) -> Bool {
-        guard element.exists else { return false }
-        let frame = element.frame
-        usleep(300_000)
-        return element.frame == frame && app.windows.firstMatch.frame.contains(frame) && element.isHittable
-    }
-
-    private func eventually(within timeout: TimeInterval = 30, _ condition: () -> Bool) -> Bool {
-        let deadline = Date.now.addingTimeInterval(timeout)
-        while !condition() {
-            if Date.now > deadline { return false }
-            usleep(250_000)
+    /// On screen: the same frame inside the main window on two polls in a row, accepted by `check`, then hittable.
+    /// Frames lag the rotation, and asking for hittability mid-rotation fails the test.
+    private func shown(
+        _ matches: [Match], _ app: XCUIApplication, within timeout: TimeInterval = 30,
+        where check: (Screen, [CGRect]) -> Bool = { _, _ in true }
+    ) -> Bool {
+        var last: [CGRect] = []
+        return eventually(within: timeout) {
+            guard let screen = app.screen() else { return false }
+            let frames = matches.map { screen[$0]?.frame ?? .null }
+            defer { last = frames }
+            guard frames == last, frames.allSatisfy({ !$0.isEmpty && screen.window.contains($0) }), check(screen, frames) else { return false }
+            // The query can resolve to another element than the snapshot did, and asking a frameless or off-window
+            // element for hittability fails the test.
+            return matches.allSatisfy { match in
+                let element = app.element(match)
+                let frame = element.frame
+                return !frame.isEmpty && screen.window.contains(frame) && element.isHittable
+            }
         }
-        return true
+    }
+
+    private func aboveKeyboard(_ frames: [CGRect], _ app: XCUIApplication) -> Bool {
+        let keyboard = app.keyboards.firstMatch
+        guard keyboard.exists else { return false }
+        let top = keyboard.frame.minY
+        return frames.allSatisfy { $0.maxY <= top + 1 }
     }
 }

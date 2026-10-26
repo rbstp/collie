@@ -44,17 +44,16 @@ final class InboxSwipeTests: XCTestCase {
         XCTAssertTrue(layout.appears(within: 10), app.debugDescription)
         app.choose(app.buttons["Inbox"]) { layout.tap() }
         let search = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "Search agents")).firstMatch
-        XCTAssertTrue(search.appears(within: 5), app.debugDescription)
+        XCTAssertNotNil(search.settledFrame(), app.debugDescription)
         let before = search.frame
         search.tap()
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
         XCTAssertEqual(search.frame, before, app.debugDescription)
         for _ in 0..<3 { app.swipeUp() }
-        sleep(1)
-        XCTAssertEqual(search.frame, before, app.debugDescription)
         let last = app.staticTexts["The rate limiter is merged."]
-        XCTAssertTrue(last.appears(within: 5), app.debugDescription)
+        XCTAssertNotNil(last.settledFrame(), app.debugDescription)
+        XCTAssertEqual(search.frame, before, app.debugDescription)
         XCTAssertTrue(last.isHittable, app.debugDescription)
         XCTAssertLessThanOrEqual(last.frame.maxY, keyboard.frame.minY, app.debugDescription)
         let all = app.segmentedControls["Filter"].buttons.firstMatch

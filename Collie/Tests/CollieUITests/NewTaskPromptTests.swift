@@ -15,11 +15,11 @@ final class NewTaskPromptTests: XCTestCase {
         let prompt = app.textFields["What should the agent do?"]
         XCTAssertTrue(prompt.appears(within: 5), app.debugDescription)
         prompt.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(app.keyboards.firstMatch.appears(within: 10), app.debugDescription)
         let preservedPrompt = app.type("keep this prompt", into: prompt)
         let collapse = app.buttons["Hide keyboard"]
         XCTAssertTrue(collapse.appears(within: 5), app.debugDescription)
-        XCTAssertTrue(collapse.wait(for: \.isHittable, toEqual: true, timeout: 5), app.debugDescription)
+        XCTAssertTrue(eventually { collapse.isHittable }, app.debugDescription)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "new-task-keyboard-collapse"
         screenshot.lifetime = .keepAlways

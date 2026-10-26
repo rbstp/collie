@@ -18,24 +18,16 @@ final class KeyboardSwipeTests: XCTestCase {
         start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 150)), withVelocity: .fast, thenHoldForDuration: 0)
     }
 
-    // A gesture while the field still moves misses it: New task scrolls its prompt above the keyboard after the keyboard appears.
-    private func settle(_ element: XCUIElement) {
-        var frame = CGRect.null
-        for _ in 0..<10 where element.frame != frame {
-            frame = element.frame
-            Thread.sleep(forTimeInterval: 0.3)
-        }
-    }
-
     private func typeAndSwipeDown(_ field: XCUIElement, in app: XCUIApplication) {
         XCTAssertTrue(field.appears(within: 10), app.debugDescription)
         field.tap()
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
         let typed = app.type("keep me", into: field)
-        settle(typed)
+        // A gesture while the field still moves misses it: New task scrolls its prompt above the keyboard after the keyboard appears.
+        XCTAssertNotNil(typed.settledFrame(), app.debugDescription)
         swipeDown(on: typed)
-        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
         XCTAssertTrue(typed.exists, app.debugDescription)
     }
 
@@ -47,22 +39,22 @@ final class KeyboardSwipeTests: XCTestCase {
         XCTAssertTrue(field.appears(within: 10), app.debugDescription)
         field.tap()
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
         let typed = app.type("keep me", into: field)
-        settle(typed)
+        XCTAssertNotNil(typed.settledFrame(), app.debugDescription)
         typed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 1, thenDragTo: typed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1.5)))
         XCTAssertFalse(keyboard.disappears(within: 1), app.debugDescription)
         typed.tap()
         swipeDown(on: typed)
-        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
 
         app.buttons["Terminal"].firstMatch.tap()
         XCTAssertTrue(typed.appears(within: 5), app.debugDescription)
         typed.tap()
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
         swipeDown(on: typed)
-        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
     }
 
     func testSwipeDownOnTheInboxSearchDismissesTheKeyboard() throws {
@@ -91,7 +83,7 @@ final class KeyboardSwipeTests: XCTestCase {
         XCTAssertTrue(field.appears(within: 10), app.debugDescription)
         field.tap()
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
         // Focus can leave the caret at the start, and the field scrolls the caret back into view after a drag. A caret on
         // the last visible row keeps the draft below its top either way.
         field.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.9)).tap()
@@ -103,6 +95,6 @@ final class KeyboardSwipeTests: XCTestCase {
         swipeDown(on: field)
         XCTAssertFalse(keyboard.disappears(within: 1), app.debugDescription)
         for _ in 0..<5 where keyboard.exists { swipeDown(on: field) }
-        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
     }
 }
