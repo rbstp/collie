@@ -827,7 +827,7 @@ private final class TerminalCanvas: UIView {
                 ctx.setFillColor(color)
                 drawGlyphs(line, text: utf16, columns: run.utf16Columns, in: ctx, metrics: m) { column in
                     if rowCodepoints[run.row] == nil {
-                        let runs = visible.filter { frameData.runs[$0].row == run.row }.map { frameData.runs[$0] }
+                        let runs = frameData.runs.filter { $0.row == run.row }
                         rowCodepoints[run.row] = GhosttyCell.codepoints(runs, columns: frameData.columns + 1)
                     }
                     return GhosttyCell.constraintWidth(rowCodepoints[run.row]!, column)

@@ -105,9 +105,10 @@ private func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) < 0.001 }
 
 @Test func privateUseGlyphsFromOtherFontsStayAsDrawn() throws {
     let m = CellMetrics(size: 13)
-    let apple = try #require(shape("\u{F8FF}", m.regular).first)
-    #expect(!["JetBrainsMono-Regular", "SymbolsNF"].contains(apple.name))
-    #expect(m.placement(of: 0xF8FF, font: apple.font, bounds: apple.bounds, cells: 1) == nil)
+    let icon = CGRect(x: 0, y: 0, width: 5, height: 8)
+    #expect(m.placement(of: 0xF418, font: CTFontCreateWithName("Menlo" as CFString, 13, nil), bounds: icon, cells: 1) == nil)
+    let symbols = try #require(shape("\u{F418}", m.regular).first)
+    #expect(m.placement(of: 0xF418, font: symbols.font, bounds: icon, cells: 1) != nil)
 }
 
 @Test func iconWidthComesFromNeighboringCells() {

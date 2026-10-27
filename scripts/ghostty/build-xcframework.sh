@@ -7,6 +7,7 @@
 # key/OSC/SGR parsers), so this pins a main commit.
 set -euo pipefail
 
+# Moving this pin means rerunning scripts/ghostty/nerd-font-constraints.py.
 GHOSTTY_COMMIT=befcdfd2c3a1cb24d9ec886e93c95b2b5daa7028
 ZIG_VERSION=0.16.0
 ZIG_SHA256=b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489

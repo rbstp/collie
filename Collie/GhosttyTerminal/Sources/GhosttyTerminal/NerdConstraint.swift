@@ -3,7 +3,7 @@ import CoreGraphics
 /// Ghostty's glyph constraint (`Glyph.RenderOptions.Constraint` in `src/font/Glyph.zig` at the
 /// commit `scripts/ghostty/build-xcframework.sh` pins), which sizes and aligns Nerd Font glyphs
 /// to the cell grid. Rectangles are in points from the cell's bottom-left corner, y up.
-struct NerdConstraint: Equatable {
+struct NerdConstraint {
     enum Size { case none, fit, cover, fitCover1, stretch }
     enum Align { case none, start, end, center, center1 }
 
@@ -166,7 +166,8 @@ enum GhosttyCell {
 
     /// How many cells the glyph in `row[x]` may cover, from the first code point of each cell in the
     /// row (0 for a cell never written). Ghostty also holds the screen's last column to one cell,
-    /// which a snapshot cannot tell apart from the last written one.
+    /// which a snapshot cannot tell apart from the last written one, and gives two to any wide
+    /// character, whose width a `TerminalRun` does not carry.
     static func constraintWidth(_ row: [UInt32], _ x: Int) -> Int {
         guard row.indices.contains(x), isSymbol(row[x]) else { return 1 }
         if x > 0 && isSymbol(row[x - 1]) && !isGraphicsElement(row[x - 1]) { return 1 }
@@ -174,7 +175,6 @@ enum GhosttyCell {
         return next == 0 || next == 0x20 || next == 0x2002 ? 2 : 1
     }
 
-    /// The first code point of each of a row's `columns` cells, from that row's runs.
     static func codepoints(_ runs: [TerminalRun], columns: Int) -> [UInt32] {
         var row = [UInt32](repeating: 0, count: columns)
         for run in runs {
