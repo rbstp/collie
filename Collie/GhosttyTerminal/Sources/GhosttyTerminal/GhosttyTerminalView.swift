@@ -685,6 +685,41 @@ struct CellMetrics {
         case (true, true): boldItalic
         }
     }
+
+    /// Maps a glyph with `bounds`, drawn with its origin at a cell's left edge on the baseline (y up),
+    /// to where Ghostty would draw it, or nil to leave it where the font puts it. `cells` is how many
+    /// cells an icon may cover. Ghostty's rules at the pinned commit: `src/font/sprite/draw/powerline.zig`
+    /// and the default constraint in `src/font/nerd_font_attributes.zig`.
+    func placement(of scalar: UInt32, bounds: @autoclosure () -> CGRect, cells: Int) -> CGAffineTransform? {
+        func map(_ b: CGRect, to r: CGRect) -> CGAffineTransform? {
+            guard b.width > 0, b.height > 0 else { return nil }
+            let sx = r.width / b.width
+            let sy = r.height / b.height
+            return CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: r.minX - b.minX * sx, ty: r.minY - b.minY * sy)
+        }
+        let descent = { CTFontGetDescent(regular) }
+        switch scalar {
+        case 0xE0B0...0xE0BF, 0xE0D2, 0xE0D4:
+            return map(bounds(), to: CGRect(x: 0, y: ascent - height, width: width, height: height))
+        case 0x2580...0x259F:
+            let sy = height / (ascent + descent())
+            return CGAffineTransform(a: 1, b: 0, c: 0, d: sy, tx: 0, ty: descent() * sy + ascent - height)
+        case 0xE000...0xF8FF, 0xF0000...0xFFFFD:
+            let b = bounds()
+            let face = ascent + descent()
+            func scale(_ cells: Int) -> CGFloat {
+                let iconHeight = cells > 1 ? face : (2 * CTFontGetCapHeight(regular) + face) / 3
+                return min(CGFloat(cells) * width / b.width, iconHeight / b.height)
+            }
+            var f = scale(cells)
+            if cells > 1 && f > 1 { f = max(1, scale(1)) }
+            let w = b.width * f
+            let h = b.height * f
+            return map(b, to: CGRect(x: max(0, (width - w) / 2), y: (ascent - descent() - h) / 2, width: w, height: h))
+        default:
+            return nil
+        }
+    }
 }
 
 private final class TerminalCanvas: UIView {
@@ -783,7 +818,7 @@ private final class TerminalCanvas: UIView {
                 ctx.scaleBy(x: 1, y: -1)
                 ctx.textMatrix = .identity
                 ctx.setFillColor(color)
-                drawGlyphs(line, columns: run.utf16Columns, in: ctx, width: m.width)
+                drawGlyphs(line, text: Array(run.text.utf16), columns: run.utf16Columns, in: ctx, metrics: m)
                 ctx.restoreGState()
             }
             if run.style.underline || run.style.strikethrough {
@@ -811,8 +846,22 @@ private final class TerminalCanvas: UIView {
 
     /// Places every glyph at its cell's column, so fallback fonts (box drawing, emoji, CJK)
     /// cannot drift off the grid. Glyphs of one cluster keep their offsets from the first.
-    private func drawGlyphs(_ line: CTLine, columns: [Int], in ctx: CGContext, width: CGFloat) {
+    private func drawGlyphs(_ line: CTLine, text: [UInt16], columns: [Int], in ctx: CGContext, metrics m: CellMetrics) {
         guard let glyphRuns = CTLineGetGlyphRuns(line) as? [CTRun] else { return }
+        func scalar(at i: Int) -> (value: UInt32, length: Int)? {
+            guard text.indices.contains(i) else { return nil }
+            if UTF16.isLeadSurrogate(text[i]), i + 1 < text.count, UTF16.isTrailSurrogate(text[i + 1]) {
+                return (0x10000 + (UInt32(text[i]) - 0xD800) << 10 + UInt32(text[i + 1]) - 0xDC00, 2)
+            }
+            return (UInt32(text[i]), 1)
+        }
+        func scalar(before i: Int) -> UInt32 {
+            guard i > 0 else { return 0 }
+            return (UTF16.isTrailSurrogate(text[i - 1]) && i >= 2 ? scalar(at: i - 2) : scalar(at: i - 1))?.value ?? 0
+        }
+        func isIcon(_ value: UInt32) -> Bool {
+            (0xE000...0xF8FF).contains(value) && !(0xE0B0...0xE0D7).contains(value) || value >= 0xF0000
+        }
         for glyphRun in glyphRuns {
             let count = CTRunGetGlyphCount(glyphRun)
             guard count > 0 else { continue }
@@ -827,15 +876,39 @@ private final class TerminalCanvas: UIView {
             CTRunGetStringIndices(glyphRun, CFRange(), &indices)
             var column = -1
             var clusterStart: CGFloat = 0
+            var plain = 0
             for i in 0..<count {
-                let c = columns[min(max(indices[i], 0), columns.count - 1)]
+                let index = min(max(indices[i], 0), columns.count - 1)
+                let c = columns[index]
                 if c != column {
                     column = c
                     clusterStart = positions[i].x
                 }
-                positions[i] = CGPoint(x: CGFloat(c) * width + positions[i].x - clusterStart, y: positions[i].y)
+                if let (value, length) = scalar(at: index) {
+                    // As in Ghostty, an icon followed by a space may cover two cells unless it follows an icon.
+                    let spaced = text.indices.contains(index + length) && text[index + length] == 0x20
+                    let cells = spaced && !isIcon(scalar(before: index)) ? 2 : 1
+                    var glyph = glyphs[i]
+                    let bounds = { CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyph, nil, 1) }
+                    if let placement = m.placement(of: value, bounds: bounds(), cells: cells) {
+                        ctx.saveGState()
+                        ctx.translateBy(x: CGFloat(c) * m.width, y: 0)
+                        ctx.concatenate(placement)
+                        // A row edge can fall inside a pixel, where two antialiased solid blocks would leave
+                        // a seam. Shades (U+2591 to U+2593) keep antialiasing, which their dot patterns need.
+                        if (0x2580...0x2590).contains(value) || (0x2594...0x259F).contains(value) {
+                            ctx.setShouldAntialias(false)
+                        }
+                        CTFontDrawGlyphs(font, [glyph], [.zero], 1, ctx)
+                        ctx.restoreGState()
+                        continue
+                    }
+                }
+                glyphs[plain] = glyphs[i]
+                positions[plain] = CGPoint(x: CGFloat(c) * m.width + positions[i].x - clusterStart, y: positions[i].y)
+                plain += 1
             }
-            CTFontDrawGlyphs(font, glyphs, positions, count, ctx)
+            CTFontDrawGlyphs(font, glyphs, positions, plain, ctx)
         }
     }
 }
