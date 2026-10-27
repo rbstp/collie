@@ -14,26 +14,29 @@ final class SampleWorkspaceTests: XCTestCase {
         app.choose(app.buttons["Grid"]) { layout.tap() }
         let card = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
         XCTAssertTrue(card.appears(within: 5))
-        XCTAssertNotNil(card.label.range(
+        let label = card.label
+        XCTAssertNotNil(label.range(
             of: #"Review approval flow, [0-9]+(?:h [0-9]+)?m, Run approval tests, [0-9]+(?:h [0-9]+)?m"#,
             options: .regularExpression
         ))
-        XCTAssertTrue(card.label.contains("+3 more"))
-        XCTAssertFalse(card.label.contains("Check retry handling"))
-        XCTAssertFalse(card.label.contains("5 subagents"))
-        XCTAssertFalse(card.label.contains("12k"))
+        XCTAssertTrue(label.contains("+3 more"))
+        XCTAssertFalse(label.contains("Check retry handling"))
+        XCTAssertFalse(label.contains("5 subagents"))
+        XCTAssertFalse(label.contains("12k"))
         let blocked = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "add approval tests")).firstMatch
         XCTAssertTrue(blocked.exists)
-        XCTAssertFalse(blocked.label.contains("Review deny path"))
-        XCTAssertTrue(blocked.label.contains("1 subagent"))
+        let blockedLabel = blocked.label
+        XCTAssertFalse(blockedLabel.contains("Review deny path"))
+        XCTAssertTrue(blockedLabel.contains("1 subagent"))
 
         app.choose(app.buttons["Star"]) { card.press(forDuration: 1) }
         let expanded = app.buttons.containing(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "fix the build", "+1 more")).firstMatch
         XCTAssertTrue(expanded.appears(within: 5))
-        XCTAssertTrue(card.label.contains("Check retry handling"))
-        XCTAssertTrue(card.label.contains("Inspect test fixtures"))
-        XCTAssertTrue(card.label.contains("+1 more"))
-        XCTAssertFalse(card.label.contains("Review documentation"))
+        let expandedLabel = card.label
+        XCTAssertTrue(expandedLabel.contains("Check retry handling"))
+        XCTAssertTrue(expandedLabel.contains("Inspect test fixtures"))
+        XCTAssertTrue(expandedLabel.contains("+1 more"))
+        XCTAssertFalse(expandedLabel.contains("Review documentation"))
     }
 
     func testSampleEntryResetAndExitWithoutDeveloperArguments() {
@@ -55,12 +58,16 @@ final class SampleWorkspaceTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Simulated denial. No command was run."].appears(within: 10))
         app.buttons["Terminal"].tap()
         app.buttons["Keys"].tap()
-        app.buttons["Escape"].tap()
+        let escape = app.buttons["Escape"]
+        XCTAssertTrue(escape.appears(within: 5))
+        escape.tap()
         app.buttons["Chat"].tap()
         XCTAssertTrue(app.staticTexts["Simulated terminal keys received. No keys were sent to a machine."].appears(within: 10))
         let prompt = app.textFields["Prompt the agent"]
+        XCTAssertTrue(prompt.appears(within: 5))
         prompt.tap()
-        prompt.typeText("Show sample result")
+        XCTAssertTrue(app.keyboards.firstMatch.appears(within: 10))
+        _ = app.type("Show sample result", into: prompt)
         app.buttons["Send"].tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Simulated response to: Show sample result")).firstMatch.appears(within: 10))
         let screenshot = XCTAttachment(screenshot: app.screenshot())

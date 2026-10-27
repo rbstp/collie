@@ -10,14 +10,12 @@ final class SwipeOrderTests: XCTestCase {
         defer { app.terminate() }
         let layout = app.buttons["Layout"]
         app.choose(app.buttons["Grid"]) { layout.tap() }
-        var deadline = Date.now.addingTimeInterval(10)
-        while Date.now < deadline, gridOrder(app).count < titles.count { usleep(250_000) }
+        _ = eventually { gridOrder(app).count == titles.count }
         let before = gridOrder(app)
         XCTAssertEqual(before.count, titles.count, app.debugDescription)
         let moved = try XCTUnwrap(before.last)
         drag(app, moved, onto: before[0], after: false)
-        deadline = Date.now.addingTimeInterval(10)
-        while Date.now < deadline, gridOrder(app).first != moved { usleep(250_000) }
+        _ = eventually { gridOrder(app).first == moved }
         let order = gridOrder(app)
         XCTAssertEqual(order.first, moved, app.debugDescription)
         XCTAssertEqual(Set(order), Set(before), app.debugDescription)
@@ -29,8 +27,7 @@ final class SwipeOrderTests: XCTestCase {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(card(app, moved).appears(within: 10), app.debugDescription)
         drag(app, moved, onto: before[before.count - 2], after: true)
-        deadline = Date.now.addingTimeInterval(10)
-        while Date.now < deadline, gridOrder(app) != before { usleep(250_000) }
+        _ = eventually { gridOrder(app) == before }
         XCTAssertEqual(gridOrder(app), before, app.debugDescription)
     }
 
@@ -45,10 +42,13 @@ final class SwipeOrderTests: XCTestCase {
         inactive.tap()
         // Most recent activity first, the reverse of the list's longest-idle-first order.
         let rows = ["The docs now describe the inbox and the context ring.", "triage issues", "The rate limiter is merged."]
-        let frames = rows.map { app.staticTexts[$0].firstMatch }.map { row in
-            XCTAssertTrue(row.appears(within: 5), app.debugDescription)
-            return row.frame.minY
-        }
+        var frames: [CGFloat] = []
+        XCTAssertTrue(eventually {
+            guard let screen = app.screen() else { return false }
+            let found = rows.compactMap { screen[Match(.staticText, $0)]?.frame.minY }
+            defer { frames = found }
+            return found.count == rows.count && found == frames
+        }, app.debugDescription)
         XCTAssertEqual(frames, frames.sorted(), app.debugDescription)
         XCTAssertFalse(app.staticTexts["Dark mode follows the system setting on every page."].exists, app.debugDescription)
 
@@ -88,13 +88,7 @@ final class SwipeOrderTests: XCTestCase {
 
     /// The grid's titles as it shows them: by row, then left to right.
     private func gridOrder(_ app: XCUIApplication) -> [String] {
-        // One snapshot of the main window: a query per card's existence and frame took a dozen app snapshots per poll,
-        // and on a loaded runner one of them ended in "Timed out while evaluating UI".
-        guard let window = try? app.windows.firstMatch.snapshot() else { return [] }
-        func buttons(_ element: any XCUIElementSnapshot) -> [any XCUIElementSnapshot] {
-            (element.elementType == .button ? [element] : []) + element.children.flatMap(buttons)
-        }
-        let cards = buttons(window)
+        guard let cards = app.screen()?.elements.filter({ $0.elementType == .button }) else { return [] }
         return titles.compactMap { title in cards.first { $0.label.contains(title) }.map { (title, $0.frame) } }
             .sorted { ($0.1.minY.rounded(), $0.1.minX) < ($1.1.minY.rounded(), $1.1.minX) }
             .map(\.0)
@@ -107,7 +101,7 @@ final class SwipeOrderTests: XCTestCase {
             if index < order.count - 1 { swipe(app, left: true) }
         }
         swipe(app, left: true)
-        sleep(2)
+        XCTAssertFalse(app.navigationBars.staticTexts[order[order.count - 1]].disappears(within: 2), app.debugDescription)
         try showTerminal(app, order[order.count - 1])
         swipe(app, left: false)
         try showTerminal(app, order[order.count - 2])

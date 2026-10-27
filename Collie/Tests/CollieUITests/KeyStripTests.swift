@@ -48,8 +48,8 @@ final class KeyStripTests: XCTestCase {
         app.typeText("c")
         XCTAssertFalse(control.isSelected, app.debugDescription)
         app.typeText("ok")
-        let typed = app.textFields.matching(NSPredicate(format: "value == %@", "ok")).firstMatch
-        XCTAssertTrue(typed.appears(within: 5), app.debugDescription)
+        let typed = app.element(Match(.textField, NSPredicate(format: "value == %@", "ok")))
+        XCTAssertTrue(typed.appears(within: 10), app.debugDescription)
         clear.tap()
         app.buttons["Hide keyboard"].tap()
 
@@ -89,11 +89,14 @@ final class KeyStripTests: XCTestCase {
 
     private func removeShortcuts(_ app: XCUIApplication) {
         app.buttons["Edit key shortcuts"].tap()
+        XCTAssertTrue(app.buttons["Add shortcut"].appears(within: 10), app.debugDescription)
         let empty = app.staticTexts["No key shortcuts"]
         for _ in 0..<20 where !empty.exists {
             let row = app.cells.firstMatch
             row.swipeLeft()
-            app.buttons["Delete"].tap()
+            let delete = app.buttons["Delete"]
+            XCTAssertTrue(delete.appears(within: 5), app.debugDescription)
+            delete.tap()
         }
         XCTAssertTrue(empty.exists, app.debugDescription)
         app.buttons["Done"].tap()

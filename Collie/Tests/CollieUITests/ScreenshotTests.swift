@@ -16,7 +16,7 @@ final class ScreenshotTests: XCTestCase {
         }
 
         var app = try launchDemo()
-        let card = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
+        let card = app.element(Match(.any, NSPredicate(format: "label CONTAINS %@", "fix the build")))
         XCTAssertTrue(card.appears(within: 10), app.debugDescription)
         try save("agents")
         let shot = try XCTUnwrap(XCUIScreen.main.screenshot().image.cgImage)

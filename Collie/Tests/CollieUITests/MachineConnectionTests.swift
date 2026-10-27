@@ -14,6 +14,7 @@ final class MachineConnectionTests: XCTestCase {
         app.launchEnvironment["COLLIE_DEMO_CONNECTION_ERROR"] = message
         app.launch()
         defer { app.terminate() }
+        XCTAssertTrue(app.buttons["Layout"].appears(within: 10), app.debugDescription)
         for layout in ["Inbox", "List", "Grid"] {
             app.choose(app.buttons[layout]) { app.buttons["Layout"].tap() }
             XCTAssertFalse(app.buttons["Copy connection error"].exists, app.debugDescription)
@@ -45,7 +46,7 @@ final class MachineConnectionTests: XCTestCase {
         let paste = app.menuItems["Paste"].exists ? app.menuItems["Paste"] : app.buttons["Paste"]
         XCTAssertTrue(paste.appears(within: 5), app.debugDescription)
         paste.tap()
-        let pasted = app.windows.firstMatch.descendants(matching: .any).matching(NSPredicate(format: "value == %@", message)).firstMatch
+        let pasted = app.element(Match(.any, NSPredicate(format: "value == %@", message)))
         XCTAssertTrue(pasted.appears(within: 5), app.debugDescription)
     }
 }

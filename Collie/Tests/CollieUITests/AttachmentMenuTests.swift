@@ -54,10 +54,7 @@ final class AttachmentMenuTests: XCTestCase {
         screenshot.name = "\(name)-\(choice)-keyboard-\(keyboard)"
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        attachment.tap()
-        let option = app.buttons[choice].firstMatch
-        XCTAssertTrue(option.appears(within: 3), app.debugDescription)
-        option.tap()
+        app.choose(app.buttons[choice].firstMatch) { attachment.tap() }
         let (picker, timeout): (XCUIElement, TimeInterval) = switch choice {
         case "Saved prompts": (app.navigationBars["Saved prompts"], 5)
         // The document browser service starts with each launch. On CI its first presentation takes 9 to 28 s and sometimes

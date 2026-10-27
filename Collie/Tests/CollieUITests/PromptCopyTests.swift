@@ -15,19 +15,19 @@ final class PromptCopyTests: XCTestCase {
         XCTAssertTrue(field.appears(within: 10), app.debugDescription)
         field.tap()
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
-        field.typeText("copy me")
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
+        let typed = app.type("copy me", into: field)
         app.buttons["Hide keyboard"].tap()
-        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
 
-        let typed = app.textFields.matching(NSPredicate(format: "value == %@", "copy me")).firstMatch
         typed.press(forDuration: 1)
-        XCTAssertTrue(app.descendants(matching: .any)["Copied"].appears(within: 2), app.debugDescription)
+        let copied = app.element(Match(.any, "Copied"))
+        XCTAssertTrue(copied.appears(within: 2), app.debugDescription)
         XCTAssertFalse(keyboard.exists, app.debugDescription)
-        XCTAssertTrue(app.descendants(matching: .any)["Copied"].disappears(within: 5), app.debugDescription)
+        XCTAssertTrue(copied.disappears(within: 5), app.debugDescription)
 
         typed.tap()
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
     }
 
     func testDragScrollsALongMacDraftWithoutTheKeyboard() throws {
@@ -52,10 +52,10 @@ final class PromptCopyTests: XCTestCase {
         XCTAssertNotEqual(field.screenshot().pngRepresentation, before)
 
         field.press(forDuration: 1)
-        XCTAssertTrue(app.descendants(matching: .any)["Copied"].appears(within: 2), app.debugDescription)
+        XCTAssertTrue(app.element(Match(.any, "Copied")).appears(within: 2), app.debugDescription)
         XCTAssertFalse(keyboard.exists, app.debugDescription)
 
         field.tap()
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
     }
 }
