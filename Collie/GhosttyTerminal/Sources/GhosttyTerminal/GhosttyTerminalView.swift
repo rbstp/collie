@@ -546,8 +546,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
     }
 }
 
-/// MesloLGS NF, as the user's Ghostty uses: Nerd Font glyphs in prompts and status lines.
-/// Loaded from the package bundle once, without registering it for other apps.
+/// Ghostty's default font: JetBrains Mono at weight 400 and 700, with Symbols Nerd Font first in
+/// the cascade for prompt and status-line glyphs. Loaded from the package bundle once, without
+/// registering it for other apps.
 // CTFontDescriptor is immutable and documented thread-safe; CoreText does not mark it Sendable.
 struct TerminalFont: @unchecked Sendable {
     let regular: CTFontDescriptor?
@@ -555,12 +556,23 @@ struct TerminalFont: @unchecked Sendable {
     let italic: CTFontDescriptor?
     let boldItalic: CTFontDescriptor?
 
-    static let meslo = TerminalFont(
-        regular: load("MesloLGS-NF-Regular"),
-        bold: load("MesloLGS-NF-Bold"),
-        italic: load("MesloLGS-NF-Italic"),
-        boldItalic: load("MesloLGS-NF-BoldItalic")
-    )
+    static let jetBrainsMono: TerminalFont = {
+        let symbols = load("SymbolsNerdFont-Regular")
+        func face(_ name: String, weight: CGFloat) -> CTFontDescriptor? {
+            load(name).map {
+                CTFontDescriptorCreateCopyWithAttributes(
+                    CTFontDescriptorCreateCopyWithVariation($0, 0x7767_6874 as CFNumber, weight),  // 'wght'
+                    [kCTFontCascadeListAttribute: symbols.map { [$0] } ?? []] as CFDictionary
+                )
+            }
+        }
+        return TerminalFont(
+            regular: face("JetBrainsMono[wght]", weight: 400),
+            bold: face("JetBrainsMono[wght]", weight: 700),
+            italic: face("JetBrainsMono-Italic[wght]", weight: 400),
+            boldItalic: face("JetBrainsMono-Italic[wght]", weight: 700)
+        )
+    }()
 
     private static func load(_ name: String) -> CTFontDescriptor? {
         guard let url = Bundle.module.url(forResource: name, withExtension: "ttf", subdirectory: "Fonts"),
@@ -639,6 +651,8 @@ struct CellMetrics {
     let width: CGFloat
     let height: CGFloat
     let ascent: CGFloat
+    let descent: CGFloat
+    let capHeight: CGFloat
     let inset: CGFloat = 8
 
     init(size: CGFloat) {
@@ -647,14 +661,14 @@ struct CellMetrics {
         func slanted(_ font: UIFont) -> UIFont {
             font.fontDescriptor.withSymbolicTraits(.traitItalic).map { UIFont(descriptor: $0, size: size) } ?? font
         }
-        let meslo = TerminalFont.meslo
+        let font = TerminalFont.jetBrainsMono
         func make(_ descriptor: CTFontDescriptor?, _ fallback: UIFont) -> CTFont {
             descriptor.map { CTFontCreateWithFontDescriptor($0, size, nil) } ?? fallback as CTFont
         }
-        regular = make(meslo.regular, base)
-        bold = make(meslo.bold, heavy)
-        italic = make(meslo.italic, slanted(base))
-        boldItalic = make(meslo.boldItalic, slanted(heavy))
+        regular = make(font.regular, base)
+        bold = make(font.bold, heavy)
+        italic = make(font.italic, slanted(base))
+        boldItalic = make(font.boldItalic, slanted(heavy))
         var glyph = CGGlyph()
         var advance = CGSize.zero
         var m: UniChar = 0x4D
@@ -662,7 +676,9 @@ struct CellMetrics {
         CTFontGetAdvancesForGlyphs(regular, .horizontal, &glyph, &advance, 1)
         width = advance.width
         ascent = CTFontGetAscent(regular)
-        height = ceil(ascent + CTFontGetDescent(regular) + CTFontGetLeading(regular))
+        descent = CTFontGetDescent(regular)
+        capHeight = CTFontGetCapHeight(regular)
+        height = ceil(ascent + descent + CTFontGetLeading(regular))
     }
 
     func font(_ style: TerminalStyle) -> CTFont {
@@ -672,6 +688,43 @@ struct CellMetrics {
         case (false, true): italic
         case (true, true): boldItalic
         }
+    }
+
+    /// Maps a glyph with `bounds`, drawn from `font` with its origin at a cell's left edge on the
+    /// baseline (y up), to where Ghostty would draw it, or nil to leave it where the font puts it.
+    /// `cells` is `GhosttyCell.constraintWidth` for its cell.
+    func placement(
+        of scalar: UInt32, font: CTFont, bounds: @autoclosure () -> CGRect, cells: @autoclosure () -> Int
+    ) -> CGAffineTransform? {
+        if (0x2580...0x259F).contains(scalar) {
+            let sy = height / (ascent + descent)
+            return CGAffineTransform(a: 1, b: 0, c: 0, d: sy, tx: 0, ty: descent * sy + ascent - height)
+        }
+        // Only our fonts' glyphs: a PUA glyph from a system fallback font is no Nerd Font glyph.
+        guard let constraint = NerdConstraint.lookup(scalar),
+            ["JetBrains Mono", "Symbols Nerd Font"].contains(CTFontCopyFamilyName(font) as String)
+        else { return nil }
+        let b = bounds()
+        guard b.width > 0, b.height > 0 else { return nil }
+        // y from the cell's bottom, where Ghostty measures it; the baseline sits `ascent` below the top.
+        let bottom = ascent - height
+        let r: CGRect
+        switch scalar {
+        case 0xE0B0...0xE0BF, 0xE0D2, 0xE0D4:
+            // Ghostty draws these as sprites filling the cell (`src/font/sprite/draw/powerline.zig`).
+            r = CGRect(x: 0, y: bottom, width: width, height: height)
+        default:
+            let face = ascent + descent
+            let metrics = NerdConstraint.Metrics(
+                cellWidth: width, cellHeight: height, faceWidth: width, faceHeight: face, faceY: height - face,
+                iconHeight: face, iconHeightSingle: (2 * capHeight + face) / 3
+            )
+            r = constraint.constrain(b.offsetBy(dx: 0, dy: -bottom), metrics, constraintWidth: cells())
+                .offsetBy(dx: 0, dy: bottom)
+        }
+        let sx = r.width / b.width
+        let sy = r.height / b.height
+        return CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: r.minX - b.minX * sx, ty: r.minY - b.minY * sy)
     }
 }
 
@@ -685,8 +738,8 @@ private final class TerminalCanvas: UIView {
     var selection: TerminalSelection?
     private var frameData: TerminalFrame?
     /// Built on first draw: most runs of a long history are never on screen.
-    private var lines: [LineKey: CTLine] = [:]
-    private var previousLines: [LineKey: CTLine] = [:]
+    private var lines: [LineKey: (line: CTLine, utf16: [UInt16])] = [:]
+    private var previousLines: [LineKey: (line: CTLine, utf16: [UInt16])] = [:]
 
     private struct LineKey: Hashable {
         let text: String
@@ -705,7 +758,7 @@ private final class TerminalCanvas: UIView {
         lines = [:]
     }
 
-    private func ctLine(_ run: TerminalRun) -> CTLine? {
+    private func ctLine(_ run: TerminalRun) -> (line: CTLine, utf16: [UInt16])? {
         guard !run.text.isEmpty, !run.style.invisible else { return nil }
         let key = LineKey(text: run.text, bold: run.style.bold, italic: run.style.italic)
         if let line = lines[key] ?? previousLines[key] {
@@ -713,12 +766,12 @@ private final class TerminalCanvas: UIView {
             return line
         }
         // Claude Code's ⏺ is in no bundled or system text font, so CoreText falls back to the color
-        // emoji; ● is the same dot in Meslo and the same UTF-16 length, so `utf16Columns` still lines up.
+        // emoji; ● is the same dot in JetBrains Mono and the same UTF-16 length, so `utf16Columns` still lines up.
         let attributed = NSAttributedString(
             string: run.text.replacingOccurrences(of: "\u{23FA}", with: "\u{25CF}"),
             attributes: [NSAttributedString.Key(kCTFontAttributeName as String): metrics.font(run.style)]
         )
-        let line = CTLineCreateWithAttributedString(attributed)
+        let line = (CTLineCreateWithAttributedString(attributed), Array(run.text.utf16))
         lines[key] = line
         return line
     }
@@ -760,18 +813,25 @@ private final class TerminalCanvas: UIView {
             }
         }
 
+        var rowCodepoints: [Int: [UInt32]] = [:]
         for index in visible {
             let run = frameData.runs[index]
             let color = UIColor(run.style.foreground).withAlphaComponent(run.style.faint ? 0.5 : 1).cgColor
             let baseline = CGFloat(run.row) * m.height + m.ascent
-            if let line = ctLine(run) {
+            if let (line, utf16) = ctLine(run) {
                 ctx.saveGState()
                 // CoreText draws y-up; flip around this row's baseline.
                 ctx.translateBy(x: 0, y: baseline)
                 ctx.scaleBy(x: 1, y: -1)
                 ctx.textMatrix = .identity
                 ctx.setFillColor(color)
-                drawGlyphs(line, columns: run.utf16Columns, in: ctx, width: m.width)
+                drawGlyphs(line, text: utf16, columns: run.utf16Columns, in: ctx, metrics: m) { column in
+                    if rowCodepoints[run.row] == nil {
+                        let runs = frameData.runs.filter { $0.row == run.row }
+                        rowCodepoints[run.row] = GhosttyCell.codepoints(runs, columns: frameData.columns + 1)
+                    }
+                    return GhosttyCell.constraintWidth(rowCodepoints[run.row]!, column)
+                }
                 ctx.restoreGState()
             }
             if run.style.underline || run.style.strikethrough {
@@ -799,7 +859,10 @@ private final class TerminalCanvas: UIView {
 
     /// Places every glyph at its cell's column, so fallback fonts (box drawing, emoji, CJK)
     /// cannot drift off the grid. Glyphs of one cluster keep their offsets from the first.
-    private func drawGlyphs(_ line: CTLine, columns: [Int], in ctx: CGContext, width: CGFloat) {
+    private func drawGlyphs(
+        _ line: CTLine, text: [UInt16], columns: [Int], in ctx: CGContext, metrics m: CellMetrics,
+        constraintWidth: (Int) -> Int
+    ) {
         guard let glyphRuns = CTLineGetGlyphRuns(line) as? [CTRun] else { return }
         for glyphRun in glyphRuns {
             let count = CTRunGetGlyphCount(glyphRun)
@@ -815,15 +878,40 @@ private final class TerminalCanvas: UIView {
             CTRunGetStringIndices(glyphRun, CFRange(), &indices)
             var column = -1
             var clusterStart: CGFloat = 0
+            var plain = 0
             for i in 0..<count {
-                let c = columns[min(max(indices[i], 0), columns.count - 1)]
+                let index = min(max(indices[i], 0), columns.count - 1)
+                let c = columns[index]
                 if c != column {
                     column = c
                     clusterStart = positions[i].x
                 }
-                positions[i] = CGPoint(x: CGFloat(c) * width + positions[i].x - clusterStart, y: positions[i].y)
+                if index < text.count, text[index] >= 0x80 {
+                    let value = UTF16.isLeadSurrogate(text[index]) && index + 1 < text.count
+                        ? 0x10000 + (UInt32(text[index]) - 0xD800) << 10 + UInt32(text[index + 1]) - 0xDC00
+                        : UInt32(text[index])
+                    var glyph = glyphs[i]
+                    let bounds = { CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyph, nil, 1) }
+                    if let placement = m.placement(of: value, font: font, bounds: bounds(), cells: constraintWidth(c)) {
+                        ctx.saveGState()
+                        ctx.translateBy(x: CGFloat(c) * m.width, y: 0)
+                        ctx.concatenate(placement)
+                        // A row edge can fall inside a pixel, where two antialiased solid blocks would leave
+                        // a seam. Shades (U+2591 to U+2593) keep antialiasing, which their dot patterns need.
+                        if (0x2580...0x2590).contains(value) || (0x2594...0x259F).contains(value) {
+                            ctx.setShouldAntialias(false)
+                        }
+                        var origin = CGPoint.zero
+                        CTFontDrawGlyphs(font, &glyph, &origin, 1, ctx)
+                        ctx.restoreGState()
+                        continue
+                    }
+                }
+                glyphs[plain] = glyphs[i]
+                positions[plain] = CGPoint(x: CGFloat(c) * m.width + positions[i].x - clusterStart, y: positions[i].y)
+                plain += 1
             }
-            CTFontDrawGlyphs(font, glyphs, positions, count, ctx)
+            CTFontDrawGlyphs(font, glyphs, positions, plain, ctx)
         }
     }
 }

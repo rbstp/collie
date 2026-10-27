@@ -31,7 +31,7 @@ Chat shortens very long text and marks where it cut. The phone fetches history o
 
 ## Terminal
 
-Terminal shows the last 200 lines of the agent's pane (500 or 1000 in **Settings > Terminal > Scrollback**), rendered with libghostty-vt in the MesloLGS NF font.
+Terminal shows the last 200 lines of the agent's pane (500 or 1000 in **Settings > Terminal > Scrollback**), rendered with libghostty-vt in JetBrains Mono, the font Ghostty uses by default, with its ligatures and Nerd Font prompt glyphs.
 
 - Turn on word wrapping to fit lines to the phone's width.
 - Copilot CLI's scrollbar is hidden in both wrap modes. Text and input-box borders stay visible.
