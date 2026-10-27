@@ -651,6 +651,8 @@ struct CellMetrics {
     let width: CGFloat
     let height: CGFloat
     let ascent: CGFloat
+    let descent: CGFloat
+    let capHeight: CGFloat
     let inset: CGFloat = 8
 
     init(size: CGFloat) {
@@ -674,7 +676,9 @@ struct CellMetrics {
         CTFontGetAdvancesForGlyphs(regular, .horizontal, &glyph, &advance, 1)
         width = advance.width
         ascent = CTFontGetAscent(regular)
-        height = ceil(ascent + CTFontGetDescent(regular) + CTFontGetLeading(regular))
+        descent = CTFontGetDescent(regular)
+        capHeight = CTFontGetCapHeight(regular)
+        height = ceil(ascent + descent + CTFontGetLeading(regular))
     }
 
     func font(_ style: TerminalStyle) -> CTFont {
@@ -686,39 +690,41 @@ struct CellMetrics {
         }
     }
 
-    /// Maps a glyph with `bounds`, drawn with its origin at a cell's left edge on the baseline (y up),
-    /// to where Ghostty would draw it, or nil to leave it where the font puts it. `cells` is how many
-    /// cells an icon may cover. Ghostty's rules at the pinned commit: `src/font/sprite/draw/powerline.zig`
-    /// and the default constraint in `src/font/nerd_font_attributes.zig`.
-    func placement(of scalar: UInt32, bounds: @autoclosure () -> CGRect, cells: Int) -> CGAffineTransform? {
-        func map(_ b: CGRect, to r: CGRect) -> CGAffineTransform? {
-            guard b.width > 0, b.height > 0 else { return nil }
-            let sx = r.width / b.width
-            let sy = r.height / b.height
-            return CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: r.minX - b.minX * sx, ty: r.minY - b.minY * sy)
+    /// Maps a glyph with `bounds`, drawn from `font` with its origin at a cell's left edge on the
+    /// baseline (y up), to where Ghostty would draw it, or nil to leave it where the font puts it.
+    /// `cells` is `GhosttyCell.constraintWidth` for its cell.
+    func placement(
+        of scalar: UInt32, font: CTFont, bounds: @autoclosure () -> CGRect, cells: @autoclosure () -> Int
+    ) -> CGAffineTransform? {
+        if (0x2580...0x259F).contains(scalar) {
+            let sy = height / (ascent + descent)
+            return CGAffineTransform(a: 1, b: 0, c: 0, d: sy, tx: 0, ty: descent * sy + ascent - height)
         }
-        let descent = { CTFontGetDescent(regular) }
+        // Only our fonts' glyphs: a PUA glyph from a system fallback font is no Nerd Font glyph.
+        guard let constraint = NerdConstraint.lookup(scalar),
+            ["JetBrains Mono", "Symbols Nerd Font"].contains(CTFontCopyFamilyName(font) as String)
+        else { return nil }
+        let b = bounds()
+        guard b.width > 0, b.height > 0 else { return nil }
+        // y from the cell's bottom, where Ghostty measures it; the baseline sits `ascent` below the top.
+        let bottom = ascent - height
+        let r: CGRect
         switch scalar {
         case 0xE0B0...0xE0BF, 0xE0D2, 0xE0D4:
-            return map(bounds(), to: CGRect(x: 0, y: ascent - height, width: width, height: height))
-        case 0x2580...0x259F:
-            let sy = height / (ascent + descent())
-            return CGAffineTransform(a: 1, b: 0, c: 0, d: sy, tx: 0, ty: descent() * sy + ascent - height)
-        case 0xE000...0xF8FF, 0xF0000...0xFFFFD:
-            let b = bounds()
-            let face = ascent + descent()
-            func scale(_ cells: Int) -> CGFloat {
-                let iconHeight = cells > 1 ? face : (2 * CTFontGetCapHeight(regular) + face) / 3
-                return min(CGFloat(cells) * width / b.width, iconHeight / b.height)
-            }
-            var f = scale(cells)
-            if cells > 1 && f > 1 { f = max(1, scale(1)) }
-            let w = b.width * f
-            let h = b.height * f
-            return map(b, to: CGRect(x: max(0, (width - w) / 2), y: (ascent - descent() - h) / 2, width: w, height: h))
+            // Ghostty draws these as sprites filling the cell (`src/font/sprite/draw/powerline.zig`).
+            r = CGRect(x: 0, y: bottom, width: width, height: height)
         default:
-            return nil
+            let face = ascent + descent
+            let metrics = NerdConstraint.Metrics(
+                cellWidth: width, cellHeight: height, faceWidth: width, faceHeight: face, faceY: height - face,
+                iconHeight: face, iconHeightSingle: (2 * capHeight + face) / 3
+            )
+            r = constraint.constrain(b.offsetBy(dx: 0, dy: -bottom), metrics, constraintWidth: cells())
+                .offsetBy(dx: 0, dy: bottom)
         }
+        let sx = r.width / b.width
+        let sy = r.height / b.height
+        return CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: r.minX - b.minX * sx, ty: r.minY - b.minY * sy)
     }
 }
 
@@ -732,8 +738,8 @@ private final class TerminalCanvas: UIView {
     var selection: TerminalSelection?
     private var frameData: TerminalFrame?
     /// Built on first draw: most runs of a long history are never on screen.
-    private var lines: [LineKey: CTLine] = [:]
-    private var previousLines: [LineKey: CTLine] = [:]
+    private var lines: [LineKey: (line: CTLine, utf16: [UInt16])] = [:]
+    private var previousLines: [LineKey: (line: CTLine, utf16: [UInt16])] = [:]
 
     private struct LineKey: Hashable {
         let text: String
@@ -752,7 +758,7 @@ private final class TerminalCanvas: UIView {
         lines = [:]
     }
 
-    private func ctLine(_ run: TerminalRun) -> CTLine? {
+    private func ctLine(_ run: TerminalRun) -> (line: CTLine, utf16: [UInt16])? {
         guard !run.text.isEmpty, !run.style.invisible else { return nil }
         let key = LineKey(text: run.text, bold: run.style.bold, italic: run.style.italic)
         if let line = lines[key] ?? previousLines[key] {
@@ -765,7 +771,7 @@ private final class TerminalCanvas: UIView {
             string: run.text.replacingOccurrences(of: "\u{23FA}", with: "\u{25CF}"),
             attributes: [NSAttributedString.Key(kCTFontAttributeName as String): metrics.font(run.style)]
         )
-        let line = CTLineCreateWithAttributedString(attributed)
+        let line = (CTLineCreateWithAttributedString(attributed), Array(run.text.utf16))
         lines[key] = line
         return line
     }
@@ -807,18 +813,25 @@ private final class TerminalCanvas: UIView {
             }
         }
 
+        var rowCodepoints: [Int: [UInt32]] = [:]
         for index in visible {
             let run = frameData.runs[index]
             let color = UIColor(run.style.foreground).withAlphaComponent(run.style.faint ? 0.5 : 1).cgColor
             let baseline = CGFloat(run.row) * m.height + m.ascent
-            if let line = ctLine(run) {
+            if let (line, utf16) = ctLine(run) {
                 ctx.saveGState()
                 // CoreText draws y-up; flip around this row's baseline.
                 ctx.translateBy(x: 0, y: baseline)
                 ctx.scaleBy(x: 1, y: -1)
                 ctx.textMatrix = .identity
                 ctx.setFillColor(color)
-                drawGlyphs(line, text: Array(run.text.utf16), columns: run.utf16Columns, in: ctx, metrics: m)
+                drawGlyphs(line, text: utf16, columns: run.utf16Columns, in: ctx, metrics: m) { column in
+                    if rowCodepoints[run.row] == nil {
+                        let runs = visible.filter { frameData.runs[$0].row == run.row }.map { frameData.runs[$0] }
+                        rowCodepoints[run.row] = GhosttyCell.codepoints(runs, columns: frameData.columns + 1)
+                    }
+                    return GhosttyCell.constraintWidth(rowCodepoints[run.row]!, column)
+                }
                 ctx.restoreGState()
             }
             if run.style.underline || run.style.strikethrough {
@@ -846,22 +859,11 @@ private final class TerminalCanvas: UIView {
 
     /// Places every glyph at its cell's column, so fallback fonts (box drawing, emoji, CJK)
     /// cannot drift off the grid. Glyphs of one cluster keep their offsets from the first.
-    private func drawGlyphs(_ line: CTLine, text: [UInt16], columns: [Int], in ctx: CGContext, metrics m: CellMetrics) {
+    private func drawGlyphs(
+        _ line: CTLine, text: [UInt16], columns: [Int], in ctx: CGContext, metrics m: CellMetrics,
+        constraintWidth: (Int) -> Int
+    ) {
         guard let glyphRuns = CTLineGetGlyphRuns(line) as? [CTRun] else { return }
-        func scalar(at i: Int) -> (value: UInt32, length: Int)? {
-            guard text.indices.contains(i) else { return nil }
-            if UTF16.isLeadSurrogate(text[i]), i + 1 < text.count, UTF16.isTrailSurrogate(text[i + 1]) {
-                return (0x10000 + (UInt32(text[i]) - 0xD800) << 10 + UInt32(text[i + 1]) - 0xDC00, 2)
-            }
-            return (UInt32(text[i]), 1)
-        }
-        func scalar(before i: Int) -> UInt32 {
-            guard i > 0 else { return 0 }
-            return (UTF16.isTrailSurrogate(text[i - 1]) && i >= 2 ? scalar(at: i - 2) : scalar(at: i - 1))?.value ?? 0
-        }
-        func isIcon(_ value: UInt32) -> Bool {
-            (0xE000...0xF8FF).contains(value) && !(0xE0B0...0xE0D7).contains(value) || value >= 0xF0000
-        }
         for glyphRun in glyphRuns {
             let count = CTRunGetGlyphCount(glyphRun)
             guard count > 0 else { continue }
@@ -884,13 +886,13 @@ private final class TerminalCanvas: UIView {
                     column = c
                     clusterStart = positions[i].x
                 }
-                if let (value, length) = scalar(at: index) {
-                    // As in Ghostty, an icon followed by a space may cover two cells unless it follows an icon.
-                    let spaced = text.indices.contains(index + length) && text[index + length] == 0x20
-                    let cells = spaced && !isIcon(scalar(before: index)) ? 2 : 1
+                if index < text.count, text[index] >= 0x80 {
+                    let value = UTF16.isLeadSurrogate(text[index]) && index + 1 < text.count
+                        ? 0x10000 + (UInt32(text[index]) - 0xD800) << 10 + UInt32(text[index + 1]) - 0xDC00
+                        : UInt32(text[index])
                     var glyph = glyphs[i]
                     let bounds = { CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyph, nil, 1) }
-                    if let placement = m.placement(of: value, bounds: bounds(), cells: cells) {
+                    if let placement = m.placement(of: value, font: font, bounds: bounds(), cells: constraintWidth(c)) {
                         ctx.saveGState()
                         ctx.translateBy(x: CGFloat(c) * m.width, y: 0)
                         ctx.concatenate(placement)
@@ -899,7 +901,8 @@ private final class TerminalCanvas: UIView {
                         if (0x2580...0x2590).contains(value) || (0x2594...0x259F).contains(value) {
                             ctx.setShouldAntialias(false)
                         }
-                        CTFontDrawGlyphs(font, [glyph], [.zero], 1, ctx)
+                        var origin = CGPoint.zero
+                        CTFontDrawGlyphs(font, &glyph, &origin, 1, ctx)
                         ctx.restoreGState()
                         continue
                     }
