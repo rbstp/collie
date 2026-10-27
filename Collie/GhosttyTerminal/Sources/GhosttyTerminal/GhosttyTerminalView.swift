@@ -546,8 +546,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
     }
 }
 
-/// MesloLGS NF, as the user's Ghostty uses: Nerd Font glyphs in prompts and status lines.
-/// Loaded from the package bundle once, without registering it for other apps.
+/// Ghostty's default font: JetBrains Mono at weight 400 and 700, with Symbols Nerd Font first in
+/// the cascade for prompt and status-line glyphs. Loaded from the package bundle once, without
+/// registering it for other apps.
 // CTFontDescriptor is immutable and documented thread-safe; CoreText does not mark it Sendable.
 struct TerminalFont: @unchecked Sendable {
     let regular: CTFontDescriptor?
@@ -555,12 +556,23 @@ struct TerminalFont: @unchecked Sendable {
     let italic: CTFontDescriptor?
     let boldItalic: CTFontDescriptor?
 
-    static let meslo = TerminalFont(
-        regular: load("MesloLGS-NF-Regular"),
-        bold: load("MesloLGS-NF-Bold"),
-        italic: load("MesloLGS-NF-Italic"),
-        boldItalic: load("MesloLGS-NF-BoldItalic")
-    )
+    static let jetBrainsMono: TerminalFont = {
+        let symbols = load("SymbolsNerdFont-Regular")
+        func face(_ name: String, weight: CGFloat) -> CTFontDescriptor? {
+            load(name).map {
+                CTFontDescriptorCreateCopyWithAttributes(
+                    CTFontDescriptorCreateCopyWithVariation($0, 0x7767_6874 as CFNumber, weight),  // 'wght'
+                    [kCTFontCascadeListAttribute: symbols.map { [$0] } ?? []] as CFDictionary
+                )
+            }
+        }
+        return TerminalFont(
+            regular: face("JetBrainsMono[wght]", weight: 400),
+            bold: face("JetBrainsMono[wght]", weight: 700),
+            italic: face("JetBrainsMono-Italic[wght]", weight: 400),
+            boldItalic: face("JetBrainsMono-Italic[wght]", weight: 700)
+        )
+    }()
 
     private static func load(_ name: String) -> CTFontDescriptor? {
         guard let url = Bundle.module.url(forResource: name, withExtension: "ttf", subdirectory: "Fonts"),
@@ -647,14 +659,14 @@ struct CellMetrics {
         func slanted(_ font: UIFont) -> UIFont {
             font.fontDescriptor.withSymbolicTraits(.traitItalic).map { UIFont(descriptor: $0, size: size) } ?? font
         }
-        let meslo = TerminalFont.meslo
+        let font = TerminalFont.jetBrainsMono
         func make(_ descriptor: CTFontDescriptor?, _ fallback: UIFont) -> CTFont {
             descriptor.map { CTFontCreateWithFontDescriptor($0, size, nil) } ?? fallback as CTFont
         }
-        regular = make(meslo.regular, base)
-        bold = make(meslo.bold, heavy)
-        italic = make(meslo.italic, slanted(base))
-        boldItalic = make(meslo.boldItalic, slanted(heavy))
+        regular = make(font.regular, base)
+        bold = make(font.bold, heavy)
+        italic = make(font.italic, slanted(base))
+        boldItalic = make(font.boldItalic, slanted(heavy))
         var glyph = CGGlyph()
         var advance = CGSize.zero
         var m: UniChar = 0x4D
@@ -713,7 +725,7 @@ private final class TerminalCanvas: UIView {
             return line
         }
         // Claude Code's ⏺ is in no bundled or system text font, so CoreText falls back to the color
-        // emoji; ● is the same dot in Meslo and the same UTF-16 length, so `utf16Columns` still lines up.
+        // emoji; ● is the same dot in JetBrains Mono and the same UTF-16 length, so `utf16Columns` still lines up.
         let attributed = NSAttributedString(
             string: run.text.replacingOccurrences(of: "\u{23FA}", with: "\u{25CF}"),
             attributes: [NSAttributedString.Key(kCTFontAttributeName as String): metrics.font(run.style)]

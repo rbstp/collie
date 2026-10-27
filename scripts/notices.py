@@ -32,9 +32,8 @@ GHOSTTY = {
 }
 FONTS = "Collie/GhosttyTerminal/Sources/GhosttyTerminal/Fonts"
 IOS_FILES = [
-    ("Meslo LG", "Apache-2.0", f"{FONTS}/LICENSE.txt"),
-    ("DejaVu and Bitstream Vera, in Meslo LG", "Bitstream-Vera AND Arev", f"{FONTS}/DejaVu-LICENSE.txt"),
-    ("Nerd Fonts glyphs, in Meslo LG", "MIT AND OFL-1.1 AND Apache-2.0 AND CC-BY-4.0 AND Unlicense",
+    ("JetBrains Mono", "OFL-1.1", f"{FONTS}/JetBrainsMono-LICENSE.txt"),
+    ("Symbols Nerd Font", "MIT AND OFL-1.1 AND Apache-2.0 AND CC-BY-4.0 AND Unlicense",
      f"{FONTS}/NerdFonts-LICENSE.txt"),
     ("Octicons", "MIT", "Collie/Resources/Octicons-LICENSE.txt"),
 ]
@@ -167,8 +166,8 @@ def main():
     if kind == "ios":
         items = go([("ios", "arm64")], "ios,ts_omit_portmapper") + ghostty()
         items += [component(name, None, license, (ROOT / path).read_text()) for name, license, path in IOS_FILES]
-        # Meslo's file is only the Apache-2.0 header; section 4(a) asks for the full text.
-        next(c for c in items if c["name"] == "Meslo LG")["text"] += "\n" + (licenses / "Apache-2.0.txt").read_text()
+        # Material Design Icons' license only links Apache-2.0; section 4(a) asks for the full text.
+        next(c for c in items if c["name"] == "Symbols Nerd Font")["text"] += "\n" + (licenses / "Apache-2.0.txt").read_text()
         items += [std] + rust("crates/collie-core/Cargo.toml", ["aarch64-apple-ios"])
         content = json.dumps(items, indent=1, ensure_ascii=False) + "\n"
     else:
