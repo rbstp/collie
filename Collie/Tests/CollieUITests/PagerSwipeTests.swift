@@ -62,11 +62,9 @@ final class PagerSwipeTests: XCTestCase {
         // Each rotation happens with Usage on screen. iPhone Duo's cover display does not rotate, so there every pass is portrait.
         for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft, .portrait] {
             app.rotate(to: orientation)
-            XCTAssertNotNil(card.settledFrame(), app.debugDescription)
-            let usage = card.frame
+            let usage = try XCTUnwrap(card.settledFrame(), app.debugDescription)
             view.buttons["Agents"].tap()
-            XCTAssertNotNil(row.settledFrame(), app.debugDescription)
-            let agents = row.frame
+            let agents = try XCTUnwrap(row.settledFrame(), app.debugDescription)
             XCTAssertEqual(usage.minX, agents.minX, "\(orientation.rawValue)\n\(app.debugDescription)")
             XCTAssertEqual(usage.maxX, agents.maxX, "\(orientation.rawValue)\n\(app.debugDescription)")
             view.buttons["Usage"].tap()
@@ -81,23 +79,25 @@ final class PagerSwipeTests: XCTestCase {
         defer { app.terminate() }
         let agents = app.segmentedControls["View"].buttons["Agents"]
         XCTAssertTrue(agents.appears(within: 10), app.debugDescription)
-        let before = try settledColor(agents)
+        let before = settledColor(agents)
         let frame = agents.frame
+        let tapped = Date.now
         agents.tap()
-        let after = try settledColor(agents)
+        let after = settledColor(agents, from: tapped.addingTimeInterval(2))
         XCTAssertEqual(agents.frame, frame)
         for (wanted, actual) in zip(before, after) {
             XCTAssertEqual(actual, wanted, accuracy: 0.08)
         }
     }
 
-    /// The label's color once two screenshots in a row agree: the selection animates.
-    private func settledColor(_ element: XCUIElement) throws -> [Double] {
+    /// The label's color once two screenshots in a row agree, sampled no earlier than `start`: the selection animates,
+    /// and a lost accent can show up late.
+    private func settledColor(_ element: XCUIElement, from start: Date = .now) -> [Double] {
         var last: [Double] = []
         XCTAssertTrue(eventually {
             let color = (try? labelColor(element)) ?? []
             defer { last = color }
-            return !color.isEmpty && color == last
+            return Date.now >= start && !color.isEmpty && color == last
         })
         return last
     }

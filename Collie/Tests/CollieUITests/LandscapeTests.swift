@@ -127,9 +127,9 @@ final class LandscapeTests: XCTestCase {
         let header = Match(.button, NSPredicate(format: "label BEGINSWITH %@", "Claude Code, "))
         let prompt = app.scrollViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Claude Code, ")).firstMatch
         let command = Match(.staticText, NSPredicate(format: "label BEGINSWITH %@", "Bash: "))
-        for _ in 0..<5 where !shown([command], app, within: 1) { drag(prompt, by: -20) }
+        for _ in 0..<5 where !shown([command], app, within: 0) { drag(prompt, by: -20) }
         XCTAssertTrue(shown([command], app), app.debugDescription)
-        for _ in 0..<5 where !shown([header], app, within: 1) { drag(prompt, by: 30) }
+        for _ in 0..<5 where !shown([header], app, within: 0) { drag(prompt, by: 30) }
         app.element(field).tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
@@ -138,7 +138,7 @@ final class LandscapeTests: XCTestCase {
         // field being hittable is what shows nothing went under it.
         XCTAssertTrue(shown([header], app), app.debugDescription)
         let deny = Match(.button, "Deny")
-        for _ in 0..<8 where !shown([approve, deny], app, within: 1) { drag(prompt, by: -30) }
+        for _ in 0..<8 where !shown([approve, deny], app, within: 0) { drag(prompt, by: -30) }
         XCTAssertTrue(shown([approve, deny], app), app.debugDescription)
         XCTAssertTrue(shown([field], app), app.debugDescription)
     }
@@ -173,13 +173,14 @@ final class LandscapeTests: XCTestCase {
         return app
     }
 
-    /// On screen: the same frame inside the main window on two polls in a row, accepted by `check`, then hittable.
-    /// Frames lag the rotation, and asking for hittability mid-rotation fails the test.
+    /// On screen: the same frame inside the main window on two snapshots a poll apart, accepted by `check`, then hittable.
+    /// Frames lag the rotation, and asking for hittability mid-rotation fails the test. A zero timeout checks once.
     private func shown(
         _ matches: [Match], _ app: XCUIApplication, within timeout: TimeInterval = 30,
         where check: (Screen, [CGRect]) -> Bool = { _, _ in true }
     ) -> Bool {
-        var last: [CGRect] = []
+        var last = app.screen().map { screen in matches.map { screen[$0]?.frame ?? .null } } ?? []
+        usleep(250_000)
         return eventually(within: timeout) {
             guard let screen = app.screen() else { return false }
             let frames = matches.map { screen[$0]?.frame ?? .null }

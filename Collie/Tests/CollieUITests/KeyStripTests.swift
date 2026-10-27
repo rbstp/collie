@@ -47,7 +47,9 @@ final class KeyStripTests: XCTestCase {
         XCTAssertTrue(control.isSelected, app.debugDescription)
         app.typeText("c")
         XCTAssertFalse(control.isSelected, app.debugDescription)
-        _ = app.type("ok", into: field)
+        app.typeText("ok")
+        let typed = app.element(Match(.textField, NSPredicate(format: "value == %@", "ok")))
+        XCTAssertTrue(typed.appears(within: 10), app.debugDescription)
         clear.tap()
         app.buttons["Hide keyboard"].tap()
 

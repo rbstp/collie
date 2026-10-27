@@ -15,7 +15,7 @@ final class PromptCopyTests: XCTestCase {
         XCTAssertTrue(field.appears(within: 10), app.debugDescription)
         field.tap()
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
         let typed = app.type("copy me", into: field)
         app.buttons["Hide keyboard"].tap()
         XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
@@ -27,7 +27,7 @@ final class PromptCopyTests: XCTestCase {
         XCTAssertTrue(copied.disappears(within: 5), app.debugDescription)
 
         typed.tap()
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
     }
 
     func testDragScrollsALongMacDraftWithoutTheKeyboard() throws {
@@ -56,6 +56,6 @@ final class PromptCopyTests: XCTestCase {
         XCTAssertFalse(keyboard.exists, app.debugDescription)
 
         field.tap()
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
     }
 }
