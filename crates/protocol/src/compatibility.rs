@@ -168,7 +168,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn allows_request(&self, request: &Request) -> bool {
-        if !(26..=28).contains(&self.version) {
+        if !(26..=29).contains(&self.version) {
             return false;
         }
         match request {
@@ -187,6 +187,9 @@ impl NegotiatedProtocol {
             Request::PairComplete(p) => self.terminal_grants || p.terminal_key.is_none(),
             Request::AgentHistory(p) => !p.latest || self.version >= 27,
             Request::UsageCosts(_) => self.version >= 28,
+            Request::FileOpen(_) | Request::FileChunk(_) | Request::FileClose(_) => {
+                self.version >= 29
+            }
             Request::Hello(_)
             | Request::Unpair(_)
             | Request::FlockSnapshot(_)
@@ -237,7 +240,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn server_frame(&self, frame: &ServerFrame) -> Result<String, &'static str> {
-        if !(26..=28).contains(&self.version) {
+        if !(26..=29).contains(&self.version) {
             return Err("unsupported wire codec");
         }
         let allowed = match frame {
@@ -246,6 +249,7 @@ impl NegotiatedProtocol {
                     self.terminal_grants
                 }
                 Response::UsageCosts(_) => self.version >= 28,
+                Response::FileOpened { .. } | Response::FileChunk { .. } => self.version >= 29,
                 Response::Hello(_)
                 | Response::Paired { .. }
                 | Response::Flock(_)
@@ -345,7 +349,7 @@ mod tests {
                     .unwrap();
             assert_eq!(
                 u64::from(negotiated.version()),
-                offer["protocol_version"].as_u64().unwrap().min(28)
+                offer["protocol_version"].as_u64().unwrap().min(29)
             );
             let frame = ClientFrame {
                 id: 2,
@@ -368,7 +372,7 @@ mod tests {
     fn baseline_apps_validate_retained_daemon_results_and_selected_revisions() {
         let mut result: HelloResult =
             serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
-        for (maximum, selected) in [(26, 26), (27, 27), (28, 28), (29, 28)] {
+        for (maximum, selected) in [(26, 26), (27, 27), (28, 28), (29, 29), (30, 29)] {
             result.protocol_max_version = maximum;
             result.protocol_version = selected;
             assert_eq!(
@@ -500,7 +504,7 @@ mod tests {
         assert!(previous.server_frame(&reply).is_err());
         let current =
             NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
-        assert_eq!(current.version(), 28);
+        assert_eq!(current.version(), 29);
         let encoded = current
             .client_frame(ClientFrame { id: 1, request })
             .unwrap();
@@ -509,6 +513,62 @@ mod tests {
             json!({"id":1,"method":"usage.costs","params":{"range":"7d","utc_offset_minutes":-240}})
         );
         assert!(current.server_frame(&reply).is_ok());
+    }
+
+    #[test]
+    fn file_reads_require_revision_29() {
+        let id = crate::DownloadId::new("ab".repeat(16)).unwrap();
+        let requests = [
+            Request::FileOpen(crate::FileOpenParams {
+                terminal_id: crate::TerminalId::new("term_1").unwrap(),
+                path: "src/main.rs".into(),
+            }),
+            Request::FileChunk(crate::FileChunkParams {
+                download_id: id.clone(),
+                offset: 0,
+            }),
+            Request::FileClose(crate::FileCloseParams {
+                download_id: id.clone(),
+            }),
+        ];
+        let replies = [
+            Response::FileOpened {
+                download_id: id,
+                name: "main.rs".into(),
+                size: 3,
+                kind: crate::FileKind::Text,
+                sha256: crate::Sha256Hex::new("0".repeat(64)).unwrap(),
+            },
+            Response::FileChunk {
+                data: crate::ChunkData::new("YWJj").unwrap(),
+            },
+        ];
+        let mut result: HelloResult =
+            serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
+        result.protocol_max_version = 28;
+        result.protocol_version = 28;
+        let previous = NegotiatedProtocol::from_result(&result).unwrap();
+        let current =
+            NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
+        for request in &requests {
+            assert!(!previous.allows_request(request));
+            assert!(current.allows_request(request));
+        }
+        for result in replies {
+            let frame = ServerFrame::Result { id: 1, result };
+            assert!(previous.server_frame(&frame).is_err());
+            assert!(current.server_frame(&frame).is_ok());
+        }
+        let encoded = current
+            .client_frame(ClientFrame {
+                id: 1,
+                request: requests[0].clone(),
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&encoded).unwrap(),
+            json!({"id":1,"method":"file.open","params":{"terminal_id":"term_1","path":"src/main.rs"}})
+        );
     }
 
     #[test]

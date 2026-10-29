@@ -2,7 +2,7 @@
 
 When the app and `collied` share no protocol revision, the app stops dialing that machine and says what to update, both in the Machines tab and in the machine's header on the Agents tab.
 
-The two use the highest revision both support. Revision 26 was the first such revision; current releases support revisions 26 to 28. A release older than revision 26 needed an exact match, so coming from one, update each side once.
+The two use the highest revision both support. Revision 26 was the first such revision; current releases support revisions 26 to 29. A release older than revision 26 needed an exact match, so coming from one, update each side once.
 
 | Message | Meaning | Fix |
 |---|---|---|

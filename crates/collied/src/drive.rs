@@ -77,7 +77,7 @@ const CLONE_PROTOCOLS: [(&str, &str); 7] = [
 ];
 /// `UF_HIDDEN` from `sys/stat.h`: Finder hides `~/Library` with it, not with a dot.
 #[cfg(target_os = "macos")]
-const UF_HIDDEN: u32 = 0x8000;
+pub(crate) const UF_HIDDEN: u32 = 0x8000;
 /// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
 const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
 
@@ -286,7 +286,11 @@ impl Driver {
         }
     }
 
-    async fn git_checkout(&self, terminal_id: &TerminalId, auth: &Authorized) -> Result<Cwd, Fail> {
+    pub(crate) async fn git_checkout(
+        &self,
+        terminal_id: &TerminalId,
+        auth: &Authorized,
+    ) -> Result<Cwd, Fail> {
         authorized(auth)?;
         let current = self.readable_agent(terminal_id).await?;
         self.checkout(&current)
@@ -2288,7 +2292,7 @@ fn worktree_parent(checkout: &Cwd, roots: &[PathBuf], auth: &Authorized) -> Resu
 /// symlink, so a folder swapped for a link after the check fails instead of leading
 /// outside the roots. A hidden folder below the root (dot or `UF_HIDDEN`) is refused, so
 /// `~/.ssh` or `~/Library` is neither listed nor created in.
-fn open_beneath(root: &Path, path: &Path) -> Result<OwnedFd, Fail> {
+pub(crate) fn open_beneath(root: &Path, path: &Path) -> Result<OwnedFd, Fail> {
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let rel = path
         .strip_prefix(root)

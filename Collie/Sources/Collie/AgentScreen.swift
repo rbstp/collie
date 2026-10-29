@@ -277,6 +277,9 @@ struct AgentScreen: View {
         .sheet(isPresented: $showingChanges) {
             GitChangesView(agent: model, sent: { showingChanges = false }, review: model.gitReview)
         }
+        .sheet(item: $model.fileLink) { link in
+            FileViewer(agent: model, link: link)
+        }
         .onChange(of: blocked, initial: true) { _, blocked in model.blocked = blocked }
         .onChange(of: model.agent, initial: true) { _, agent in
             guard !recordedOpen, let agent else { return }

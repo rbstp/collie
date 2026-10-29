@@ -14,6 +14,7 @@ pub mod daemon;
 pub mod doctor;
 pub mod draft;
 pub mod drive;
+pub mod files;
 pub mod flock;
 pub mod gate;
 pub mod git;

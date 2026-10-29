@@ -285,7 +285,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                     : HistoryMessage(id: "u\(turn)", role: "user", text: "Run the approval tests again, round \(turn).", tool: nil, callId: nil, truncated: false, parentCallId: nil),
                 HistoryMessage(
                     id: "a\(turn)", role: "assistant",
-                    text: "Round \(turn): all 18 approval tests pass. The fixed 200 ms wait is now a poll on the approval state with a five second deadline, so a slow run still passes and a real hang still fails.",
+                    text: "Round \(turn): all 18 approval tests pass. The fixed 200 ms wait is now a poll on the approval state with a five second deadline, so a slow run still passes and a real hang still fails." + (turn == 20 ? " The fix is in `tests/approvals.rs`." : ""),
                     tool: nil, callId: nil, truncated: false, parentCallId: nil
                 ),
             ]
@@ -441,6 +441,12 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
             days: days,
             models: models
         )
+    }
+
+    func openFile(machineId: String, terminalId: String, path: String) async throws -> OpenedFile {
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        let data = Data("// Sample of \(name): no file was read.\nwait_for_approval_state().await;\n".utf8)
+        return OpenedFile(name: name, size: UInt64(data.count), kind: .text, data: data)
     }
 
     func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String {

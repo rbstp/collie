@@ -47,6 +47,7 @@ final class AgentModel {
 
     let gitReview: GitReview
     let conversation = ConversationModel()
+    var fileLink: FileLink?
     var draft = ""
     /// What the phone last saw in the Mac's input box: nil when unknown. A send replaces exactly this text.
     private(set) var macDraft: String?
@@ -735,6 +736,14 @@ final class AgentModel {
     func gitDiff(root: String, file: GitFile) async throws -> GitDiff {
         try await core.agentDiff(machineId: route.machineId, terminalId: route.terminalId,
                                  root: root, path: file.path, section: file.section)
+    }
+
+    func openFile(_ path: String) async throws -> OpenedFile {
+        try await core.openFile(machineId: route.machineId, terminalId: route.terminalId, path: path)
+    }
+
+    func cancelFileOpen() {
+        core.cancelDownloads(machineId: route.machineId)
     }
 
     /// Text sent apart from the draft: review feedback and text shortcuts.

@@ -21,6 +21,7 @@ Chat reads the agent's real conversation from its transcript on the machine.
 - A recent page loads first. Tap **Load older messages** for more.
 - The search button finds text across the history, with highlighted matches and previous and next buttons.
 - New messages arrive while you read older ones, without jumping.
+- File paths the agent mentions show as links: absolute paths, paths relative to its folder such as `src/main.rs` or `src/main.rs:42`, common file names such as `README.md`, and Markdown links to a path. Tap one to open the file, as described below.
 
 When an interactive prompt needs terminal keys, Chat offers **Continue in Terminal**.
 
@@ -28,6 +29,17 @@ When an interactive prompt needs terminal keys, Chat offers **Continue in Termin
 > Chat needs the agent's session ID from herdr's SessionStart integration. If the ID is missing, Chat says so and retries when it arrives; it never guesses a transcript from the folder. For Codex, install herdr's hook: see [Codex](../agents/codex.md). Copilot CLI needs no hook; Chat waits until it can tell which conversation the pane shows: see [Copilot CLI](../agents/copilot.md).
 
 Chat shortens very long text and marks where it cut. The phone fetches history only while Chat is open, and stops loading when you switch to Terminal or leave the app. `collied` never writes history to logs or notifications.
+
+### Open a file
+
+Tap a file link in Chat to open a read-only preview of the file from the machine.
+
+- Images (PNG, JPEG, GIF, HEIC and WebP) and PDF files show as they are, up to 20 MB.
+- Text and source files show in the monospaced style of Git diffs, with the same wrap button, up to 1 MB.
+- Any other file up to 20 MB shows its name, its size and "No preview".
+- **Copy** puts the file on the clipboard; **Share** saves or sends it.
+
+`collied` opens only regular files inside the task folders (`roots` in [collied.toml](../operate/configuration.md#colliedtoml), your home folder by default). It refuses hidden files and folders (`.env` included), symlinks, folders, paths with `..` and larger files, and the preview says why. If the connection drops while a file loads, tap **Try Again**. When the machine runs an older `collied`, the preview asks you to update it. The phone keeps the file only while the preview is open.
 
 ## Terminal
 

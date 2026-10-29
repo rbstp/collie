@@ -1,6 +1,7 @@
 mod approvals;
 mod attachments;
 mod conn;
+mod files;
 mod identity;
 mod pin;
 mod reach;
@@ -740,6 +741,22 @@ pub struct HistoryPage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FileKind {
+    Image,
+    Pdf,
+    Text,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct OpenedFile {
+    pub name: String,
+    pub size: u64,
+    pub kind: FileKind,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum CostRange {
     Today,
     Week,
@@ -997,6 +1014,7 @@ struct Inner {
     reach: Arc<Reachability>,
     ops: Mutex<HashMap<String, (OpId, SystemTime)>>,
     uploads: Mutex<HashMap<u64, (String, watch::Sender<bool>)>>,
+    downloads: Mutex<HashMap<u64, (String, watch::Sender<bool>)>>,
     next_upload: AtomicU64,
     suspended: watch::Sender<bool>,
     resumes: AtomicU64,
@@ -2574,6 +2592,56 @@ impl CollieCore {
         }
     }
 
+    /// A file the agent mentioned, by a path absolute or relative to its working folder.
+    /// A machine below revision 29 is refused locally. Cancel with [`Self::cancel_downloads`].
+    pub async fn open_file(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        path: String,
+    ) -> Result<OpenedFile, CoreError> {
+        let params = protocol::FileOpenParams {
+            terminal_id: terminal(terminal_id)?,
+            path,
+        };
+        if !params.is_valid() {
+            return Err(invalid("path", "invalid file path"));
+        }
+        let conn = self.conn(&machine_id)?;
+        let _busy = Busy::new(&self.inner);
+        let (cancel, mut cancelled) = watch::channel(false);
+        let key = self.inner.next_upload.fetch_add(1, Ordering::Relaxed);
+        lock(&self.inner.downloads).insert(key, (machine_id, cancel));
+        let result = self
+            .run(async move {
+                let call = |request: Request| {
+                    let conn = conn.clone();
+                    async move {
+                        conn.request(request, CALL_TIMEOUT)
+                            .await
+                            .map_err(|e| request_error(&conn, e))
+                    }
+                };
+                let cancel = async move {
+                    if cancelled.wait_for(|c| *c).await.is_err() {
+                        std::future::pending::<()>().await;
+                    }
+                };
+                files::download(call, params, cancel).await
+            })
+            .await;
+        lock(&self.inner.downloads).remove(&key);
+        result
+    }
+
+    pub fn cancel_downloads(&self, machine_id: String) {
+        for (machine, cancel) in lock(&self.inner.downloads).values() {
+            if *machine == machine_id {
+                let _ = cancel.send(true);
+            }
+        }
+    }
+
     /// Fails with `ConfirmRequired` unless `confirm` is true.
     pub async fn close_pane(
         &self,
@@ -2676,6 +2744,7 @@ impl CollieCore {
                 reach: Arc::default(),
                 ops: Mutex::default(),
                 uploads: Mutex::default(),
+                downloads: Mutex::default(),
                 next_upload: AtomicU64::default(),
                 suspended: watch::Sender::new(false),
                 resumes: AtomicU64::default(),

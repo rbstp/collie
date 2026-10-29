@@ -285,13 +285,13 @@ async fn scenario(
         assert_closed(&mut ws).await;
     }
 
-    for maximum in [26, 27, 28, 29] {
+    for maximum in [26, 27, 28, 29, 30] {
         let mut ws = open(&phone, &target).await;
         send(&mut ws, json!({"id":1,"method":"hello","params":{"protocol_version":maximum,"protocol_min_version":26,"app_version":"it","capabilities":[]}})).await;
         let Response::Hello(hello) = result(recv(&mut ws).await) else {
             panic!("no negotiated hello")
         };
-        assert_eq!(hello.protocol_version, maximum.min(28));
+        assert_eq!(hello.protocol_version, maximum.min(29));
         assert!(hello.capabilities.is_empty());
         send(&mut ws, json!({"id":2,"method":"pair.complete","params":{"pairing_code":invite.code.as_str(),"device_label":"phone","terminal_key":format!("{}Q", "M".repeat(121))}})).await;
         assert_error(&recv(&mut ws).await, ErrorCode::NotImplemented);

@@ -470,6 +470,14 @@ validated_string!(
 );
 
 validated_string!(
+    /// 16 random bytes, lowercase hex. Bound to the session that opened the file.
+    DownloadId,
+    debug = plain,
+    check = |s| lower_hex(s, 32),
+    schema = { "pattern": "^[0-9a-f]{32}$" }
+);
+
+validated_string!(
     Sha256Hex,
     debug = plain,
     check = |s| lower_hex(s, 64),
