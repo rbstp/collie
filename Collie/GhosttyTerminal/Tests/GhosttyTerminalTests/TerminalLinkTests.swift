@@ -144,4 +144,12 @@ private func selection(_ row: Int, _ column: Int, _ endRow: Int, _ endColumn: In
     #expect(selection(5, 0, 5, 3).words(in: frame) == "next")
     (frame.wrapContinuations, frame.wrapsUnknown) = ([], true)
     #expect(selection(1, 0, 1, 3).words(in: frame) == nil)
+    #expect(selection(5, 0, 5, 3).words(in: frame) == "next")
+
+    var tail = try render("see /Users/me/git/app/Sources/Main.rs\r\nnext", wrapColumns: 12)
+    #expect(tail.runs.contains { $0.row == 3 && $0.text == "s/Main.rs" })
+    #expect(selection(3, 0, 3, 3).words(in: tail) == "/Users/me/git/app/Sources/Main.rs")
+    (tail.wrapContinuations, tail.wrapsUnknown) = ([], true)
+    #expect(selection(3, 0, 3, 3).words(in: tail) == nil)
+    #expect(selection(4, 0, 4, 3).words(in: tail) == "next")
 }
