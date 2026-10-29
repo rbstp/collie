@@ -249,8 +249,12 @@ struct UsageLimit: Equatable {
         label == "5h" ? "resets at \(resets(now: now))" : "resets in \(resets(now: now))"
     }
 
+    func spokenResetsLine(now: Date) -> String {
+        label == "5h" ? resetsLine(now: now) : "resets in \(PlanUsage.spoken(seconds: seconds))"
+    }
+
     func spokenLine(now: Date) -> String {
-        let resets = label == "5h" ? resetsLine(now: now) : "resets in \(PlanUsage.spoken(seconds: seconds))"
+        let resets = spokenResetsLine(now: now)
         let trend = switch pace {
         case .slower: "usage pace slower"
         case .onPace: "usage on pace"
@@ -282,13 +286,52 @@ extension PlanUsage {
     }
 
     func age(now: Date) -> String {
-        let latest = max(recordedMs, codex?.recordedMs ?? 0)
-        return Self.ageSeconds(latest, now: now) < 60 ? "just now" : "\(Elapsed.string(sinceMs: latest, now: now)) ago"
+        Self.age(sinceMs: max(recordedMs, codex?.recordedMs ?? 0), now: now)
     }
 
     func spokenAge(now: Date) -> String {
-        let seconds = Self.ageSeconds(max(recordedMs, codex?.recordedMs ?? 0), now: now)
-        return seconds < 60 ? "recorded just now" : "recorded \(Self.spoken(seconds: seconds)) ago"
+        Self.spokenAge(sinceMs: max(recordedMs, codex?.recordedMs ?? 0), now: now)
+    }
+
+    static func age(sinceMs: UInt64, now: Date) -> String {
+        ageSeconds(sinceMs, now: now) < 60 ? "just now" : "\(Elapsed.string(sinceMs: sinceMs, now: now)) ago"
+    }
+
+    static func spokenAge(sinceMs: UInt64, now: Date) -> String {
+        let seconds = ageSeconds(sinceMs, now: now)
+        return seconds < 60 ? "recorded just now" : "recorded \(spoken(seconds: seconds)) ago"
+    }
+
+    func warning(agent: String, now: Date) -> PlanUsageWarning? {
+        let name: String, used: UInt8, resets: String, spokenResets: String, sinceMs: UInt64, stale: Bool
+        switch agent {
+        case "claude":
+            guard let limit = limits(now: now).max(by: { ($0.used, $0.seconds) < ($1.used, $1.seconds) }) else { return nil }
+            name = limit.label == "5h" ? "Claude 5-hour limit" : "Claude weekly limit"
+            used = limit.used
+            resets = limit.resetsLine(now: now)
+            spokenResets = limit.spokenResetsLine(now: now)
+            sinceMs = recordedMs
+            stale = isStale(now: now)
+        case "codex":
+            guard let codex, codex.resetsAtMs > now.unixMs else { return nil }
+            name = "Codex monthly limit"
+            used = codex.percent
+            resets = codex.resetsLine
+            spokenResets = resets
+            sinceMs = codex.recordedMs
+            stale = codex.isStale(now: now)
+        default:
+            // Copilot CLI has no plan data.
+            return nil
+        }
+        guard used >= 80 else { return nil }
+        let head = used >= 100 ? "\(name) reached, " : "\(name) at \(used)%, "
+        return PlanUsageWarning(
+            text: head + resets + (stale ? ", recorded \(Self.age(sinceMs: sinceMs, now: now))" : ""),
+            spoken: head + spokenResets + (stale ? ", \(Self.spokenAge(sinceMs: sinceMs, now: now))" : ""),
+            reached: used >= 100
+        )
     }
 
     private static func ageSeconds(_ ms: UInt64, now: Date) -> Int {
@@ -332,7 +375,21 @@ extension AgentSummary {
     var activityMs: UInt64 { lastActivityMs ?? statusSinceMs }
 }
 
+struct PlanUsageWarning: Equatable {
+    let text: String
+    let spoken: String
+    let reached: Bool
+}
+
 extension CodexUsage {
+    static let staleAfterMs: UInt64 = 10 * 60_000
+
+    var percent: UInt8 { limit > 0 ? UInt8(min(100, (Double(used) / Double(limit) * 100).rounded())) : 0 }
+
+    var resetsLine: String { "resets \(Date(unixMs: resetsAtMs).formatted(date: .abbreviated, time: .omitted))" }
+
+    func isStale(now: Date) -> Bool { now.unixMs > recordedMs + Self.staleAfterMs }
+
     func elapsed(now: Date) -> Double {
         let end = Date(unixMs: resetsAtMs)
         guard let interval = WatchUsage.monthlyInterval(endingAt: end) else { return 0 }

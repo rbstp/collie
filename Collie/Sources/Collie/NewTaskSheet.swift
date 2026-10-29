@@ -3,6 +3,7 @@ import SwiftUI
 
 struct NewTaskSheet: View {
     let machines: [Machine]
+    let planUsage: [String: PlanUsage]
     let onStarted: (AgentRoute) -> Void
     @State private var model: NewTaskModel
     @State private var startTask: Task<Void, Never>?
@@ -22,17 +23,18 @@ struct NewTaskSheet: View {
     }
 
     init(
-        core: any AgentCore, machines: [Machine], preferredMachineId: String?,
+        core: any AgentCore, machines: [Machine], preferredMachineId: String?, planUsage: [String: PlanUsage],
         onStarted: @escaping (AgentRoute) -> Void
     ) {
         self.init(
             model: NewTaskModel(core: core, machines: machines, preferredMachineId: preferredMachineId),
-            machines: machines, onStarted: onStarted
+            machines: machines, planUsage: planUsage, onStarted: onStarted
         )
     }
 
-    init(model: NewTaskModel, machines: [Machine], onStarted: @escaping (AgentRoute) -> Void) {
+    init(model: NewTaskModel, machines: [Machine], planUsage: [String: PlanUsage] = [:], onStarted: @escaping (AgentRoute) -> Void) {
         self.machines = machines
+        self.planUsage = planUsage
         self.onStarted = onStarted
         _model = State(initialValue: model)
     }
@@ -236,7 +238,16 @@ struct NewTaskSheet: View {
                         Text("Agent")
                     } footer: {
                         if !model.agent.isEmpty {
-                            Text("Use the session's terminal buttons or type an answer to respond to approval prompts.")
+                            TimelineView(.everyMinute) { context in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    if let warning = model.machineId.flatMap({ planUsage[$0] })?.warning(agent: model.agent, now: context.date) {
+                                        Text(warning.text)
+                                            .foregroundStyle(warning.reached ? Color.orange : Color.secondary)
+                                            .accessibilityLabel(warning.spoken)
+                                    }
+                                    Text("Use the session's terminal buttons or type an answer to respond to approval prompts.")
+                                }
+                            }
                         }
                     }
                 }

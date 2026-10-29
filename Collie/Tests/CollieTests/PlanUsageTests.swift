@@ -100,3 +100,68 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
         #expect(usage.elapsed(now: end.addingTimeInterval(1)) == 1)
     }
 }
+
+@Test func newTaskWarnsAboutTheFullestWindowOfTheAgentsPlan() throws {
+    let now = Date.now
+    let demo = try #require(DemoAgentCore().cachedFlock(machineId: DemoAgentCore.machine.id)?.planUsage)
+    for agent in ["claude", "codex", "copilot"] {
+        #expect(demo.warning(agent: agent, now: now) == nil, "the demo's 38% and 61%, and no Codex reading")
+    }
+    let resets = { (usage: PlanUsage, label: String) in usage.limits(now: now).first { $0.label == label }?.resetsLine(now: now) ?? "" }
+
+    var usage = demo
+    usage.fiveHour?.usedPercent = 92
+    var warning = try #require(usage.warning(agent: "claude", now: now))
+    #expect(warning.text == "Claude 5-hour limit at 92%, \(resets(usage, "5h"))")
+    #expect(warning.text.hasPrefix("Claude 5-hour limit at 92%, resets at "))
+    #expect(warning.spoken == warning.text)
+    #expect(!warning.reached)
+    #expect(usage.warning(agent: "copilot", now: now) == nil)
+    #expect(usage.warning(agent: "codex", now: now) == nil)
+
+    usage.fiveHour?.usedPercent = 100
+    warning = try #require(usage.warning(agent: "claude", now: now))
+    #expect(warning.text == "Claude 5-hour limit reached, \(resets(usage, "5h"))")
+    #expect(warning.reached)
+
+    usage.fiveHour?.usedPercent = 79
+    #expect(usage.warning(agent: "claude", now: now) == nil)
+    usage.sevenDay?.usedPercent = 85
+    warning = try #require(usage.warning(agent: "claude", now: now))
+    #expect(warning.text == "Claude weekly limit at 85%, \(resets(usage, "7d"))")
+    #expect(warning.text.hasPrefix("Claude weekly limit at 85%, resets in 3d "))
+    #expect(warning.spoken.hasPrefix("Claude weekly limit at 85%, resets in 3 days, "))
+
+    usage.fiveHour?.usedPercent = 100
+    usage.sevenDay?.usedPercent = 100
+    #expect(usage.warning(agent: "claude", now: now)?.text.hasPrefix("Claude weekly limit reached") == true, "the later reset")
+
+    usage.codex = CodexUsage(used: 2_000, limit: 2_000, resetsAtMs: now.unixMs + 9 * 86_400_000, recordedMs: now.unixMs - 20_000)
+    warning = try #require(usage.warning(agent: "codex", now: now))
+    #expect(warning.text == "Codex monthly limit reached, resets \(Date(unixMs: now.unixMs + 9 * 86_400_000).formatted(date: .abbreviated, time: .omitted))")
+    #expect(warning.reached)
+    #expect(usage.warning(agent: "copilot", now: now) == nil)
+    usage.codex?.used = 1_600
+    #expect(usage.warning(agent: "codex", now: now)?.text.hasPrefix("Codex monthly limit at 80%, resets ") == true)
+    usage.codex?.used = 1_580
+    #expect(usage.warning(agent: "codex", now: now) == nil)
+    usage.codex?.used = 2_000
+    usage.codex?.resetsAtMs = now.unixMs - 1
+    #expect(usage.warning(agent: "codex", now: now) == nil, "the Usage view hides a reading past its reset")
+}
+
+@Test func newTaskWarningSaysHowOldAStaleReadingIs() throws {
+    var usage = PlanUsage(
+        fiveHour: UsageWindow(usedPercent: 95, resetsAtMs: nowMs + 3_600_000), sevenDay: nil, recordedMs: nowMs - 4 * 60_000,
+        codex: CodexUsage(used: 95, limit: 100, resetsAtMs: nowMs + 86_400_000, recordedMs: nowMs - 9 * 60_000)
+    )
+    #expect(usage.warning(agent: "claude", now: now)?.text.contains("recorded") == false)
+    #expect(usage.warning(agent: "codex", now: now)?.text.contains("recorded") == false)
+    usage.recordedMs = nowMs - 12 * 60_000
+    usage.codex?.recordedMs = nowMs - 11 * 60_000
+    let claude = try #require(usage.warning(agent: "claude", now: now))
+    #expect(claude.text.hasPrefix("Claude 5-hour limit at 95%, resets at "))
+    #expect(claude.text.hasSuffix(", recorded 12m ago"))
+    #expect(claude.spoken.hasSuffix(", recorded 12 minutes ago"))
+    #expect(usage.warning(agent: "codex", now: now)?.text.hasSuffix(", recorded 11m ago") == true)
+}

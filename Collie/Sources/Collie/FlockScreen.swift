@@ -117,7 +117,8 @@ struct FlockScreen: View {
                 if let core {
                     NewTaskSheet(
                         core: core, machines: machines,
-                        preferredMachineId: model.entries.first { $0.flock?.link == .connected }?.id
+                        preferredMachineId: model.entries.first { $0.flock?.link == .connected }?.id,
+                        planUsage: model.entries.reduce(into: [:]) { usage, entry in usage[entry.id] = entry.flock?.planUsage }
                     ) { path.append($0) }
                 }
             }

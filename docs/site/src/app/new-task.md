@@ -9,6 +9,16 @@ While you edit the prompt, its text and controls stay above the keyboard in port
 <img class="screenshot-dark" src="../images/new-task-dark.png" width="300" height="652" loading="lazy" alt="The New task sheet: location, folder, agent picker and prompt">
 </div>
 
+## Plan usage
+
+When the agent you pick is close to its plan limit on that machine, a line under the agent picker says so, with the time the limit resets, so you can pick another agent first:
+
+- **Claude Code:** the 5-hour or weekly limit, once it reaches 80%, such as "Claude 5-hour limit at 92%, resets at 3:40 PM". At 100% the line turns orange and reads "Claude 5-hour limit reached".
+- **Codex:** the monthly credits, the same way.
+- **Copilot CLI:** nothing, because collie has no plan data for it.
+
+The figures come from [Usage](usage.md). When a reading is older than a few minutes, the line also says when the machine recorded it. The warning never stops you from tapping **Start**.
+
 ## Choose a folder
 
 Each machine can have a **base folder** (Machines > the machine > Base folder). Give its full path, such as `/Users/you/git`, because collie does not expand `~`. The base folder must be inside one of `collied`'s task roots (`[tasks] roots` in `collied.toml`, your home folder by default).
