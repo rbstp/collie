@@ -36,6 +36,8 @@ protocol AgentCore: AnyObject, Sendable {
     func taskResume(machineId: String, cwd: String, agent: String, sessionId: String, prompt: String, label: String?) async throws -> TaskStarted
     func flock(machineId: String) async throws -> MachineFlock
     func usageCosts(machineId: String, range: CostRange, utcOffsetMinutes: Int16) async throws -> UsageCosts
+    func openFile(machineId: String, terminalId: String, path: String) async throws -> OpenedFile
+    func cancelDownloads(machineId: String)
     func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String
     func maxAttachmentBytes() -> UInt64
     func cancelUploads(machineId: String)
@@ -65,4 +67,10 @@ extension AgentCore {
     func usageCosts(machineId: String, range: CostRange, utcOffsetMinutes: Int16) async throws -> UsageCosts {
         throw CoreError.NotImplemented
     }
+
+    func openFile(machineId: String, terminalId: String, path: String) async throws -> OpenedFile {
+        throw CoreError.NotImplemented
+    }
+
+    func cancelDownloads(machineId: String) {}
 }

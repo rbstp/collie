@@ -458,12 +458,66 @@
         }
       ]
     },
+    "DownloadId": {
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
     "DraftText": {
       "maxLength": 32768,
       "type": "string"
     },
     "Empty": {
       "additionalProperties": false,
+      "type": "object"
+    },
+    "FileChunkParams": {
+      "additionalProperties": false,
+      "description": "`offset` is where the chunk starts; collied answers at most 32 KiB from there.",
+      "properties": {
+        "download_id": {
+          "$ref": "#/$defs/DownloadId"
+        },
+        "offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "download_id",
+        "offset"
+      ],
+      "type": "object"
+    },
+    "FileCloseParams": {
+      "additionalProperties": false,
+      "properties": {
+        "download_id": {
+          "$ref": "#/$defs/DownloadId"
+        }
+      },
+      "required": [
+        "download_id"
+      ],
+      "type": "object"
+    },
+    "FileOpenParams": {
+      "additionalProperties": false,
+      "description": "`path` is absolute or relative to the agent's working folder.",
+      "properties": {
+        "path": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "path"
+      ],
       "type": "object"
     },
     "FolderName": {
@@ -1376,6 +1430,54 @@
         },
         "params": {
           "$ref": "#/$defs/UsageCostsParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "file.open",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/FileOpenParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "file.chunk",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/FileChunkParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "file.close",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/FileCloseParams"
         }
       },
       "required": [

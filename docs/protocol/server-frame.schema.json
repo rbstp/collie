@@ -388,6 +388,12 @@
         }
       ]
     },
+    "ChunkData": {
+      "maxLength": 43692,
+      "minLength": 4,
+      "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+      "type": "string"
+    },
     "CodexUsage": {
       "properties": {
         "limit": {
@@ -488,6 +494,10 @@
           "type": "string"
         }
       ]
+    },
+    "DownloadId": {
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
     },
     "ErrorBody": {
       "properties": {
@@ -675,6 +685,15 @@
           "type": "object"
         }
       ]
+    },
+    "FileKind": {
+      "enum": [
+        "image",
+        "pdf",
+        "text",
+        "other"
+      ],
+      "type": "string"
     },
     "Flock": {
       "properties": {
@@ -1494,6 +1513,57 @@
           "type": "object"
         },
         {
+          "description": "`sha256` covers the whole file as collied read it at open.",
+          "properties": {
+            "download_id": {
+              "$ref": "#/$defs/DownloadId"
+            },
+            "kind": {
+              "$ref": "#/$defs/FileKind"
+            },
+            "name": {
+              "type": "string"
+            },
+            "sha256": {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            "size": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "file_opened",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "download_id",
+            "name",
+            "size",
+            "kind",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/ChunkData"
+            },
+            "type": {
+              "const": "file_chunk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "source": {
               "$ref": "#/$defs/Cwd"
@@ -1766,6 +1836,10 @@
     },
     "SessionId": {
       "pattern": "^[0-9a-f][0-9a-f-]{35}$",
+      "type": "string"
+    },
+    "Sha256Hex": {
+      "pattern": "^[0-9a-f]{64}$",
       "type": "string"
     },
     "Subagent": {

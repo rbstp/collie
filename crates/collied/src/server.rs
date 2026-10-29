@@ -38,6 +38,7 @@ use crate::audit::Audit;
 use crate::control::{self, Candidate, PairAttempt, StatusInfo};
 use crate::costs::Costs;
 use crate::drive::{self, Authorized, Driver, Origin, Reply, Watched, Watcher};
+use crate::files::{self, Downloads};
 use crate::flock::{self, Baseline, Stars, StatusTracker};
 use crate::gate::{self, Decision};
 use crate::pairing::{Attempt, Pairing};
@@ -210,6 +211,7 @@ pub struct State {
     pub(crate) approvals: Arc<Approvals>,
     push: Arc<Push>,
     attachments: Arc<Attachments>,
+    downloads: Arc<Downloads>,
     pub(crate) audit: Arc<Audit>,
     tls: Arc<CertifiedKey>,
     tls_pin: KeyPin,
@@ -636,6 +638,7 @@ pub async fn start_with(
         approvals,
         push,
         attachments,
+        downloads: Arc::default(),
         audit,
         tls,
         tls_pin,
@@ -646,7 +649,11 @@ pub async fn start_with(
     let tasks = vec![
         tokio::spawn(accept_loop(listener, state.clone(), rx.clone(), dead_tx)),
         tokio::spawn(control::serve(control, state.clone(), rx.clone())),
-        tokio::spawn(upkeep(state.attachments.clone(), rx.clone())),
+        tokio::spawn(upkeep(
+            state.attachments.clone(),
+            state.downloads.clone(),
+            rx.clone(),
+        )),
         tokio::spawn(codex_usage(state.clone(), rx.clone())),
         tokio::spawn(pull_requests(state.clone(), rx.clone())),
         tokio::spawn(pr_watches(state.clone(), rx.clone())),
@@ -991,6 +998,7 @@ impl Drop for Registration {
         self.state.lock_sessions().live.remove(&self.id);
         lock(&self.state.terminals).end_session(self.id);
         self.state.attachments.end_session(self.id);
+        self.state.downloads.end_session(self.id);
     }
 }
 
@@ -1432,7 +1440,7 @@ impl Session<'_> {
         // Every frame, parseable or not, takes a token before any reply or audit line so
         // that neither can outrun the per-peer limit. Chunks draw from their own bucket.
         let parsed = protocol::parse_client_frame(bytes);
-        let chunk = matches!(&parsed, Ok(f) if matches!(f.request, Request::AttachmentChunk(_)));
+        let chunk = matches!(&parsed, Ok(f) if matches!(f.request, Request::AttachmentChunk(_) | Request::FileChunk(_)));
         let rate = self.state.rate(&self.peer.who.node.stable_id, chunk);
         let keep_open = *greeted && self.peer.pairing_window.is_none();
         if rate != Rate::Ok {
@@ -1578,6 +1586,11 @@ impl Session<'_> {
             Request::TaskOptions(_) => (drive.task_options().await, None),
             Request::AgentDraft(p) => (drive.draft(&p.terminal_id).await, None),
             Request::UsageCosts(p) => (self.usage_costs(p).await, None),
+            Request::FileOpen(p) => (self.file_open(p, &auth).await, None),
+            Request::FileClose(p) => {
+                self.state.downloads.close(self.id, &peer, &p.download_id);
+                (Ok(Response::Ok), None)
+            }
             Request::AgentPrompt(p) => {
                 let (op_id, d) = (p.op_id.clone(), drive.clone());
                 let op = self.audited(method, target.clone(), async move {
@@ -1696,6 +1709,7 @@ impl Session<'_> {
             | Request::PushActivityToken(_)
             | Request::PushActivityEnd(_)
             | Request::AttachmentChunk(_)
+            | Request::FileChunk(_)
                 if !auth() =>
             {
                 (
@@ -1825,6 +1839,7 @@ impl Session<'_> {
                 (reply, Some(origin))
             }
             Request::AttachmentChunk(p) => (self.chunk(p).await, None),
+            Request::FileChunk(p) => (self.file_chunk(p).await, None),
             Request::AttachmentCommit(p) => {
                 let upload = self.state.attachments.take(self.id, &peer, &p.upload_id);
                 let op = commit(
@@ -1903,6 +1918,8 @@ impl Session<'_> {
                 | "flock.snapshot"
                 | "approval.list"
                 | "usage.costs"
+                | "file.chunk"
+                | "file.close"
                 | "attachment.chunk"
                 | "attachment.abort"
         ) || (method == "terminal.challenge" && done.reply.is_ok());
@@ -1933,6 +1950,44 @@ impl Session<'_> {
             },
         )
         .await
+    }
+
+    /// Content never reaches the audit log or a push: the audit line carries the path.
+    async fn file_open(&self, p: protocol::FileOpenParams, auth: &Authorized) -> Reply {
+        let cwd = self.state.drive.git_checkout(&p.terminal_id, auth).await?;
+        let roots = self.state.drive.roots().to_vec();
+        let opened = tokio::task::spawn_blocking(move || files::open(&cwd, &p.path, &roots))
+            .await
+            .unwrap_or_else(|_| drive::fail(ErrorCode::Internal, "could not read the file"))?;
+        if !auth() {
+            return err(ErrorCode::NotPaired, "pairing revoked");
+        }
+        let peer = &self.peer.who.node.stable_id;
+        let download_id = self
+            .state
+            .downloads
+            .begin(self.id, peer, opened.file, opened.size)?;
+        Ok(Response::FileOpened {
+            download_id,
+            name: opened.name,
+            size: opened.size,
+            kind: opened.kind,
+            sha256: opened.sha256,
+        })
+    }
+
+    async fn file_chunk(&self, p: protocol::FileChunkParams) -> Reply {
+        let (downloads, session) = (self.state.downloads.clone(), self.id);
+        let peer = self.peer.who.node.stable_id.clone();
+        let data = tokio::task::spawn_blocking(move || {
+            downloads.chunk(session, &peer, &p.download_id, p.offset)
+        })
+        .await
+        .unwrap_or_else(|_| drive::fail(ErrorCode::Internal, "could not read the file"))?;
+        Ok(Response::FileChunk {
+            data: protocol::ChunkData::new(STANDARD.encode(data))
+                .expect("a chunk encodes within limits"),
+        })
     }
 
     async fn chunk(&self, p: AttachmentChunkParams) -> Reply {
@@ -2403,6 +2458,9 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::AttachmentBegin(p) => return Some(attachments::sanitize(p.name.as_str())),
         Request::AgentRead(p) | Request::PaneRead(p) => p.terminal_id.as_str(),
         Request::AgentHistory(p) => p.terminal_id.as_str(),
+        Request::FileOpen(p) => {
+            return Some(format!("{} path={:?}", p.terminal_id.as_str(), p.path));
+        }
         Request::AgentWatch(p) => p.terminal_id.as_ref().map_or("none", |t| t.as_str()),
         Request::AgentPrompt(p) => p.terminal_id.as_str(),
         Request::AgentDraft(p) => p.terminal_id.as_str(),
@@ -2555,7 +2613,11 @@ async fn commit(
     }
 }
 
-async fn upkeep(store: Arc<Attachments>, mut shutdown: watch::Receiver<bool>) {
+async fn upkeep(
+    store: Arc<Attachments>,
+    downloads: Arc<Downloads>,
+    mut shutdown: watch::Receiver<bool>,
+) {
     let mut swept = Instant::now();
     loop {
         tokio::select! {
@@ -2566,9 +2628,10 @@ async fn upkeep(store: Arc<Attachments>, mut shutdown: watch::Receiver<bool>) {
         if sweep {
             swept = Instant::now();
         }
-        let store = store.clone();
+        let (store, downloads) = (store.clone(), downloads.clone());
         let _ = tokio::task::spawn_blocking(move || {
             store.reap(Instant::now());
+            downloads.reap(Instant::now());
             if sweep {
                 store.sweep(std::time::SystemTime::now(), false);
             }

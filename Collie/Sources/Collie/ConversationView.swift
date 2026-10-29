@@ -461,13 +461,16 @@ private struct ConversationToolRecord: View {
                 ConversationMarkdown(text: message.text, query: query)
             } else {
                 ScrollView(.horizontal) {
-                    Text(ConversationMarkdown.highlighted(AttributedString(message.text), query: query))
+                    Text(ConversationMarkdown.highlighted(FileLinks.linked(AttributedString(message.text)), query: query))
                         .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                 }
             }
             ConversationTruncation(truncated: message.truncated)
         }
         .padding(.vertical, 6)
+        .environment(\.openURL, OpenURLAction { url in
+            MainActor.assumeIsolated { ConversationMarkdown.open(url, agent: agent) }
+        })
     }
 }
 
@@ -490,6 +493,13 @@ struct ConversationMarkdown: View {
     static func allowsLink(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else { return false }
         return url.host?.isEmpty == false
+    }
+
+    static func open(_ url: URL, agent: AgentModel?) -> OpenURLAction.Result {
+        if allowsLink(url) { return .systemAction }
+        guard let agent, let path = FileLinks.path(from: url) else { return .discarded }
+        agent.fileLink = FileLink(path: path)
+        return .handled
     }
 
     static func highlighted(_ text: AttributedString, query: String) -> AttributedString {
@@ -531,7 +541,7 @@ struct ConversationMarkdown: View {
         let bullet = trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ")
         let body = heading ? String(trimmed.dropFirst(hashes + 1)) : quote ? String(trimmed.dropFirst(2)) : bullet ? "• " + trimmed.dropFirst(2) : line
         let rendered = (try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(body)
-        return Text(Self.highlighted(rendered, query: query))
+        return Text(Self.highlighted(FileLinks.linked(rendered), query: query))
             .font(heading ? (hashes <= 2 ? .headline : .subheadline.weight(.semibold)) : .body)
             .foregroundStyle(quote ? .secondary : .primary)
             .padding(.leading, quote ? 10 : 0)
@@ -573,7 +583,7 @@ struct ConversationMarkdown: View {
             }
         }
         .environment(\.openURL, OpenURLAction { url in
-            Self.allowsLink(url) ? .systemAction : .discarded
+            MainActor.assumeIsolated { Self.open(url, agent: agent) }
         })
     }
 }

@@ -228,6 +228,50 @@ pub struct UsageCosts {
     pub models: Vec<ModelCost>,
 }
 
+/// `path` is absolute or relative to the agent's working folder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct FileOpenParams {
+    pub terminal_id: TerminalId,
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = limits::MAX_CWD_BYTES)))]
+    pub path: String,
+}
+
+impl FileOpenParams {
+    pub fn is_valid(&self) -> bool {
+        (1..=limits::MAX_CWD_BYTES).contains(&self.path.len())
+            && !self.path.chars().any(char::is_control)
+    }
+}
+
+/// `offset` is where the chunk starts; collied answers at most 32 KiB from there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct FileChunkParams {
+    pub download_id: DownloadId,
+    pub offset: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct FileCloseParams {
+    pub download_id: DownloadId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum FileKind {
+    Image,
+    Pdf,
+    Text,
+    #[serde(other)]
+    Other,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct ClientFrame {
@@ -267,6 +311,12 @@ pub enum Request {
     AgentDraft(AgentTarget),
     #[serde(rename = "usage.costs")]
     UsageCosts(UsageCostsParams),
+    #[serde(rename = "file.open")]
+    FileOpen(FileOpenParams),
+    #[serde(rename = "file.chunk")]
+    FileChunk(FileChunkParams),
+    #[serde(rename = "file.close")]
+    FileClose(FileCloseParams),
 
     #[serde(rename = "agent.prompt")]
     AgentPrompt(AgentPromptParams),
@@ -353,6 +403,9 @@ impl Request {
         "agent.diff",
         "agent.draft",
         "usage.costs",
+        "file.open",
+        "file.chunk",
+        "file.close",
         "agent.prompt",
         "agent.send_keys",
         "agent.type_text",
@@ -402,6 +455,9 @@ impl Request {
             Self::AgentDiff(_) => "agent.diff",
             Self::AgentDraft(_) => "agent.draft",
             Self::UsageCosts(_) => "usage.costs",
+            Self::FileOpen(_) => "file.open",
+            Self::FileChunk(_) => "file.chunk",
+            Self::FileClose(_) => "file.close",
             Self::AgentPrompt(_) => "agent.prompt",
             Self::AgentSendKeys(_) => "agent.send_keys",
             Self::AgentTypeText(_) => "agent.type_text",
@@ -450,6 +506,9 @@ impl Request {
             | Self::AgentDiff(_)
             | Self::AgentDraft(_)
             | Self::UsageCosts(_)
+            | Self::FileOpen(_)
+            | Self::FileChunk(_)
+            | Self::FileClose(_)
             | Self::ApprovalList(_) => MethodClass::Read,
             Self::AgentPrompt(_)
             | Self::AgentSendKeys(_)
@@ -1178,6 +1237,17 @@ pub enum Response {
     GitDiff(GitDiff),
     History(HistoryPage),
     UsageCosts(UsageCosts),
+    /// `sha256` covers the whole file as collied read it at open.
+    FileOpened {
+        download_id: DownloadId,
+        name: String,
+        size: u64,
+        kind: FileKind,
+        sha256: Sha256Hex,
+    },
+    FileChunk {
+        data: ChunkData,
+    },
     TaskWorktrees {
         source: Cwd,
         worktrees: Vec<TaskWorktreeInfo>,
@@ -1885,6 +1955,7 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
         Request::AgentRead(p) | Request::PaneRead(p) => p.is_valid(),
         Request::AgentHistory(p) => p.is_valid(),
         Request::UsageCosts(p) => p.is_valid(),
+        Request::FileOpen(p) => p.is_valid(),
         Request::AgentSendKeys(p) => p.is_valid(),
         Request::AgentTypeText(p) => p.is_valid(),
         Request::TerminalRun(p) => p.is_valid(),
@@ -2173,7 +2244,57 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 28);
+        assert_eq!(crate::PROTOCOL_VERSION, 29);
+    }
+
+    #[test]
+    fn file_reads_are_bounded() {
+        let open = |params: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"file.open","params":{params}}}"#
+            ))
+        };
+        let frame = open(r#"{"terminal_id":"term_1","path":"docs/a b.png"}"#).unwrap();
+        assert_eq!(frame.request.class(), MethodClass::Read);
+        let long = format!(r#"{{"terminal_id":"t","path":"{}"}}"#, "a".repeat(1025));
+        for params in [
+            r#"{"terminal_id":"t","path":""}"#,
+            r#"{"terminal_id":"t","path":"a\u0007b"}"#,
+            r#"{"terminal_id":"t"}"#,
+            r#"{"terminal_id":"t","path":"a","offset":0}"#,
+            &long,
+        ] {
+            assert_eq!(
+                open(params).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{params}"
+            );
+        }
+        let chunk = parse(
+            r#"{"id":2,"method":"file.chunk","params":{"download_id":"0123456789abcdef0123456789abcdef","offset":32768}}"#,
+        )
+        .unwrap();
+        assert_eq!(chunk.request.class(), MethodClass::Read);
+        let reply = ServerFrame::Result {
+            id: 2,
+            result: Response::FileChunk {
+                data: ChunkData::new(format!("{}=", "A".repeat(43691))).unwrap(),
+            },
+        };
+        let json = serde_json::to_string(&reply).unwrap();
+        assert!(json.len() < limits::MAX_FRAME_BYTES, "{}", json.len());
+        let unknown: Response = serde_json::from_value(serde_json::json!({
+            "type": "file_opened", "download_id": "0123456789abcdef0123456789abcdef",
+            "name": "a.bin", "size": 1, "kind": "video", "sha256": "0".repeat(64)
+        }))
+        .unwrap();
+        assert!(matches!(
+            unknown,
+            Response::FileOpened {
+                kind: FileKind::Other,
+                ..
+            }
+        ));
     }
 
     #[test]

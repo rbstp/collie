@@ -21,6 +21,7 @@ Chat reads the agent's real conversation from its transcript on the machine.
 - A recent page loads first. Tap **Load older messages** for more.
 - The search button finds text across the history, with highlighted matches and previous and next buttons.
 - New messages arrive while you read older ones, without jumping.
+- File paths the agent mentions show as links: absolute paths, paths relative to its folder such as `src/main.rs` or `src/main.rs:42`, common file names such as `README.md`, and Markdown links to a path. Tap one to open the file, as described below.
 
 When an interactive prompt needs terminal keys, Chat offers **Continue in Terminal**.
 
@@ -29,6 +30,17 @@ When an interactive prompt needs terminal keys, Chat offers **Continue in Termin
 
 Chat shortens very long text and marks where it cut. The phone fetches history only while Chat is open, and stops loading when you switch to Terminal or leave the app. `collied` never writes history to logs or notifications.
 
+### Open a file
+
+Tap a file link in Chat, or choose **Open** on a selected path in Terminal, to open a read-only preview of the file from the machine.
+
+- Images (PNG, JPEG, GIF, HEIC and WebP) and PDF files show as they are, up to 20 MB.
+- Text and source files show in the monospaced style of Git diffs, with the same wrap button, up to 1 MB.
+- Any other file up to 20 MB shows its name, its size and "No preview".
+- **Copy** puts the file on the clipboard; **Share** saves or sends it.
+
+`collied` opens only regular files inside the task folders (`roots` in [collied.toml](../operate/configuration.md#colliedtoml), your home folder by default). It refuses hidden files and folders (`.env` included, though an agent working inside a hidden folder such as a worktree in `.worktree` can still show its own files), symlinks, folders, paths with `..` and larger files, and the preview says why. If the connection drops while a file loads, tap **Try Again**. When the machine runs an older `collied`, the preview asks you to update it. The phone keeps the file only while the preview is open.
+
 ## Terminal
 
 Terminal shows the last 200 lines of the agent's pane (500 or 1000 in **Settings > Terminal > Scrollback**), rendered with libghostty-vt in JetBrains Mono, the font Ghostty uses by default, with its ligatures and Nerd Font prompt glyphs.
@@ -36,7 +48,7 @@ Terminal shows the last 200 lines of the agent's pane (500 or 1000 in **Settings
 - Turn on word wrapping to fit lines to the phone's width.
 - Copilot CLI's scrollbar is hidden in both wrap modes. Text and input-box borders stay visible.
 - Codex's input box and Claude Code's sent prompts keep their shaded background across wrapped lines. Codex prompt continuations wrap to the phone's width instead of keeping the desktop terminal's line breaks.
-- Long-press to select and copy text (Universal Clipboard included), to quote it into the prompt or to open an http or https link. After a copy, a green checkmark and **Copied** appear briefly before the selection closes. Plain terminals have no **Quote**.
+- Long-press to select and copy text (Universal Clipboard included), to quote it into the prompt or to open an http or https link. In an agent session, **Open** also shows for a selected file path and opens it the way a file link in Chat does. After a copy, a green checkmark and **Copied** appear briefly before the selection closes. Plain terminals have no **Quote**.
 - Terminal updates up to four times a second. After 5 seconds without change, or while the iPhone is in Low Data Mode, it updates once a second.
 
 ## The prompt

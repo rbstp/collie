@@ -124,6 +124,21 @@ struct TerminalSelection: Equatable, Sendable {
     /// The http or https link this selection touches, read whole across soft-wrapped rows. Hidden
     /// text, invisible or drawn in its background color, reads as spaces.
     func link(in frame: TerminalFrame) -> URL? {
+        logicalLines(in: frame).flatMap { TerminalLink.url(in: $0.text, touching: $0.touched) }
+    }
+
+    /// The space-separated words this selection touches, read whole across soft-wrapped rows like
+    /// `link(in:)`; nil while the wrapping is unknown, since a row could then hold a cut word.
+    func words(in frame: TerminalFrame) -> String? {
+        guard !frame.wrapsUnknown, let (text, touched) = logicalLines(in: frame) else { return nil }
+        var lower = touched.lowerBound
+        var upper = touched.upperBound
+        while lower > 0 && !text[lower - 1].properties.isWhitespace { lower -= 1 }
+        while upper < text.count && !text[upper].properties.isWhitespace { upper += 1 }
+        return String(String.UnicodeScalarView(text[lower..<upper]))
+    }
+
+    private func logicalLines(in frame: TerminalFrame) -> (text: [Unicode.Scalar], touched: Range<Int>)? {
         guard start.row < frame.rows else { return nil }
         var first = start.row
         while frame.wrapContinuations.contains(first) { first -= 1 }
@@ -158,7 +173,7 @@ struct TerminalSelection: Equatable, Sendable {
             // from being offered cut short.
             if frame.wrapsUnknown && next ?? 0 >= frame.columns { text.append("\u{FFFD}") }
         }
-        return touched.flatMap { TerminalLink.url(in: text, touching: $0) }
+        return touched.map { (text, $0) }
     }
 }
 
