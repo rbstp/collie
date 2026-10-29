@@ -48,7 +48,7 @@ Terminal shows the last 200 lines of the agent's pane (500 or 1000 in **Settings
 - Turn on word wrapping to fit lines to the phone's width.
 - Copilot CLI's scrollbar is hidden in both wrap modes. Text and input-box borders stay visible.
 - Codex's input box and Claude Code's sent prompts keep their shaded background across wrapped lines. Codex prompt continuations wrap to the phone's width instead of keeping the desktop terminal's line breaks.
-- Long-press to select and copy text (Universal Clipboard included), to quote it into the prompt or to open an http or https link. After a copy, a green checkmark and **Copied** appear briefly before the selection closes. Plain terminals have no **Quote**.
+- Long-press to select and copy text (Universal Clipboard included), to quote it into the prompt or to open an http or https link. In an agent session, **Open** also shows for a selected file path and opens it as a file link in Chat does. After a copy, a green checkmark and **Copied** appear briefly before the selection closes. Plain terminals have no **Quote**.
 - Terminal updates up to four times a second. After 5 seconds without change, or while the iPhone is in Low Data Mode, it updates once a second.
 
 ## The prompt

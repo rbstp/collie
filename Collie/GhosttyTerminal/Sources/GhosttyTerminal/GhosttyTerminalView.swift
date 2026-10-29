@@ -64,6 +64,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
     public var canSwipe: ((TerminalSwipe) -> Bool)?
     /// Shows Quote in the selection menu, which hands this the selected text.
     public var onQuote: ((String) -> Void)?
+    /// Shows Open for selected text this maps to a file path, which `onOpenFile` receives.
+    public var filePath: ((String) -> String?)?
+    public var onOpenFile: ((String) -> Void)?
 
     private let screen = TerminalScreen(background: GhosttyTerminalUIView.background, foreground: GhosttyTerminalUIView.foreground)
     private let canvas = TerminalCanvas()
@@ -91,6 +94,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     /// content decelerates.
     private var copyAnchor: CGPoint?
     private var shownLink: URL?
+    private var shownPath: String?
     private let press = UILongPressGestureRecognizer()
     private let tap = UITapGestureRecognizer()
     private let doubleTap = UITapGestureRecognizer()
@@ -458,8 +462,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
         copyButton.accessibilityLabel = "Copy"
         copyButton.isUserInteractionEnabled = true
         shownLink = frameData.flatMap { selection?.link(in: $0) }
+        shownPath = shownLink == nil ? selectedPath() : nil
         quoteButton.isHidden = onQuote == nil
-        openButton.isHidden = shownLink == nil
+        openButton.isHidden = shownLink == nil && shownPath == nil
         menu.isHidden = false
         setNeedsLayout()
     }
@@ -503,8 +508,15 @@ public final class GhosttyTerminalUIView: UIScrollView {
         // Frames keep arriving under an open menu; open only the link it was shown for.
         if let frameData, let shownLink, selection?.link(in: frameData) == shownLink {
             UIApplication.shared.open(shownLink)
+        } else if let shownPath, selectedPath() == shownPath {
+            onOpenFile?(shownPath)
         }
         selection = nil
+    }
+
+    private func selectedPath() -> String? {
+        guard let filePath, onOpenFile != nil, let selection, let frameData else { return nil }
+        return filePath(selection.text(in: frameData))
     }
 
     @discardableResult

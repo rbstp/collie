@@ -84,6 +84,7 @@ struct AgentScreen: View {
                         ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
                         perform: perform, resized: { model.fontSize = $0 }, resizeEnded: model.saveFontSize,
                         quote: model.isTerminal ? nil : model.quote,
+                        openFile: model.isTerminal ? nil : { model.fileLink = FileLink(path: $0) },
                         // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
                         neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
                         switchAgent: switchAgent, obscuredTop: obscuredTop, obscuredBottom: obscuredBottom
@@ -585,6 +586,7 @@ private struct AgentTerminal: UIViewRepresentable {
     let resized: @MainActor (Double) -> Void
     let resizeEnded: @MainActor () -> Void
     let quote: (@MainActor (String) -> Void)?
+    let openFile: (@MainActor (String) -> Void)?
     let neighbor: ((Int) -> AgentRoute?)?
     let switchAgent: (AgentRoute) -> Void
     let obscuredTop: CGFloat
@@ -624,6 +626,8 @@ private struct AgentTerminal: UIViewRepresentable {
         view.onPinch = gestures.pinchResizesText ? { resized($0) } : nil
         view.onPinchEnded = { resizeEnded() }
         view.onQuote = quote.map { quote in { quote($0) } }
+        view.filePath = openFile == nil ? nil : { FileLinks.path(selected: $0) }
+        view.onOpenFile = openFile.map { openFile in { openFile($0) } }
         if gestures.swipeSwitchesAgents, let neighbor {
             let switchAgent = switchAgent
             let offset = { (swipe: TerminalSwipe) in swipe == .left ? 1 : -1 }

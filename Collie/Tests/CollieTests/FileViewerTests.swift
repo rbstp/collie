@@ -17,6 +17,13 @@ private func found(_ text: String) -> [String] {
     #expect(found("Run /compact, e.g. and/or Node.js v1.2.3 km/h https://example.com/a.png ../x.rs .env src/*.rs a=b/c.md") == [])
 }
 
+@Test func terminalSelectionsOpenOnlyOnePath() {
+    #expect(FileLinks.path(selected: "/Users/me/git/chewtoy/test.txt") == "/Users/me/git/chewtoy/test.txt")
+    #expect(FileLinks.path(selected: "I created test.txt with") == "test.txt")
+    #expect(FileLinks.path(selected: "src/a.rs and src/b.rs") == nil)
+    #expect(FileLinks.path(selected: "with one line") == nil)
+}
+
 @Test func linksRoundTripToThePathAndSkipExistingLinks() throws {
     var text = try AttributedString(markdown: "Open [the shot](shots/a%20b.png#L3) or src/main.rs:7 or [site](https://example.com).")
     text = FileLinks.linked(text)

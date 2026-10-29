@@ -9,7 +9,7 @@ struct FileLink: Identifiable, Equatable {
     let path: String
 }
 
-/// File paths in Chat: absolute ones, relative ones with a folder (`src/main.rs`) and bare
+/// File paths in Chat and Terminal selections: absolute ones, relative ones with a folder (`src/main.rs`) and bare
 /// names with a common file extension (`README.md`). Collied decides what may be read.
 enum FileLinks {
     static let scheme = "collie-file"
@@ -45,6 +45,12 @@ enum FileLinks {
             result[lower..<upper].link = url
         }
         return result
+    }
+
+    /// The one file path in a Terminal selection, if there is exactly one.
+    static func path(selected text: String) -> String? {
+        let found = paths(in: text)
+        return found.count == 1 ? found[0].path : nil
     }
 
     /// A link Chat opens as a file: one it made, or a Markdown link with no scheme or `file:`.

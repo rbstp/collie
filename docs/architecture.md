@@ -298,7 +298,7 @@ No version bump: the methods, responses and error codes (`too_large`, `checksum_
 
 ## Files from Chat
 
-Chat turns file paths in agent messages and tool records into links, and a tap opens a read-only preview. The phone recognizes absolute paths with at least two components (so `/compact` is not one), relative paths with a folder whose last component has an extension (`src/main.rs`, not `and/or`) or that start with `./`, bare names with a common extension (`README.md`, `out.png`; not `Node.js` or `e.g.`), and Markdown links with no scheme or `file:`. A trailing `:line` or `:line:column` is dropped; tokens with `..`, `://`, `*`, `$`, `=`, `@` or `\` and hidden names are not linked. collied decides what may be read.
+Chat turns file paths in agent messages and tool records into links, and a tap opens a read-only preview. The phone recognizes absolute paths with at least two components (so `/compact` is not one), relative paths with a folder whose last component has an extension (`src/main.rs`, not `and/or`) or that start with `./`, bare names with a common extension (`README.md`, `out.png`; not `Node.js` or `e.g.`), and Markdown links with no scheme or `file:`. In Terminal, an agent session's selection menu shows Open when the selected text holds exactly one such path and no http link, and opens the same viewer. A trailing `:line` or `:line:column` is dropped; tokens with `..`, `://`, `*`, `$`, `=`, `@` or `\` and hidden names are not linked. collied decides what may be read.
 
 ### Flow
 
