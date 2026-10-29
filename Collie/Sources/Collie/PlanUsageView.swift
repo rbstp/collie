@@ -50,7 +50,7 @@ private struct CodexSubscriptionUsage: View {
     @ScaledMetric(relativeTo: .headline) private var logo: CGFloat = 22
 
     var body: some View {
-        let percent = usage.limit > 0 ? UInt8(min(100, (Double(usage.used) / Double(usage.limit) * 100).rounded())) : 0
+        let percent = usage.percent
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Image("Codex")
@@ -67,13 +67,13 @@ private struct CodexSubscriptionUsage: View {
             HStack {
                 Text("\(usage.used.formatted()) / \(usage.limit.formatted()) credits")
                 Spacer()
-                Text("resets \(Date(unixMs: usage.resetsAtMs).formatted(date: .abbreviated, time: .omitted))")
+                Text(usage.resetsLine)
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
-        .opacity(now.unixMs > usage.recordedMs + 10 * 60_000 ? 0.6 : 1)
+        .opacity(usage.isStale(now: now) ? 0.6 : 1)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Codex monthly usage limit, \(usage.used) of \(usage.limit) credits used, \(percent) percent, \(Int((usage.elapsed(now: now) * 100).rounded())) percent of the month elapsed")
     }
