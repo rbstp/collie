@@ -302,7 +302,6 @@ extension PlanUsage {
         return seconds < 60 ? "recorded just now" : "recorded \(spoken(seconds: seconds)) ago"
     }
 
-    /// New task's line for the agent's fullest window at 80% or more. Copilot CLI has no plan data.
     func warning(agent: String, now: Date) -> PlanUsageWarning? {
         let name: String, used: UInt8, resets: String, spokenResets: String, sinceMs: UInt64, stale: Bool
         switch agent {
@@ -323,6 +322,7 @@ extension PlanUsage {
             sinceMs = codex.recordedMs
             stale = codex.isStale(now: now)
         default:
+            // Copilot CLI has no plan data.
             return nil
         }
         guard used >= 80 else { return nil }

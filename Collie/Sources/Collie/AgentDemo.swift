@@ -145,18 +145,17 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         self.snapshot = snapshot
         self.connectionError = connectionError
         let now = Date.now.unixMs
-        var usage = PlanUsage(
-            fiveHour: UsageWindow(usedPercent: 38, resetsAtMs: now + 7_980_000),
-            sevenDay: UsageWindow(usedPercent: 61, resetsAtMs: now + 277_200_000),
-            recordedMs: now - 20_000
-        )
         #if DEBUG
-        if let used = ProcessInfo.processInfo.environment["COLLIE_DEMO_PLAN_USED"].flatMap(UInt8.init) {
-            usage.fiveHour?.usedPercent = used
-            usage.codex = CodexUsage(used: UInt64(used) * 20, limit: 2_000, resetsAtMs: now + 777_600_000, recordedMs: now - 20_000)
-        }
+        let used = ProcessInfo.processInfo.environment["COLLIE_DEMO_PLAN_USED"].flatMap(UInt8.init)
+        #else
+        let used: UInt8? = nil
         #endif
-        self.usage = usage
+        usage = PlanUsage(
+            fiveHour: UsageWindow(usedPercent: used ?? 38, resetsAtMs: now + 7_980_000),
+            sevenDay: UsageWindow(usedPercent: 61, resetsAtMs: now + 277_200_000),
+            recordedMs: now - 20_000,
+            codex: used.map { CodexUsage(used: UInt64($0) * 20, limit: 2_000, resetsAtMs: now + 777_600_000, recordedMs: now - 20_000) }
+        )
         agents = [
             AgentSummary(
                 terminalId: "term_demo", workspaceId: "ws_collie", kind: "claude", name: nil, title: "fix the build",
