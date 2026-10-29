@@ -132,3 +132,16 @@ private func selection(_ row: Int, _ column: Int, _ endRow: Int, _ endColumn: In
     #expect(selection(1, 10, 1, 10).link(in: frame) == nil)
     #expect(selection(3, 3, 3, 3).link(in: frame)?.absoluteString == "https://a.dev")
 }
+
+@Test func wordsAcrossSoftWrappedRows() throws {
+    var frame = try render("see /Users/me/git/app/Sources/Main.swift ok\r\nnext", wrapColumns: 12)
+    #expect(frame.wrapContinuations == [1, 2, 3, 4])
+    let path = "/Users/me/git/app/Sources/Main.swift"
+    #expect(selection(1, 0, 1, 3).words(in: frame) == path)
+    #expect(selection(2, 3, 2, 3).words(in: frame) == path)
+    #expect(selection(0, 0, 0, 2).words(in: frame) == "see")
+    #expect(selection(0, 0, 1, 3).words(in: frame) == "see \(path)")
+    #expect(selection(5, 0, 5, 3).words(in: frame) == "next")
+    (frame.wrapContinuations, frame.wrapsUnknown) = ([], true)
+    #expect(selection(1, 0, 1, 3).words(in: frame) == nil)
+}

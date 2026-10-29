@@ -88,7 +88,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private let endHandle = SelectionHandle(edge: .end)
     private let copyButton = UIButton(configuration: .glass())
     let quoteButton = UIButton(configuration: .glass())
-    private let openButton = UIButton(configuration: .glass())
+    let openButton = UIButton(configuration: .glass())
     private let menu = UIStackView()
     /// Where the pop-up points, relative to the visible area so it stays put while the
     /// content decelerates.
@@ -454,7 +454,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
         endHandle.isHidden = pressedWord != nil
     }
 
-    private func showCopy(at point: CGPoint) {
+    func showCopy(at point: CGPoint) {
         copyAnchor = CGPoint(x: point.x - bounds.minX, y: point.y - bounds.minY)
         copyButton.configuration?.title = "Copy"
         copyButton.configuration?.image = nil
@@ -516,7 +516,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
 
     private func selectedPath() -> String? {
         guard let filePath, onOpenFile != nil, let selection, let frameData else { return nil }
-        return filePath(selection.text(in: frameData))
+        return selection.words(in: frameData).flatMap(filePath)
     }
 
     @discardableResult

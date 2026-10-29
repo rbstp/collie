@@ -32,7 +32,7 @@ Chat shortens very long text and marks where it cut. The phone fetches history o
 
 ### Open a file
 
-Tap a file link in Chat to open a read-only preview of the file from the machine.
+Tap a file link in Chat, or choose **Open** on a selected path in Terminal, to open a read-only preview of the file from the machine.
 
 - Images (PNG, JPEG, GIF, HEIC and WebP) and PDF files show as they are, up to 20 MB.
 - Text and source files show in the monospaced style of Git diffs, with the same wrap button, up to 1 MB.
@@ -48,7 +48,7 @@ Terminal shows the last 200 lines of the agent's pane (500 or 1000 in **Settings
 - Turn on word wrapping to fit lines to the phone's width.
 - Copilot CLI's scrollbar is hidden in both wrap modes. Text and input-box borders stay visible.
 - Codex's input box and Claude Code's sent prompts keep their shaded background across wrapped lines. Codex prompt continuations wrap to the phone's width instead of keeping the desktop terminal's line breaks.
-- Long-press to select and copy text (Universal Clipboard included), to quote it into the prompt or to open an http or https link. In an agent session, **Open** also shows for a selected file path and opens it as a file link in Chat does. After a copy, a green checkmark and **Copied** appear briefly before the selection closes. Plain terminals have no **Quote**.
+- Long-press to select and copy text (Universal Clipboard included), to quote it into the prompt or to open an http or https link. In an agent session, **Open** also shows for a selected file path and opens it the way a file link in Chat does. After a copy, a green checkmark and **Copied** appear briefly before the selection closes. Plain terminals have no **Quote**.
 - Terminal updates up to four times a second. After 5 seconds without change, or while the iPhone is in Low Data Mode, it updates once a second.
 
 ## The prompt

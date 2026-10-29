@@ -36,11 +36,11 @@ Deleting the app removes its files, but iOS can keep the app's Keychain items on
 
 ## What goes between your phone and your machine
 
-The phone and `collied` talk only over your tailnet, inside mutual TLS. This traffic carries what you see and do in the app: the agent list, terminal screens, conversation history while Chat is open or grid cards preview it, Git diffs, pull request status, plan usage, token counts and estimated costs (numbers, model names and dates only, for which the phone sends its current time zone offset so days end at your midnight), your prompts, keys and attachments, files you open from a Chat link, and approval decisions. The phone also gives `collied` its push notification token and a notification key it generated, so the machine can send it encrypted alerts.
+The phone and `collied` talk only over your tailnet, inside mutual TLS. This traffic carries what you see and do in the app: the agent list, terminal screens, conversation history while Chat is open or grid cards preview it, Git diffs, pull request status, plan usage, token counts and estimated costs (numbers, model names and dates only, for which the phone sends its current time zone offset so days end at your midnight), your prompts, keys and attachments, files you open from a Chat link or a Terminal selection, and approval decisions. The phone also gives `collied` its push notification token and a notification key it generated, so the machine can send it encrypted alerts.
 
 `collied` never writes conversation history or the summary lines shown in the Inbox to logs, and never puts them in notifications.
 
-When you tap a file link in Chat, `collied` sends that file to the phone and writes only its path to the audit log; it never logs, caches or pushes the file's content. The phone keeps the file in memory and in a temporary copy for Share, and deletes the copy when you close the preview.
+When you tap a file link in Chat, or choose Open on a selected path in Terminal, `collied` sends that file to the phone and writes only its path to the audit log; it never logs, caches or pushes the file's content. The phone keeps the file in memory and in a temporary copy for Share, and deletes the copy when you close the preview.
 
 ## Tailscale
 
