@@ -85,20 +85,22 @@ pub fn open(cwd: &Cwd, path: &str, roots: &[PathBuf]) -> Result<Opened, Fail> {
     let file = File::from(fd);
     let name = name.to_string_lossy().into_owned();
     let size = st.st_size as u64;
-    let kind = kind(&file, &name)?;
-    let (cap, what) = match kind {
-        FileKind::Text => (limits::MAX_TEXT_FILE_BYTES, "text files"),
-        _ => (limits::MAX_FILE_BYTES, "files"),
-    };
-    if size > cap {
-        return fail(
+    let too_large = |cap: u64, what: &str| {
+        fail(
             ErrorCode::TooLarge,
             format!(
                 "{name} is {:.1} MB; {what} open up to {} MB.",
                 size as f64 / 1_048_576.0,
                 cap >> 20
             ),
-        );
+        )
+    };
+    if size > limits::MAX_FILE_BYTES {
+        return too_large(limits::MAX_FILE_BYTES, "files");
+    }
+    let kind = kind(&file, &name)?;
+    if kind == FileKind::Text && size > limits::MAX_TEXT_FILE_BYTES {
+        return too_large(limits::MAX_TEXT_FILE_BYTES, "text files");
     }
     let sha256 = digest(&file, size)?;
     Ok(Opened {

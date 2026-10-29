@@ -4,7 +4,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use protocol::{
-    DownloadId, FileChunkParams, FileCloseParams, FileOpenParams, Request, Response, hex, limits,
+    DownloadId, FileChunkParams, FileCloseParams, FileOpenParams, Request, Response, Sha256Hex,
+    hex, limits,
 };
 use sha2::{Digest, Sha256};
 
@@ -14,10 +15,13 @@ use crate::{CoreError, FileKind, OpenedFile};
 const IN_FLIGHT: usize = 4;
 const RATE_LIMIT_RETRIES: usize = 8;
 const RATE_LIMIT_PAUSE: Duration = Duration::from_millis(250);
+const CLOSE_WAIT: Duration = Duration::from_secs(1);
 
 /// open, chunks (a few in flight), close. The file is checked against collied's size and
 /// checksum before it is returned; nothing is written to disk. Nothing resumes across
-/// connections: collied binds an open file to the session that opened it.
+/// connections: collied binds an open file to the session that opened it. `cancel` races
+/// only the chunks, so every file collied opened gets its close; the close waits at most
+/// `CLOSE_WAIT` since collied also drops the file with the session.
 pub(crate) async fn download<C, F>(
     call: C,
     params: FileOpenParams,
@@ -27,27 +31,7 @@ where
     C: Fn(Request) -> F,
     F: Future<Output = Result<Response, CoreError>>,
 {
-    let mut opened = None;
-    let result = tokio::select! {
-        r = receive(&call, params, &mut opened) => r,
-        () = cancel => Err(CoreError::Cancelled),
-    };
-    if let Some(download_id) = opened {
-        let _ = call(Request::FileClose(FileCloseParams { download_id })).await;
-    }
-    result
-}
-
-async fn receive<C, F>(
-    call: &C,
-    params: FileOpenParams,
-    opened: &mut Option<DownloadId>,
-) -> Result<OpenedFile, CoreError>
-where
-    C: Fn(Request) -> F,
-    F: Future<Output = Result<Response, CoreError>>,
-{
-    let (download_id, name, size, kind, sha256) = match call(Request::FileOpen(params)).await? {
+    let opened = match call(Request::FileOpen(params)).await? {
         Response::FileOpened {
             download_id,
             name,
@@ -57,7 +41,31 @@ where
         } => (download_id, name, size, kind, sha256),
         other => return Err(unexpected(&other).into()),
     };
-    *opened = Some(download_id.clone());
+    let download_id = opened.0.clone();
+    let result = tokio::select! {
+        biased;
+        () = cancel => Err(CoreError::Cancelled),
+        r = receive(&call, opened) => r,
+    };
+    let close = call(Request::FileClose(FileCloseParams { download_id }));
+    let _ = tokio::time::timeout(CLOSE_WAIT, close).await;
+    result
+}
+
+async fn receive<C, F>(
+    call: &C,
+    (download_id, name, size, kind, sha256): (
+        DownloadId,
+        String,
+        u64,
+        protocol::FileKind,
+        Sha256Hex,
+    ),
+) -> Result<OpenedFile, CoreError>
+where
+    C: Fn(Request) -> F,
+    F: Future<Output = Result<Response, CoreError>>,
+{
     if size > limits::MAX_FILE_BYTES {
         return Err(CoreError::TooLarge {
             message: format!("{name} is too large to open"),
@@ -131,7 +139,7 @@ fn interrupted(e: CoreError) -> CoreError {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use protocol::{ChunkData, ErrorCode, Sha256Hex, TerminalId};
+    use protocol::{ChunkData, ErrorCode, TerminalId};
 
     use super::*;
     use crate::session::{SessionError, lock};
@@ -306,6 +314,56 @@ mod tests {
             matches!(result, Err(CoreError::TooLarge { .. })),
             "{result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn cancel_during_the_open_still_closes_the_file() {
+        let mac = Arc::new(Mutex::new(Mac {
+            file: bytes(100_000),
+            ..Mac::default()
+        }));
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let call = |request: Request| {
+            let (mac, tx) = (mac.clone(), tx.clone());
+            async move {
+                let open = matches!(request, Request::FileOpen(_));
+                if open {
+                    let _ = tx.send(true);
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                lock(&mac).answer(request)
+            }
+        };
+        let cancel = async move {
+            let _ = rx.wait_for(|c| *c).await;
+        };
+        let result = download(call, params(), cancel).await;
+        assert!(matches!(result, Err(CoreError::Cancelled)), "{result:?}");
+        assert_eq!(lock(&mac).methods, ["file.open", "file.close"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dead_link_fails_without_waiting_for_the_close() {
+        let call = |request: Request| async move {
+            match request {
+                Request::FileOpen(_) => Ok(Response::FileOpened {
+                    download_id: DownloadId::new("ab".repeat(16)).unwrap(),
+                    name: "a.bin".into(),
+                    size: 10,
+                    kind: protocol::FileKind::Other,
+                    sha256: Sha256Hex::new("0".repeat(64)).unwrap(),
+                }),
+                Request::FileChunk(_) => Err(server(ErrorCode::NotFound)),
+                _ => std::future::pending().await,
+            }
+        };
+        let started = tokio::time::Instant::now();
+        let result = download(call, params(), std::future::pending()).await;
+        assert!(
+            matches!(result, Err(CoreError::Unreachable { .. })),
+            "{result:?}"
+        );
+        assert!(started.elapsed() <= CLOSE_WAIT);
     }
 
     #[tokio::test]
