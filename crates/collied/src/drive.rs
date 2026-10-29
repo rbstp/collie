@@ -2262,7 +2262,7 @@ fn open_under_root(cwd: &str, roots: &[PathBuf]) -> Result<(OwnedFd, Cwd), Fail>
     let Some(root) = roots.iter().find(|r| path.starts_with(r)) else {
         return Err(invalid("cwd is outside the allowed roots"));
     };
-    let dir = open_beneath(root, path)?;
+    let dir = open_beneath(root, path, root)?;
     Ok((dir, resolved))
 }
 
@@ -2291,23 +2291,28 @@ fn worktree_parent(checkout: &Cwd, roots: &[PathBuf], auth: &Authorized) -> Resu
 /// Opens the canonical `path` one component at a time from `root` without following a
 /// symlink, so a folder swapped for a link after the check fails instead of leading
 /// outside the roots. A hidden folder below the root (dot or `UF_HIDDEN`) is refused, so
-/// `~/.ssh` or `~/Library` is neither listed nor created in.
-pub(crate) fn open_beneath(root: &Path, path: &Path) -> Result<OwnedFd, Fail> {
+/// `~/.ssh` or `~/Library` is neither listed nor created in. Only the folders on the way to
+/// `trusted` (a checkout `resolve_cwd` accepted, such as `<repo>/.worktree/<branch>`) may be
+/// hidden.
+pub(crate) fn open_beneath(root: &Path, path: &Path, trusted: &Path) -> Result<OwnedFd, Fail> {
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let rel = path
         .strip_prefix(root)
         .map_err(|_| io_fail(rustix::io::Errno::INVAL))?;
     let mut dir = rustix::fs::open(root, flags, Mode::empty()).map_err(io_fail)?;
+    let mut at = root.to_path_buf();
     for part in rel.components() {
         let Component::Normal(part) = part else {
             return Err(io_fail(rustix::io::Errno::INVAL));
         };
-        if part.as_encoded_bytes().starts_with(b".") {
+        at.push(part);
+        let checked = !trusted.starts_with(&at);
+        if checked && part.as_encoded_bytes().starts_with(b".") {
             return Err(invalid("folder is hidden"));
         }
         dir = rustix::fs::openat(&dir, part, flags, Mode::empty()).map_err(io_fail)?;
         #[cfg(target_os = "macos")]
-        if rustix::fs::fstat(&dir).map_err(io_fail)?.st_flags & UF_HIDDEN != 0 {
+        if checked && rustix::fs::fstat(&dir).map_err(io_fail)?.st_flags & UF_HIDDEN != 0 {
             return Err(invalid("folder is hidden"));
         }
     }
@@ -2957,16 +2962,16 @@ mod tests {
     fn open_beneath_never_follows_a_link() {
         let (_dir, base) = tree();
         let root = base.join("root");
-        assert!(open_beneath(&root, &root.join("proj/sub")).is_ok());
-        assert!(open_beneath(&root, &root).is_ok());
+        assert!(open_beneath(&root, &root.join("proj/sub"), &root).is_ok());
+        assert!(open_beneath(&root, &root, &root).is_ok());
         for swapped in ["alias", "alias/sub", "escape"] {
             assert!(
-                open_beneath(&root, &root.join(swapped)).is_err(),
+                open_beneath(&root, &root.join(swapped), &root).is_err(),
                 "{swapped}"
             );
         }
-        assert!(open_beneath(&root, &root.join("proj/..")).is_err());
-        assert!(open_beneath(&root, &base.join("outside")).is_err());
+        assert!(open_beneath(&root, &root.join("proj/.."), &root).is_err());
+        assert!(open_beneath(&root, &base.join("outside"), &root).is_err());
     }
 
     #[test]

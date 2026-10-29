@@ -39,7 +39,7 @@ Tap a file link in Chat to open a read-only preview of the file from the machine
 - Any other file up to 20 MB shows its name, its size and "No preview".
 - **Copy** puts the file on the clipboard; **Share** saves or sends it.
 
-`collied` opens only regular files inside the task folders (`roots` in [collied.toml](../operate/configuration.md#colliedtoml), your home folder by default). It refuses hidden files and folders (`.env` included), symlinks, folders, paths with `..` and larger files, and the preview says why. If the connection drops while a file loads, tap **Try Again**. When the machine runs an older `collied`, the preview asks you to update it. The phone keeps the file only while the preview is open.
+`collied` opens only regular files inside the task folders (`roots` in [collied.toml](../operate/configuration.md#colliedtoml), your home folder by default). It refuses hidden files and folders (`.env` included, though an agent working inside a hidden folder such as a worktree in `.worktree` can still show its own files), symlinks, folders, paths with `..` and larger files, and the preview says why. If the connection drops while a file loads, tap **Try Again**. When the machine runs an older `collied`, the preview asks you to update it. The phone keeps the file only while the preview is open.
 
 ## Terminal
 

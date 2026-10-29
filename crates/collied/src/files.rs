@@ -31,7 +31,8 @@ pub struct Opened {
 
 /// `path` is absolute or relative to `cwd` (a canonical checkout inside the roots). It is
 /// resolved without `..` and opened one component at a time from its root, so no symlink
-/// is followed and no hidden file or folder is opened.
+/// is followed and no hidden file or folder is opened, except the folders of the checkout
+/// itself for a file below it (a worktree in `<repo>/.worktree`).
 pub fn open(cwd: &Cwd, path: &str, roots: &[PathBuf]) -> Result<Opened, Fail> {
     let mut abs = PathBuf::new();
     for part in Path::new(cwd.as_str()).join(path).components() {
@@ -54,7 +55,13 @@ pub fn open(cwd: &Cwd, path: &str, roots: &[PathBuf]) -> Result<Opened, Fail> {
     if name.as_encoded_bytes().starts_with(b".") {
         return refused("Hidden files are not opened.");
     }
-    let dir = crate::drive::open_beneath(root, parent)?;
+    let checkout = Path::new(cwd.as_str());
+    let trusted = if parent.starts_with(checkout) {
+        checkout
+    } else {
+        root
+    };
+    let dir = crate::drive::open_beneath(root, parent, trusted)?;
     let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
     let fd = rustix::fs::openat(&dir, name, flags, Mode::empty()).map_err(|e| match e {
         rustix::io::Errno::LOOP => (
@@ -336,6 +343,30 @@ mod tests {
         assert!(message(open_in(&t, "linked/main.rs")).starts_with("folder cannot be opened"));
         let root = t.root.to_str().unwrap();
         assert_eq!(message(open_in(&t, root)), "Folders are not opened.");
+    }
+
+    #[test]
+    fn a_checkout_in_a_hidden_folder_opens_only_below_itself() {
+        let t = tree();
+        let repo = Path::new(t.cwd.as_str());
+        let checkout = repo.join(".worktree/x");
+        std::fs::create_dir_all(checkout.join("src")).unwrap();
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::write(checkout.join("src/a.rs"), "a").unwrap();
+        std::fs::write(checkout.join(".env"), "SECRET=1").unwrap();
+        std::fs::write(checkout.join(".git/config"), "[core]").unwrap();
+        std::fs::write(repo.join(".worktree/notes.txt"), "sibling").unwrap();
+        let cwd = Cwd::new(checkout.to_str().unwrap()).unwrap();
+        let roots = std::slice::from_ref(&t.root);
+        let open_at = |path: &str| open(&cwd, path, roots);
+        assert_eq!(open_at("src/a.rs").unwrap().name, "a.rs");
+        let abs = format!("{}/src/a.rs", cwd.as_str());
+        assert_eq!(open_at(&abs).unwrap().name, "a.rs");
+        assert_eq!(message(open_at(".env")), "Hidden files are not opened.");
+        assert_eq!(message(open_at(".git/config")), "folder is hidden");
+        let sibling = format!("{}/.worktree/notes.txt", repo.display());
+        assert_eq!(message(open_at(&sibling)), "folder is hidden");
+        assert_eq!(message(open_in(&t, &abs)), "folder is hidden");
     }
 
     #[test]
