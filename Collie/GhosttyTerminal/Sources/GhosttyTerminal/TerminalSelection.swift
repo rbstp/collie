@@ -128,20 +128,14 @@ struct TerminalSelection: Equatable, Sendable {
     }
 
     /// The space-separated words this selection touches, read whole across soft-wrapped rows like
-    /// `link(in:)`; nil when a row of unknown wrapping may have cut them, at either end.
+    /// `link(in:)`; nil while the wrapping is unknown, since a row could then hold a cut word.
     func words(in frame: TerminalFrame) -> String? {
-        guard let (text, touched) = logicalLines(in: frame) else { return nil }
+        guard !frame.wrapsUnknown, let (text, touched) = logicalLines(in: frame) else { return nil }
         var lower = touched.lowerBound
         var upper = touched.upperBound
         while lower > 0 && !text[lower - 1].properties.isWhitespace { lower -= 1 }
         while upper < text.count && !text[upper].properties.isWhitespace { upper += 1 }
-        if frame.wrapsUnknown && lower == 0 && start.row > 0 {
-            let above = frame.runs.filter { $0.row == start.row - 1 }.flatMap(Cluster.all).map(\.end).max() ?? 0
-            if above >= frame.columns { return nil }
-        }
-        let words = text[lower..<upper]
-        guard !words.contains("\u{FFFD}") else { return nil }
-        return String(String.UnicodeScalarView(words))
+        return String(String.UnicodeScalarView(text[lower..<upper]))
     }
 
     private func logicalLines(in frame: TerminalFrame) -> (text: [Unicode.Scalar], touched: Range<Int>)? {

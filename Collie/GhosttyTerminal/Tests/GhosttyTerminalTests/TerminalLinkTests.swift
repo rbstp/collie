@@ -134,7 +134,7 @@ private func selection(_ row: Int, _ column: Int, _ endRow: Int, _ endColumn: In
 }
 
 @Test func wordsAcrossSoftWrappedRows() throws {
-    var frame = try render("see /Users/me/git/app/Sources/Main.swift ok\r\nnext", wrapColumns: 12)
+    let frame = try render("see /Users/me/git/app/Sources/Main.swift ok\r\nnext", wrapColumns: 12)
     #expect(frame.wrapContinuations == [1, 2, 3, 4])
     let path = "/Users/me/git/app/Sources/Main.swift"
     #expect(selection(1, 0, 1, 3).words(in: frame) == path)
@@ -142,14 +142,21 @@ private func selection(_ row: Int, _ column: Int, _ endRow: Int, _ endColumn: In
     #expect(selection(0, 0, 0, 2).words(in: frame) == "see")
     #expect(selection(0, 0, 1, 3).words(in: frame) == "see \(path)")
     #expect(selection(5, 0, 5, 3).words(in: frame) == "next")
-    (frame.wrapContinuations, frame.wrapsUnknown) = ([], true)
-    #expect(selection(1, 0, 1, 3).words(in: frame) == nil)
-    #expect(selection(5, 0, 5, 3).words(in: frame) == "next")
+    let indented = try render("  see /Users/me/git/app/Sources/Main.rs", wrapColumns: 14)
+    let last = try #require(indented.runs.last { $0.text.contains("Main.rs") })
+    #expect(selection(last.row, last.startColumn, last.row, last.startColumn).words(in: indented) == "/Users/me/git/app/Sources/Main.rs")
+}
 
-    var tail = try render("see /Users/me/git/app/Sources/Main.rs\r\nnext", wrapColumns: 12)
-    #expect(tail.runs.contains { $0.row == 3 && $0.text == "s/Main.rs" })
-    #expect(selection(3, 0, 3, 3).words(in: tail) == "/Users/me/git/app/Sources/Main.rs")
-    (tail.wrapContinuations, tail.wrapsUnknown) = ([], true)
-    #expect(selection(3, 0, 3, 3).words(in: tail) == nil)
-    #expect(selection(4, 0, 4, 3).words(in: tail) == "next")
+@Test func wordsAreNotReadWhileWrappingIsUnknown() throws {
+    for (snapshot, columns) in [
+        ("see /Users/me/git/app/Sources/Main.swift ok", 12),
+        ("see /Users/me/git/app/Sources/Main.rs", 12),
+        ("  see /Users/me/git/app/Sources/Main.rs", 14),
+    ] {
+        var frame = try render(snapshot, wrapColumns: columns)
+        (frame.wrapContinuations, frame.wrapsUnknown) = ([], true)
+        for row in 0..<frame.rows {
+            #expect(selection(row, 0, row, columns - 1).words(in: frame) == nil, "\(snapshot) row \(row)")
+        }
+    }
 }
