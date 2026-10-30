@@ -34,6 +34,9 @@ struct UsageSections: View {
                             if let codex = usage.codex, codex.resetsAtMs > context.date.unixMs {
                                 CodexSubscriptionUsage(usage: codex, now: context.date)
                             }
+                            if let copilot = usage.copilot, copilot.resetsAtMs > context.date.unixMs {
+                                CopilotSubscriptionUsage(usage: copilot, now: context.date)
+                            }
                         }
                     }
                 }
@@ -76,6 +79,49 @@ private struct CodexSubscriptionUsage: View {
         .opacity(usage.isStale(now: now) ? 0.6 : 1)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Codex monthly usage limit, \(usage.used) of \(usage.limit) credits used, \(percent) percent, \(Int((usage.elapsed(now: now) * 100).rounded())) percent of the month elapsed")
+    }
+}
+
+private struct CopilotSubscriptionUsage: View {
+    let usage: CopilotUsage
+    let now: Date
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .headline) private var logo: CGFloat = 22
+
+    var body: some View {
+        let percent = usage.percent
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Image("Copilot")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: logo, height: logo)
+                    .padding(logo / 3)
+                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: logo / 2, style: .continuous))
+                    .accessibilityHidden(true)
+                Text("Copilot").font(.headline)
+            }
+            Text("Monthly premium usage").font(.subheadline)
+            if !usage.unlimited {
+                UsageBar(used: UInt8(min(100, percent)), elapsed: usage.elapsed(now: now))
+            }
+            let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout())
+            layout {
+                Text(usage.unlimited ? "Unlimited" : "\(percent)% used, \(usage.used.formatted()) / \(usage.limit.formatted()) \(usage.unit)")
+                if !dynamicTypeSize.isAccessibilitySize { Spacer() }
+                Text(usage.resetsLine)
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+        .opacity(usage.isStale(now: now) ? 0.6 : 1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            usage.unlimited
+                ? "Copilot monthly premium usage, unlimited, \(usage.resetsLine)"
+                : "Copilot monthly premium usage, \(usage.used) of \(usage.limit) \(usage.unit) used, \(percent) percent, \(Int((usage.elapsed(now: now) * 100).rounded())) percent of the month elapsed"
+        )
     }
 }
 

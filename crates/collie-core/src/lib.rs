@@ -465,12 +465,25 @@ pub struct PlanUsage {
     pub recorded_ms: u64,
     #[uniffi(default = None)]
     pub codex: Option<CodexUsage>,
+    #[uniffi(default = None)]
+    pub copilot: Option<CopilotUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct CodexUsage {
     pub used: u64,
     pub limit: u64,
+    pub resets_at_ms: u64,
+    pub recorded_ms: u64,
+}
+
+/// `used` can pass `limit` when the seat permits overage; both are 0 when `unlimited`.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CopilotUsage {
+    pub used: u64,
+    pub limit: u64,
+    pub unlimited: bool,
+    pub token_based_billing: bool,
     pub resets_at_ms: u64,
     pub recorded_ms: u64,
 }
@@ -3629,6 +3642,14 @@ fn plan_usage(u: &protocol::PlanUsage) -> PlanUsage {
             resets_at_ms: c.resets_at_ms,
             recorded_ms: c.recorded_ms,
         }),
+        copilot: u.copilot.as_ref().map(|c| CopilotUsage {
+            used: c.used,
+            limit: c.limit,
+            unlimited: c.unlimited,
+            token_based_billing: c.token_based_billing,
+            resets_at_ms: c.resets_at_ms,
+            recorded_ms: c.recorded_ms,
+        }),
     }
 }
 
@@ -3993,6 +4014,7 @@ mod tests {
                 }),
                 recorded_ms: 1_738_420_000_000,
                 codex: None,
+                copilot: None,
             }
         );
     }

@@ -598,6 +598,14 @@ impl FlockState {
             {
                 current.codex = Some(codex.clone());
             }
+            if let Some(copilot) = &plan.copilot
+                && current
+                    .copilot
+                    .as_ref()
+                    .is_none_or(|old| old.recorded_ms < copilot.recorded_ms)
+            {
+                current.copilot = Some(copilot.clone());
+            }
         }
     }
 }
@@ -774,6 +782,7 @@ mod tests {
             seven_day: None,
             recorded_ms: 1,
             codex: None,
+            copilot: None,
         };
         let with = |seq, used| Flock {
             plan_usage: Some(plan(used)),
@@ -802,6 +811,7 @@ mod tests {
             seven_day: None,
             recorded_ms,
             codex: None,
+            copilot: None,
         };
         let used = |s: &FlockState| s.flock.as_ref()?.plan_usage.clone();
         let mut s = FlockState::default();
@@ -828,6 +838,7 @@ mod tests {
                 resets_at_ms: 10_000,
                 recorded_ms: 20,
             }),
+            copilot: None,
         };
         s.listed_plan(&codex);
         let mut claude = codex.clone();
@@ -847,6 +858,19 @@ mod tests {
         let plan = s.flock.as_ref().unwrap().plan_usage.as_ref().unwrap();
         assert_eq!(plan.five_hour, claude.five_hour);
         assert_eq!(plan.codex, codex.codex);
+        let mut copilot = claude.clone();
+        copilot.copilot = Some(protocol::CopilotUsage {
+            used: 100,
+            limit: 300,
+            unlimited: false,
+            token_based_billing: false,
+            resets_at_ms: 10_000,
+            recorded_ms: 40,
+        });
+        s.listed_plan(&copilot);
+        let plan = s.flock.as_ref().unwrap().plan_usage.as_ref().unwrap();
+        assert_eq!(plan.codex, codex.codex);
+        assert_eq!(plan.copilot, copilot.copilot);
     }
 
     #[test]
@@ -863,6 +887,7 @@ mod tests {
                 resets_at_ms: 10_000,
                 recorded_ms: 20,
             }),
+            copilot: None,
         });
         s.apply_snapshot(with_codex);
         assert_eq!(

@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated: October 29, 2026.
+Last updated: October 30, 2026.
 
 This policy covers the Collie app for iPhone and Apple Watch, its notification extension and widgets, and `collied`, the daemon you run on your own Mac or Linux machine.
 
@@ -60,7 +60,7 @@ The app keeps a protected App Group mirror of notification keys so the widget ca
 
 `collied` runs these tools on your machine, as you, with the credentials you already gave them. collie has no credentials of its own.
 
-- **GitHub CLI (`gh`)**: while the app is connected, or when you turned on archiving merged pull requests, `collied` asks GitHub about the pull request of each agent's branch, about every 2 minutes. It also polls the pull requests you watch, at the interval you chose, with or without the app. When you ask, it clones repositories, fetches pull request branches and runs `gh poi` to clean up merged branches.
+- **GitHub CLI (`gh`)**: while the app is connected, or when you turned on archiving merged pull requests, `collied` asks GitHub about the pull request of each agent's branch, about every 2 minutes. It also polls the pull requests you watch, at the interval you chose, with or without the app. Every five minutes, with or without the app, it also asks GitHub for your Copilot premium usage, and keeps only the used and allowed amount, whether the seat is unlimited, how it is billed and the reset date. When you ask, it clones repositories, fetches pull request branches and runs `gh poi` to clean up merged branches.
 - **Codex**: `collied` asks the local Codex app-server for your account's usage limits every five minutes, which Codex reads from OpenAI.
 
 GitHub's and OpenAI's own policies cover their handling of these requests.

@@ -425,6 +425,46 @@
       ],
       "type": "object"
     },
+    "CopilotUsage": {
+      "description": "Copilot's monthly premium quota. `used` can pass `limit` when the seat permits overage;\nboth are 0 when `unlimited`.",
+      "properties": {
+        "limit": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recorded_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resets_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "token_based_billing": {
+          "type": "boolean"
+        },
+        "unlimited": {
+          "type": "boolean"
+        },
+        "used": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "used",
+        "limit",
+        "unlimited",
+        "token_based_billing",
+        "resets_at_ms",
+        "recorded_ms"
+      ],
+      "type": "object"
+    },
     "CostTokens": {
       "properties": {
         "cache_read": {
@@ -1253,6 +1293,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/CodexUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "copilot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CopilotUsage"
             },
             {
               "type": "null"
