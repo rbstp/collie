@@ -127,6 +127,8 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     r.line(s, "plan usage", d);
     let (s, d) = check_gh().await;
     r.line(s, "gh", d);
+    let (s, d) = check_copilot(&data_dir, crate::now_ms()).await;
+    r.line(s, "copilot", d);
 
     Ok(!r.failed)
 }
@@ -195,6 +197,31 @@ async fn check_gh() -> (Status, String) {
             Status::Warn,
             format!("{gh} is not signed in (gh auth login); agents show no pull request"),
         )
+    }
+}
+
+/// The daemon keeps no failure, so without a fresh reading this asks GitHub itself.
+async fn check_copilot(data_dir: &Path, now_ms: u64) -> (Status, String) {
+    if let Some(copilot) = crate::usage::last_recorded(data_dir)
+        .and_then(|r| r.copilot)
+        .filter(|c| now_ms.saturating_sub(c.recorded_ms) < 10 * 60_000)
+    {
+        let minutes = now_ms.saturating_sub(copilot.recorded_ms) / 60_000;
+        return (Status::Ok, format!("premium usage read {minutes} min ago"));
+    }
+    match crate::usage::fetch_copilot_usage().await {
+        Ok(Some(_)) => (
+            Status::Ok,
+            "premium usage readable; the daemon reads it every five minutes".to_owned(),
+        ),
+        Ok(None) => (
+            Status::Ok,
+            "no premium usage: no gh, no gh login or no Copilot premium quota".to_owned(),
+        ),
+        Err(reason) => (
+            Status::Warn,
+            format!("could not read premium usage with gh: {reason}"),
+        ),
     }
 }
 
@@ -804,6 +831,29 @@ mod tests {
             s == Status::Warn
                 && d.contains("0.9.5 or later")
                 && d.contains("herdr integration install codex"),
+            "{d}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reports_when_it_last_read_copilot_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("collie");
+        crate::usage::record_copilot(
+            &data,
+            Some(protocol::CopilotUsage {
+                used: 10,
+                limit: 300,
+                unlimited: false,
+                token_based_billing: false,
+                resets_at_ms: 1_000_000,
+                recorded_ms: 60_000,
+            }),
+        )
+        .unwrap();
+        let (s, d) = check_copilot(&data, 240_000).await;
+        assert!(
+            s == Status::Ok && d == "premium usage read 3 min ago",
             "{d}"
         );
     }

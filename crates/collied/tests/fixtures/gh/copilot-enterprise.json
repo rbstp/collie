@@ -1,0 +1,20 @@
+{
+  "copilot_plan": "enterprise",
+  "token_based_billing": true,
+  "quota_reset_date": "2026-11-01",
+  "quota_reset_date_utc": "2026-11-01T00:00:00.000Z",
+  "quota_snapshots": {
+    "chat": { "unlimited": true, "entitlement": 0, "remaining": 0, "percent_remaining": 100.0 },
+    "completions": { "unlimited": true, "entitlement": 0, "remaining": 0, "percent_remaining": 100.0 },
+    "premium_interactions": {
+      "unlimited": false,
+      "overage_permitted": true,
+      "overage_count": 0,
+      "entitlement": 400000,
+      "remaining": 160587,
+      "percent_remaining": 40.1,
+      "credits_used": 239412,
+      "token_based_billing": true
+    }
+  }
+}

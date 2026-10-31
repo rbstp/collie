@@ -286,11 +286,11 @@ extension PlanUsage {
     }
 
     func age(now: Date) -> String {
-        Self.age(sinceMs: max(recordedMs, codex?.recordedMs ?? 0), now: now)
+        Self.age(sinceMs: max(recordedMs, codex?.recordedMs ?? 0, copilot?.recordedMs ?? 0), now: now)
     }
 
     func spokenAge(now: Date) -> String {
-        Self.spokenAge(sinceMs: max(recordedMs, codex?.recordedMs ?? 0), now: now)
+        Self.spokenAge(sinceMs: max(recordedMs, codex?.recordedMs ?? 0, copilot?.recordedMs ?? 0), now: now)
     }
 
     static func age(sinceMs: UInt64, now: Date) -> String {
@@ -321,8 +321,15 @@ extension PlanUsage {
             spokenResets = resets
             sinceMs = codex.recordedMs
             stale = codex.isStale(now: now)
+        case "copilot":
+            guard let copilot, !copilot.unlimited, copilot.resetsAtMs > now.unixMs else { return nil }
+            name = "Copilot premium limit"
+            used = UInt8(min(100, copilot.percent))
+            resets = copilot.resetsLine
+            spokenResets = resets
+            sinceMs = copilot.recordedMs
+            stale = copilot.isStale(now: now)
         default:
-            // Copilot CLI has no plan data.
             return nil
         }
         guard used >= 80 else { return nil }
@@ -389,6 +396,28 @@ extension CodexUsage {
     var resetsLine: String { "resets \(Date(unixMs: resetsAtMs).formatted(date: .abbreviated, time: .omitted))" }
 
     func isStale(now: Date) -> Bool { now.unixMs > recordedMs + Self.staleAfterMs }
+
+    func elapsed(now: Date) -> Double {
+        let end = Date(unixMs: resetsAtMs)
+        guard let interval = WatchUsage.monthlyInterval(endingAt: end) else { return 0 }
+        return min(1, max(0, now.timeIntervalSince(interval.lowerBound) / end.timeIntervalSince(interval.lowerBound)))
+    }
+}
+
+extension CopilotUsage {
+    static let staleAfterMs: UInt64 = 10 * 60_000
+
+    /// Past 100 when the seat permits overage.
+    var percent: Int { limit > 0 ? Int(min(1_000_000, (Double(used) / Double(limit) * 100).rounded())) : 0 }
+
+    var unit: String { tokenBasedBilling ? "credits" : "requests" }
+
+    var resetsLine: String { "resets \(Date(unixMs: resetsAtMs).formatted(date: .abbreviated, time: .omitted))" }
+
+    func isStale(now: Date) -> Bool {
+        let nowMs = now.unixMs
+        return nowMs > recordedMs && nowMs - recordedMs > Self.staleAfterMs
+    }
 
     func elapsed(now: Date) -> Double {
         let end = Date(unixMs: resetsAtMs)

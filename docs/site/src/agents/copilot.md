@@ -12,10 +12,13 @@ You can follow GitHub Copilot CLI agents, read them in Chat and work with them i
 | Answering prompts | Terminal buttons or typing in the composer |
 | Key shortcuts just for Copilot CLI | Yes |
 | New task | Yes |
+| [Plan usage](../app/usage.md) | Monthly premium usage, with `gh` signed in |
 
 ## Set up
 
 Install Copilot CLI on the machine as `copilot`, and keep it in the `[tasks] agents` list of `collied.toml`, where it is by default. herdr starts it and reads its status from the screen.
+
+For plan usage, install the GitHub CLI (`gh`) on the machine and sign in with `gh auth login` to the github.com account that has the Copilot seat.
 
 ## Chat
 
@@ -24,6 +27,10 @@ Chat shows the conversation that Copilot shows in the pane, and follows it when 
 ## Terminal
 
 Terminal hides Copilot's scrollbar column. With line wrapping on, Copilot's prose and your sent prompts wrap to the phone's width.
+
+## Plan usage
+
+The Usage view shows the premium usage this month: the credits used and allowed (or requests, for a seat billed by request), and the reset date. A seat without a cap shows "Unlimited". `collied` asks GitHub for it every five minutes with your own `gh` login, and the token stays with `gh`. The row clears when `gh` is signed out or the account has no premium quota. A seat that a GitHub Enterprise Cloud account with data residency (`*.ghe.com`) assigns does not show.
 
 ## Startup prompts
 

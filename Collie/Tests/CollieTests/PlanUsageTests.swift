@@ -165,3 +165,30 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(claude.spoken.hasSuffix(", recorded 12 minutes ago"))
     #expect(usage.warning(agent: "codex", now: now)?.text.hasSuffix(", recorded 11m ago") == true)
 }
+
+@Test func copilotPremiumUsageWarnsLikeCodexAndCountsOverage() throws {
+    var usage = PlanUsage(
+        fiveHour: nil, sevenDay: nil, recordedMs: 0,
+        copilot: CopilotUsage(used: 239_413, limit: 400_000, unlimited: false, tokenBasedBilling: true, resetsAtMs: nowMs + 86_400_000, recordedMs: nowMs - 20_000)
+    )
+    #expect(usage.copilot?.percent == 60)
+    #expect(usage.copilot?.unit == "credits")
+    #expect(usage.warning(agent: "copilot", now: now) == nil)
+    usage.copilot?.used = 320_000
+    #expect(usage.warning(agent: "copilot", now: now)?.text.hasPrefix("Copilot premium limit at 80%, resets ") == true)
+    usage.copilot?.used = 412_500
+    #expect(usage.copilot?.percent == 103)
+    let warning = try #require(usage.warning(agent: "copilot", now: now))
+    #expect(warning.text.hasPrefix("Copilot premium limit reached, resets "))
+    #expect(warning.reached)
+    usage.copilot?.recordedMs = nowMs - 11 * 60_000
+    #expect(usage.warning(agent: "copilot", now: now)?.text.hasSuffix(", recorded 11m ago") == true)
+    #expect(usage.age(now: now) == "11m ago")
+    usage.copilot?.tokenBasedBilling = false
+    #expect(usage.copilot?.unit == "requests")
+    usage.copilot?.unlimited = true
+    #expect(usage.warning(agent: "copilot", now: now) == nil)
+    usage.copilot?.unlimited = false
+    usage.copilot?.resetsAtMs = nowMs - 1
+    #expect(usage.warning(agent: "copilot", now: now) == nil)
+}

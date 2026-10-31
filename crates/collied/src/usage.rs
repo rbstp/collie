@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::SystemTime;
 
-use protocol::{CodexUsage, PlanUsage, UsageWindow};
+use protocol::{CodexUsage, CopilotUsage, PlanUsage, UsageWindow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -33,6 +33,8 @@ pub struct Recorded {
     pub plan: Option<PlanUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex: Option<CodexUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copilot: Option<CopilotUsage>,
     /// Context window size per Claude Code session id.
     #[serde(default)]
     pub windows: BTreeMap<String, SessionWindow>,
@@ -64,6 +66,7 @@ pub fn record(data_dir: &Path, input: &[u8], now_ms: u64) -> anyhow::Result<()> 
             seven_day: window(&r["seven_day"]),
             recorded_ms: now_ms,
             codex: None,
+            copilot: None,
         });
     let session = v["session_id"]
         .as_str()
@@ -140,6 +143,7 @@ fn merge_plan(old: Option<PlanUsage>, new: PlanUsage, now_ms: u64) -> PlanUsage 
         seven_day,
         recorded_ms,
         codex: None,
+        copilot: None,
     }
 }
 
@@ -292,6 +296,126 @@ pub async fn fetch_codex_usage() -> Result<Option<CodexUsage>, CodexUsageError> 
     .map_err(|_| CodexUsageError)?
 }
 
+pub fn record_copilot(data_dir: &Path, usage: Option<CopilotUsage>) -> anyhow::Result<()> {
+    crate::ensure_private_dir(data_dir)?;
+    let _lock = lock(&data_dir.join(USAGE_LOCK))?;
+    let path = data_dir.join(USAGE_FILE);
+    let mut recorded = match peers::load_json::<Recorded>(&path) {
+        Err(peers::Error::Json { .. }) => Recorded::default(),
+        other => other?,
+    };
+    if recorded.copilot.is_none() && usage.is_none() {
+        return Ok(());
+    }
+    if recorded
+        .copilot
+        .as_ref()
+        .zip(usage.as_ref())
+        .is_some_and(|(old, new)| {
+            *old == CopilotUsage {
+                recorded_ms: old.recorded_ms,
+                ..new.clone()
+            } && new.recorded_ms < old.recorded_ms + RESTAMP_MS
+        })
+    {
+        return Ok(());
+    }
+    recorded.copilot = usage;
+    peers::replace_json(&path, &recorded)?;
+    Ok(())
+}
+
+/// Reduced inside `gh` by `--jq`, so the login, ids, organizations and endpoints in the
+/// answer never reach collied.
+const COPILOT_FIELDS: &str = "{token_based_billing, quota_reset_date, quota_reset_date_utc, quota_snapshots: {premium_interactions: .quota_snapshots.premium_interactions}}";
+
+/// github.com only. No `gh`, no login (exit code 4) and no Copilot seat (404) are `None`.
+pub async fn fetch_copilot_usage() -> Result<Option<CopilotUsage>, &'static str> {
+    let Some(gh) = crate::drive::gh() else {
+        return Ok(None);
+    };
+    let mut command = crate::pulls::gh_command(&gh);
+    command
+        .args([
+            "api",
+            "--hostname",
+            "github.com",
+            "copilot_internal/user",
+            "--jq",
+            COPILOT_FIELDS,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = tokio::time::timeout(crate::pulls::GH_TIMEOUT, command.output())
+        .await
+        .map_err(|_| "timed out")?
+        .map_err(|_| "unavailable")?;
+    if output.status.success() {
+        return parse_copilot_usage(&output.stdout, crate::now_ms());
+    }
+    if output.status.code() == Some(4)
+        || String::from_utf8_lossy(&output.stderr).contains("(HTTP 404)")
+    {
+        return Ok(None);
+    }
+    Err("request failed")
+}
+
+pub fn parse_copilot_usage(
+    response: &[u8],
+    now_ms: u64,
+) -> Result<Option<CopilotUsage>, &'static str> {
+    const BAD: &str = "unreadable response";
+    let root: Value = serde_json::from_slice(response).map_err(|_| BAD)?;
+    root.as_object().ok_or(BAD)?;
+    let premium = &root["quota_snapshots"]["premium_interactions"];
+    if premium.is_null() {
+        return Ok(None);
+    }
+    premium.as_object().ok_or(BAD)?;
+    let resets_at_ms = match root["quota_reset_date_utc"].as_str() {
+        Some(at) => crate::transcript::timestamp_ms(at),
+        None => root["quota_reset_date"]
+            .as_str()
+            .and_then(|day| crate::transcript::timestamp_ms(&format!("{day}T00:00:00Z"))),
+    }
+    .filter(|ms| *ms > now_ms)
+    .ok_or(BAD)?;
+    let token_based_billing = root["token_based_billing"].as_bool().unwrap_or(false);
+    if premium["unlimited"].as_bool().ok_or(BAD)? {
+        return Ok(Some(CopilotUsage {
+            used: 0,
+            limit: 0,
+            unlimited: true,
+            token_based_billing,
+            resets_at_ms,
+            recorded_ms: now_ms,
+        }));
+    }
+    let number = |v: &Value| v.as_f64().filter(|n| n.is_finite() && n.abs() < 1e9);
+    let entitlement = number(&premium["entitlement"])
+        .filter(|n| *n >= 0.0)
+        .ok_or(BAD)?;
+    if entitlement < 1.0 {
+        return Ok(None);
+    }
+    // Past the allowance, a seat that permits overage reports a negative `remaining` or
+    // a `remaining` held at 0 with the excess in `overage_count`.
+    let remaining = number(&premium["remaining"]).ok_or(BAD)?.max(0.0);
+    let overage = match premium.get("overage_count") {
+        None => 0.0,
+        Some(v) => number(v).filter(|n| *n >= 0.0).ok_or(BAD)?,
+    };
+    Ok(Some(CopilotUsage {
+        used: (entitlement - remaining + overage).max(0.0).round() as u64,
+        limit: entitlement.round() as u64,
+        unlimited: false,
+        token_based_billing,
+        resets_at_ms,
+        recorded_ms: now_ms,
+    }))
+}
+
 fn merge_window(
     old: Option<UsageWindow>,
     new: Option<UsageWindow>,
@@ -379,9 +503,12 @@ impl Usage {
             seven_day: None,
             recorded_ms: 0,
             codex: None,
+            copilot: None,
         });
         plan.codex = self.recorded.codex.clone();
-        (self.recorded.plan.is_some() || plan.codex.is_some()).then_some(plan)
+        plan.copilot = self.recorded.copilot.clone();
+        (self.recorded.plan.is_some() || plan.codex.is_some() || plan.copilot.is_some())
+            .then_some(plan)
     }
 
     /// True once per change of the recorded plan, its stamp included.
@@ -448,6 +575,7 @@ mod tests {
                 }),
                 recorded_ms: 1_000,
                 codex: None,
+                copilot: None,
             })
         );
         assert_eq!(r.windows[SESSION].size, 1_000_000);
@@ -485,6 +613,80 @@ mod tests {
         record_codex(&data, None).unwrap();
         usage.refresh();
         assert!(usage.plan().unwrap().codex.is_none());
+        assert_eq!(usage.plan().unwrap().five_hour.unwrap().used_percent, 24);
+    }
+
+    fn copilot(name: &str, now_ms: u64) -> Result<Option<CopilotUsage>, &'static str> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/gh")
+            .join(name);
+        parse_copilot_usage(&std::fs::read(path).unwrap(), now_ms)
+    }
+
+    #[test]
+    fn copilot_premium_usage_keeps_only_the_quota() {
+        let resets_at_ms = 1_793_491_200_000;
+        let usage = |used, limit, unlimited, token_based_billing| {
+            Ok(Some(CopilotUsage {
+                used,
+                limit,
+                unlimited,
+                token_based_billing,
+                resets_at_ms,
+                recorded_ms: 1_000,
+            }))
+        };
+        assert_eq!(
+            copilot("copilot-enterprise.json", 1_000),
+            usage(239_413, 400_000, false, true)
+        );
+        assert_eq!(
+            copilot("copilot-requests.json", 1_000),
+            usage(179, 300, false, false)
+        );
+        assert_eq!(
+            copilot("copilot-unlimited.json", 1_000),
+            usage(0, 0, true, false)
+        );
+        assert_eq!(
+            copilot("copilot-overage.json", 1_000),
+            usage(412_500, 400_000, false, true)
+        );
+        assert_eq!(
+            copilot("copilot-overage-clamped.json", 1_000),
+            usage(412_500, 400_000, false, true)
+        );
+        assert_eq!(copilot("copilot-no-premium.json", 1_000), Ok(None));
+        for bad in [
+            &b"not json"[..],
+            b"[]",
+            br#"{"quota_snapshots":{"premium_interactions":"lots"}}"#,
+            br#"{"quota_reset_date":"2026-11-01","quota_snapshots":{"premium_interactions":{"unlimited":false,"entitlement":"300","remaining":1}}}"#,
+            br#"{"quota_snapshots":{"premium_interactions":{"unlimited":false,"entitlement":300,"remaining":1}}}"#,
+        ] {
+            assert!(parse_copilot_usage(bad, 1_000).is_err());
+        }
+        assert!(copilot("copilot-enterprise.json", resets_at_ms).is_err());
+    }
+
+    #[test]
+    fn copilot_usage_preserves_the_others_and_clears() {
+        let (_dir, data) = data();
+        record(&data, INPUT.as_bytes(), 1_000).unwrap();
+        let reading = copilot("copilot-enterprise.json", 1_000).unwrap();
+        record_copilot(&data, reading.clone()).unwrap();
+        let mut usage = Usage::new(data.join(USAGE_FILE));
+        usage.refresh();
+        let plan = usage.plan().unwrap();
+        assert_eq!(plan.five_hour.unwrap().used_percent, 24);
+        assert_eq!(plan.copilot, reading);
+        let text = std::fs::read_to_string(data.join(USAGE_FILE)).unwrap();
+        for kept_out in ["enterprise", "overage", "credits_used", "percent_remaining"] {
+            assert!(!text.contains(kept_out), "{kept_out} leaked into the file");
+        }
+        record_copilot(&data, None).unwrap();
+        usage.refresh();
+        assert!(usage.plan().unwrap().copilot.is_none());
         assert_eq!(usage.plan().unwrap().five_hour.unwrap().used_percent, 24);
     }
 

@@ -655,6 +655,7 @@ pub async fn start_with(
             rx.clone(),
         )),
         tokio::spawn(codex_usage(state.clone(), rx.clone())),
+        tokio::spawn(copilot_usage(state.clone(), rx.clone())),
         tokio::spawn(pull_requests(state.clone(), rx.clone())),
         tokio::spawn(pr_watches(state.clone(), rx.clone())),
         tokio::spawn(reconcile(state.clone(), rx)),
@@ -676,6 +677,20 @@ async fn codex_usage(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             _ = interval.tick() => {
                 if let Ok(usage) = crate::usage::fetch_codex_usage().await {
                     let _ = crate::usage::record_codex(&state.cfg.data_dir, usage);
+                }
+            }
+            _ = shutdown.changed() => return,
+        }
+    }
+}
+
+async fn copilot_usage(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(300));
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Ok(usage) = crate::usage::fetch_copilot_usage().await {
+                    let _ = crate::usage::record_copilot(&state.cfg.data_dir, usage);
                 }
             }
             _ = shutdown.changed() => return,

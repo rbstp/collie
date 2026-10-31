@@ -1464,6 +1464,8 @@ pub struct PlanUsage {
     pub recorded_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex: Option<CodexUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copilot: Option<CopilotUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1471,6 +1473,19 @@ pub struct PlanUsage {
 pub struct CodexUsage {
     pub used: u64,
     pub limit: u64,
+    pub resets_at_ms: u64,
+    pub recorded_ms: u64,
+}
+
+/// Copilot's monthly premium quota. `used` can pass `limit` when the seat permits overage;
+/// both are 0 when `unlimited`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct CopilotUsage {
+    pub used: u64,
+    pub limit: u64,
+    pub unlimited: bool,
+    pub token_based_billing: bool,
     pub resets_at_ms: u64,
     pub recorded_ms: u64,
 }
@@ -2648,6 +2663,7 @@ mod tests {
             seven_day: None,
             recorded_ms: 1_738_420_000_000,
             codex: None,
+            copilot: None,
         };
         let with = Flock {
             plan_usage: Some(usage.clone()),

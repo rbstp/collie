@@ -16,7 +16,7 @@ collie lets you watch and steer your [herdr](https://github.com/herdrdev/herdr) 
 - Approve or deny a blocked Claude Code agent from a notification, a Live Activity or the Apple Watch.
 - Start Claude Code, Codex or Copilot CLI in a folder, a new folder, a Git worktree, a fresh clone or a pull request branch.
 - Review an agent's Git changes and send line comments back to it.
-- Follow plan usage for Claude Code and Codex on the phone and on a watch complication.
+- Follow plan usage for Claude Code, Codex and Copilot CLI on the phone, and for Claude Code and Codex on a watch complication.
 
 Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agents, but Collie has not been validated with them. On Linux, Collie has been tested only on Arch Linux with Omarchy. See [Requirements](install/requirements.md).
 

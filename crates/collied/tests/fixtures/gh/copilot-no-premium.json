@@ -1,0 +1,8 @@
+{
+  "copilot_plan": "free",
+  "quota_reset_date": "2026-11-01",
+  "quota_snapshots": {
+    "chat": { "unlimited": false, "entitlement": 50, "remaining": 50, "percent_remaining": 100.0 },
+    "completions": { "unlimited": false, "entitlement": 2000, "remaining": 2000, "percent_remaining": 100.0 }
+  }
+}

@@ -15,7 +15,7 @@ When the agent you pick is close to its plan limit on that machine, a line under
 
 - **Claude Code:** the 5-hour or weekly limit, once it reaches 80%, such as "Claude 5-hour limit at 92%, resets at 3:40 PM". At 100% the line turns orange and reads "Claude 5-hour limit reached".
 - **Codex:** the monthly credits, the same way.
-- **Copilot CLI:** nothing, because collie has no plan data for it.
+- **Copilot CLI:** the monthly premium usage, the same way, unless the seat is unlimited.
 
 The figures come from [Usage](usage.md). When a reading is older than a few minutes, the line also says when the machine recorded it. The warning never stops you from tapping **Start**.
 
