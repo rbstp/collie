@@ -9,12 +9,12 @@ For each gate, record the exact build, source SHA, deployment version, operator 
 | Gate | Evidence needed before submission |
 |---|---|
 | Paid runtime and capacity | Cold and warm CPU for enrollment, assertions, signing, sends and hostile input; account-wide Worker, Durable Object and D1 usage; concurrency and bounded cleanup; approved enrollment and device capacity |
-| Production trust | App Attest under the publisher App ID on a physical device and in TestFlight; rejected development and simulator proofs; actual entitlements; retained replay and revocation state |
+| Production trust | App Attest under the publisher App ID on a physical device and in TestFlight; rejected development and simulator proofs; actual profile and signature entitlements; retained replay and revocation state |
 | Push privacy and delivery | Every alert, background clear and Live Activity update and end; safe extension and widget failure; locked and pre-first-unlock behavior; real production APNs receipt on the submitted build |
-| Compatibility and recovery | Both upgrade orders; route renewal and revocation; 1027, 429 and D1 outages with direct sessions still usable |
-| Personal embedded connectivity ([#389](https://github.com/rbstp/collie/issues/389)) | Independently reviewed same-user ownership checks; pairing, reconnect, background use, expiry, sign-in recovery and revocation on a real iPhone and Mac with no OS VPN profile or standalone Tailscale client, including beside a corporate VPN on the Mac. Static, mocked and Simulator checks do not count |
+| Compatibility and recovery | Both app and daemon upgrade orders; route renewal and revocation; 1027, 429 and D1 outages with direct sessions still usable |
+| Personal embedded connectivity ([#389](https://github.com/rbstp/collie/issues/389)) | Independently reviewed same-user ownership checks; pairing, reconnect, background use, expiry, sign-in recovery and revocation on a real iPhone and Mac with no OS VPN profile or standalone Tailscale client, including beside a corporate VPN on the Mac. Static, mocked and Simulator checks do not prove physical coexistence |
 | Review access | Release sample on simulator and signed iPhone, reset and exit without real effects; real-hardware video; App Review's decision on the sample and the Tailscale login |
-| Desktop installation | The exact linked macOS (signed, notarized) and Linux downloads, with tested requirements and install and update instructions |
+| Desktop installation | The exact linked macOS (signed, notarized) and Linux downloads verified, with tested requirements and install and update instructions |
 | Disclosures and operation | Published policy matches deployed retention and logging; App Privacy and privacy-manifest review; tested incident and credential rotation procedures |
 | Export and metadata | The [export checklist](release.md#export-compliance), France restriction and external-tester caveat included; actual screenshots, age rating, contact details and metadata |
 

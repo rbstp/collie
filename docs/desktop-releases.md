@@ -14,7 +14,7 @@ Each `vMAJOR.MINOR.PATCH` release on [GitHub Releases](https://github.com/rbstp/
 | `homebrew-VERSION.tar.gz` | `Formula/collied.rb` and `Casks/colliebar.rb` for [rbstp/homebrew-tap](https://github.com/rbstp/homebrew-tap) |
 | `source.json`, `SHA256SUMS` | The tag and source commit, and the SHA-256 of every other asset |
 
-Each daemon archive holds `THIRD_PARTY_NOTICES` and `release.json` with the version, source commit and supported protocol range. The Linux floor is checked only on the Ubuntu 24.04 builder.
+Each daemon archive holds `THIRD_PARTY_NOTICES` and `release.json` with the version, source commit and supported protocol range. The Linux glibc and library floor is checked only on the Ubuntu 24.04 builder, not on every distribution.
 
 Controlling agents needs herdr; the agent CLIs and the tailnet policy are separate prerequisites. There is no Linux arm64, Intel Mac or generic GNOME or KDE tray build.
 
@@ -30,7 +30,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 collied setup
 ```
 
-The installer replaces `~/.cargo/bin/collied` with a new file. On macOS, it first checks the strict code signature, identifier and Developer ID team, and Apple's [notarization](https://developer.apple.com/forums/thread/130560), which it looks up online even for the stapled DMG: allow network access, and do not remove quarantine or disable Gatekeeper. An existing launchd agent or systemd user unit keeps its arguments, environment and data paths, and restarts only if it was running; on Linux, it refuses an unrecognized `ExecStart` or a unit loaded from another file. A first install creates no service: `collied setup` does.
+The installer replaces `~/.cargo/bin/collied` with a new file. On macOS, it first checks the strict code signature, identifier and Developer ID team, and Apple's [notarization](https://developer.apple.com/forums/thread/130560), which it looks up online even for the stapled DMG: allow network access, and do not remove quarantine or disable Gatekeeper. An existing launchd agent or systemd user unit keeps its arguments, environment and data paths, and restarts only if it was running; on Linux, the installer refuses an unrecognized `ExecStart` or a unit loaded from another file. A first install creates no service: `collied setup` does.
 
 To roll back, run the previous release's installer with `--replace`, after checking that it supports the app's protocol. Node identity, configuration, pairings and audit data stay.
 
@@ -69,7 +69,7 @@ collie-tray-activate
 
 `REVIEWED_RECIPE_COMMIT` is the commit the publisher records after the release, once the recipes carry its verified checksums; never check out an unreleased `master` or the v0.1.2 recipes. Review the recipes and helpers first. `install.sh` packages both prebuilt archives with an unprivileged `makepkg --nodeps`, then installs them with their dependencies in one `sudo pacman -U` transaction that keeps the daemon and widget versions matched. Once both packages are on the AUR, `paru -S collie-tray` replaces these steps.
 
-`collied-bin` has the Linux daemon's requirements. `collie-tray` needs the same `collied-bin` version, Quickshell, qrencode and an Omarchy 4 session with its bundled `qs.Commons` and `qs.Ui` QML modules. Other distributions and desktop shells are not supported. `collie-tray-activate` checks for Omarchy, which is not a package dependency, then links and enables the widget, keeping its bar placement and settings.
+`collied-bin` has the Linux daemon's requirements. `collie-tray` needs the same `collied-bin` version, Quickshell, qrencode and an Omarchy 4 session with its bundled `qs.Commons` and `qs.Ui` QML modules. Other distributions and desktop shells are not supported. Run `collie-tray-activate` in your Omarchy session: it checks for Omarchy, which is not a package dependency, then links and enables the widget, restarting the shell and keeping the widget's bar placement and settings.
 
 ### Adopt an existing installation
 
@@ -81,7 +81,7 @@ collied-aur-adopt
 collie-tray-activate
 ```
 
-`collied-aur-adopt` backs up the user unit to `collied.service.before-aur` and changes only its `ExecStart` executable to `/usr/bin/collied`. Configuration, data, node identity, pairings and push settings stay; a running service restarts, a stopped one stays stopped. It refuses any other `ExecStart`, an existing backup, drop-ins and a unit loaded from another file. For those, change only the effective executable by hand (see `systemctl --user cat collied`), then run `systemctl --user daemon-reload` and `systemctl --user try-restart collied`.
+`collied-aur-adopt` backs up the user unit to `collied.service.before-aur` and changes only its `ExecStart` executable to `/usr/bin/collied`. Configuration, data, node identity, pairings and push settings stay; a running service restarts, a stopped one stays stopped. It accepts only an `ExecStart` of a quoted `collied` path, an optional `--config` and `run`, and refuses an existing backup, drop-ins and a unit loaded from another file. For those, change only the effective executable by hand (see `systemctl --user cat collied`), then run `systemctl --user daemon-reload` and `systemctl --user try-restart collied`.
 
 Rename any `~/.cargo/bin/collied` (`type -a collied` finds older copies in `PATH`) so it cannot shadow the package binary; until then, call `/usr/bin/collied`. Do not run a download installer or `just collied-install` over the package installation. `collie-tray-activate` moves a copied plugin to the hidden directory `.rbstp.collie.before-aur`.
 

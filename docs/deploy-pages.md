@@ -76,7 +76,7 @@ Other text:
 
 No pull request can change these repository settings. In this order:
 
-1. **Settings > Pages > Build and deployment > Source: GitHub Actions.** Until then, Pages builds the repository root with Jekyll, so the site shows the README, and the workflow cannot deploy.
+1. **Settings > Pages > Build and deployment > Source: GitHub Actions.** Until then, Pages builds the repository root with Jekyll, so the site shows the README, and the workflow cannot deploy: run it by hand after the change.
 2. Add the [Cloudflare record](#2-cloudflare-dns).
 3. **Settings > Pages > Custom domain: `collie.rbstp.dev`**, then Save. GitHub checks the DNS record on save, so wait until `dig` shows it.
 4. Tick **Enforce HTTPS** once GitHub has the certificate, usually within minutes and at most about an hour; if it takes longer, see the pitfalls below.

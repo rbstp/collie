@@ -78,7 +78,7 @@ For an outage, restart the server with the same directory and `COLLIE_SIMULATOR_
 
 Apple silicon or T2 Macs on macOS 13 or later with an iOS 16 or later Simulator can register with APNs Sandbox, though some hosts, runtimes or networks still fail ([Simulator APNs support](https://developer.apple.com/documentation/xcode-release-notes/xcode-14-release-notes), [ActivityKit push testing](https://developer.apple.com/documentation/activitykit/starting-and-updating-live-activities-with-activitykit-push-notifications)).
 
-Use a locally held APNs signing key authorized for the app's team and topic. Never share it, copy it from another user's Keychain, put it in the identity file or commit it. Stop the mock server (both modes use the same port) and create a fresh directory with your ten-character team and key IDs:
+Use a locally held APNs signing key authorized for the app's team and topic. Never share it, copy it from another user's Keychain, put it in the identity file or commit it. Stop the mock server (both modes use the same port) and create a fresh directory, replacing both placeholders with your ten-character team and key IDs:
 
 ```sh
 cd relay

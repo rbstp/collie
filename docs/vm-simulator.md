@@ -6,7 +6,7 @@ Two consecutive fresh `just vm-reset` and `just vm-test` runs passed at clean re
 
 ## Requirements and pinned inputs
 
-You need the [build prerequisites](../install/requirements.html), Node with npm, initialized submodules, an Apple silicon macOS 27 host (only 27.2 has passed) and an iOS 27 Simulator runtime. The harness reads Go from `/opt/homebrew/opt/go/bin/go`.
+You need the [build prerequisites](../install/requirements.html), Node with npm, initialized submodules, an Apple silicon macOS 27 host (only 27.2 is tested) and an iOS 27 Simulator runtime. The harness reads Go from `/opt/homebrew/opt/go/bin/go`.
 
 Reserve at least 80 GiB free, plus room for build outputs: the image download is 34.13 GB, and its disk metadata reports 41.05 GB. The guest takes two virtual CPUs and 4 GiB RAM.
 
@@ -46,7 +46,7 @@ just vm-test
 Keep it in the foreground. It:
 
 1. Builds a Debug app on the ordinary Release core and checks that VM mode refuses to start before creating normal or VM state (`wrong-core.json`, `wrong-core.png`), then builds the special Debug core and app.
-2. Boots a disposable clone of the prepared guest with fresh local control, DERP and mock relay state, reached over restricted SSH through Tart's guest agent rather than the LAN. It changes no host VPN or routing setting and proves nothing about a real corporate VPN.
+2. Boots a disposable clone of the prepared guest with fresh local control, DERP and mock relay state, reached over restricted SSH (pinned guest host key, task key only, guest-loopback forwards) through Tart's guest agent rather than the LAN. It changes no host VPN or routing setting and proves nothing about a real corporate VPN.
 3. Confirms only the **VM Simulator** candidate at the ordinary mutual-TLS pairing prompt and sends an encrypted mock notification.
 4. Revokes that peer with the ordinary daemon command and requires the next push to fail without changing the saved payload.
 
@@ -69,7 +69,7 @@ just vm-reset
 just vm-test
 ```
 
-Reset deletes `collie-374-test`, erases the dedicated Simulator and clears the run marker, so the next test starts from the prepared baseline with fresh credentials, keys, Simulator state and pairing. It keeps the pinned base, `collie-374-desktop`, the tool cache and earlier logs.
+Reset stops owned resources, deletes `collie-374-test`, erases the dedicated Simulator and clears the run marker, so the next test starts from the prepared baseline with fresh credentials, keys, Simulator state and pairing. It keeps the pinned base, `collie-374-desktop`, the tool cache and earlier logs.
 
 ## Remove owned resources
 
@@ -77,7 +77,7 @@ Reset deletes `collie-374-test`, erases the dedicated Simulator and clears the r
 just vm-clean
 ```
 
-Clean removes the recorded guest, dedicated Simulator, prepared desktop, pinned baseline and task-owned OCI image, and prints the directory that keeps logs and tools. Delete that exact directory once you no longer need the evidence; never substitute a global Tart cache, shared Simulator directory or installed Collie data directory.
+Clean removes the recorded guest, dedicated Simulator, prepared desktop, pinned baseline and task-owned OCI image, and prints the directory that keeps logs and tools. Once cleanup succeeds and you no longer need the evidence, delete that exact directory; never substitute a global Tart cache, shared Simulator directory or installed Collie data directory.
 
 ## Troubleshooting
 

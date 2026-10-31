@@ -29,7 +29,7 @@ A machine on the publisher relay needs no key. Give each machine its own key, so
 
 In Certificates, Identifiers & Profiles, Keys, add a key with **Apple Push Notifications service (APNs)** and environment **Sandbox & Production**, so one collied serves debug builds from `just ios-run-device` and TestFlight builds. Download the `.p8` (offered once) and note the Key ID.
 
-With no push mode configured, `collied setup --direct-apns` does the rest, asking for the `.p8` (already mode 0600) and the IDs. By hand:
+With no push mode configured, `collied setup --direct-apns` asks for the `.p8` (already mode 0600) and the IDs, writes the section and imports the key. By hand:
 
 ```toml
 # macOS: ~/Library/Application Support/collie/collied.toml
@@ -71,7 +71,7 @@ Set these repository secrets, encoding the base64 ones with `base64 -i <file> | 
 | --- | --- |
 | `APPLE_DIST_CERT_P12` | Apple Distribution certificate and key, `.p12`, base64 |
 | `APPLE_DIST_CERT_PASSWORD` | password of that `.p12` |
-| `APPLE_PROVISIONING_PROFILE`, `_PUSH`, `_WIDGETS`, `_WATCH`, `_WATCH_WIDGETS` | the five [profiles](#one-time-apple-setup) in that order, `.mobileprovision`, base64 |
+| `APPLE_PROVISIONING_PROFILE`, `APPLE_PROVISIONING_PROFILE_PUSH`, `APPLE_PROVISIONING_PROFILE_WIDGETS`, `APPLE_PROVISIONING_PROFILE_WATCH`, `APPLE_PROVISIONING_PROFILE_WATCH_WIDGETS` | the five [profiles](#one-time-apple-setup), in table order, `.mobileprovision`, base64 |
 | `APPLE_KEY_P8` | App Store Connect API key (Developer role), `.p8`, base64 |
 | `APPLE_KEY_ID` | that key's ID |
 | `APPLE_ISSUER_ID` | App Store Connect issuer ID |

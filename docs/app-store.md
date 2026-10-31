@@ -76,7 +76,7 @@ Researched limits and proposed budgets, not load-test results:
 | D1 | 5 million rows read/day; 100,000 rows written/day; 5 GB/account, 500 MB/database | Indexed lookups; at most 4 billed writes per authorized send attempt as a launch gate; reserve 20,000 writes/day for control, failed quota checks, cleanup and other account use |
 | Burst limiter | Workers binding supports 10/60-second windows | Soft per-send-token, installation and source-IP limits, before expensive work; never the authority for global quota or replay protection |
 
-Sources: [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), [D1 limits](https://developers.cloudflare.com/d1/platform/limits/), [rate limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/). D1 index changes and deletes count as writes. Binding counters are per location and eventually consistent; if the binding fails its acceptance check on a real Free account, keep exact D1 quotas and use the Free zone's [one IP-based WAF rate rule](https://developers.cloudflare.com/waf/rate-limiting-rules/). Neither keeps the account available under distributed abuse.
+Sources: [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), [D1 limits](https://developers.cloudflare.com/d1/platform/limits/), [rate limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/). D1 index changes and deletes count as writes. Binding counters are per location and eventually consistent; if the binding fails its acceptance check on a real Free account, keep exact D1 quotas and use the Free zone's [one IP-based WAF rate rule](https://developers.cloudflare.com/waf/rate-limiting-rules/). Neither, nor any per-device quota, keeps the account available under distributed abuse.
 
 Quotas per UTC day, enforced in D1 with atomic conditional updates that concurrent requests cannot overspend:
 
@@ -146,7 +146,7 @@ The plan starts distribution with a public TestFlight link after Beta App Review
 
 ## Operations and launch gates
 
-Monitor with [free Workers metrics and logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/): aggregate counts by push class and result, CPU, D1 row costs, quota rejections and APNs errors, only redacted errors, no logging backend, and the account's other Workers and D1 usage.
+Monitor aggregate counts by push class and result, CPU, D1 row costs, quota rejections, APNs errors and the account's other Workers and D1 usage with [free Workers metrics and logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/), keeping only redacted errors and no logging backend.
 
 The APNs key and HMAC signing secret are Worker secrets. Rotate versioned HMAC secrets with an overlap of at most the grant lifetime; the [relay runbook](relay-runbook.md) has the rotation and incident procedures.
 

@@ -15,7 +15,7 @@ Collie has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot C
 
 ## What to Test
 
-- Open a Copilot CLI session in Chat. Check replies, tool activity, search and new messages as they arrive. Run `/new` in Copilot and check that Chat follows the new conversation.
+- Open a Copilot CLI session and switch to Chat. Check replies, tool activity, search and new messages as they arrive. Run `/new` in Copilot and check that Chat follows the new conversation.
 - Set Settings > Sessions > Default view to Chat. Check that grid cards show your last two messages and the agent's last two replies, that starred cards show more of each message, and that a blocked agent keeps its terminal. Set it back to Terminal and check that the cards show the terminal again.
 - Connect to a machine still running collied 0.1.5. Check that the app connects without a version message and that its cards keep the terminal preview.
 - Open an agent with running subagents. Check the list over the terminal and over Chat, that scrolling to the top shows the first terminal rows, and that Latest messages does not appear when Chat is already at the bottom.
