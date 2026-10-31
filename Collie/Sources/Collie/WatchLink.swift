@@ -25,8 +25,9 @@ extension WatchUsage {
         guard !plans.isEmpty else { return nil }
         let claude = plans.filter { $0.fiveHour != nil || $0.sevenDay != nil }.max { $0.recordedMs < $1.recordedMs }
         let codex = plans.compactMap(\.codex).max { $0.recordedMs < $1.recordedMs }
+        let copilot = plans.compactMap(\.copilot).max { $0.recordedMs < $1.recordedMs }
         return WatchUsage(PlanUsage(
-            fiveHour: claude?.fiveHour, sevenDay: claude?.sevenDay, recordedMs: claude?.recordedMs ?? 0, codex: codex
+            fiveHour: claude?.fiveHour, sevenDay: claude?.sevenDay, recordedMs: claude?.recordedMs ?? 0, codex: codex, copilot: copilot
         ))
     }
 
@@ -35,12 +36,19 @@ extension WatchUsage {
             guard usage.limit > 0 else { return nil }
             return UInt8(min(100, (Double(usage.used) / Double(usage.limit) * 100).rounded()))
         }
+        let copilot = plan.copilot.flatMap { usage -> UInt8? in
+            if usage.unlimited { return 0 }
+            guard usage.limit > 0 else { return nil }
+            return UInt8(min(100, usage.percent))
+        }
         self.init(
             fiveHourUsed: plan.fiveHour.map { min($0.usedPercent, 100) }, fiveHourResetsAtMs: plan.fiveHour?.resetsAtMs,
             sevenDayUsed: plan.sevenDay.map { min($0.usedPercent, 100) }, sevenDayResetsAtMs: plan.sevenDay?.resetsAtMs,
             codexUsed: codex, codexResetsAtMs: plan.codex?.resetsAtMs,
             claudeRecordedMs: plan.fiveHour != nil || plan.sevenDay != nil ? plan.recordedMs : nil,
-            codexRecordedMs: plan.codex?.recordedMs
+            codexRecordedMs: plan.codex?.recordedMs,
+            copilotUsed: copilot, copilotUnlimited: plan.copilot?.unlimited,
+            copilotResetsAtMs: plan.copilot?.resetsAtMs, copilotRecordedMs: plan.copilot?.recordedMs
         )
     }
 }

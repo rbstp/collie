@@ -13,7 +13,8 @@ enum WatchDemo {
             fiveHourUsed: 38, fiveHourResetsAtMs: now.addingTimeInterval(7_980).unixMs,
             sevenDayUsed: 61, sevenDayResetsAtMs: now.addingTimeInterval(277_200).unixMs,
             codexUsed: 24, codexResetsAtMs: month.end.unixMs,
-            claudeRecordedMs: now.unixMs, codexRecordedMs: now.unixMs
+            claudeRecordedMs: now.unixMs, codexRecordedMs: now.unixMs,
+            copilotUsed: 47, copilotResetsAtMs: month.end.unixMs, copilotRecordedMs: now.unixMs
         )
     }
 }
