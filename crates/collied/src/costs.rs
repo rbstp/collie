@@ -2,7 +2,6 @@
 //! transcripts. Only token counts, model ids and 15-minute slots are kept; no message text.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -16,7 +15,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::lock;
-use crate::transcript::{civil, compressed, open, plain_first, timestamp_ms};
+use crate::transcript::{civil, compressed, decoder, open, plain_first, timestamp_ms};
 
 pub const INDEX_FILE: &str = "usage-costs.json";
 const INDEX_VERSION: u32 = 3;
@@ -636,9 +635,8 @@ fn read_lines(
 }
 
 /// A compressed file cannot be read from an offset, so it is decoded whole each time it changes.
-fn read_compressed(file: File, limit: u64, parser: Parser) -> std::io::Result<(u64, Parser)> {
-    let decoder = ruzstd::decoding::StreamingDecoder::new(file).map_err(std::io::Error::other)?;
-    let mut capped = decoder.take(limit);
+fn read_compressed(file: impl Read, limit: u64, parser: Parser) -> std::io::Result<(u64, Parser)> {
+    let mut capped = decoder(file)?.take(limit + 1);
     let read = read_lines(&mut capped, 0, parser)?;
     if capped.limit() == 0 {
         return Err(std::io::Error::other("decoded past the cap"));
@@ -749,6 +747,9 @@ impl Costs {
                 continue;
             };
             let zst = compressed(&path);
+            if agent == Agent::Codex && !zst {
+                lock(&self.state).forget(&format!("{key}.zst"));
+            }
             let previous = lock(&self.state).index.files.get(key).map(|e| {
                 (e.dev == dev && e.ino == ino && size >= e.size && (zst || size >= e.offset))
                     .then(|| (e.size, e.offset, e.model.clone(), e.last, e.start))
@@ -1193,26 +1194,63 @@ mod tests {
 
     #[test]
     fn an_oversized_compressed_file_is_refused_at_the_cap() {
-        let line = format!("{}\n", CODEX.lines().last().unwrap());
-        let text = line.repeat((1 << 20) / line.len() + 1);
+        let text: String = (0..100_000)
+            .map(|n| format!("{:016x}{:016x}\n", hash(&n.to_string()), n))
+            .collect();
         let zst = ruzstd::encoding::compress_to_vec(
             text.as_bytes(),
             ruzstd::encoding::CompressionLevel::Fastest,
         );
-        let path = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(path.path(), zst).unwrap();
         let parser = || Parser {
             agent: Agent::Codex,
-            model: Some("gpt-6-astra".into()),
+            model: None,
             last: None,
             start: None,
             records: Vec::new(),
         };
-        let read = |limit| read_compressed(File::open(path.path()).unwrap(), limit, parser());
-        assert!(read(1 << 20).is_err());
-        let (offset, parsed) = read(2 << 20).unwrap();
-        assert_eq!(offset, text.len() as u64);
-        assert_eq!(parsed.records.len(), 1);
+        let read = |limit| {
+            let mut source = std::io::Cursor::new(&zst[..]);
+            let read = read_compressed(&mut source, limit, parser()).map(|r| r.0);
+            (read.ok(), source.position())
+        };
+        let len = text.len() as u64;
+        assert_eq!(read(len).0, Some(len));
+        assert_eq!(read(len - 1).0, None);
+        let (refused, consumed) = read(len / 8);
+        assert_eq!(refused, None);
+        assert!(
+            consumed < zst.len() as u64 / 2,
+            "{consumed} of {}",
+            zst.len()
+        );
+    }
+
+    #[test]
+    fn a_corrupt_compressed_rollout_is_recorded_and_not_decoded_again() {
+        let s = setup();
+        std::fs::remove_file(&s.codex).unwrap();
+        let zst = s.codex.with_extension("jsonl.zst");
+        let fixture = include_bytes!("../tests/fixtures/transcripts/codex-costs.jsonl.zst");
+        std::fs::write(&zst, vec![b'x'; fixture.len()]).unwrap();
+        let c = s.scan();
+        assert!(!c.models.iter().any(|m| m.agent == "codex"));
+        assert!(
+            lock(&s.costs.state)
+                .index
+                .files
+                .contains_key(zst.to_str().unwrap())
+        );
+        std::fs::write(&zst, fixture).unwrap();
+        assert!(!s.scan().models.iter().any(|m| m.agent == "codex"));
+    }
+
+    #[test]
+    fn a_replay_after_an_incremental_scan_is_not_counted() {
+        let s = setup();
+        let before = s.scan();
+        let first = CODEX.lines().nth(3).unwrap();
+        append(&s.codex, &format!("{first}\n"));
+        assert_eq!(s.scan(), before);
     }
 
     fn token_count(at: &str, last: (u64, u64), total: (u64, u64)) -> String {

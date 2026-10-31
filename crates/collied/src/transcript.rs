@@ -419,13 +419,22 @@ impl Transcripts {
 
     fn codex_sessions(&self, cwd: &str) -> Vec<Session> {
         recent("codex", self.codex_files(), |path, file, id| {
-            let (i, c, interactive) = codex_meta(&codex_head(path, file, META_BYTES)?)?;
+            let zst = compressed(path);
+            let limit = if zst { HEAD_BYTES + 1 } else { META_BYTES };
+            let mut text = codex_head(path, file, limit)?;
+            let (i, c, interactive) = codex_meta(&text)?;
             if i != id || c != cwd || !interactive {
                 return None;
             }
-            file.seek(SeekFrom::Start(0)).ok()?;
-            let text = codex_head(path, file, HEAD_BYTES)?;
-            Some(codex_first_prompt(&String::from_utf8_lossy(&text)))
+            if !zst {
+                file.seek(SeekFrom::Start(0)).ok()?;
+                text = head(&mut *file, HEAD_BYTES + 1)?;
+            }
+            let longer = text.len() as u64 > HEAD_BYTES;
+            text.truncate(HEAD_BYTES as usize);
+            codex_first_prompt(&String::from_utf8_lossy(&text))
+                .or_else(|| longer.then(String::new))
+                .map(Some)
         })
     }
 }
@@ -474,9 +483,9 @@ fn recent(
         .collect()
 }
 
-fn head(file: &mut File, limit: u64) -> Option<Vec<u8>> {
+fn head(file: impl Read, limit: u64) -> Option<Vec<u8>> {
     let mut buf = Vec::new();
-    file.by_ref().take(limit).read_to_end(&mut buf).ok()?;
+    file.take(limit).read_to_end(&mut buf).ok()?;
     Some(buf)
 }
 
@@ -498,18 +507,19 @@ fn dated_dirs(dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// A compressed rollout's head is decoded up to `limit` bytes.
 fn codex_head(path: &Path, file: &mut File, limit: u64) -> Option<Vec<u8>> {
-    if !compressed(path) {
-        return head(file, limit);
+    if compressed(path) {
+        head(decoder(file).ok()?, limit)
+    } else {
+        head(file, limit)
     }
-    let mut buf = Vec::new();
-    ruzstd::decoding::StreamingDecoder::new(file)
-        .ok()?
-        .take(limit)
-        .read_to_end(&mut buf)
-        .ok()?;
-    Some(buf)
+}
+
+/// The decoder holds back a whole window before it yields. Codex writes zstd level 3, a 2 MiB
+/// window; a larger one is refused, so a hostile header cannot claim more memory or work.
+pub(crate) fn decoder(source: impl Read) -> std::io::Result<impl Read> {
+    ruzstd::decoding::StreamingDecoder::new_with_max_window_size(source, 8 << 20)
+        .map_err(std::io::Error::other)
 }
 
 pub(crate) fn compressed(path: &Path) -> bool {
