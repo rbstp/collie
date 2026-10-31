@@ -6,7 +6,7 @@ To see plan usage and token cost, switch the Agents tab to **Usage**, or swipe l
 |---|---|---|
 | Claude Code | 5-hour and weekly limits | The [status line tap](../install/claude-code.md#plan-usage) |
 | Codex | Monthly used and allowed credits, and the reset date | The local Codex app-server, every five minutes, for a credit-metered workspace |
-| Copilot | Monthly premium usage in percent, the used and allowed credits (or requests), and the reset date; "Unlimited" for a seat without a cap | GitHub, through the machine's own `gh` login, every five minutes, for an account with a Copilot seat on github.com |
+| Copilot | Monthly premium used and allowed credits (or requests), and the reset date; "Unlimited" for a seat without a cap | GitHub, through the machine's own `gh` login, every five minutes, for an account with a Copilot seat on github.com |
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/usage-light.png" width="300" height="652" loading="lazy" alt="The Usage view: Claude Code's 5-hour and weekly usage limits, each with a bar and its reset time">

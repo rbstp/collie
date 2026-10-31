@@ -107,7 +107,7 @@ private struct CopilotSubscriptionUsage: View {
             }
             let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout())
             layout {
-                Text(usage.unlimited ? "Unlimited" : "\(percent)% used, \(usage.used.formatted()) / \(usage.limit.formatted()) \(usage.unit)")
+                Text(usage.unlimited ? "Unlimited" : "\(usage.used.formatted()) / \(usage.limit.formatted()) \(usage.unit)")
                 if !dynamicTypeSize.isAccessibilitySize { Spacer() }
                 Text(usage.resetsLine)
             }
