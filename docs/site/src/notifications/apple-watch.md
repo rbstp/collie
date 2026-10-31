@@ -38,4 +38,4 @@ Tap either one to open a compact usage list. Both refresh about every 15 minutes
 
 Each widget and complication shows Claude Code, Codex and Copilot until you choose otherwise. To show fewer, edit the watch face or the Smart Stack on the watch, or the watch face in the Watch app on the iPhone, and turn agents off in the widget's options. Each widget keeps its own choice.
 
-The widget then shows a dial for each agent you chose, at the same size and centered, and the complication shows their rings, two for Claude Code. If you turn all three off, both show all three.
+The widget then shows a gauge for each agent you chose, at the same size and centered, and the complication shows their rings, two for Claude Code. If you turn all three off, both show all three.
