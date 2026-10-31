@@ -52,7 +52,7 @@ To hide a row, swipe it to the right and choose **Snooze**: for 1 hour, 4 hours,
 
 ## Remaining context
 
-A small ring shows how much context a Claude Code or Codex agent has left. `collied` reads it from the agent's transcript on the machine.
+A small ring shows how much context a Claude Code or Codex agent has left. `collied` reads it from the agent's transcript on the machine. For Claude Code, the ring counts down to the point where Claude Code compacts the conversation, like Claude Code's own "until auto-compact" indicator, and shows 0% once the session passes it. If you turn auto-compact off in Claude Code's `/config`, the ring counts down to the full context window instead.
 
 ## Running subagents
 
