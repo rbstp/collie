@@ -216,7 +216,7 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
         )
     }
     let state = WatchState(
-        items: [], entries: [entry(mac, [], usage: plan(used: 40_000, recordedMs: nowMs - 60_000)), entry(linux, [], usage: plan(used: 239_412))],
+        items: [], entries: [entry(linux, [], usage: plan(used: 239_412)), entry(mac, [], usage: plan(used: 40_000, recordedMs: nowMs - 60_000))],
         allowed: false, live: true, now: now
     )
     let usage = try #require(state.usage)
