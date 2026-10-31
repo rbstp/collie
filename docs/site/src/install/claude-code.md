@@ -1,6 +1,6 @@
 # Claude Code hook and plan usage
 
-Both are optional; `collied doctor` checks them.
+The hook and the status line tap are optional; `collied doctor` checks both.
 
 ## The PermissionRequest hook
 

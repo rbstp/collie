@@ -37,7 +37,7 @@ The download needs macOS 26 or later. [Desktop release downloads](../reference/d
 
 `collied setup` needs a terminal and the signed regular file `~/.cargo/bin/collied`, not a symlink. It skips steps already done, so a rerun resumes where it stopped:
 
-1. **`collied login`** signs in with your personal Tailscale account in the browser, or through the printed link or QR code.
+1. **`collied login`** signs in, in the browser or through the printed link or QR code, with the personal Tailscale account you will use on the phone.
 2. **`collied service install`** installs the launchd agent that starts `collied` at login, or reinstalls it when it is stopped or outdated.
 3. **`collied doctor`** stops setup on a `fail` line. Expect `warn` lines for parts not set up yet, such as `reach` before your phone signs in.
 4. **Push notifications**, optional: setup offers the publisher relay. A self-built app needs direct APNs instead: run `collied setup --direct-apns` ([Push notifications](push.md)).

@@ -27,7 +27,7 @@ Choose **Git worktree**, pick the repository as you would a folder, then:
 
 - **Create** a new branch, named for you unless you type a name, with its checkout under the repository's `.worktree/` folder;
 - **Open** an existing checkout;
-- check out a **Pull request** of that repository by number; `collied` fetches its branch from `origin` with `gh`, and refuses pull requests from forks.
+- check out a **Pull request** of that repository by number; `collied` asks `gh` for its branch and fetches it from `origin`, and refuses pull requests from forks.
 
 Check the branch and path before you tap **Start**. If the agent fails to start, the checkout and workspace stay, and the error names them.
 

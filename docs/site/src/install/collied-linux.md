@@ -33,6 +33,7 @@ collied setup
 
 Setup runs the [macOS steps](collied-macos.md#what-setup-does), except:
 
+- `~/.cargo/bin/collied` needs no signature.
 - `collied login` prints the sign-in link and QR code, and opens no browser.
 - `collied service install` writes a systemd user unit instead of a launchd agent.
 - With `--direct-apns`, `collied` stores the APNs key as an encrypted systemd user credential (systemd 256 or later), or, where systemd cannot encrypt it, in a file only you can read. `collied doctor` says which.

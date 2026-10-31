@@ -86,7 +86,7 @@ collie is a developer tool and is not directed at children.
 
 ## Changes
 
-Changes to this policy appear on this page with a new date. A collie version that adds a service handling your data will be described here before it is released.
+Changes to this policy appear on this page with a new date. If a collie version adds a service that handles your data, this page will describe it before that version is released.
 
 ## Contact
 

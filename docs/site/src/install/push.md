@@ -52,7 +52,7 @@ On macOS, the key goes into the login Keychain, which only the signed `collied` 
 
 ## Test a notification that opens a session
 
-Use an agent's terminal ID from `collied status`:
+With either push mode, use an agent's terminal ID from `collied status`:
 
 ```sh
 collied apns test --terminal-id <terminal-id>

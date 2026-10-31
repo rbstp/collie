@@ -33,7 +33,7 @@ Collie is tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI, an
    collied setup
    ```
 
-3. [Install the app](https://collie.rbstp.dev/install/app.html) with `just ios-run-device`, then [pair it](https://collie.rbstp.dev/install/pair.html).
+3. [Install the app](https://collie.rbstp.dev/install/app.html) on a connected iPhone with `just ios-run-device`, then [pair it](https://collie.rbstp.dev/install/pair.html).
 4. Optional: [push notifications](https://collie.rbstp.dev/install/push.html), the [Claude Code hook and plan usage](https://collie.rbstp.dev/install/claude-code.html), [terminals](https://collie.rbstp.dev/install/terminals.html) and the [desktop companions](https://collie.rbstp.dev/desktop/colliebar.html).
 
 ## Documentation

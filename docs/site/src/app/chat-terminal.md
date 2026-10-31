@@ -48,7 +48,7 @@ Terminal shows the last 200 lines of the agent's pane, or 500 or 1000 with **Set
 - When a prompt cannot reach the machine, the send button spins while the phone retries, up to 5 tries in all, a minute apart or as soon as the connection is back. To stop, edit the prompt or tap the spinner.
 - **Quote** adds text to the end of the prompt as a code block, without sending it. A prompt holds up to 32 KiB.
 - To hide the keyboard, tap the hide-keyboard button or swipe down on the prompt field. **Settings > Prompt > Keep keyboard open after sending** keeps it up.
-- When a background task or agent below Claude Code's input box is selected on the machine, Claude Code would not send your prompt, so the phone keeps it and says so. Press ↑ on the key strip or on the machine, then send again.
+- When a background task or agent below Claude Code's input box is selected on the machine, Claude Code would not send your prompt, so the phone keeps it and says so. Press ↑ on the key strip or on the machine to return to the input box, then send again.
 - An unsent prompt stays with its agent on this phone, and its attachments for up to 23 hours.
 
 See also [Key strip and gestures](keys.md), [Dictation and attachments](dictation-attachments.md), [Saved prompts](saved-prompts.md) and Claude Code's [draft sync](../agents/claude-code.md#draft-sync).

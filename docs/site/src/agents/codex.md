@@ -7,7 +7,7 @@
 | Grid preview, status and Inbox | Yes; if status looks wrong, see [Troubleshooting](../troubleshooting.md#codex-status-or-done-alerts-missing) |
 | [Chat](../app/chat-terminal.md) and Terminal | Yes; Chat needs the [hook](#set-up) |
 | [Context ring](../app/agents-tab.md#remaining-context) and [subagents](../app/agents-tab.md#running-subagents) | With the [hook](#set-up) |
-| [Approval alerts](../notifications/approvals.md) | No Approve or Deny: answer in the session |
+| [Approval alerts](../notifications/approvals.md) | Yes, without Approve or Deny: answer in the session |
 | [Plan usage](../app/usage.md) | Monthly credits, for a credit-metered workspace |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
 | Slash command menu, notice buttons, draft sync and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | No |
