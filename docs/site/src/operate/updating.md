@@ -1,10 +1,10 @@
 # Updating
 
-You can update the app and `collied` in either order: when they connect, they agree on a protocol revision both support. If you are updating from a release older than protocol revision 26, which needed both sides to match exactly, update both once. When the two drift too far apart, the app tells you which one to update: see [Version mismatch](version-mismatch.md).
+You can update the app and `collied` in either order: when they connect, they use the highest protocol revision both support. When they share none, the app says which one to update: see [Version mismatch](version-mismatch.md).
 
 ## collied
 
-Download the latest release for your operating system from [GitHub Releases](https://github.com/rbstp/collie/releases) and follow that release's installation instructions. To update a source build:
+Download the latest [release](https://github.com/rbstp/collie/releases) and install it as on [macOS](../install/collied-macos.md) or [Linux](../install/collied-linux.md). To update a source build:
 
 ```sh
 git pull
@@ -17,14 +17,16 @@ collied setup
 
 ## The app
 
+In the updated checkout, run:
+
 ```sh
 just ios-run-device
 ```
 
 ## Desktop companions
 
-- CollieBar: `just mac-install`.
-- CollieTray: `git pull`, then `just tray-install`.
+- CollieBar: install the new release download, or run `git pull`, then `just mac-install`.
+- CollieTray: run the new release's installer, or run `git pull`, then `just tray-install`.
 
 ## herdr
 

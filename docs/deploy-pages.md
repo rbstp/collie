@@ -1,38 +1,38 @@
 # Documentation site
 
-The documentation site at <https://collie.rbstp.dev> is built with [mdBook](https://github.com/rust-lang/mdBook) from `docs/site/` and published to GitHub Pages by `.github/workflows/pages.yml`.
+The site at <https://collie.rbstp.dev> is built with [mdBook](https://github.com/rust-lang/mdBook) from `docs/site/` and published to GitHub Pages by `.github/workflows/pages.yml`.
 
 ## Sources
 
 - `docs/site/book.toml`: the mdBook configuration.
 - `docs/site/src/`: the pages. `SUMMARY.md` is the table of contents.
-- `docs/site/src/reference/`: each page is a single mdBook include directive for `architecture.md`, `threat-model.md`, `tailnet.md`, `notifications.md`, `release.md` and this file, so those documents have one source.
-- `docs/site/src/images/`: screenshots of the app, each in a light and a dark copy. `just ios-screenshots` regenerates them from the app's demo data (`AgentDemo`) on the iPhone 18 Pro Max simulator, with a fixed status bar and the Dark Gold accent, then compresses them with [pngquant](https://pngquant.org) (`brew install pngquant`; without it they are kept uncompressed, several times larger). A page shows a pair inside `<div class="screenshots">`, with the classes `screenshot-light` and `screenshot-dark`; `collie.css` hides the copy that does not match the active theme. The README shows the dark copies. After every TestFlight release, the `docs screenshots` workflow regenerates the iPhone ones from the shipped commit (the watch ones are refreshed locally) and, when they changed, merges them through a `[skip-release]` pull request, whose push to `master` redeploys the site ([release.md](release.md#documentation-screenshots)).
-- `docs/site/theme/`: the Dark Gold theme (`collie.css`), the favicon and logo (`favicon.png`, the app icon at 128 px) and `head.hbs`, which puts the logo in the top bar.
+- `docs/site/src/reference/`: each page is a single mdBook include directive for a document under `docs/`, such as `architecture.md`, `release.md` or this file, so each document has one source.
+- `docs/site/src/images/`: the app screenshots, a light and a dark copy of each iPhone screen and one copy of each watch screen. `just ios-screenshots` regenerates them from the app's demo data (`AgentDemo`) on the iPhone 18 Pro Max simulator, with a fixed status bar and the Dark Gold accent, and compresses them with [pngquant](https://pngquant.org) when it is installed (`brew install pngquant`); uncompressed, they are several times larger. A page shows a pair inside `<div class="screenshots">` with the classes `screenshot-light` and `screenshot-dark`, and `collie.css` hides the copy that does not match the active theme; the README shows the dark copies. After every TestFlight release, a workflow refreshes the iPhone screenshots ([release.md](release.md#documentation-screenshots)).
+- `docs/site/theme/`: the Dark Gold theme (`collie.css`), `favicon.png` (the app icon at 128 px, also the logo) and `head.hbs`, which puts the logo in the top bar.
 
-The site lives under `docs/`, so a change to it starts no TestFlight build (`testflight.yml` ignores `docs/**`). `ci.yml` ignores `docs/site/**`, `docs/deploy-pages.md`, `README.md`, `AGENTS.md` and `CLAUDE.md` on pushes to `master`. On a pull request, its `changes` job lists the changed files, and when nothing outside those paths changed, the `rust` and `ios` jobs are skipped. A job skipped by its condition counts as passing, so the required checks are still met. Other docs stay out of that list because tests read `docs/protocol/` and `docs/tailnet.md`.
+The site lives under `docs/`, so changing it starts no TestFlight build (`testflight.yml` ignores `docs/**`). On pushes to `master`, `ci.yml` ignores `.github/**`, `docs/site/**`, `docs/deploy-pages.md`, `README.md`, `AGENTS.md` and `CLAUDE.md`. On a pull request, its `changes` job skips the `rust` and `ios` jobs when only `docs/site/`, `docs/deploy-pages.md`, `README.md`, `AGENTS.md` or `CLAUDE.md` changed; a job skipped by its condition counts as passing, so the required checks are met. Other docs stay out of that list because tests read `docs/protocol/` and `docs/tailnet.md`.
 
 ## The workflow
 
-`pages` runs on pull requests and on pushes to `master` that touch `docs/**`, `README.md` or the workflow itself, and on demand (Actions, pages, Run workflow, on `master`).
+`pages` runs on pull requests and pushes to `master` that touch `docs/**`, `README.md` or the workflow itself, and on demand (Actions, pages, Run workflow, on `master`).
 
-1. **build**, on every run: installs mdBook 0.5.4 (checked against its SHA-256), runs `docs/site/stage-site.sh` into a temporary directory, then `docs/site/check-site.sh` on the result. A pull request stops here, so the merge gate and the deploy gate are the same checks.
-2. On `master` only, **build** uploads the staged directory with `actions/upload-pages-artifact`, and **deploy** runs `actions/configure-pages` and `actions/deploy-pages` in the `github-pages` environment. Only **deploy** gets `pages: write` and `id-token: write`; it is in the `pages` concurrency group with `cancel-in-progress: false`, so a deployment is never cut off halfway.
+1. **build**, on every run: installs mdBook 0.5.4 (checked against its SHA-256), runs `docs/site/stage-site.sh` into a temporary directory, then `docs/site/check-site.sh` on the result. A pull request stops here, so merging and deploying pass the same checks.
+2. On `master` only, **build** uploads the staged directory with `actions/upload-pages-artifact`, and **deploy** runs `actions/configure-pages` and `actions/deploy-pages` in the `github-pages` environment. Only **deploy** gets `pages: write` and `id-token: write`. It runs in the `pages` concurrency group with `cancel-in-progress: false`, so a deployment is never cut off halfway.
 
-`stage-site.sh <outdir>` builds the book and adds:
+`stage-site.sh <outdir>` builds the book, fails on an unclosed HTML tag (a bare `<placeholder>` in prose: write `\<placeholder>` or use backticks), and adds:
 
-- `reference/protocol/`, a copy of `docs/protocol/`, which the included reference pages link to;
-- `CNAME` with `collie.rbstp.dev` (override with `SITE_DOMAIN`), in the artifact as a record of the domain. GitHub ignores `CNAME` files for sites deployed by a custom Actions workflow: the custom domain lives only in Settings > Pages;
+- `reference/protocol/`, a copy of `docs/protocol/`, which the reference pages link to;
+- `CNAME` with `collie.rbstp.dev` (override with `SITE_DOMAIN`), kept as a record of the domain only: GitHub ignores `CNAME` for a site deployed by a custom Actions workflow, and the custom domain lives in Settings > Pages;
 - `.nojekyll`.
 
-mdBook writes `404.html` itself, from `src/404.md`. With `site-url = "/"`, it carries `<base href="/">`, so its links work at any depth. mdBook also adds a content hash to every asset name, so a deploy never mixes new pages with cached old assets.
+mdBook writes `404.html` from `src/404.md`. With `site-url = "/"`, it carries `<base href="/">`, so its links work at any depth. mdBook also adds a content hash to every asset name, so a deploy never mixes new pages with cached old assets.
 
 `check-site.sh <site-dir>` fails when:
 
 - a required page, the search index, `CNAME` or `.nojekyll` is missing;
 - `CNAME` is not `collie.rbstp.dev` (or `SITE_DOMAIN`);
 - a page still shows an mdBook directive, which means an include failed;
-- any `href` or `src` that is not an external URL points at a missing file, or at an `id` that does not exist in its target page.
+- any `href` or `src` that is not an external URL points at a missing file, or at an `id` missing from its target page.
 
 `book.toml` sets `create-missing = false`, so a `SUMMARY.md` entry without its file fails the build instead of creating an empty page.
 
@@ -48,7 +48,7 @@ python3 -m http.server -d /tmp/collie-site 8080    # http://127.0.0.1:8080/
 
 ## Theme
 
-The palettes are built around the app's Dark Gold accent (`AppAccent.gold` in `Collie/Sources/Collie/DevicePrefs.swift`): `#805C14` in light mode and `#C79E40` in dark mode. Gold is used for links, the active sidebar item, callout edges and titles, and focus rings. mdBook's Light and Rust themes use the light palette; Coal, Navy and Ayu use the dark one. The theme menu offers Auto, which follows the system, Light and Coal.
+The palettes are built around the app's Dark Gold accent (`AppAccent.gold` in `Collie/Sources/Collie/DevicePrefs.swift`): `#805C14` in light mode and `#C79E40` in dark mode. Gold marks links, the active sidebar item, callout edges and titles, and focus rings. mdBook's Light and Rust themes use the light palette, and Coal, Navy and Ayu the dark one. The theme menu offers only Auto, which follows the system, Light and Coal.
 
 Every text color passes WCAG AA (4.5:1) on the backgrounds it is drawn on:
 
@@ -81,14 +81,14 @@ Recompute these when a color in `collie.css` changes.
 
 ## 1. GitHub settings
 
-These are repository settings, not files, so a pull request cannot set them. Do them in this order:
+These repository settings are not files, so no pull request can set them. In this order:
 
-1. **Settings > Pages > Build and deployment > Source: GitHub Actions.** Until this is set, Pages keeps building the repository root with Jekyll from the branch, and the workflow cannot deploy.
+1. **Settings > Pages > Build and deployment > Source: GitHub Actions.** Until then, Pages builds the repository root with Jekyll from the branch, and the workflow cannot deploy.
 2. Add the Cloudflare record ([below](#2-cloudflare-dns)).
 3. **Settings > Pages > Custom domain: `collie.rbstp.dev`**, then Save. GitHub checks the DNS record on save, so it must exist first.
-4. Wait for the certificate, then tick **Enforce HTTPS**. The checkbox stays unavailable until the certificate is issued, which usually takes minutes and can take up to an hour.
+4. Wait for the certificate, then tick **Enforce HTTPS**. The checkbox stays unavailable until the certificate is issued, usually within minutes and at most about an hour.
 
-The `github-pages` environment is created on the first deployment. If it ever gets protection rules, keep `master` as an allowed deployment branch.
+The first deployment creates the `github-pages` environment. If it ever gets protection rules, keep `master` as an allowed deployment branch.
 
 ## 2. Cloudflare DNS
 
@@ -102,14 +102,14 @@ In the Cloudflare dashboard, zone `rbstp.dev`, **DNS > Records > Add record**:
 | Proxy status | **DNS only** (gray cloud) |
 | TTL | Auto |
 
-Use a `CNAME`, not A records: `collie` is a subdomain. Nothing else in the zone changes.
+`collie` is a subdomain, so use a `CNAME`, not A records. Nothing else in the zone changes.
 
 ### Pitfalls
 
-- **Proxying before the certificate exists.** GitHub gets its Let's Encrypt certificate with an HTTP challenge on `http://collie.rbstp.dev/.well-known/acme-challenge/`. A proxied (orange) record can hide that request from GitHub, and GitHub's domain check sees Cloudflare's addresses instead of its own. Keep the record gray. If you proxy it later, after Enforce HTTPS is on, set SSL/TLS to **Full (strict)**; **Flexible** loops with GitHub's HTTPS redirect (`ERR_TOO_MANY_REDIRECTS`).
-- **Always Use HTTPS.** This zone setting answers the plain HTTP challenge with a redirect, but only for proxied records. A gray record is not affected.
-- **CAA records.** If the zone has CAA records, one must allow `letsencrypt.org`, or GitHub can never get a certificate.
-- **HSTS with `includeSubDomains`.** Browsers then refuse plain HTTP on `collie.rbstp.dev`, so expect a TLS error rather than a page until the certificate is issued.
+- **Proxying before the certificate exists.** GitHub gets its Let's Encrypt certificate through an HTTP challenge on `http://collie.rbstp.dev/.well-known/acme-challenge/`. A proxied (orange) record can hide that request from GitHub, and GitHub's domain check then sees Cloudflare's addresses instead of its own. Keep the record gray. To proxy it later, after Enforce HTTPS is on, set SSL/TLS to **Full (strict)**; **Flexible** loops with GitHub's HTTPS redirect (`ERR_TOO_MANY_REDIRECTS`).
+- **Always Use HTTPS.** This zone setting answers the plain HTTP challenge with a redirect, but only for proxied records; a gray record is not affected.
+- **CAA records.** If the zone has CAA records, one must allow `letsencrypt.org`, or GitHub never gets a certificate.
+- **HSTS with `includeSubDomains`.** Browsers then refuse plain HTTP on `collie.rbstp.dev`, so expect a TLS error instead of a page until the certificate is issued.
 - **A wildcard record.** If `*.rbstp.dev` exists, `collie.rbstp.dev` resolves before you add anything, so a working `dig` proves nothing. The explicit record wins once added.
 
 ## 3. Verify
@@ -140,7 +140,7 @@ curl -sS https://collie.rbstp.dev/no/such/page | grep -o 'Page not found'
 | The site still shows the README | Source is still "Deploy from a branch". Set it to GitHub Actions and run the workflow. |
 | The deploy job fails | Source is not GitHub Actions, or `github-pages` protection rules exclude `master`. |
 | No deploy after a merge | The push touched nothing under `docs/`, `README.md` or the workflow. Run it by hand: Actions, pages, Run workflow. |
-| The custom domain is rejected | The DNS record has not propagated: check `dig` first. |
-| Enforce HTTPS stays unavailable for over an hour | No certificate. Check that the record is gray and the CAA records. |
+| The custom domain is rejected | The DNS record has not propagated: check with `dig` first. |
+| Enforce HTTPS stays unavailable for over an hour | No certificate. Check that the record is gray, and check the CAA records. |
 | `ERR_TOO_MANY_REDIRECTS` | Proxied with SSL/TLS set to Flexible. Use Full (strict), or go back to gray. |
 | The custom domain is blank | Set it again in Settings > Pages. With an Actions deploy, that setting is the only source; the artifact's `CNAME` does not restore it. |

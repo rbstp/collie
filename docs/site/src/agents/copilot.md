@@ -8,32 +8,28 @@ You can follow GitHub Copilot CLI agents, read them in Chat and work with them i
 |---|---|
 | Grid preview, status and Inbox | Yes |
 | [Chat](../app/chat-terminal.md) and Terminal | Yes |
-| Blocked notifications | Yes, without Approve or Deny |
-| Answering prompts | Terminal buttons or typing in the composer |
-| Key shortcuts just for Copilot CLI | Yes |
-| New task | Yes |
+| [Context ring](../app/agents-tab.md#remaining-context) and [subagents](../app/agents-tab.md#running-subagents) | Subagents only |
+| Approval alerts | Text read from the screen, without Approve or Deny |
+| Answer prompts in the session | Yes |
 | [Plan usage](../app/usage.md) | Monthly premium usage, with `gh` signed in |
+| [Token cost](../app/usage.md#tokens-and-cost) | Yes |
+| Slash command menu, notice buttons and draft sync | No |
+| [Watch a pull request](../app/pull-requests.md#watch-a-pull-request) | No |
+| [New task](../app/new-task.md) | Yes |
 
 ## Set up
 
-Install Copilot CLI on the machine as `copilot`, and keep it in the `[tasks] agents` list of `collied.toml`, where it is by default. herdr starts it and reads its status from the screen.
-
-For plan usage, install the GitHub CLI (`gh`) on the machine and sign in with `gh auth login` to the github.com account that has the Copilot seat.
+1. Install Copilot CLI on the machine as `copilot`, and leave `copilot` in `[tasks] agents` in `collied.toml`, as it is by default. herdr starts it and reads its status from the screen.
+2. For plan usage, install the GitHub CLI (`gh`) on the machine and sign in with `gh auth login` to the github.com account that has the Copilot seat.
 
 ## Chat
 
-Chat shows the conversation that Copilot shows in the pane, and follows it when you start another one with `/new`. A subagent's steps appear under the task that started it. Copilot names a session after your first prompt. Until it does, or when two conversations in the pane share a name, Chat says it cannot tell which conversation the pane shows rather than guessing, and Terminal still works.
-
-## Terminal
-
-Terminal hides Copilot's scrollbar column. With line wrapping on, Copilot's prose and your sent prompts wrap to the phone's width.
+Chat shows the conversation the pane shows, and follows `/new` to the next one. A subagent's steps appear under the task that started it. Copilot names a session after your first prompt; until then, or when two conversations in the pane share a name, Chat says it cannot tell which conversation the pane shows rather than guess, and Terminal still works.
 
 ## Plan usage
 
-The Usage view shows the premium usage this month: the credits used and allowed (or requests, for a seat billed by request), and the reset date. A seat without a cap shows "Unlimited". `collied` asks GitHub for it every five minutes with your own `gh` login, and the token stays with `gh`. The row clears when `gh` is signed out or the account has no premium quota. A seat that a GitHub Enterprise Cloud account with data residency (`*.ghe.com`) assigns does not show.
-
-The same reading feeds the [Apple Watch](../notifications/apple-watch.md) complication and widget.
+Usage shows this month's premium usage: the credits used and allowed (requests for a seat billed by request, "Unlimited" for a seat without a cap) and the reset date. `collied` asks GitHub every five minutes with your own `gh` login, and the token stays with `gh`. The row clears when `gh` is signed out or the account has no premium quota. A seat assigned by a GitHub Enterprise Cloud account with data residency (`*.ghe.com`) does not show.
 
 ## Startup prompts
 
-When Copilot asks whether to trust the folder, the new task stops with a message. Answer the prompt in Terminal, with the key strip or by typing in the composer.
+When Copilot asks whether to trust the folder, the new task stops with a message, without sending its prompt. Answer the prompt in Terminal, with the key strip or by typing in the composer.

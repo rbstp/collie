@@ -1,10 +1,8 @@
 # Agents
 
-The **Agents** tab lists every herdr agent on every paired machine, grouped by machine with blocked agents first. Each agent shows its status: `idle`, `working`, `blocked` or `done`. A machine that is asleep or off shows as offline and does not slow down the others.
+The **Agents** tab lists the herdr agents on every paired machine. Each agent shows its status: `idle`, `working`, `blocked` or `done`. A machine that is asleep or off shows as offline without slowing down the others.
 
 Pull down to retry every machine, or tap a machine's header to retry that one.
-
-In every layout and in Usage, the content scrolls under the buttons at the top and the tab bar at the bottom and stays fully visible around them: no band covers either edge.
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/agents-light.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">
@@ -13,71 +11,53 @@ In every layout and in Usage, the content scrolls under the buttons at the top a
 
 ## Machine order
 
-To arrange your machines, open **Machines**, tap **Edit**, drag the reorder handles, then tap **Done**. The phone keeps this order across app restarts and uses it in the grouped Agents layouts, in Usage and when you move between agents on different machines. Offline machines keep their positions, newly paired machines go to the end, and a removed machine leaves the order.
-
-Agents keep their order within each machine. Inbox still ranks agents by status and priority across machines.
+To arrange your machines, open **Machines**, tap **Edit**, drag the handles, then tap **Done**. Grid, List and Usage follow this order, as does swiping between agents opened from Grid or List; Inbox sorts by status instead. This phone keeps the order, and newly paired machines go to the end.
 
 ## Layouts
 
-The Agents tab has three layouts.
+The layout button at the top switches between three layouts.
 
 ### Grid
 
-The default. Each card is a live preview of the agent's screen. Claude Code, Codex and Copilot CLI cards show the agent's output without its input box and status lines. A blocked agent's card shows its whole screen.
+The default: each machine gets a section of cards. While **Settings > Sessions > Default view** is Chat (the default), each card previews the conversation: your last two messages and the agent's last two replies, without tool calls. Set to Terminal, or when Chat is not available for the agent or `collied` on its machine needs an update, a card previews the agent's screen without Claude Code's, Codex's or Copilot CLI's input box and status lines. A blocked agent's card always shows the whole screen, prompt included. The grid picks up a change to the setting the next time you open the tab.
 
-When **Settings > Sessions > Default view** is Chat, cards preview the conversation instead: your last two messages and the agent's last two replies, in order, without tool calls. A starred card shows more of each message. A blocked agent's card still shows its whole screen, so you can see the prompt. A card also shows the screen when Chat is not available for the agent, or when `collied` on its machine needs an update. When you change the setting, the grid follows it the next time you open the Agents tab.
+[Running subagents](#running-subagents) appear at the top of the preview with their titles and elapsed times: up to two on a card and four on a starred card, then "+N more". While the agent is blocked, the card hides them so the prompt stays visible.
 
-[Running subagents](#running-subagents) appear on glass at the top of the preview. Each shows its title and elapsed time, updated every minute. A normal card lists up to two subagents and a starred card up to four, then "+N more". The latest output stays visible below the list, and at accessibility text sizes the preview grows to fit both. The list disappears when the subagents finish. While the agent is blocked, the card hides the list so the prompt stays visible. VoiceOver reads the subagents with the card.
-
-- **Star** a card with a long press. Starred cards lead their machine's section at twice the height. The machine keeps stars for all your phones until the pane closes or you remove the machine.
-- **Reorder** by dragging a card to an insertion line. Moving a card between the starred and unstarred groups also stars or unstars it. This phone keeps the order.
-
-Cards stay in place when statuses change. You can drop a card above or below a starred card, or on any edge of an unstarred card in a grid with several rows. A single row offers only left and right, and a single column only above and below. When the other group is empty, a glass drop area appears during the drag: drop above the cards to star, below them to unstar. The Agents page stays in place until the drag ends.
+- **Star** a card: long-press it and choose **Star**. Starred cards lead their machine's section at twice the height. The machine keeps stars for all your phones until the pane closes or you remove the machine.
+- **Reorder** cards by dragging. Dropping a card among the starred cards stars it, and among the others unstars it; when one group is empty, drop on the **Drop here to star** or **Drop here to unstar** area that appears. This phone keeps the order, and cards stay in place when statuses change.
 
 ### List
 
-A compact list of agents, with their status as icons.
+A compact list of agents grouped by machine, blocked first, with their status as icons.
 
 ### Inbox
 
-Search agents across machines with the field below the filters, and filter them. Swipe down on the search field to hide the keyboard.
+One list of the agents on every machine, grouped by status with blocked agents first. Search it with the field at the top (swipe down on the field to hide the keyboard), or filter it:
 
-- **Needs attention**: blocked agents and recent completions.
-- **Working**: agents that are working, including blocked ones.
+- **Needs attention**: blocked agents and completions you have not opened.
+- **Working**: working and blocked agents.
 - **Inactive**: idle agents and completions older than 24 hours.
 
 Each row shows the latest reply, your last prompt, the workspace, agent kind, machine and elapsed time.
 
-To hide a row, swipe it to the right and choose **Snooze**: for 1 hour, 4 hours, until 8:00 the next morning or until a time you pick. A snoozed agent comes back early when it blocks or finishes another turn. You cannot snooze a blocked agent. Snoozed agents wait in a collapsed **Snoozed** section; to bring one back, long-press it and choose **Wake now**. This phone keeps your snoozes.
+To hide a row, swipe it right and choose **Snooze**: **1 hour**, **4 hours**, **Today 8:00** or **Tomorrow 8:00** (whichever comes next), or **Custom**. You cannot snooze a blocked agent, and a snoozed agent comes back early when it blocks or finishes another turn. Snoozed agents wait in a collapsed **Snoozed** section; long-press one and choose **Wake now** to bring it back. This phone keeps your snoozes.
 
 ## Remaining context
 
-A small ring shows how much context a Claude Code or Codex agent has left. `collied` reads it from the agent's transcript on the machine. For Claude Code, the ring counts down to the point where Claude Code compacts the conversation, like Claude Code's own "until auto-compact" indicator, and shows 0% once the session passes it. If you turn auto-compact off in Claude Code's `/config`, the ring counts down to the full context window instead.
+A small ring shows how much context a Claude Code or Codex agent has left, read from its transcript on the machine. Codex needs [herdr's hook](../agents/codex.md#set-up). For Claude Code, the ring counts down to the point where Claude Code compacts the conversation, like its own "until auto-compact" indicator, and shows 0% once the session passes it. With auto-compact off in Claude Code's `/config`, the ring counts down to the full context window.
 
 ## Running subagents
 
-Claude Code, GitHub Copilot CLI and Codex agents show their running subagents, each with a title and elapsed time. A subagent disappears when it finishes or is interrupted. When it gets a follow-up, its elapsed time starts again.
+Claude Code, GitHub Copilot CLI and Codex agents show their running subagents, each with a title and elapsed time; Codex needs [herdr's hook](../agents/codex.md#set-up). A subagent disappears when it finishes or is interrupted, and a follow-up restarts its elapsed time. After Copilot's `/new`, Collie follows the new conversation in the same pane; when it cannot tell which conversation the pane shows, it does not guess.
 
-After Copilot's `/new`, the same pane shows a new conversation, and Collie follows it. When Collie cannot tell which conversation the pane shows, it does not guess.
+Collie leaves out idle subagents, subagents of other sessions, a subagent that never writes its identifying metadata, and subagents forked by older Codex versions that do not mark where the inherited history ends. In a session with a large event log, subagents can take a few refreshes to appear.
 
-Subagents can take a few refreshes to appear when the session's event log is large. Collie does not show:
-
-- idle subagents, or subagents of other sessions;
-- a subagent that never writes its identifying metadata;
-- subagents forked by older Codex versions that do not mark where the inherited history ends.
-
-Subagents also affect [archiving when the pull request merges](pull-requests.md#archive-when-the-pull-request-merges). Collie does not archive a workspace while a subagent runs, while it cannot read a known subagent's data, or while it cannot tell which conversation a Copilot pane shows. Background work that a Copilot pane still holds in an earlier conversation also blocks archiving, without appearing under the current one. Unused Codex threads do not count as subagents and do not block archiving.
+Subagents also hold back [archiving when the pull request merges](pull-requests.md#archive-when-the-pull-request-merges): Collie waits while a subagent runs, while it cannot read a known subagent's data, and while it cannot tell which conversation a Copilot pane shows. Background work a Copilot pane holds from an earlier conversation also blocks archiving, though it does not appear. Unused Codex threads do not count.
 
 ## Agent actions
 
-Long-press an agent, or use the agent screen's menu, to:
-
-- follow it on the Lock Screen (see [Live Activities](../notifications/live-activities.md));
-- close its pane or workspace;
-- open its [Git changes](git-changes.md).
-
-**Focus on** followed by the machine name brings the agent's pane to the front in herdr on that machine.
+Long-press an agent to follow it on the Lock Screen (see [Live Activities](../notifications/live-activities.md)), close its pane or workspace, or [archive](new-task.md#archive) it. A session's **More** menu offers the same actions, plus [Git changes](git-changes.md), **Refresh**, and **Focus on** followed by the machine name, which brings the agent's pane to the front in herdr on that machine.
 
 ## Appearance
 
-Choose an accent color in **Settings > Appearance > Accent color**: None, Blue (the default), Orange, Green, Red or Dark Gold. None uses the system text color, white in dark mode and black in light mode, so selected labels, buttons and icons keep the highest contrast; switches keep the system green. The choice applies to this phone only. Destructive actions stay red, and status colors keep their meaning.
+Choose an accent color in **Settings > Appearance > Accent color**: None, Blue (the default), Orange, Green, Red or Dark Gold. None uses the system text color, black or white, for the highest contrast; switches stay green. The choice applies to this phone only. Destructive actions stay red, and status colors keep their meaning.
