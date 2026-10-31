@@ -24,6 +24,7 @@ hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "http2"
 protocol.workspace = true
 qrcode = { version = "0.14.1", default-features = false }
 rustix = { version = "1.1.5", features = ["fs", "param", "process", "system", "termios"] }
+ruzstd = "0.9.1"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
