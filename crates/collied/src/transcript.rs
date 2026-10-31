@@ -25,6 +25,7 @@ const CLAUDE_WINDOW: u64 = 200_000;
 const CLAUDE_LONG_WINDOW: u64 = 1_000_000;
 /// Claude Code 2.1.314 auto-compacts at the window less min(max output, 20,000) less 13,000.
 const CLAUDE_COMPACT_RESERVE: u64 = 33_000;
+const MAX_SETTINGS: u64 = 64 << 10;
 /// codex-rs `BASELINE_TOKENS`, so the percentage matches Codex's own "context left".
 const CODEX_BASELINE: u64 = 12_000;
 const MAX_SESSIONS: usize = 20;
@@ -307,6 +308,7 @@ impl Transcripts {
         };
         let Some(stamp) = std::fs::metadata(&path)
             .ok()
+            .filter(|m| m.is_file() && m.len() <= MAX_SETTINGS)
             .and_then(|m| Some((m.len(), m.modified().ok()?)))
         else {
             self.auto_compact = None;
@@ -775,7 +777,8 @@ fn claude(text: &str, known_window: Option<u64>, auto_compact: bool) -> Derived 
                     } else {
                         window
                     };
-                    let used = compacted.unwrap_or(seen);
+                    let output = u["output_tokens"].as_u64().unwrap_or(0);
+                    let used = compacted.unwrap_or(seen + output);
                     d.context_left = Some(percent(limit.saturating_sub(used), limit));
                 }
                 if d.last_line.is_none() {
@@ -934,7 +937,7 @@ mod tests {
     #[test]
     fn claude_fixture() {
         let d = claude(CLAUDE, None, true);
-        // 2 + 429 + 54811 input tokens of a 1M window; the sidechain and synthetic lines are skipped.
+        // 2 + 429 + 54811 input and 153 output tokens of a 1M window; the sidechain and synthetic lines are skipped.
         assert_eq!(d.context_left, Some(94));
         assert_eq!(d.last_line.as_deref(), Some("**Fixed** the flaky test."));
         assert_eq!(
@@ -1141,6 +1144,8 @@ mod tests {
         assert_eq!(left(50_000, 200_000, false), Some(75));
         assert_eq!(left(167_000, 200_000, false), Some(17));
         assert_eq!(left(10_000, 20_000, true), Some(0));
+        let replied = r#"{"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-5-5","content":[],"usage":{"input_tokens":46660,"output_tokens":3340}}}"#;
+        assert_eq!(claude(replied, Some(200_000), true).context_left, Some(70));
     }
 
     #[test]
