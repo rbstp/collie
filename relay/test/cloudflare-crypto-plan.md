@@ -4,7 +4,7 @@ Status: the single reviewed 42-attempt cycle ran on 2026-10-16 and its exact tem
 
 ## Source and limits
 
-The experiment keeps production's attestation/assertion verifier, Apple roots, D1 schema and transactions, and actor policy. `test/cloudflare-crypto-benchmark.ts` exports a guarded Worker and `BenchmarkCrypto`, a test subclass with a fixed historical Apple-fixture method and a new-signer method that production RPCs lack. Before any database or actor access, the Worker answers 404 to an absent, wrong or unconfigured bearer secret. It seeds one synthetic verified key, fakes APNs with no outbound fetch, runs challenge, control and send through the production implementation, and logs no bodies, grants, challenges or secrets. The local-test admission-delay helper `compute-fixture.ts` is not bundled.
+The experiment keeps production's `RelayCrypto` methods, attestation/assertion verifier, Apple roots, and D1 schema and transactions. `test/cloudflare-crypto-benchmark.ts` exports a guarded Worker and `BenchmarkCrypto`, a test subclass with a fixed historical Apple-fixture method and a new-signer method that production RPCs lack. Before any database or actor access, the Worker answers 404 to an absent, wrong or unconfigured bearer secret. It seeds one synthetic verified key, fakes APNs with no outbound fetch, runs challenge, control and send through the production implementation, and logs no bodies, grants, challenges or secrets. The local-test admission-delay helper `compute-fixture.ts` is not bundled.
 
 One explicit initialization creates a new private directory, ephemeral signing keys and a shared fsynced `{attempts:0,limit:50}` journal. Every Worker-origin request, probes, failed network attempts and authorized supplemental clients included, goes through `benchmarkClient` with that journal. Redirects are errors; missing, corrupt or locked state fails closed. The driver never retries, refuses a second matrix once its response log exists, and gives each attempt a 15-second deadline. A failure stops the matrix and authorizes no recovery traffic, directory or counter.
 
@@ -44,7 +44,7 @@ node test/cloudflare-crypto-driver.ts initialize /private/tmp/collie-crypto-benc
 cf d1 create --name collie-push-crypto-bench-20261016
 ```
 
-Apply only the reviewed `migrations/0001_relay.sql` and `0002_attestation.sql` with `cf d1 query <owned-database-id> --batch @<schema-batch.json>`, keeping trigger statements whole; keep the returned metadata and require at most 40 writes. Stage a private build directory with the reviewed `src/`, `test/`, package and lock files and installed dependencies, using `test/cloudflare-crypto.config.ts` as `cloudflare.config.ts` with only its zero D1 placeholder replaced. From there:
+Apply only the reviewed `migrations/0001_relay.sql` and `0002_attestation.sql` with `cf d1 query <owned-database-id> --batch @<schema-batch.json>`, keeping trigger statements whole; keep the returned metadata and require at most 40 writes. Stage a private build directory with the reviewed `src/`, `test/`, package and lock files and installed dependencies, using `test/cloudflare-crypto.config.ts` as `cloudflare.config.ts` with only its zero D1 placeholder replaced by the new database ID. From there:
 
 ```sh
 cf build

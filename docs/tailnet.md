@@ -12,7 +12,7 @@ Local testcontrol cannot prove coexistence with a corporate VPN on a physical ph
 
 - Run `collied setup` and sign in with the phone's personal account. On macOS, an interactive login without an auth key also tries once to open the sign-in page.
 - For headless use, `collied login` accepts an untagged user auth key in `COLLIE_TS_AUTHKEY`. `collied` removes it from its environment, `collied run` ignores it, and no key is needed once the node state is saved.
-- `[tailnet] hostname` (default `collie-<hostname>`) and `[tailnet] port` (default 8457) override the defaults.
+- `[tailnet] hostname` and `[tailnet] port` override the defaults, `collie-<hostname>` and 8457.
 - Node state lives in `~/Library/Application Support/collie/tsnet` on macOS, and in `$XDG_DATA_HOME/collie/tsnet`, else `~/.local/share/collie/tsnet`, on Linux: 0700 directories owned by the current OS user.
 - Login and startup require a positive embedded self user ID, no tags, and an unshared whois of the node's own address matching that user and StableID; admission binds to this owner before the control socket or tailnet listener opens. An optional `[tailnet] owner_user_id`, the owner in `peers.json` and every paired phone must match that user, or startup fails closed, so no phone can choose the owner. After an intentional account change, resolve the old pairings while the daemon is stopped.
 
@@ -48,7 +48,7 @@ A policy that already lets your devices reach each other needs no edit, and Coll
 }
 ```
 
-`autogroup:self` limits each member to their own devices, and the source can be narrowed to one user. Grants only add access, so this entry cancels no broader rule: review the whole policy in Access controls and Preview rules.
+`autogroup:self` matches each member's own devices, so this grant gives no user access to another's; an administrator can narrow the source to one user. Grants only add access, so this entry cancels no broader rule: review the whole policy in Access controls and Preview rules.
 
 User ownership gives the computer node its user's network access, possibly including outbound access to other devices: a compromised daemon can use it, and Collie's gate protects only Collie's sessions ([Trust boundaries](threat-model.md#trust-boundaries)). The phone opens no Collie listener, but serves Tailscale's peerapi in-process to peers the policy allows.
 
@@ -56,7 +56,7 @@ User ownership gives the computer node its user's network access, possibly inclu
 
 ## Pairing and connection authorization
 
-1. Before the TLS handshake, `collied` verifies its own embedded identity and a fresh whois of the peer, which must be untagged, unshared and owned by the bound positive user, and either a paired StableID with the same stored user and TLS key or an unpaired phone during a locally opened pairing window. Every other connection is refused.
+1. Before the TLS handshake, `collied` verifies its own embedded identity and a fresh whois of the peer. The peer must be untagged, unshared and owned by the bound positive user, and be either a paired StableID with the same stored user and TLS key or an unpaired phone during a locally opened pairing window. Every other connection is refused.
 2. After TLS, `collied` repeats these checks under the peers, pairing and sessions locks; an identity change, a revocation or a window change refuses admission.
 3. The pairing QR code carries the computer's netmap name, port, StableID, TLS key pin and one-time code. A pairing window lasts 120 seconds, the first `pair.complete` burns it, and even a right code needs a local **y/N** within 60 seconds ([Leaked pairing QR](threat-model.md#leaked-pairing-qr)).
 4. Before using a session, the phone finds the computer's pinned entry in its own netmap, with no DNS lookup, and checks its own embedded user against the saved owner, that entry's same-user untagged ownership, a fresh unshared whois, the exact StableID, the pinned TLS key and the node ID in `hello`. A first pairing records the current verified user; reconnects and one-shot background approvals make the same checks.

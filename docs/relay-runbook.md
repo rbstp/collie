@@ -60,7 +60,7 @@ SELECT COUNT(*) AS cleanup_backlog FROM routes WHERE expires_at < unixepoch() - 
 
 A steady trickle of `410 invalid_route` (tokens Apple invalidated) is normal; every `502 configuration_error` needs [action](#apns-configuration-errors).
 
-To reproduce a failure, run `collied apns test` on a machine paired with an operator-owned phone; it prints each relay result. In `collied doctor`, "relay temporarily unavailable" means any 429 or 5xx without a more specific message, Cloudflare error pages included.
+To reproduce a failure, run `collied apns test` on a machine paired with an operator-owned phone; it prints each relay result. In `collied doctor`, "relay temporarily unavailable" means any 429 or 5xx without a more specific message, Cloudflare error pages included, and "relay returned an unexpected response" any other reply without relay JSON.
 
 Before raising the public TestFlight tester limit, check seven days of counters against [Public link capacity](app-review.md#public-link-capacity) and [Relay's review points](relay.md#operations).
 

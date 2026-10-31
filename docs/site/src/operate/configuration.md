@@ -25,7 +25,7 @@ session = "work"               # default: herdr's default
 
 [tasks]                        # for New task
 roots = ["/Users/you/git"]     # where it may work; default: your home folder
-agents = ["claude", "codex", "copilot"]  # the first one herdr knows is the default
+agents = ["claude", "codex", "copilot"]  # those it may start; the first one herdr knows is the default
 ```
 
 **`owner_user_id`** pins the owner, the only Tailscale user allowed to use `collied`, by the ID the pairing prompt and `collied peers list` show. `collied` refuses to start under another account, and the pin survives deleting the paired phones file. Without it, the signed-in account is the owner.

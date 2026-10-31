@@ -11,7 +11,7 @@ Run these on the machine; [CollieBar](../desktop/colliebar.md) and [CollieTray](
 | `collied pair` | Shows a pairing QR code; `--show-uri` also prints the invite, one-time code included, for the Simulator |
 | `collied peers list` | Lists the owner's user ID and paired phones |
 | `collied peers revoke <label or StableID>` | Revokes a phone and closes its live sessions |
-| `collied stop` / `start` | Turns `collied` off, across reboots, or on again |
+| `collied stop` / `start` | Turns `collied` off (it stays off across reboots) or on again |
 | `collied login` | Signs Collie's node in to Tailscale; stop `collied` first |
 | `collied service install` / `uninstall` | Installs and starts, or stops and removes, the service |
 | `collied apns import <file>` | Imports a direct APNs `.p8` key |
@@ -23,4 +23,4 @@ Commands that read `collied.toml` take `--config <path>` to use another file. `c
 
 Each line is `ok`, `warn` or `fail`, the check and a detail. [Troubleshooting](../troubleshooting.md) names the line to read for each symptom.
 
-The `push` line shows the last send error and next retry; with the publisher relay, also the earliest grant expiry and when a reached daily quota resets. All machines paired with a phone share that quota: 1,000 sends per UTC day, at most 700 of them routine Live Activity updates. It never prints a grant, push token or payload.
+The `push` line shows the last send error and next retry; with the publisher relay, also the earliest grant expiry and when a reached daily quota resets. All machines paired with a phone share that quota: 1,000 sends per UTC day, at most 700 of them routine Live Activity updates. Times are Unix timestamps: grant expiry in seconds, the others in milliseconds. The line never prints a grant, push token or payload.

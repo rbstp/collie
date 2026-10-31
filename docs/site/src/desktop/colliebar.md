@@ -26,5 +26,5 @@ This signs CollieBar with your Developer ID and installs it to `~/Applications`,
 
 - The icon is bright while `collied` runs, dim while it is off, and shows a dot for a pending approval.
 - The menu shows the status and version, turns `collied` off and on, pairs a phone, lists the paired phones and opens the audit log. **Quit** also stops `collied`.
-- While `collied` is off, **Set Up…** runs `collied setup` in Terminal, to set up the machine or sign in again.
+- **Set Up…** runs `collied setup` in Terminal, to set up the machine or sign in again. It shows only while `collied` is off, so turn it off first to sign in again.
 - **Open at Login**, off by default, starts CollieBar when you log in.
