@@ -1,10 +1,11 @@
+import AppIntents
 import SwiftUI
 import WidgetKit
 
 @main
 struct UsageComplication: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: WatchUsage.widgetKind, provider: UsageProvider()) { entry in
+        AppIntentConfiguration(kind: WatchUsage.widgetKind, intent: UsageAgentsIntent.self, provider: UsageProvider()) { entry in
             UsageWidgetView(entry: entry)
         }
         .configurationDisplayName("Plan usage")
@@ -12,12 +13,29 @@ struct UsageComplication: Widget {
     }
 }
 
+struct UsageAgentsIntent: WidgetConfigurationIntent {
+    static let title: LocalizedStringResource = "Agents"
+    static let description = IntentDescription("Choose the agents this widget shows.")
+
+    @Parameter(title: "Claude Code", default: true) var claude: Bool
+    @Parameter(title: "Codex", default: true) var codex: Bool
+    @Parameter(title: "Copilot", default: true) var copilot: Bool
+
+    var agents: UsageAgents {
+        claude || codex || copilot ? UsageAgents(claude: claude, codex: codex, copilot: copilot) : UsageAgents()
+    }
+}
+
 struct UsageEntry: TimelineEntry {
     let date: Date
     let usage: WatchUsage?
+    var agents = UsageAgents()
 }
 
-struct UsageProvider: TimelineProvider {
+struct UsageProvider: AppIntentTimelineProvider {
+    // Empty, so watchOS 26 lets the owner edit the intent instead of picking a preset.
+    func recommendations() -> [AppIntentRecommendation<UsageAgentsIntent>] { [] }
+
     func placeholder(in context: Context) -> UsageEntry {
         let now = Date.now
         let month = Calendar(identifier: .gregorian).dateInterval(of: .month, for: now)!
@@ -33,15 +51,17 @@ struct UsageProvider: TimelineProvider {
         )
     }
 
-    func getSnapshot(in context: Context, completion: @escaping (UsageEntry) -> Void) {
-        completion(context.isPreview ? placeholder(in: context) : UsageEntry(date: .now, usage: WatchUsage.load()))
+    func snapshot(for configuration: UsageAgentsIntent, in context: Context) async -> UsageEntry {
+        var entry = context.isPreview ? placeholder(in: context) : UsageEntry(date: .now, usage: WatchUsage.load())
+        entry.agents = configuration.agents
+        return entry
     }
 
-    func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
+    func timeline(for configuration: UsageAgentsIntent, in context: Context) async -> Timeline<UsageEntry> {
         let now = Date.now
         let usage = WatchUsage.load()
-        let entries = (usage?.timelineDates(now: now) ?? [now]).map { UsageEntry(date: $0, usage: usage) }
-        completion(Timeline(entries: entries, policy: entries.count > 1 ? .atEnd : .after(now.addingTimeInterval(15 * 60))))
+        let entries = (usage?.timelineDates(now: now) ?? [now]).map { UsageEntry(date: $0, usage: usage, agents: configuration.agents) }
+        return Timeline(entries: entries, policy: entries.count > 1 ? .atEnd : .after(now.addingTimeInterval(15 * 60)))
     }
 }
 
@@ -52,9 +72,9 @@ private struct UsageWidgetView: View {
     var body: some View {
         Group {
             if family == .accessoryRectangular {
-                UsageGauges(usage: entry.usage, now: entry.date)
+                UsageGauges(usage: entry.usage, now: entry.date, agents: entry.agents)
             } else {
-                UsageRings(usage: entry.usage, now: entry.date)
+                UsageRings(usage: entry.usage, now: entry.date, agents: entry.agents)
             }
         }
         .widgetURL(WatchUsage.detailsURL)
@@ -71,15 +91,17 @@ private struct UsageWidgetView: View {
 private struct UsageRings: View {
     let usage: WatchUsage?
     let now: Date
+    let agents: UsageAgents
     private let labels = ["Claude 5-hour", "Claude weekly", "Codex monthly", "Copilot monthly"]
 
     var body: some View {
         let windows = usage?.windows(now: now) ?? [nil, nil, nil, nil]
+        let shown = agents.windows
         GeometryReader { geometry in
             let size = min(geometry.size.width, geometry.size.height)
             ZStack {
-                ForEach(0..<4) { index in
-                    let diameter = size * (1 - Double(index) * 0.22)
+                ForEach(Array(shown.enumerated()), id: \.element) { position, index in
+                    let diameter = size * (1 - Double(position) * 0.22)
                     let strokeWidth = size * 0.075
                     Group {
                         if let window = windows[index] {
@@ -106,15 +128,16 @@ private struct UsageRings: View {
                             .rotationEffect(.degrees(window.elapsed(now: now) * 360))
                     }
                 }
-                if windows.allSatisfy({ $0 == nil }) {
+                if shown.allSatisfy({ windows[$0] == nil }) {
                     Text("--").font(.system(size: size * 0.2)).foregroundStyle(.secondary)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(labels.enumerated().map { index, label in
-            windows[index].map { "\(label), \($0.unlimited ? "unlimited" : "\($0.used) percent used"), \(Int(($0.elapsed(now: now) * 100).rounded())) percent of the window elapsed" } ?? "\(label), unavailable"
+        .accessibilityLabel(shown.map { index in
+            let label = labels[index]
+            return windows[index].map { "\(label), \($0.unlimited ? "unlimited" : "\($0.used) percent used"), \(Int(($0.elapsed(now: now) * 100).rounded())) percent of the window elapsed" } ?? "\(label), unavailable"
         }.joined(separator: ". "))
     }
 }
