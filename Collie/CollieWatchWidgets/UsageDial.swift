@@ -2,21 +2,22 @@ import SwiftUI
 import WidgetKit
 
 struct UsageDial: View {
-    let logo: String
+    let logo: String?
     var period: String? = nil
     let window: WatchUsage.Window?
     let now: Date
     var showsPercentage = true
+    var span = 1.0
 
     var body: some View {
         let color = window.map { WatchUsage.usedColor($0.used) } ?? .secondary
-        let fraction = window?.usedFraction ?? 0
-        let end = window == nil ? 0 : min(fraction + 0.02, 1)
+        let fraction = (window?.usedFraction ?? 0) * span
+        let end = window.map { $0.unlimited ? 0 : min(fraction + 0.02, 1) } ?? 0
         let remainder = end < 1 ? color.opacity(0.2) : color
         Gauge(value: fraction) {
             if let period {
                 HStack(spacing: 2) {
-                    if showsPercentage {
+                    if showsPercentage, let logo {
                         UsageLogo(name: logo).frame(width: 11, height: 11)
                     }
                     Text(period).font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -24,10 +25,10 @@ struct UsageDial: View {
             }
         } currentValueLabel: {
             if showsPercentage {
-                Text(window.map { "\($0.used)%" } ?? "--")
+                Text(window.map { $0.unlimited ? "∞" : "\($0.used)%" } ?? "--")
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-            } else {
+            } else if let logo {
                 UsageLogo(name: logo).frame(width: 20, height: 20)
             }
         }
@@ -46,14 +47,14 @@ struct UsageDial: View {
                     Capsule().fill(.white)
                         .frame(width: 2, height: diameter * 0.16)
                         .offset(y: -diameter * 0.45)
-                        .rotationEffect(.degrees(-135 + window.elapsed(now: now) * 270))
+                        .rotationEffect(.degrees(-135 + window.elapsed(now: now) * 270 * span))
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .mask {
                             Rectangle().overlay {
                                 Circle()
                                     .frame(width: diameter * 0.2, height: diameter * 0.2)
                                     .offset(y: -diameter * 0.45)
-                                    .rotationEffect(.degrees(-135 + window.usedFraction * 270))
+                                    .rotationEffect(.degrees(-135 + fraction * 270))
                                     .blendMode(.destinationOut)
                             }
                             .compositingGroup()
@@ -67,12 +68,12 @@ struct UsageDial: View {
 }
 
 extension WatchUsage.Window {
-    func remaining(now: Date) -> Text {
+    func remaining(now: Date, units: Int = 2) -> Text {
         Text(Duration.seconds(max(0, interval.upperBound.timeIntervalSince(now))),
-             format: .units(allowed: [.days, .hours, .minutes], width: .narrow, maximumUnitCount: 2))
+             format: .units(allowed: [.days, .hours, .minutes], width: .narrow, maximumUnitCount: units))
     }
 
     func accessibilityValue(now: Date) -> String {
-        "\(used) percent used. \(Int((elapsed(now: now) * 100).rounded())) percent of the window elapsed. Resets \(interval.upperBound.formatted(date: .abbreviated, time: .shortened))"
+        "\(unlimited ? "Unlimited" : "\(used) percent used"). \(Int((elapsed(now: now) * 100).rounded())) percent of the window elapsed. Resets \(interval.upperBound.formatted(date: .abbreviated, time: .shortened))"
     }
 }

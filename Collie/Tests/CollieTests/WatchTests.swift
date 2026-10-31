@@ -125,12 +125,12 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
         codexUsed: 90, codexResetsAtMs: nowMs + 86_400_000
     )
     let windows = usage.windows(now: now)
-    #expect(windows.map { $0?.used } == [29, 73, 90])
+    #expect(windows.map { $0?.used } == [29, 73, 90, nil])
     #expect(try #require(windows[0]).interval.upperBound.timeIntervalSince(now) == 9_000)
     #expect(try #require(windows[0]).interval.upperBound.timeIntervalSince(windows[0]!.interval.lowerBound) == 18_000)
     #expect(try #require(windows[1]).interval.upperBound.timeIntervalSince(windows[1]!.interval.lowerBound) == 604_800)
     #expect(usage.timelineDates(now: now).last == now.addingTimeInterval(3600))
-    #expect(usage.windows(now: now.addingTimeInterval(9_000)).map { $0?.used } == [nil, 73, 90])
+    #expect(usage.windows(now: now.addingTimeInterval(9_000)).map { $0?.used } == [nil, 73, 90, nil])
     #expect(usage.windows(now: now.addingTimeInterval(86_400)).allSatisfy { $0 == nil })
     #expect(usage.timelineDates(now: now.addingTimeInterval(86_400)) == [now.addingTimeInterval(86_400)])
     #expect(WatchUsage(fiveHourUsed: nil, fiveHourResetsAtMs: nowMs + 60_000).timelineDates(now: now) == [now])
@@ -174,7 +174,7 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
 @Test func watchUsageDecodesOlderCachedReadings() throws {
     let data = Data(#"{"fiveHourUsed":42,"fiveHourResetsAtMs":2000000060000}"#.utf8)
     let usage = try JSONDecoder().decode(WatchUsage.self, from: data)
-    #expect(usage.windows(now: now).map { $0?.used } == [42, nil, nil])
+    #expect(usage.windows(now: now).map { $0?.used } == [42, nil, nil, nil])
     #expect(try JSONDecoder().decode(WatchUsage.self, from: JSONEncoder().encode(usage)) == usage)
 }
 
@@ -191,7 +191,7 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
         )
         let usage = try #require(foreground.usage)
         #expect(background.usage == usage)
-        #expect(usage.windows(now: now).map { $0?.used } == [nil, 100, used > 10_000 ? 100 : 15])
+        #expect(usage.windows(now: now).map { $0?.used } == [nil, 100, used > 10_000 ? 100 : 15, nil])
         #expect(try JSONDecoder().decode(WatchUsage.self, from: JSONEncoder().encode(usage)) == usage)
     }
     let codexOnly = PlanUsage(
@@ -204,6 +204,35 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
         codex: CodexUsage(used: 42, limit: 0, resetsAtMs: reset, recordedMs: nowMs)
     )
     #expect(WatchUsage(invalid).windows(now: now).allSatisfy { $0 == nil })
+}
+
+@Test func watchReceivesCopilotUsageFromTheNewestReading() throws {
+    let linux = Machine(id: "m2", label: "Linux", host: "linux.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
+    let reset = nowMs + 86_400_000
+    func plan(used: UInt64, limit: UInt64 = 400_000, unlimited: Bool = false, recordedMs: UInt64 = nowMs) -> PlanUsage {
+        PlanUsage(
+            fiveHour: nil, sevenDay: nil, recordedMs: 0,
+            copilot: CopilotUsage(used: used, limit: limit, unlimited: unlimited, tokenBasedBilling: true, resetsAtMs: reset, recordedMs: recordedMs)
+        )
+    }
+    let state = WatchState(
+        items: [], entries: [entry(mac, [], usage: plan(used: 40_000, recordedMs: nowMs - 60_000)), entry(linux, [], usage: plan(used: 239_412))],
+        allowed: false, live: true, now: now
+    )
+    let usage = try #require(state.usage)
+    #expect(usage.windows(now: now).map { $0?.used } == [nil, nil, nil, 60])
+    #expect(usage.copilotRecordedMs == nowMs)
+    #expect(usage.windows(now: now)[3]?.unlimited == false)
+    #expect(usage.windows(now: Date(unixMs: reset))[3] == nil)
+    let refreshed = WatchState.refreshed(
+        nil, listed: [MachineApprovals(machineId: linux.id, approvals: [], planUsage: plan(used: 239_412))], machines: [linux], allowed: false, now: now
+    )
+    #expect(refreshed.usage == usage)
+    #expect(WatchUsage(plan(used: 412_500)).windows(now: now)[3]?.used == 100)
+    let unlimited = try #require(WatchUsage(plan(used: 0, limit: 0, unlimited: true)).windows(now: now)[3])
+    #expect(unlimited.unlimited && unlimited.used == 0 && unlimited.usedFraction == 0)
+    #expect(WatchUsage(plan(used: 10, limit: 0)).windows(now: now)[3] == nil)
+    #expect(try JSONDecoder().decode(WatchUsage.self, from: JSONEncoder().encode(usage)) == usage)
 }
 
 @Test func watchKeepsClaudeWhenAnotherMachineOnlyHasCodex() throws {
@@ -219,7 +248,7 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     )
     let state = WatchState(items: [], entries: [entry(mac, [], usage: claude), entry(linux, [], usage: codex)], allowed: false, live: true, now: now)
     let usage = try #require(state.usage)
-    #expect(usage.windows(now: now).map { $0?.used } == [42, 73, 90])
+    #expect(usage.windows(now: now).map { $0?.used } == [42, 73, 90, nil])
     let refreshed = WatchState.refreshed(
         nil, listed: [MachineApprovals(machineId: mac.id, approvals: [], planUsage: claude), MachineApprovals(machineId: linux.id, approvals: [], planUsage: codex)],
         machines: [mac, linux], allowed: false, now: now
@@ -484,9 +513,9 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
         claudeRecordedMs: nowMs, codexRecordedMs: nowMs - 600_000
     )
     let windows = usage.windows(now: now)
-    #expect(windows.map { $0?.isStale(now: now) } == [false, false, false])
-    #expect(windows.map { $0?.isStale(now: now.addingTimeInterval(1200)) } == [false, false, true])
-    #expect(windows.map { $0?.isStale(now: now.addingTimeInterval(1800)) } == [true, true, true])
+    #expect(windows.map { $0?.isStale(now: now) } == [false, false, false, nil])
+    #expect(windows.map { $0?.isStale(now: now.addingTimeInterval(1200)) } == [false, false, true, nil])
+    #expect(windows.map { $0?.isStale(now: now.addingTimeInterval(1800)) } == [true, true, true, nil])
     #expect([0, 1200, 1800, 3600].allSatisfy { usage.timelineDates(now: now).contains(now.addingTimeInterval($0)) })
     let later = usage.timelineDates(now: now.addingTimeInterval(1800))
     #expect([1800, 5400].allSatisfy { later.contains(now.addingTimeInterval($0)) })

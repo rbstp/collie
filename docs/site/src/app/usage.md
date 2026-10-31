@@ -30,8 +30,8 @@ The cost is an estimate, not your bill: a subscription charges differently, and 
 
 If the card asks you to update `collied`, the machine runs a release too old to count tokens: [update collied](../operate/updating.md#collied) there.
 
-The Claude Code and Codex readings also feed the [Apple Watch](../notifications/apple-watch.md) complication and widget.
+The plan readings above also feed the [Apple Watch](../notifications/apple-watch.md) complication and widget.
 
 <div class="screenshots">
-<img src="../images/watch-widget.png" width="208" height="248" loading="lazy" alt="The Plan usage widget on the Apple Watch: three gauges, Claude 5-hour, Claude weekly and Codex monthly, each with a reset countdown">
+<img src="../images/watch-widget.png" width="208" height="248" loading="lazy" alt="The Plan usage widget on the Apple Watch: three gauges, Claude with its 5-hour and weekly halves, Codex monthly and Copilot monthly, each with a reset countdown">
 </div>

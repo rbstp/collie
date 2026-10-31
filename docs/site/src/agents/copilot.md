@@ -32,6 +32,8 @@ Terminal hides Copilot's scrollbar column. With line wrapping on, Copilot's pros
 
 The Usage view shows the premium usage this month: the credits used and allowed (or requests, for a seat billed by request), and the reset date. A seat without a cap shows "Unlimited". `collied` asks GitHub for it every five minutes with your own `gh` login, and the token stays with `gh`. The row clears when `gh` is signed out or the account has no premium quota. A seat that a GitHub Enterprise Cloud account with data residency (`*.ghe.com`) assigns does not show.
 
+The same reading feeds the [Apple Watch](../notifications/apple-watch.md) complication and widget.
+
 ## Startup prompts
 
 When Copilot asks whether to trust the folder, the new task stops with a message. Answer the prompt in Terminal, with the key strip or by typing in the composer.

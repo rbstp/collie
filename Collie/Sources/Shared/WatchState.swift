@@ -83,11 +83,16 @@ struct WatchUsage: Codable, Equatable, Sendable {
     var codexResetsAtMs: UInt64? = nil
     var claudeRecordedMs: UInt64? = nil
     var codexRecordedMs: UInt64? = nil
+    var copilotUsed: UInt8? = nil
+    var copilotUnlimited: Bool? = nil
+    var copilotResetsAtMs: UInt64? = nil
+    var copilotRecordedMs: UInt64? = nil
 
     struct Window {
         let used: UInt8
         let interval: ClosedRange<Date>
         var recordedMs: UInt64? = nil
+        var unlimited = false
 
         var recordedAt: Date? {
             recordedMs.map(Date.init(unixMs:))
@@ -112,10 +117,12 @@ struct WatchUsage: Codable, Equatable, Sendable {
             window(used: fiveHourUsed, reset: fiveHourResetsAtMs, length: 5 * 3600, recordedMs: claudeRecordedMs, now: now),
             window(used: sevenDayUsed, reset: sevenDayResetsAtMs, length: 7 * 24 * 3600, recordedMs: claudeRecordedMs, now: now),
             window(used: codexUsed, reset: codexResetsAtMs, length: nil, recordedMs: codexRecordedMs, now: now),
+            window(used: copilotUsed, reset: copilotResetsAtMs, length: nil, recordedMs: copilotRecordedMs, now: now,
+                   unlimited: copilotUnlimited == true),
         ]
     }
 
-    private func window(used: UInt8?, reset: UInt64?, length: TimeInterval?, recordedMs: UInt64?, now: Date) -> Window? {
+    private func window(used: UInt8?, reset: UInt64?, length: TimeInterval?, recordedMs: UInt64?, now: Date, unlimited: Bool = false) -> Window? {
         guard let used, let reset, reset > now.unixMs else { return nil }
         let end = Date(unixMs: reset)
         let start: Date
@@ -125,7 +132,7 @@ struct WatchUsage: Codable, Equatable, Sendable {
             guard let interval = Self.monthlyInterval(endingAt: end) else { return nil }
             start = interval.lowerBound
         }
-        return Window(used: min(used, 100), interval: start...end, recordedMs: recordedMs)
+        return Window(used: min(used, 100), interval: start...end, recordedMs: recordedMs, unlimited: unlimited)
     }
 
     static func monthlyInterval(endingAt end: Date) -> ClosedRange<Date>? {

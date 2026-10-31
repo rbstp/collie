@@ -27,7 +27,8 @@ struct UsageProvider: TimelineProvider {
                 fiveHourUsed: 42, fiveHourResetsAtMs: now.addingTimeInterval(10_800).unixMs,
                 sevenDayUsed: 73, sevenDayResetsAtMs: now.addingTimeInterval(4 * 24 * 3600).unixMs,
                 codexUsed: 90, codexResetsAtMs: month.end.unixMs,
-                claudeRecordedMs: now.unixMs, codexRecordedMs: now.unixMs
+                claudeRecordedMs: now.unixMs, codexRecordedMs: now.unixMs,
+                copilotUsed: 55, copilotResetsAtMs: month.end.unixMs, copilotRecordedMs: now.unixMs
             )
         )
     }
@@ -70,16 +71,16 @@ private struct UsageWidgetView: View {
 private struct UsageRings: View {
     let usage: WatchUsage?
     let now: Date
-    private let labels = ["Claude 5-hour", "Claude weekly", "Codex monthly"]
+    private let labels = ["Claude 5-hour", "Claude weekly", "Codex monthly", "Copilot monthly"]
 
     var body: some View {
-        let windows = usage?.windows(now: now) ?? [nil, nil, nil]
+        let windows = usage?.windows(now: now) ?? [nil, nil, nil, nil]
         GeometryReader { geometry in
             let size = min(geometry.size.width, geometry.size.height)
             ZStack {
-                ForEach(0..<3) { index in
-                    let diameter = size * (1 - Double(index) * 0.28)
-                    let strokeWidth = diameter * 0.1
+                ForEach(0..<4) { index in
+                    let diameter = size * (1 - Double(index) * 0.22)
+                    let strokeWidth = size * 0.075
                     Group {
                         if let window = windows[index] {
                             ZStack {
@@ -113,7 +114,7 @@ private struct UsageRings: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(labels.enumerated().map { index, label in
-            windows[index].map { "\(label), \($0.used) percent used, \(Int(($0.elapsed(now: now) * 100).rounded())) percent of the window elapsed" } ?? "\(label), unavailable"
+            windows[index].map { "\(label), \($0.unlimited ? "unlimited" : "\($0.used) percent used"), \(Int(($0.elapsed(now: now) * 100).rounded())) percent of the window elapsed" } ?? "\(label), unavailable"
         }.joined(separator: ". "))
     }
 }
