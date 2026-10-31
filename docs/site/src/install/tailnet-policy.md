@@ -1,10 +1,10 @@
 # Tailscale sign-in and policy
 
-Sign in with the same personal Tailscale account inside Collie on the iPhone and through `collied setup` on the computer. Each device runs its own Tailscale node inside collie, so you need no Tailscale app, VPN profile or VPN switch in Settings. A corporate Tailscale VPN on your Mac can stay connected: Collie does not switch its account or change its routes.
+Sign in with the same personal Tailscale account inside Collie on the iPhone and through `collied setup` on the computer. collie runs its own node on each device: you need no Tailscale app or VPN profile, and a corporate Tailscale VPN on your Mac can stay connected.
 
 ## When the policy needs a grant
 
-If your tailnet already lets your own devices connect to each other, you need no tags and no policy edit. Collie never changes the policy. A restrictive policy can still block TCP port 8457 or hide the machine from the phone. Then ask the administrator to allow that port between your own untagged devices, merging this grant into the existing policy rather than replacing it:
+If your own devices already reach each other, you need no tags or policy edit; Collie never edits the policy. If a restrictive policy blocks TCP port 8457 or hides the machine from the phone, ask the administrator to merge this grant into it:
 
 ```hujson
 {
@@ -14,8 +14,7 @@ If your tailnet already lets your own devices connect to each other, you need no
 }
 ```
 
-Review the complete policy in Access controls and Preview rules; broader grants you already have still apply. Your computer's node gets the same network access and key expiry as your other devices.
+Your computer's node gets the same network access and key expiry as your other devices. [Tailnet setup](../reference/tailnet.md) covers expiry and revocation.
 
-## Coming from a tagged setup
-
-`collied` refuses a Collie node tagged by desktop v0.1.0, and the app cannot reconnect with a pairing made with it. Update the app and `collied`, then reset the node and pair again as [Existing tagged installations](../reference/tailnet.md#existing-tagged-installations) describes. Leave the system Tailscale client's state and your corporate VPN alone. [Tailnet setup](../reference/tailnet.md) also covers state paths, authorization, expiry and revocation.
+> [!NOTE]
+> `collied` and the app refuse the tagged node that desktop v0.1.0 created. Update both, then reset the node and pair again: see [Existing tagged installations](../reference/tailnet.md#existing-tagged-installations).

@@ -1,12 +1,10 @@
 # Claude Code hook and plan usage
 
-Two optional additions to Claude Code give collie more detail: the hook names the exact command in approval alerts, and the status line tap shares plan usage. `collied doctor` checks both.
+Both are optional; `collied doctor` checks them.
 
 ## The PermissionRequest hook
 
-With the hook, an approval alert names the exact command or file; without it, the alert shows the tool call as `collied` reads it from the screen. The hook only reports the call to `collied`: Claude Code's own dialog does not change.
-
-Add it to `~/.claude/settings.json`:
+Add this to `~/.claude/settings.json` so approval alerts name the exact command or file:
 
 ```json
 {
@@ -18,19 +16,19 @@ Add it to `~/.claude/settings.json`:
 }
 ```
 
+The hook only reports the call: Claude Code's dialog does not change.
+
 ## Plan usage
 
-Claude Code passes the plan's 5-hour and weekly limits only to the status line command. To share them with collie, add this line to your status line script after it reads its input into `input` (for example with `input=$(cat)`):
+Only the status line command receives Claude Code's 5-hour and weekly limits. To show them in [Usage](../app/usage.md), add this line to your status line script after it reads stdin into `input`:
 
 ```sh
 printf '%s' "$input" | ~/.cargo/bin/collied statusline >/dev/null 2>&1 &
 ```
 
-The line prints nothing, so your status line looks the same. `collied` keeps the limits and each session's context window size, so the context ring uses the exact window, and drops the rest of the input.
+`collied` keeps only the limits and each session's context window size, which the [context ring](../app/agents-tab.md#remaining-context) uses.
 
-If your `statusLine.command` is a single command rather than a script, point it at a small script that reads `input=$(cat)`, runs the line above, then pipes `printf '%s' "$input"` into your old command.
+If `statusLine.command` is a single command, point it at a script that reads `input=$(cat)`, runs the line above, then pipes `printf '%s' "$input"` into the old command.
 
 > [!NOTE]
-> Claude Code reports the limits only for claude.ai Pro and Max plans, after the session's first reply. `collied doctor` reports when the tap last recorded them.
-
-The limits show in [Usage](../app/usage.md) and on the [Apple Watch](../notifications/apple-watch.md).
+> The limits come only with claude.ai Pro and Max plans, after a session's first reply. `collied doctor` shows when the tap last recorded them.

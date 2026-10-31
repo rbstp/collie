@@ -1,38 +1,25 @@
 # Pull requests
 
-When an agent works on a branch with a GitHub pull request, collie shows the pull request and can act on it. `collied` reads it with the `gh` CLI on the machine, so `gh` must be installed and signed in; `collied doctor` warns when it is not.
+collie shows the GitHub pull request of an agent's branch and can act on it. Install `gh` on the machine and sign in; `collied doctor` checks it.
 
 ## Status
 
-A badge on grid cards, Inbox rows and the session header shows the pull request's number and state (open, draft, merged or closed), with its checks while it is open or a draft.
-
-Tap the badge on the session header for a menu:
-
-- **Open PR**;
-- **Fix failing checks**, when checks fail;
-- **Address review comments**, when there are reviews or comments;
-- **Resolve conflicts**, when the branch conflicts;
-- **Explain this PR**, always.
-
-Each prompt adds one line naming the pull request to the composer, for you to edit and send.
+A badge on grid cards, Inbox rows and the session header shows the pull request's state and checks. In the session header, tap it for **Open PR** or a prompt to edit and send: **Fix failing checks**, **Address review comments** or **Resolve conflicts** when they apply, and **Explain this PR**.
 
 ## Watch a pull request
 
-For a Claude Code agent with an open or draft pull request, the session's **More** menu offers **Watch PR**, which checks every 2, 5, 15 or 30 minutes. `collied` keeps watching whether or not the phone is connected, and wakes the agent with a one-line prompt when:
-
-- a check fails;
-- all required checks pass;
-- someone else comments or reviews;
-- the branch starts to conflict.
-
-`collied` wakes only an agent that is idle or done and still on the watched branch, and sends you a "Woke" alert with a short summary. Chat, the grid card preview and Inbox show the wake as one line with an eye and that summary, such as "PR watch: CI failed on #123"; in Chat, tap it to read the full prompt. A prompt you type that repeats a wake's text also shows as that wake; in Inbox, matching its first 159 characters is enough.
+For a Claude Code agent's open or draft pull request, choose **Watch PR** in the session's **More** menu and an interval of 2, 5, 15 or 30 minutes. `collied` then wakes the agent, even while the phone is away, when a check fails, all required checks pass, someone else comments or reviews, or the branch starts to conflict. It wakes only an idle or done agent still on the branch, and sends you a "Woke" alert.
 
 The watch stops when you choose **Stop watching**, when the pull request is merged or closed, after 10 wakes in a row made only of comments, or after 8 failed reads in a row.
 
 ## Archive when the pull request merges
 
-A merged pull request's badge reads **Merged**, and the session's **More** menu puts **Archive** first.
+After a merge, **Archive** leads the session's **More** menu.
 
-To let `collied` archive the task itself, turn on **Settings > Sessions > Archive when the PR merges**. `collied` notices a merge within about 2 minutes. It archives only a linked worktree whose panes all hold idle or done agents (a shell pane holds it back) and whose checkout has no uncommitted or untracked changes and no commits outside the pull request, then sends an "Archived" alert. It never archives a regular folder.
+With **Settings > Sessions > Archive when the PR merges** on, `collied` [archives](new-task.md#archive) a merged task within about 2 minutes and sends an "Archived" alert, if it is a linked worktree whose:
 
-Done, Woke and Archived alerts all follow **Settings > Notifications > Notify when an agent finishes**.
+- panes all hold idle or done agents, not shells;
+- agents have no subagent running, which `collied` must be able to confirm;
+- checkout has no uncommitted or untracked changes and no commits outside the pull request.
+
+Done, Woke and Archived alerts follow **Settings > Notifications > Notify when an agent finishes**.

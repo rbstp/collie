@@ -1,14 +1,14 @@
 # macOS VM and host Simulator testing
 
-This harness runs the test daemon in a disposable macOS guest and the iOS Simulator on the Apple silicon host, with its own local tailnet control, mock relay, identities and pairing. It needs no Tailscale or Cloudflare account and no Apple signing credentials, and it leaves the installed owner daemon and personal direct APNs configuration alone.
+This harness runs the test daemon in a disposable macOS guest and the iOS Simulator on the Apple silicon host, with its own local tailnet control, mock relay, identities and pairing ([design](architecture.md#isolated-vm-and-simulator-tailnet)). It needs no Tailscale, Cloudflare or Apple signing account, and leaves the installed daemon and personal APNs configuration alone.
 
 Two consecutive fresh `just vm-reset` and `just vm-test` runs passed at clean revision `90f747c7f66f3f7e0c328b2702bcc0a5c767f892`, each reproving guest desktop capture, a Calculator accessibility click changing `0` to `6`, VM mode refusal with an ordinary Release core, isolated VM identities, ordinary mutual-TLS pairing, encrypted mock push, and ordinary peer removal with a rejected follow-up. The prepared guest kept its Driver grants without another consent round.
 
 ## Requirements and pinned inputs
 
-You need the [build prerequisites](../install/requirements.html), including initialized submodules, Rust, Go, just, Xcode, XcodeGen, jq and Node with npm. The harness requires an Apple silicon macOS 27 host and an available iOS 27 Simulator runtime, and reads Go from `/opt/homebrew/opt/go/bin/go`. The exercised host is macOS 27.2; other host and runtime combinations have no acceptance result in this lane.
+You need the [build prerequisites](../install/requirements.html), Node with npm, initialized submodules, an Apple silicon macOS 27 host (only 27.2 has passed) and an iOS 27 Simulator runtime. The harness reads Go from `/opt/homebrew/opt/go/bin/go`.
 
-Reserve at least 80 GiB free for VM setup, plus space for Rust and Xcode build outputs and the existing Xcode and Simulator installation. The image download is 34.13 GB and its disk metadata reports 41.05 GB. The guest gets two virtual CPUs and 4 GiB RAM, so leave memory for Xcode and Simulator on the host.
+Reserve at least 80 GiB free, plus room for build outputs: the image download is 34.13 GB, and its disk metadata reports 41.05 GB. The guest takes two virtual CPUs and 4 GiB RAM.
 
 | Input | Pin |
 |---|---|
@@ -16,28 +16,26 @@ Reserve at least 80 GiB free for VM setup, plus space for Rust and Xcode build o
 | macOS base | `ghcr.io/cirruslabs/macos-golden-gate-base@sha256:5302a9ea6cd68c059d00fa253fe75c8ebdf4e0dc8c45d4e136ecc6e7a4c02b70` |
 | Guest CuaDriver | `0.36.0`, archive SHA-256 `4a0e229922a1ac6d6f59152e0653541920951afa89a3007e4ff5ffc024eae7a8` |
 
-The guest boots as macOS 27.0, build `26A428`. The harness downloads Tart into its own tool directory, verifies its signature and Gatekeeper assessment, and uses a separate `TART_HOME`. It installs the signed CuaDriver app only inside the guest and disables its telemetry. Driver control uses a guest `admin`-owned UNIX socket with mode `0600` and no TCP listener. The procedure needs no global Tart installation and no host Accessibility or screen-recording grant.
+The guest boots macOS 27.0, build `26A428`. The harness keeps its verified Tart in its own tool directory and `TART_HOME`. CuaDriver runs only in the guest, with telemetry off, behind a guest `admin`-owned `0600` UNIX socket and no TCP listener. The host needs no Accessibility or screen-recording grant.
 
-VM disks, downloaded tools, ownership records and private logs live in `<repo-parent>/.codex/vms/collie-374`, shared by this repository's worktrees; build outputs stay under `target`. The dedicated host Simulator, **Collie VM test**, holds its own app and Keychain state, and `owned.json` records its exact identifier and VM ownership. Only one harness command can run at a time. Keep the directory private, uncommitted and unshared: it holds disposable authentication material, pairing state and test logs.
+Disks, tools, ownership records and logs live in `<repo-parent>/.codex/vms/collie-374`, shared by this repository's worktrees. Keep that directory private and uncommitted: it holds disposable credentials, pairing state and logs. The dedicated Simulator, **Collie VM test**, has its own app and Keychain state, and `owned.json` records it. One harness command runs at a time.
 
 ## Set up the guest desktop once
-
-From the repository checkout:
 
 ```sh
 just setup
 just vm-setup
 ```
 
-The first setup downloads the pinned base, creates the dedicated iPhone 18 Pro Simulator, opens `collie-374-test` and installs CuaDriver in the guest. Downloads and builds need network access. It never takes ownership of unrelated VMs, Simulators, installed daemon state, Keychain items or real pairings.
+The first setup downloads the pinned base, creates the dedicated iPhone 18 Pro Simulator, boots `collie-374-test` and installs CuaDriver in it. It never takes over unrelated VMs, Simulators, installed daemon state, Keychain items or real pairings.
 
-Log in to the guest as `admin` with password `admin`, the public defaults of this CI image. In the guest, grant CuaDriver **Accessibility** and **Screen & System Audio Recording**, accept its relaunch, and complete any System Events or direct capture prompt. Then, on the host, run:
+Log in to the guest as `admin` with password `admin`, the CI image's public defaults. Grant CuaDriver **Accessibility** and **Screen & System Audio Recording**, accept its relaunch and complete any System Events or direct capture prompt. Then, on the host:
 
 ```sh
 just vm-desktop-ready
 ```
 
-This checks that both grants are attributed to the Driver daemon, clicks Calculator through its accessibility tree to prove a visible `0` to `6` change, lists guest apps and captures PNG screenshots, including Calculator before and after. It saves this private evidence under `desktop-proof`, stops the guest and creates `collie-374-desktop`, a prepared baseline that keeps the guest permission decisions without run-specific relay, SSH or pairing credentials. On success it prints `Guest desktop grants and capture verified; prepared baseline collie-374-desktop` and the evidence directory. The check does not claim that every app can be controlled.
+This verifies both Driver grants, clicks Calculator from `0` to `6` through its accessibility tree and saves screenshots in `desktop-proof`. It then stops the guest and saves it as `collie-374-desktop`, a baseline with the permission decisions but no run-specific credentials.
 
 ## Run the integration test
 
@@ -45,15 +43,16 @@ This checks that both grants are attributed to the Driver daemon, clicks Calcula
 just vm-test
 ```
 
-Keep this command in the foreground. Xcode ad-hoc signs the Simulator app with its normal simulated entitlements, without a personal certificate or provisioning profile. The test first links a Debug Simulator app against the ordinary Release core and verifies that VM mode refuses to start before creating normal or VM state, saving `wrong-core.json` and `wrong-core.png`. It then builds the special Debug core and its Simulator app.
+Keep it in the foreground. It:
 
-The test also boots a disposable clone of the prepared guest, creates fresh local control, DERP and mock relay state, and connects the guest through restricted SSH forwarding. It confirms only the expected **VM Simulator** candidate through the ordinary mutual-TLS pairing flow and sends an encrypted mock notification. Finally it revokes that peer with the ordinary daemon command and requires the next push to fail without changing the saved encrypted payload.
+1. Builds a Debug app on the ordinary Release core and checks that VM mode refuses to start before creating normal or VM state (`wrong-core.json`, `wrong-core.png`), then builds the special Debug core and app.
+2. Boots a disposable clone of the prepared guest with fresh local control, DERP and mock relay state, reached over restricted SSH through Tart's guest agent rather than the LAN. It changes no host VPN or routing setting and proves nothing about a real corporate VPN.
+3. Confirms only the **VM Simulator** candidate at the ordinary mutual-TLS pairing prompt and sends an encrypted mock notification.
+4. Revokes that peer with the ordinary daemon command and requires the next push to fail without changing the saved payload.
 
-SSH reaches the guest listener through the pinned Tart guest-agent stream. The client still verifies the fresh pinned guest host key and uses only the task client key, and the three reverse forwards listen on guest loopback only. This avoids a direct host-to-guest LAN connection without changing host VPN or routing settings; it does not establish real corporate VPN coexistence.
+Success prints `PASS: guest/Simulator pairing and encrypted mock push` and the private run directory; its `result.json` records the revision and result beside each step's evidence. The saved payload proves mock acceptance only, not display or decryption.
 
-On success the command prints a line beginning `PASS: guest/Simulator pairing and encrypted mock push` and its private run directory. `runs/<run-id>/result.json` records the exact revision and result; to diagnose a failure, inspect the adjacent build, wrong-core, guest posture, pairing, push and peer-removal evidence. The saved encrypted payload shows mock acceptance only, not a displayed notification or notification extension decryption.
-
-Whether the command succeeds, fails or receives Ctrl-C, it stops its owned guest, dedicated Simulator and test services and leaves the result and disposable state for inspection. A completed `vm-test` is not a persistent desktop-control session; for desktop control, use the prepared guest desktop during its explicit desktop acceptance checks.
+On success, failure or Ctrl-C, the command stops its guest, Simulator and test services and keeps the result and state.
 
 ## Stop, reset and rerun
 
@@ -61,7 +60,7 @@ Whether the command succeeds, fails or receives Ctrl-C, it stops its owned guest
 just vm-stop
 ```
 
-This stops recorded test resources without deleting their state. Before stopping an owned host process group, it checks the recorded process start time and command, so it refuses a reused PID. It must not stop an installed daemon, unrelated VM, shared Simulator or another process that happens to hold a test port.
+This stops recorded test resources and keeps their state. It matches each owned process group's recorded start time and command, so it never stops a reused PID, an installed daemon, an unrelated VM, a shared Simulator or another process on a test port.
 
 For another fresh integration run:
 
@@ -70,7 +69,7 @@ just vm-reset
 just vm-test
 ```
 
-Reset stops the owned resources, deletes `collie-374-test`, erases the dedicated Simulator and clears the previous run marker. It keeps the pinned base, `collie-374-desktop`, the tool cache and earlier private logs for diagnosing failed attempts, so inspect each run's own result and cleanup evidence. The next test clones the prepared baseline with its guest Driver grants and creates fresh tailnet authentication, relay identity, SSH keys, Simulator state and pairing.
+Reset deletes `collie-374-test`, erases the dedicated Simulator and clears the run marker, so the next test starts from the prepared baseline with fresh credentials, keys, Simulator state and pairing. It keeps the pinned base, `collie-374-desktop`, the tool cache and earlier logs.
 
 ## Remove owned resources
 
@@ -78,26 +77,22 @@ Reset stops the owned resources, deletes `collie-374-test`, erases the dedicated
 just vm-clean
 ```
 
-Clean removes the recorded disposable guest, dedicated Simulator, prepared desktop, pinned baseline and task-owned OCI image. It keeps private logs and downloaded tools in the directory it prints. Once cleanup succeeds and you no longer need the evidence, remove that printed directory to delete the remaining tool archives and logs. Do not substitute a global Tart cache, shared Simulator directory or installed Collie data directory.
+Clean removes the recorded guest, dedicated Simulator, prepared desktop, pinned baseline and task-owned OCI image, and prints the directory that keeps logs and tools. Delete that exact directory once you no longer need the evidence; never substitute a global Tart cache, shared Simulator directory or installed Collie data directory.
 
 ## Troubleshooting
 
 | Failure | Action |
 |---|---|
-| Missing iOS 27 runtime | Install that Simulator runtime through Xcode, then retry setup |
-| Insufficient free space or archive checksum mismatch | Free the required space or investigate the download; do not change pins to make the check pass |
-| Guest permission check fails or stays stale after a toggle | In the guest Terminal, run `/Applications/CuaDriver.app/Contents/MacOS/cua-driver permissions grant`, complete the visible guest prompts including any direct-capture Allow, then retry `just vm-desktop-ready` on the host |
-| Test ports `127.0.0.1:8788` through `8791` occupied | Identify their owner and stop it yourself if appropriate; the harness refuses to evict another process |
-| Previous run marker present | Run `just vm-reset` before another test |
-| Recorded Simulator missing or ownership does not match | Inspect the recorded state; do not adopt or delete an unrelated resource to bypass the check |
-| Guest SSH startup timeout | Inspect the private run's `ssh-ready-*.log` files and guest log, keep the failed attempt, then stop or reset only owned resources before rerunning |
-| Build, guest boot, pairing or mock push timeout | Inspect the printed private run directory, stop owned resources, and keep the failure evidence before resetting |
+| Too little space, or checksum mismatch | Free space or investigate the download; never change pins to pass |
+| Guest permission check fails or stays stale | In the guest Terminal, run `/Applications/CuaDriver.app/Contents/MacOS/cua-driver permissions grant`, complete its prompts, then retry `just vm-desktop-ready` on the host |
+| Recorded Simulator missing or not owned | Inspect the recorded state; never adopt or delete an unrelated resource |
+| Timeout in build, boot, SSH, pairing or push | Keep and read the printed run directory (for SSH, `ssh-ready-*.log` and the guest log), then stop or reset only owned resources |
 
 ## Check the Release sample workspace
 
-This check is separate from the Debug integration above. It uses the dedicated Simulator, the ordinary Release core and a Release app with no demo arguments. The iOS 27.2 Simulator acceptance passed for Welcome entry, simulated denial, terminal Escape, a prompt response, Machines, actual reset of changed sample data, exit and re-entry, and ordinary preferences stayed unchanged. It does not establish physical iPhone acceptance or preservation of a real signed-in account or pairing.
+This check runs a Release app on the ordinary Release core, with no demo arguments, on the dedicated Simulator. It passed on the iOS 27.2 Simulator for Welcome entry, simulated denial, terminal Escape, a prompt response, Machines, actual reset of changed sample data, exit and re-entry, with ordinary preferences unchanged. It proves neither physical iPhone acceptance nor that a real signed-in account or pairing survives.
 
-From the checkout, reset the harness-owned test resources (the prepared baseline stays) and build the app:
+From the checkout, reset the harness and build the app:
 
 ```sh
 just vm-reset
@@ -123,14 +118,14 @@ shasum -a 256 "$collie_sample_state/prefs.json"
 xcrun simctl launch "$collie_sample_sim" dev.rbstp.collie
 ```
 
-The build is ad-hoc signed, and the commands seed only benign ordinary preferences in the freshly erased dedicated Simulator. Do not use the Debug VM core, demo flags or a relay override. In Simulator, select **Collie VM test** and check:
+Use no Debug VM core, demo flags or relay override. In Simulator, select **Collie VM test** and check:
 
-1. On **Welcome**, choose **Explore sample workspace** without signing in. Keep the **Sample workspace / Simulated actions only** banner visible.
-2. In Agents, choose the list layout and **add approval tests**. Deny its pending approval and require the visible simulated denial. In Terminal, open Keys and send Escape, then return to Chat and require the simulated terminal-key result. Send a sample prompt and require its visible simulated response. Inspect Machines.
-3. In sample Settings, choose **Reset sample workspace**. Reopen the same agent: it must be blocked again with Approve and Deny available, and the earlier denial and prompt response must be gone. The banner alone does not prove reset.
-4. Exit to Welcome, then enter the sample again. Check that the ordinary onboarding and existing local preferences have not changed: repeat `shasum -a 256 "$collie_sample_state/prefs.json"` and require the original digest. Confirm that `machines.json` and `tsnet/tailscaled.state` are still absent from that state directory. Do not copy a real account or pairing into this test.
+1. On **Welcome**, choose **Explore sample workspace** without signing in. The **Sample workspace / Simulated actions only** banner must stay visible.
+2. In Agents, choose the list layout and open **add approval tests**. Deny its approval and require the simulated denial. In Terminal, send Escape from Keys, then require the simulated terminal-key result in Chat. Send a sample prompt and require its simulated response. Inspect Machines.
+3. In sample Settings, choose **Reset sample workspace**. Reopen the agent: it must be blocked again with Approve and Deny, without the earlier denial and response. The banner alone does not prove reset.
+4. Exit to Welcome and re-enter the sample. Onboarding must be unchanged, `shasum -a 256 "$collie_sample_state/prefs.json"` must print the original digest, and `machines.json` and `tsnet/tailscaled.state` must still be absent from that directory. Never copy a real account or pairing into this test.
 
-Keep screenshots, the exact source, Release app and core hashes and signing results with the acceptance record. The existing `SampleWorkspaceTests` covers the representative actions and exit, but its reset assertion checks only the banner, so the restored-state check above is still needed. Afterwards, stop and erase only this dedicated Simulator:
+Record screenshots, the exact source, the Release app and core hashes and the signing results. `SampleWorkspaceTests` checks only the banner after reset, so step 3 stays manual. Then stop and erase only this Simulator:
 
 ```sh
 xcrun simctl shutdown "$collie_sample_sim"
@@ -139,9 +134,9 @@ xcrun simctl erase "$collie_sample_sim"
 
 ## Check published desktop downloads in a separate guest
 
-`vm-test` uses host-only networking and Debug artifacts. Published downloads need a separately named clone with default shared NAT, for GitHub HTTPS and Apple's online notarization lookup. NAT permits general outbound access, not an Apple-only allowlist. Clone the stopped, consented `collie-374-desktop` baseline; never install into it, and never copy host credentials, home directories or existing tailnet state into the clone.
+Published downloads need a separately named clone of the stopped, consented `collie-374-desktop` baseline with default shared NAT for GitHub and Apple's online notarization lookup (NAT allows any outbound host). Never install into the baseline or copy host credentials, home directories or tailnet state into the clone.
 
-Choose one approved published tag and replace the tag placeholder below. In a separate private acceptance record, note its exact source from `source.json`, the selected asset hashes, the clone name and the baseline identity. Confirm that the name is absent from `tart list` before cloning. From the checkout:
+Replace `vMAJOR.MINOR.PATCH` below with one approved published tag. In a private acceptance record, note its source from `source.json`, the selected asset hashes, the clone name and the baseline identity. Confirm that `tart list` lacks the clone name, then, from the checkout:
 
 ```sh
 collie_vm_root="$(dirname "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")")/.codex/vms/collie-374"
@@ -156,9 +151,9 @@ collie_release_vm="collie-release-acceptance-$collie_release_tag"
 "$collie_tart" run "$collie_release_vm" --no-audio --no-usb-accessories --no-clipboard
 ```
 
-Leave `--net-host` off this run, and add no bridge, SSH listener, shares, host proxy or host network or security changes. Use the guest desktop and its existing signed Driver grants. Before testing, record the actual guest OS, the empty installed-product state, the Driver socket and permissions, and the CI security posture.
+Leave `--net-host` off, and add no bridge, SSH listener, shares, host proxy, or host network or security change. Before testing, record the guest OS, the empty installed-product state, the Driver socket and permissions, and the CI security posture.
 
-If guest HTTPS times out while routing and DNS work, first record the guest's current `en0` MTU. On the tested host VPN path, guest MTU 1500 failed, 1280 passed the same HTTPS probes, and restoring 1500 reproduced the failure. The workaround is temporary and guest-only. In the guest Terminal:
+If guest HTTPS times out while routing and DNS work, record the guest's `en0` MTU first. On the tested host VPN path, guest MTU 1500 failed, 1280 passed the same HTTPS probes, and restoring 1500 reproduced the failure. In the guest Terminal, apply the temporary, guest-only workaround:
 
 ```sh
 collie_guest_original_mtu="$(/sbin/ifconfig en0 | awk 'NR == 1 {print $NF}')"
@@ -166,15 +161,15 @@ printf 'Original guest MTU: %s\n' "$collie_guest_original_mtu"
 sudo -n /sbin/ifconfig en0 mtu 1280
 ```
 
-Keep this guest Terminal open and save the displayed original MTU in the acceptance record. This is not a certificate fix; do not change host interfaces, VPN or DNS. Restore the original value before deleting the clone (it was 1500 in the verified experiment).
+Keep this Terminal open and record the printed original MTU (1500 in the verified experiment). This is not a certificate fix; never change host interfaces, VPN or DNS.
 
-Use guest Safari to download the selected macOS assets, `source.json` and `SHA256SUMS` from that exact release. Record the quarantine attributes before opening anything, verify each selected manifest entry uniquely and compare the source identity. Follow the [download installation and trust checks](desktop-releases.md#install-a-daemon-download): keep the strict Developer ID, team and identifier checks, the standalone daemon's explicit online notarization check, and the app and DMG policy checks. The raw daemon check is `codesign --verify --strict -R=notarized --check-notarization ./collied`. Never re-sign, remove quarantine or skip a failed check. If browser downloads fail but verified HTTPS works, a CLI transfer can support bounded install tests, but browser and quarantine acceptance stays unproven.
+With guest Safari, download that release's selected macOS assets, `source.json` and `SHA256SUMS`. Record quarantine attributes before opening anything, verify each selected manifest entry uniquely and compare the source identity. Run every [download trust check](desktop-releases.md#install-a-daemon-download), including the daemon's online notarization check (`codesign --verify --strict -R=notarized --check-notarization ./collied`) and the app and DMG policy checks; never re-sign, remove quarantine or skip a failed check. If only browser downloads fail, a verified CLI transfer can support bounded install tests, but not browser or quarantine acceptance.
 
-The authentic v0.0.152 downloads passed guest checksum, Safari quarantine and explicit signature and notarization checks, but the installer exited 141 before copying the executable because a metadata pipeline failed under `pipefail`. Published install, service and app acceptance did not pass. An unreleased installer candidate tested against that unchanged signed binary is separate evidence; do not present it as a fixed published download.
+The authentic v0.0.152 downloads passed guest checksum, Safari quarantine and explicit signature and notarization checks, but the installer exited 141 before copying the executable: a metadata pipeline failed under `pipefail`. Published install, service and app acceptance did not pass. An unreleased installer candidate tested against that unchanged signed binary is separate evidence, not a fixed published download.
 
-Run the packaged installer with `--replace` only inside this disposable guest, and stop at its first failure. Only after it succeeds, record the installed binary's hash, version and signature, then check setup prerequisites and cancel if setup reaches login without signing in (setup logs in before installing its service). Separately check service install, start, stop and uninstall, and CollieBar's initial Off state, installed-service discovery and Quit. A registered service or a Starting or Off menu is not a healthy authenticated daemon. Real Running, full setup, pairing and agent control need legitimate dedicated test-tailnet authorization and guest prerequisites; never use Debug control or auth bypasses for Release. Do not send APNs or activate a publisher relay in this lane.
+Run the packaged installer with `--replace` only in this guest and stop at its first failure. Once it succeeds, record the installed binary's hash, version and signature, run setup to check prerequisites, and cancel at the login step (setup logs in before installing the service). Check service install, start, stop and uninstall separately, and CollieBar's initial Off state, service discovery and Quit; a registered service or a Starting or Off menu is not a healthy authenticated daemon. Running, full setup, pairing and agent control need a legitimate dedicated test tailnet and guest prerequisites. Never use Debug control or auth bypasses for Release, send APNs or activate a publisher relay here.
 
-Quit CollieBar, disable any guest login item enabled during the test, uninstall its guest service and detach any mounted DMG. If you applied the MTU workaround, restore and verify the captured value in the same guest Terminal:
+To clean up, quit CollieBar, disable any guest login item the test enabled, uninstall the guest service and detach any mounted DMG. If you lowered the MTU, restore and verify it in the same guest Terminal:
 
 ```sh
 sudo -n /sbin/ifconfig en0 mtu "$collie_guest_original_mtu"
@@ -189,10 +184,10 @@ Then, from a second host Terminal with the same variables, stop and delete only 
 "$collie_tart" list
 ```
 
-Verify that its owned process has exited, its name is gone, and the stopped prepared baseline and harness ownership record are unchanged. Keep the private download, trust, screenshot, service, MTU-restoration and cleanup evidence. Do not run `vm-clean` or remove the harness task directory while a separate acceptance clone exists.
+Verify that its process exited, its name is gone, and the baseline and harness ownership record are unchanged. Keep the private evidence, including MTU restoration and cleanup. Never run `vm-clean` or remove the harness directory while an acceptance clone exists.
 
 ## Acceptance limits
 
-The pinned image is a CI base, not a pristine consumer Mac: the guest has Gatekeeper assessments and System Integrity Protection disabled, so neither Debug integration nor explicit trust and install checks of signed downloads in this image can establish clean-consumer Gatekeeper acceptance. Do not change those security settings on the host to make a test pass. Published release assets need the separate [desktop release acceptance checks](desktop-releases.md#validation-before-public-rollout).
+The pinned image is a CI base with Gatekeeper assessments and System Integrity Protection disabled, so no test in it establishes clean-consumer Gatekeeper acceptance; never change those settings on the host to pass a test. Published assets also need the [desktop release acceptance checks](desktop-releases.md#validation-before-public-rollout).
 
-The local relay uses a fresh software identity and mock delivery. Genuine Apple App Attest, Secure Enclave trust, production APNs delivery and locked, background or pre-first-unlock behavior need separate evidence from a physical iPhone. See [Simulator relay testing](simulator.md) for its modes and [notifications](notifications.md) for device acceptance. Linux x86_64 and Omarchy acceptance remain separate requirements.
+Genuine App Attest, Secure Enclave trust, production APNs delivery and locked, background or pre-first-unlock behavior need a physical iPhone ([Simulator relay testing](simulator.md), [notifications](notifications.md)). Linux x86_64 and Omarchy acceptance are separate.
