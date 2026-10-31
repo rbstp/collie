@@ -1,18 +1,35 @@
 import SwiftUI
 import WidgetKit
 
+struct UsageAgents {
+    var claude = true
+    var codex = true
+    var copilot = true
+
+    var windows: [Int] {
+        (claude ? [0, 1] : []) + (codex ? [2] : []) + (copilot ? [3] : [])
+    }
+}
+
 struct UsageGauges: View {
     let usage: WatchUsage?
     let now: Date
+    var agents = UsageAgents()
 
     var body: some View {
         let windows = usage?.windows(now: now) ?? [nil, nil, nil, nil]
         GeometryReader { geometry in
             let diameter = max(0, min((geometry.size.width - 4) / 3, geometry.size.height - 16))
             HStack(spacing: 2) {
-                ClaudeGauge(fiveHour: windows[0], weekly: windows[1], now: now, diameter: diameter)
-                UsageGauge(logo: "Codex", label: "Codex monthly", window: windows[2], now: now, diameter: diameter)
-                UsageGauge(logo: "Copilot", label: "Copilot monthly", window: windows[3], now: now, diameter: diameter)
+                if agents.claude {
+                    ClaudeGauge(fiveHour: windows[0], weekly: windows[1], now: now, diameter: diameter)
+                }
+                if agents.codex {
+                    UsageGauge(logo: "Codex", label: "Codex monthly", window: windows[2], now: now, diameter: diameter)
+                }
+                if agents.copilot {
+                    UsageGauge(logo: "Copilot", label: "Copilot monthly", window: windows[3], now: now, diameter: diameter)
+                }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }

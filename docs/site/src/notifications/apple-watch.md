@@ -33,3 +33,9 @@ Tap either one to open a compact usage list. Both refresh about every 15 minutes
 <img src="../images/watch-widget.png" width="208" height="248" loading="lazy" alt="The Plan usage widget: three gauges, Claude with its 5-hour and weekly halves, Codex monthly and Copilot monthly, each with a reset countdown">
 <img src="../images/watch-usage.png" width="208" height="248" loading="lazy" alt="The watch usage list: Claude 5-hour at 38%, Claude weekly at 61% and Codex monthly at 24%, each with the time left">
 </div>
+
+### Choosing the agents
+
+Each widget and complication shows Claude Code, Codex and Copilot until you choose otherwise. To show fewer, edit the watch face or the Smart Stack on the watch, or the watch face in the Watch app on the iPhone, and turn agents off in the widget's options. Each widget keeps its own choice.
+
+The widget then shows a gauge for each agent you chose, at the same size and centered, and the complication shows their rings, two for Claude Code. If you turn all three off, both show all three.
