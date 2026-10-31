@@ -408,13 +408,16 @@ extension CopilotUsage {
     static let staleAfterMs: UInt64 = 10 * 60_000
 
     /// Past 100 when the seat permits overage.
-    var percent: Int { limit > 0 ? Int((Double(used) / Double(limit) * 100).rounded()) : 0 }
+    var percent: Int { limit > 0 ? Int(min(1_000_000, (Double(used) / Double(limit) * 100).rounded())) : 0 }
 
     var unit: String { tokenBasedBilling ? "credits" : "requests" }
 
     var resetsLine: String { "resets \(Date(unixMs: resetsAtMs).formatted(date: .abbreviated, time: .omitted))" }
 
-    func isStale(now: Date) -> Bool { now.unixMs > recordedMs + Self.staleAfterMs }
+    func isStale(now: Date) -> Bool {
+        let nowMs = now.unixMs
+        return nowMs > recordedMs && nowMs - recordedMs > Self.staleAfterMs
+    }
 
     func elapsed(now: Date) -> Double {
         let end = Date(unixMs: resetsAtMs)

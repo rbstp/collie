@@ -200,9 +200,12 @@ async fn check_gh() -> (Status, String) {
     }
 }
 
-/// The daemon keeps no failure, so without a recorded reading this asks GitHub itself.
+/// The daemon keeps no failure, so without a fresh reading this asks GitHub itself.
 async fn check_copilot(data_dir: &Path, now_ms: u64) -> (Status, String) {
-    if let Some(copilot) = crate::usage::last_recorded(data_dir).and_then(|r| r.copilot) {
+    if let Some(copilot) = crate::usage::last_recorded(data_dir)
+        .and_then(|r| r.copilot)
+        .filter(|c| now_ms.saturating_sub(c.recorded_ms) < 10 * 60_000)
+    {
         let minutes = now_ms.saturating_sub(copilot.recorded_ms) / 60_000;
         return (Status::Ok, format!("premium usage read {minutes} min ago"));
     }

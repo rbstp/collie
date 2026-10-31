@@ -336,7 +336,14 @@ pub async fn fetch_copilot_usage() -> Result<Option<CopilotUsage>, &'static str>
     };
     let mut command = crate::pulls::gh_command(&gh);
     command
-        .args(["api", "copilot_internal/user", "--jq", COPILOT_FIELDS])
+        .args([
+            "api",
+            "--hostname",
+            "github.com",
+            "copilot_internal/user",
+            "--jq",
+            COPILOT_FIELDS,
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let output = tokio::time::timeout(crate::pulls::GH_TIMEOUT, command.output())
@@ -392,10 +399,15 @@ pub fn parse_copilot_usage(
     if entitlement < 1.0 {
         return Ok(None);
     }
-    // Negative once use passes the allowance on a seat that permits overage.
-    let remaining = number(&premium["remaining"]).ok_or(BAD)?;
+    // Past the allowance, a seat that permits overage reports a negative `remaining` or
+    // a `remaining` held at 0 with the excess in `overage_count`.
+    let remaining = number(&premium["remaining"]).ok_or(BAD)?.max(0.0);
+    let overage = match premium.get("overage_count") {
+        None => 0.0,
+        Some(v) => number(v).filter(|n| *n >= 0.0).ok_or(BAD)?,
+    };
     Ok(Some(CopilotUsage {
-        used: (entitlement - remaining).max(0.0).round() as u64,
+        used: (entitlement - remaining + overage).max(0.0).round() as u64,
         limit: entitlement.round() as u64,
         unlimited: false,
         token_based_billing,
@@ -638,6 +650,10 @@ mod tests {
         );
         assert_eq!(
             copilot("copilot-overage.json", 1_000),
+            usage(412_500, 400_000, false, true)
+        );
+        assert_eq!(
+            copilot("copilot-overage-clamped.json", 1_000),
             usage(412_500, 400_000, false, true)
         );
         assert_eq!(copilot("copilot-no-premium.json", 1_000), Ok(None));
