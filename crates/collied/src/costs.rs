@@ -16,16 +16,18 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::lock;
-use crate::transcript::{civil, open, timestamp_ms};
+use crate::transcript::{civil, compressed, open, plain_first, timestamp_ms};
 
 pub const INDEX_FILE: &str = "usage-costs.json";
-const INDEX_VERSION: u32 = 2;
+const INDEX_VERSION: u32 = 3;
 const SLOT_MS: u64 = 15 * 60_000;
 const DAY_MS: i64 = 86_400_000;
 /// The longest range plus the widest phone offset: nothing older is ever shown.
 const KEEP_MS: u64 = 32 * 86_400_000;
 const CHUNK: usize = 1 << 20;
 const MAX_LINE: usize = 8 << 20;
+/// A compressed rollout decoding past this is refused, so a hostile file cannot keep a scan busy.
+const MAX_DECODED: u64 = 512 << 20;
 const MAX_FILES: usize = 20_000;
 const MAX_DEPTH: usize = 5;
 const MAX_MODELS: usize = 32;
@@ -190,11 +192,14 @@ struct Entry {
     size: u64,
     /// Just past the last complete line read: a partial last line is read again.
     offset: u64,
-    /// Codex: the latest `turn_context` model and the last counted `token_count`.
+    /// Codex: the latest `turn_context` model, the last counted `token_count` and the first
+    /// request of the current counter sequence.
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
     last: Option<u64>,
+    #[serde(default)]
+    start: Option<u64>,
     buckets: Vec<Bucket>,
     /// Claude records this file counted first, by `message.id` and `requestId`, with their
     /// slot and the output counted so far.
@@ -243,6 +248,7 @@ impl State {
                 offset: 0,
                 model: None,
                 last: None,
+                start: None,
                 buckets: Vec::new(),
                 keys: Vec::new(),
             });
@@ -252,6 +258,7 @@ impl State {
         entry.offset = read.offset;
         entry.model = read.parser.model;
         entry.last = read.parser.last;
+        entry.start = read.parser.start;
         let mut at: HashMap<(u32, String, bool, bool), usize> = entry
             .buckets
             .iter()
@@ -339,11 +346,14 @@ impl Roots {
             let mut found = Vec::new();
             walk(root, 0, keep, wanted, &mut found);
             complete &= found.len() < MAX_FILES;
+            if agent == Agent::Codex {
+                plain_first(&mut found);
+            }
             out.extend(found.into_iter().map(|p| (p, agent)));
         };
         add(&self.claude, Agent::Claude, |n| n.ends_with(".jsonl"));
         add(&self.codex, Agent::Codex, |n| {
-            n.starts_with("rollout-") && n.ends_with(".jsonl")
+            n.starts_with("rollout-") && (n.ends_with(".jsonl") || n.ends_with(".jsonl.zst"))
         });
         add(&self.copilot, Agent::Copilot, |n| n == "events.jsonl");
         out.sort();
@@ -392,6 +402,7 @@ struct Parser {
     agent: Agent,
     model: Option<String>,
     last: Option<u64>,
+    start: Option<u64>,
     records: Vec<Record>,
 }
 
@@ -454,6 +465,8 @@ impl Parser {
 
     /// `token_count` carries no model, so it comes from the latest `turn_context`. Codex
     /// repeats an unchanged event on some stream boundaries; the cumulative total tells them apart.
+    /// When its counters restart, it can later replay that sequence's first request: only the
+    /// same event (timestamp and request) is a replay, as a later request may restart identically.
     fn codex(&mut self, text: &str) -> Option<Record> {
         let v: Value = serde_json::from_str(text).ok()?;
         let p = &v["payload"];
@@ -479,6 +492,19 @@ impl Parser {
         let signature = hash(&counted.to_string());
         if self.last == Some(signature) {
             return None;
+        }
+        if ["input_tokens", "output_tokens"]
+            .iter()
+            .all(|k| total[k].as_u64() == Some(0))
+        {
+            self.start = None;
+        }
+        if total.as_object() == Some(last) {
+            let start = hash(&format!("{ms}:{}", info["last_token_usage"]));
+            if self.start == Some(start) {
+                return None;
+            }
+            self.start = Some(start);
         }
         self.last = Some(signature);
         let n = |k: &str| last.get(k).and_then(Value::as_u64).unwrap_or(0);
@@ -572,15 +598,12 @@ struct Delta {
     parser: Parser,
 }
 
-/// Reads `start..size` a chunk at a time and consumes only newline-terminated lines.
+/// Reads from `start` a chunk at a time and consumes only newline-terminated lines.
 fn read_lines(
-    mut file: File,
+    mut file: impl Read,
     start: u64,
-    size: u64,
     mut parser: Parser,
 ) -> std::io::Result<(u64, Parser)> {
-    file.seek(SeekFrom::Start(start))?;
-    let mut file = file.take(size - start);
     let mut buf = vec![0; CHUNK];
     let mut line = Vec::new();
     let mut skipping = false;
@@ -610,6 +633,17 @@ fn read_lines(
             line.extend_from_slice(chunk);
         }
     }
+}
+
+/// A compressed file cannot be read from an offset, so it is decoded whole each time it changes.
+fn read_compressed(file: File, limit: u64, parser: Parser) -> std::io::Result<(u64, Parser)> {
+    let decoder = ruzstd::decoding::StreamingDecoder::new(file).map_err(std::io::Error::other)?;
+    let mut capped = decoder.take(limit);
+    let read = read_lines(&mut capped, 0, parser)?;
+    if capped.limit() == 0 {
+        return Err(std::io::Error::other("decoded past the cap"));
+    }
+    Ok(read)
 }
 
 pub struct Costs {
@@ -710,26 +744,43 @@ impl Costs {
                 let ms = modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
                 Some((file, size, ms, meta.dev(), meta.ino()))
             });
-            let Some((file, size, _, dev, ino)) = opened.filter(|o| o.2 >= keep) else {
+            let Some((mut file, size, _, dev, ino)) = opened.filter(|o| o.2 >= keep) else {
                 lock(&self.state).forget(key);
                 continue;
             };
+            let zst = compressed(&path);
             let previous = lock(&self.state).index.files.get(key).map(|e| {
-                (e.dev == dev && e.ino == ino && size >= e.size && size >= e.offset)
-                    .then(|| (e.size, e.offset, e.model.clone(), e.last))
+                (e.dev == dev && e.ino == ino && size >= e.size && (zst || size >= e.offset))
+                    .then(|| (e.size, e.offset, e.model.clone(), e.last, e.start))
             });
             let resume = previous.flatten();
             if resume.as_ref().is_some_and(|r| r.0 == size) {
                 continue;
             }
-            let (start, model, last) = resume.map_or((0, None, None), |r| (r.1, r.2, r.3));
-            let parser = Parser {
+            let (start, model, last, first) = resume
+                .filter(|_| !zst)
+                .map_or((0, None, None, None), |r| (r.1, r.2, r.3, r.4));
+            let empty = || Parser {
                 agent,
-                model,
-                last,
+                model: None,
+                last: None,
+                start: None,
                 records: Vec::new(),
             };
-            let Ok((offset, parser)) = read_lines(file, start, size, parser) else {
+            let parser = Parser {
+                model,
+                last,
+                start: first,
+                ..empty()
+            };
+            let read = if zst {
+                // A refused file is recorded empty, so it is not decoded again until it changes.
+                Ok(read_compressed(file, MAX_DECODED, parser).unwrap_or_else(|_| (0, empty())))
+            } else {
+                file.seek(SeekFrom::Start(start))
+                    .and_then(|_| read_lines(file.take(size - start), start, parser))
+            };
+            let Ok((offset, parser)) = read else {
                 continue;
             };
             let read = Delta {
@@ -1108,6 +1159,110 @@ mod tests {
         let opus = price("claude-opus-5-5").unwrap();
         assert_eq!(opus.cost(&t, false, true), opus.cost(&t, false, false));
         assert!(copilot(r#"{"type":"session.usage_record","timestamp":"2026-10-18T12:00:00.000Z","data":{"usage":{"model":"gpt-6.1-sol","inputTokens":272001,"outputTokens":1}}}"#).unwrap().long);
+    }
+
+    #[test]
+    fn a_compressed_rollout_counts_once_beside_its_plain_copy() {
+        let s = setup();
+        let counted = |c: &UsageCosts| {
+            (
+                row(c, "codex", "gpt-6.1-sol").tokens.clone(),
+                row(c, "codex", "gpt-6-astra").tokens.clone(),
+            )
+        };
+        let indexed = |p: &Path| {
+            lock(&s.costs.state)
+                .index
+                .files
+                .contains_key(p.to_str().unwrap())
+        };
+        let plain = counted(&s.scan());
+        let zst = s.codex.with_extension("jsonl.zst");
+        std::fs::write(
+            &zst,
+            include_bytes!("../tests/fixtures/transcripts/codex-costs.jsonl.zst"),
+        )
+        .unwrap();
+        assert_eq!(counted(&s.scan()), plain);
+        assert!(indexed(&s.codex) && !indexed(&zst));
+        std::fs::remove_file(&s.codex).unwrap();
+        assert_eq!(counted(&s.scan()), plain);
+        assert!(indexed(&zst) && !indexed(&s.codex));
+        assert_eq!(counted(&s.scan()), plain);
+    }
+
+    #[test]
+    fn an_oversized_compressed_file_is_refused_at_the_cap() {
+        let line = format!("{}\n", CODEX.lines().last().unwrap());
+        let text = line.repeat((1 << 20) / line.len() + 1);
+        let zst = ruzstd::encoding::compress_to_vec(
+            text.as_bytes(),
+            ruzstd::encoding::CompressionLevel::Fastest,
+        );
+        let path = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(path.path(), zst).unwrap();
+        let parser = || Parser {
+            agent: Agent::Codex,
+            model: Some("gpt-6-astra".into()),
+            last: None,
+            start: None,
+            records: Vec::new(),
+        };
+        let read = |limit| read_compressed(File::open(path.path()).unwrap(), limit, parser());
+        assert!(read(1 << 20).is_err());
+        let (offset, parsed) = read(2 << 20).unwrap();
+        assert_eq!(offset, text.len() as u64);
+        assert_eq!(parsed.records.len(), 1);
+    }
+
+    fn token_count(at: &str, last: (u64, u64), total: (u64, u64)) -> String {
+        format!(
+            r#"{{"timestamp":"2026-10-18T{at}.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{},"output_tokens":{}}},"last_token_usage":{{"input_tokens":{},"output_tokens":{}}}}}}}}}"#,
+            total.0, total.1, last.0, last.1
+        )
+    }
+
+    #[test]
+    fn a_replayed_first_request_counts_once() {
+        let outputs = |lines: &[String]| -> Vec<u64> {
+            let mut p = Parser {
+                agent: Agent::Codex,
+                model: Some("gpt-6-astra".into()),
+                last: None,
+                start: None,
+                records: Vec::new(),
+            };
+            lines
+                .iter()
+                .map(|l| {
+                    p.line(l.as_bytes());
+                    p.records.drain(..).map(|r| r.tokens.output).sum()
+                })
+                .collect()
+        };
+        let request = (100, 20);
+        assert_eq!(
+            outputs(&[
+                token_count("12:00:00", request, request),
+                token_count("12:01:00", request, (200, 40)),
+                token_count("12:00:00", request, request),
+                token_count("12:02:00", request, (300, 60)),
+                token_count("12:03:00", request, request),
+            ]),
+            [20, 20, 0, 20, 20],
+            "a replay is skipped and a later restart with the same counters counts"
+        );
+        assert_eq!(
+            outputs(&[
+                token_count("12:00:00", request, request),
+                token_count("12:01:00", request, (200, 40)),
+                token_count("12:02:00", (0, 0), (0, 0)),
+                token_count("12:00:00", request, request),
+                token_count("12:04:00", (30, 5), (130, 25)),
+            ]),
+            [20, 20, 0, 20, 5],
+            "a zeroed baseline forgets the sequence start"
+        );
     }
 
     #[test]

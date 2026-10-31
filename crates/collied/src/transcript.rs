@@ -298,7 +298,7 @@ impl Transcripts {
                     .map(|e| e.path().join(&name));
                 by_cwd.chain(any).find(|p| is_file(p))
             }
-            Kind::Codex => self.codex_rollout(id),
+            Kind::Codex => self.codex_rollout(id).filter(|p| !compressed(p)),
             Kind::Copilot => Some(
                 self.copilot_sessions
                     .as_ref()?
@@ -312,7 +312,6 @@ impl Transcripts {
     fn codex_rollout(&self, id: &str) -> Option<PathBuf> {
         let root = self.codex_sessions.as_ref()?;
         let day = (uuid_v7_ms(id)? / 86_400_000) as i64;
-        let suffix = format!("-{id}.jsonl");
         // Rollouts sit under the local date the session started; the id has it in UTC.
         (day - 1..=day + 1)
             .flat_map(|d| {
@@ -323,12 +322,11 @@ impl Transcripts {
                     .flatten()
             })
             .map(|e| e.path())
-            .find(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(&suffix))
+            .filter(|p| {
+                p.file_name().and_then(|n| n.to_str()).and_then(rollout_id) == Some(id)
                     && is_file(p)
             })
+            .min_by_key(|p| compressed(p))
     }
 
     /// The most recent sessions started in `cwd` (canonical) that have a prompt, newest first.
@@ -361,12 +359,9 @@ impl Transcripts {
                         .into_iter()
                         .find_map(|(path, i)| (i == id).then_some(path))
                 })
-                .and_then(|path| open(&path))
-                .is_some_and(|(mut file, _, _)| {
-                    head(&mut file, META_BYTES)
-                        .and_then(|h| codex_meta(&h))
-                        .is_some_and(|(i, c, _)| i == id && c == cwd)
-                }),
+                .and_then(|path| codex_head(&path, &mut open(&path)?.0, META_BYTES))
+                .and_then(|h| codex_meta(&h))
+                .is_some_and(|(i, c, _)| i == id && c == cwd),
             _ => false,
         }
     }
@@ -386,7 +381,7 @@ impl Transcripts {
                 is_session_id(id).then(|| (e.path(), id.to_owned()))
             })
             .collect();
-        recent("claude", files, |file, _| {
+        recent("claude", files, |_, file, _| {
             let text = head(file, HEAD_BYTES)?;
             Some(claude_first_prompt(&String::from_utf8_lossy(&text)))
         })
@@ -405,25 +400,31 @@ impl Transcripts {
                         if files.len() >= MAX_LISTED {
                             break 'walk;
                         }
-                        let name = e.file_name();
-                        if let Some(id) = name.to_str().and_then(rollout_id) {
-                            files.push((e.path(), id.to_owned()));
+                        if e.file_name().to_str().and_then(rollout_id).is_some() {
+                            files.push(e.path());
                         }
                     }
                 }
             }
         }
+        plain_first(&mut files);
         files
+            .into_iter()
+            .filter_map(|p| {
+                let id = rollout_id(p.file_name()?.to_str()?)?.to_owned();
+                Some((p, id))
+            })
+            .collect()
     }
 
     fn codex_sessions(&self, cwd: &str) -> Vec<Session> {
-        recent("codex", self.codex_files(), |file, id| {
-            let (i, c, interactive) = codex_meta(&head(file, META_BYTES)?)?;
+        recent("codex", self.codex_files(), |path, file, id| {
+            let (i, c, interactive) = codex_meta(&codex_head(path, file, META_BYTES)?)?;
             if i != id || c != cwd || !interactive {
                 return None;
             }
             file.seek(SeekFrom::Start(0)).ok()?;
-            let text = head(file, HEAD_BYTES)?;
+            let text = codex_head(path, file, HEAD_BYTES)?;
             Some(codex_first_prompt(&String::from_utf8_lossy(&text)))
         })
     }
@@ -443,7 +444,7 @@ pub struct Session {
 fn recent(
     agent: &'static str,
     files: Vec<(PathBuf, String)>,
-    prompt: impl Fn(&mut File, &str) -> Option<Option<String>>,
+    prompt: impl Fn(&Path, &mut File, &str) -> Option<Option<String>>,
 ) -> Vec<Session> {
     let mut dated: Vec<(SystemTime, PathBuf, String)> = files
         .into_iter()
@@ -461,7 +462,7 @@ fn recent(
         .filter_map(|(_, path, id)| {
             let (mut file, len, modified) = open(&path)?;
             let first_prompt =
-                prompt(&mut file, &id)?.or_else(|| (len > HEAD_BYTES).then(String::new))?;
+                prompt(&path, &mut file, &id)?.or_else(|| (len > HEAD_BYTES).then(String::new))?;
             Some(Session {
                 agent,
                 modified_ms: modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64,
@@ -497,8 +498,46 @@ fn dated_dirs(dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// A compressed rollout's head is decoded up to `limit` bytes.
+fn codex_head(path: &Path, file: &mut File, limit: u64) -> Option<Vec<u8>> {
+    if !compressed(path) {
+        return head(file, limit);
+    }
+    let mut buf = Vec::new();
+    ruzstd::decoding::StreamingDecoder::new(file)
+        .ok()?
+        .take(limit)
+        .read_to_end(&mut buf)
+        .ok()?;
+    Some(buf)
+}
+
+pub(crate) fn compressed(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "zst")
+}
+
+/// Codex compresses a rollout (and decompresses one it resumes) next to the original, removing
+/// the original only afterwards; while both exist, Codex reads the plain one.
+pub(crate) fn plain_first(paths: &mut Vec<PathBuf>) {
+    let id = |p: &PathBuf| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(rollout_id)
+            .map(str::to_owned)
+    };
+    let plain: HashSet<String> = paths
+        .iter()
+        .filter(|p| !compressed(p))
+        .filter_map(id)
+        .collect();
+    paths.retain(|p| !compressed(p) || id(p).is_none_or(|i| !plain.contains(&i)));
+}
+
 fn rollout_id(name: &str) -> Option<&str> {
-    let stem = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    let stem = name.strip_prefix("rollout-")?;
+    let stem = stem
+        .strip_suffix(".jsonl")
+        .or_else(|| stem.strip_suffix(".jsonl.zst"))?;
     let id = stem.get(stem.len().checked_sub(36)?..)?;
     is_session_id(id).then_some(id)
 }
@@ -1448,6 +1487,48 @@ mod tests {
         assert!(!t.has_session("claude", cwd, &uuid(2)));
         assert!(!t.has_session("copilot", cwd, CLAUDE_ID));
         assert!(!t.has_session("claude", cwd, "../-Users-me-src-other/x"));
+    }
+
+    #[test]
+    fn lists_and_finds_a_compressed_codex_session_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = roots(dir.path());
+        let cwd = "/Users/me/src/collie";
+        let plain = dir.path().join(format!(
+            "codex/sessions/2026/10/05/rollout-2026-10-05T22-25-26-{CODEX_ID}.jsonl"
+        ));
+        let zst = plain.with_extension("jsonl.zst");
+        std::fs::create_dir_all(plain.parent().unwrap()).unwrap();
+        std::fs::write(
+            &zst,
+            include_bytes!("../tests/fixtures/transcripts/codex.jsonl.zst"),
+        )
+        .unwrap();
+        let listed = |t: &Transcripts| -> Vec<(String, String)> {
+            t.sessions(cwd, true, true)
+                .into_iter()
+                .map(|s| (s.id, s.first_prompt))
+                .collect()
+        };
+        let session = [(
+            CODEX_ID.to_owned(),
+            "add approval tests for the codex menu".to_owned(),
+        )];
+        assert_eq!(listed(&t), session);
+        assert!(t.has_session("codex", cwd, CODEX_ID));
+        assert!(!t.has_session("codex", "/Users/me/src/other", CODEX_ID));
+        assert_eq!(t.codex_rollout(CODEX_ID), Some(zst));
+        let c = agent("codex", CODEX_ID, cwd);
+        assert_eq!(
+            t.derive(&c, true),
+            None,
+            "a live pane never reads compressed bytes"
+        );
+
+        write(&plain, CODEX);
+        assert_eq!(listed(&t), session);
+        assert_eq!(t.codex_rollout(CODEX_ID), Some(plain));
+        assert!(t.derive(&c, true).is_some());
     }
 
     #[test]
