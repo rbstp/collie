@@ -23,6 +23,8 @@ const TAIL_BYTES: u64 = 1 << 20;
 pub const MAX_TEXT_CHARS: usize = 160;
 const CLAUDE_WINDOW: u64 = 200_000;
 const CLAUDE_LONG_WINDOW: u64 = 1_000_000;
+/// Claude Code 2.1.314 auto-compacts at the window less min(max output, 20,000) less 13,000.
+const CLAUDE_COMPACT_RESERVE: u64 = 33_000;
 /// codex-rs `BASELINE_TOKENS`, so the percentage matches Codex's own "context left".
 const CODEX_BASELINE: u64 = 12_000;
 const MAX_SESSIONS: usize = 20;
@@ -55,6 +57,7 @@ struct Cached {
     len: u64,
     modified: SystemTime,
     window: Option<u64>,
+    auto_compact: bool,
     derived: Derived,
 }
 
@@ -66,6 +69,7 @@ pub struct Transcripts {
     cache: HashMap<String, Cached>,
     missed: HashSet<String>,
     usage: Usage,
+    auto_compact: Option<((u64, SystemTime), bool)>,
     live: subagents::Live,
     providers: provider_subagents::Live,
     panes: HashMap<String, live::Pane>,
@@ -83,6 +87,7 @@ impl Transcripts {
             cache: HashMap::new(),
             missed: HashSet::new(),
             usage: Usage::default(),
+            auto_compact: None,
             live: subagents::Live::default(),
             providers: provider_subagents::Live::default(),
             panes: HashMap::new(),
@@ -225,25 +230,32 @@ impl Transcripts {
             return None;
         };
         self.missed.remove(id);
-        let (window, subagents, subagents_truncated) = match kind {
+        let (window, auto_compact, subagents, subagents_truncated) = match kind {
             Kind::Claude => {
                 self.usage.refresh();
                 let sessions = self.sessions_dir();
                 let subagents = self.live.running(sessions.as_deref(), &path, id);
-                (self.usage.window(id), subagents, self.live.truncated(id))
+                let auto_compact = self.auto_compact();
+                (
+                    self.usage.window(id),
+                    auto_compact,
+                    subagents,
+                    self.live.truncated(id),
+                )
             }
             Kind::Codex => {
                 let (subagents, truncated) =
                     self.providers.codex(self.codex_sessions.as_deref()?, id);
-                (None, subagents, truncated)
+                (None, false, subagents, truncated)
             }
             Kind::Copilot => return None,
         };
-        if let Some(c) = self
-            .cache
-            .get(id)
-            .filter(|c| c.len == len && c.modified == modified && c.window == window)
-        {
+        if let Some(c) = self.cache.get(id).filter(|c| {
+            c.len == len
+                && c.modified == modified
+                && c.window == window
+                && c.auto_compact == auto_compact
+        }) {
             return Some(Derived {
                 subagents,
                 subagents_truncated,
@@ -252,7 +264,7 @@ impl Transcripts {
         }
         let text = tail(file, len).ok()?;
         let mut derived = match kind {
-            Kind::Claude => claude(&text, window),
+            Kind::Claude => claude(&text, window, auto_compact),
             Kind::Codex => codex(&text),
             Kind::Copilot => return None,
         };
@@ -275,10 +287,42 @@ impl Transcripts {
                 len,
                 modified,
                 window,
+                auto_compact,
                 derived: derived.clone(),
             },
         );
         Some(derived)
+    }
+
+    /// Only the user settings, where `/config` writes it: the agent's environment
+    /// (`DISABLE_AUTO_COMPACT`) and project settings are not visible here.
+    fn auto_compact(&mut self) -> bool {
+        let Some(path) = self
+            .claude_projects
+            .as_deref()
+            .and_then(Path::parent)
+            .map(|d| d.join("settings.json"))
+        else {
+            return true;
+        };
+        let Some(stamp) = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| Some((m.len(), m.modified().ok()?)))
+        else {
+            self.auto_compact = None;
+            return true;
+        };
+        if let Some((seen, on)) = self.auto_compact
+            && seen == stamp
+        {
+            return on;
+        }
+        let on = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .is_none_or(|v| v["autoCompactEnabled"] != false);
+        self.auto_compact = Some((stamp, on));
+        on
     }
 
     fn locate(&self, kind: Kind, id: &str, a: &AgentInfo) -> Option<PathBuf> {
@@ -684,7 +728,7 @@ fn claude_window(model: &str, used: u64) -> u64 {
     }
 }
 
-fn claude(text: &str, known_window: Option<u64>) -> Derived {
+fn claude(text: &str, known_window: Option<u64>, auto_compact: bool) -> Derived {
     let mut d = Derived::default();
     let mut compacted = None;
     let mut summary = None;
@@ -726,8 +770,13 @@ fn claude(text: &str, known_window: Option<u64>) -> Derived {
                     let window = known_window.unwrap_or_else(|| {
                         claude_window(m["model"].as_str().unwrap_or_default(), seen)
                     });
+                    let limit = if auto_compact {
+                        window.saturating_sub(CLAUDE_COMPACT_RESERVE).max(1)
+                    } else {
+                        window
+                    };
                     let used = compacted.unwrap_or(seen);
-                    d.context_left = Some(percent(window.saturating_sub(used), window));
+                    d.context_left = Some(percent(limit.saturating_sub(used), limit));
                 }
                 if d.last_line.is_none() {
                     let first = v["apiBlockIndex"].as_u64().unwrap_or(0);
@@ -884,7 +933,7 @@ mod tests {
 
     #[test]
     fn claude_fixture() {
-        let d = claude(CLAUDE, None);
+        let d = claude(CLAUDE, None, true);
         // 2 + 429 + 54811 input tokens of a 1M window; the sidechain and synthetic lines are skipped.
         assert_eq!(d.context_left, Some(94));
         assert_eq!(d.last_line.as_deref(), Some("**Fixed** the flaky test."));
@@ -893,7 +942,7 @@ mod tests {
             Some("fix the flaky approval test it fails one run in ten")
         );
         let sidechain = r#"{"isSidechain":true,"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Subagent done."}],"usage":{"input_tokens":900000}}}"#;
-        let d = claude(&[CLAUDE, sidechain].join("\n"), None);
+        let d = claude(&[CLAUDE, sidechain].join("\n"), None, true);
         assert_eq!(
             (d.context_left, d.last_line.as_deref()),
             (Some(94), Some("**Fixed** the flaky test."))
@@ -905,11 +954,14 @@ mod tests {
         let fixture = include_str!("../tests/fixtures/transcripts/claude-thinking-updates.jsonl");
         let running = fixture.lines().take(4).collect::<Vec<_>>().join("\n");
         let update = "The timeout comes from the retry loop, so I'll read its test next.";
-        assert_eq!(claude(&running, None).last_line.as_deref(), Some(update));
-        let older = running.replace("claude-opus-5-5", "claude-opus-5");
-        assert_eq!(claude(&older, None).last_line, None);
         assert_eq!(
-            claude(fixture, None).last_line.as_deref(),
+            claude(&running, None, true).last_line.as_deref(),
+            Some(update)
+        );
+        let older = running.replace("claude-opus-5-5", "claude-opus-5");
+        assert_eq!(claude(&older, None, true).last_line, None);
+        assert_eq!(
+            claude(fixture, None, true).last_line.as_deref(),
             Some("The retry loop never resets its timer.")
         );
     }
@@ -918,12 +970,12 @@ mod tests {
     fn claude_compaction_sets_the_context_until_the_next_reply() {
         let boundary = r#"{"isSidechain":false,"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":749477,"postTokens":20000}}"#;
         let summary = r#"{"isSidechain":false,"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation."}}"#;
-        let d = claude(&[CLAUDE, boundary, summary].join("\n"), None);
+        let d = claude(&[CLAUDE, boundary, summary].join("\n"), None, true);
         assert_eq!(d.context_left, Some(98));
         assert_eq!(d.last_line.as_deref(), Some("**Fixed** the flaky test."));
         let reply = r#"{"isSidechain":false,"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"Back."}],"usage":{"input_tokens":100000}}}"#;
         assert_eq!(
-            claude(&[CLAUDE, boundary, summary, reply].join("\n"), None).context_left,
+            claude(&[CLAUDE, boundary, summary, reply].join("\n"), None, true).context_left,
             Some(90)
         );
     }
@@ -935,13 +987,13 @@ mod tests {
         let notice = r#"{"type":"user","isSidechain":false,"origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>"}}"#;
         let summary = r#"{"type":"last-prompt","lastPrompt":"older"}"#;
         assert_eq!(
-            claude(&[summary, human, tool, notice].join("\n"), None)
+            claude(&[summary, human, tool, notice].join("\n"), None, true)
                 .last_prompt
                 .as_deref(),
             Some("ship it")
         );
         assert_eq!(
-            claude(&[human, summary].join("\n"), None)
+            claude(&[human, summary].join("\n"), None, true)
                 .last_prompt
                 .as_deref(),
             Some("older")
@@ -970,7 +1022,7 @@ mod tests {
             false,
         );
         let next = r#"{"type":"user","isSidechain":false,"origin":{"kind":"human"},"promptSource":"queued","message":{"role":"user","content":"and update the docs"}}"#;
-        let prompt = |lines: &[&str]| claude(&lines.join("\n"), None).last_prompt;
+        let prompt = |lines: &[&str]| claude(&lines.join("\n"), None, true).last_prompt;
         let relay = Some("also check the relay timeout".to_owned());
         assert_eq!(prompt(&[first, &mid]), relay);
         assert_eq!(prompt(&[first, &mid, summary]), relay);
@@ -1014,7 +1066,7 @@ mod tests {
         let builtin = r#"{"type":"user","isSidechain":false,"message":{"role":"user","content":"<command-name>/exit</command-name>\n<command-message>exit</command-message>\n<command-args></command-args>"}}"#;
         let stdout = r#"{"type":"user","isSidechain":false,"origin":{"kind":"human"},"message":{"role":"user","content":"<local-command-stdout>human</local-command-stdout>"}}"#;
         let typed = r#"{"type":"user","isSidechain":false,"origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"<command-name>/exit</command-name> typed"}}"#;
-        let prompt = |lines: &[&str]| claude(&lines.join("\n"), None).last_prompt;
+        let prompt = |lines: &[&str]| claude(&lines.join("\n"), None, true).last_prompt;
         assert_eq!(prompt(&[human, skill]).as_deref(), Some("/review pr 12"));
         assert_eq!(
             prompt(&[human, builtin, stdout]).as_deref(),
@@ -1067,9 +1119,28 @@ mod tests {
                 r#"{{"type":"assistant","isSidechain":false,"message":{{"model":"claude-haiku-4-5","content":[],"usage":{{"input_tokens":{used},"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}"#
             )
         };
-        assert_eq!(claude(&line(50_000), None).context_left, Some(75));
-        assert_eq!(claude(&line(400_000), None).context_left, Some(60));
-        assert_eq!(claude(&line(2_000_000), None).context_left, Some(0));
+        assert_eq!(claude(&line(50_000), None, true).context_left, Some(70));
+        assert_eq!(claude(&line(400_000), None, true).context_left, Some(59));
+        assert_eq!(claude(&line(2_000_000), None, true).context_left, Some(0));
+    }
+
+    #[test]
+    fn claude_context_runs_to_auto_compact() {
+        let left = |used: u64, window: u64, auto_compact: bool| {
+            let line = format!(
+                r#"{{"type":"assistant","isSidechain":false,"message":{{"model":"claude-opus-5-5","content":[],"usage":{{"input_tokens":{used}}}}}}}"#
+            );
+            claude(&line, Some(window), auto_compact).context_left
+        };
+        assert_eq!(left(50_000, 200_000, true), Some(70));
+        assert_eq!(left(483_500, 1_000_000, true), Some(50));
+        assert_eq!(left(165_330, 200_000, true), Some(1));
+        assert_eq!(left(167_000, 200_000, true), Some(0));
+        assert_eq!(left(190_000, 200_000, true), Some(0));
+        assert_eq!(left(117_000, 150_000, true), Some(0));
+        assert_eq!(left(50_000, 200_000, false), Some(75));
+        assert_eq!(left(167_000, 200_000, false), Some(17));
+        assert_eq!(left(10_000, 20_000, true), Some(0));
     }
 
     #[test]
@@ -1180,7 +1251,7 @@ mod tests {
         let d = t.derive(&a, false).unwrap();
         assert_eq!(
             (d.context_left, d.last_line.as_deref()),
-            (Some(50), Some("Pushed."))
+            (Some(48), Some("Pushed."))
         );
 
         // A tool result longer than the tail hides the reply and prompt: the last ones are kept.
@@ -1195,7 +1266,7 @@ mod tests {
         let d = t.derive(&a, false).unwrap();
         assert_eq!(
             (d.context_left, d.last_line.as_deref()),
-            (Some(40), Some("Pushed."))
+            (Some(38), Some("Pushed."))
         );
         assert!(d.last_prompt.unwrap().starts_with("fix the flaky"));
 
@@ -1273,7 +1344,12 @@ mod tests {
             r#""context_window_size": 200000"#,
         );
         crate::usage::record(&data, input.as_bytes(), 7).unwrap();
+        assert_eq!(t.derive(&a, false).unwrap().context_left, Some(67));
+        let settings = dir.path().join("claude/settings.json");
+        write(&settings, r#"{"autoCompactEnabled": false}"#);
         assert_eq!(t.derive(&a, false).unwrap().context_left, Some(72));
+        write(&settings, "{}");
+        assert_eq!(t.derive(&a, false).unwrap().context_left, Some(67));
         let plan = t.plan_moved().unwrap().unwrap();
         assert_eq!(plan.recorded_ms, 7);
         assert_eq!(plan.five_hour.as_ref().unwrap().used_percent, 24);
@@ -1326,7 +1402,7 @@ mod tests {
         let (file, len, _) = open(&big).unwrap();
         let tail = tail(file, len).unwrap();
         assert!(tail.len() < TAIL_BYTES as usize && tail.starts_with('{'));
-        assert_eq!(claude(&tail, None).context_left, Some(94));
+        assert_eq!(claude(&tail, None, true).context_left, Some(94));
     }
 
     fn aged(path: &Path, text: &str, secs: u64) {
