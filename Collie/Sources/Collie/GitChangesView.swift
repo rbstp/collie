@@ -363,17 +363,23 @@ struct GitDiffView: View {
                     .frame(minWidth: 20, minHeight: 28)
             }
             .accessibilityLabel(collapsed ? "Expand diff" : "Collapse diff")
-            Text(verbatim: file.oldPath.map { "\($0) → \(file.path)" } ?? file.path)
-                .font(.footnote.weight(.semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
-            Spacer(minLength: 0)
             HStack(spacing: 4) {
-                if let additions = file.additions { Text(verbatim: "+\(additions)").foregroundStyle(.green) }
-                if let deletions = file.deletions { Text(verbatim: "−\(deletions)").foregroundStyle(.red) }
+                if let old = file.oldPath { Text(verbatim: "\(old) →").layoutPriority(-1) }
+                Text(verbatim: file.path).textSelection(.enabled)
             }
-            .font(.caption.monospacedDigit())
+            .font(.footnote.weight(.semibold))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            Spacer(minLength: 0)
+            if let additions = file.additions, let deletions = file.deletions {
+                HStack(spacing: 4) {
+                    Text(verbatim: "+\(additions)").foregroundStyle(.green)
+                    Text(verbatim: "−\(deletions)").foregroundStyle(.red)
+                }
+                .font(.caption.monospacedDigit())
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(additions) added, \(deletions) removed lines")
+            }
             if file.hash != nil {
                 Toggle(isOn: viewed) {
                     Label("Viewed", systemImage: viewed.wrappedValue ? "checkmark.circle.fill" : "circle")

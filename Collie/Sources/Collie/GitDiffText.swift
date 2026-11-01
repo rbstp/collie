@@ -189,11 +189,13 @@ struct GitDiffText: UIViewRepresentable {
 final class GitDiffLayoutManager: NSLayoutManager {
     var rows: [GitDiffRow] = []
     var ranges: [NSRange] = []
-    var font = UIFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    var font = UIFont.monospacedSystemFont(ofSize: 11, weight: .regular) { didSet { advance = Self.advance(of: font) } }
     var digits = 1
-    private var advance: CGFloat { ceil(("0" as NSString).size(withAttributes: [.font: font]).width) }
+    private var advance = GitDiffLayoutManager.advance(of: .monospacedSystemFont(ofSize: 11, weight: .regular))
     var numberWidth: CGFloat { CGFloat(digits) * advance + 8 }
     var gutterWidth: CGFloat { numberWidth * 2 + advance + 6 }
+
+    private static func advance(of font: UIFont) -> CGFloat { ceil(("0" as NSString).size(withAttributes: [.font: font]).width) }
 
     // GitHub's diff colors: Primer light, and its dark theme's translucent fills.
     private static func color(_ light: UInt32, _ dark: UInt32, _ alpha: CGFloat) -> UIColor {

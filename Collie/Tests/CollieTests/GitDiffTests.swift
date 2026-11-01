@@ -91,12 +91,14 @@ import UIKit
 @MainActor
 @Test func gitDiffGutterFitsTheWidestLineNumber() {
     let layout = GitDiffLayoutManager()
-    layout.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
     let narrow = layout.gutterWidth
-    layout.digits = 5
+    layout.font = .monospacedSystemFont(ofSize: 20, weight: .regular)
     #expect(layout.gutterWidth > narrow)
-    #expect(layout.gutterWidth > layout.numberWidth * 2)
-    #expect(("99999" as NSString).size(withAttributes: [.font: layout.font]).width <= layout.numberWidth - 4)
+    layout.digits = 5
+    let widest = ("99999" as NSString).size(withAttributes: [.font: layout.font]).width
+    let marker = ("+" as NSString).size(withAttributes: [.font: layout.font]).width
+    #expect(widest <= layout.numberWidth - 4)
+    #expect(widest * 2 + marker < layout.gutterWidth)
 }
 
 @MainActor
