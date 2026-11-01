@@ -31,7 +31,7 @@ enum GitCleanup {
         Clean up these Git worktrees (paths and branches are JSON strings):
         \(list.joined(separator: "\n"))
 
-        Check that each one is not in use: no agent or process is working in it, nothing in it was created or changed in the last 24 hours, it has no uncommitted or untracked changes and no unpushed commits, and its pull request is merged or closed, or it has none. Remove only the worktrees that pass, with their local branches. Never remove the main worktree or the default branch. Report which worktrees you kept and why.
+        Check that each one is not in use: no agent or process is working in it, it has no uncommitted or untracked changes and no unpushed commits, and its pull request is merged or closed, or it has none. If it has no pull request, also check that nothing in it was created or changed in the last 24 hours. Remove only the worktrees that pass, with their local branches. Never remove the main worktree or the default branch. Report which worktrees you kept and why.
         """
     }
 
