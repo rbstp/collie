@@ -6,7 +6,7 @@ use protocol::{
     Agent, AgentStatus, Flock, MachineInfo, Subagent, Terminal, TerminalId, Workspace, WorkspaceId,
 };
 
-use crate::herdr::{AgentInfo, PaneInfo, SessionSnapshot, WorkspaceInfo};
+use crate::runtime::{AgentInfo, PaneInfo, SessionSnapshot, WorkspaceInfo};
 use crate::transcript::{Derived, Transcripts};
 
 /// herdr reports no timestamp for a status, so collied records when it first saw each one,

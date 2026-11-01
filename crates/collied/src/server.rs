@@ -46,10 +46,11 @@ use crate::peers::{self, Peer, Store};
 use crate::pr_watch::{self, Wakes, Watch, Watches};
 use crate::pulls::{self, Pulls};
 use crate::push::{self, ActivityError, Push};
+use crate::runtime::{self, Runtime};
 use crate::terminal::{self, Grants};
 use crate::transcript::Transcripts;
 use crate::turns::Turns;
-use crate::{config, git, herdr, lock};
+use crate::{config, git, lock};
 
 const MAX_CONNECTIONS: usize = 64;
 const MAX_SESSIONS_PER_NODE: usize = 4;
@@ -192,7 +193,7 @@ pub struct State {
     machine: MachineInfo,
     dns_name: String,
     started_ms: u64,
-    herdr: PathBuf,
+    runtime: Runtime,
     peers: Arc<Mutex<Store>>,
     pairing: Mutex<Pairing<mpsc::Sender<PairAttempt>>>,
     sessions: Mutex<Sessions>,
@@ -369,10 +370,7 @@ impl State {
                 Err(e) => (format!("error: {e}"), None, None),
             };
         // Concurrent, so a wedged herdr costs one herdr timeout, under the control timeout.
-        let (pong, snap) = tokio::join!(
-            herdr::ping(&self.herdr),
-            herdr::session_snapshot(&self.herdr)
-        );
+        let (pong, snap) = tokio::join!(self.runtime.ping(), self.runtime.session_snapshot());
         let herdr_version = pong.ok().map(|p| p.version);
         let flock = snap.ok().map(|snap| {
             let mut tracker = lock(&self.tracker);
@@ -616,7 +614,7 @@ pub async fn start_with(
         cfg,
         dns_name,
         started_ms: crate::now_ms(),
-        herdr: herdr_socket,
+        runtime: Runtime::new(herdr_socket),
         peers,
         pairing: Mutex::new(Pairing::default()),
         sessions: Mutex::new(Sessions {
@@ -717,15 +715,15 @@ async fn pull_requests(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             }
             continue;
         };
-        let Ok(mut agents) = herdr::agent_list(&state.herdr).await else {
+        let Ok(mut agents) = state.runtime.agent_list().await else {
             continue;
         };
         let phone = state.events.receiver_count() > 0;
         if !phone {
-            let Ok(snapshot) = herdr::session_snapshot(&state.herdr).await else {
+            let Ok(snapshot) = state.runtime.session_snapshot().await else {
                 continue;
             };
-            let quiet = |a: &herdr::AgentInfo| lock(&state.transcripts).quiet(a);
+            let quiet = |a: &runtime::AgentInfo| lock(&state.transcripts).quiet(a);
             agents.retain(|a| drive::worktree_settled(&snapshot, &a.terminal_id, &quiet));
         }
         let Some((linked, seen, merged)) = read_pulls(&state, &gh, &agents).await else {
@@ -740,14 +738,14 @@ async fn pull_requests(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     }
 }
 
-type Merged = Vec<(herdr::AgentInfo, Cwd, u64)>;
+type Merged = Vec<(runtime::AgentInfo, Cwd, u64)>;
 
 /// `Merged` lists the agents whose pull request a fresh or kept read found merged, only
 /// while automatic archive is on.
 async fn read_pulls(
     state: &State,
     gh: &str,
-    agents: &[herdr::AgentInfo],
+    agents: &[runtime::AgentInfo],
 ) -> Option<(HashMap<String, PullRequest>, HashSet<pulls::Key>, Merged)> {
     let roots = state.drive.roots();
     let mut linked = HashMap::new();
@@ -808,7 +806,7 @@ async fn read_pulls(
 async fn archive_merged(
     state: &Arc<State>,
     gh: &str,
-    agent: &herdr::AgentInfo,
+    agent: &runtime::AgentInfo,
     root: &Cwd,
     number: u64,
 ) {
@@ -816,7 +814,7 @@ async fn archive_merged(
         let state = state.clone();
         Arc::new(move || state.archives_on_merge())
     };
-    let quiet = |a: &herdr::AgentInfo| lock(&state.transcripts).quiet(a);
+    let quiet = |a: &runtime::AgentInfo| lock(&state.transcripts).quiet(a);
     let Some(reply) = state
         .drive
         .archive_if_merged(gh, agent, root, number, &quiet, &auth)
@@ -859,7 +857,7 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             }
         }
         let mut ended = false;
-        let agents = herdr::agent_list(&state.herdr).await.ok();
+        let agents = state.runtime.agent_list().await.ok();
         let peers = state.peers();
         {
             let mut pulls = lock(&state.pulls);
@@ -2151,7 +2149,7 @@ impl Session<'_> {
         let paired = self.peer.paired();
         // An unpaired peer learns nothing about herdr and cannot make collied call it.
         let herdr_version = if paired {
-            herdr::ping(&self.state.herdr).await.ok().map(|p| p.version)
+            self.state.runtime.ping().await.ok().map(|p| p.version)
         } else {
             None
         };
@@ -2177,7 +2175,7 @@ impl Session<'_> {
     }
 
     async fn flock(&self) -> Reply {
-        let snap = herdr_result(herdr::session_snapshot(&self.state.herdr).await)?;
+        let snap = herdr_result(self.state.runtime.session_snapshot().await)?;
         let mut tracker = lock(&self.state.tracker);
         let mut flock = flock::map_flock(
             &snap,
@@ -2704,7 +2702,7 @@ fn code_name(code: ErrorCode) -> String {
         .unwrap_or_default()
 }
 
-fn herdr_result<T>(res: Result<T, herdr::Error>) -> Result<T, (ErrorCode, String)> {
+fn herdr_result<T>(res: Result<T, runtime::Error>) -> Result<T, (ErrorCode, String)> {
     res.map_err(|e| {
         tracing::warn!(error = %e, "herdr call failed");
         (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned())
@@ -2712,7 +2710,7 @@ fn herdr_result<T>(res: Result<T, herdr::Error>) -> Result<T, (ErrorCode, String
 }
 
 fn observe_agent(
-    agent: &herdr::AgentInfo,
+    agent: &runtime::AgentInfo,
     tracker: &mut StatusTracker,
     transcripts: &mut Transcripts,
     pulls: &Pulls,
@@ -2742,10 +2740,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             _ = tokio::time::sleep(delay) => {}
             _ = shutdown.changed() => return,
         }
-        let polled = tokio::try_join!(
-            herdr::agent_list(&state.herdr),
-            herdr::workspace_list(&state.herdr)
-        );
+        let polled = tokio::try_join!(state.runtime.agent_list(), state.runtime.workspace_list());
         let (agents, workspaces) = match polled {
             Ok(v) => v,
             Err(e) => {
@@ -2763,7 +2758,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         delay = RECONCILE_EVERY;
         let stale = lock(&state.transcripts).stale_panes(&agents);
         for (terminal_id, pane_id) in stale {
-            let procs = herdr::pane_processes(&state.herdr, &pane_id).await.ok();
+            let procs = state.runtime.pane_processes(&pane_id).await.ok();
             lock(&state.transcripts).set_pane(terminal_id, pane_id, procs);
         }
         let phones = state.events.receiver_count() > 0;
@@ -2818,7 +2813,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         // shell pane's included, takes the snapshot.
         let starred = lock(&state.stars).list();
         if !lock(&state.stars).listed(&agents)
-            && let Ok(snap) = herdr::session_snapshot(&state.herdr).await
+            && let Ok(snap) = state.runtime.session_snapshot().await
             && lock(&state.stars).reconcile(&snap.panes) != starred
         {
             let _ = state.events.send(Event::FlockChanged {});
@@ -2867,7 +2862,7 @@ mod tests {
     fn disconnected_status_changes_skip_transcripts_and_preserve_status_times() {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../tests/fixtures/session.snapshot.json")).unwrap();
-        let snap: herdr::SessionSnapshot =
+        let snap: runtime::SessionSnapshot =
             serde_json::from_value(fixture["result"]["snapshot"].clone()).unwrap();
         let mut agent = snap.agents[0].clone();
         let dir = tempfile::tempdir().unwrap();

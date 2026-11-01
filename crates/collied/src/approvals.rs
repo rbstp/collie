@@ -16,10 +16,10 @@ use zeroize::Zeroizing;
 use crate::audit::Audit;
 use crate::drive::{Authorized, Reply, fail, herdr_fail};
 use crate::flock;
-use crate::herdr::{self, AgentInfo, WorkspaceInfo};
 use crate::hooks;
 use crate::prompt::{self, Menu};
 use crate::push::{self, Push};
+use crate::runtime::{self, AgentInfo, Runtime, WorkspaceInfo};
 use crate::server::TokenBucket;
 
 pub const TTL: Duration = Duration::from_secs(600);
@@ -145,7 +145,7 @@ impl Inner {
 }
 
 pub struct Approvals {
-    herdr: PathBuf,
+    runtime: Runtime,
     node_id: String,
     events: broadcast::Sender<Event>,
     audit: Arc<Audit>,
@@ -249,7 +249,7 @@ impl Approvals {
         push: Option<Arc<Push>>,
     ) -> Self {
         Self {
-            herdr,
+            runtime: Runtime::new(herdr),
             node_id,
             events,
             audit,
@@ -408,11 +408,11 @@ impl Approvals {
         }
     }
 
-    async fn screen(&self, a: &AgentInfo) -> Result<Screen, herdr::Error> {
+    async fn screen(&self, a: &AgentInfo) -> Result<Screen, runtime::Error> {
         let kind = a.agent.as_deref().unwrap_or_default();
-        let explain = herdr::agent_explain(&self.herdr, &a.pane_id).await?;
+        let explain = self.runtime.agent_explain(&a.pane_id).await?;
         let matched = explain.matched_rule.map(|r| r.id);
-        let detected = herdr::detection_text(&self.herdr, &a.pane_id).await?;
+        let detected = self.runtime.detection_text(&a.pane_id).await?;
         let (rule, form) = prompt::without_session_name(kind, matched.as_deref(), &detected);
         let (text, reason) =
             prompt::without_reason(kind, &prompt::without_deny_countdown(kind, form));
@@ -614,8 +614,8 @@ impl Approvals {
         });
     }
 
-    async fn current(&self, terminal: &str) -> Result<Option<Screen>, herdr::Error> {
-        let agents = herdr::agent_list(&self.herdr).await?;
+    async fn current(&self, terminal: &str) -> Result<Option<Screen>, runtime::Error> {
+        let agents = self.runtime.agent_list().await?;
         match agents.iter().find(|a| a.terminal_id == terminal) {
             Some(a) => Ok(Some(self.screen(a).await?)),
             None => Ok(None),
@@ -626,7 +626,7 @@ impl Approvals {
         let poll = async {
             loop {
                 tokio::time::sleep(SETTLE_POLL).await;
-                let Ok(agents) = herdr::agent_list(&self.herdr).await else {
+                let Ok(agents) = self.runtime.agent_list().await else {
                     continue;
                 };
                 match agents.iter().find(|a| a.terminal_id == terminal) {
@@ -727,7 +727,7 @@ impl Approvals {
             audit(why);
             fail(code, message)
         };
-        let failed = |why: &str, e: herdr::Error| -> Reply {
+        let failed = |why: &str, e: runtime::Error| -> Reply {
             self.finish(terminal, &id, ApprovalOutcome::Superseded);
             audit(why);
             Err(herdr_fail(e))
@@ -836,9 +836,7 @@ impl Approvals {
         let pane = now.pane_id.as_str();
         let sent = |keys: &[&str]| format!("terminal={terminal} keys={}", keys.join(","));
         if !nav.is_empty() {
-            match tokio::time::timeout_at(budget, herdr::agent_send_keys(&self.herdr, pane, &nav))
-                .await
-            {
+            match tokio::time::timeout_at(budget, self.runtime.agent_send_keys(pane, &nav)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => return failed("failed: keys not sent", e),
                 Err(_) => return superseded(&format!("superseded: herdr too slow {}", sent(&nav))),
@@ -874,11 +872,8 @@ impl Approvals {
                 return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
             }
             keys.push("tab");
-            match tokio::time::timeout_at(
-                budget,
-                herdr::agent_send_keys(&self.herdr, pane, &["tab"]),
-            )
-            .await
+            match tokio::time::timeout_at(budget, self.runtime.agent_send_keys(pane, &["tab"]))
+                .await
             {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => return failed(&format!("failed: tab not sent {}", sent(&nav)), e),
@@ -905,9 +900,7 @@ impl Approvals {
             if tokio::time::Instant::now() >= budget {
                 return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
             }
-            match tokio::time::timeout_at(budget, herdr::pane_send_text(&self.herdr, pane, note))
-                .await
-            {
+            match tokio::time::timeout_at(budget, self.runtime.pane_send_text(pane, note)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => return failed(&format!("failed: note not sent {}", sent(&keys)), e),
                 Err(_) => {
@@ -929,25 +922,23 @@ impl Approvals {
                 return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
             }
         }
-        let settled = match tokio::time::timeout_at(
-            budget,
-            herdr::agent_send_keys(&self.herdr, pane, &[confirm]),
-        )
-        .await
-        {
-            Ok(Ok(())) => Some(self.settled(terminal, screen.seq).await),
-            Ok(Err(e)) => {
-                self.finish(terminal, &id, ApprovalOutcome::Superseded);
-                if keys.is_empty() {
-                    audit("failed: keys not sent");
-                } else {
-                    audit(&format!("failed: {confirm} not sent {}", sent(&keys)));
+        let settled =
+            match tokio::time::timeout_at(budget, self.runtime.agent_send_keys(pane, &[confirm]))
+                .await
+            {
+                Ok(Ok(())) => Some(self.settled(terminal, screen.seq).await),
+                Ok(Err(e)) => {
+                    self.finish(terminal, &id, ApprovalOutcome::Superseded);
+                    if keys.is_empty() {
+                        audit("failed: keys not sent");
+                    } else {
+                        audit(&format!("failed: {confirm} not sent {}", sent(&keys)));
+                    }
+                    return Err(herdr_fail(e));
                 }
-                return Err(herdr_fail(e));
-            }
-            // The key may still have reached the agent.
-            Err(_) => None,
-        };
+                // The key may still have reached the agent.
+                Err(_) => None,
+            };
         keys.push(confirm);
         let (decision, by) = (p.decision, peer.to_owned());
         let applied = settled == Some(true);

@@ -18,7 +18,6 @@ pub mod files;
 pub mod flock;
 pub mod gate;
 pub mod git;
-pub mod herdr;
 pub mod hooks;
 #[cfg(target_os = "macos")]
 pub mod keychain;
@@ -31,6 +30,7 @@ pub mod push;
 mod push_display;
 pub mod reflow;
 pub mod relay;
+pub mod runtime;
 pub mod server;
 pub mod service;
 pub mod setup;

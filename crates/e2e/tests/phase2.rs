@@ -703,7 +703,9 @@ async fn live_scenario(
     let m = machine.id.clone();
     let flock = connected_flock(core, &m).await;
     assert_eq!(flock.details.unwrap().herdr_session, herdr.name);
-    let listed = collied::herdr::workspace_list(&herdr.socket).await.unwrap();
+    let listed = collied::runtime::herdr::workspace_list(&herdr.socket)
+        .await
+        .unwrap();
     assert!(listed.iter().any(|w| w.label == "collie-e2e"), "{listed:?}");
     let got: Vec<(&str, &str)> = flock
         .workspaces
@@ -715,12 +717,12 @@ async fn live_scenario(
         .map(|w| (w.workspace_id.as_str(), w.label.as_str()))
         .collect();
     assert_eq!(got, want);
-    let snapshot = collied::herdr::session_snapshot(&herdr.socket)
+    let snapshot = collied::runtime::herdr::session_snapshot(&herdr.socket)
         .await
         .unwrap();
     let shell = snapshot.panes[0].terminal_id.clone();
     let workspaces = || async {
-        collied::herdr::workspace_list(&herdr.socket)
+        collied::runtime::herdr::workspace_list(&herdr.socket)
             .await
             .unwrap()
             .into_iter()

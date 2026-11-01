@@ -446,10 +446,10 @@ impl Rig {
 
     /// One reconcile as the server runs it: approvals, then Live Activities.
     async fn tick(&self) {
-        let agents = collied::herdr::agent_list(&self.herdr.socket)
+        let agents = collied::runtime::herdr::agent_list(&self.herdr.socket)
             .await
             .unwrap();
-        let workspaces = collied::herdr::workspace_list(&self.herdr.socket)
+        let workspaces = collied::runtime::herdr::workspace_list(&self.herdr.socket)
             .await
             .unwrap();
         self.approvals.observe(&agents, &workspaces).await;
@@ -483,10 +483,10 @@ impl Rig {
     }
 
     async fn observe(&self) {
-        let agents = collied::herdr::agent_list(&self.herdr.socket)
+        let agents = collied::runtime::herdr::agent_list(&self.herdr.socket)
             .await
             .unwrap();
-        let workspaces = collied::herdr::workspace_list(&self.herdr.socket)
+        let workspaces = collied::runtime::herdr::workspace_list(&self.herdr.socket)
             .await
             .unwrap();
         self.approvals.observe(&agents, &workspaces).await;
@@ -1589,10 +1589,14 @@ async fn notifications_and_live_activities_continue_without_app_events() {
     assert!(state.get("approvalId").is_none() && state.get("enc").is_none());
 
     let mut turns = collied::turns::Turns::default();
-    let agents = collied::herdr::agent_list(&rig.herdr.socket).await.unwrap();
+    let agents = collied::runtime::herdr::agent_list(&rig.herdr.socket)
+        .await
+        .unwrap();
     assert!(turns.observe(&agents, 0).is_empty());
     rig.herdr.set_status("done");
-    let agents = collied::herdr::agent_list(&rig.herdr.socket).await.unwrap();
+    let agents = collied::runtime::herdr::agent_list(&rig.herdr.socket)
+        .await
+        .unwrap();
     let done = turns.observe(&agents, collied::turns::MIN_TURN_MS);
     assert_eq!(done.len(), 1);
     rig.push.notify_done(collied::push::done_alert(

@@ -12,7 +12,8 @@ use crate::keychain;
 
 use crate::config::{self, ApnsConfig, ApnsKey, Config};
 use crate::control::{self, Reply, Request};
-use crate::{herdr, hooks, push};
+use crate::runtime::{self, Runtime};
+use crate::{hooks, push};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Status {
@@ -729,8 +730,7 @@ fn ownership(meta: &Metadata, want: u32) -> (Status, String) {
 }
 
 async fn check_herdr(r: &mut Report, config: &Config) {
-    let env = herdr::SocketEnv::from_process();
-    let socket = match herdr::resolve_socket_path(config.herdr.session.as_deref(), &env) {
+    let socket = match runtime::herdr_socket(config.herdr.session.as_deref()) {
         Ok(p) => p,
         Err(e) => return r.line(Status::Fail, "herdr", e.to_string()),
     };
@@ -746,7 +746,7 @@ async fn check_herdr(r: &mut Report, config: &Config) {
     if status != Status::Ok {
         return r.line(status, "herdr", format!("{shown}: {detail}"));
     }
-    match herdr::ping(&socket).await {
+    match Runtime::new(socket.clone()).ping().await {
         Ok(pong) => r.line(
             Status::Ok,
             "herdr",

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use protocol::AgentStatus;
 
 use crate::flock;
-use crate::herdr::AgentInfo;
+use crate::runtime::AgentInfo;
 
 /// The shortest turn that alerts when it ends: quick replies never do, and since it equals
 /// approvals' `ALERT_GAP` a flapping agent alerts at most once per 30 s per terminal.

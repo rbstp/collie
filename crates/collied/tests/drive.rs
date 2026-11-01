@@ -715,7 +715,7 @@ async fn a_pull_request_wake_waits_for_an_idle_agent_on_its_branch_with_an_empty
         .unwrap()
     };
     herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("idle"));
-    let mut agent: collied::herdr::AgentInfo =
+    let mut agent: collied::runtime::AgentInfo =
         serde_json::from_value(herdr.with(|h| h.snapshot["agents"][0].clone())).unwrap();
     assert_eq!(agent.terminal_id, CLAUDE);
     agent.foreground_cwd = None;
@@ -3151,7 +3151,7 @@ fn ends_after(allowed: usize) -> Authorized {
 #[tokio::test]
 async fn automatic_archive_needs_an_idle_quiet_clean_worktree_inside_the_merged_head() {
     let m = merged_worktree();
-    let quiet = |_: &collied::herdr::AgentInfo| true;
+    let quiet = |_: &collied::runtime::AgentInfo| true;
     let refused = async |code: ErrorCode, quiet: &collied::drive::Quiet<'_>| {
         let error = m
             .drive
@@ -3257,9 +3257,9 @@ async fn automatic_archive_reads_the_pull_request_again_and_stops_with_the_setti
         .unwrap();
     };
     let calls = || std::fs::read_to_string(&calls).unwrap_or_default();
-    let agent: collied::herdr::AgentInfo =
+    let agent: collied::runtime::AgentInfo =
         serde_json::from_value(m.herdr.with(|h| h.snapshot["agents"][1].clone())).unwrap();
-    let quiet = |_: &collied::herdr::AgentInfo| true;
+    let quiet = |_: &collied::runtime::AgentInfo| true;
     let gh = gh.to_str().unwrap();
     let root = cwd(&m.checkout);
     let archive = async |number: u64, quiet: &collied::drive::Quiet<'_>, auth: &Authorized| {

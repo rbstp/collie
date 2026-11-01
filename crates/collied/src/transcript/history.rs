@@ -10,7 +10,7 @@ use serde_json::Value;
 use super::{Kind, Transcripts, open};
 use crate::draft::cells;
 use crate::drive::sanitize_ansi;
-use crate::herdr::AgentInfo;
+use crate::runtime::AgentInfo;
 
 const SCAN_BYTES: u64 = 2 * 1024 * 1024;
 const PAGE_BYTES: usize = 40 * 1024;
@@ -954,7 +954,7 @@ fn normalize(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::herdr::AgentSession;
+    use crate::runtime::AgentSession;
     use serde_json::json;
     use std::io::Write;
     use std::path::PathBuf;
@@ -2162,7 +2162,7 @@ mod tests {
             t.set_pane(
                 "t1".into(),
                 "w1:p1".into(),
-                Some(crate::herdr::PaneProcesses {
+                Some(crate::runtime::PaneProcesses {
                     pids: vec![pid],
                     attach: None,
                 }),

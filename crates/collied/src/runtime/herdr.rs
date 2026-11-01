@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
+use super::{AgentInfo, PaneInfo, PaneProcesses, SessionSnapshot, WorkspaceInfo};
+
 const TIMEOUT: Duration = Duration::from_secs(5);
 const WORKTREE_REMOVE_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_LINE: u64 = 1 << 20;
@@ -140,72 +142,6 @@ struct Response<R> {
 struct ErrorBody {
     code: String,
     message: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct WorkspaceInfo {
-    pub workspace_id: String,
-    pub number: u32,
-    pub label: String,
-    pub active_tab_id: Option<String>,
-    pub agent_status: String,
-    #[serde(default)]
-    pub worktree: Option<WorkspaceWorktreeInfo>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct WorkspaceWorktreeInfo {
-    pub repo_root: String,
-    pub checkout_path: String,
-    pub is_linked_worktree: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PaneInfo {
-    pub pane_id: String,
-    pub terminal_id: String,
-    pub workspace_id: String,
-    pub tab_id: String,
-    pub cwd: Option<String>,
-    pub foreground_cwd: Option<String>,
-    /// Absent on a pane with no agent (herdr 0.9.3).
-    #[serde(default)]
-    pub agent: Option<String>,
-    #[serde(default)]
-    pub label: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct AgentSession {
-    pub value: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AgentInfo {
-    pub terminal_id: String,
-    pub workspace_id: String,
-    pub pane_id: String,
-    pub agent: Option<String>,
-    pub name: Option<String>,
-    pub title: Option<String>,
-    pub terminal_title_stripped: Option<String>,
-    pub agent_status: String,
-    #[serde(default)]
-    pub state_change_seq: u64,
-    pub cwd: Option<String>,
-    pub foreground_cwd: Option<String>,
-    pub agent_session: Option<AgentSession>,
-    #[serde(default)]
-    pub interactive_ready: bool,
-    #[serde(default)]
-    pub launch_pending: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SessionSnapshot {
-    pub workspaces: Vec<WorkspaceInfo>,
-    pub panes: Vec<PaneInfo>,
-    pub agents: Vec<AgentInfo>,
 }
 
 #[derive(Deserialize)]
@@ -368,11 +304,6 @@ struct PaneProcess {
     pid: u32,
     #[serde(default)]
     argv: Option<Vec<String>>,
-}
-
-pub struct PaneProcesses {
-    pub pids: Vec<u32>,
-    pub attach: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -888,7 +819,8 @@ mod tests {
     #[test]
     fn decodes_live_samples() {
         let snap: Response<SnapshotResult> =
-            serde_json::from_str(include_str!("../tests/fixtures/session.snapshot.json")).unwrap();
+            serde_json::from_str(include_str!("../../tests/fixtures/session.snapshot.json"))
+                .unwrap();
         let SnapshotResult::SessionSnapshot { snapshot } = snap.result.unwrap();
         assert_eq!(snapshot.agents.len(), 2);
         assert_eq!(snapshot.agents[0].state_change_seq, 5);

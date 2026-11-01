@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::subagents::alive;
 use super::{Kind, MAX_LISTED, Transcripts, is_file, is_session_id, open, project_dir, session_id};
-use crate::herdr::{AgentInfo, PaneProcesses};
+use crate::runtime::{AgentInfo, PaneProcesses};
 
 const SESSION_BYTES: u64 = 64 * 1024;
 const POINTER_BYTES: u64 = 64 * 1024;
@@ -672,7 +672,7 @@ mod tests {
     use protocol::{HistoryParams, TerminalId};
 
     use super::*;
-    use crate::herdr::AgentSession;
+    use crate::runtime::AgentSession;
 
     const CLAUDE: &str = include_str!("../../tests/fixtures/transcripts/claude.jsonl");
     const LIVE: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";

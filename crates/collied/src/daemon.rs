@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 use crate::config::{self, Config};
 use crate::control;
 use crate::server::{self, ServerConfig};
-use crate::{approvals, herdr, push, terminal};
+use crate::{approvals, push, runtime, terminal};
 
 const POLL: Duration = Duration::from_millis(250);
 const LOGIN_ERROR: &str = "You are logged out. The last login error was: ";
@@ -270,8 +270,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
         Ok(None)
     })
     .await?;
-    let env = herdr::SocketEnv::from_process();
-    let herdr_socket = herdr::resolve_socket_path(config.herdr.session.as_deref(), &env)?;
+    let herdr_socket = runtime::herdr_socket(config.herdr.session.as_deref())?;
     let apns = push::sender(config)?;
     let mut handle = server::start_with(
         node,
@@ -279,7 +278,7 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
             data_dir: data_dir.to_owned(),
             port: config.tailnet.port,
             owner_user_id: config.tailnet.owner_user_id,
-            herdr_session: herdr::session_label(config.herdr.session.as_deref(), &env),
+            herdr_session: runtime::herdr_session_label(config.herdr.session.as_deref()),
             machine_name: config::machine_name(),
             approval_ttl: approvals::TTL,
             attachments_dir: config::attachments_dir()?,

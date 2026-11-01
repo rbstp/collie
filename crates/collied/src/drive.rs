@@ -24,7 +24,7 @@ use tokio::task::JoinHandle;
 use tokio::{process::Command, time::timeout};
 
 use crate::draft::{self, InputBox};
-use crate::herdr::{self, AgentInfo, PaneInfo};
+use crate::runtime::{self, AgentInfo, PaneInfo, Runtime};
 use crate::transcript::{self, Transcripts};
 use crate::{flock, git, prompt, pulls, reflow};
 
@@ -93,9 +93,9 @@ pub(crate) fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, 
     Err((code, message.into()))
 }
 
-pub fn herdr_fail(e: herdr::Error) -> Fail {
+pub fn herdr_fail(e: runtime::Error) -> Fail {
     tracing::debug!(error = %e, "herdr call failed");
-    let herdr::Error::Herdr { code, message } = &e else {
+    let runtime::Error::Herdr { code, message } = &e else {
         return (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned());
     };
     let (code, message) = match code.as_str() {
@@ -150,9 +150,9 @@ fn canonical_limit(message: &str) -> bool {
 
 /// herdr's error message may quote the input, so only its code is kept, or the fact that
 /// the line was too long.
-fn quiet_fail(e: herdr::Error) -> Fail {
+fn quiet_fail(e: runtime::Error) -> Fail {
     match e {
-        herdr::Error::Herdr { code, message } => herdr_fail(herdr::Error::Herdr {
+        runtime::Error::Herdr { code, message } => herdr_fail(runtime::Error::Herdr {
             code,
             message: if canonical_limit(&message) {
                 message
@@ -173,7 +173,7 @@ pub fn fingerprint(request: &Request) -> u64 {
 }
 
 pub struct Driver {
-    herdr: PathBuf,
+    runtime: Runtime,
     agents: Vec<AgentKind>,
     roots: Vec<PathBuf>,
     ops: OpCache,
@@ -217,7 +217,7 @@ impl Driver {
             })
             .collect::<anyhow::Result<_>>()?;
         Ok(Self {
-            herdr,
+            runtime: Runtime::new(herdr),
             agents,
             roots,
             ops: OpCache::new(OPS_PER_PEER, OP_TTL),
@@ -246,7 +246,8 @@ impl Driver {
 
     /// Never trusts a cached `pane_id`: it changes on cross-workspace moves.
     pub(crate) async fn find_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
-        herdr::agent_list(&self.herdr)
+        self.runtime
+            .agent_list()
             .await
             .map_err(herdr_fail)?
             .into_iter()
@@ -261,9 +262,7 @@ impl Driver {
     /// Read now, never from a cache: an agent herdr is still launching counts, though its
     /// pane has no `agent` yet.
     async fn pane_and_agent(&self, terminal_id: &TerminalId) -> Result<(PaneInfo, bool), Fail> {
-        let snap = herdr::session_snapshot(&self.herdr)
-            .await
-            .map_err(herdr_fail)?;
+        let snap = self.runtime.session_snapshot().await.map_err(herdr_fail)?;
         let pane = snap
             .panes
             .into_iter()
@@ -332,7 +331,9 @@ impl Driver {
         terminal_id: &TerminalId,
     ) -> Result<(AgentInfo, Result<(), Fail>), Fail> {
         let listed = self.find_agent(terminal_id).await?;
-        let current = herdr::agent_get(&self.herdr, &listed.pane_id)
+        let current = self
+            .runtime
+            .agent_get(&listed.pane_id)
             .await
             .map_err(herdr_fail)?;
         let ready = check_ready(&listed, &current);
@@ -360,7 +361,9 @@ impl Driver {
 
     /// Read with SGR: [`protocol::jump_banner`] finds the banner by how it is drawn.
     async fn scrolled(&self, pane_id: &str) -> Result<bool, Fail> {
-        let read = herdr::pane_read(&self.herdr, pane_id, source_name(ReadSource::Visible), None)
+        let read = self
+            .runtime
+            .pane_read(pane_id, source_name(ReadSource::Visible), None)
             .await
             .map_err(herdr_fail)?;
         Ok(protocol::jump_banner(&sanitize_ansi(&read.text)))
@@ -404,7 +407,7 @@ impl Driver {
                     "no agent in this pane; open it as a terminal",
                 );
             }
-            herdr::pane_read(&self.herdr, &pane.pane_id, source, lines).await
+            self.runtime.pane_read(&pane.pane_id, source, lines).await
         }
         .map_err(herdr_fail)?;
         let mut read = terminal_read(p.terminal_id, p.source, read);
@@ -417,7 +420,7 @@ impl Driver {
     /// Leaves `read` unjoined when herdr does not give the pane's width; `false` when herdr
     /// failed.
     async fn reflow(&self, pane_id: &str, kind: &str, read: &mut TerminalRead) -> bool {
-        let cols = herdr::pane_columns(&self.herdr, pane_id).await;
+        let cols = self.runtime.pane_columns(pane_id).await;
         let layout_cols = cols.as_ref().ok().copied().flatten().map(usize::from);
         let screen_cols = match kind {
             "copilot" => reflow::copilot_scrollbar_columns(&read.ansi),
@@ -448,7 +451,7 @@ impl Driver {
         pane_id: &str,
         source: &str,
         lines: &mut Option<u32>,
-    ) -> Result<herdr::PaneRead, herdr::Error> {
+    ) -> Result<runtime::PaneRead, runtime::Error> {
         self.halving_read(pane_id, source, lines, true).await
     }
 
@@ -458,15 +461,15 @@ impl Driver {
         source: &str,
         lines: &mut Option<u32>,
         agent: bool,
-    ) -> Result<herdr::PaneRead, herdr::Error> {
+    ) -> Result<runtime::PaneRead, runtime::Error> {
         loop {
             let read = if agent {
-                herdr::agent_read(&self.herdr, pane_id, source, *lines).await
+                self.runtime.agent_read(pane_id, source, *lines).await
             } else {
-                herdr::pane_read(&self.herdr, pane_id, source, *lines).await
+                self.runtime.pane_read(pane_id, source, *lines).await
             };
             match read {
-                Err(herdr::Error::LineTooLong) if lines.is_some_and(|n| n > 1) => {
+                Err(runtime::Error::LineTooLong) if lines.is_some_and(|n| n > 1) => {
                     *lines = lines.map(|n| n / 2);
                 }
                 read => return read,
@@ -600,7 +603,9 @@ impl Driver {
     }
 
     async fn input_box(&self, pane_id: &str) -> Result<Option<InputBox>, Fail> {
-        let read = herdr::pane_read(&self.herdr, pane_id, source_name(ReadSource::Visible), None)
+        let read = self
+            .runtime
+            .pane_read(pane_id, source_name(ReadSource::Visible), None)
             .await
             .map_err(herdr_fail)?;
         Ok(draft::parse(&sanitize_ansi(&read.text)))
@@ -639,7 +644,8 @@ impl Driver {
             self.replace_draft(&a.pane_id, expected, auth).await?;
         }
         authorized(auth)?;
-        herdr::agent_prompt(&self.herdr, &a.pane_id, p.text.as_str())
+        self.runtime
+            .agent_prompt(&a.pane_id, p.text.as_str())
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
@@ -679,7 +685,8 @@ impl Driver {
         }
         for keys in draft::clear_keys(current.lines).chunks(limits::MAX_KEYS_PER_CALL) {
             authorized(auth)?;
-            herdr::agent_send_keys(&self.herdr, pane_id, keys)
+            self.runtime
+                .agent_send_keys(pane_id, keys)
                 .await
                 .map_err(herdr_fail)?;
         }
@@ -725,7 +732,8 @@ impl Driver {
             blocked.then(|| format!("{} blocked keys={}", p.terminal_id.as_str(), keys.join(",")));
         let sent = async {
             authorized(auth)?;
-            herdr::agent_send_keys(&self.herdr, &a.pane_id, &keys)
+            self.runtime
+                .agent_send_keys(&a.pane_id, &keys)
                 .await
                 .map_err(herdr_fail)?;
             Ok(Response::Ok)
@@ -739,7 +747,8 @@ impl Driver {
         self.input_safeguards(&a, true).await?;
         authorized(auth)?;
         let paste = format!("\u{1b}[200~{}\u{1b}[201~", p.text.as_str());
-        herdr::pane_send_input(&self.herdr, &a.pane_id, &paste, &["enter"])
+        self.runtime
+            .pane_send_input(&a.pane_id, &paste, &["enter"])
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
@@ -750,7 +759,8 @@ impl Driver {
     pub async fn terminal_run(&self, p: TerminalRunParams, auth: &Authorized) -> Reply {
         let pane = self.shell_pane(&p.terminal_id).await?;
         granted(auth)?;
-        herdr::pane_send_input(&self.herdr, &pane.pane_id, p.text.as_str(), &["enter"])
+        self.runtime
+            .pane_send_input(&pane.pane_id, p.text.as_str(), &["enter"])
             .await
             .map_err(quiet_fail)?;
         Ok(Response::Ok)
@@ -760,7 +770,8 @@ impl Driver {
         let keys: Vec<&str> = p.keys.iter().map(|k| k.herdr_name()).collect();
         let pane = self.shell_pane(&p.terminal_id).await?;
         granted(auth)?;
-        herdr::pane_send_keys(&self.herdr, &pane.pane_id, &keys)
+        self.runtime
+            .pane_send_keys(&pane.pane_id, &keys)
             .await
             .map_err(quiet_fail)?;
         Ok(Response::Ok)
@@ -769,7 +780,8 @@ impl Driver {
     pub async fn focus(&self, terminal_id: &TerminalId, auth: &Authorized) -> Reply {
         let a = self.find_agent(terminal_id).await?;
         authorized(auth)?;
-        herdr::agent_focus(&self.herdr, &a.pane_id)
+        self.runtime
+            .agent_focus(&a.pane_id)
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
@@ -786,7 +798,8 @@ impl Driver {
             return fail(ErrorCode::AgentNotReady, "already at the bottom");
         }
         authorized(auth)?;
-        herdr::pane_send_text(&self.herdr, &current.pane_id, SCROLL_BOTTOM)
+        self.runtime
+            .pane_send_text(&current.pane_id, SCROLL_BOTTOM)
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
@@ -809,14 +822,11 @@ impl Driver {
         if self.scrolled(&a.pane_id).await? {
             return fail(ErrorCode::AgentNotReady, SCROLLED);
         }
-        let read = herdr::pane_read(
-            &self.herdr,
-            &a.pane_id,
-            source_name(ReadSource::Visible),
-            None,
-        )
-        .await
-        .map_err(herdr_fail)?;
+        let read = self
+            .runtime
+            .pane_read(&a.pane_id, source_name(ReadSource::Visible), None)
+            .await
+            .map_err(herdr_fail)?;
         let visible = sanitize_ansi(&read.text);
         if !protocol::notice(&visible)
             .iter()
@@ -831,7 +841,8 @@ impl Driver {
             return fail(ErrorCode::AgentNotReady, "the input box is not empty");
         }
         authorized(auth)?;
-        herdr::pane_send_text(&self.herdr, &a.pane_id, p.digit.as_str())
+        self.runtime
+            .pane_send_text(&a.pane_id, p.digit.as_str())
             .await
             .map_err(herdr_fail)?;
         let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
@@ -870,7 +881,8 @@ impl Driver {
         }
         authorized(auth)?;
         let paste = format!("\u{1b}[200~{}\u{1b}[201~", p.command.as_str());
-        herdr::pane_send_text(&self.herdr, &a.pane_id, &paste)
+        self.runtime
+            .pane_send_text(&a.pane_id, &paste)
             .await
             .map_err(herdr_fail)?;
         let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
@@ -907,8 +919,8 @@ impl Driver {
 
     pub async fn task_options(&self) -> Reply {
         let (known, snap) = tokio::try_join!(
-            herdr::agent_manifests(&self.herdr),
-            herdr::session_snapshot(&self.herdr)
+            self.runtime.agent_manifests(),
+            self.runtime.session_snapshot()
         )
         .map_err(herdr_fail)?;
         let agents: Vec<AgentKind> = self
@@ -963,7 +975,9 @@ impl Driver {
     pub async fn task_worktrees(&self, p: TaskWorktreesParams, auth: &Authorized) -> Reply {
         authorized(auth)?;
         let requested = resolve_cwd(p.cwd.as_str(), &self.roots).map_err(invalid)?;
-        let list = herdr::worktree_list(&self.herdr, requested.as_str())
+        let list = self
+            .runtime
+            .worktree_list(requested.as_str())
             .await
             .map_err(herdr_fail)?;
         let source =
@@ -997,7 +1011,9 @@ impl Driver {
         let cwd = resolve_cwd(p.cwd.as_str(), &self.roots).map_err(invalid)?;
         let allowed = |kind: &str| self.agents.iter().any(|a| a.as_str() == kind);
         let (claude, codex) = (allowed("claude"), allowed("codex"));
-        let open: Vec<String> = herdr::agent_list(&self.herdr)
+        let open: Vec<String> = self
+            .runtime
+            .agent_list()
             .await
             .map_err(herdr_fail)?
             .into_iter()
@@ -1130,14 +1146,12 @@ impl Driver {
             self.resumable(&p.agent, id, cwd).await?;
         }
         authorized(auth)?;
-        let pane = herdr::workspace_create(
-            &self.herdr,
-            cwd.as_str(),
-            p.label.as_ref().map(|l| l.as_str()),
-        )
-        .await
-        .map_err(herdr_fail)?
-        .root_pane;
+        let pane = self
+            .runtime
+            .workspace_create(cwd.as_str(), p.label.as_ref().map(|l| l.as_str()))
+            .await
+            .map_err(herdr_fail)?
+            .root_pane;
         self.finish_task(&p, &pane, "created and left open", true, auth)
             .await
     }
@@ -1165,7 +1179,9 @@ impl Driver {
         if !found {
             return fail(ErrorCode::InvalidParams, "no such session in this folder");
         }
-        let open = herdr::agent_list(&self.herdr)
+        let open = self
+            .runtime
+            .agent_list()
             .await
             .map_err(herdr_fail)?
             .iter()
@@ -1205,7 +1221,9 @@ impl Driver {
             TaskWorktree::PullRequest { .. } => None,
         };
         authorized(auth)?;
-        let listed = herdr::worktree_list(&self.herdr, source.as_str())
+        let listed = self
+            .runtime
+            .worktree_list(source.as_str())
             .await
             .map_err(herdr_fail)?;
         let checkout =
@@ -1266,23 +1284,23 @@ impl Driver {
         authorized(auth)?;
         let result = match worktree {
             TaskWorktree::Create { branch } => {
-                herdr::worktree_create(
-                    &self.herdr,
-                    source.as_str(),
-                    branch,
-                    path.as_str(),
-                    p.label.as_ref().map(|l| l.as_str()),
-                )
-                .await
+                self.runtime
+                    .worktree_create(
+                        source.as_str(),
+                        branch,
+                        path.as_str(),
+                        p.label.as_ref().map(|l| l.as_str()),
+                    )
+                    .await
             }
             TaskWorktree::Open { .. } => {
-                herdr::worktree_open(
-                    &self.herdr,
-                    source.as_str(),
-                    path.as_str(),
-                    p.label.as_ref().map(|l| l.as_str()),
-                )
-                .await
+                self.runtime
+                    .worktree_open(
+                        source.as_str(),
+                        path.as_str(),
+                        p.label.as_ref().map(|l| l.as_str()),
+                    )
+                    .await
             }
             TaskWorktree::PullRequest { .. } => unreachable!(),
         }
@@ -1344,7 +1362,9 @@ impl Driver {
         }
         let pane = &result.root_pane;
         if result.already_open {
-            let current = herdr::pane_get(&self.herdr, &pane.pane_id)
+            let current = self
+                .runtime
+                .pane_get(&pane.pane_id)
                 .await
                 .map_err(herdr_fail)
                 .map_err(left)?;
@@ -1393,7 +1413,9 @@ impl Driver {
             )
             .await
             .map_err(left_open)?;
-        let current = herdr::agent_get(&self.herdr, &name)
+        let current = self
+            .runtime
+            .agent_get(&name)
             .await
             .map_err(|e| left_open(herdr_fail(e)))?;
         self.started_check(&current, pane, &name, &p.agent)
@@ -1408,14 +1430,15 @@ impl Driver {
             // herdr may not rule another kind's startup prompt `blocked`, and the prompt's
             // Enter would answer it.
             if p.agent.as_str() != "claude" {
-                let screen = herdr::detection_text(&self.herdr, &pane.pane_id).await.ok();
+                let screen = self.runtime.detection_text(&pane.pane_id).await.ok();
                 if screen.as_deref().is_none_or(prompt::shows_dialog) {
                     let message = startup_prompt(&p.agent, screen.as_deref());
                     return Err(left_open((ErrorCode::AgentBlocked, message.to_owned())));
                 }
             }
             authorized(auth).map_err(left_open)?;
-            herdr::agent_prompt(&self.herdr, &name, text.as_str())
+            self.runtime
+                .agent_prompt(&name, text.as_str())
                 .await
                 .map_err(|e| left_open(herdr_fail(e)))?;
         }
@@ -1428,7 +1451,9 @@ impl Driver {
     async fn ultracode_shown(&self, pane_id: &str) -> Result<(), Fail> {
         let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
         loop {
-            let screen = herdr::detection_text(&self.herdr, pane_id)
+            let screen = self
+                .runtime
+                .detection_text(pane_id)
                 .await
                 .map_err(herdr_fail)?;
             if prompt::ultracode_on(&screen) {
@@ -1461,21 +1486,16 @@ impl Driver {
         let name = agent_name()?;
         let started = loop {
             authorized(auth)?;
-            match herdr::agent_start(
-                &self.herdr,
-                &name,
-                kind.as_str(),
-                &pane.pane_id,
-                resume,
-                ultracode,
-            )
-            .await
+            match self
+                .runtime
+                .agent_start(&name, kind.as_str(), &pane.pane_id, resume, ultracode)
+                .await
             {
                 Ok(a) => break a,
                 // Retried while the pane still holds the terminal created for this task: what
                 // runs there is the shell's startup (rc files often run helpers in the
                 // foreground), as nothing else has used the pane yet.
-                Err(herdr::Error::Herdr { code, .. })
+                Err(runtime::Error::Herdr { code, .. })
                     if retry_busy
                         && code == "agent_pane_busy"
                         && tokio::time::Instant::now() < deadline
@@ -1494,9 +1514,9 @@ impl Driver {
         }
         while tokio::time::Instant::now() < deadline {
             tokio::time::sleep(START_POLL).await;
-            let a = match herdr::agent_get(&self.herdr, &name).await {
+            let a = match self.runtime.agent_get(&name).await {
                 Ok(a) => a,
-                Err(_) => match herdr::agent_get(&self.herdr, &pane.pane_id).await {
+                Err(_) => match self.runtime.agent_get(&pane.pane_id).await {
                     Ok(a) => a,
                     Err(_) => continue,
                 },
@@ -1543,11 +1563,13 @@ impl Driver {
             return Ok(());
         }
         let message = if kind.as_str() == "codex" {
-            let screen = herdr::detection_text(&self.herdr, &pane.pane_id).await.ok();
+            let screen = self.runtime.detection_text(&pane.pane_id).await.ok();
             startup_prompt(kind, screen.as_deref())
         } else if kind.as_str() != "claude" {
             STARTUP_PROMPT
-        } else if herdr::detection_text(&self.herdr, &pane.pane_id)
+        } else if self
+            .runtime
+            .detection_text(&pane.pane_id)
             .await
             .is_ok_and(|t| prompt::Menu::parse(&t).is_some_and(|m| m.is_trust_prompt()))
         {
@@ -1559,7 +1581,8 @@ impl Driver {
     }
 
     async fn still_new(&self, pane: &PaneInfo) -> bool {
-        herdr::pane_get(&self.herdr, &pane.pane_id)
+        self.runtime
+            .pane_get(&pane.pane_id)
             .await
             .is_ok_and(|now| now.terminal_id == pane.terminal_id && now.agent.is_none())
     }
@@ -1569,7 +1592,8 @@ impl Driver {
             return fail(ErrorCode::ConfirmRequired, "confirm must be true");
         }
         authorized(auth)?;
-        herdr::workspace_close(&self.herdr, p.workspace_id.as_str())
+        self.runtime
+            .workspace_close(p.workspace_id.as_str())
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
@@ -1581,7 +1605,8 @@ impl Driver {
         }
         let pane = self.find_pane(&p.terminal_id).await?;
         authorized(auth)?;
-        herdr::pane_close(&self.herdr, &pane.pane_id)
+        self.runtime
+            .pane_close(&pane.pane_id)
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
@@ -1610,7 +1635,7 @@ impl Driver {
             return None;
         }
         let terminal_id = TerminalId::new(agent.terminal_id.clone()).ok()?;
-        let snapshot = herdr::session_snapshot(&self.herdr).await.ok()?;
+        let snapshot = self.runtime.session_snapshot().await.ok()?;
         if !worktree_settled(&snapshot, terminal_id.as_str(), quiet)
             || !crate::git::clean(root).await.unwrap_or(false)
         {
@@ -1648,9 +1673,7 @@ impl Driver {
         merged: Option<(&Cwd, &str, &Quiet<'_>)>,
     ) -> Reply {
         authorized(auth)?;
-        let snapshot = herdr::session_snapshot(&self.herdr)
-            .await
-            .map_err(herdr_fail)?;
+        let snapshot = self.runtime.session_snapshot().await.map_err(herdr_fail)?;
         let pane = snapshot
             .panes
             .iter()
@@ -1679,7 +1702,9 @@ impl Driver {
                 return Err(invalid("worktree checkout path changed"));
             }
             let repo = resolve_cwd(&worktree.repo_root, &self.roots).map_err(invalid)?;
-            let listed = herdr::worktree_list(&self.herdr, checkout.as_str())
+            let listed = self
+                .runtime
+                .worktree_list(checkout.as_str())
                 .await
                 .map_err(herdr_fail)?;
             if !listed.worktrees.iter().any(|item| {
@@ -1700,7 +1725,7 @@ impl Driver {
                     "the checkout has changes or commits outside the pull request",
                 ));
             }
-            let closed = match herdr::worktree_remove(&self.herdr, &pane.workspace_id).await {
+            let closed = match self.runtime.worktree_remove(&pane.workspace_id).await {
                 Ok(removed) if removed.path == checkout.as_str() => {
                     format!(
                         "Removed worktree checkout {} and closed its workspace.",
@@ -1727,14 +1752,12 @@ impl Driver {
                         ));
                     }
                     let workspace_closed =
-                        herdr::session_snapshot(&self.herdr)
-                            .await
-                            .is_ok_and(|snapshot| {
-                                !snapshot
-                                    .workspaces
-                                    .iter()
-                                    .any(|item| item.workspace_id == pane.workspace_id)
-                            });
+                        self.runtime.session_snapshot().await.is_ok_and(|snapshot| {
+                            !snapshot
+                                .workspaces
+                                .iter()
+                                .any(|item| item.workspace_id == pane.workspace_id)
+                        });
                     if workspace_closed {
                         format!(
                             "Removed worktree checkout {} and closed its workspace.",
@@ -1773,7 +1796,7 @@ impl Driver {
                     invalid("Archive could not preserve the worktree group: pane folder is outside task roots or unavailable.")
                 })?;
                 authorized(auth)?;
-                herdr::tab_create(&self.herdr, &pane.workspace_id, cwd.as_str())
+                self.runtime.tab_create(&pane.workspace_id, cwd.as_str())
                     .await
                     .map_err(|error| {
                         let (code, message) = herdr_fail(error);
@@ -1781,7 +1804,8 @@ impl Driver {
                     })?;
             }
             authorized(auth)?;
-            herdr::pane_close(&self.herdr, &pane.pane_id)
+            self.runtime
+                .pane_close(&pane.pane_id)
                 .await
                 .map_err(|error| {
                     let (code, message) = herdr_fail(error);
@@ -1830,7 +1854,7 @@ pub type Quiet<'a> = dyn Fn(&AgentInfo) -> bool + Send + Sync + 'a;
 /// The terminal's workspace is a linked worktree whose every pane is an idle or done agent
 /// that is `quiet`.
 pub fn worktree_settled(
-    snapshot: &herdr::SessionSnapshot,
+    snapshot: &runtime::SessionSnapshot,
     terminal_id: &str,
     quiet: &Quiet<'_>,
 ) -> bool {
@@ -2220,7 +2244,7 @@ fn source_name(source: ReadSource) -> &'static str {
 fn terminal_read(
     terminal_id: TerminalId,
     source: ReadSource,
-    read: herdr::PaneRead,
+    read: runtime::PaneRead,
 ) -> TerminalRead {
     TerminalRead {
         terminal_id,
@@ -2617,7 +2641,7 @@ mod tests {
                 .map(|(i, status)| serde_json::json!({"terminal_id": format!("t{i}"), "workspace_id": "w1", "pane_id": format!("w1:p{i}"), "agent": "claude", "agent_status": status}))
                 .chain([serde_json::json!({"terminal_id": "other", "workspace_id": "w2", "pane_id": "w2:p1", "agent": "claude", "agent_status": "working"})])
                 .collect();
-            serde_json::from_value::<herdr::SessionSnapshot>(serde_json::json!({
+            serde_json::from_value::<runtime::SessionSnapshot>(serde_json::json!({
                 "workspaces": [
                     {"workspace_id": "w1", "number": 1, "label": "a", "agent_status": "idle",
                      "worktree": {"repo_root": "/r", "checkout_path": "/r/.worktree/x", "is_linked_worktree": linked}},
@@ -2629,7 +2653,7 @@ mod tests {
             .unwrap()
         };
         let quiet = |_: &AgentInfo| true;
-        let settled = |s: &herdr::SessionSnapshot, t: &str| worktree_settled(s, t, &quiet);
+        let settled = |s: &runtime::SessionSnapshot, t: &str| worktree_settled(s, t, &quiet);
         assert!(settled(&snapshot(true, &["idle"], false), "t0"));
         assert!(settled(&snapshot(true, &["done", "idle"], false), "t0"));
         assert!(!settled(&snapshot(false, &["idle"], false), "t0"));
@@ -3177,7 +3201,7 @@ mod tests {
     #[test]
     fn herdr_errors_map_to_protocol_codes() {
         let e = |code: &str| {
-            herdr_fail(herdr::Error::Herdr {
+            herdr_fail(runtime::Error::Herdr {
                 code: code.into(),
                 message: "m".into(),
             })
@@ -3195,7 +3219,7 @@ mod tests {
         );
         assert_eq!(e("agent_prompt_failed"), ErrorCode::Internal);
         assert_eq!(
-            herdr_fail(herdr::Error::Timeout).0,
+            herdr_fail(runtime::Error::Timeout).0,
             ErrorCode::HerdrUnavailable
         );
     }
