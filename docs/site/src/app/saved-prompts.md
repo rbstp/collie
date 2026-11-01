@@ -1,9 +1,9 @@
 # Saved prompts
 
-Saved prompts let you name a prompt once and reuse it.
+Name a prompt once and reuse it with every project and machine.
 
-- **Add** them in **Settings > Prompt > Saved prompts**, or from the paperclip menu in an agent or in New task.
-- **Use** one by tapping it: it fills an empty composer or is appended to your current draft. Edit it, then send.
+- **Add** one in **Settings > Prompt > Saved prompts**, or from the paperclip menu in an agent or in New task.
+- **Use** one from the paperclip menu: choose **Saved prompts**, then tap it. It fills an empty composer or joins the end of your draft, without sending.
 - **Edit or delete** one by swiping it.
 
-Saved prompts stay on this phone and are shared across projects and machines.
+Saved prompts stay on this phone.

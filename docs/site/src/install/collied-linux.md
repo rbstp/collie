@@ -1,54 +1,49 @@
 # collied on Linux
 
-`collied` runs as a systemd user unit. You can install a release download, which needs no Rust toolchain or checkout, or build from source. Keep the phone and desktop on matching releases.
+`collied` runs as a systemd user unit. Install the release download, which needs no Rust toolchain or checkout, or build from source. Keep the phone and desktop on matching releases.
 
 ## Install a release download
 
-The Linux x86_64 download needs glibc 2.39 or later and systemd 255 or later. Download all assets of one [release](https://github.com/rbstp/collie/releases) into one folder and check them with `sha256sum -c SHA256SUMS`. Then extract the daemon archive and run, in its folder:
+The x86_64 download needs glibc 2.39 or later and systemd 255 or later. [Desktop release downloads](../reference/desktop-releases.md) covers updates, rollback and removal.
 
-```sh
-bash install.sh --replace
-~/.cargo/bin/collied setup
-```
+1. Download all assets of one [release](https://github.com/rbstp/collie/releases) into one folder and check them:
 
-[Desktop release downloads](../reference/desktop-releases.md) covers updates, rollback and removal. Arch Linux (AUR) packages are not published yet; until they are, use the download or a source build.
+   ```sh
+   sha256sum -c SHA256SUMS
+   ```
+
+2. Extract the daemon archive, and in its folder run:
+
+   ```sh
+   bash install.sh --replace
+   ~/.cargo/bin/collied setup
+   ```
+
+   Add `~/.cargo/bin` to `PATH` in your shell profile so you can run `collied` by name later.
 
 ## Install from source
 
-1. Clone the repository with its submodules and build:
+```sh
+git clone --recurse-submodules https://github.com/rbstp/collie
+cd collie
+just setup
+just collied-install
+collied setup
+```
 
-   ```sh
-   git clone --recurse-submodules https://github.com/rbstp/collie
-   cd collie
-   just setup
-   just collied-install
-   ```
+## What setup does
 
-2. Run the interactive setup:
+Setup runs the [macOS steps](collied-macos.md#what-setup-does), except:
 
-   ```sh
-   collied setup
-   ```
+- `~/.cargo/bin/collied` needs no signature.
+- `collied login` prints the sign-in link and QR code, and opens no browser.
+- `collied service install` writes a systemd user unit instead of a launchd agent.
+- With `--direct-apns`, `collied` stores the APNs key as an encrypted systemd user credential (systemd 256 or later), or, where systemd cannot encrypt it, in a file only you can read. `collied doctor` says which.
 
-Setup runs the same steps as [on macOS](collied-macos.md#what-setup-does), with these differences:
+## Running and logs
 
-- `collied login` signs in collie's own Tailscale node. Use the same personal account as Collie on the phone. You need no system Tailscale client.
-- `collied service install` writes the systemd user unit `~/.config/systemd/user/collied.service`.
-- The publisher relay needs no APNs key. With `collied setup --direct-apns` for a self-built app, `collied` stores the APNs key as a systemd user credential, encrypted with the host key and sealed to the TPM2 when one is usable. Where `systemd-creds` cannot encrypt, `collied` keeps the key in a file readable only by your user instead. `collied doctor` reports which one you have.
+- A systemd user unit runs only while you are logged in. To keep it running after you log out, run `loginctl enable-linger`.
+- Read the logs with `journalctl --user -u collied`. [Configuration](../operate/configuration.md) lists `collied`'s files.
+- A system `tailscaled` plays no part in collie: collie's node runs beside it with its own keys and WireGuard port, and adds no TUN device or routes.
 
-> [!WARNING]
-> Setup stops when the user manager loads the unit from another file, applies a `collied.service.d` drop-in to it, or the unit pins another `XDG_DATA_HOME`. Remove the override and run setup again.
-
-## Files and logs
-
-- The data directory is `$XDG_DATA_HOME/collie`, else `~/.local/share/collie`. It holds `collied.toml`, the node state, paired phones and the audit log.
-- Logs go to the user journal: `journalctl --user -u collied`.
-- A systemd user unit runs only while you have a session. To keep it running without a login, run `loginctl enable-linger`.
-
-## A system Tailscale on the same machine
-
-A system `tailscaled` is a separate node and plays no part in collie. The two run side by side: collie's node has its own keys and its own WireGuard port, and it adds no TUN device and no routes.
-
-## Next
-
-[Install the app](app.md), then [pair your phone](pair.md). On Omarchy, the [bar widget](../desktop/collietray.md) is optional.
+Next, [install the app](app.md) and [pair your phone](pair.md).

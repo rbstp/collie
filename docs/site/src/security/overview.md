@@ -1,37 +1,33 @@
 # Security overview
 
-Security is collie's first requirement: the phone can drive every agent on your machine, so `collied` treats every request as hostile until proven otherwise. This page sums up what protects you and what is left to you. The [threat model](../reference/threat-model.md) covers each threat, its mitigations and what remains.
+Your phone can drive every agent on your machine, so `collied` treats every request as hostile ([threat model](../reference/threat-model.md)).
 
-## Network
+## Network and pairing
 
-- **Tailnet only.** `collied` accepts application connections only through its own Tailscale node, on one port, and exposes no TCP listener on your local network. Tailscale's own UDP socket stays reachable, as the [threat model](../reference/threat-model.md) describes.
-- **Your paired phone only.** Before anything else, `collied` asks Tailscale who is connecting. It accepts only an untagged phone from your own tailnet, owned by you, that you paired and that still belongs to the account it was paired with. `collied` checks this again before every message, and revoking a phone cuts its live sessions.
-- **Mutual TLS.** Inside the tunnel, the phone pins the machine's key from the pairing QR code, and `collied` pins the phone's key, which never leaves its Secure Enclave. A stolen Tailscale node key, or a node injected by a compromised Tailscale control plane, gets no session.
-
-## Pairing
-
-Nobody can pair without the QR code that `collied pair` shows and your `y` on the machine. The pairing window lasts 120 seconds, and the first attempt closes it.
+- **Tailnet only.** `collied` listens only on its own Tailscale node, on one port; on your local network it opens only Tailscale's UDP socket, no TCP listener ([details](../reference/threat-model.md#lan-attacker)).
+- **Your paired phone only.** Pairing needs the QR code from `collied pair`, CollieBar or CollieTray, valid for 120 seconds and one attempt, and your confirmation on the machine. `collied` then accepts a connection only from a paired phone that is untagged, yours and in your tailnet, and before every message rechecks that the phone is still paired on the same account. Revoking a phone cuts its live sessions.
+- **Mutual TLS.** Each side pins the other's key; the phone's never leaves its Secure Enclave. A stolen node key, or a node a compromised Tailscale control plane injects, gets no session.
 
 ## What the phone can do
 
-`collied` accepts a fixed list of requests and rejects anything else before reading it. The phone cannot reach herdr's privileged methods.
+`collied` accepts only a fixed set of requests, never herdr's privileged methods.
 
-- **Approvals** answer only the prompt you saw. `collied` reads the screen again and answers only if the same prompt is still there, and each approval can be used once.
-- **Apple Watch** decisions are off by default, need the watch unlocked and on your wrist, and go through the same checks as the iPhone.
-- **Terminals** are off unless `collied.toml` turns them on. Each unlock needs Face ID or the passcode, is signed by a separate key in the phone's Secure Enclave, and covers one terminal for 5 minutes. The audit log records it without the command text.
-- **Attachments** are limited in size, checked for integrity, stored privately and deleted after 24 hours.
+- **Approvals** answer only the prompt you saw, once, while it is still on screen; typing keys or text into a prompt skips these checks and Face ID ([details](../reference/threat-model.md#keys-and-text-on-a-blocked-prompt)).
+- **Apple Watch** decisions are off by default and need the watch unlocked and on your wrist.
+- **Terminals** are off unless `collied.toml` turns them on. Each Face ID or passcode unlock covers one terminal for 5 minutes; the audit log records each command run, never its text.
+- **Attachments** are size-limited, integrity-checked, private and deleted after 24 hours.
 
 ## Notifications
 
-Only your phone can read what alerts and Live Activities show, including their labels: `collied` encrypts all of it with a key your phone made for this machine. Apple sees generic alerts, opaque IDs, urgency, timing, frequency, sizes and when activities start and end. When the phone cannot verify and decrypt the content, it shows a generic state without approval controls.
+Only your phone can read what alerts and Live Activities show, labels included: a key it made for this machine encrypts it all. Apple and the default publisher relay see only generic alert text and metadata such as timing, sizes and opaque IDs; the relay also sees IP addresses ([privacy policy](../privacy.md#push-relay)).
 
 ## Secrets on the machine
 
-- **macOS**: the APNs key is in the login Keychain, where only the Developer ID signed `collied` can read it without a prompt.
-- **Linux**: the APNs key is a systemd user credential, encrypted with the host key and sealed to the TPM2 when one is usable, or else a file readable only by you. Any process running as your user can decrypt it.
+- **Publisher relay (default):** no APNs key; the private `push.json` holds relay grants that can send to your phone until they expire or the app revokes them, which it does when you remove the machine.
+- **Direct APNs** (`collied setup --direct-apns`): an APNs key, which on macOS only the signed `collied` reads from the login Keychain without a prompt, and on Linux any process running as you can decrypt.
 
 ## Your part
 
-- Keep the [tailnet policy](../install/tailnet-policy.md) tight, and check the login name when you pair.
-- When a phone is lost, revoke it with `collied peers revoke` and remove its node in the Tailscale admin console. See [Revocation](../reference/tailnet.md#revocation).
-- If a machine is compromised, revoke its APNs key in the Apple Developer portal.
+- Keep the [tailnet policy](../install/tailnet-policy.md) tight and check the login name when you pair.
+- If you lose a phone, run `collied peers revoke <label or StableID>` on each machine and remove its node in the Tailscale admin console ([Revocation](../reference/tailnet.md#revocation)).
+- If a machine is compromised, remove it in the app and its node in the Tailscale admin console. With direct APNs, also revoke its key in the Apple Developer portal ([Revocation](../reference/tailnet.md#revocation)).

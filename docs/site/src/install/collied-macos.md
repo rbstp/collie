@@ -1,53 +1,48 @@
 # collied on macOS
 
-`collied` runs as a launchd user agent from `~/.cargo/bin`. You can install a publisher-signed release download, which needs no developer toolchain and no Developer ID of your own, or build from source with your own Developer ID Application certificate. Keep the phone and desktop on matching releases.
+`collied` runs as a launchd user agent from `~/.cargo/bin`. Install the signed release download, which needs no Xcode, Rust or Developer ID of your own, or build from source. Keep the phone and desktop on matching releases.
 
 ## Install a release download
 
-Download all assets of one [release](https://github.com/rbstp/collie/releases) into one folder and check them with `shasum -a 256 -c SHA256SUMS`. Then open the DMG and run its `install.sh` in Terminal, or extract the daemon tar archive and run, in its folder:
+The download needs macOS 26 or later. [Desktop release downloads](../reference/desktop-releases.md) covers Homebrew, updates, rollback and removal.
 
-```sh
-bash install.sh --replace
-export PATH="$HOME/.cargo/bin:$PATH"
-collied setup
-```
+1. Download all assets of one [release](https://github.com/rbstp/collie/releases) into one folder and check them:
 
-[Desktop release downloads](../reference/desktop-releases.md) covers Homebrew, updates, rollback and removal.
+   ```sh
+   shasum -a 256 -c SHA256SUMS
+   ```
+
+2. Open the DMG or extract the daemon archive, and in its folder run:
+
+   ```sh
+   bash install.sh --replace
+   export PATH="$HOME/.cargo/bin:$PATH"
+   collied setup
+   ```
+
+   The `export` lasts only for this terminal: add `~/.cargo/bin` to `PATH` in your shell profile (`~/.zprofile` by default) so you can run `collied` by name later.
 
 ## Install from source
 
-1. Clone the repository with its submodules and build:
+1. Clone the repository:
 
    ```sh
    git clone --recurse-submodules https://github.com/rbstp/collie
    cd collie
    just setup
-   just collied-install
    ```
 
-2. Choose **Set Up…** in CollieBar, or run the interactive setup:
-
-   ```sh
-   collied setup
-   ```
+2. Set [your own identifiers](requirements.md#your-own-identifiers), then build, sign and install `collied` with `just collied-install`.
+3. Run `collied setup`, or choose **Set Up…** in [CollieBar](../desktop/colliebar.md).
 
 ## What setup does
 
-`collied setup` runs these steps in order. It skips any step that is already done, so running it again resumes where it stopped:
+`collied setup` needs a terminal and the signed regular file `~/.cargo/bin/collied`, not a symlink. It skips steps already done, so a rerun resumes where it stopped:
 
-1. **`collied login`**: the browser opens once. Sign in with the same personal Tailscale account you use inside Collie on the phone. If the browser does not open, use the printed link or QR code. You need no VPN profile.
-2. **`collied service install`**: installs the launchd agent that runs `collied` at login. Setup installs it again, restarting `collied`, when it points at another binary or config, is stopped, or runs an older binary.
-3. **`collied doctor`**: setup stops on a `fail` line. On a new machine, expect `warn` lines for peers, push, hooks, codex hook and plan usage, and one for reach until your phone is signed in to Tailscale.
-4. **Push notifications**, when neither `[push.relay]` nor `[apns]` is configured yet. The default is the publisher relay, which needs no APNs key. For a self-built app, use `collied setup --direct-apns`. You can skip this step and come back later: see [Push notifications](push.md).
-5. **`collied pair`**, offered at the end: see [Pair a phone](pair.md).
+1. **`collied login`** signs in, in the browser or through the printed link or QR code, with the personal Tailscale account you will use on the phone.
+2. **`collied service install`** installs the launchd agent that starts `collied` at login, or reinstalls it when it is stopped or outdated.
+3. **`collied doctor`** stops setup on a `fail` line. Expect `warn` lines for parts not set up yet, such as `reach` before your phone signs in.
+4. **Push notifications**, optional: plain `collied setup` sets up the publisher relay, which serves only the publisher's app. For an app you build yourself, answer `N` and run `collied setup --direct-apns` ([Push notifications](push.md)). Once either mode is in `collied.toml`, setup skips this step.
+5. **`collied pair`**, offered last ([Pair a phone](pair.md)).
 
-> [!NOTE]
-> Setup needs a terminal, and `~/.cargo/bin/collied` must be the signed regular file, not a symlink. Setup never confirms a pairing for you: that stays your `y` on the machine. You can also run each step on its own.
-
-## Files
-
-`collied.toml`, the node state, paired phones and the audit log live in `~/Library/Application Support/collie/`. See [Configuration](../operate/configuration.md).
-
-## Next
-
-[Install the app](app.md), then [pair your phone](pair.md). The [menu bar app](../desktop/colliebar.md) is optional.
+Next, [install the app](app.md) and [pair your phone](pair.md). [Configuration](../operate/configuration.md) lists where `collied` keeps files.

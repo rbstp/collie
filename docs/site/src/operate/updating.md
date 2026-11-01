@@ -1,10 +1,10 @@
 # Updating
 
-You can update the app and `collied` in either order: when they connect, they agree on a protocol revision both support. If you are updating from a release older than protocol revision 26, which needed both sides to match exactly, update both once. When the two drift too far apart, the app tells you which one to update: see [Version mismatch](version-mismatch.md).
+Update the app and `collied` in either order: they use the highest protocol revision both support. When they share none, the app says which one to update: see [Version mismatch](version-mismatch.md).
 
 ## collied
 
-Download the latest release for your operating system from [GitHub Releases](https://github.com/rbstp/collie/releases) and follow that release's installation instructions. To update a source build:
+Download the latest [release](https://github.com/rbstp/collie/releases) and install it as on [macOS](../install/collied-macos.md) or [Linux](../install/collied-linux.md). To update a source build:
 
 ```sh
 git pull
@@ -13,19 +13,16 @@ just collied-install
 collied setup
 ```
 
-`just collied-install` restarts the running service. `collied setup` keeps the node, the paired phones and the config, and offers to pair a phone again.
+`just collied-install` restarts the running service. `collied setup` keeps the node, paired phones and config, and offers to pair a phone again.
 
 ## The app
 
-```sh
-just ios-run-device
-```
+In the updated checkout, run `just ios-run-device`.
 
 ## Desktop companions
 
-- CollieBar: `just mac-install`.
-- CollieTray: `git pull`, then `just tray-install`.
+Update [CollieBar](../desktop/colliebar.md) and [CollieTray](../desktop/collietray.md) the way you installed them: from the new release, or with `git pull`, then `just mac-install` or `just tray-install`.
 
 ## herdr
 
-After you update herdr, install its Codex hook again with `herdr integration install codex`. `collied doctor` warns when the hook is missing or older.
+After you update herdr, run `herdr integration install codex` again. `collied doctor` warns when the Codex hook is missing or older.
