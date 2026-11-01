@@ -26,13 +26,29 @@ enum GitCleanup {
     }
 
     static func prompt(_ worktrees: [GitWorktree]) -> String {
-        let list = worktrees.map { "- \($0.root) (\($0.branch.map { "branch \($0)" } ?? "detached HEAD"))" }
+        let list = worktrees.map { "- \(quoted($0.root)) (\($0.branch.map { "branch \(quoted($0))" } ?? "detached HEAD"))" }
         return """
-        Clean up these Git worktrees:
+        Clean up these Git worktrees (paths and branches are JSON strings):
         \(list.joined(separator: "\n"))
 
         Check that each one is not in use: no agent or process is working in it, it has no uncommitted or untracked changes and no unpushed commits, and its pull request is merged or closed, or it has none. Remove only the worktrees that pass, with their local branches. Never remove the main worktree or the default branch. Report which worktrees you kept and why.
         """
+    }
+
+    /// Paths and branch names may hold U+2028 or U+2029, which would start a line of their own in the prompt.
+    static func quoted(_ text: String) -> String {
+        let escaped = text.unicodeScalars.map { scalar -> String in
+            switch scalar {
+            case "\"", "\\": return "\\" + String(scalar)
+            default:
+                switch scalar.properties.generalCategory {
+                case .control, .format, .lineSeparator, .paragraphSeparator:
+                    return String(scalar).utf16.map { String(format: "\\u%04X", $0) }.joined()
+                default: return String(scalar)
+                }
+            }
+        }
+        return "\"" + escaped.joined() + "\""
     }
 }
 
@@ -136,12 +152,29 @@ final class GitReview {
         return true
     }
 
-    func cleanUp(_ worktrees: [GitWorktree], using agent: AgentModel) async -> Bool {
+    func select(_ on: Bool) {
+        guard !sending else { return }
+        selection = on ? [] : nil
+        error = nil
+    }
+
+    func cleanUp(_ worktrees: [GitWorktree], checkout: String, using agent: AgentModel) async -> Bool {
         guard !sending, !worktrees.isEmpty else { return false }
         sending = true
         error = nil
         defer { sending = false }
-        if let error = await agent.sendGitFeedback(GitCleanup.prompt(worktrees)) {
+        do {
+            guard try await agent.gitChanges().root == checkout else {
+                error = "The agent’s checkout changed. Refresh the worktrees before cleaning up."
+                return false
+            }
+        } catch {
+            self.error = AgentModel.message(for: error)
+            return false
+        }
+        if let error = await agent.sendGitFeedback(
+            GitCleanup.prompt(worktrees), noun: "a cleanup request", tooLong: "The cleanup request is too long. Select fewer worktrees."
+        ) {
             self.error = error
             return false
         }
@@ -229,17 +262,19 @@ struct GitChangesView: View {
             }
             .gitCompactList()
             .environment(\.editMode, .constant(selecting ? .active : .inactive))
-            .safeAreaInset(edge: .bottom) { GitReviewBar(agent: agent, review: review, sent: sent, cleanup: selecting ? cleanup : nil) }
+            .safeAreaInset(edge: .bottom) {
+                GitReviewBar(agent: agent, review: review, sent: sent, cleanup: selecting ? cleanup : nil, checkout: overview?.root)
+            }
             .overlay { if loading && overview == nil { ProgressView("Loading worktrees…") } }
             .navigationTitle("Git changes")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.disabled(review.sending) }
                 if selecting {
-                    ToolbarItem(placement: .primaryAction) { Button("Cancel") { review.selection = nil }.disabled(review.sending) }
+                    ToolbarItem(placement: .primaryAction) { Button("Cancel") { review.select(false) }.disabled(review.sending) }
                 } else {
                     if let overview, overview.worktrees.contains(where: { GitCleanup.selectable($0, checkout: overview.root) }) {
-                        ToolbarItem(placement: .primaryAction) { Button("Select") { review.selection = [] }.disabled(review.sending) }
+                        ToolbarItem(placement: .primaryAction) { Button("Select") { review.select(true) }.disabled(review.sending) }
                     }
                     ToolbarItem(placement: .primaryAction) {
                         Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }.disabled(loading)
@@ -250,6 +285,7 @@ struct GitChangesView: View {
             .task { await refresh() }
         }
         .interactiveDismissDisabled(review.sending)
+        .onAppear { if review.selection != nil { review.select(false) } }
     }
 
     private var selecting: Bool { review.selection != nil }
@@ -820,6 +856,7 @@ private struct GitReviewBar: View {
     let review: GitReview
     let sent: () -> Void
     var cleanup: [GitWorktree]?
+    var checkout: String?
 
     var body: some View {
         VStack(spacing: 8) {
@@ -834,7 +871,9 @@ private struct GitReviewBar: View {
             }
             Button {
                 Task {
-                    let done = if let cleanup { await review.cleanUp(cleanup, using: agent) } else { await review.send(using: agent) }
+                    let done = if let cleanup {
+                        await review.cleanUp(cleanup, checkout: checkout ?? "", using: agent)
+                    } else { await review.send(using: agent) }
                     if done { sent() }
                 }
             } label: {

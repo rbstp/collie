@@ -13,7 +13,7 @@ Below them, **Pull requests without a worktree** lists your open pull requests w
 1. Tap **Select**, then pick the worktrees you no longer need. The agent and changes markers stay on the rows to help you choose. You cannot pick the session's own checkout or a `main` or `master` worktree.
 2. Tap **Clean up** to send the agent one prompt naming each picked worktree and its branch.
 
-The agent checks that each worktree is not in use: no agent or process works in it, it has no uncommitted, untracked or unpushed work, and its pull request is merged or closed, or it has none. It removes only the worktrees that pass, with their local branches, never the main worktree or the default branch, and tells you which it kept and why. Like feedback, the prompt never goes to a blocked agent or replaces unsent text in its input box.
+The prompt asks the agent to check that each worktree is not in use: no agent or process works in it, it has no uncommitted, untracked or unpushed work, and its pull request is merged or closed, or it has none. It asks the agent to remove only the worktrees that pass, with their local branches, never the main worktree or the default branch, and to tell you which it kept and why. If the agent's checkout changed since the list loaded, refresh it before cleaning up. Like feedback, the prompt never goes to a blocked agent or replaces unsent text in its input box. Leaving Git changes ends Select mode.
 
 ## Review the changes
 

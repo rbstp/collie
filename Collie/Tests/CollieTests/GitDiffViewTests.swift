@@ -155,7 +155,16 @@ final class GitDiffViewTests: XCTestCase {
             snapshot(window, name: "select")
             XCTAssertTrue(core.snapshot.prompts.isEmpty)
         }
-        model.gitReview.selection = nil
+
+        let reopened = UIHostingController(rootView: GitChangesView(agent: model, sent: {}, review: model.gitReview))
+        try await hosting(reopened) { _ in
+            _ = try await waitFor("worktree rows after reopening") {
+                reopened.view.layoutIfNeeded()
+                return descendants(reopened.view).compactMap { $0 as? UICollectionView }
+                    .first { !$0.isEditing && $0.numberOfSections > 0 && $0.numberOfItems(inSection: 0) == 4 }
+            }
+            XCTAssertNil(model.gitReview.selection)
+        }
 
         let worktree = core.snapshot.gitWorktrees[1]
         let host = UIHostingController(rootView: NavigationStack {

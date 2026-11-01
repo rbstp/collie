@@ -765,15 +765,17 @@ final class AgentModel {
             && blocked == nil && agent?.status != .blocked && !codexQuestionQueued && !jumpBanner
     }
 
-    func sendGitFeedback(_ text: String) async -> String? {
-        guard canSendText else { return "The agent cannot accept review feedback right now." }
+    func sendGitFeedback(
+        _ text: String, noun: String = "review feedback", tooLong: String = "Feedback is too long. Shorten the comments or select less text."
+    ) async -> String? {
+        guard canSendText else { return "The agent cannot accept \(noun) right now." }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Write feedback before sending." }
-        guard text.utf8.count <= 32 * 1024 else { return "Feedback is too long. Shorten the comments or select less text." }
+        guard text.utf8.count <= 32 * 1024 else { return tooLong }
         do {
-            return try await sendAlone(text) ? nil : "The agent cannot accept review feedback right now."
+            return try await sendAlone(text) ? nil : "The agent cannot accept \(noun) right now."
         } catch {
             if case .DraftChanged = error as? CoreError {
-                return "The agent’s input box has unsent text. Send or clear it in the session before sending this feedback."
+                return "The agent’s input box has unsent text. Send or clear it in the session first."
             }
             return Self.message(for: error)
         }

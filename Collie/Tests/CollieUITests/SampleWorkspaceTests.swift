@@ -81,4 +81,31 @@ final class SampleWorkspaceTests: XCTestCase {
         app.buttons["Exit"].tap()
         XCTAssertTrue(explore.appears(within: 5))
     }
+
+    func testGitChangesRowOpensItsWorktree() {
+        let app = XCUIApplication()
+        app.launch()
+        defer { app.terminate() }
+        if app.buttons["Settings"].exists { app.buttons["Settings"].tap() }
+        let explore = app.buttons["Explore sample workspace"]
+        XCTAssertTrue(explore.appears(within: 10))
+        explore.tap()
+        app.choose(app.buttons["List"]) { app.buttons["Layout"].tap() }
+        let agent = app.staticTexts["add approval tests"].firstMatch
+        XCTAssertTrue(agent.appears(within: 5))
+        agent.tap()
+        app.choose(app.buttons["Git changes"]) { app.buttons["More"].tap() }
+        let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "sample-approval-tests")).firstMatch
+        XCTAssertTrue(row.appears(within: 10))
+        XCTAssertFalse(app.buttons["Select"].exists, "the session's own checkout is the only worktree")
+        row.tap()
+        XCTAssertTrue(app.navigationBars["sample-approval-tests"].appears(within: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["Done"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["Machines"].tap()
+        app.buttons["Settings"].tap()
+        app.buttons["Exit"].tap()
+        XCTAssertTrue(explore.appears(within: 5))
+    }
 }
