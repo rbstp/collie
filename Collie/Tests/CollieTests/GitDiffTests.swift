@@ -70,6 +70,50 @@ import UIKit
     #expect(removed.map(\.newLine) == [nil, nil, nil, 1, 2])
 }
 
+@Test func gitDiffNumbersRenamesNoNewlineMarkersBinaryAndTruncatedDiffs() {
+    let renamed = GitDiffRow.parse("diff --git a/old.swift b/new.swift\nsimilarity index 90%\nrename from old.swift\nrename to new.swift\nindex 1..2 100644\n--- a/old.swift\n+++ b/new.swift\n@@ -98,2 +98,2 @@ func a()\n keep\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n")
+    #expect(renamed.map(\.kind) == [.hunk, .context, .removed, .notice, .added, .notice])
+    #expect(renamed.map(\.oldLine) == [nil, 98, 99, nil, nil, nil])
+    #expect(renamed.map(\.newLine) == [nil, 98, nil, nil, 99, nil])
+    #expect(renamed.map(\.text) == ["@@ -98,2 +98,2 @@ func a()", "keep", "old", "\\ No newline at end of file", "new", "\\ No newline at end of file"])
+    #expect(GitDiffRow.parse("diff --git a/a b/b\nsimilarity index 100%\nrename from a\nrename to b\n").isEmpty)
+    let binary = GitDiffRow.parse("Binary file. No text diff available.\n")
+    #expect(binary.map(\.kind) == [.notice])
+    #expect(binary[0].oldLine == nil && binary[0].newLine == nil)
+    let truncated = GitDiffRow.parse("@@ -1,5 +1,6 @@\n a\n-b\n+c\n+par")
+    #expect(truncated.map(\.kind) == [.hunk, .context, .removed, .added, .added])
+    #expect(truncated.map(\.oldLine) == [nil, 1, 2, nil, nil])
+    #expect(truncated.map(\.newLine) == [nil, 1, nil, 2, 3])
+    #expect(truncated.last?.text == "par")
+    #expect(GitDiffRow.parse("@@ -1 +1 @@\n-a\n+b\n@@ -10,3 +1").count == 3)
+}
+
+@MainActor
+@Test func gitDiffGutterFitsTheWidestLineNumber() {
+    let layout = GitDiffLayoutManager()
+    layout.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+    let narrow = layout.gutterWidth
+    layout.digits = 5
+    #expect(layout.gutterWidth > narrow)
+    #expect(layout.gutterWidth > layout.numberWidth * 2)
+    #expect(("99999" as NSString).size(withAttributes: [.font: layout.font]).width <= layout.numberWidth - 4)
+}
+
+@MainActor
+@Test func gitDiffFeedbackSendsTheSelectedLinesWithoutGutterNumbersOrMarkers() throws {
+    let block = GitDiffBlock(rows: GitDiffRow.parse("@@ -1200,2 +1300,2 @@\n-old\n+new\n same\n"))
+    #expect(block.text == "@@ -1200,2 +1300,2 @@\nold\nnew\nsame\n")
+    var sent: (String, Int)?
+    let coordinator = GitDiffText.Coordinator(block: block, feedback: { sent = ($0, $1) })
+    let text = block.text as NSString
+    let range = NSRange(location: text.range(of: "old").location, length: NSMaxRange(text.range(of: "same")) - text.range(of: "old").location)
+    let menu = try #require(coordinator.textView(UITextView(), editMenuForTextIn: range, suggestedActions: []))
+    let action = try #require(menu.children.first as? UIAction)
+    UIButton(primaryAction: action).sendActions(for: .touchUpInside)
+    #expect(sent?.0 == "old\nnew\nsame")
+    #expect(sent?.1 == 3)
+}
+
 @Test func gitDiffSelectionUsesUTF16AndAnchorsTheLastSelectedRow() throws {
     let rows = GitDiffRow.parse("@@ -1,2 +1,2 @@\n-old 🐑\n+new 🐑\n context\n")
     let block = GitDiffBlock(rows: rows)

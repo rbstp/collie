@@ -353,21 +353,27 @@ struct GitDiffView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(spacing: 8) {
             Button {
                 collapsed.toggle()
                 if collapsed { editing = nil }
             } label: {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                    .frame(minWidth: 24, minHeight: 32)
+                    .font(.footnote.weight(.semibold))
+                    .frame(minWidth: 20, minHeight: 28)
             }
             .accessibilityLabel(collapsed ? "Expand diff" : "Collapse diff")
-            VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: file.path).font(.subheadline.weight(.semibold)).textSelection(.enabled)
-                Text("\(file.section.capitalized) · \(file.statusLabel)").font(.caption).foregroundStyle(.secondary)
-                if let old = file.oldPath { Text("From \(old)").font(.caption).foregroundStyle(.secondary) }
-            }
+            Text(verbatim: file.oldPath.map { "\($0) → \(file.path)" } ?? file.path)
+                .font(.footnote.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
             Spacer(minLength: 0)
+            HStack(spacing: 4) {
+                if let additions = file.additions { Text(verbatim: "+\(additions)").foregroundStyle(.green) }
+                if let deletions = file.deletions { Text(verbatim: "−\(deletions)").foregroundStyle(.red) }
+            }
+            .font(.caption.monospacedDigit())
             if file.hash != nil {
                 Toggle(isOn: viewed) {
                     Label("Viewed", systemImage: viewed.wrappedValue ? "checkmark.circle.fill" : "circle")
@@ -384,10 +390,12 @@ struct GitDiffView: View {
             .buttonStyle(.glass)
             .disabled(review.sending)
         }
-        .padding(12)
+        .controlSize(.small)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
         .padding(.horizontal, 8)
-        .padding(.bottom, 8)
+        .padding(.bottom, 4)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 

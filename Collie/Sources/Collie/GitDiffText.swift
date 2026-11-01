@@ -137,18 +137,21 @@ struct GitDiffText: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.block = block
         context.coordinator.feedback = feedback
-        let font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: view.traitCollection).pointSize, weight: .regular)
+        let font = UIFont.monospacedSystemFont(ofSize: min(24, UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: view.traitCollection).pointSize), weight: .regular)
         let layout = view.layoutManager as! GitDiffLayoutManager
-        let numberWidth = ceil(CGFloat(digits) * font.pointSize * 0.61) + 8
         let lineBreakMode: NSLineBreakMode = wraps ? .byCharWrapping : .byClipping
-        guard layout.rows != block.rows || layout.font != font || layout.numberWidth != numberWidth
+        guard layout.rows != block.rows || layout.font != font || layout.digits != digits
             || view.textContainer.lineBreakMode != lineBreakMode else { return }
         layout.rows = block.rows
         layout.ranges = block.ranges
         layout.font = font
-        layout.numberWidth = numberWidth
-        view.textContainerInset = UIEdgeInsets(top: 0, left: layout.gutterWidth, bottom: 0, right: 12)
-        view.attributedText = NSAttributedString(string: block.text, attributes: [.font: font, .foregroundColor: UIColor.label])
+        layout.digits = digits
+        view.textContainerInset = UIEdgeInsets(top: 0, left: layout.gutterWidth, bottom: 0, right: 8)
+        let text = NSMutableAttributedString(string: block.text, attributes: [.font: font, .foregroundColor: UIColor.label])
+        for (row, range) in zip(block.rows, block.ranges) where row.kind == .hunk || row.kind == .notice {
+            text.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: range)
+        }
+        view.attributedText = text
         view.textContainer.lineBreakMode = lineBreakMode
         layout.invalidateDisplay(forCharacterRange: NSRange(location: 0, length: view.textStorage.length))
     }
@@ -186,9 +189,23 @@ struct GitDiffText: UIViewRepresentable {
 final class GitDiffLayoutManager: NSLayoutManager {
     var rows: [GitDiffRow] = []
     var ranges: [NSRange] = []
-    var font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-    var numberWidth: CGFloat = 32
-    var gutterWidth: CGFloat { numberWidth * 2 + font.pointSize + 16 }
+    var font = UIFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    var digits = 1
+    private var advance: CGFloat { ceil(("0" as NSString).size(withAttributes: [.font: font]).width) }
+    var numberWidth: CGFloat { CGFloat(digits) * advance + 8 }
+    var gutterWidth: CGFloat { numberWidth * 2 + advance + 6 }
+
+    // GitHub's diff colors: Primer light, and its dark theme's translucent fills.
+    private static func color(_ light: UInt32, _ dark: UInt32, _ alpha: CGFloat) -> UIColor {
+        func rgb(_ hex: UInt32, _ alpha: CGFloat) -> UIColor {
+            UIColor(red: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
+        }
+        return UIColor { $0.userInterfaceStyle == .dark ? rgb(dark, alpha) : rgb(light, 1) }
+    }
+
+    private static let added = (line: color(0xDAFBE1, 0x2EA043, 0.15), number: color(0xACEEBB, 0x3FB950, 0.3))
+    private static let removed = (line: color(0xFFEBE9, 0xF85149, 0.1), number: color(0xFFCECB, 0xF85149, 0.3))
+    private static let hunk = (line: color(0xDDF4FF, 0x388BFD, 0.1), number: color(0xB6E3FF, 0x388BFD, 0.25))
 
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
         guard let container = textContainers.first else { return }
@@ -197,19 +214,19 @@ final class GitDiffLayoutManager: NSLayoutManager {
             guard NSIntersectionRange(glyphs, glyphsToShow).length > 0 else { continue }
             let first = lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
             let last = lineFragmentRect(forGlyphAt: NSMaxRange(glyphs) - 1, effectiveRange: nil)
-            let rect = CGRect(x: 0, y: origin.y + first.minY, width: origin.x + container.size.width + 12, height: last.maxY - first.minY)
-            let color: UIColor? = switch row.kind {
-            case .added: .systemGreen
-            case .removed: .systemRed
-            case .hunk: .systemBlue
+            let rect = CGRect(x: 0, y: origin.y + first.minY, width: origin.x + container.size.width + 8, height: last.maxY - first.minY)
+            let tint: (line: UIColor, number: UIColor)? = switch row.kind {
+            case .added: Self.added
+            case .removed: Self.removed
+            case .hunk: Self.hunk
             default: nil
             }
-            if let color {
-                color.withAlphaComponent(0.14).setFill()
+            if let tint {
+                tint.line.setFill()
                 UIRectFill(rect)
+                tint.number.setFill()
+                UIRectFill(CGRect(x: 0, y: rect.minY, width: numberWidth * 2, height: rect.height))
             }
-            UIColor.secondaryLabel.withAlphaComponent(0.05).setFill()
-            UIRectFillUsingBlendMode(CGRect(x: 0, y: rect.minY, width: gutterWidth - font.pointSize - 8, height: rect.height), .normal)
             let paragraph = NSMutableParagraphStyle()
             paragraph.alignment = .right
             let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.secondaryLabel, .paragraphStyle: paragraph]
@@ -218,7 +235,7 @@ final class GitDiffLayoutManager: NSLayoutManager {
                     (String(number) as NSString).draw(in: CGRect(x: CGFloat(column) * numberWidth, y: rect.minY, width: numberWidth - 4, height: first.height), withAttributes: attributes)
                 }
             }
-            (row.marker as NSString).draw(at: CGPoint(x: numberWidth * 2 + 4, y: rect.minY), withAttributes: [.font: font, .foregroundColor: UIColor.label])
+            (row.marker as NSString).draw(at: CGPoint(x: numberWidth * 2 + 3, y: rect.minY), withAttributes: [.font: font, .foregroundColor: UIColor.label])
         }
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
     }
