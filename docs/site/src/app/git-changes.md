@@ -16,7 +16,7 @@ Open a worktree to see its folder, the agents working in it (tap one to open its
 - **Branch**: every file the branch changed since it left its default branch (`origin/HEAD`, then `main`, then `master`).
 - **Pull request**: while the branch has an open or draft pull request, its files and diffs exactly as GitHub shows them, read with `gh` on the machine.
 
-Each file shows its status letter, path and lines added and removed. Open a file to see its diff; **Wrap lines** turns phone-width wrapping on or off. Mark a file **Viewed** in its diff header to collapse it and move it last; this phone keeps the mark until the diff changes. Listings show up to 200 entries, and long diffs only a preview.
+Each file shows its status letter, path and lines added and removed. Open a file to see its diff, a compact unified view like GitHub's: a one-line header with the path and its added and removed line counts, then each line with its old and new line numbers, added lines tinted green and removed lines red. **Wrap lines** turns phone-width wrapping on or off. Mark a file **Viewed** in its diff header to collapse it and move it last; this phone keeps the mark until the diff changes. Listings show up to 200 entries, and long diffs only a preview.
 
 ## Send feedback
 
