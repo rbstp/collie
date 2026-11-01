@@ -948,6 +948,21 @@ mod tests {
         (key, pin)
     }
 
+    fn machine() -> Machine {
+        Machine {
+            id: "m".into(),
+            label: "m".into(),
+            host: "m".into(),
+            port: 0,
+            node_id: "n".into(),
+            owner_user_id: 123,
+            kind: MachineKind::Mac,
+            key: String::new(),
+            terminal_key: String::new(),
+            default_label: None,
+        }
+    }
+
     #[tokio::test]
     async fn tls_failures_say_which_side_refused() {
         let (machine, machine_pin) = key();
@@ -1395,21 +1410,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn node_running_wakes_only_a_wait_for_the_node() {
         let (_suspend, suspended) = watch::channel(true);
-        let machine = Machine {
-            id: "m".into(),
-            label: "m".into(),
-            host: "m".into(),
-            port: 0,
-            node_id: "n".into(),
-            owner_user_id: 123,
-            kind: MachineKind::Mac,
-            key: String::new(),
-            terminal_key: String::new(),
-            default_label: None,
-        };
         let conn = Conn::spawn(
             &tokio::runtime::Handle::current(),
-            machine,
+            machine(),
             NodeSlot::default(),
             IdentitySlot::default(),
             PushSlot::default(),
@@ -1452,21 +1455,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn resume_redials_a_stopped_link() {
         let (_suspend, suspended) = watch::channel(true);
-        let machine = Machine {
-            id: "m".into(),
-            label: "m".into(),
-            host: "m".into(),
-            port: 0,
-            node_id: "n".into(),
-            owner_user_id: 123,
-            kind: MachineKind::Mac,
-            key: String::new(),
-            terminal_key: String::new(),
-            default_label: None,
-        };
         let conn = Arc::new(Conn::spawn(
             &tokio::runtime::Handle::current(),
-            machine,
+            machine(),
             NodeSlot::default(),
             IdentitySlot::default(),
             PushSlot::default(),
@@ -1506,22 +1497,10 @@ mod tests {
         })
         .unwrap();
         let (_suspend, suspended) = watch::channel(false);
-        let machine = Machine {
-            id: "m".into(),
-            label: "m".into(),
-            host: "m".into(),
-            port: 0,
-            node_id: "n".into(),
-            owner_user_id: 123,
-            kind: MachineKind::Mac,
-            // Not a pin: every dial stops with PairAgain before using the node.
-            key: String::new(),
-            terminal_key: String::new(),
-            default_label: None,
-        };
+        // machine() has no pin: every dial stops with PairAgain before using the node.
         let conn = Arc::new(Conn::spawn(
             &tokio::runtime::Handle::current(),
-            machine,
+            machine(),
             Arc::new(Mutex::new(Some(Arc::new(node)))),
             IdentitySlot::default(),
             PushSlot::default(),

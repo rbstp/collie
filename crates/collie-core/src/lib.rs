@@ -3799,6 +3799,29 @@ mod tests {
         .into()
     }
 
+    fn mac(id: &str) -> Machine {
+        Machine {
+            id: id.into(),
+            label: "mac".into(),
+            host: format!("{id}.tail1234.ts.net"),
+            port: 8457,
+            node_id: format!("n{id}"),
+            owner_user_id: 123,
+            kind: MachineKind::Mac,
+            key: String::new(),
+            terminal_key: String::new(),
+            default_label: None,
+        }
+    }
+
+    fn stored(machines: &[Machine]) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("s");
+        ensure_private_dir(&state).unwrap();
+        MachineStore::new(state.clone()).save(machines).unwrap();
+        (dir, state)
+    }
+
     #[test]
     fn pairing_errors_name_the_fix() {
         let missing = pair_error(
@@ -4221,24 +4244,7 @@ mod tests {
 
     #[test]
     fn low_data_reaches_every_machines_watch() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("s");
-        ensure_private_dir(&state).unwrap();
-        let mac = |id: &str| Machine {
-            id: id.into(),
-            label: "mac".into(),
-            host: format!("{id}.tail1234.ts.net"),
-            port: 8457,
-            node_id: format!("n{id}"),
-            owner_user_id: 123,
-            kind: MachineKind::Mac,
-            key: String::new(),
-            terminal_key: String::new(),
-            default_label: None,
-        };
-        MachineStore::new(state.clone())
-            .save(&[mac("m1"), mac("m2")])
-            .unwrap();
+        let (_dir, state) = stored(&[mac("m1"), mac("m2")]);
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
         let low_data = |id: &str| lock(&core.conn(id).unwrap().shared.flock).low_data;
         assert!(!low_data("m1"));
@@ -4251,23 +4257,7 @@ mod tests {
 
     #[test]
     fn a_link_waiting_for_a_node_start_or_restart_is_not_offline() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("s");
-        ensure_private_dir(&state).unwrap();
-        MachineStore::new(state.clone())
-            .save(&[Machine {
-                id: "m1".into(),
-                label: "mac".into(),
-                host: "m1.tail1234.ts.net".into(),
-                port: 8457,
-                node_id: "nm1".into(),
-                owner_user_id: 123,
-                kind: MachineKind::Mac,
-                key: String::new(),
-                terminal_key: String::new(),
-                default_label: None,
-            }])
-            .unwrap();
+        let (_dir, state) = stored(&[mac("m1")]);
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
         let conn = core.conn("m1").unwrap();
         let reaches = |phase: LinkPhase| {
@@ -4287,24 +4277,7 @@ mod tests {
 
     #[test]
     fn a_rename_is_kept_and_cleared_without_touching_the_link() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("s");
-        ensure_private_dir(&state).unwrap();
-        let mac = |id: &str| Machine {
-            id: id.into(),
-            label: "mac".into(),
-            host: format!("{id}.tail1234.ts.net"),
-            port: 8457,
-            node_id: format!("n{id}"),
-            owner_user_id: 123,
-            kind: MachineKind::Mac,
-            key: String::new(),
-            terminal_key: String::new(),
-            default_label: None,
-        };
-        MachineStore::new(state.clone())
-            .save(&[mac("m1"), mac("m2")])
-            .unwrap();
+        let (_dir, state) = stored(&[mac("m1"), mac("m2")]);
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
         let conn = core.conn("m1").unwrap();
         let shown = |core: &CollieCore| {
@@ -4358,24 +4331,7 @@ mod tests {
 
     #[test]
     fn push_registration_is_per_machine_and_kept_in_memory() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("s");
-        ensure_private_dir(&state).unwrap();
-        let mac = |id: &str| Machine {
-            id: id.into(),
-            label: "mac".into(),
-            host: format!("{id}.tail1234.ts.net"),
-            port: 8457,
-            node_id: format!("n{id}"),
-            owner_user_id: 123,
-            kind: MachineKind::Mac,
-            key: String::new(),
-            terminal_key: String::new(),
-            default_label: None,
-        };
-        MachineStore::new(state.clone())
-            .save(&[mac("m1"), mac("m2")])
-            .unwrap();
+        let (_dir, state) = stored(&[mac("m1"), mac("m2")]);
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
         let key: Vec<u8> = (1..=32).collect();
         let token = "ab".repeat(32);
@@ -4467,23 +4423,7 @@ mod tests {
 
     #[test]
     fn archive_on_merge_rides_every_session_once_set() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("s");
-        ensure_private_dir(&state).unwrap();
-        MachineStore::new(state.clone())
-            .save(&[Machine {
-                id: "m1".into(),
-                label: "mac".into(),
-                host: "m1.tail1234.ts.net".into(),
-                port: 8457,
-                node_id: "nm1".into(),
-                owner_user_id: 123,
-                kind: MachineKind::Mac,
-                key: String::new(),
-                terminal_key: String::new(),
-                default_label: None,
-            }])
-            .unwrap();
+        let (_dir, state) = stored(&[mac("m1")]);
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
         let seed = || -> Vec<Request> {
             let (seed, _) = lock(&core.inner.push).requests("m1");
@@ -4513,23 +4453,7 @@ mod tests {
 
     #[test]
     fn activity_tokens_are_validated_and_kept_in_memory() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("s");
-        ensure_private_dir(&state).unwrap();
-        MachineStore::new(state.clone())
-            .save(&[Machine {
-                id: "m1".into(),
-                label: "mac".into(),
-                host: "m1.tail1234.ts.net".into(),
-                port: 8457,
-                node_id: "nm1".into(),
-                owner_user_id: 123,
-                kind: MachineKind::Mac,
-                key: String::new(),
-                terminal_key: String::new(),
-                default_label: None,
-            }])
-            .unwrap();
+        let (_dir, state) = stored(&[mac("m1")]);
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
         let token = "cd".repeat(80);
         let act = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
@@ -4637,24 +4561,7 @@ mod tests {
 
     #[test]
     fn unsent_ends_survive_a_restart_until_acknowledged() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("s");
-        ensure_private_dir(&state).unwrap();
-        let mac = |id: &str| Machine {
-            id: id.into(),
-            label: "mac".into(),
-            host: format!("{id}.tail1234.ts.net"),
-            port: 8457,
-            node_id: format!("n{id}"),
-            owner_user_id: 123,
-            kind: MachineKind::Mac,
-            key: String::new(),
-            terminal_key: String::new(),
-            default_label: None,
-        };
-        MachineStore::new(state.clone())
-            .save(&[mac("m1"), mac("m2")])
-            .unwrap();
+        let (_dir, state) = stored(&[mac("m1"), mac("m2")]);
         let file = state.join(conn::ENDS_FILE);
         let token = "cd".repeat(80);
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
@@ -4755,28 +4662,15 @@ mod tests {
 
     #[test]
     fn a_terminal_needs_the_key_this_phone_paired_with() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("s");
-        ensure_private_dir(&state).unwrap();
         let spki = || {
             let key = collie_tls::load(&collie_tls::generate().unwrap()).unwrap();
             key.public_key().unwrap().as_ref().to_vec()
         };
         let (paired, current) = (spki(), spki());
-        MachineStore::new(state.clone())
-            .save(&[Machine {
-                id: "m1".into(),
-                label: "mac".into(),
-                host: "m1.tail1234.ts.net".into(),
-                port: 8457,
-                node_id: "nm1".into(),
-                owner_user_id: 123,
-                kind: MachineKind::Mac,
-                key: String::new(),
-                terminal_key: URL_SAFE_NO_PAD.encode(&paired),
-                default_label: None,
-            }])
-            .unwrap();
+        let (_dir, state) = stored(&[Machine {
+            terminal_key: URL_SAFE_NO_PAD.encode(&paired),
+            ..mac("m1")
+        }]);
         let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
         let challenge = |core: &CollieCore| {
             core.runtime
