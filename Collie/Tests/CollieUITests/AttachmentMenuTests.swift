@@ -7,13 +7,7 @@ final class AttachmentMenuTests: XCTestCase {
 
     private func launchDemo() throws -> XCUIApplication {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments += [
-            "--terminal-demo",
-            fixture.path
-        ]
+        let app = try demoApp("attachment-demo")
         app.launch()
         XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
         return app

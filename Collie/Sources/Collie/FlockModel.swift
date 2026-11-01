@@ -388,6 +388,12 @@ struct PlanUsageWarning: Equatable {
     let reached: Bool
 }
 
+private func monthElapsed(resetsAtMs: UInt64, now: Date) -> Double {
+    let end = Date(unixMs: resetsAtMs)
+    guard let interval = WatchUsage.monthlyInterval(endingAt: end) else { return 0 }
+    return min(1, max(0, now.timeIntervalSince(interval.lowerBound) / end.timeIntervalSince(interval.lowerBound)))
+}
+
 extension CodexUsage {
     static let staleAfterMs: UInt64 = 10 * 60_000
 
@@ -397,11 +403,7 @@ extension CodexUsage {
 
     func isStale(now: Date) -> Bool { now.unixMs > recordedMs + Self.staleAfterMs }
 
-    func elapsed(now: Date) -> Double {
-        let end = Date(unixMs: resetsAtMs)
-        guard let interval = WatchUsage.monthlyInterval(endingAt: end) else { return 0 }
-        return min(1, max(0, now.timeIntervalSince(interval.lowerBound) / end.timeIntervalSince(interval.lowerBound)))
-    }
+    func elapsed(now: Date) -> Double { monthElapsed(resetsAtMs: resetsAtMs, now: now) }
 }
 
 extension CopilotUsage {
@@ -419,11 +421,7 @@ extension CopilotUsage {
         return nowMs > recordedMs && nowMs - recordedMs > Self.staleAfterMs
     }
 
-    func elapsed(now: Date) -> Double {
-        let end = Date(unixMs: resetsAtMs)
-        guard let interval = WatchUsage.monthlyInterval(endingAt: end) else { return 0 }
-        return min(1, max(0, now.timeIntervalSince(interval.lowerBound) / end.timeIntervalSince(interval.lowerBound)))
-    }
+    func elapsed(now: Date) -> Double { monthElapsed(resetsAtMs: resetsAtMs, now: now) }
 }
 
 enum ArchiveSummary {

@@ -56,9 +56,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func launchDemo(_ arguments: [String] = []) throws -> XCUIApplication {
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "screenshot-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path] + arguments
+        let app = try demoApp("screenshot-demo", arguments)
         app.launchEnvironment["COLLIE_DEMO_SCREENSHOTS"] = "1"
         app.launch()
         XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)

@@ -4,10 +4,7 @@ import XCTest
 final class PromptCopyTests: XCTestCase {
     func testLongPressCopiesThePromptWithoutTheKeyboard() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments += ["--terminal-demo", fixture.path]
+        let app = try demoApp("attachment-demo")
         app.launch()
         defer { app.terminate() }
         app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
@@ -32,10 +29,7 @@ final class PromptCopyTests: XCTestCase {
 
     func testDragScrollsALongMacDraftWithoutTheKeyboard() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments += ["--terminal-demo", fixture.path]
+        let app = try demoApp("attachment-demo")
         app.launchEnvironment["COLLIE_DEMO_MAC_DRAFT"] = (1...12).map { "Line \($0) of the draft left in Claude Code on the Mac" }.joined(separator: "\n")
         app.launch()
         defer { app.terminate() }

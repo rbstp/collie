@@ -165,9 +165,7 @@ final class LandscapeTests: XCTestCase {
 
     private func launchDemo(_ arguments: [String] = []) throws -> XCUIApplication {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "landscape-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path] + arguments
+        let app = try demoApp("landscape-demo", arguments)
         app.launch()
         XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
         return app

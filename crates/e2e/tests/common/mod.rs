@@ -250,6 +250,16 @@ pub fn phone(root: &Path, name: &str, net: &Net) -> Arc<CollieCore> {
     core
 }
 
+pub fn phone_up(root: &Path, net: &Net) -> (tokio::runtime::Runtime, Arc<CollieCore>) {
+    wait_ready(&net.mac, 0);
+    let core = phone(root, "phone", net);
+    let rt = runtime();
+    rt.block_on(core.node_start(Some(net.key.clone()))).unwrap();
+    wait_ready(&net.mac, 1);
+    wait_phone(&rt, &core);
+    (rt, core)
+}
+
 pub fn wait_phone(rt: &tokio::runtime::Runtime, core: &CollieCore) {
     let deadline = Instant::now() + Duration::from_secs(60);
     while rt.block_on(core.node_state()).unwrap().backend_state != TailnetState::Running {

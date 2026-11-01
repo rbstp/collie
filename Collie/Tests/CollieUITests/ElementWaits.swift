@@ -41,6 +41,16 @@ struct Screen {
 }
 
 @MainActor
+extension XCTestCase {
+    func demoApp(_ fixture: String, _ arguments: [String] = []) throws -> XCUIApplication {
+        let app = XCUIApplication()
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: fixture, withExtension: "txt"))
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", url.path] + arguments
+        return app
+    }
+}
+
+@MainActor
 extension XCUIElement {
     func appears(within timeout: TimeInterval) -> Bool {
         eventually(within: timeout) { exists }

@@ -4,9 +4,7 @@ import XCTest
 final class SampleWorkspaceTests: XCTestCase {
     func testGridSubagentsAreAccessibleAndCappedWithoutCoveringBlockedAgents() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "screenshot-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path, "--subagent-demo"]
+        let app = try demoApp("screenshot-demo", ["--subagent-demo"])
         app.launch()
         defer { app.terminate() }
         let layout = app.buttons["Layout"]

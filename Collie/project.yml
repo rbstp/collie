@@ -104,6 +104,7 @@ targets:
     platform: iOS
     sources:
       - path: CollieWidgets
+      - path: Resources/UsageAssets.xcassets
       - path: Sources/Shared/AgentActivity.swift
       - path: Sources/Shared/DecideApprovalIntent.swift
       - path: Sources/Shared/NotificationKey.swift

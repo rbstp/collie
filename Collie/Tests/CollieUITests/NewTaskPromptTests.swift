@@ -4,9 +4,7 @@ import XCTest
 final class NewTaskPromptTests: XCTestCase {
     func testHideKeyboardPreservesThePrompt() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        let app = try demoApp("attachment-demo")
         app.launch()
         defer { app.terminate() }
         let newTask = app.buttons["New task"]

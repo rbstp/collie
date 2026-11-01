@@ -67,12 +67,7 @@ fn phase2_end_to_end() {
     let t0 = Instant::now();
     let root = TempDir::new("e2e2");
     let net = Net::start(&root.0);
-    wait_ready(&net.mac, 0);
-    let core = phone(&root.0, "phone", &net);
-    let rt = runtime();
-    rt.block_on(core.node_start(Some(net.key.clone()))).unwrap();
-    wait_ready(&net.mac, 1);
-    wait_phone(&rt, &core);
+    let (rt, core) = phone_up(&root.0, &net);
     println!("tailnet: control, Mac, phone up in {:?}", t0.elapsed());
     rt.block_on(scenario(&root.0, &net, &core));
     drop(core);
@@ -676,12 +671,7 @@ fn live_herdr_drive() {
     );
     let root = TempDir::new("e2e2-herdr");
     let net = Net::start(&root.0);
-    wait_ready(&net.mac, 0);
-    let core = phone(&root.0, "phone", &net);
-    let rt = runtime();
-    rt.block_on(core.node_start(Some(net.key.clone()))).unwrap();
-    wait_ready(&net.mac, 1);
-    wait_phone(&rt, &core);
+    let (rt, core) = phone_up(&root.0, &net);
     rt.block_on(live_scenario(&root.0, &net, &core, &herdr, pi_is_fake));
     drop(core);
     drop(rt);

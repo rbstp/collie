@@ -4,9 +4,7 @@ import XCTest
 final class KeyStripTests: XCTestCase {
     func testToggleModifiersAndShortcuts() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "landscape-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        let app = try demoApp("landscape-demo")
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)

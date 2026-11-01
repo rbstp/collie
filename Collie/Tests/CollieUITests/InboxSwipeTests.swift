@@ -4,9 +4,7 @@ import XCTest
 final class InboxSwipeTests: XCTestCase {
     func testSwipeRightOffersSnoozeExceptOnBlockedRows() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        let app = try demoApp("attachment-demo")
         app.launch()
         defer { app.terminate() }
         let layout = app.buttons["Layout"]
@@ -35,9 +33,7 @@ final class InboxSwipeTests: XCTestCase {
 
     func testSearchStaysBelowTheFilterAndTheLastRowAboveTheKeyboard() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        let app = try demoApp("attachment-demo")
         app.launch()
         defer { app.terminate() }
         let layout = app.buttons["Layout"]

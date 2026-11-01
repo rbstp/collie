@@ -190,12 +190,7 @@ fn background_listing_carries_the_plan() {
     }
     let root = TempDir::new("e2e3u");
     let net = Net::start(&root.0);
-    wait_ready(&net.mac, 0);
-    let core = phone(&root.0, "phone", &net);
-    let rt = runtime();
-    rt.block_on(core.node_start(Some(net.key.clone()))).unwrap();
-    wait_ready(&net.mac, 1);
-    wait_phone(&rt, &core);
+    let (rt, core) = phone_up(&root.0, &net);
     rt.block_on(async {
         let herdr_socket = root.0.join("herdr.sock");
         let _calls = mock_herdr(&herdr_socket, |_, _| None);
@@ -243,12 +238,7 @@ fn phase3_expired_approvals() {
     }
     let root = TempDir::new("e2e3x");
     let net = Net::with_key(&root.0, KEY.into());
-    wait_ready(&net.mac, 0);
-    let core = phone(&root.0, "phone", &net);
-    let rt = runtime();
-    rt.block_on(core.node_start(Some(net.key.clone()))).unwrap();
-    wait_ready(&net.mac, 1);
-    wait_phone(&rt, &core);
+    let (rt, core) = phone_up(&root.0, &net);
     let herdr = rt.block_on(async { Mock::start(&root.0.join("herdr.sock")) });
     let apns = Arc::new(Apns::default());
     let data_dir = root.0.join("collied");
@@ -332,12 +322,7 @@ fn live_activity_follows_an_agent() {
     }
     let root = TempDir::new("e2e4");
     let net = Net::with_key(&root.0, KEY.into());
-    wait_ready(&net.mac, 0);
-    let core = phone(&root.0, "phone", &net);
-    let rt = runtime();
-    rt.block_on(core.node_start(Some(net.key.clone()))).unwrap();
-    wait_ready(&net.mac, 1);
-    wait_phone(&rt, &core);
+    let (rt, core) = phone_up(&root.0, &net);
     let herdr = rt.block_on(async { Mock::start(&root.0.join("herdr.sock")) });
     let apns = Arc::new(Apns::default());
     let data_dir = root.0.join("collied");
