@@ -57,9 +57,7 @@ final class SwipeOrderTests: XCTestCase {
     }
 
     private func launch() throws -> XCUIApplication {
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        let app = try demoApp("attachment-demo")
         app.launch()
         XCTAssertTrue(app.buttons["Layout"].appears(within: 10), app.debugDescription)
         return app

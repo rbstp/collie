@@ -48,9 +48,7 @@ final class PlanUsageWarningTests: XCTestCase {
     }
 
     private func openNewTask(used: String?) throws -> XCUIApplication {
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "screenshot-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        let app = try demoApp("screenshot-demo")
         app.launchEnvironment["COLLIE_DEMO_SCREENSHOTS"] = "1"
         if let used { app.launchEnvironment["COLLIE_DEMO_PLAN_USED"] = used }
         app.launch()

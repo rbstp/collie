@@ -4,9 +4,7 @@ import XCTest
 final class KeyboardSwipeTests: XCTestCase {
     private func launch(draft: String? = nil) throws -> XCUIApplication {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        let app = try demoApp("attachment-demo")
         if let draft { app.launchEnvironment["COLLIE_DEMO_MAC_DRAFT"] = draft }
         app.launch()
         return app

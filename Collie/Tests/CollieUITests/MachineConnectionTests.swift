@@ -4,13 +4,8 @@ import XCTest
 final class MachineConnectionTests: XCTestCase {
     func testErrorsAppearOnlyInMachinesAndCopyExactly() throws {
         continueAfterFailure = false
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
         let message = "collie-linux.example.ts.net is not in this tailnet's netmap\nRetry failed."
-        let app = XCUIApplication()
-        app.launchArguments = [
-            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
-            "--terminal-demo", fixture.path
-        ]
+        let app = try demoApp("attachment-demo")
         app.launchEnvironment["COLLIE_DEMO_CONNECTION_ERROR"] = message
         app.launch()
         defer { app.terminate() }

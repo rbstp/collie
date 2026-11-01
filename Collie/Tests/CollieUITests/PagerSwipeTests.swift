@@ -8,9 +8,7 @@ final class PagerSwipeTests: XCTestCase {
 
     func testSwipeBetweenAgentsAndUsageInEveryLayout() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        let app = try demoApp("attachment-demo")
         app.launch()
         defer { app.terminate() }
         let layout = app.buttons["Layout"]
@@ -33,9 +31,7 @@ final class PagerSwipeTests: XCTestCase {
     }
 
     func testAgentsPageStartsAtTheLeadingEdge() throws {
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        let app = try demoApp("attachment-demo")
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.segmentedControls["View"].buttons["Agents"].appears(within: 10), app.debugDescription)
@@ -45,9 +41,7 @@ final class PagerSwipeTests: XCTestCase {
 
     func testUsageCardsKeepTheAgentsListMargins() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        let app = try demoApp("attachment-demo")
         app.launch()
         defer { app.terminate() }
         let layout = app.buttons["Layout"]
@@ -72,9 +66,7 @@ final class PagerSwipeTests: XCTestCase {
     }
 
     func testTappedSelectionKeepsItsColor() throws {
-        let app = XCUIApplication()
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "attachment-demo", withExtension: "txt"))
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "--terminal-demo", fixture.path]
+        let app = try demoApp("attachment-demo")
         app.launch()
         defer { app.terminate() }
         let agents = app.segmentedControls["View"].buttons["Agents"]
