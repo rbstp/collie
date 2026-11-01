@@ -70,8 +70,8 @@ const TASK_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(150);
 /// collied's 75 s clone, or its 75 s budget for a pull request's gh read, checks and fetch,
 /// then `TASK_NEW_TIMEOUT`.
 const TASK_CLONE_TIMEOUT: Duration = Duration::from_secs(165);
-/// collied's 30 s budget for each gh read behind the worktree list or a pull request's
-/// files, plus its git reads.
+/// collied's 30 s deadline for a pull request read, or the worktree list's 30 s gh read
+/// beside its git reads.
 const GIT_GITHUB_TIMEOUT: Duration = Duration::from_secs(40);
 /// An unanswered mutation's `op_id` is reused for an identical retry within this window,
 /// in wall time so a sleeping phone does not stretch it. Longer than any mutation timeout

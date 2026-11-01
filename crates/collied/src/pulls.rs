@@ -214,14 +214,14 @@ pub(crate) fn first_line(stderr: &[u8]) -> String {
 /// A pull request of the user's, its head branch and its title.
 pub type Mine = (PullRequest, String, String);
 
-/// The user's latest pull requests, newest first, for the worktree list; none when gh
+/// The user's open pull requests, newest first, for the worktree list; none when gh
 /// cannot tell. Pull requests from forks are left out: their branch names say nothing
 /// about the local branches.
 pub async fn mine(gh: &str, checkout: &Cwd) -> Vec<Mine> {
     let mut command = gh_command(gh);
     command
         .args([
-            "pr", "list", "--author", "@me", "--state", "all", "--limit", "30",
+            "pr", "list", "--author", "@me", "--state", "open", "--limit", "100",
         ])
         .args([
             "--json",

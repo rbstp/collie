@@ -100,7 +100,8 @@ final class GitReview {
             let changes = try await agent.gitChanges()
             checkout = changes.root
             let roots = Set(changes.worktrees.map(\.root) + [checkout].compactMap { $0 })
-            guard pending.allSatisfy({ $0.file.pullRequest != nil || roots.contains($0.root) }) else {
+            // A pull request's files carry the agent's checkout as their root: another checkout may be another repository.
+            guard pending.allSatisfy({ $0.file.pullRequest == nil ? roots.contains($0.root) : $0.root == checkout }) else {
                 error = "The agent’s checkout changed. Review the feedback before sending."
                 return false
             }
@@ -542,7 +543,7 @@ private struct GitCounts: View {
             Text("+\(files.reduce(UInt64(0)) { $0 + UInt64($1.additions ?? 0) })").foregroundStyle(.green)
             Text("−\(files.reduce(UInt64(0)) { $0 + UInt64($1.deletions ?? 0) })").foregroundStyle(.red)
             if files.contains(where: { $0.additions == nil || $0.deletions == nil }) {
-                Text(files.count == 1 ? "binary" : "some binary").foregroundStyle(.secondary)
+                Text(files.count == 1 ? "counts unavailable" : "some counts unavailable").foregroundStyle(.secondary)
             }
         }.monospacedDigit()
     }

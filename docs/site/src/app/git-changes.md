@@ -4,7 +4,7 @@ To review what the agent changed, open the session's **More** menu and choose **
 
 ## Pick a worktree
 
-Git changes opens on the repository's worktrees. Each row shows the branch, the last commit and how long ago it was made, commits ahead of the default branch, files not yet committed, lines added and removed, and the pull request's number and state. A location arrow marks the session's own checkout, and colored dots count the agents working in that worktree.
+Git changes opens on the repository's worktrees. Each row shows the branch, the last commit and how long ago it was made, commits ahead of the default branch, files not yet committed, lines added and removed, and its open pull request's number and state. A location arrow marks the session's own checkout, and colored dots count the agents working in that worktree.
 
 Below them, **Pull requests without a worktree** lists your open pull requests whose worktree is gone, so you can still review them.
 

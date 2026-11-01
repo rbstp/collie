@@ -240,14 +240,23 @@ async fn worktree(
     if !worktrees.iter().any(|w| &w.root == requested) {
         return Ok(None);
     }
+    let common = metadata(checkout, "--git-common-dir", roots).await?;
+    in_repository(&common, requested, roots).await
+}
+
+/// `requested` is a checkout's top level whose Git common directory is `common`.
+async fn in_repository(
+    common: &Cwd,
+    requested: &Cwd,
+    roots: &[PathBuf],
+) -> Result<Option<Cwd>, Fail> {
     let Some(root) = root(requested, roots)
         .await?
         .filter(|root| root == requested)
     else {
         return Ok(None);
     };
-    let common = metadata(checkout, "--git-common-dir", roots).await?;
-    Ok((metadata(&root, "--git-common-dir", roots).await? == common).then_some(root))
+    Ok((&metadata(&root, "--git-common-dir", roots).await? == common).then_some(root))
 }
 
 /// Fixed refs only: the phone never names the base. Its name, and its commit.
@@ -631,14 +640,16 @@ async fn overview(
     worktrees: Vec<GitWorktree>,
     roots: &[PathBuf],
 ) -> Result<GitChanges, Fail> {
-    let listed = worktrees.clone();
+    let common = metadata(&checkout, "--git-common-dir", roots).await.ok();
     let summaries = futures_util::stream::iter(worktrees)
         .map(|mut w| {
-            let (checkout, listed) = (&checkout, &listed);
+            let (checkout, common) = (&checkout, &common);
             async move {
-                if &w.root == checkout
-                    || matches!(worktree(checkout, listed, &w.root, roots).await, Ok(Some(r)) if r == w.root)
-                {
+                let same = match common {
+                    Some(common) => in_repository(common, &w.root, roots).await,
+                    None => Ok(None),
+                };
+                if &w.root == checkout || matches!(same, Ok(Some(r)) if r == w.root) {
                     let _ = summarize(&mut w).await;
                 }
                 w
@@ -707,7 +718,7 @@ async fn summarize(w: &mut GitWorktree) -> Result<(), Fail> {
             "status",
             "--porcelain",
             "-z",
-            "--untracked-files=normal",
+            "--untracked-files=all",
             "--ignore-submodules=none",
         ],
         OUTPUT_LIMIT,
@@ -805,6 +816,7 @@ struct PullFile {
 }
 
 const PULL_FIELDS: &str = "map({filename, previous_filename, status, additions, deletions, sha})";
+const PULL_PATCH: &str = "{count: length, file: ([.[] | select(.filename == $ENV.COLLIE_PATH) | {filename, previous_filename, status, patch}] | first)}";
 
 fn pull_status(status: &str) -> &'static str {
     match status {
@@ -846,9 +858,13 @@ fn pull_page(json: &[u8]) -> Result<Vec<PullFile>, Fail> {
     serde_json::from_slice(json).map_err(|_| error("GitHub's file list could not be read"))
 }
 
-async fn gh(checkout: &Cwd, args: &[&str]) -> Result<Vec<u8>, Fail> {
+/// `path`, when set, reaches gh's `--jq` program as `$ENV.COLLIE_PATH`, never as an argument.
+async fn gh(checkout: &Cwd, args: &[&str], path: Option<&str>) -> Result<Vec<u8>, Fail> {
     let gh = crate::drive::gh().ok_or_else(|| error("gh is not installed on the machine"))?;
     let mut command = crate::pulls::gh_command(&gh);
+    if let Some(path) = path {
+        command.env("COLLIE_PATH", path);
+    }
     command
         .args(args)
         .current_dir(checkout.as_str())
@@ -886,6 +902,17 @@ pub async fn pull_changes(cwd: &Cwd, roots: &[PathBuf], number: u64) -> Result<G
     let checkout = root(cwd, roots)
         .await?
         .ok_or_else(|| error("This folder is no longer a Git checkout"))?;
+    deadline(pull_list(checkout, number)).await
+}
+
+/// All of a pull request read's gh calls share one `GH_TIMEOUT`, within the phone's wait.
+async fn deadline<T>(read: impl Future<Output = Result<T, Fail>>) -> Result<T, Fail> {
+    tokio::time::timeout(crate::pulls::GH_TIMEOUT, read)
+        .await
+        .map_err(|_| error("GitHub took too long; try again"))?
+}
+
+async fn pull_list(checkout: Cwd, number: u64) -> Result<GitChanges, Fail> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct View {
@@ -904,6 +931,7 @@ pub async fn pull_changes(cwd: &Cwd, roots: &[PathBuf], number: u64) -> Result<G
             "--json",
             "number,baseRefName,headRefName,changedFiles",
         ],
+        None,
     )
     .await?;
     let view: View = serde_json::from_slice(&view)
@@ -924,6 +952,7 @@ pub async fn pull_changes(cwd: &Cwd, roots: &[PathBuf], number: u64) -> Result<G
         let out = gh(
             &checkout,
             &["api", &files_url(number, page), "--jq", PULL_FIELDS],
+            None,
         )
         .await?;
         let files = pull_page(&out)?;
@@ -940,42 +969,35 @@ pub async fn pull_changes(cwd: &Cwd, roots: &[PathBuf], number: u64) -> Result<G
     limited(changes)
 }
 
-/// GitHub's own patch for one file, found by its place in the list so that no path
-/// reaches gh's command line.
+/// GitHub's own patch for one file, one page at a time.
 async fn pull_patch(checkout: &Cwd, number: u64, name: &str) -> Result<String, Fail> {
-    let mut found = None;
+    #[derive(Deserialize)]
+    struct Page {
+        count: usize,
+        file: Option<PullFile>,
+    }
     for page in 1..=MAX_FILES.div_ceil(PULL_PAGE) {
         let out = gh(
             checkout,
-            &["api", &files_url(number, page), "--jq", PULL_FIELDS],
+            &["api", &files_url(number, page), "--jq", PULL_PATCH],
+            Some(name),
         )
         .await?;
-        let files = pull_page(&out)?;
-        if let Some(index) = files.iter().position(|f| f.filename == name) {
-            found = Some((page, index));
-            break;
+        let page: Page = serde_json::from_slice(&out)
+            .map_err(|_| error("GitHub's file list could not be read"))?;
+        if let Some(file) = page.file {
+            if file.filename != name {
+                return Err(error(
+                    "The pull request changed while reading its diff; refresh",
+                ));
+            }
+            return Ok(pull_text(file.patch));
         }
-        if files.len() < PULL_PAGE {
+        if page.count < PULL_PAGE {
             break;
         }
     }
-    let (page, index) =
-        found.ok_or_else(|| error("File is no longer in the pull request; refresh"))?;
-    let out = gh(
-        checkout,
-        &[
-            "api",
-            &files_url(number, page),
-            "--jq",
-            &format!(".[{index}] | {{filename, previous_filename, status, patch}}"),
-        ],
-    )
-    .await?;
-    let file: PullFile = serde_json::from_slice(&out)
-        .ok()
-        .filter(|f: &PullFile| f.filename == name)
-        .ok_or_else(|| error("The pull request changed while reading its diff; refresh"))?;
-    Ok(pull_text(file.patch))
+    Err(error("File is no longer in the pull request; refresh"))
 }
 
 fn pull_text(patch: Option<String>) -> String {
@@ -998,7 +1020,7 @@ pub async fn diff(cwd: &Cwd, roots: &[PathBuf], p: &AgentDiffParams) -> Result<G
     };
     if let Some(number) = p.pull_request {
         return bounded(GitDiff {
-            patch: pull_patch(&checkout, number, &p.path).await?,
+            patch: deadline(pull_patch(&checkout, number, &p.path)).await?,
             truncated: false,
         });
     }

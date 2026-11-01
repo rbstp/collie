@@ -2987,14 +2987,19 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
 }
 
 @MainActor
-@Test func pullRequestFeedbackNamesThePullRequestAndNeedsNoListedWorktree() async {
+@Test func pullRequestFeedbackNamesThePullRequestAndNeedsTheSameCheckout() async {
     let core = FakeCore()
-    core.state.withLock { $0.gitWorktrees = [GitWorktree(root: "/worktree", branch: "main")] }
+    core.state.withLock { $0.gitWorktrees = [GitWorktree(root: "/worktree", branch: "main"), GitWorktree(root: "/feature", branch: "feature")] }
     let model = await slashReady(core)
     let file = GitFile(path: "file.swift", oldPath: nil, section: "pull_request", status: "M", additions: 1, deletions: 1, hash: nil, pullRequest: 42)
-    #expect(GitFeedback.draft(file: file, selection: "", root: "/gone") == "Feedback for file.swift in pull request #42: ")
+    #expect(GitFeedback.draft(file: file, selection: "", root: "/worktree") == "Feedback for file.swift in pull request #42: ")
     let review = model.gitReview
-    review.add(root: "/gone", file: file, selection: "")
+    review.add(root: "/feature", file: file, selection: "")
+    review.comments[0].text = "Split this."
+    #expect(!(await review.send(using: model)))
+    #expect(review.error?.contains("checkout changed") == true)
+    review.comments = []
+    review.add(root: "/worktree", file: file, selection: "")
     review.comments[0].text = "Split this."
     #expect(await review.send(using: model))
     #expect(core.snapshot.prompts == ["Feedback for file.swift in pull request #42: Split this."])
