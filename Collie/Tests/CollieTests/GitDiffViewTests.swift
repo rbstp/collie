@@ -94,7 +94,7 @@ final class GitDiffViewTests: XCTestCase {
         }
     }
 
-    func testWorktreeListAndPullRequestScope() async throws {
+    func testWorktreeListSelectModeAndPullRequestScope() async throws {
         let core = FakeCore()
         let now = UInt64(Date().timeIntervalSince1970 * 1000)
         let pullRequest = PullRequestSummary(number: 622, state: .open, checks: .unknown, url: "https://github.com/o/r/pull/622")
@@ -106,7 +106,10 @@ final class GitDiffViewTests: XCTestCase {
                 GitWorktree(root: "/worktree/.worktrees/622", branch: "worktree-overview", subject: "Show what each worktree is doing",
                             committedAtMs: now - 600_000, ahead: 3, uncommitted: 4, additions: 812, deletions: 96, pullRequest: pullRequest),
                 GitWorktree(root: "/worktree/.worktrees/623", branch: "compact-diff", subject: "Compact the diff", committedAtMs: now - 1_800_000,
-                            ahead: 1, uncommitted: 2, additions: 120, deletions: 40)
+                            ahead: 1, uncommitted: 2, additions: 120, deletions: 40),
+                GitWorktree(root: "/worktree/.worktrees/619", branch: "shorter-docs", subject: "Correct and shorten the documentation",
+                            committedAtMs: now - 86_400_000, ahead: 0, uncommitted: 0, additions: 0, deletions: 0,
+                            pullRequest: PullRequestSummary(number: 619, state: .merged, checks: .unknown, url: "https://github.com/o/r/pull/619"))
             ]
             $0.gitPullRequests = [GitPullRequest(
                 pullRequest: PullRequestSummary(number: 615, state: .draft, checks: .unknown, url: "https://github.com/o/r/pull/615"),
@@ -124,7 +127,13 @@ final class GitDiffViewTests: XCTestCase {
                 GitFile(path: "crates/collied/src/git.rs", oldPath: nil, section: "pull_request", status: "M", additions: 200, deletions: 10, hash: "e")
             ]
         }
+        core.state.withLock {
+            $0.kind = "claude"
+            $0.macDraft = ""
+        }
         let model = AgentModel(core: core, route: AgentRoute(machineId: "m", terminalId: "t"), prefsFile: nil)
+        model.poll()
+        await model.loadMacDraft()
         let list = UIHostingController(rootView: GitChangesView(agent: model, sent: {}, review: model.gitReview))
         list.overrideUserInterfaceStyle = .light
         try await hosting(list) { window in
@@ -135,6 +144,26 @@ final class GitDiffViewTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(500))
             list.view.layoutIfNeeded()
             snapshot(window, name: "worktrees")
+            model.gitReview.selection = ["/worktree/.worktrees/623", "/worktree/.worktrees/619"]
+            let rows = try await waitFor("selected worktrees") {
+                list.view.layoutIfNeeded()
+                let rows = descendants(list.view).compactMap { $0 as? UICollectionView }.first { $0.isEditing }
+                return rows?.indexPathsForSelectedItems?.count == 2 && model.canSendText ? rows : nil
+            }
+            XCTAssertEqual(rows.indexPathsForSelectedItems?.map(\.item).sorted(), [2, 3])
+            try await Task.sleep(for: .milliseconds(500))
+            snapshot(window, name: "select")
+            XCTAssertTrue(core.snapshot.prompts.isEmpty)
+        }
+
+        let reopened = UIHostingController(rootView: GitChangesView(agent: model, sent: {}, review: model.gitReview))
+        try await hosting(reopened) { _ in
+            _ = try await waitFor("worktree rows after reopening") {
+                reopened.view.layoutIfNeeded()
+                return descendants(reopened.view).compactMap { $0 as? UICollectionView }
+                    .first { !$0.isEditing && $0.numberOfSections > 0 && $0.numberOfItems(inSection: 0) == 4 }
+            }
+            XCTAssertNil(model.gitReview.selection)
         }
 
         let worktree = core.snapshot.gitWorktrees[1]

@@ -19,6 +19,39 @@ enum GitFeedback {
     }
 }
 
+enum GitCleanup {
+    /// collied's default branch falls back to main, then master; the prompt guards an origin/HEAD naming another.
+    static func selectable(_ worktree: GitWorktree, checkout: String?) -> Bool {
+        worktree.root != checkout && worktree.branch != "main" && worktree.branch != "master"
+    }
+
+    static func prompt(_ worktrees: [GitWorktree]) -> String {
+        let list = worktrees.map { "- \(quoted($0.root)) (\($0.branch.map { "branch \(quoted($0))" } ?? "detached HEAD"))" }
+        return """
+        Clean up these Git worktrees (paths and branches are JSON strings):
+        \(list.joined(separator: "\n"))
+
+        Check that each one is not in use: no agent or process is working in it, it has no uncommitted or untracked changes and no unpushed commits, and its pull request is merged or closed, or it has none. If it has no pull request, also check that nothing in it was created or changed in the last 24 hours. Remove only the worktrees that pass, with their local branches. Never remove the main worktree or the default branch. Report which worktrees you kept and why.
+        """
+    }
+
+    /// Paths and branch names may hold U+2028 or U+2029, which would start a line of their own in the prompt.
+    static func quoted(_ text: String) -> String {
+        let escaped = text.unicodeScalars.map { scalar -> String in
+            switch scalar {
+            case "\"", "\\": return "\\" + String(scalar)
+            default:
+                switch scalar.properties.generalCategory {
+                case .control, .format, .lineSeparator, .paragraphSeparator:
+                    return String(scalar).utf16.map { String(format: "\\u%04X", $0) }.joined()
+                default: return String(scalar)
+                }
+            }
+        }
+        return "\"" + escaped.joined() + "\""
+    }
+}
+
 struct GitComment: Identifiable {
     let id = UUID()
     let root: String
@@ -37,6 +70,7 @@ struct GitComment: Identifiable {
 @Observable
 final class GitReview {
     var comments: [GitComment] = []
+    var selection: Set<String>?
     private(set) var sending = false
     private(set) var error: String?
     private(set) var viewed: GitViewed
@@ -117,6 +151,36 @@ final class GitReview {
         comments.removeAll { sent.contains($0.id) }
         return true
     }
+
+    func select(_ on: Bool) {
+        guard !sending else { return }
+        selection = on ? [] : nil
+        error = nil
+    }
+
+    func cleanUp(_ worktrees: [GitWorktree], checkout: String, using agent: AgentModel) async -> Bool {
+        guard !sending, !worktrees.isEmpty else { return false }
+        sending = true
+        error = nil
+        defer { sending = false }
+        do {
+            guard try await agent.gitChanges().root == checkout else {
+                error = "The agent’s checkout changed. Refresh the worktrees before cleaning up."
+                return false
+            }
+        } catch {
+            self.error = AgentModel.message(for: error)
+            return false
+        }
+        if let error = await agent.sendGitFeedback(
+            GitCleanup.prompt(worktrees), noun: "a cleanup request", tooLong: "The cleanup request is too long. Select fewer worktrees."
+        ) {
+            self.error = error
+            return false
+        }
+        selection = nil
+        return true
+    }
 }
 
 /// Which agents work in which worktree: each goes to the deepest worktree holding its folder.
@@ -146,28 +210,32 @@ struct GitChangesView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                GitFeedbackSection(review: review)
+            List(selection: selection) {
+                if !selecting { GitFeedbackSection(review: review) }
                 if let error { Text(error).font(.footnote).foregroundStyle(.red) }
                 if let overview {
                     if let checkout = overview.root {
                         Section {
                             ForEach(overview.worktrees, id: \.root) { worktree in
                                 let here = agents[worktree.root] ?? []
-                                NavigationLink {
-                                    GitWorktreeView(
-                                        agent: agent, root: worktree.root, branch: worktree.branch, pullRequest: worktree.pullRequest,
-                                        local: true, agents: here, sent: sent, review: review, open: open
-                                    )
-                                } label: {
-                                    GitWorktreeRow(worktree: worktree, current: worktree.root == checkout, agents: here)
+                                let row = GitWorktreeRow(worktree: worktree, current: worktree.root == checkout, agents: here)
+                                Group {
+                                    if selecting { row } else {
+                                        NavigationLink {
+                                            GitWorktreeView(
+                                                agent: agent, root: worktree.root, branch: worktree.branch, pullRequest: worktree.pullRequest,
+                                                local: true, agents: here, sent: sent, review: review, open: open
+                                            )
+                                        } label: { row }
+                                    }
                                 }
                                 .listRowInsets(GitRow.insets)
+                                .selectionDisabled(!GitCleanup.selectable(worktree, checkout: checkout))
                             }
                         } header: {
                             GitSectionHeader(title: "Worktrees")
                         }
-                        if !overview.pullRequests.isEmpty {
+                        if !overview.pullRequests.isEmpty && !selecting {
                             Section {
                                 ForEach(overview.pullRequests, id: \.pullRequest.number) { pull in
                                     NavigationLink {
@@ -193,20 +261,42 @@ struct GitChangesView: View {
                 }
             }
             .gitCompactList()
-            .safeAreaInset(edge: .bottom) { GitReviewBar(agent: agent, review: review, sent: sent) }
+            .environment(\.editMode, .constant(selecting ? .active : .inactive))
+            .safeAreaInset(edge: .bottom) {
+                GitReviewBar(agent: agent, review: review, sent: sent, cleanup: selecting ? cleanup : nil, checkout: overview?.root)
+            }
             .overlay { if loading && overview == nil { ProgressView("Loading worktrees…") } }
             .navigationTitle("Git changes")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.disabled(review.sending) }
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }.disabled(loading)
+                if selecting {
+                    ToolbarItem(placement: .primaryAction) { Button("Cancel") { review.select(false) }.disabled(review.sending) }
+                } else {
+                    if let overview, overview.worktrees.contains(where: { GitCleanup.selectable($0, checkout: overview.root) }) {
+                        ToolbarItem(placement: .primaryAction) { Button("Select") { review.select(true) }.disabled(review.sending) }
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }.disabled(loading)
+                    }
                 }
             }
             .refreshable { await refresh() }
             .task { await refresh() }
         }
         .interactiveDismissDisabled(review.sending)
+        .onAppear { if review.selection != nil { review.select(false) } }
+    }
+
+    private var selecting: Bool { review.selection != nil }
+
+    private var selection: Binding<Set<String>> {
+        Binding(get: { review.selection ?? [] }, set: { if review.selection != nil && !review.sending { review.selection = $0 } })
+    }
+
+    private var cleanup: [GitWorktree] {
+        guard let overview, let selected = review.selection else { return [] }
+        return overview.worktrees.filter { selected.contains($0.root) && GitCleanup.selectable($0, checkout: overview.root) }
     }
 
     private func refresh() async {
@@ -765,6 +855,8 @@ private struct GitReviewBar: View {
     let agent: AgentModel
     let review: GitReview
     let sent: () -> Void
+    var cleanup: [GitWorktree]?
+    var checkout: String?
 
     var body: some View {
         VStack(spacing: 8) {
@@ -773,19 +865,26 @@ private struct GitReviewBar: View {
                     .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 12))
             }
             if !agent.canSendText && !review.sending {
-                Text("Feedback stays here until the agent can accept a prompt.").font(.footnote).foregroundStyle(.secondary)
+                Text(cleanup == nil ? "Feedback stays here until the agent can accept a prompt." : "Clean up waits until the agent can accept a prompt.")
+                    .font(.footnote).foregroundStyle(.secondary)
                     .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 12))
             }
             Button {
-                Task { if await review.send(using: agent) { sent() } }
+                Task {
+                    let done = if let cleanup {
+                        await review.cleanUp(cleanup, checkout: checkout ?? "", using: agent)
+                    } else { await review.send(using: agent) }
+                    if done { sent() }
+                }
             } label: {
                 if review.sending { ProgressView() }
+                else if let cleanup { Label("Clean up (\(cleanup.count))", systemImage: "trash") }
                 else { Label("Send feedback (\(review.comments.count))", systemImage: "text.bubble") }
             }
             .buttonStyle(.glassProminent)
             .onAccentFill()
             .controlSize(.large)
-            .disabled(review.sending || !review.ready || !agent.canSendText)
+            .disabled(review.sending || !(cleanup.map { !$0.isEmpty } ?? review.ready) || !agent.canSendText)
         }
         .padding(12)
         .frame(maxWidth: .infinity)
