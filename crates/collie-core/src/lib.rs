@@ -5409,6 +5409,35 @@ mod tailnet_tests {
         }
     }
 
+    struct Log(Arc<Mutex<Vec<String>>>);
+
+    impl CoreLog for Log {
+        fn log(&self, message: String) {
+            lock(&self.0).push(message);
+        }
+    }
+
+    fn current_thread() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    fn start_mac(root: &Path, key: &str, control: &TestControl) -> Node {
+        let mac = Node::new(&Config {
+            state_dir: root.join("mac"),
+            hostname: "it-mac".into(),
+            auth_key: Some(Zeroizing::new(key.into())),
+            control_url: Some(control.1.clone()),
+            advertise_tags: Vec::new(),
+            log_to_stderr: false,
+        })
+        .unwrap();
+        mac.start().unwrap();
+        mac
+    }
+
     fn wait_running(node: &Node, peers: usize) -> tailnet::Status {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
@@ -5488,10 +5517,7 @@ mod tailnet_tests {
 
         let core = CollieCore::with_control_url(phone_dir.clone(), control.1.clone()).unwrap();
         set_identity(&core);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = current_thread();
         assert_eq!(
             rt.block_on(core.node_state()).unwrap().backend_state,
             TailnetState::NotStarted
@@ -5500,16 +5526,7 @@ mod tailnet_tests {
         rt.block_on(core.node_start(Some(format!(" {key}\n"))))
             .unwrap();
 
-        let mac = Node::new(&Config {
-            state_dir: root.path().join("mac"),
-            hostname: "it-mac".into(),
-            auth_key: Some(Zeroizing::new(key.clone())),
-            control_url: Some(control.1.clone()),
-            advertise_tags: Vec::new(),
-            log_to_stderr: false,
-        })
-        .unwrap();
-        mac.start().unwrap();
+        let mac = start_mac(root.path(), &key, &control);
         let mac_st = wait_running(&mac, 1);
         let phone_node = lock(&core.inner.node).clone().unwrap();
         let phone_st = wait_running(&phone_node, 1);
@@ -5845,21 +5862,9 @@ mod tailnet_tests {
         set_identity(&core);
         core.set_app_group_dir(group.to_string_lossy().into())
             .unwrap();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = current_thread();
         rt.block_on(core.node_start(Some(key.clone()))).unwrap();
-        let mac = Node::new(&Config {
-            state_dir: root.path().join("mac"),
-            hostname: "it-mac".into(),
-            auth_key: Some(Zeroizing::new(key.clone())),
-            control_url: Some(control.1.clone()),
-            advertise_tags: Vec::new(),
-            log_to_stderr: false,
-        })
-        .unwrap();
-        mac.start().unwrap();
+        let mac = start_mac(root.path(), &key, &control);
         let mac_self = wait_running(&mac, 1).self_node.unwrap();
         let phone_node = lock(&core.inner.node).clone().unwrap();
         let phone_id = wait_running(&phone_node, 1).self_node.unwrap().stable_id;
@@ -6259,29 +6264,11 @@ mod tailnet_tests {
         std::fs::set_permissions(&phone_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         let core = CollieCore::with_control_url(phone_dir, control.1.clone()).unwrap();
         set_identity(&core);
-        struct Log(Arc<Mutex<Vec<String>>>);
-        impl CoreLog for Log {
-            fn log(&self, message: String) {
-                lock(&self.0).push(message);
-            }
-        }
         let logged = Arc::new(Mutex::new(Vec::new()));
         core.set_log(Box::new(Log(logged.clone())));
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = current_thread();
         rt.block_on(core.node_start(Some(KEY.into()))).unwrap();
-        let mac = Node::new(&Config {
-            state_dir: root.path().join("mac"),
-            hostname: "it-mac".into(),
-            auth_key: Some(Zeroizing::new(KEY.into())),
-            control_url: Some(control.1.clone()),
-            advertise_tags: Vec::new(),
-            log_to_stderr: false,
-        })
-        .unwrap();
-        mac.start().unwrap();
+        let mac = start_mac(root.path(), KEY, &control);
         let mac_self = wait_running(&mac, 1).self_node.unwrap();
         let phone_node = lock(&core.inner.node).clone().unwrap();
         let phone_st = wait_running(&phone_node, 1);
@@ -6549,29 +6536,11 @@ mod tailnet_tests {
         std::fs::set_permissions(&phone_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         let core = CollieCore::with_control_url(phone_dir, control.1.clone()).unwrap();
         set_identity(&core);
-        struct Log(Arc<Mutex<Vec<String>>>);
-        impl CoreLog for Log {
-            fn log(&self, message: String) {
-                lock(&self.0).push(message);
-            }
-        }
         let logged = Arc::new(Mutex::new(Vec::new()));
         core.set_log(Box::new(Log(logged.clone())));
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = current_thread();
         rt.block_on(core.node_start(Some(KEY.into()))).unwrap();
-        let mac = Node::new(&Config {
-            state_dir: root.path().join("mac"),
-            hostname: "it-mac".into(),
-            auth_key: Some(Zeroizing::new(KEY.into())),
-            control_url: Some(control.1.clone()),
-            advertise_tags: Vec::new(),
-            log_to_stderr: false,
-        })
-        .unwrap();
-        mac.start().unwrap();
+        let mac = start_mac(root.path(), KEY, &control);
         let mac_self = wait_running(&mac, 1).self_node.unwrap();
         let phone_node = lock(&core.inner.node).clone().unwrap();
         let phone_id = wait_running(&phone_node, 1).self_node.unwrap().stable_id;
