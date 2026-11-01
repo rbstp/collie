@@ -18,7 +18,7 @@ Then open the app on the paired phone to register this machine. `collied doctor`
 
 ## Direct APNs for a self-built app
 
-Make your `.p8` key readable only by you, then run setup with `--direct-apns`. If no push mode is configured, setup asks for the key file and your IDs, imports the key and restarts `collied`:
+Create an APNs key as [Release](../reference/release.md#apns-key-for-direct-apns) describes, make its `.p8` readable only by you, then run setup with `--direct-apns`. If no push mode is configured, setup asks for the key file and your IDs, imports the key and restarts `collied`:
 
 ```sh
 chmod 0600 AuthKey_<KEY_ID>.p8
@@ -58,4 +58,4 @@ With either push mode, use an agent's terminal ID from `collied status`:
 collied apns test --terminal-id <terminal-id>
 ```
 
-Tapping the alert should open that agent's session; it carries no approval actions. The command reports only that the send was accepted: check the phone. See [Notifications](../reference/notifications.md) for more tests and [Release](../reference/release.md) for the Apple setup.
+Tapping the alert should open that agent's session; it carries no approval actions. The command reports only that the send was accepted: check the phone. See [Notifications](../reference/notifications.md) for more tests.

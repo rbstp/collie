@@ -16,7 +16,7 @@ The watch stops when you choose **Stop watching**, when the pull request is merg
 
 After a merge, **Archive** leads the session's **More** menu.
 
-With **Settings > Sessions > Archive when the PR merges** on, `collied` [archives](new-task.md#archive) a merged task within about 2 minutes and sends an "Archived" alert, if it is a linked worktree whose:
+With **Settings > Sessions > Archive when the PR merges** on, `collied` [archives](new-task.md#archive) a merged task within about 2 minutes, without running `gh poi`, and sends an "Archived" alert, if it is a linked worktree whose:
 
 - panes all hold idle or done agents, not shells;
 - agents have no subagent running, which `collied` must be able to confirm;

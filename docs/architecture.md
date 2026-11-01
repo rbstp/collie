@@ -695,7 +695,7 @@ The lock screen and the Dynamic Island show an agent only while the user follows
 |---|---|
 | `apns-push-type` | `liveactivity` |
 | `apns-topic` | `<bundle_id>.push-type.liveactivity` |
-| `apns-priority` | 10 for an update carrying an approval alert, else 5 (updates, refreshes, ends) |
+| `apns-priority` | 10 for an update carrying an approval alert and for the first update after an approval leaves the activity, else 5 (updates, refreshes, ends) |
 | `apns-expiration` | for an update carrying an approval alert, the approval's expiry, as for the alert it replaces; else now + 5 min |
 | `apns-collapse-id` | none |
 
@@ -716,7 +716,7 @@ The lock screen and the Dynamic Island show an agent only while the user follows
 - A reissue that `alert_due` keeps quiet reaches only the activity, as a priority 5 update without alert carrying the new `approvalId` and `enc`, so its buttons never decide a burned approval.
 - Fallback: if the activity push fails (any APNs or network error, or a dead token, dropped as usual), or the activity or the agent is gone by push time, the device gets the approval alert at once.
 - Late fallback: APNs accepts pushes to an activity the phone has ended (dismissed, ended by iOS while suspended, Live Activities off, an update dropped by iOS's budget or replaced while offline), and nothing tells collied. So an approval that alerted on an activity and 2 min later is still pending and not being decided also reaches that device once as the approval alert, never after an early fallback. The cost: a reminder after 2 min unanswered, and up to 2 min of delay behind a dead activity. Both timers live in collied's memory; a restart reissues pending approvals, which alert again.
-- The inner `enc` is sealed once per device and approval and repeated inside freshly sealed outer envelopes on later updates, so coalescing still sees an unchanged state. Once the approval resolves or the agent leaves `blocked`, the next update omits `approvalId` and `enc` and coalesces normally, without alert. An `end` never carries them.
+- The inner `enc` is sealed once per device and approval and repeated inside freshly sealed outer envelopes on later updates, so coalescing still sees an unchanged state. Once the approval resolves or the agent leaves `blocked`, the next update omits `approvalId` and `enc` and carries no alert; it goes out at once at priority 10, skipping the 2 s gap and the relay's 60 s cadence, so a locked phone drops the buttons. An `end` never carries them.
 - On the phone, `AgentActivityAttributes` carries the Mac's `nodeId`. The widget authenticates the whole state against its node and activity binding, then shows the inner command, `privacySensitive` (redacted while locked), on the lock screen and the expanded Dynamic Island. Failed authentication shows a neutral display without buttons; authenticated blocked state without a command shows "Approval needed"; Approve and Deny need a command that decrypts. Their `LiveActivityIntent` requires authentication, so iOS makes the user unlock first; the intent then takes the notification actions' path in the app ([Lock-screen approval](#lock-screen-approval)).
 
 ## `collied setup`
@@ -754,7 +754,7 @@ User ownership gives the embedded daemon its user's network privileges, not a se
 
 ## Linux
 
-collied runs on Linux with the same protocol, gate, allowlist and approvals as on macOS. Built and tested on Arch (systemd 261, herdr 0.9.3).
+collied runs on Linux with the same protocol, gate, allowlist and approvals as on macOS. Built and tested on Arch with systemd 261; [Requirements](https://collie.rbstp.dev/install/requirements.html) names the tested herdr version.
 
 ### Platforms and build
 

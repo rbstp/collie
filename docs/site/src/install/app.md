@@ -2,7 +2,7 @@
 
 Collie is not on the App Store yet; build and install it from your Mac.
 
-1. Set [your own identifiers](requirements.md#your-own-identifiers).
+1. On the Mac, with the [build tools](requirements.md#to-build-from-source), clone the repository and run `just setup` ([Install from source](collied-macos.md#install-from-source)), then set [your own identifiers](requirements.md#your-own-identifiers).
 2. Turn on Developer Mode on the iPhone and connect it to the Mac.
 3. Install the app and its watch app:
 

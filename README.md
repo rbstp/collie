@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/rbstp/collie/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/rbstp/collie/actions/workflows/ci.yml)
 
-collie is a remote control for [herdr](https://github.com/herdrdev/herdr) coding agents. A small daemon, `collied`, runs next to herdr on your Mac or Linux machine, and the Collie app on your iPhone and Apple Watch reaches it over your own tailnet, with no open port on your network. From the phone, you follow every Claude Code, Codex and Copilot CLI agent, read its conversation or terminal, prompt it, start tasks and approve a blocked Claude Code agent from the lock screen.
+collie is a remote control for [herdr](https://github.com/herdrdev/herdr) coding agents. A small daemon, `collied`, runs next to herdr on your Mac or Linux machine, and the Collie app on your iPhone reaches it over your own tailnet, with no open port on your network; the Apple Watch app works through the iPhone. From the phone, you follow every Claude Code, Codex and Copilot CLI agent, read its conversation or terminal, prompt it, start tasks and approve a blocked Claude Code agent from the lock screen.
 
 Documentation: <https://collie.rbstp.dev>
 

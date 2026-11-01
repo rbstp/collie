@@ -1,6 +1,6 @@
 # collied on Linux
 
-`collied` runs as a systemd user unit. Install the release download or build from source. Keep the phone and desktop on matching releases.
+`collied` runs as a systemd user unit. Install the release download, which needs no Rust toolchain or checkout, or build from source. Keep the phone and desktop on matching releases.
 
 ## Install a release download
 
@@ -18,6 +18,8 @@ The x86_64 download needs glibc 2.39 or later and systemd 255 or later. [Desktop
    bash install.sh --replace
    ~/.cargo/bin/collied setup
    ```
+
+   Add `~/.cargo/bin` to `PATH` in your shell profile so you can run `collied` by name later.
 
 ## Install from source
 

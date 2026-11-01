@@ -6,7 +6,7 @@ Two consecutive fresh `just vm-reset` and `just vm-test` runs passed at clean re
 
 ## Requirements and pinned inputs
 
-You need the [build prerequisites](../install/requirements.html), Node with npm, initialized submodules, an Apple silicon macOS 27 host (only 27.2 is tested) and an iOS 27 Simulator runtime. The harness reads Go from `/opt/homebrew/opt/go/bin/go`.
+You need the [build prerequisites](https://collie.rbstp.dev/install/requirements.html#to-build-from-source), Node with npm, initialized submodules, an Apple silicon macOS 27 host (only 27.2 is tested) and an iOS 27 Simulator runtime. The harness reads Go from `/opt/homebrew/opt/go/bin/go`.
 
 Reserve at least 80 GiB free, plus room for build outputs: the image download is 34.13 GB, and its disk metadata reports 41.05 GB. The guest takes two virtual CPUs and 4 GiB RAM.
 

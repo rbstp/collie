@@ -11,7 +11,7 @@ collie lets you watch and steer your [herdr](https://github.com/herdrdev/herdr) 
 
 ## What you can do
 
-- See every agent on every paired machine, with its status, a live preview and remaining context.
+- See every agent on every paired machine, with its status, a live preview and, for Claude Code and Codex, remaining context.
 - Read an agent's conversation or terminal screen, and reply by typing, dictating or sending keys.
 - Approve or deny a blocked Claude Code agent from a notification, a Live Activity or the watch.
 - Start Claude Code, Codex or Copilot CLI in a folder, Git worktree, fresh clone or pull request branch.

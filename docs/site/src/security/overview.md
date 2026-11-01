@@ -5,7 +5,7 @@ Your phone can drive every agent on your machine, so `collied` treats every requ
 ## Network and pairing
 
 - **Tailnet only.** `collied` listens only on its own Tailscale node, on one port; on your local network it opens only Tailscale's UDP socket, no TCP listener ([details](../reference/threat-model.md#lan-attacker)).
-- **Your paired phone only.** Pairing needs the QR code from `collied pair`, CollieBar or CollieTray, valid for 120 seconds and one attempt, and your confirmation on the machine. `collied` then serves only your paired phones, rechecking before every message that each is untagged, yours, in your tailnet and on its paired account. Revoking a phone cuts its live sessions.
+- **Your paired phone only.** Pairing needs the QR code from `collied pair`, CollieBar or CollieTray, valid for 120 seconds and one attempt, and your confirmation on the machine. `collied` then accepts a connection only from a paired phone that is untagged, yours and in your tailnet, and before every message rechecks that the phone is still paired on the same account. Revoking a phone cuts its live sessions.
 - **Mutual TLS.** Each side pins the other's key; the phone's never leaves its Secure Enclave. A stolen node key, or a node a compromised Tailscale control plane injects, gets no session.
 
 ## What the phone can do
@@ -29,5 +29,5 @@ Only your phone can read what alerts and Live Activities show, labels included: 
 ## Your part
 
 - Keep the [tailnet policy](../install/tailnet-policy.md) tight and check the login name when you pair.
-- If you lose a phone, run `collied peers revoke` and remove its node in the Tailscale admin console ([Revocation](../reference/tailnet.md#revocation)).
-- If a machine is compromised, remove it in the app and, with direct APNs, revoke its key in the Apple Developer portal.
+- If you lose a phone, run `collied peers revoke <label or StableID>` on each machine and remove its node in the Tailscale admin console ([Revocation](../reference/tailnet.md#revocation)).
+- If a machine is compromised, remove it in the app and its node in the Tailscale admin console. With direct APNs, also revoke its key in the Apple Developer portal ([Revocation](../reference/tailnet.md#revocation)).

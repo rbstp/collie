@@ -28,7 +28,7 @@ Your agents' transcripts and your files stay where the agents keep them; `collie
 
 - its Tailscale node keys and the machines you paired, including a Tailscale user ID as an ownership pin, in a state folder excluded from iCloud and Finder backups;
 - its signing keys and per-machine notification keys, in the iPhone's Keychain, on this device only and never synced; its TLS signing key is generated in the Secure Enclave and cannot be exported;
-- your settings, saved prompts, key shortcuts and other preferences, and unsent drafts (with their attachments for up to 23 hours); device and iCloud backups can include all of these.
+- your settings, saved prompts, key shortcuts and other preferences, and unsent drafts (with their attachments for up to 23 hours), in the same state folder, which backups leave out.
 
 Deleting the app removes its files, but iOS can keep its Keychain items, which the app uses again if you reinstall it.
 

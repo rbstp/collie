@@ -104,7 +104,7 @@ Test approval, done and agent alerts and the generic missing-key fallback separa
 
 1. Follow a scratch agent, wait for its real ActivityKit token from `pushTokenUpdates`, then background the app, still following.
 2. Record the decoded status and workspace name, change the session to another non-fallback status, and require the new values in the system activity while the app stays backgrounded. `unknown` proves nothing: it is also the decryption-failure fallback.
-3. Close only that scratch terminal or workspace, still backgrounded, and require the daemon's `event=end` send and an ended activity. Unfollowing ends the activity only locally.
+3. Close only that scratch terminal or workspace, still backgrounded, and require the daemon's `event=end` send and an ended activity. Unfollowing ends the activity on the phone, tells the Mac and revokes its relay route, so it proves no remote end.
 
 Activity pushes use their own token: require topic `dev.rbstp.collie.push-type.liveactivity`, push type `liveactivity` and Apple acceptance for each update and end. [notifications.md](notifications.md) covers decisions, expiry and background clearing.
 

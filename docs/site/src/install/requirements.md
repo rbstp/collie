@@ -7,7 +7,7 @@
 - **[Claude Code](../agents/claude-code.md), [Codex](../agents/codex.md) or [GitHub Copilot](../agents/copilot.md) CLI**, the only agents Collie is tested with; their features differ.
 - **An iPhone on iOS 26 or later**, and optionally an Apple Watch on watchOS 26 or later.
 - **A personal Tailscale account.** You need no Tailscale app; a restrictive policy may need a [grant](tailnet-policy.md).
-- **An Apple Developer account** to [build the app](app.md), and an APNs key for push notifications.
+- **A Mac with the [build tools](#to-build-from-source) and an Apple Developer account** to [build the app](app.md), also when `collied` runs on Linux, and an APNs key for push notifications.
 - **Optional, for the Linux bar widget**: Omarchy 4 and `qrencode`, which Omarchy installs.
 
 ## To build from source

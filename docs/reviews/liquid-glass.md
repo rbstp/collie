@@ -33,6 +33,7 @@ Issue #207 uses the iOS 26 and watchOS 26 glass APIs directly, with minimum vers
 
 - The cards form a full-width, edge-to-edge band at the bottom of the session header, sharing its one clear glass and dimming layer (two edge-to-edge glass layers show a seam). Like the header, it is dark over the terminal, following the appearance over Chat.
 - Text caps at xxLarge, one below the largest standard size, in compact footnote and caption styles with small decision buttons.
+- Known limitation: in Chat, VoiceOver touch exploration under the header and the band lands on the conversation, so VoiceOver reaches Approve, Deny and the header's controls only by swiping.
 - The cards together take at most about a fifth of the whole screen's height, keyboard or not (21%; a quarter in landscape, so the prompt fits above Approve). With the keyboard up, they give way to what is left above the composer.
 - The prompt scrolls inside its card above pinned Approve and Deny; a prompt cut at the card's edge fades over its last 16 points to read as scrollable. If the card would leave the prompt under two command lines (tight landscape, keyboard up), Approve and Deny scroll with it.
 - The countdown pill is blocked red; the agent's reason sits under the command on a light orange fill with a shield symbol.

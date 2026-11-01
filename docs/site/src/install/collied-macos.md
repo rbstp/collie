@@ -1,6 +1,6 @@
 # collied on macOS
 
-`collied` runs as a launchd user agent from `~/.cargo/bin`. Install the signed release download or build from source. Keep the phone and desktop on matching releases.
+`collied` runs as a launchd user agent from `~/.cargo/bin`. Install the signed release download, which needs no Xcode, Rust or Developer ID of your own, or build from source. Keep the phone and desktop on matching releases.
 
 ## Install a release download
 
@@ -19,6 +19,8 @@ The download needs macOS 26 or later. [Desktop release downloads](../reference/d
    export PATH="$HOME/.cargo/bin:$PATH"
    collied setup
    ```
+
+   The `export` lasts only for this terminal: add `~/.cargo/bin` to `PATH` in your shell profile (`~/.zprofile` by default) so you can run `collied` by name later.
 
 ## Install from source
 
@@ -40,7 +42,7 @@ The download needs macOS 26 or later. [Desktop release downloads](../reference/d
 1. **`collied login`** signs in, in the browser or through the printed link or QR code, with the personal Tailscale account you will use on the phone.
 2. **`collied service install`** installs the launchd agent that starts `collied` at login, or reinstalls it when it is stopped or outdated.
 3. **`collied doctor`** stops setup on a `fail` line. Expect `warn` lines for parts not set up yet, such as `reach` before your phone signs in.
-4. **Push notifications**, optional: setup offers the publisher relay. A self-built app needs direct APNs instead: run `collied setup --direct-apns` ([Push notifications](push.md)).
+4. **Push notifications**, optional: plain `collied setup` sets up the publisher relay, which serves only the publisher's app. For an app you build yourself, answer `N` and run `collied setup --direct-apns` ([Push notifications](push.md)). Once either mode is in `collied.toml`, setup skips this step.
 5. **`collied pair`**, offered last ([Pair a phone](pair.md)).
 
 Next, [install the app](app.md) and [pair your phone](pair.md). [Configuration](../operate/configuration.md) lists where `collied` keeps files.
