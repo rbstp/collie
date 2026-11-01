@@ -229,7 +229,19 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         ], truncated: false, worktrees: [])
     }
 
-    func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff {
+    func agentWorktrees(machineId: String, terminalId: String) async throws -> GitChanges {
+        guard isSample else { throw CoreError.NotImplemented }
+        return GitChanges(root: "/Users/demo/collie", branch: "sample-approval-tests", base: nil, files: [], truncated: false, worktrees: [
+            GitWorktree(root: "/Users/demo/collie", branch: "sample-approval-tests", subject: "Wait for the approval state in tests",
+                        committedAtMs: UInt64(Date().addingTimeInterval(-3600).timeIntervalSince1970 * 1000), ahead: 1, uncommitted: 1, additions: 1, deletions: 1)
+        ])
+    }
+
+    func agentPullRequestChanges(machineId: String, terminalId: String, number: UInt64) async throws -> GitChanges {
+        throw CoreError.NotImplemented
+    }
+
+    func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String, pullRequest: UInt64?) async throws -> GitDiff {
         guard isSample else { throw CoreError.NotImplemented }
         return GitDiff(patch: "diff --git a/tests/approvals.rs b/tests/approvals.rs\n--- a/tests/approvals.rs\n+++ b/tests/approvals.rs\n@@ -1 +1 @@\n-sleep(Duration::from_millis(200)).await;\n+wait_for_approval_state().await;\n", truncated: false)
     }

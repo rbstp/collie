@@ -94,33 +94,73 @@ final class GitDiffViewTests: XCTestCase {
         }
     }
 
-    func testScopePickerLoadsTheBranchChanges() async throws {
+    func testWorktreeListAndPullRequestScope() async throws {
         let core = FakeCore()
+        let now = UInt64(Date().timeIntervalSince1970 * 1000)
+        let pullRequest = PullRequestSummary(number: 622, state: .open, checks: .unknown, url: "https://github.com/o/r/pull/622")
         core.state.withLock {
-            $0.gitBase = "origin/main"
+            $0.gitBase = "origin/master"
+            $0.gitWorktrees = [
+                GitWorktree(root: "/worktree", branch: "master", subject: "Remove duplicated code and test setup", committedAtMs: now - 7_200_000,
+                            ahead: 0, uncommitted: 0, additions: 0, deletions: 0),
+                GitWorktree(root: "/worktree/.worktrees/622", branch: "worktree-overview", subject: "Show what each worktree is doing",
+                            committedAtMs: now - 600_000, ahead: 3, uncommitted: 4, additions: 812, deletions: 96, pullRequest: pullRequest),
+                GitWorktree(root: "/worktree/.worktrees/623", branch: "compact-diff", subject: "Compact the diff", committedAtMs: now - 1_800_000,
+                            ahead: 1, uncommitted: 2, additions: 120, deletions: 40)
+            ]
+            $0.gitPullRequests = [GitPullRequest(
+                pullRequest: PullRequestSummary(number: 615, state: .draft, checks: .unknown, url: "https://github.com/o/r/pull/615"),
+                branch: "watch-widgets", title: "Choose which agents the watch usage widgets show"
+            )]
+            $0.gitAgents = [
+                AgentSummary(terminalId: "t", workspaceId: "w", kind: "claude", name: nil, title: "Coordinator", status: .working, statusSinceMs: 0, cwd: "/worktree", lastLine: nil),
+                AgentSummary(terminalId: "u", workspaceId: "w", kind: "codex", name: nil, title: "Reviewer", status: .idle, statusSinceMs: 0, cwd: "/worktree/.worktrees/622", lastLine: nil)
+            ]
             $0.gitFiles = [
-                GitFile(path: "a.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1, hash: "a"),
-                GitFile(path: "b.swift", oldPath: nil, section: "committed", status: "A", additions: 2, deletions: 0, hash: "b")
+                GitFile(path: "Collie/Sources/Collie/GitChangesView.swift", oldPath: nil, section: "unstaged", status: "M", additions: 310, deletions: 80, hash: "a"),
+                GitFile(path: "crates/e2e/tests/git.rs", oldPath: nil, section: "untracked", status: "?", additions: 120, deletions: 0, hash: "b"),
+                GitFile(path: "crates/collied/src/git.rs", oldPath: nil, section: "staged", status: "M", additions: 380, deletions: 16, hash: "c"),
+                GitFile(path: "docs/old.md", oldPath: nil, section: "staged", status: "D", additions: 0, deletions: 12, hash: "d"),
+                GitFile(path: "crates/collied/src/git.rs", oldPath: nil, section: "pull_request", status: "M", additions: 200, deletions: 10, hash: "e")
             ]
         }
         let model = AgentModel(core: core, route: AgentRoute(machineId: "m", terminalId: "t"), prefsFile: nil)
-        let host = UIHostingController(rootView: GitChangesView(agent: model, sent: {}, review: model.gitReview))
+        let list = UIHostingController(rootView: GitChangesView(agent: model, sent: {}, review: model.gitReview))
+        list.overrideUserInterfaceStyle = .light
+        try await hosting(list) { window in
+            _ = try await waitFor("worktree rows") {
+                list.view.layoutIfNeeded()
+                return core.snapshot.gitCalls == ["m|t|worktrees"] && core.snapshot.flocks > 0 ? true : nil
+            }
+            try await Task.sleep(for: .milliseconds(500))
+            list.view.layoutIfNeeded()
+            snapshot(window, name: "worktrees")
+        }
+
+        let worktree = core.snapshot.gitWorktrees[1]
+        let host = UIHostingController(rootView: NavigationStack {
+            GitWorktreeView(
+                agent: model, root: worktree.root, branch: worktree.branch, pullRequest: worktree.pullRequest, local: true,
+                agents: [core.snapshot.gitAgents[1]], sent: {}, review: model.gitReview
+            )
+        })
+        host.overrideUserInterfaceStyle = .light
         try await hosting(host) { window in
             let picker = try await waitFor("scope picker") {
                 host.view.layoutIfNeeded()
                 let picker = descendants(host.view).compactMap { $0 as? UISegmentedControl }.first
-                return picker?.isEnabled == true && core.snapshot.gitCalls == ["m|t"] ? picker : nil
+                return picker?.isEnabled == true && core.snapshot.gitCalls.last == "m|t|/worktree/.worktrees/622" ? picker : nil
             }
-            XCTAssertEqual((0..<picker.numberOfSegments).map { picker.titleForSegment(at: $0) }, ["Uncommitted", "Branch"])
-            XCTAssertEqual(picker.selectedSegmentIndex, 0)
-            snapshot(window, name: "uncommitted")
-            picker.selectedSegmentIndex = 1
+            XCTAssertEqual((0..<picker.numberOfSegments).map { picker.titleForSegment(at: $0) }, ["Uncommitted", "Branch", "Pull request"])
+            snapshot(window, name: "worktree-files")
+            picker.selectedSegmentIndex = 2
             picker.sendActions(for: .valueChanged)
-            _ = try await waitFor("branch changes") {
+            _ = try await waitFor("pull request files") {
                 host.view.layoutIfNeeded()
-                return core.snapshot.gitCalls == ["m|t", "m|t|branch"] && picker.isEnabled ? true : nil
+                return core.snapshot.gitCalls.last == "m|t|#622" && picker.isEnabled ? true : nil
             }
-            snapshot(window, name: "branch")
+            try await Task.sleep(for: .milliseconds(500))
+            snapshot(window, name: "pull-request")
         }
     }
 

@@ -70,6 +70,9 @@ const TASK_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(150);
 /// collied's 75 s clone, or its 75 s budget for a pull request's gh read, checks and fetch,
 /// then `TASK_NEW_TIMEOUT`.
 const TASK_CLONE_TIMEOUT: Duration = Duration::from_secs(165);
+/// collied's 30 s deadline for a pull request read, or the worktree list's 30 s gh read
+/// beside its git reads.
+const GIT_GITHUB_TIMEOUT: Duration = Duration::from_secs(40);
 /// An unanswered mutation's `op_id` is reused for an identical retry within this window,
 /// in wall time so a sleeping phone does not stretch it. Longer than any mutation timeout
 /// and the app's prompt resends (270 s), shorter than collied's 600 s outcome cache. That
@@ -693,12 +696,35 @@ pub struct GitChanges {
     pub files: Vec<GitFile>,
     pub truncated: bool,
     pub worktrees: Vec<GitWorktree>,
+    #[uniffi(default = [])]
+    pub pull_requests: Vec<GitPullRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct GitWorktree {
     pub root: String,
     pub branch: Option<String>,
+    #[uniffi(default = None)]
+    pub subject: Option<String>,
+    #[uniffi(default = None)]
+    pub committed_at_ms: Option<u64>,
+    #[uniffi(default = None)]
+    pub ahead: Option<u32>,
+    #[uniffi(default = None)]
+    pub uncommitted: Option<u32>,
+    #[uniffi(default = None)]
+    pub additions: Option<u32>,
+    #[uniffi(default = None)]
+    pub deletions: Option<u32>,
+    #[uniffi(default = None)]
+    pub pull_request: Option<PullRequestSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GitPullRequest {
+    pub pull_request: PullRequestSummary,
+    pub branch: String,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -710,6 +736,9 @@ pub struct GitFile {
     pub additions: Option<u32>,
     pub deletions: Option<u32>,
     pub hash: Option<String>,
+    /// Set on the files of a pull request's scope.
+    #[uniffi(default = None)]
+    pub pull_request: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -2073,55 +2102,46 @@ impl CollieCore {
         root: Option<String>,
         branch: bool,
     ) -> Result<GitChanges, CoreError> {
-        let request = Request::AgentChanges(protocol::AgentChangesParams {
-            terminal_id: TerminalId::new(terminal_id)
-                .map_err(|_| invalid("terminal_id", "invalid terminal"))?,
-            root: root
-                .map(Cwd::new)
-                .transpose()
-                .map_err(|_| invalid("root", "invalid checkout"))?,
-            scope: if branch {
-                protocol::GitScope::Branch
-            } else {
-                protocol::GitScope::Uncommitted
-            },
-        });
-        match self.call(&machine_id, request, CALL_TIMEOUT).await? {
-            Response::GitChanges(changes) => Ok(GitChanges {
-                root: changes.root.map(String::from),
-                branch: changes.branch,
-                base: changes.base,
-                truncated: changes.truncated,
-                worktrees: changes
-                    .worktrees
-                    .into_iter()
-                    .map(|w| GitWorktree {
-                        root: w.root.into(),
-                        branch: w.branch,
-                    })
-                    .collect(),
-                files: changes
-                    .files
-                    .into_iter()
-                    .map(|f| GitFile {
-                        path: f.path,
-                        old_path: f.old_path,
-                        status: f.status,
-                        section: match f.section {
-                            protocol::GitSection::Committed => "committed",
-                            protocol::GitSection::Staged => "staged",
-                            protocol::GitSection::Unstaged => "unstaged",
-                            protocol::GitSection::Untracked => "untracked",
-                        }
-                        .into(),
-                        additions: f.additions,
-                        deletions: f.deletions,
-                        hash: f.hash,
-                    })
-                    .collect(),
-            }),
-            other => Err(unexpected(&other).into()),
-        }
+        let scope = if branch {
+            protocol::GitScope::Branch
+        } else {
+            protocol::GitScope::Uncommitted
+        };
+        self.changes(machine_id, terminal_id, root, scope, None)
+            .await
+    }
+
+    /// The repository's worktrees, summarized, and the user's open pull requests whose
+    /// branch has no worktree.
+    pub async fn agent_worktrees(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+    ) -> Result<GitChanges, CoreError> {
+        self.changes(
+            machine_id,
+            terminal_id,
+            None,
+            protocol::GitScope::Worktrees,
+            None,
+        )
+        .await
+    }
+
+    pub async fn agent_pull_request_changes(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        number: u64,
+    ) -> Result<GitChanges, CoreError> {
+        self.changes(
+            machine_id,
+            terminal_id,
+            None,
+            protocol::GitScope::PullRequest,
+            Some(number),
+        )
+        .await
     }
 
     pub async fn agent_diff(
@@ -2131,12 +2151,14 @@ impl CollieCore {
         root: String,
         path: String,
         section: String,
+        pull_request: Option<u64>,
     ) -> Result<GitDiff, CoreError> {
         let section = match section.as_str() {
             "committed" => protocol::GitSection::Committed,
             "staged" => protocol::GitSection::Staged,
             "unstaged" => protocol::GitSection::Unstaged,
             "untracked" => protocol::GitSection::Untracked,
+            "pull_request" => protocol::GitSection::PullRequest,
             _ => return Err(invalid("section", "invalid Git section")),
         };
         let request = Request::AgentDiff(protocol::AgentDiffParams {
@@ -2145,8 +2167,14 @@ impl CollieCore {
             root: Cwd::new(root).map_err(|_| invalid("root", "invalid checkout"))?,
             path,
             section,
+            pull_request,
         });
-        match self.call(&machine_id, request, CALL_TIMEOUT).await? {
+        let timeout = if pull_request.is_some() {
+            GIT_GITHUB_TIMEOUT
+        } else {
+            CALL_TIMEOUT
+        };
+        match self.call(&machine_id, request, timeout).await? {
             Response::GitDiff(diff) => Ok(GitDiff {
                 patch: diff.patch,
                 truncated: diff.truncated,
@@ -2782,6 +2810,84 @@ impl CollieCore {
             .map_err(|e| CoreError::Internal {
                 message: e.to_string(),
             })?
+    }
+
+    async fn changes(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        root: Option<String>,
+        scope: protocol::GitScope,
+        pull_request: Option<u64>,
+    ) -> Result<GitChanges, CoreError> {
+        let request = Request::AgentChanges(protocol::AgentChangesParams {
+            terminal_id: TerminalId::new(terminal_id)
+                .map_err(|_| invalid("terminal_id", "invalid terminal"))?,
+            root: root
+                .map(Cwd::new)
+                .transpose()
+                .map_err(|_| invalid("root", "invalid checkout"))?,
+            scope,
+            pull_request,
+        });
+        let timeout = match scope {
+            protocol::GitScope::Worktrees | protocol::GitScope::PullRequest => GIT_GITHUB_TIMEOUT,
+            _ => CALL_TIMEOUT,
+        };
+        match self.call(&machine_id, request, timeout).await? {
+            Response::GitChanges(changes) => Ok(GitChanges {
+                root: changes.root.map(String::from),
+                branch: changes.branch,
+                base: changes.base,
+                truncated: changes.truncated,
+                worktrees: changes
+                    .worktrees
+                    .into_iter()
+                    .map(|w| GitWorktree {
+                        root: w.root.into(),
+                        branch: w.branch,
+                        subject: w.subject,
+                        committed_at_ms: w.committed_at_ms,
+                        ahead: w.ahead,
+                        uncommitted: w.uncommitted,
+                        additions: w.additions,
+                        deletions: w.deletions,
+                        pull_request: w.pull_request.as_ref().map(pull_request_summary),
+                    })
+                    .collect(),
+                pull_requests: changes
+                    .pull_requests
+                    .into_iter()
+                    .map(|p| GitPullRequest {
+                        pull_request: pull_request_summary(&p.pull_request),
+                        branch: p.branch,
+                        title: p.title,
+                    })
+                    .collect(),
+                files: changes
+                    .files
+                    .into_iter()
+                    .map(|f| GitFile {
+                        path: f.path,
+                        old_path: f.old_path,
+                        status: f.status,
+                        section: match f.section {
+                            protocol::GitSection::Committed => "committed",
+                            protocol::GitSection::Staged => "staged",
+                            protocol::GitSection::Unstaged => "unstaged",
+                            protocol::GitSection::Untracked => "untracked",
+                            protocol::GitSection::PullRequest => "pull_request",
+                        }
+                        .into(),
+                        additions: f.additions,
+                        deletions: f.deletions,
+                        hash: f.hash,
+                        pull_request,
+                    })
+                    .collect(),
+            }),
+            other => Err(unexpected(&other).into()),
+        }
     }
 
     async fn call(
@@ -3598,32 +3704,36 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
                 called_tools: s.called_tools,
             })
             .collect(),
-        pull_request: a.pull_request.as_ref().map(|pr| PullRequestSummary {
-            number: pr.number,
-            state: match pr.state {
-                protocol::PullState::Open => PullState::Open,
-                protocol::PullState::Draft => PullState::Draft,
-                protocol::PullState::Merged => PullState::Merged,
-                protocol::PullState::Closed => PullState::Closed,
-                protocol::PullState::Unknown => PullState::Unknown,
-            },
-            checks: match pr.checks {
-                protocol::PullChecks::Passing => PullChecks::Passing,
-                protocol::PullChecks::Failing => PullChecks::Failing,
-                protocol::PullChecks::Pending => PullChecks::Pending,
-                protocol::PullChecks::None => PullChecks::NoChecks,
-                protocol::PullChecks::Unknown => PullChecks::Unknown,
-            },
-            url: pr.url.clone(),
-            failing_checks: pr.failing_checks.clone(),
-            remarks: pr.remarks,
-            conflicting: pr.conflicting,
-        }),
+        pull_request: a.pull_request.as_ref().map(pull_request_summary),
         pr_watch: a.pr_watch.as_ref().map(|w| PrWatchSummary {
             number: w.number,
             url: w.url.clone(),
             every_minutes: w.every_minutes,
         }),
+    }
+}
+
+fn pull_request_summary(pr: &protocol::PullRequest) -> PullRequestSummary {
+    PullRequestSummary {
+        number: pr.number,
+        state: match pr.state {
+            protocol::PullState::Open => PullState::Open,
+            protocol::PullState::Draft => PullState::Draft,
+            protocol::PullState::Merged => PullState::Merged,
+            protocol::PullState::Closed => PullState::Closed,
+            protocol::PullState::Unknown => PullState::Unknown,
+        },
+        checks: match pr.checks {
+            protocol::PullChecks::Passing => PullChecks::Passing,
+            protocol::PullChecks::Failing => PullChecks::Failing,
+            protocol::PullChecks::Pending => PullChecks::Pending,
+            protocol::PullChecks::None => PullChecks::NoChecks,
+            protocol::PullChecks::Unknown => PullChecks::Unknown,
+        },
+        url: pr.url.clone(),
+        failing_checks: pr.failing_checks.clone(),
+        remarks: pr.remarks,
+        conflicting: pr.conflicting,
     }
 }
 

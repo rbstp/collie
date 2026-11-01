@@ -3,11 +3,13 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use protocol::{
-    AgentDiffParams, Cwd, ErrorCode, GitChanges, GitDiff, GitFile, GitScope, GitSection,
-    GitWorktree, hex,
+    AgentDiffParams, Cwd, ErrorCode, GitChanges, GitDiff, GitFile, GitPullRequest, GitScope,
+    GitSection, GitWorktree, PullState, hex,
 };
 use rustix::fs::{Mode, OFlags};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -19,6 +21,7 @@ const FILE_LIMIT: u64 = 1024 * 1024;
 const RESPONSE_LIMIT: usize = 48 * 1024;
 const MAX_FILES: usize = 200;
 const MAX_WORKTREES: usize = 20;
+const PULL_PAGE: usize = 100;
 
 fn error(message: &str) -> Fail {
     (ErrorCode::InvalidParams, message.into())
@@ -209,7 +212,17 @@ async fn worktrees(checkout: &Cwd, roots: &[PathBuf]) -> Result<Vec<GitWorktree>
         if let Some(root) = root
             && (list.len() < MAX_WORKTREES || &root == checkout)
         {
-            list.push(GitWorktree { root, branch });
+            list.push(GitWorktree {
+                root,
+                branch,
+                subject: None,
+                committed_at_ms: None,
+                ahead: None,
+                uncommitted: None,
+                additions: None,
+                deletions: None,
+                pull_request: None,
+            });
         }
     }
     Ok(list)
@@ -227,17 +240,26 @@ async fn worktree(
     if !worktrees.iter().any(|w| &w.root == requested) {
         return Ok(None);
     }
+    let common = metadata(checkout, "--git-common-dir", roots).await?;
+    in_repository(&common, requested, roots).await
+}
+
+/// `requested` is a checkout's top level whose Git common directory is `common`.
+async fn in_repository(
+    common: &Cwd,
+    requested: &Cwd,
+    roots: &[PathBuf],
+) -> Result<Option<Cwd>, Fail> {
     let Some(root) = root(requested, roots)
         .await?
         .filter(|root| root == requested)
     else {
         return Ok(None);
     };
-    let common = metadata(checkout, "--git-common-dir", roots).await?;
-    Ok((metadata(&root, "--git-common-dir", roots).await? == common).then_some(root))
+    Ok((&metadata(&root, "--git-common-dir", roots).await? == common).then_some(root))
 }
 
-/// Fixed refs only: the phone never names the base.
+/// Fixed refs only: the phone never names the base. Its name, and its commit.
 async fn base(root: &Cwd) -> Result<Option<(String, String)>, Fail> {
     for candidate in [
         "refs/remotes/origin/HEAD",
@@ -268,7 +290,7 @@ async fn base(root: &Cwd) -> Result<Option<(String, String)>, Fail> {
             .map(|n| n.trim_end_matches('\n'))
             .filter(|n| ok && !truncated && !n.is_empty())
             .unwrap_or(candidate);
-        return Ok(Some((name.into(), format!("{sha}...HEAD"))));
+        return Ok(Some((name.into(), sha)));
     }
     Ok(None)
 }
@@ -494,9 +516,13 @@ pub async fn changes(
             files: Vec::new(),
             truncated: false,
             worktrees: Vec::new(),
+            pull_requests: Vec::new(),
         });
     };
     let worktrees = worktrees(&checkout, roots).await?;
+    if scope == GitScope::Worktrees {
+        return overview(checkout, worktrees, roots).await;
+    }
     let root = match requested {
         Some(requested) => worktree(&checkout, &worktrees, requested, roots)
             .await?
@@ -511,9 +537,11 @@ pub async fn changes(
         files: Vec::new(),
         truncated: false,
         worktrees,
+        pull_requests: Vec::new(),
     };
     if scope == GitScope::Branch {
-        if let Some((name, range)) = base(&root).await? {
+        if let Some((name, sha)) = base(&root).await? {
+            let range = format!("{sha}...HEAD");
             let mut args = diff_args(GitSection::Committed, &range);
             args.extend(["--raw", "--no-abbrev", "--numstat", "-z", "--"]);
             let (out, ok, truncated) = git(&root, &args, OUTPUT_LIMIT).await?;
@@ -588,12 +616,16 @@ pub async fn changes(
             _ => None,
         };
     }
+    limited(changes)
+}
+
+fn limited(mut changes: GitChanges) -> Result<GitChanges, Fail> {
     while serde_json::to_vec(&changes)
         .map_err(|_| error("Could not encode Git changes"))?
         .len()
         > RESPONSE_LIMIT
     {
-        if changes.files.pop().is_none() {
+        if changes.files.pop().is_none() && changes.pull_requests.pop().is_none() {
             return Err(error("Git changes are too large to list"));
         }
         changes.truncated = true;
@@ -601,11 +633,397 @@ pub async fn changes(
     Ok(changes)
 }
 
+/// Each worktree with its last commit, how far it is from the default branch and its
+/// pull request, plus the user's open pull requests whose branch has no worktree.
+async fn overview(
+    checkout: Cwd,
+    worktrees: Vec<GitWorktree>,
+    roots: &[PathBuf],
+) -> Result<GitChanges, Fail> {
+    let common = metadata(&checkout, "--git-common-dir", roots).await.ok();
+    let summaries = futures_util::stream::iter(worktrees)
+        .map(|mut w| {
+            let (checkout, common) = (&checkout, &common);
+            async move {
+                let same = match common {
+                    Some(common) => in_repository(common, &w.root, roots).await,
+                    None => Ok(None),
+                };
+                if &w.root == checkout || matches!(same, Ok(Some(r)) if r == w.root) {
+                    let _ = summarize(&mut w).await;
+                }
+                w
+            }
+        })
+        .buffered(8)
+        .collect::<Vec<_>>();
+    let mine = async {
+        match crate::drive::gh() {
+            Some(gh) => crate::pulls::mine(&gh, &checkout).await,
+            None => Vec::new(),
+        }
+    };
+    let (mut worktrees, mine) = tokio::join!(summaries, mine);
+    for w in &mut worktrees {
+        w.pull_request = mine
+            .iter()
+            .find(|(_, branch, _)| w.branch.as_ref() == Some(branch))
+            .map(|(pr, ..)| pr.clone());
+    }
+    let pull_requests = mine
+        .into_iter()
+        .filter(|(pr, branch, _)| {
+            matches!(pr.state, PullState::Open | PullState::Draft)
+                && !worktrees.iter().any(|w| w.branch.as_ref() == Some(branch))
+        })
+        .map(|(pull_request, branch, title)| GitPullRequest {
+            pull_request,
+            branch,
+            title,
+        })
+        .collect();
+    limited(GitChanges {
+        branch: head(&checkout).await?,
+        root: Some(checkout),
+        base: None,
+        files: Vec::new(),
+        truncated: false,
+        worktrees,
+        pull_requests,
+    })
+}
+
+async fn summarize(w: &mut GitWorktree) -> Result<(), Fail> {
+    let root = &w.root;
+    if let Some((time, subject)) = line(
+        root,
+        &[
+            "log",
+            "-1",
+            "--no-show-signature",
+            "--format=%ct %s",
+            "HEAD",
+        ],
+    )
+    .await?
+    .as_deref()
+    .and_then(|l| l.split_once(' '))
+    {
+        w.committed_at_ms = time.parse::<u64>().ok().map(|t| t.saturating_mul(1000));
+        w.subject = Some(crate::pulls::title(subject));
+    }
+    let (out, ok, truncated) = git(
+        root,
+        &[
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ],
+        OUTPUT_LIMIT,
+    )
+    .await?;
+    if ok && !truncated {
+        w.uncommitted = Some(status_count(&out));
+    }
+    let Some((_, sha)) = base(root).await? else {
+        return Ok(());
+    };
+    w.ahead = line(root, &["rev-list", "--count", &format!("{sha}..HEAD")])
+        .await?
+        .and_then(|n| n.parse().ok());
+    let (out, ok, truncated) = git(
+        root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--ignore-submodules=none",
+            "--numstat",
+            "-z",
+            "--merge-base",
+            &sha,
+            "--",
+        ],
+        OUTPUT_LIMIT,
+    )
+    .await?;
+    if ok && !truncated {
+        let (additions, deletions) = numstat_totals(&out);
+        (w.additions, w.deletions) = (Some(additions), Some(deletions));
+    }
+    Ok(())
+}
+
+/// `git status --porcelain -z` entries; a rename or copy carries its source as one more.
+fn status_count(out: &[u8]) -> u32 {
+    let mut parts = out.split(|b| *b == 0).filter(|p| !p.is_empty());
+    let mut count = 0u32;
+    while let Some(entry) = parts.next() {
+        if entry
+            .get(..2)
+            .is_some_and(|xy| xy.contains(&b'R') || xy.contains(&b'C'))
+        {
+            parts.next();
+        }
+        count = count.saturating_add(1);
+    }
+    count
+}
+
+/// `git diff --numstat -z`: a rename's paths follow as two more fields; a binary file
+/// counts no lines.
+fn numstat_totals(out: &[u8]) -> (u32, u32) {
+    let mut parts = out.split(|b| *b == 0);
+    let (mut additions, mut deletions) = (0u32, 0u32);
+    while let Some(record) = parts.next() {
+        let mut columns = record.splitn(3, |b| *b == b'\t');
+        let (Some(add), Some(del), Some(name)) = (columns.next(), columns.next(), columns.next())
+        else {
+            continue;
+        };
+        if name.is_empty() {
+            parts.next();
+            parts.next();
+        }
+        let count = |n: &[u8]| {
+            std::str::from_utf8(n)
+                .ok()
+                .and_then(|n| n.parse::<u32>().ok())
+        };
+        additions = additions.saturating_add(count(add).unwrap_or(0));
+        deletions = deletions.saturating_add(count(del).unwrap_or(0));
+    }
+    (additions, deletions)
+}
+
+/// One file of GitHub's pull request file list. All of it is untrusted.
+#[derive(Deserialize)]
+struct PullFile {
+    filename: String,
+    previous_filename: Option<String>,
+    status: String,
+    #[serde(default)]
+    additions: u64,
+    #[serde(default)]
+    deletions: u64,
+    #[serde(default)]
+    sha: Option<String>,
+    #[serde(default)]
+    patch: Option<String>,
+}
+
+const PULL_FIELDS: &str = "map({filename, previous_filename, status, additions, deletions, sha})";
+const PULL_PATCH: &str = "{count: length, file: ([.[] | select(.filename == $ENV.COLLIE_PATH) | {filename, previous_filename, status, patch}] | first)}";
+
+fn pull_status(status: &str) -> &'static str {
+    match status {
+        "added" => "A",
+        "removed" => "D",
+        "renamed" => "R",
+        "copied" => "C",
+        "changed" => "T",
+        _ => "M",
+    }
+}
+
+/// A file whose path or previous path is not a plain relative path is left out.
+fn pull_file(number: u64, f: &PullFile) -> Option<GitFile> {
+    let path = path(f.filename.as_bytes()).ok()?;
+    let old_path = match &f.previous_filename {
+        Some(old) => Some(self::path(old.as_bytes()).ok()?),
+        None => None,
+    };
+    let status = pull_status(&f.status);
+    Some(GitFile {
+        hash: Some(digest(&[
+            &number.to_le_bytes(),
+            status.as_bytes(),
+            old_path.as_deref().unwrap_or_default().as_bytes(),
+            path.as_bytes(),
+            f.sha.as_deref().unwrap_or_default().as_bytes(),
+        ])),
+        path,
+        old_path,
+        section: GitSection::PullRequest,
+        status: status.into(),
+        additions: u32::try_from(f.additions).ok(),
+        deletions: u32::try_from(f.deletions).ok(),
+    })
+}
+
+fn pull_page(json: &[u8]) -> Result<Vec<PullFile>, Fail> {
+    serde_json::from_slice(json).map_err(|_| error("GitHub's file list could not be read"))
+}
+
+/// `path`, when set, reaches gh's `--jq` program as `$ENV.COLLIE_PATH`, never as an argument.
+async fn gh(checkout: &Cwd, args: &[&str], path: Option<&str>) -> Result<Vec<u8>, Fail> {
+    let gh = crate::drive::gh().ok_or_else(|| error("gh is not installed on the machine"))?;
+    let mut command = crate::pulls::gh_command(&gh);
+    if let Some(path) = path {
+        command.env("COLLIE_PATH", path);
+    }
+    command
+        .args(args)
+        .current_dir(checkout.as_str())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = tokio::time::timeout(crate::pulls::GH_TIMEOUT, command.output())
+        .await
+        .map_err(|_| error("gh took too long; try again"))?
+        .map_err(|_| error("gh is unavailable"))?;
+    if output.status.code() == Some(4) {
+        return Err(error(
+            "gh is not signed in; run `gh auth login` on the machine",
+        ));
+    }
+    if !output.status.success() {
+        return Err(error(&format!(
+            "gh could not read the pull request: {}",
+            crate::pulls::first_line(&output.stderr)
+        )));
+    }
+    if output.stdout.len() > OUTPUT_LIMIT {
+        return Err(error("The pull request is too large to preview"));
+    }
+    Ok(output.stdout)
+}
+
+fn files_url(number: u64, page: usize) -> String {
+    format!("repos/{{owner}}/{{repo}}/pulls/{number}/files?per_page={PULL_PAGE}&page={page}")
+}
+
+/// The files of pull request `number` of the repository gh finds for the agent's checkout,
+/// as GitHub lists them: its pushed head against its base, whether or not a worktree
+/// still has the branch.
+pub async fn pull_changes(cwd: &Cwd, roots: &[PathBuf], number: u64) -> Result<GitChanges, Fail> {
+    let checkout = root(cwd, roots)
+        .await?
+        .ok_or_else(|| error("This folder is no longer a Git checkout"))?;
+    deadline(pull_list(checkout, number)).await
+}
+
+/// All of a pull request read's gh calls share one `GH_TIMEOUT`, within the phone's wait.
+async fn deadline<T>(read: impl Future<Output = Result<T, Fail>>) -> Result<T, Fail> {
+    tokio::time::timeout(crate::pulls::GH_TIMEOUT, read)
+        .await
+        .map_err(|_| error("GitHub took too long; try again"))?
+}
+
+async fn pull_list(checkout: Cwd, number: u64) -> Result<GitChanges, Fail> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct View {
+        number: u64,
+        base_ref_name: String,
+        head_ref_name: String,
+        changed_files: u64,
+    }
+    let number_arg = number.to_string();
+    let view = gh(
+        &checkout,
+        &[
+            "pr",
+            "view",
+            &number_arg,
+            "--json",
+            "number,baseRefName,headRefName,changedFiles",
+        ],
+        None,
+    )
+    .await?;
+    let view: View = serde_json::from_slice(&view)
+        .ok()
+        .filter(|v: &View| v.number == number)
+        .ok_or_else(|| error("GitHub's answer for the pull request could not be read"))?;
+    let mut changes = GitChanges {
+        root: Some(checkout.clone()),
+        branch: Some(crate::pulls::title(&view.head_ref_name)),
+        base: Some(crate::pulls::title(&view.base_ref_name)),
+        files: Vec::new(),
+        truncated: false,
+        worktrees: Vec::new(),
+        pull_requests: Vec::new(),
+    };
+    let mut listed = 0;
+    for page in 1..=MAX_FILES.div_ceil(PULL_PAGE) {
+        let out = gh(
+            &checkout,
+            &["api", &files_url(number, page), "--jq", PULL_FIELDS],
+            None,
+        )
+        .await?;
+        let files = pull_page(&out)?;
+        listed += files.len();
+        changes
+            .files
+            .extend(files.iter().filter_map(|f| pull_file(number, f)));
+        if files.len() < PULL_PAGE {
+            break;
+        }
+    }
+    changes.truncated = (listed as u64) < view.changed_files || changes.files.len() < listed;
+    changes.files.truncate(MAX_FILES);
+    limited(changes)
+}
+
+/// GitHub's own patch for one file, one page at a time.
+async fn pull_patch(checkout: &Cwd, number: u64, name: &str) -> Result<String, Fail> {
+    #[derive(Deserialize)]
+    struct Page {
+        count: usize,
+        file: Option<PullFile>,
+    }
+    for page in 1..=MAX_FILES.div_ceil(PULL_PAGE) {
+        let out = gh(
+            checkout,
+            &["api", &files_url(number, page), "--jq", PULL_PATCH],
+            Some(name),
+        )
+        .await?;
+        let page: Page = serde_json::from_slice(&out)
+            .map_err(|_| error("GitHub's file list could not be read"))?;
+        if let Some(file) = page.file {
+            if file.filename != name {
+                return Err(error(
+                    "The pull request changed while reading its diff; refresh",
+                ));
+            }
+            return Ok(pull_text(file.patch));
+        }
+        if page.count < PULL_PAGE {
+            break;
+        }
+    }
+    Err(error("File is no longer in the pull request; refresh"))
+}
+
+fn pull_text(patch: Option<String>) -> String {
+    match patch {
+        Some(patch) if !patch.is_empty() => {
+            if patch.ends_with('\n') {
+                patch
+            } else {
+                patch + "\n"
+            }
+        }
+        _ => "Binary file, or a change GitHub shows no text diff for.\n".into(),
+    }
+}
+
 pub async fn diff(cwd: &Cwd, roots: &[PathBuf], p: &AgentDiffParams) -> Result<GitDiff, Fail> {
     path(p.path.as_bytes())?;
     let Some(checkout) = root(cwd, roots).await? else {
         return Err(error("This folder is no longer a Git checkout"));
     };
+    if let Some(number) = p.pull_request {
+        return bounded(GitDiff {
+            patch: deadline(pull_patch(&checkout, number, &p.path)).await?,
+            truncated: false,
+        });
+    }
     let root = if checkout == p.root {
         checkout
     } else {
@@ -661,7 +1079,7 @@ pub async fn diff(cwd: &Cwd, roots: &[PathBuf], p: &AgentDiffParams) -> Result<G
         let range = if p.section == GitSection::Committed {
             base(&root)
                 .await?
-                .map(|(_, range)| range)
+                .map(|(_, sha)| format!("{sha}...HEAD"))
                 .ok_or_else(|| error("File no longer has changes in this section; refresh"))?
         } else {
             String::new()
@@ -721,10 +1139,13 @@ pub async fn diff(cwd: &Cwd, roots: &[PathBuf], p: &AgentDiffParams) -> Result<G
             truncated && index + 1 == starts.len(),
         )
     };
-    let mut diff = GitDiff {
+    bounded(GitDiff {
         patch: String::from_utf8_lossy(&bytes).into_owned(),
         truncated,
-    };
+    })
+}
+
+fn bounded(mut diff: GitDiff) -> Result<GitDiff, Fail> {
     while serde_json::to_vec(&diff)
         .map_err(|_| error("Could not encode Git diff"))?
         .len()
@@ -776,6 +1197,7 @@ mod tests {
                 root: cwd.clone(),
                 path: name.into(),
                 section,
+                pull_request: None,
             },
         )
         .await
@@ -1129,6 +1551,7 @@ mod tests {
                 root: checkout.clone(),
                 path: "feature".into(),
                 section: GitSection::Committed,
+                pull_request: None,
             },
         )
         .await
@@ -1163,8 +1586,158 @@ mod tests {
             root: other,
             path: "base".into(),
             section: GitSection::Unstaged,
+            pull_request: None,
         };
         assert!(diff(&cwd, &roots, &unlisted).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn worktrees_are_summarized_and_a_foreign_one_is_not() {
+        let (_dir, cwd, roots) = repo();
+        let root = Path::new(cwd.as_str());
+        std::fs::write(root.join("base"), "one\ntwo\nthree\nfour\n").unwrap();
+        run(root, &["add", "."]);
+        run(root, &["commit", "-m", "base"]);
+        run(root, &["worktree", "add", "-b", "feature", "checkout"]);
+        std::fs::write(root.join(".git/info/exclude"), "checkout\nforeign\n").unwrap();
+        let checkout = Cwd::new(root.join("checkout").to_str().unwrap()).unwrap();
+        let tree = Path::new(checkout.as_str());
+        std::fs::write(tree.join("base"), "one\n2\nthree\nfour\n").unwrap();
+        run(tree, &["commit", "-am", "Change\u{1b}[2J the \u{202e}base"]);
+        run(tree, &["mv", "base", "renamed"]);
+        std::fs::write(tree.join("new"), "a\nb\n").unwrap();
+
+        let list = changes(&cwd, &roots, Some(&checkout), GitScope::Worktrees)
+            .await
+            .unwrap();
+        assert_eq!(list.root, Some(cwd.clone()));
+        assert!(list.files.is_empty() && list.pull_requests.is_empty());
+        let summary = |w: &GitWorktree| {
+            (
+                w.branch.clone(),
+                w.subject.clone(),
+                w.ahead,
+                w.uncommitted,
+                w.additions,
+                w.deletions,
+            )
+        };
+        let main = &list.worktrees[0];
+        assert_eq!(
+            summary(main),
+            (
+                Some("main".into()),
+                Some("base".into()),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0)
+            )
+        );
+        assert!(main.committed_at_ms.unwrap() > 1_600_000_000_000);
+        assert_eq!(
+            summary(&list.worktrees[1]),
+            (
+                Some("feature".into()),
+                Some("Change[2J the base".into()),
+                Some(1),
+                Some(2),
+                Some(1),
+                Some(1)
+            )
+        );
+
+        let foreign = root.join("foreign");
+        run(root, &["init", "-b", "main", "foreign"]);
+        std::fs::write(
+            root.join(".git/worktrees/checkout/gitdir"),
+            format!("{}\n", foreign.join(".git").display()),
+        )
+        .unwrap();
+        let list = changes(&cwd, &roots, None, GitScope::Worktrees)
+            .await
+            .unwrap();
+        let foreign = list
+            .worktrees
+            .iter()
+            .find(|w| w.root.as_str() == foreign.to_str().unwrap())
+            .unwrap();
+        assert_eq!(summary(foreign).1, None);
+        assert_eq!(summary(foreign).3, None);
+    }
+
+    #[test]
+    fn status_and_numstat_counts_skip_rename_sources() {
+        assert_eq!(status_count(b""), 0);
+        assert_eq!(
+            status_count(b"R  new\0old\0 M both\0?? untracked\0C  copy\0src\0"),
+            4
+        );
+        assert_eq!(numstat_totals(b""), (0, 0));
+        assert_eq!(
+            numstat_totals(b"3\t1\ta.rs\0-\t-\tbinary\x002\t0\t\0old\0new\0x\ty\tbad\0"),
+            (5, 1)
+        );
+        assert_eq!(
+            numstat_totals(b"4294967295\t0\ta\x004294967295\t0\tb\0"),
+            (u32::MAX, 0)
+        );
+    }
+
+    #[test]
+    fn github_file_lists_are_untrusted() {
+        let page = pull_page(
+            br#"[
+                {"filename":"src/a.rs","previous_filename":null,"status":"modified","additions":3,"deletions":1,"sha":"s1"},
+                {"filename":"b.rs","previous_filename":"old/b.rs","status":"renamed","additions":0,"deletions":0,"sha":"s2"},
+                {"filename":"gone.rs","status":"removed","additions":0,"deletions":9,"sha":"s3"},
+                {"filename":"new.rs","status":"added","additions":4294967296,"deletions":0},
+                {"filename":"../etc/passwd","status":"added","additions":1,"deletions":0},
+                {"filename":"/abs","status":"added","additions":1,"deletions":0},
+                {"filename":"ok.rs","previous_filename":"../escape","status":"renamed"},
+                {"filename":"","status":"added"},
+                {"filename":"x.rs","status":"--evil"}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(page.len(), 9);
+        let files: Vec<_> = page.iter().filter_map(|f| pull_file(7, f)).collect();
+        let shown: Vec<_> = files
+            .iter()
+            .map(|f| {
+                (
+                    f.path.as_str(),
+                    f.old_path.as_deref(),
+                    f.status.as_str(),
+                    f.additions,
+                    f.deletions,
+                    f.section,
+                )
+            })
+            .collect();
+        let section = GitSection::PullRequest;
+        assert_eq!(
+            shown,
+            [
+                ("src/a.rs", None, "M", Some(3), Some(1), section),
+                ("b.rs", Some("old/b.rs"), "R", Some(0), Some(0), section),
+                ("gone.rs", None, "D", Some(0), Some(9), section),
+                ("new.rs", None, "A", None, Some(0), section),
+                ("x.rs", None, "M", Some(0), Some(0), section),
+            ]
+        );
+        assert_ne!(
+            pull_file(7, &page[0]).unwrap().hash,
+            pull_file(8, &page[0]).unwrap().hash
+        );
+        assert!(pull_page(b"{\"message\":\"Not Found\"}").is_err());
+        assert!(pull_page(b"[{\"status\":\"added\"}]").is_err());
+        assert_eq!(
+            pull_text(Some("@@ -1 +1 @@\n-a\n+b".into())),
+            "@@ -1 +1 @@\n-a\n+b\n"
+        );
+        assert!(pull_text(None).starts_with("Binary "));
+        assert!(pull_text(Some(String::new())).starts_with("Binary "));
     }
 
     #[tokio::test]
@@ -1297,6 +1870,7 @@ mod tests {
                 root: cwd.clone(),
                 path: "file".into(),
                 section: GitSection::Staged,
+                pull_request: None,
             },
         )
         .await;
@@ -1343,6 +1917,7 @@ mod tests {
                     root: cwd.clone(),
                     path: "base".into(),
                     section: GitSection::Committed,
+                    pull_request: None,
                 },
             )
             .await

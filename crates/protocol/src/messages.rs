@@ -18,6 +18,7 @@ pub enum GitSection {
     Staged,
     Unstaged,
     Untracked,
+    PullRequest,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +28,15 @@ pub enum GitScope {
     #[default]
     Uncommitted,
     Branch,
+    /// The repository's worktrees, each summarized, and the user's open pull requests whose
+    /// branch has no worktree; no files.
+    Worktrees,
+    /// The files of `pull_request` as GitHub shows them.
+    PullRequest,
+}
+
+fn pull_request_number(number: Option<u64>) -> bool {
+    number.is_none_or(|n| (1..=u64::from(u32::MAX)).contains(&n))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,6 +47,16 @@ pub struct AgentChangesParams {
     pub root: Option<Cwd>,
     #[serde(default)]
     pub scope: GitScope,
+    /// Set exactly when `scope` is `pull_request`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<u64>,
+}
+
+impl AgentChangesParams {
+    pub fn is_valid(&self) -> bool {
+        (self.scope == GitScope::PullRequest) == self.pull_request.is_some()
+            && pull_request_number(self.pull_request)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -47,6 +67,16 @@ pub struct AgentDiffParams {
     pub root: Cwd,
     pub path: String,
     pub section: GitSection,
+    /// Set exactly when `section` is `pull_request`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<u64>,
+}
+
+impl AgentDiffParams {
+    pub fn is_valid(&self) -> bool {
+        (self.section == GitSection::PullRequest) == self.pull_request.is_some()
+            && pull_request_number(self.pull_request)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -58,13 +88,47 @@ pub struct GitChanges {
     pub files: Vec<GitFile>,
     pub truncated: bool,
     pub worktrees: Vec<GitWorktree>,
+    /// `worktrees` scope only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<GitPullRequest>,
 }
 
+/// The summary fields are filled for the `worktrees` scope only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct GitWorktree {
     pub root: Cwd,
     pub branch: Option<String>,
+    /// The last commit's subject, without control or format characters, at most 200
+    /// characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub committed_at_ms: Option<u64>,
+    /// Commits on `HEAD` that the default branch does not have.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ahead: Option<u32>,
+    /// Changed and untracked files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncommitted: Option<u32>,
+    /// Lines changed in tracked files since the fork point with the default branch,
+    /// committed or not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<PullRequest>,
+}
+
+/// An open pull request of the user whose branch has no worktree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct GitPullRequest {
+    pub pull_request: PullRequest,
+    pub branch: String,
+    /// Without control or format characters, at most 200 characters.
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1971,6 +2035,8 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
         Request::AgentHistory(p) => p.is_valid(),
         Request::UsageCosts(p) => p.is_valid(),
         Request::FileOpen(p) => p.is_valid(),
+        Request::AgentChanges(p) => p.is_valid(),
+        Request::AgentDiff(p) => p.is_valid(),
         Request::AgentSendKeys(p) => p.is_valid(),
         Request::AgentTypeText(p) => p.is_valid(),
         Request::TerminalRun(p) => p.is_valid(),
@@ -2259,7 +2325,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 29);
+        assert_eq!(crate::PROTOCOL_VERSION, 30);
     }
 
     #[test]
@@ -2359,13 +2425,51 @@ mod tests {
         assert_eq!(frame.request.class(), MethodClass::Read);
         let json = serde_json::to_string(&frame).unwrap();
         assert_eq!(parse(&json).unwrap(), frame);
+        let Request::AgentChanges(pull) =
+            changes(r#"{"terminal_id":"t","scope":"pull_request","pull_request":7}"#)
+                .unwrap()
+                .request
+        else {
+            panic!("not agent.changes");
+        };
+        assert_eq!(
+            (pull.scope, pull.pull_request),
+            (GitScope::PullRequest, Some(7))
+        );
+        assert!(changes(r#"{"terminal_id":"t","scope":"worktrees"}"#).is_ok());
         for params in [
             r#"{"terminal_id":"t","root":"a"}"#,
             r#"{"terminal_id":"t","path":"/a"}"#,
             r#"{"terminal_id":"t","scope":"main"}"#,
+            r#"{"terminal_id":"t","scope":"pull_request"}"#,
+            r#"{"terminal_id":"t","scope":"pull_request","pull_request":0}"#,
+            r#"{"terminal_id":"t","scope":"pull_request","pull_request":4294967296}"#,
+            r#"{"terminal_id":"t","scope":"branch","pull_request":7}"#,
         ] {
             assert_eq!(
                 changes(params).unwrap_err().code,
+                ErrorCode::InvalidParams,
+                "{params}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_diff_names_a_pull_request_only_for_its_section() {
+        let diff = |params: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"agent.diff","params":{{"terminal_id":"t","root":"/a","path":"x"{params}}}}}"#
+            ))
+        };
+        assert!(diff(r#","section":"staged""#).is_ok());
+        assert!(diff(r#","section":"pull_request","pull_request":7"#).is_ok());
+        for params in [
+            r#","section":"pull_request""#,
+            r#","section":"staged","pull_request":7"#,
+            r#","section":"pull_request","pull_request":0"#,
+        ] {
+            assert_eq!(
+                diff(params).unwrap_err().code,
                 ErrorCode::InvalidParams,
                 "{params}"
             );

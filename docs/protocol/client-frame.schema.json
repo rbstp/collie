@@ -44,6 +44,15 @@
     "AgentChangesParams": {
       "additionalProperties": false,
       "properties": {
+        "pull_request": {
+          "description": "Set exactly when `scope` is `pull_request`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "root": {
           "anyOf": [
             {
@@ -72,6 +81,15 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "pull_request": {
+          "description": "Set exactly when `section` is `pull_request`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "root": {
           "$ref": "#/$defs/Cwd"
@@ -527,18 +545,33 @@
       "type": "string"
     },
     "GitScope": {
-      "enum": [
-        "uncommitted",
-        "branch"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "uncommitted",
+            "branch"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "worktrees",
+          "description": "The repository's worktrees, each summarized, and the user's open pull requests whose\nbranch has no worktree; no files.",
+          "type": "string"
+        },
+        {
+          "const": "pull_request",
+          "description": "The files of `pull_request` as GitHub shows them.",
+          "type": "string"
+        }
+      ]
     },
     "GitSection": {
       "enum": [
         "committed",
         "staged",
         "unstaged",
-        "untracked"
+        "untracked",
+        "pull_request"
       ],
       "type": "string"
     },

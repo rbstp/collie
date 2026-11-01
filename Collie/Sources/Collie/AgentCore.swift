@@ -9,7 +9,9 @@ protocol AgentCore: AnyObject, Sendable {
     func agentHistory(machineId: String, terminalId: String, before: String?, after: String?, query: String?) async throws -> HistoryPage
     func agentLatest(machineId: String, terminalId: String) async throws -> HistoryPage
     func agentChanges(machineId: String, terminalId: String, root: String?, branch: Bool) async throws -> GitChanges
-    func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff
+    func agentWorktrees(machineId: String, terminalId: String) async throws -> GitChanges
+    func agentPullRequestChanges(machineId: String, terminalId: String, number: UInt64) async throws -> GitChanges
+    func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String, pullRequest: UInt64?) async throws -> GitDiff
     func agentDraft(machineId: String, terminalId: String) async throws -> String?
     func prompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws
     func resendPrompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws

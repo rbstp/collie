@@ -276,7 +276,10 @@ struct AgentScreen: View {
             }
         }
         .sheet(isPresented: $showingChanges) {
-            GitChangesView(agent: model, sent: { showingChanges = false }, review: model.gitReview)
+            GitChangesView(agent: model, sent: { showingChanges = false }, review: model.gitReview) { route in
+                showingChanges = false
+                if route != model.route { switchAgent(route) }
+            }
         }
         .sheet(item: $model.fileLink) { link in
             FileViewer(agent: model, link: link)
