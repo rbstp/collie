@@ -4654,6 +4654,7 @@ async fn git_changes_use_live_agent_checkout_and_existing_authorization() {
         terminal_id: tid(CLAUDE),
         root: Some(protocol::Cwd::new(base.join("root/b").to_str().unwrap()).unwrap()),
         scope: protocol::GitScope::Uncommitted,
+        pull_request: None,
     };
     let Response::GitChanges(list) = drive.git_changes(target.clone(), &yes()).await.unwrap()
     else {
@@ -4670,11 +4671,28 @@ async fn git_changes_use_live_agent_checkout_and_existing_authorization() {
         root: list.root.unwrap(),
         path: "test.txt".into(),
         section: protocol::GitSection::Untracked,
+        pull_request: None,
     };
     let Response::GitDiff(diff) = drive.git_diff(params.clone(), &yes()).await.unwrap() else {
         panic!()
     };
     assert!(diff.patch.contains("+feedback"));
+    let overview = protocol::AgentChangesParams {
+        root: None,
+        scope: protocol::GitScope::Worktrees,
+        ..target.clone()
+    };
+    let Response::GitChanges(list) = drive.git_changes(overview.clone(), &yes()).await.unwrap()
+    else {
+        panic!()
+    };
+    assert!(list.files.is_empty());
+    assert_eq!(list.worktrees.len(), 1);
+    assert_eq!(list.worktrees[0].uncommitted, Some(1));
+    assert_eq!(
+        drive.git_changes(overview, &no()).await.unwrap_err().0,
+        ErrorCode::NotPaired
+    );
     assert_eq!(
         drive
             .git_changes(target.clone(), &no())

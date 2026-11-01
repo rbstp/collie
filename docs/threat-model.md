@@ -318,6 +318,16 @@ Computer nodes are user-owned, not tag-confined: they get their user's tailnet p
 | Attack | A crafted checkout or GitHub response makes collied run `gh` somewhere it should not or with a token it should not use, or makes the phone open a hostile link. |
 | Mitigations | collied runs `gh pr view` only while a phone is connected or a paired phone has "Archive when the PR merges" on (then only for agents it could archive), only in checkouts that resolve inside the task roots: no argument from the checkout, a fixed binary path, `GH_PROMPT_DISABLED=1`, no `GH_TOKEN`, `GITHUB_TOKEN` or enterprise token variables, null stdin, a 30 s timeout, `kill_on_drop`. Only these reach the phone: number, state, check outcome, an `https://` URL without whitespace or control characters, up to 10 failing check names (no control or format characters or quotes, 100 characters each), review and comment counts (counted inside `gh` by `--jq`, so no text reaches collied) and whether it conflicts. The phone opens only `https` links. Prompts the badge menu fills hold only the URL and those check names, and are sent only when the user taps Send. Nothing from `gh` is logged. |
 | Residual | `gh` reads the checkout's git config and remotes, as `gh poi` does. A repository whose remote points at another GitHub repository shows that repository's pull request. |
+
+### Git changes worktree list and pull request diffs
+
+| | |
+|---|---|
+| Assets | The machine; the user's `gh` login; repositories under the task roots |
+| Attack | A worktree entry the agent writes points collied's git reads at another repository; GitHub's answer (file names, sizes, branch names, titles, patches) carries paths that escape the checkout, control characters, or sizes meant to exhaust collied or the phone; the phone names a pull request or file to make `gh` run something else. |
+| Mitigations | Revision 30 reads, Read class, paired full session, the agent's checkout under the roots, authorization re-checked after the read. A worktree is summarized only after the same checks as picking it (resolves to itself under the roots, same Git common directory); summaries use the git command builder above, with `--no-show-signature` for the commit subject. `gh` runs in the agent's checkout from a fixed path in the linked pull request read's environment and timeout. Only a number (1 to 2^32 - 1, checked at parse) and fixed arguments reach its command line; a file is located by its index in GitHub's list, never by path. File paths must be plain relative UTF-8 paths, else the file is left out; status maps to a fixed letter; counts over 2^32 - 1 are unknown; branch names with control or format characters, non-`https://` URLs and forks are dropped; titles, subjects and branch names shown are stripped of control and format characters and cut at 200 characters. Listings stay at 200 files, gh output over 2 MiB is refused, and answers are cut to the 48 KiB response cap. Nothing from GitHub is logged. |
+| Residual | Patch text from GitHub reaches the phone as it is, like a local diff; it is shown as text, never run. The user's open pull requests in that repository, with titles, are listed whether or not an agent works on them. |
+| Phase | Built |
 | Phase | Built |
 
 ### Pull request watch

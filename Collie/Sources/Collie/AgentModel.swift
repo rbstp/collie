@@ -733,9 +733,22 @@ final class AgentModel {
         try await core.agentChanges(machineId: route.machineId, terminalId: route.terminalId, root: root, branch: branch)
     }
 
+    func gitWorktrees() async throws -> GitChanges {
+        try await core.agentWorktrees(machineId: route.machineId, terminalId: route.terminalId)
+    }
+
+    func gitPullRequest(_ number: UInt64) async throws -> GitChanges {
+        try await core.agentPullRequestChanges(machineId: route.machineId, terminalId: route.terminalId, number: number)
+    }
+
     func gitDiff(root: String, file: GitFile) async throws -> GitDiff {
         try await core.agentDiff(machineId: route.machineId, terminalId: route.terminalId,
-                                 root: root, path: file.path, section: file.section)
+                                 root: root, path: file.path, section: file.section, pullRequest: file.pullRequest)
+    }
+
+    /// The machine's agents, for the worktree list; none when the machine cannot say.
+    func machineAgents() async -> [AgentSummary] {
+        (try? await core.flock(machineId: route.machineId))?.agents ?? []
     }
 
     func openFile(_ path: String) async throws -> OpenedFile {

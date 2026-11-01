@@ -828,6 +828,13 @@
           },
           "type": "array"
         },
+        "pull_requests": {
+          "description": "`worktrees` scope only.",
+          "items": {
+            "$ref": "#/$defs/GitPullRequest"
+          },
+          "type": "array"
+        },
         "root": {
           "anyOf": [
             {
@@ -917,25 +924,108 @@
       ],
       "type": "object"
     },
+    "GitPullRequest": {
+      "description": "An open pull request of the user whose branch has no worktree.",
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "pull_request": {
+          "$ref": "#/$defs/PullRequest"
+        },
+        "title": {
+          "description": "Without control or format characters, at most 200 characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pull_request",
+        "branch",
+        "title"
+      ],
+      "type": "object"
+    },
     "GitSection": {
       "enum": [
         "committed",
         "staged",
         "unstaged",
-        "untracked"
+        "untracked",
+        "pull_request"
       ],
       "type": "string"
     },
     "GitWorktree": {
+      "description": "The summary fields are filled for the `worktrees` scope only.",
       "properties": {
+        "additions": {
+          "description": "Lines changed in tracked files since the fork point with the default branch,\ncommitted or not.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ahead": {
+          "description": "Commits on `HEAD` that the default branch does not have.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "branch": {
           "type": [
             "string",
             "null"
           ]
         },
+        "committed_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "deletions": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pull_request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PullRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "root": {
           "$ref": "#/$defs/Cwd"
+        },
+        "subject": {
+          "description": "The last commit's subject, without control or format characters, at most 200\ncharacters.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uncommitted": {
+          "description": "Changed and untracked files.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [

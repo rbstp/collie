@@ -191,20 +191,102 @@ pub async fn head(gh: &str, checkout: &Cwd, number: u64) -> Result<Head, String>
         return Err("gh is not signed in; run `gh auth login` on the machine".to_owned());
     }
     if !output.status.success() {
-        let text: String = String::from_utf8_lossy(&output.stderr)
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .chars()
-            .filter(|&c| !c.is_control() && !protocol::is_format(c))
-            .take(200)
-            .collect();
         return Err(format!(
             "gh could not read pull request #{number}: {}",
-            text.trim()
+            first_line(&output.stderr)
         ));
     }
     parse_head(&output.stdout).map_err(|e| format!("pull request #{number} {e}"))
+}
+
+pub(crate) fn first_line(stderr: &[u8]) -> String {
+    let text: String = String::from_utf8_lossy(stderr)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|&c| !c.is_control() && !protocol::is_format(c))
+        .take(200)
+        .collect();
+    text.trim().to_owned()
+}
+
+/// A pull request of the user's, its head branch and its title.
+pub type Mine = (PullRequest, String, String);
+
+/// The user's latest pull requests, newest first, for the worktree list; none when gh
+/// cannot tell. Pull requests from forks are left out: their branch names say nothing
+/// about the local branches.
+pub async fn mine(gh: &str, checkout: &Cwd) -> Vec<Mine> {
+    let mut command = gh_command(gh);
+    command
+        .args([
+            "pr", "list", "--author", "@me", "--state", "all", "--limit", "30",
+        ])
+        .args([
+            "--json",
+            "number,state,isDraft,url,headRefName,title,isCrossRepository",
+        ])
+        .current_dir(checkout.as_str())
+        .stdout(Stdio::piped());
+    match timeout(GH_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) if output.status.success() => parse_mine(&output.stdout),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_mine(json: &[u8]) -> Vec<Mine> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Listed {
+        number: u64,
+        state: String,
+        is_draft: bool,
+        url: String,
+        head_ref_name: String,
+        title: String,
+        is_cross_repository: bool,
+    }
+    let Ok(listed) = serde_json::from_slice::<Vec<Listed>>(json) else {
+        return Vec::new();
+    };
+    listed
+        .into_iter()
+        .filter(|l| {
+            !l.is_cross_repository
+                && (1..=u64::from(u32::MAX)).contains(&l.number)
+                && valid_url(&l.url)
+                && !l.head_ref_name.is_empty()
+                && l.head_ref_name.len() <= 255
+                && !l
+                    .head_ref_name
+                    .chars()
+                    .any(|c| c.is_control() || protocol::is_format(c))
+        })
+        .filter_map(|l| {
+            let pr = PullRequest {
+                number: l.number,
+                state: state(&l.state, l.is_draft)?,
+                checks: PullChecks::Unknown,
+                url: l.url,
+                failing_checks: Vec::new(),
+                remarks: 0,
+                conflicting: false,
+            };
+            Some((pr, l.head_ref_name, title(&l.title)))
+        })
+        .collect()
+}
+
+/// Untrusted text for display: no control or format characters, at most 200 characters.
+pub(crate) fn title(text: &str) -> String {
+    let text: String = text
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .filter(|&c| !c.is_control() && !protocol::is_format(c))
+        .take(200)
+        .collect();
+    text.trim().to_owned()
 }
 
 fn parse_head(json: &[u8]) -> Result<Head, &'static str> {
@@ -276,13 +358,7 @@ pub(crate) enum Outcome {
 
 fn parse(json: &[u8]) -> Option<Pull> {
     let view: View = serde_json::from_slice(json).ok()?;
-    let state = match (view.state.as_str(), view.is_draft) {
-        ("OPEN", true) => PullState::Draft,
-        ("OPEN", false) => PullState::Open,
-        ("MERGED", _) => PullState::Merged,
-        ("CLOSED", _) => PullState::Closed,
-        _ => return None,
-    };
+    let state = state(&view.state, view.is_draft)?;
     if !valid_url(&view.url) {
         return None;
     }
@@ -314,6 +390,16 @@ fn parse(json: &[u8]) -> Option<Pull> {
         conflicting: view.mergeable.as_deref() == Some("CONFLICTING"),
     };
     Some((pr, view.head_ref_oid))
+}
+
+fn state(state: &str, draft: bool) -> Option<PullState> {
+    match (state, draft) {
+        ("OPEN", true) => Some(PullState::Draft),
+        ("OPEN", false) => Some(PullState::Open),
+        ("MERGED", _) => Some(PullState::Merged),
+        ("CLOSED", _) => Some(PullState::Closed),
+        _ => None,
+    }
 }
 
 pub(crate) fn clean(name: &str) -> String {
@@ -650,6 +736,53 @@ mod tests {
             );
         }
         assert!(parse_head(b"no pull requests found").is_err());
+    }
+
+    #[test]
+    fn the_users_pull_requests_are_untrusted_and_forks_are_left_out() {
+        let listed = |number: u64,
+                      state: &str,
+                      draft: bool,
+                      url: &str,
+                      branch: &str,
+                      fork: bool| {
+            serde_json::json!({"number":number,"state":state,"isDraft":draft,"url":url,"headRefName":branch,"title":"Fix \u{1b}[2J\"it\"\u{202e}\nnow","isCrossRepository":fork})
+        };
+        let url = "https://github.com/o/r/pull/1";
+        let json = serde_json::json!([
+            listed(1, "OPEN", false, url, "feature", false),
+            listed(2, "OPEN", true, url, "draft", false),
+            listed(3, "MERGED", false, url, "merged", false),
+            listed(4, "OPEN", false, url, "fork", true),
+            listed(
+                5,
+                "OPEN",
+                false,
+                "http://github.com/o/r/pull/5",
+                "insecure",
+                false
+            ),
+            listed(6, "OPEN", false, url, "bad\u{7}branch", false),
+            listed(7, "OPEN", false, url, "", false),
+            listed(8, "LOCKED", false, url, "unknown", false),
+            listed(0, "OPEN", false, url, "zero", false),
+        ]);
+        let mine = parse_mine(json.to_string().as_bytes());
+        let shown: Vec<_> = mine
+            .iter()
+            .map(|(pr, branch, title)| (pr.number, pr.state, branch.as_str(), title.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (1, PullState::Open, "feature", "Fix [2J\"it\" now"),
+                (2, PullState::Draft, "draft", "Fix [2J\"it\" now"),
+                (3, PullState::Merged, "merged", "Fix [2J\"it\" now"),
+            ]
+        );
+        assert_eq!(mine[0].0.checks, PullChecks::Unknown);
+        assert!(parse_mine(b"no pull requests found").is_empty());
+        assert_eq!(title(&"x".repeat(300)).len(), 200);
     }
 
     fn pr(number: u64) -> PullRequest {

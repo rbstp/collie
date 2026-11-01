@@ -16,6 +16,8 @@ final class FakeCore: AgentCore {
     struct State {
         var gitCalls: [String] = []
         var gitWorktrees: [GitWorktree] = []
+        var gitPullRequests: [GitPullRequest] = []
+        var gitAgents: [AgentSummary] = []
         var gitFiles: [GitFile] = []
         var gitBase: String?
         var gitPatch = "@@ -1 +1 @@\n-old\n+new\n"
@@ -201,11 +203,30 @@ final class FakeCore: AgentCore {
         }
         return GitChanges(
             root: root ?? "/worktree", branch: "feature", base: branch ? s.gitBase : nil,
-            files: s.gitFiles.filter { ($0.section == "committed") == branch }, truncated: false, worktrees: s.gitWorktrees
+            files: s.gitFiles.filter { $0.section != "pull_request" && ($0.section == "committed") == branch }, truncated: false, worktrees: s.gitWorktrees
         )
     }
-    func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String) async throws -> GitDiff {
-        state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)") }
+    func agentWorktrees(machineId: String, terminalId: String) async throws -> GitChanges {
+        let s = state.withLock { s in
+            s.gitCalls.append("\(machineId)|\(terminalId)|worktrees")
+            return s
+        }
+        return GitChanges(root: "/worktree", branch: "feature", base: nil, files: [], truncated: false,
+                          worktrees: s.gitWorktrees, pullRequests: s.gitPullRequests)
+    }
+    func agentPullRequestChanges(machineId: String, terminalId: String, number: UInt64) async throws -> GitChanges {
+        let s = state.withLock { s in
+            s.gitCalls.append("\(machineId)|\(terminalId)|#\(number)")
+            return s
+        }
+        return GitChanges(
+            root: "/worktree", branch: "feature", base: "master",
+            files: s.gitFiles.filter { $0.section == "pull_request" }.map { var file = $0; file.pullRequest = number; return file },
+            truncated: false, worktrees: []
+        )
+    }
+    func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String, pullRequest: UInt64?) async throws -> GitDiff {
+        state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)" + (pullRequest.map { "|#\($0)" } ?? "")) }
         try await Task.sleep(for: snapshot.gitDiffDelay)
         return GitDiff(patch: snapshot.gitPatch, truncated: false)
     }
@@ -380,12 +401,15 @@ final class FakeCore: AgentCore {
         try await call { $0.terminalKeys.append(keys) }
     }
     func flock(machineId: String) async throws -> MachineFlock {
-        let started = state.withLock { s in
+        let (started, gitAgents) = state.withLock { s in
             s.flocks += 1
-            return s.started
+            return (s.started, s.gitAgents)
         }
-        guard let started else { throw CoreError.MachineNotFound }
         let machine = Machine(id: machineId, label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        guard let started else {
+            guard !gitAgents.isEmpty else { throw CoreError.MachineNotFound }
+            return MachineFlock(machine: machine, link: .connected, lastError: nil, details: nil, workspaces: [], agents: gitAgents, approvalsCount: 0)
+        }
         let agent = AgentSummary(
             terminalId: started.terminalId, workspaceId: started.workspaceId, kind: "claude", name: nil, title: nil,
             status: .working, statusSinceMs: 0, cwd: nil, lastLine: nil
@@ -2942,15 +2966,57 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
 @MainActor
 @Test func gitReadsStayOnTheAgentRouteAndSelectedCheckout() async throws {
     let core = FakeCore()
+    core.state.withLock { $0.gitFiles = [GitFile(path: "p.swift", oldPath: nil, section: "pull_request", status: "M", additions: 1, deletions: 0, hash: "h")] }
     let model = await slashReady(core)
     let changes = try await model.gitChanges()
     let file = GitFile(path: "a.swift", oldPath: nil, section: "staged", status: "M", additions: 1, deletions: 1, hash: nil)
     let root = try #require(changes.root)
     _ = try await model.gitDiff(root: root, file: file)
     _ = try await model.gitChanges(root: "/feature")
+    _ = try await model.gitWorktrees()
+    let pull = try await model.gitPullRequest(7)
+    let pullFile = try #require(pull.files.first)
+    #expect(pullFile.pullRequest == 7)
+    _ = try await model.gitDiff(root: root, file: pullFile)
     let target = "\(model.route.machineId)|\(model.route.terminalId)"
-    #expect(core.snapshot.gitCalls == [target, target + "|/worktree|a.swift|staged", target + "|/feature"])
+    #expect(core.snapshot.gitCalls == [
+        target, target + "|/worktree|a.swift|staged", target + "|/feature", target + "|worktrees", target + "|#7",
+        target + "|/worktree|p.swift|pull_request|#7"
+    ])
     #expect(core.snapshot.prompts.isEmpty)
+}
+
+@MainActor
+@Test func pullRequestFeedbackNamesThePullRequestAndNeedsNoListedWorktree() async {
+    let core = FakeCore()
+    core.state.withLock { $0.gitWorktrees = [GitWorktree(root: "/worktree", branch: "main")] }
+    let model = await slashReady(core)
+    let file = GitFile(path: "file.swift", oldPath: nil, section: "pull_request", status: "M", additions: 1, deletions: 1, hash: nil, pullRequest: 42)
+    #expect(GitFeedback.draft(file: file, selection: "", root: "/gone") == "Feedback for file.swift in pull request #42: ")
+    let review = model.gitReview
+    review.add(root: "/gone", file: file, selection: "")
+    review.comments[0].text = "Split this."
+    #expect(await review.send(using: model))
+    #expect(core.snapshot.prompts == ["Feedback for file.swift in pull request #42: Split this."])
+}
+
+@Test func agentsGoToTheDeepestWorktreeHoldingTheirFolder() {
+    func agent(_ id: String, _ cwd: String?) -> AgentSummary {
+        AgentSummary(terminalId: id, workspaceId: "w", kind: "claude", name: nil, title: nil, status: .working, statusSinceMs: 0, cwd: cwd, lastLine: nil)
+    }
+    let placed = GitWorktreeAgents.place([
+        agent("main", "/repo"),
+        agent("sub", "/repo/src/app"),
+        agent("tree", "/repo/.worktrees/622"),
+        agent("deep", "/repo/.worktrees/622/crates"),
+        agent("sibling", "/repo-other"),
+        agent("none", nil),
+        agent("outside", "/elsewhere")
+    ], in: ["/repo", "/repo/.worktrees/622", "/repo/.worktrees/623"])
+    #expect(placed["/repo"]?.map(\.terminalId) == ["main", "sub"])
+    #expect(placed["/repo/.worktrees/622"]?.map(\.terminalId) == ["tree", "deep"])
+    #expect(placed["/repo/.worktrees/623"] == nil)
+    #expect(placed.values.flatMap { $0 }.count == 4)
 }
 
 @Test func archiveSummariesOnlyIncludeRelevantDetails() {

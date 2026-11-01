@@ -1,4 +1,7 @@
-use crate::{ClientFrame, Event, HelloParams, HelloResult, Label, Request, Response, ServerFrame};
+use crate::{
+    ClientFrame, Event, GitScope, GitSection, HelloParams, HelloResult, Label, Request, Response,
+    ServerFrame,
+};
 
 pub const PROTOCOL_MIN_VERSION: u32 = 26;
 pub const TERMINAL_GRANTS_V1: &str = "terminal_grants_v1";
@@ -168,7 +171,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn allows_request(&self, request: &Request) -> bool {
-        if !(26..=29).contains(&self.version) {
+        if !(26..=30).contains(&self.version) {
             return false;
         }
         match request {
@@ -190,6 +193,10 @@ impl NegotiatedProtocol {
             Request::FileOpen(_) | Request::FileChunk(_) | Request::FileClose(_) => {
                 self.version >= 29
             }
+            Request::AgentChanges(p) => {
+                matches!(p.scope, GitScope::Uncommitted | GitScope::Branch) || self.version >= 30
+            }
+            Request::AgentDiff(p) => p.section != GitSection::PullRequest || self.version >= 30,
             Request::Hello(_)
             | Request::Unpair(_)
             | Request::FlockSnapshot(_)
@@ -197,8 +204,6 @@ impl NegotiatedProtocol {
             | Request::PaneRead(_)
             | Request::AgentWatch(_)
             | Request::TaskOptions(_)
-            | Request::AgentChanges(_)
-            | Request::AgentDiff(_)
             | Request::AgentDraft(_)
             | Request::AgentPrompt(_)
             | Request::AgentSendKeys(_)
@@ -240,7 +245,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn server_frame(&self, frame: &ServerFrame) -> Result<String, &'static str> {
-        if !(26..=29).contains(&self.version) {
+        if !(26..=30).contains(&self.version) {
             return Err("unsupported wire codec");
         }
         let allowed = match frame {
@@ -250,13 +255,19 @@ impl NegotiatedProtocol {
                 }
                 Response::UsageCosts(_) => self.version >= 28,
                 Response::FileOpened { .. } | Response::FileChunk { .. } => self.version >= 29,
+                Response::GitChanges(changes) => {
+                    self.version >= 30
+                        || changes
+                            .files
+                            .iter()
+                            .all(|f| f.section != GitSection::PullRequest)
+                }
+                Response::GitDiff(_) => true,
                 Response::Hello(_)
                 | Response::Paired { .. }
                 | Response::Flock(_)
                 | Response::Terminal(_)
                 | Response::TaskOptions(_)
-                | Response::GitChanges(_)
-                | Response::GitDiff(_)
                 | Response::History(_)
                 | Response::TaskWorktrees { .. }
                 | Response::TaskSessions { .. }
@@ -349,7 +360,7 @@ mod tests {
                     .unwrap();
             assert_eq!(
                 u64::from(negotiated.version()),
-                offer["protocol_version"].as_u64().unwrap().min(29)
+                offer["protocol_version"].as_u64().unwrap().min(30)
             );
             let frame = ClientFrame {
                 id: 2,
@@ -372,7 +383,7 @@ mod tests {
     fn baseline_apps_validate_retained_daemon_results_and_selected_revisions() {
         let mut result: HelloResult =
             serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
-        for (maximum, selected) in [(26, 26), (27, 27), (28, 28), (29, 29), (30, 29)] {
+        for (maximum, selected) in [(26, 26), (27, 27), (28, 28), (29, 29), (30, 30), (31, 30)] {
             result.protocol_max_version = maximum;
             result.protocol_version = selected;
             assert_eq!(
@@ -504,7 +515,7 @@ mod tests {
         assert!(previous.server_frame(&reply).is_err());
         let current =
             NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
-        assert_eq!(current.version(), 29);
+        assert_eq!(current.version(), 30);
         let encoded = current
             .client_frame(ClientFrame { id: 1, request })
             .unwrap();
@@ -568,6 +579,93 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&encoded).unwrap(),
             json!({"id":1,"method":"file.open","params":{"terminal_id":"term_1","path":"src/main.rs"}})
+        );
+    }
+
+    #[test]
+    fn worktree_and_pull_request_scopes_require_revision_30() {
+        let terminal_id = crate::TerminalId::new("term_1").unwrap();
+        let changes = |scope, pull_request| {
+            Request::AgentChanges(crate::AgentChangesParams {
+                terminal_id: terminal_id.clone(),
+                root: None,
+                scope,
+                pull_request,
+            })
+        };
+        let diff = |section, pull_request| {
+            Request::AgentDiff(crate::AgentDiffParams {
+                terminal_id: terminal_id.clone(),
+                root: crate::Cwd::new("/repo").unwrap(),
+                path: "a.rs".into(),
+                section,
+                pull_request,
+            })
+        };
+        let file = |section| crate::GitFile {
+            path: "a.rs".into(),
+            old_path: None,
+            section,
+            status: "M".into(),
+            additions: Some(1),
+            deletions: Some(0),
+            hash: None,
+        };
+        let reply = |section| ServerFrame::Result {
+            id: 1,
+            result: Response::GitChanges(crate::GitChanges {
+                root: None,
+                branch: None,
+                base: None,
+                files: vec![file(section)],
+                truncated: false,
+                worktrees: Vec::new(),
+                pull_requests: Vec::new(),
+            }),
+        };
+        let mut result: HelloResult =
+            serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
+        result.protocol_max_version = 29;
+        result.protocol_version = 29;
+        let previous = NegotiatedProtocol::from_result(&result).unwrap();
+        let current =
+            NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
+        for request in [
+            changes(GitScope::Uncommitted, None),
+            changes(GitScope::Branch, None),
+            diff(GitSection::Committed, None),
+        ] {
+            assert!(previous.allows_request(&request));
+            assert!(current.allows_request(&request));
+        }
+        for request in [
+            changes(GitScope::Worktrees, None),
+            changes(GitScope::PullRequest, Some(7)),
+            diff(GitSection::PullRequest, Some(7)),
+        ] {
+            assert!(!previous.allows_request(&request));
+            assert!(current.allows_request(&request));
+        }
+        assert!(previous.server_frame(&reply(GitSection::Staged)).is_ok());
+        assert!(
+            previous
+                .server_frame(&reply(GitSection::PullRequest))
+                .is_err()
+        );
+        assert!(
+            current
+                .server_frame(&reply(GitSection::PullRequest))
+                .is_ok()
+        );
+        let encoded = current
+            .client_frame(ClientFrame {
+                id: 1,
+                request: changes(GitScope::PullRequest, Some(7)),
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&encoded).unwrap(),
+            json!({"id":1,"method":"agent.changes","params":{"terminal_id":"term_1","root":null,"scope":"pull_request","pull_request":7}})
         );
     }
 
