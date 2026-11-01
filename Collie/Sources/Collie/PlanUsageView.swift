@@ -50,21 +50,11 @@ struct UsageSections: View {
 private struct CodexSubscriptionUsage: View {
     let usage: CodexUsage
     let now: Date
-    @ScaledMetric(relativeTo: .headline) private var logo: CGFloat = 22
 
     var body: some View {
         let percent = usage.percent
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Image("Codex")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: logo, height: logo)
-                    .padding(logo / 3)
-                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: logo / 2, style: .continuous))
-                    .accessibilityHidden(true)
-                Text("Codex").font(.headline)
-            }
+            UsageHeader(image: "Codex", title: "Codex")
             Text("Monthly usage limit").font(.subheadline)
             UsageBar(used: percent, elapsed: usage.elapsed(now: now))
             HStack {
@@ -86,21 +76,11 @@ private struct CopilotSubscriptionUsage: View {
     let usage: CopilotUsage
     let now: Date
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @ScaledMetric(relativeTo: .headline) private var logo: CGFloat = 22
 
     var body: some View {
         let percent = usage.percent
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Image("Copilot")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: logo, height: logo)
-                    .padding(logo / 3)
-                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: logo / 2, style: .continuous))
-                    .accessibilityHidden(true)
-                Text("Copilot").font(.headline)
-            }
+            UsageHeader(image: "Copilot", title: "Copilot")
             Text("Monthly premium usage").font(.subheadline)
             if !usage.unlimited {
                 UsageBar(used: UInt8(min(100, percent)), elapsed: usage.elapsed(now: now))
@@ -129,21 +109,11 @@ private struct SubscriptionUsage: View {
     let usage: PlanUsage
     let now: Date
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @ScaledMetric(relativeTo: .headline) private var logo: CGFloat = 22
 
     var body: some View {
         let limits = usage.limits(now: now)
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Image("Claude")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: logo, height: logo)
-                    .padding(logo / 3)
-                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: logo / 2, style: .continuous))
-                    .accessibilityHidden(true)
-                Text("Claude Code").font(.headline)
-            }
+            UsageHeader(image: "Claude", title: "Claude Code")
             if !limits.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(limits, id: \.label) { limit in
@@ -167,6 +137,25 @@ private struct SubscriptionUsage: View {
         }
         .padding(.vertical, 4)
         .opacity(usage.isStale(now: now) ? 0.6 : 1)
+    }
+}
+
+private struct UsageHeader: View {
+    let image: String
+    let title: String
+    @ScaledMetric(relativeTo: .headline) private var logo: CGFloat = 22
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: logo, height: logo)
+                .padding(logo / 3)
+                .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: logo / 2, style: .continuous))
+                .accessibilityHidden(true)
+            Text(title).font(.headline)
+        }
     }
 }
 
