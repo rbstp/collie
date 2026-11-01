@@ -79,46 +79,38 @@ pub fn record(data_dir: &Path, input: &[u8], now_ms: u64) -> anyhow::Result<()> 
     if plan.is_none() && session.is_none() {
         return Ok(());
     }
-    crate::ensure_private_dir(data_dir)?;
-    let _lock = lock(&data_dir.join(USAGE_LOCK))?;
-    let path = data_dir.join(USAGE_FILE);
-    let mut recorded = match peers::load_json::<Recorded>(&path) {
-        Err(peers::Error::Json { .. }) => Recorded::default(),
-        other => other?,
-    };
-    let before = recorded.clone();
-    if let Some(plan) = plan {
-        recorded.plan = Some(merge_plan(recorded.plan.take(), plan, now_ms));
-    }
-    if let Some((id, size)) = session
-        && !recorded
-            .windows
-            .get(id)
-            .is_some_and(|w| w.size == size && now_ms < w.seen_ms + RESTAMP_MS)
-    {
-        recorded.windows.insert(
-            id.to_owned(),
-            SessionWindow {
-                size,
-                seen_ms: now_ms,
-            },
-        );
-        while recorded.windows.len() > MAX_SESSIONS {
-            let Some(oldest) = recorded
-                .windows
-                .iter()
-                .min_by_key(|(_, w)| w.seen_ms)
-                .map(|(id, _)| id.clone())
-            else {
-                break;
-            };
-            recorded.windows.remove(&oldest);
+    update(data_dir, |recorded| {
+        let before = recorded.clone();
+        if let Some(plan) = plan {
+            recorded.plan = Some(merge_plan(recorded.plan.take(), plan, now_ms));
         }
-    }
-    if recorded != before {
-        peers::replace_json(&path, &recorded)?;
-    }
-    Ok(())
+        if let Some((id, size)) = session
+            && !recorded
+                .windows
+                .get(id)
+                .is_some_and(|w| w.size == size && now_ms < w.seen_ms + RESTAMP_MS)
+        {
+            recorded.windows.insert(
+                id.to_owned(),
+                SessionWindow {
+                    size,
+                    seen_ms: now_ms,
+                },
+            );
+            while recorded.windows.len() > MAX_SESSIONS {
+                let Some(oldest) = recorded
+                    .windows
+                    .iter()
+                    .min_by_key(|(_, w)| w.seen_ms)
+                    .map(|(id, _)| id.clone())
+                else {
+                    break;
+                };
+                recorded.windows.remove(&oldest);
+            }
+        }
+        *recorded != before
+    })
 }
 
 /// Each session reports the limits from its own last reply, so a quiet session's older
@@ -148,32 +140,26 @@ fn merge_plan(old: Option<PlanUsage>, new: PlanUsage, now_ms: u64) -> PlanUsage 
 }
 
 pub fn record_codex(data_dir: &Path, usage: Option<CodexUsage>) -> anyhow::Result<()> {
-    crate::ensure_private_dir(data_dir)?;
-    let _lock = lock(&data_dir.join(USAGE_LOCK))?;
-    let path = data_dir.join(USAGE_FILE);
-    let mut recorded = match peers::load_json::<Recorded>(&path) {
-        Err(peers::Error::Json { .. }) => Recorded::default(),
-        other => other?,
-    };
-    if recorded.codex.is_none() && usage.is_none() {
-        return Ok(());
-    }
-    if recorded
-        .codex
-        .as_ref()
-        .zip(usage.as_ref())
-        .is_some_and(|(old, new)| {
-            old.used == new.used
-                && old.limit == new.limit
-                && old.resets_at_ms == new.resets_at_ms
-                && new.recorded_ms < old.recorded_ms + RESTAMP_MS
-        })
-    {
-        return Ok(());
-    }
-    recorded.codex = usage;
-    peers::replace_json(&path, &recorded)?;
-    Ok(())
+    update(data_dir, |recorded| {
+        if recorded.codex.is_none() && usage.is_none() {
+            return false;
+        }
+        if recorded
+            .codex
+            .as_ref()
+            .zip(usage.as_ref())
+            .is_some_and(|(old, new)| {
+                old.used == new.used
+                    && old.limit == new.limit
+                    && old.resets_at_ms == new.resets_at_ms
+                    && new.recorded_ms < old.recorded_ms + RESTAMP_MS
+            })
+        {
+            return false;
+        }
+        recorded.codex = usage;
+        true
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -297,32 +283,26 @@ pub async fn fetch_codex_usage() -> Result<Option<CodexUsage>, CodexUsageError> 
 }
 
 pub fn record_copilot(data_dir: &Path, usage: Option<CopilotUsage>) -> anyhow::Result<()> {
-    crate::ensure_private_dir(data_dir)?;
-    let _lock = lock(&data_dir.join(USAGE_LOCK))?;
-    let path = data_dir.join(USAGE_FILE);
-    let mut recorded = match peers::load_json::<Recorded>(&path) {
-        Err(peers::Error::Json { .. }) => Recorded::default(),
-        other => other?,
-    };
-    if recorded.copilot.is_none() && usage.is_none() {
-        return Ok(());
-    }
-    if recorded
-        .copilot
-        .as_ref()
-        .zip(usage.as_ref())
-        .is_some_and(|(old, new)| {
-            *old == CopilotUsage {
-                recorded_ms: old.recorded_ms,
-                ..new.clone()
-            } && new.recorded_ms < old.recorded_ms + RESTAMP_MS
-        })
-    {
-        return Ok(());
-    }
-    recorded.copilot = usage;
-    peers::replace_json(&path, &recorded)?;
-    Ok(())
+    update(data_dir, |recorded| {
+        if recorded.copilot.is_none() && usage.is_none() {
+            return false;
+        }
+        if recorded
+            .copilot
+            .as_ref()
+            .zip(usage.as_ref())
+            .is_some_and(|(old, new)| {
+                *old == CopilotUsage {
+                    recorded_ms: old.recorded_ms,
+                    ..new.clone()
+                } && new.recorded_ms < old.recorded_ms + RESTAMP_MS
+            })
+        {
+            return false;
+        }
+        recorded.copilot = usage;
+        true
+    })
 }
 
 /// Reduced inside `gh` by `--jq`, so the login, ids, organizations and endpoints in the
@@ -442,6 +422,20 @@ fn window(v: &Value) -> Option<UsageWindow> {
         used_percent: used.round().clamp(0.0, 100.0) as u8,
         resets_at_ms: (resets * 1000.0) as u64,
     })
+}
+
+fn update(data_dir: &Path, change: impl FnOnce(&mut Recorded) -> bool) -> anyhow::Result<()> {
+    crate::ensure_private_dir(data_dir)?;
+    let _lock = lock(&data_dir.join(USAGE_LOCK))?;
+    let path = data_dir.join(USAGE_FILE);
+    let mut recorded = match peers::load_json::<Recorded>(&path) {
+        Err(peers::Error::Json { .. }) => Recorded::default(),
+        other => other?,
+    };
+    if change(&mut recorded) {
+        peers::replace_json(&path, &recorded)?;
+    }
+    Ok(())
 }
 
 /// Concurrent sessions' status lines merge into the same file.
