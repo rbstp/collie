@@ -154,6 +154,12 @@ jobs:
           persist-credentials: false
           submodules: true
 
+      # Overlaps the simulator's first boot on a fresh runner with the builds below. The boot
+      # saturates the runner for minutes, so set up go here takes minutes against seconds in
+      # rust; started later, the boot slows the cargo cache restore or the builds as much.
+      - name: boot the simulator
+        run: xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
+
       # setup-go otherwise unpacks Go from scratch on every macOS runner.
       - name: cache the Go toolchain
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -171,11 +177,6 @@ jobs:
 
       - name: install the rust toolchain
         run: rustup toolchain install
-
-      # Overlaps the simulator's first boot on a fresh runner with the builds below. Started any
-      # earlier, it held set up go at 125 to 230 s, against 3 s in the rust job.
-      - name: boot the simulator
-        run: xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
 
       - name: cache cargo and go builds
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -228,7 +229,8 @@ jobs:
         run: xcrun simctl list runtimes | grep -q watchOS || xcodebuild -downloadPlatform watchOS
 
       - name: test
-        run: just --no-deps ios-test never 3
+        timeout-minutes: 45
+        run: just --no-deps ios-test never 2
 
   desktop-packaging:
     runs-on: ubuntu-24.04
