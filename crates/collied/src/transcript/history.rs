@@ -11,6 +11,7 @@ use super::{Kind, Transcripts, open};
 use crate::draft::cells;
 use crate::drive::sanitize_ansi;
 use crate::runtime::AgentInfo;
+use crate::runtime::herdr_core;
 
 const SCAN_BYTES: u64 = 2 * 1024 * 1024;
 const PAGE_BYTES: usize = 40 * 1024;
@@ -29,7 +30,9 @@ impl Transcripts {
         self.read_history(agent, params).unwrap_or(HistoryPage {
             session: None,
             available: false,
-            unavailable_reason: Some(if self.live_id(agent).is_some() {
+            unavailable_reason: Some(if herdr_core::owns(&agent.terminal_id) {
+                "Chat is not available for Herdr 2 agents yet."
+            } else if self.live_id(agent).is_some() {
                 "The transcript for this session is not readable yet. Terminal remains available."
             } else if agent.agent.as_deref() == Some("copilot") {
                 "Chat cannot yet confirm which Copilot CLI conversation this pane shows, so it does not guess. It retries once the pane’s title shows the session’s name. Terminal remains available."
@@ -1444,6 +1447,14 @@ mod tests {
             let page = reader.history(&agent, &params(None, None, None));
             assert!(!page.available && page.messages.is_empty());
             assert!(page.unavailable_reason.unwrap().contains("session ID"));
+            let mut core = agent.clone();
+            core.terminal_id = "hc:abc:t1".into();
+            let page = reader.history(&core, &params(None, None, None));
+            assert!(!page.available && page.messages.is_empty());
+            assert_eq!(
+                page.unavailable_reason.as_deref(),
+                Some("Chat is not available for Herdr 2 agents yet.")
+            );
             agent.agent_session = identity;
             let page = reader.history(&agent, &params(None, None, None));
             assert!(page.available && !page.messages.is_empty());

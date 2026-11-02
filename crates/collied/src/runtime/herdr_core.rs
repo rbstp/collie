@@ -1242,6 +1242,22 @@ mod tests {
                 .0,
             protocol::ErrorCode::HerdrUnavailable
         );
+        let drive = Arc::new(drive);
+        let watch = drive
+            .watch(
+                protocol::TerminalId::new(format!("hc:{ID}:t1")).unwrap(),
+                200,
+                false,
+            )
+            .await;
+        assert_eq!(
+            watch.err(),
+            Some((
+                protocol::ErrorCode::Internal,
+                crate::runtime::NOT_YET.to_owned()
+            )),
+            "a watch that would never send output is refused"
+        );
     }
 
     #[tokio::test]
