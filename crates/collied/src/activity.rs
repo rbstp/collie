@@ -198,7 +198,7 @@ impl Live {
         activities: &[Activity],
         routed: &mut Vec<Routed>,
         agents: &[AgentInfo],
-        held: &[AgentInfo],
+        held: &dyn Fn(&str) -> bool,
         workspaces: &[WorkspaceInfo],
         pending: &[Approval],
         tracker: &mut StatusTracker,
@@ -239,10 +239,7 @@ impl Live {
                 .find(|a| a.terminal_id == activity.terminal_id.as_str())
             else {
                 // Held while herdr is down: not gone, and nothing new to show.
-                if held
-                    .iter()
-                    .any(|a| a.terminal_id == activity.terminal_id.as_str())
-                {
+                if held(activity.terminal_id.as_str()) {
                     t.misses = 0;
                     continue;
                 }
@@ -346,7 +343,7 @@ impl Live {
         push: &Push,
         audit: &Audit,
         agents: &[AgentInfo],
-        held: &[AgentInfo],
+        held: &dyn Fn(&str) -> bool,
         workspaces: &[WorkspaceInfo],
         pending: &[Approval],
         tracker: &mut StatusTracker,
@@ -515,7 +512,7 @@ mod tests {
                 activities,
                 routed,
                 agents,
-                &self.held,
+                &|id| self.held.iter().any(|a| a.terminal_id == id),
                 &workspaces(),
                 pending,
                 &mut self.tracker,
@@ -1115,7 +1112,7 @@ mod tests {
             &push,
             &audit,
             &[agent("working")],
-            &[],
+            &|_| false,
             &workspaces(),
             &[],
             &mut tracker,

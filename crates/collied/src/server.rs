@@ -2754,11 +2754,8 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             _ = tokio::time::sleep(delay) => {}
             _ = shutdown.changed() => return,
         }
-        let (agents, workspaces, held) = match state.runtime.poll().await {
-            Ok(p) => {
-                let held = held(&p.agents, p.herdr, &mut last).map(<[_]>::to_vec);
-                (p.agents, p.workspaces, held)
-            }
+        let (agents, workspaces, answered) = match state.runtime.poll().await {
+            Ok(p) => (p.agents, p.workspaces, p.herdr),
             Err(e) => {
                 if !outage {
                     tracing::warn!(error = %e, "herdr unavailable, retrying with backoff");
@@ -2827,11 +2824,10 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         // Also with no phone connected: a closed pane must lose its star before herdr can
         // give its pane id to a new pane. Any star not in `agents` as it was last seen, a
         // shell pane's included, takes the snapshot.
-        let kept: Option<Vec<runtime::AgentInfo>> = held
-            .as_ref()
-            .map(|h| agents.iter().chain(h).cloned().collect());
+        let herdr = Herdr::after(&agents, answered, &mut last);
+        let kept = herdr.kept(&agents);
         let starred = lock(&state.stars).list();
-        if !lock(&state.stars).listed(kept.as_deref().unwrap_or(&agents))
+        if !lock(&state.stars).listed(&kept)
             && let Ok(snap) = state.runtime.session_snapshot().await
             && lock(&state.stars).reconcile(&snap.panes) != starred
         {
@@ -2845,9 +2841,6 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                 }
             }
         }
-        let (Some(kept), Some(held)) = (kept, held) else {
-            continue;
-        };
         state.approvals.observe(&kept, &workspaces).await;
         for a in lock(&state.turns).observe(&kept, crate::now_ms()) {
             let Ok(terminal_id) = TerminalId::new(a.terminal_id.clone()) else {
@@ -2865,7 +2858,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             &state.push,
             &state.audit,
             &agents,
-            &held,
+            &|id| herdr.holds(id),
             &workspaces,
             &pending,
             &mut lock(&state.tracker),
@@ -2876,26 +2869,51 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     }
 }
 
-/// herdr's agents as herdr last listed them, while a followed core answers in its place:
-/// approvals, done alerts, Live Activities and status times kept for them outlast the
-/// outage, though the phone's list drops them. None while herdr has not answered since
-/// collied started, when nothing is known of its agents and none of that is pruned.
-fn held<'a>(
-    agents: &[runtime::AgentInfo],
-    herdr: bool,
-    last: &'a mut Option<Vec<runtime::AgentInfo>>,
-) -> Option<&'a [runtime::AgentInfo]> {
-    if herdr {
-        *last = Some(
-            agents
-                .iter()
-                .filter(|a| !herdr_core::owns(&a.terminal_id))
-                .cloned()
-                .collect(),
-        );
-        return Some(&[]);
+/// What reconcile knows of herdr's agents: while a followed core answers in herdr's place,
+/// approvals, done alerts, Live Activities and status times kept for herdr's agents outlast
+/// the outage, though the phone's list drops them.
+enum Herdr<'a> {
+    Answered,
+    /// As herdr last listed them.
+    Held(&'a [runtime::AgentInfo]),
+    /// herdr has not answered since collied started.
+    Unknown,
+}
+
+impl<'a> Herdr<'a> {
+    fn after(
+        agents: &[runtime::AgentInfo],
+        answered: bool,
+        last: &'a mut Option<Vec<runtime::AgentInfo>>,
+    ) -> Self {
+        if answered {
+            *last = Some(
+                agents
+                    .iter()
+                    .filter(|a| !herdr_core::owns(&a.terminal_id))
+                    .cloned()
+                    .collect(),
+            );
+            return Self::Answered;
+        }
+        last.as_deref().map_or(Self::Unknown, Self::Held)
     }
-    last.as_deref()
+
+    fn kept(&self, agents: &[runtime::AgentInfo]) -> Vec<runtime::AgentInfo> {
+        match self {
+            Self::Held(held) => agents.iter().chain(held.iter()).cloned().collect(),
+            _ => agents.to_vec(),
+        }
+    }
+
+    /// Not gone, though not polled: its Live Activity is neither updated nor ended.
+    fn holds(&self, terminal_id: &str) -> bool {
+        match self {
+            Self::Answered => false,
+            Self::Held(held) => held.iter().any(|a| a.terminal_id == terminal_id),
+            Self::Unknown => !herdr_core::owns(terminal_id),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2903,33 +2921,118 @@ mod tests {
     use super::*;
     use protocol::TerminalId;
 
+    fn info(id: &str, status: &str) -> runtime::AgentInfo {
+        serde_json::from_value(serde_json::json!({
+            "terminal_id": id, "workspace_id": "w1", "pane_id": id, "agent_status": status,
+            "agent": "claude",
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn herdr_agents_are_held_while_a_core_answers_in_its_place() {
-        let agent = |id: &str| -> runtime::AgentInfo {
-            serde_json::from_value(serde_json::json!({
-                "terminal_id": id, "workspace_id": "w1", "pane_id": id, "agent_status": "blocked",
-            }))
-            .unwrap()
-        };
-        let ids = |v: Option<&[runtime::AgentInfo]>| -> Option<Vec<String>> {
-            v.map(|v| v.iter().map(|a| a.terminal_id.clone()).collect())
+        let ids = |v: Vec<runtime::AgentInfo>| -> Vec<String> {
+            v.into_iter().map(|a| a.terminal_id).collect()
         };
         let mut last = None;
-        let core = [agent("hc:abc:t1")];
-        assert_eq!(
-            ids(held(&core, false, &mut last)),
-            None,
-            "started while herdr is down: nothing known, nothing pruned"
+        let core = [info("hc:abc:t1", "idle")];
+        let herdr = Herdr::after(&core, false, &mut last);
+        assert!(matches!(herdr, Herdr::Unknown));
+        assert!(herdr.holds("term_1") && !herdr.holds("hc:abc:t1"));
+        assert_eq!(ids(herdr.kept(&core)), ["hc:abc:t1"]);
+        let both = [info("term_1", "idle"), info("hc:abc:t1", "idle")];
+        assert!(!Herdr::after(&both, true, &mut last).holds("term_1"));
+        let herdr = Herdr::after(&core, false, &mut last);
+        assert_eq!(ids(herdr.kept(&core)), ["hc:abc:t1", "term_1"]);
+        assert!(herdr.holds("term_1") && !herdr.holds("term_2"));
+        Herdr::after(&core, true, &mut last);
+        let herdr = Herdr::after(&core, false, &mut last);
+        assert!(!herdr.holds("term_1"));
+    }
+
+    /// herdr never answers, as on a herdr-core-only machine: the core's agent still gets its
+    /// done alert, Live Activity updates and end, and herdr's saved state is left alone.
+    #[tokio::test(start_paused = true)]
+    async fn a_core_agent_is_followed_while_herdr_never_answers() {
+        use crate::push::Activity;
+        let activity = |terminal: &str, token: char| Activity {
+            relay_grant: None,
+            stable_id: "nPhone".into(),
+            activity_id: protocol::ActivityId::new(format!(
+                "3F2504E0-4F89-11D3-9A0C-0305E82C330{token}"
+            ))
+            .unwrap(),
+            terminal_id: TerminalId::new(terminal).unwrap(),
+            token: protocol::PushToken::new(token.to_string().repeat(64)).unwrap(),
+            environment: protocol::ApnsEnvironment::Production,
+            registered_at: 0,
+            shows_approvals: true,
+            display_binding: None,
+        };
+        let acts = [activity("hc:abc:t1", 'a'), activity("term_1", 'b')];
+        let mut last = None;
+        let mut live = activity::Live::default();
+        let mut turns = Turns::default();
+        let mut tracker = StatusTracker::default();
+        flock::map_agent(&info("term_1", "working"), &mut tracker, 1_000, None).unwrap();
+        let t0 = 1_791_028_800_000;
+        let mut poll = |agents: &[runtime::AgentInfo],
+                        now_ms: u64,
+                        live: &mut activity::Live,
+                        turns: &mut Turns,
+                        tracker: &mut StatusTracker| {
+            let herdr = Herdr::after(agents, false, &mut last);
+            let kept = herdr.kept(agents);
+            let done: Vec<String> = turns
+                .observe(&kept, now_ms)
+                .into_iter()
+                .map(|a| a.terminal_id.clone())
+                .collect();
+            let planned = live.plan(
+                &acts,
+                &mut Vec::new(),
+                agents,
+                &|id| herdr.holds(id),
+                &[],
+                &[],
+                tracker,
+                now_ms,
+            );
+            tracker.retain(kept.iter().map(|a| a.terminal_id.as_str()));
+            let planned: Vec<(String, bool)> = planned
+                .into_iter()
+                .map(|p| (p.activity.terminal_id.as_str().to_owned(), p.end))
+                .collect();
+            (done, planned)
+        };
+
+        let working = [info("hc:abc:t1", "working")];
+        let (done, planned) = poll(&working, t0, &mut live, &mut turns, &mut tracker);
+        assert!(done.is_empty());
+        assert_eq!(planned, [("hc:abc:t1".to_owned(), false)]);
+        tokio::time::advance(Duration::from_secs(31)).await;
+        let finished = [info("hc:abc:t1", "done")];
+        let (done, planned) = poll(&finished, t0 + 31_000, &mut live, &mut turns, &mut tracker);
+        assert_eq!(done, ["hc:abc:t1"], "the done alert");
+        assert_eq!(planned, [("hc:abc:t1".to_owned(), false)], "the update");
+        let mut ended = Vec::new();
+        for i in 0..20 {
+            tokio::time::advance(Duration::from_secs(60)).await;
+            let now_ms = t0 + 32_000 + i * 60_000;
+            ended.extend(poll(&[], now_ms, &mut live, &mut turns, &mut tracker).1);
+        }
+        assert!(ended.contains(&("hc:abc:t1".to_owned(), true)), "the end");
+        assert!(
+            ended.iter().all(|(t, _)| t == "hc:abc:t1"),
+            "herdr's activity is neither updated nor ended"
         );
-        let both = [agent("term_1"), agent("hc:abc:t1")];
-        assert_eq!(ids(held(&both, true, &mut last)), Some(vec![]));
         assert_eq!(
-            ids(held(&core, false, &mut last)),
-            Some(vec!["term_1".to_owned()]),
-            "herdr down: its agent is held"
+            flock::map_agent(&info("term_1", "working"), &mut tracker, 9_000, None)
+                .unwrap()
+                .status_since_ms,
+            1_000,
+            "herdr's status time is kept"
         );
-        assert_eq!(ids(held(&core, true, &mut last)), Some(vec![]));
-        assert_eq!(ids(held(&core, false, &mut last)), Some(vec![]));
     }
 
     #[test]

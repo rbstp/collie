@@ -54,10 +54,13 @@ impl StatusTracker {
         }
     }
 
+    /// A runtime that lists no agent, or does not answer, keeps its agents' times.
     pub fn retain<'a>(&mut self, live: impl Iterator<Item = &'a str>) {
         let live: std::collections::HashSet<&str> = live.collect();
+        let listed = |core: bool| live.iter().any(|id| owns(id) == core);
         let before = self.seen.len();
-        self.seen.retain(|id, _| live.contains(id.as_str()));
+        self.seen
+            .retain(|id, _| live.contains(id.as_str()) || !listed(owns(id)));
         self.dirty |= self.seen.len() != before;
     }
 }

@@ -615,7 +615,7 @@ impl Approvals {
     }
 
     async fn current(&self, terminal: &str) -> Result<Option<Screen>, runtime::Error> {
-        let agents = self.runtime.agents_of(terminal).await?;
+        let agents = self.runtime.agent_list().await?;
         match agents.iter().find(|a| a.terminal_id == terminal) {
             Some(a) => Ok(Some(self.screen(a).await?)),
             None => Ok(None),
@@ -626,7 +626,7 @@ impl Approvals {
         let poll = async {
             loop {
                 tokio::time::sleep(SETTLE_POLL).await;
-                let Ok(agents) = self.runtime.agents_of(terminal).await else {
+                let Ok(agents) = self.runtime.agent_list().await else {
                     continue;
                 };
                 match agents.iter().find(|a| a.terminal_id == terminal) {
