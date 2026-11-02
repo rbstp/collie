@@ -110,20 +110,15 @@ extension XCUIApplication {
         withInteractionOptions(2, open)
         // The item exists before the menu has laid it out, and isHittable records a failure instead of returning false while
         // the item's activation point is not valid yet.
-        // The menu can also fail to open. Its items exist only while it is open, so it is opened again only when the item is
-        // missing: a second open of an open menu closes it, and a hosted runner kept an open menu's item frameless for 15 s.
-        let reopen = Date.now.addingTimeInterval(8)
-        var reopened = false
         var last = CGRect.null
-        XCTAssertTrue(eventually(within: 30) {
+        let ready = eventually(within: 15) {
             let laidOut = (try? item.snapshot())?.frame ?? .null
             defer { last = laidOut }
-            if laidOut.isEmpty && !reopened && Date.now >= reopen && !item.exists {
-                reopened = true
-                withInteractionOptions(2, open)
-            }
             return !laidOut.isEmpty && frame.contains(laidOut) && laidOut == last
-        }, debugDescription)
+        }
+        // A hosted runner kept an open menu's item frameless for 25 s, and XCTest's own tap still reached it through the
+        // menu's cell.
+        guard ready else { return withInteractionOptions(1) { item.tap() } }
         let settled = last
         let center = item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         withInteractionOptions(1) { center.tap() }
