@@ -68,6 +68,10 @@ pub struct AgentInfo {
     pub interactive_ready: bool,
     #[serde(default)]
     pub launch_pending: bool,
+    /// A herdr-core agent with no OSC 7501 status: nothing tells collied a dialog is open
+    /// (Copilot's folder trust prompt reports nothing), so it takes no input from the phone.
+    #[serde(skip)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -107,6 +111,8 @@ pub fn herdr_session_label(session: Option<&str>) -> String {
 }
 
 pub const NOT_YET: &str = "not available for Herdr 2 agents yet";
+/// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
+const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
 
 fn herdr_only(id: &str) -> Result<(), Error> {
     if herdr_core::owns(id) {
@@ -210,7 +216,9 @@ impl Runtime {
     }
 
     pub async fn agent_get(&self, target: &str) -> Result<AgentInfo, Error> {
-        herdr_only(target)?;
+        if herdr_core::owns(target) {
+            return self.followed()?.get(target).await;
+        }
         herdr::agent_get(&self.herdr, target).await
     }
 
@@ -261,28 +269,64 @@ impl Runtime {
     }
 
     pub async fn agent_explain(&self, target: &str) -> Result<herdr::Explain, Error> {
-        herdr_only(target)?;
+        if herdr_core::owns(target) {
+            return self.followed()?.explain(target);
+        }
         herdr::agent_explain(&self.herdr, target).await
     }
 
     pub async fn detection_text(&self, pane_id: &str) -> Result<String, Error> {
-        herdr_only(pane_id)?;
+        if herdr_core::owns(pane_id) {
+            return self.followed()?.screen_text(pane_id).await;
+        }
         herdr::detection_text(&self.herdr, pane_id).await
     }
 
-    pub async fn agent_prompt(&self, pane_id: &str, text: &str) -> Result<(), Error> {
-        herdr_only(pane_id)?;
+    /// `seen` is the status the ready check saw, which a herdr-core send requires again.
+    pub async fn agent_prompt(&self, pane_id: &str, text: &str, seen: &str) -> Result<(), Error> {
+        if herdr_core::owns(pane_id) {
+            return self.followed()?.send(pane_id, text, seen, false).await;
+        }
         herdr::agent_prompt(&self.herdr, pane_id, text).await
     }
 
+    /// A typed answer: a paste and Enter, also into a blocked agent's dialog.
+    pub async fn type_text(&self, pane_id: &str, text: &str, seen: &str) -> Result<(), Error> {
+        if herdr_core::owns(pane_id) {
+            let blocked = seen == "blocked";
+            return self.followed()?.send(pane_id, text, seen, blocked).await;
+        }
+        let paste = format!("\u{1b}[200~{text}\u{1b}[201~");
+        herdr::pane_send_input(&self.herdr, pane_id, &paste, &["enter"]).await
+    }
+
     pub async fn agent_send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<(), Error> {
-        herdr_only(pane_id)?;
+        if herdr_core::owns(pane_id) {
+            return self.followed()?.keys(pane_id, keys).await;
+        }
         herdr::agent_send_keys(&self.herdr, pane_id, keys).await
     }
 
     pub async fn pane_send_text(&self, pane_id: &str, text: &str) -> Result<(), Error> {
-        herdr_only(pane_id)?;
+        if herdr_core::owns(pane_id) {
+            return self.followed()?.type_raw(pane_id, text).await;
+        }
         herdr::pane_send_text(&self.herdr, pane_id, text).await
+    }
+
+    pub async fn scroll_bottom(&self, pane_id: &str) -> Result<(), Error> {
+        if herdr_core::owns(pane_id) {
+            return self.followed()?.keys(pane_id, &["ctrl+end"]).await;
+        }
+        herdr::pane_send_text(&self.herdr, pane_id, SCROLL_BOTTOM).await
+    }
+
+    /// A notice option's digit, without Enter.
+    pub async fn notice_digit(&self, pane_id: &str, digit: &str) -> Result<(), Error> {
+        if herdr_core::owns(pane_id) {
+            return self.followed()?.keys(pane_id, &[digit]).await;
+        }
+        herdr::pane_send_text(&self.herdr, pane_id, digit).await
     }
 
     pub async fn pane_send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<(), Error> {

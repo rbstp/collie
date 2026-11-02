@@ -583,7 +583,8 @@ pub async fn start_with(
             audit.clone(),
             Some(push.clone()),
         )
-        .with_timing(cfg.approval_ttl, approvals::SETTLE),
+        .with_timing(cfg.approval_ttl, approvals::SETTLE)
+        .with_core(core.clone()),
     );
     {
         let approvals = Arc::downgrade(&approvals);

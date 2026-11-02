@@ -1,6 +1,6 @@
 # Agents
 
-The **Agents** tab lists the herdr agents on every paired machine, each with its status: `idle`, `working`, `blocked` or `done`. Agents in herdr-core (Herdr 2) appear in a group of their own named **Herdr 2**, after the machine's herdr workspaces; an agent that does not report its status there, such as Copilot CLI, shows as `unknown`. A machine that is asleep or off shows as offline without slowing down the others. Pull down to retry every machine, or tap a machine's header to retry that one.
+The **Agents** tab lists the herdr agents on every paired machine, each with its status: `idle`, `working`, `blocked` or `done`. Agents in herdr-core (Herdr 2) appear in a group of their own named **Herdr 2**, after the machine's herdr workspaces; an agent that does not report its status there, such as Copilot CLI, shows as `unknown` and takes no prompts or keys from the phone. A machine that is asleep or off shows as offline without slowing down the others. Pull down to retry every machine, or tap a machine's header to retry that one.
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/agents-light.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">
@@ -42,7 +42,7 @@ Claude Code, Copilot CLI and Codex agents show their running subagents, each wit
 
 ## Agent actions
 
-Long-press an agent to follow it on the Lock Screen ([Live Activities](../notifications/live-activities.md)), close its pane or workspace, or [archive](new-task.md#archive) it. For a Herdr 2 agent, you can follow it, watch its screen in **Terminal** and on grid cards, and close it, which ends its program and removes its terminal; the machine refuses to close the Herdr 2 group, which would end every terminal in it, and Collie shows a Claude Code or Codex agent's conversation in [Chat](chat-terminal.md#chat) but cannot yet prompt it or answer its approvals. A session's **More** menu offers the same actions, plus [Git changes](git-changes.md), **Refresh**, and **Focus on** followed by the machine name, which brings the agent's pane to the front in herdr on that machine.
+Long-press an agent to follow it on the Lock Screen ([Live Activities](../notifications/live-activities.md)), close its pane or workspace, or [archive](new-task.md#archive) it. For a Herdr 2 agent, you can follow it, watch its screen in **Terminal** and on grid cards, prompt it, send it keys, answer its approvals, and close it, which ends its program and removes its terminal; the machine refuses to close the Herdr 2 group, which would end every terminal in it, and to focus or archive a Herdr 2 agent. A Herdr 2 agent you suspend with Ctrl+Z leaves the list, and its Live Activity ends, until you bring it back with `fg`; an agent started through a shell wrapper that keeps the terminal, such as a terminal started as `sh -c 'cd x && claude'`, does not appear. Collie shows a Claude Code or Codex agent's conversation in [Chat](chat-terminal.md#chat). A session's **More** menu offers the same actions, plus [Git changes](git-changes.md), **Refresh**, and **Focus on** followed by the machine name, which brings the agent's pane to the front in herdr on that machine.
 
 ## Appearance
 

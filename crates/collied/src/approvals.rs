@@ -19,6 +19,7 @@ use crate::flock;
 use crate::hooks;
 use crate::prompt::{self, Menu};
 use crate::push::{self, Push};
+use crate::runtime::herdr_core::{self, Core};
 use crate::runtime::{self, AgentInfo, Runtime, WorkspaceInfo};
 use crate::server::TokenBucket;
 
@@ -270,6 +271,11 @@ impl Approvals {
 
     pub fn with_budget(mut self, budget: Duration) -> Self {
         self.budget = budget;
+        self
+    }
+
+    pub fn with_core(mut self, core: Option<Arc<Core>>) -> Self {
+        self.runtime = self.runtime.with_core(core);
         self
     }
 
@@ -716,7 +722,19 @@ impl Approvals {
                 }
             }
         };
-        let budget = tokio::time::Instant::now() + self.budget;
+        // A note's Enter on a herdr-core agent waits out the core's typing hold (below). Notes
+        // never come from the lock screen, whose background time the budget keeps to.
+        let held = p.note.is_some()
+            && claimed
+                .as_ref()
+                .is_some_and(|(a, _)| herdr_core::owns(a.terminal_id.as_str()));
+        let budget = tokio::time::Instant::now()
+            + self.budget
+            + if held {
+                herdr_core::TYPING_HOLD
+            } else {
+                Duration::ZERO
+            };
         let Some((approval, screen)) = claimed else {
             audit("rejected: replayed");
             return fail(ErrorCode::ApprovalAlreadyResolved, "approval already used");
@@ -907,13 +925,29 @@ impl Approvals {
                     return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
                 }
             }
-            let typed = self
-                .menu_settles(terminal, &screen, budget, |m| {
+            let typed_at = tokio::time::Instant::now();
+            let typed = async || {
+                self.menu_settles(terminal, &screen, budget, |m| {
                     menu.only_changed(target, m) && m.reads(target, shown)
                 })
-                .await;
-            if !typed {
+                .await
+            };
+            if !typed().await {
                 return superseded(&format!("superseded: note not shown {}", sent(&keys)));
+            }
+            // herdr-core holds a key until nobody has typed for about 3 s, and the note's
+            // own typing counts: an Enter sent now would land that long after the read above,
+            // into whatever dialog shows then. Wait the hold out and read again, so Enter
+            // follows the last read as closely as under herdr.
+            if herdr_core::owns(pane) {
+                let quiet = typed_at + herdr_core::TYPING_HOLD;
+                if quiet >= budget {
+                    return superseded(&format!("superseded: herdr too slow {}", sent(&keys)));
+                }
+                tokio::time::sleep_until(quiet).await;
+                if !typed().await {
+                    return superseded(&format!("superseded: note not shown {}", sent(&keys)));
+                }
             }
             if !auth() {
                 return revoked();
