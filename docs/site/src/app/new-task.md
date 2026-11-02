@@ -33,7 +33,7 @@ Check the branch and path before you tap **Start**. If the agent fails to start,
 
 ## Resume a session
 
-Choose **Resume** and a folder to list its recent Claude Code and Codex sessions by first prompt, then resume one in a new workspace, with an optional prompt. Sessions open in a herdr pane are left out.
+Choose **Resume** and a folder to list its recent Claude Code and Codex sessions by first prompt, then resume one in a new workspace, with an optional prompt. Sessions already open in an agent, in herdr or Herdr 2, are left out.
 
 ## Options
 
