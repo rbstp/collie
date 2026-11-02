@@ -198,6 +198,7 @@ impl Live {
         activities: &[Activity],
         routed: &mut Vec<Routed>,
         agents: &[AgentInfo],
+        held: &[AgentInfo],
         workspaces: &[WorkspaceInfo],
         pending: &[Approval],
         tracker: &mut StatusTracker,
@@ -237,6 +238,14 @@ impl Live {
                 .iter()
                 .find(|a| a.terminal_id == activity.terminal_id.as_str())
             else {
+                // Held while herdr is down: not gone, and nothing new to show.
+                if held
+                    .iter()
+                    .any(|a| a.terminal_id == activity.terminal_id.as_str())
+                {
+                    t.misses = 0;
+                    continue;
+                }
                 t.misses += 1;
                 if t.misses >= GONE_AFTER {
                     out.push(Planned {
@@ -331,11 +340,13 @@ impl Live {
 
     /// Sends what `plan` decided; the activity of a terminal that is gone is ended and
     /// its token dropped.
+    #[allow(clippy::too_many_arguments)]
     pub fn observe(
         &mut self,
         push: &Push,
         audit: &Audit,
         agents: &[AgentInfo],
+        held: &[AgentInfo],
         workspaces: &[WorkspaceInfo],
         pending: &[Approval],
         tracker: &mut StatusTracker,
@@ -371,6 +382,7 @@ impl Live {
             &activities,
             &mut routed,
             agents,
+            held,
             workspaces,
             pending,
             tracker,
@@ -465,6 +477,7 @@ mod tests {
         live: Live,
         tracker: StatusTracker,
         clock_ms: u64,
+        held: Vec<AgentInfo>,
     }
 
     impl Rig {
@@ -473,6 +486,7 @@ mod tests {
                 live: Live::default(),
                 tracker: StatusTracker::default(),
                 clock_ms: T0,
+                held: Vec::new(),
             }
         }
 
@@ -501,6 +515,7 @@ mod tests {
                 activities,
                 routed,
                 agents,
+                &self.held,
                 &workspaces(),
                 pending,
                 &mut self.tracker,
@@ -835,6 +850,29 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn a_held_agent_keeps_its_activity_without_updates() {
+        let mut rig = Rig::new();
+        let acts = [activity('a')];
+        assert_eq!(rig.plan(&acts, &[agent("working")], &[]).len(), 1);
+        rig.held = vec![agent("working")];
+        for _ in 0..80 {
+            rig.advance(Duration::from_secs(60)).await;
+            assert!(
+                rig.plan(&acts, &[], &[]).is_empty(),
+                "a herdr outage sends nothing and ends nothing"
+            );
+        }
+        rig.held.clear();
+        rig.advance(Duration::from_secs(60)).await;
+        assert!(rig.plan(&acts, &[], &[]).is_empty());
+        let ended = rig.plan(&acts, &[], &[]);
+        assert!(
+            ended.len() == 1 && ended[0].end,
+            "gone once nothing holds it"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn flapping_never_alerts_by_itself() {
         let mut rig = Rig::new();
         let acts = [activity('a')];
@@ -1077,6 +1115,7 @@ mod tests {
             &push,
             &audit,
             &[agent("working")],
+            &[],
             &workspaces(),
             &[],
             &mut tracker,

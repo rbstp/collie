@@ -2748,16 +2748,16 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     let mut base: Option<Baseline> = None;
     let mut outage = false;
     let mut delay = RECONCILE_EVERY;
-    let mut held = Vec::new();
+    let mut last = None;
     loop {
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
             _ = shutdown.changed() => return,
         }
-        let (agents, workspaces, kept) = match state.runtime.poll().await {
+        let (agents, workspaces, held) = match state.runtime.poll().await {
             Ok(p) => {
-                let kept = with_held(&p.agents, p.herdr, &mut held);
-                (p.agents, p.workspaces, kept)
+                let held = held(&p.agents, p.herdr, &mut last).map(<[_]>::to_vec);
+                (p.agents, p.workspaces, held)
             }
             Err(e) => {
                 if !outage {
@@ -2827,8 +2827,11 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         // Also with no phone connected: a closed pane must lose its star before herdr can
         // give its pane id to a new pane. Any star not in `agents` as it was last seen, a
         // shell pane's included, takes the snapshot.
+        let kept: Option<Vec<runtime::AgentInfo>> = held
+            .as_ref()
+            .map(|h| agents.iter().chain(h).cloned().collect());
         let starred = lock(&state.stars).list();
-        if !lock(&state.stars).listed(&kept)
+        if !lock(&state.stars).listed(kept.as_deref().unwrap_or(&agents))
             && let Ok(snap) = state.runtime.session_snapshot().await
             && lock(&state.stars).reconcile(&snap.panes) != starred
         {
@@ -2842,6 +2845,9 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                 }
             }
         }
+        let (Some(kept), Some(held)) = (kept, held) else {
+            continue;
+        };
         state.approvals.observe(&kept, &workspaces).await;
         for a in lock(&state.turns).observe(&kept, crate::now_ms()) {
             let Ok(terminal_id) = TerminalId::new(a.terminal_id.clone()) else {
@@ -2858,7 +2864,8 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         lock(&state.live).observe(
             &state.push,
             &state.audit,
-            &kept,
+            &agents,
+            &held,
             &workspaces,
             &pending,
             &mut lock(&state.tracker),
@@ -2869,23 +2876,26 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     }
 }
 
-/// While a followed core answers in herdr's place, herdr's agents as it last listed them,
-/// beside what was polled, so approvals, Live Activities, status times and stars kept for
-/// them outlast the outage. The phone's list drops them all the same.
-fn with_held(
+/// herdr's agents as herdr last listed them, while a followed core answers in its place:
+/// approvals, done alerts, Live Activities and status times kept for them outlast the
+/// outage, though the phone's list drops them. None while herdr has not answered since
+/// collied started, when nothing is known of its agents and none of that is pruned.
+fn held<'a>(
     agents: &[runtime::AgentInfo],
     herdr: bool,
-    held: &mut Vec<runtime::AgentInfo>,
-) -> Vec<runtime::AgentInfo> {
+    last: &'a mut Option<Vec<runtime::AgentInfo>>,
+) -> Option<&'a [runtime::AgentInfo]> {
     if herdr {
-        *held = agents
-            .iter()
-            .filter(|a| !herdr_core::owns(&a.terminal_id))
-            .cloned()
-            .collect();
-        return agents.to_vec();
+        *last = Some(
+            agents
+                .iter()
+                .filter(|a| !herdr_core::owns(&a.terminal_id))
+                .cloned()
+                .collect(),
+        );
+        return Some(&[]);
     }
-    agents.iter().chain(held.iter()).cloned().collect()
+    last.as_deref()
 }
 
 #[cfg(test)]
@@ -2901,27 +2911,25 @@ mod tests {
             }))
             .unwrap()
         };
-        let ids = |v: Vec<runtime::AgentInfo>| -> Vec<String> {
-            v.into_iter().map(|a| a.terminal_id).collect()
+        let ids = |v: Option<&[runtime::AgentInfo]>| -> Option<Vec<String>> {
+            v.map(|v| v.iter().map(|a| a.terminal_id.clone()).collect())
         };
-        let mut held = Vec::new();
-        let both = [agent("term_1"), agent("hc:abc:t1")];
-        assert_eq!(
-            ids(with_held(&both, true, &mut held)),
-            ["term_1", "hc:abc:t1"]
-        );
+        let mut last = None;
         let core = [agent("hc:abc:t1")];
         assert_eq!(
-            ids(with_held(&core, false, &mut held)),
-            ["hc:abc:t1", "term_1"],
-            "herdr down: its agent stays for approvals, Live Activities and status times"
+            ids(held(&core, false, &mut last)),
+            None,
+            "started while herdr is down: nothing known, nothing pruned"
         );
+        let both = [agent("term_1"), agent("hc:abc:t1")];
+        assert_eq!(ids(held(&both, true, &mut last)), Some(vec![]));
         assert_eq!(
-            ids(with_held(&core, false, &mut held)),
-            ["hc:abc:t1", "term_1"]
+            ids(held(&core, false, &mut last)),
+            Some(vec!["term_1".to_owned()]),
+            "herdr down: its agent is held"
         );
-        assert_eq!(ids(with_held(&core, true, &mut held)), ["hc:abc:t1"]);
-        assert!(held.is_empty());
+        assert_eq!(ids(held(&core, true, &mut last)), Some(vec![]));
+        assert_eq!(ids(held(&core, false, &mut last)), Some(vec![]));
     }
 
     #[test]

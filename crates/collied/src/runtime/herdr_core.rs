@@ -709,7 +709,7 @@ impl Conn {
             .await
             .map_err(|_| Error::Timeout)??;
         // The socket is 0755: its folder alone keeps other users from serving one there.
-        if stream.peer_cred()?.uid() != rustix::process::getuid().as_raw() {
+        if stream.peer_cred()?.uid() != rustix::process::geteuid().as_raw() {
             return Err(Error::Unsupported("is served by another user".to_owned()));
         }
         let (reader, writer) = stream.into_split();
