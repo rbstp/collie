@@ -36,6 +36,9 @@ pub const METHODS: [&str; 10] = [
 pub const GROUP_LABEL: &str = "Herdr 2";
 const PREFIX: &str = "hc:";
 const AGENT_CLIS: [&str; 3] = ["claude", "codex", "copilot"];
+const SHELLS: [&str; 9] = [
+    "sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu",
+];
 const TIMEOUT: Duration = Duration::from_secs(5);
 const KILL_TIMEOUT: Duration = Duration::from_secs(15);
 /// A send or keys call first waits until nobody has typed for about 3 s, and input through
@@ -210,6 +213,8 @@ impl Terminal {
 struct Foreground {
     pid: Option<u32>,
     cli: Option<String>,
+    /// A login shell's `argv[0]` starts with `-`.
+    shell: bool,
     cwd: String,
 }
 
@@ -233,6 +238,7 @@ impl From<RawForeground> for Foreground {
         Self {
             pid: raw.pid,
             cli: name.filter(|n| AGENT_CLIS.contains(n)).map(str::to_owned),
+            shell: name.is_some_and(|n| SHELLS.contains(&n.trim_start_matches('-'))),
             cwd: raw.cwd,
         }
     }
@@ -276,21 +282,12 @@ struct Held {
     terminal: Terminal,
     /// `state_change_seq`: the seq of the event where the status's state last changed.
     seq: u64,
-    /// The status was left behind by a program that ended: herdr-core 0.1.16 keeps a
-    /// program's OSC 7501 status after it exits and its shell takes the terminal back, and a
-    /// prompt's Enter would then go to the shell. Cleared by the next report.
-    orphaned: bool,
 }
 
 struct Live {
     group: String,
     seq: u64,
     terminals: BTreeMap<String, Held>,
-    alive: fn(u32) -> bool,
-}
-
-fn alive(pid: u32) -> bool {
-    process(pid).is_some()
 }
 
 impl Live {
@@ -298,13 +295,10 @@ impl Live {
     /// when its state or turn moved, so a dialog seen across a gap still gets a new seq.
     fn snapshot(&mut self, seq: u64, terminals: Vec<Terminal>) {
         let mut next = BTreeMap::new();
-        for mut t in terminals.into_iter().filter(|t| local(&t.address)) {
-            let held = self.terminals.get(&t.address);
-            let orphaned = held.is_some_and(|h| h.orphaned && leader(&h.terminal) == leader(&t));
-            if orphaned {
-                t.status = None;
-            }
-            let kept = held
+        for t in terminals.into_iter().filter(|t| local(&t.address)) {
+            let kept = self
+                .terminals
+                .get(&t.address)
                 .filter(|h| h.terminal.state() == t.state() && h.terminal.turn == t.turn)
                 .map_or(seq, |h| h.seq);
             next.insert(
@@ -312,7 +306,6 @@ impl Live {
                 Held {
                     terminal: t,
                     seq: kept,
-                    orphaned,
                 },
             );
         }
@@ -343,7 +336,6 @@ impl Live {
                         Held {
                             terminal: t,
                             seq: kept,
-                            orphaned: false,
                         },
                     );
                 }
@@ -352,7 +344,6 @@ impl Live {
                 self.terminals.remove(&e.terminal);
             }
             kind => {
-                let alive = self.alive;
                 let Some(h) = self.terminals.get_mut(&e.terminal) else {
                     return;
                 };
@@ -363,21 +354,7 @@ impl Live {
                         t.foreground = None;
                         t.status = None;
                     }
-                    "foreground" => {
-                        let next: Option<Foreground> =
-                            serde_json::from_value(e.data).ok().flatten();
-                        // The program that led the terminal ended; one that hands it to a
-                        // child it started is still there.
-                        let ended = leader(t).is_some_and(|old| {
-                            next.as_ref().and_then(|f| f.pid) != Some(old) && !alive(old)
-                        });
-                        if ended && t.status.is_some() {
-                            t.status = None;
-                            h.seq = e.seq;
-                            h.orphaned = true;
-                        }
-                        t.foreground = next;
-                    }
+                    "foreground" => t.foreground = serde_json::from_value(e.data).ok().flatten(),
                     "status" => {
                         #[derive(Deserialize)]
                         struct Data {
@@ -389,7 +366,6 @@ impl Live {
                                 h.seq = e.seq;
                             }
                             t.status = status;
-                            h.orphaned = false;
                         }
                     }
                     "title" => {
@@ -439,10 +415,6 @@ impl Live {
     }
 }
 
-fn leader(t: &Terminal) -> Option<u32> {
-    t.foreground.as_ref().and_then(|f| f.pid)
-}
-
 fn not_found() -> Error {
     Error::Core {
         kind: "not_found".to_owned(),
@@ -465,6 +437,12 @@ fn agent(
 ) -> Option<AgentInfo> {
     let t = &h.terminal;
     if t.state != "live" {
+        return None;
+    }
+    // A shell leads the terminal, so input would reach it: the status the core still holds
+    // is that of a program that exited or is suspended (Ctrl+Z), which herdr-core 0.1.16
+    // keeps, or of one a shell wrapper runs without handing it the terminal.
+    if t.foreground.as_ref().is_some_and(|f| f.shell) {
         return None;
     }
     let cli = t.foreground.as_ref().and_then(|f| f.cli.as_deref());
@@ -782,7 +760,6 @@ impl Core {
             group,
             seq: 0,
             terminals: BTreeMap::new(),
-            alive,
         };
         live.snapshot(snap.seq, snap.terminals);
         self.lock().live = Some(live);
@@ -820,7 +797,7 @@ impl Core {
     pub async fn get(&self, id: &str) -> Result<AgentInfo, Error> {
         let (address, ..) = self.terminal(id)?;
         let mut conn = Conn::open(&self.socket).await?;
-        let mut t: Terminal = conn
+        let t: Terminal = conn
             .call("terminal.get", json!({ "terminal": address }), TIMEOUT)
             .await?;
         if t.address != address {
@@ -828,20 +805,12 @@ impl Core {
         }
         let inner = self.lock();
         let live = inner.live.as_ref().ok_or(Error::Closed)?;
-        let held = live.terminals.get(&address);
-        let seq = held.map_or(live.seq, |h| h.seq);
-        let orphaned = held.is_some_and(|h| h.orphaned);
-        if orphaned {
-            t.status = None;
-        }
-        let held = Held {
-            terminal: t,
-            seq,
-            orphaned,
-        };
-        agent(&live.group, &held, &|kind, address, pid| {
-            self.session(&inner, kind, address, pid)
-        })
+        let seq = live.terminals.get(&address).map_or(live.seq, |h| h.seq);
+        agent(
+            &live.group,
+            &Held { terminal: t, seq },
+            &|kind, address, pid| self.session(&inner, kind, address, pid),
+        )
         .ok_or_else(not_found)
     }
 
@@ -1539,7 +1508,6 @@ mod tests {
             group: format!("hc:{ID}"),
             seq: 0,
             terminals: BTreeMap::new(),
-            alive: |_| true,
         };
         live.snapshot(seq, serde_json::from_value(terminals).unwrap());
         live
@@ -1723,31 +1691,25 @@ mod tests {
     }
 
     #[test]
-    fn a_status_left_by_a_program_that_ended_is_dropped() {
+    fn a_terminal_a_shell_leads_is_never_an_agent() {
+        // herdr-core 0.1.16 keeps a status after its program exits, and while it is
+        // suspended (Ctrl+Z), with the shell leading the terminal again.
         let codex = terminal("t1", json!({"state": "idle", "app": "codex"}), "codex");
         let mut l = live(10, json!([codex]));
-        let fg = |pid: u32, argv0: &str| json!({"pid": pid, "argv": [argv0], "cwd": "/w"});
-        // Codex hands the terminal to an editor it started, then takes it back.
-        event(&mut l, 11, "t1", "foreground", fg(12, "vim"));
-        event(&mut l, 12, "t1", "foreground", fg(9, "codex"));
         assert_eq!(shown(&l)[0].1, "idle");
-        l.alive = |pid| pid != 9;
-        event(&mut l, 13, "t1", "foreground", fg(3, "-zsh"));
-        assert!(
-            l.agents(none).is_empty(),
-            "a shell with Codex's last status"
-        );
+        let fg = |pid: u32, argv0: &str| json!({"pid": pid, "argv": [argv0, "-i"], "cwd": "/w"});
+        let shells = ["-zsh", "/bin/bash", "sh", "/opt/homebrew/bin/fish", "nu"];
+        for (seq, shell) in (11..).zip(shells) {
+            event(&mut l, seq, "t1", "foreground", fg(3, shell));
+            assert!(l.agents(none).is_empty(), "{shell}");
+        }
+        event(&mut l, 20, "t1", "foreground", fg(9, "codex"));
+        assert_eq!(shown(&l)[0].1, "idle", "back in the foreground");
 
-        let mut kept = terminal("t1", json!({"state": "idle", "app": "codex"}), "codex");
-        kept["foreground"] = fg(3, "-zsh");
-        l.snapshot(20, serde_json::from_value(json!([kept.clone()])).unwrap());
-        assert!(l.agents(none).is_empty(), "the core still holds the status");
-        let status = json!({"reported": true, "status": {"state": "idle", "app": "codex"}});
-        event(&mut l, 21, "t1", "status", status);
-        let a = &l.agents(none)[0];
-        assert_eq!((a.agent_status.as_str(), a.read_only), ("idle", false));
-        l.snapshot(22, serde_json::from_value(json!([kept])).unwrap());
-        assert_eq!(l.agents(none).len(), 1, "a new report holds");
+        // A fresh follow (collied restarted, the core reconnected) sees only the snapshot.
+        let mut stale = terminal("t1", json!({"state": "idle", "app": "codex"}), "codex");
+        stale["foreground"] = fg(3, "-zsh");
+        assert!(live(20, json!([stale])).agents(none).is_empty());
     }
 
     #[test]

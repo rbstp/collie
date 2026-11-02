@@ -88,8 +88,10 @@ async fn until<T>(what: &str, mut ready: impl AsyncFnMut() -> Option<T>) -> T {
     panic!("timed out waiting for {what}");
 }
 
+/// Under a name that is not a shell's: collied lists no terminal a shell leads.
 fn run(core: &CoreSession, name: &str, work: &Path, script: &str) -> String {
-    run_argv(core, name, work, &["/bin/sh", "-c", script])
+    let exec = r#"exec -a collie-fake /bin/bash -c "$1""#;
+    run_argv(core, name, work, &["/bin/bash", "-c", exec, "fake", script])
 }
 
 fn run_argv(core: &CoreSession, name: &str, work: &Path, argv: &[&str]) -> String {
@@ -1084,32 +1086,52 @@ async fn input_scenario(core: &CoreSession) {
     rt.agent_send_keys(&a.pane_id, &["esc"]).await.unwrap();
     shows(&claude, "amended esc").await;
 
-    // herdr-core keeps a status after its program exits to the shell; collied does not list
-    // the shell as that agent.
+    // herdr-core keeps a program's status while it is suspended and after it exits, with
+    // the shell leading the terminal; collied lists no terminal a shell leads.
     let shell = run_argv(core, "collie-shell", &work, &["/bin/sh", "-i"]);
     std::fs::write(
         work.join("reporter"),
         "printf '\\033]7501;state=idle:app=codex\\033\\\\'\nwhile [ ! -e leave ]; do sleep 0.1; done\n",
     )
     .unwrap();
-    core.hc(&["send", "--json", &shell, "sh reporter"]);
+    let leads = async |argv0: &str| {
+        until(argv0, async || {
+            let t = core.hc(&["get", "--json", &shell]);
+            (t["foreground"]["argv"][0] == argv0).then_some(())
+        })
+        .await;
+    };
+    let listed = async |yes: bool| {
+        until("the listing", async || {
+            (find(&shell).await.is_some() == yes).then_some(())
+        })
+        .await;
+    };
+    core.hc(&[
+        "send",
+        "--json",
+        &shell,
+        "/bin/bash -c 'exec -a collie-reporter /bin/bash reporter'",
+    ]);
+    leads("collie-reporter").await;
     let reporter = status(&shell, "idle").await;
     assert_eq!(reporter.agent.as_deref(), Some("codex"));
-    until("the reporting program to lead the terminal", async || {
-        let t = core.hc(&["get", "--json", &shell]);
-        (t["foreground"]["argv"][1] == "reporter").then_some(())
-    })
-    .await;
-    std::fs::write(work.join("leave"), "").unwrap();
-    until("the shell to leave the list", async || {
-        find(&shell).await.is_none().then_some(())
-    })
-    .await;
+    core.hc(&["keys", "--json", &shell, "ctrl+z"]);
+    leads("/bin/sh").await;
+    listed(false).await;
+    let held = || core.hc(&["get", "--json", &shell])["status"]["app"].clone();
     assert_eq!(
-        core.hc(&["get", "--json", &shell])["status"]["app"],
+        held(),
         "codex",
-        "herdr-core still holds the status"
+        "herdr-core holds a suspended program's status"
     );
+    core.hc(&["send", "--json", &shell, "fg"]);
+    leads("collie-reporter").await;
+    listed(true).await;
+    std::fs::write(work.join("leave"), "").unwrap();
+    leads("/bin/sh").await;
+    listed(false).await;
+    assert_eq!(held(), "codex", "and an exited one's");
 
     // Every key, and Ctrl+End, a notice digit and a paste through a typing attach, which
     // leaves the size a desktop client chose.
