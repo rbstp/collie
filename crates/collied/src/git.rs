@@ -1230,6 +1230,71 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn worktree_list_reads_the_main_checkout_first() {
+        let (_dir, cwd, roots) = repo();
+        let root = &roots[0];
+        run(root, &["commit", "-q", "--allow-empty", "-m", "start"]);
+        let feat = root.join("wt/feat branch");
+        let detached = root.join("wt/detached");
+        run(
+            root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feat",
+                feat.to_str().unwrap(),
+            ],
+        );
+        run(
+            root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                detached.to_str().unwrap(),
+            ],
+        );
+        let list = worktree_list(&cwd).await.unwrap();
+        assert_eq!(list.source.source_checkout_path, cwd.as_str());
+        let seen: Vec<(String, Option<String>, bool, bool)> = (list.worktrees.into_iter())
+            .map(|w| (w.path, w.branch, w.is_linked_worktree, w.is_bare))
+            .collect();
+        let path = |p: &Path| p.to_str().unwrap().to_owned();
+        assert_eq!(
+            seen,
+            [
+                (path(root), Some("main".to_owned()), false, false),
+                (path(&detached), None, true, false),
+                (path(&feat), Some("feat".to_owned()), true, false),
+            ]
+        );
+
+        let bare = root.join("bare.git");
+        run(
+            root,
+            &["clone", "-q", "--bare", ".", bare.to_str().unwrap()],
+        );
+        let linked = root.join("from-bare");
+        run(
+            &bare,
+            &["worktree", "add", "-q", linked.to_str().unwrap(), "main"],
+        );
+        let list = worktree_list(&Cwd::new(linked.to_str().unwrap()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(list.source.source_checkout_path, path(&bare));
+        assert!(list.worktrees[0].is_bare && !list.worktrees[0].is_linked_worktree);
+        assert!(list.worktrees[1].is_linked_worktree && !list.worktrees[1].is_bare);
+
+        let plain = tempfile::tempdir().unwrap();
+        let plain = Cwd::new(plain.path().canonicalize().unwrap().to_str().unwrap()).unwrap();
+        assert!(worktree_list(&plain).await.is_err());
+    }
+
     fn repo() -> (tempfile::TempDir, Cwd, Vec<PathBuf>) {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();

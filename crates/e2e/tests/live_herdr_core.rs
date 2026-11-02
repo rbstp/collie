@@ -1392,7 +1392,7 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
     );
     assert_eq!(
         core.hc(&["get", "--json", &codex_address])["labels"],
-        serde_json::json!({"collie.kind": "codex", "collie.label": "e2e"})
+        serde_json::json!({"collie.kind": "codex"})
     );
 
     let Ok(Response::TaskWorktrees { source, worktrees }) = drive

@@ -188,6 +188,20 @@ pub fn shows_dialog(text: &str) -> bool {
         .any(|l| trust_wording(l) || option_line(l.trim_start().trim_start_matches('›')).is_some())
 }
 
+/// A startup dialog on a screen whose program reported no status yet: folder trust wording,
+/// Codex's update picker, or an option under a cursor (`❯` or `›`). A numbered list a resume
+/// repaints from history has no cursor, so it does not count.
+pub fn startup_dialog(text: &str) -> bool {
+    codex_update(text)
+        || text.lines().any(|l| {
+            let t = l.trim_start();
+            trust_wording(l)
+                || t.strip_prefix('›')
+                    .is_some_and(|rest| option_line(rest).is_some())
+                || option_line(t).is_some_and(|(cursor, ..)| cursor)
+        })
+}
+
 /// Codex's startup update picker, legacy or 0.159+: an "Update available" heading and an
 /// "Update now" option. The passive update notice in the history has no option.
 pub fn codex_update(text: &str) -> bool {
@@ -1972,6 +1986,19 @@ mod tests {
             None,
             "only the trust prompt goes unnumbered"
         );
+    }
+
+    #[test]
+    fn a_startup_dialog_before_any_status_needs_a_cursor_or_trust_wording() {
+        let history = "› resume the plan\n\n1. Read the tests\n2. Fix the flake\n";
+        assert!(shows_dialog(history));
+        assert!(!startup_dialog(history));
+        assert!(startup_dialog("  Do you trust the files in this folder?\n"));
+        assert!(startup_dialog("› 1. Yes, continue\n  2. No, quit\n"));
+        assert!(startup_dialog(" ❯ 1. Yes\n   2. No\n"));
+        assert!(startup_dialog(
+            "✨ Update available! 0.166.0 -> 0.167.0\n› 1. Update now\n  2. Skip\n"
+        ));
     }
 
     #[test]

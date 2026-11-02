@@ -221,6 +221,11 @@ impl Runtime {
         }
     }
 
+    /// herdr's own snapshot, without the core's agents, its error included.
+    pub async fn herdr_snapshot(&self) -> Result<SessionSnapshot, Error> {
+        herdr::session_snapshot(&self.herdr).await
+    }
+
     pub async fn agent_manifests(&self) -> Result<Vec<String>, Error> {
         herdr::agent_manifests(&self.herdr).await
     }
