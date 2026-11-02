@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use collied::approvals::Approvals;
 use collied::audit::Audit;
 use collied::drive::{Authorized, Driver};
-use collied::herdr;
+use collied::runtime::herdr;
 use common::{HerdrSession, herdr_installed};
 use protocol::{
     AgentKind, AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, ApprovalDecideParams,

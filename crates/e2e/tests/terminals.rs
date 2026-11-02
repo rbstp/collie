@@ -102,7 +102,7 @@ async fn scenario(
         "the key goes with the pairing"
     );
     let m = machine.id.clone();
-    let snapshot = collied::herdr::session_snapshot(&herdr.socket)
+    let snapshot = collied::runtime::herdr::session_snapshot(&herdr.socket)
         .await
         .unwrap();
     let shell = snapshot.panes[0].terminal_id.clone();

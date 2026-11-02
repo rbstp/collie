@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-use crate::herdr::AgentInfo;
 use crate::prompt;
+use crate::runtime::AgentInfo;
 use crate::usage::Usage;
 
 pub(crate) use subagents::timestamp_ms;
@@ -944,7 +944,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
-    use crate::herdr::AgentSession;
+    use crate::runtime::AgentSession;
 
     const CLAUDE: &str = include_str!("../tests/fixtures/transcripts/claude.jsonl");
     const CODEX: &str = include_str!("../tests/fixtures/transcripts/codex.jsonl");

@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
 use crate::drive::{Authorized, Driver, Fail, fail};
-use crate::herdr::AgentInfo;
 use crate::pulls::{self, Check, Outcome, clean};
+use crate::runtime::AgentInfo;
 use crate::{flock, peers};
 
 pub const EVERY_MINUTES: [u32; 4] = [2, 5, 15, 30];

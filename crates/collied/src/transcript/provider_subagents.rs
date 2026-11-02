@@ -1101,7 +1101,7 @@ mod tests {
         let _other = locked(&locks.join(format!("{other}.lock")));
         std::fs::write(&s.rollout, CODEX).unwrap();
         let mut transcripts = super::super::Transcripts::new(None, Some(s.codex.clone()));
-        let agents: Vec<crate::herdr::AgentInfo> = [PARENT, other]
+        let agents: Vec<crate::runtime::AgentInfo> = [PARENT, other]
             .into_iter()
             .map(|id| {
                 let mut meta: Value = serde_json::from_str(CODEX.lines().next().unwrap()).unwrap();
