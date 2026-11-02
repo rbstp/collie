@@ -22,12 +22,13 @@ permissions:
   contents: read
 
 jobs:
-  # rust and ios are required checks, so a site-only pull request skips them with if
+  # rust and ios are required checks, so a pull request skips them with if
   # (a skipped job passes) rather than with paths-ignore (which would leave them pending).
   changes:
     runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      ios: ${{ steps.diff.outputs.ios }}
 
     steps:
       - name: checkout
@@ -46,6 +47,7 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
             echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "ios=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           files="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
@@ -55,6 +57,12 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           else
             echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+          # What the app builds from or its tests read (PreviewTests reads collied's fixtures).
+          if [ -z "$files" ] || printf '%s\n' "$files" | grep -qE '^(Collie/|crates/(collie-core|protocol|tailnet|tls|tailscale-sys|uniffi-bindgen)/|crates/collied/tests/fixtures/|docs/protocol/|scripts/ghostty/|scripts/notices\.py$|\.github/workflows/ci\.yml$|\.gitmodules$|Cargo\.(toml|lock)$|rust-toolchain\.toml$|about\.toml$|justfile$)'; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ios=false" >> "$GITHUB_OUTPUT"
           fi
 
   rust:
@@ -136,7 +144,7 @@ jobs:
 
   ios:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code != 'false') }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.ios != 'false') }}
     runs-on: xcode-27
 
     steps:
@@ -146,7 +154,9 @@ jobs:
           persist-credentials: false
           submodules: true
 
-      # Overlaps the simulator's first boot on a fresh runner with the builds below.
+      # Overlaps the simulator's first boot on a fresh runner with the builds below. The boot
+      # saturates the runner for minutes: set up go has taken 8 to 338 s here against 2 to 5 s in rust,
+      # and with the boot started after the rust toolchain, restoring the cargo cache took 369 s.
       - name: boot the simulator
         run: xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
 
