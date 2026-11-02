@@ -120,7 +120,6 @@ impl Hello {
             .collect()
     }
 
-    /// Why collied cannot follow this core.
     pub fn problem(&self) -> Option<String> {
         let missing = self.missing();
         if self.generation != GENERATION {
@@ -341,6 +340,25 @@ impl Live {
         }
     }
 
+    fn notice(&mut self, line: &[u8]) {
+        let Ok(notice) = serde_json::from_slice::<Notice>(line) else {
+            return;
+        };
+        match notice.method.as_str() {
+            "event" => {
+                if let Ok(e) = serde_json::from_value(notice.params) {
+                    self.event(e);
+                }
+            }
+            "missed" => {
+                if let Ok(s) = serde_json::from_value::<Snapshot>(notice.params) {
+                    self.snapshot(s.seq, s.terminals);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn agents(&self) -> Vec<AgentInfo> {
         self.terminals
             .values()
@@ -439,7 +457,6 @@ pub fn pane(a: &AgentInfo) -> PaneInfo {
     }
 }
 
-/// What `collied status` shows of the core.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Report {
     pub socket: String,
@@ -483,7 +500,6 @@ impl Core {
         crate::lock(&self.inner)
     }
 
-    /// Its agents; None while it is not followed.
     pub fn agents(&self) -> Option<Vec<AgentInfo>> {
         self.lock().live.as_ref().map(Live::agents)
     }
@@ -606,30 +622,15 @@ impl Core {
                 Ok(Err(e)) => return e,
                 Err(_) => return Error::Timeout,
             };
-            let Ok(notice) = serde_json::from_slice::<Notice>(&line) else {
-                continue;
-            };
             let mut inner = self.lock();
             let Some(live) = inner.live.as_mut() else {
                 return Error::Closed;
             };
-            match notice.method.as_str() {
-                "event" => {
-                    if let Ok(e) = serde_json::from_value(notice.params) {
-                        live.event(e);
-                    }
-                }
-                "missed" => {
-                    if let Ok(s) = serde_json::from_value::<Snapshot>(notice.params) {
-                        live.snapshot(s.seq, s.terminals);
-                    }
-                }
-                _ => {}
-            }
+            live.notice(&line);
         }
     }
 
-    /// Ends the agent's program, then removes its terminal. Only a terminal collied lists.
+    /// Only a terminal collied lists.
     pub async fn close(&self, id: &str) -> Result<(), Error> {
         let address = {
             let inner = self.lock();
@@ -668,8 +669,6 @@ struct ServerStatus {
     holder: Option<Holder>,
 }
 
-/// What `collied doctor` reads: the handshake, and the pid of the holder that runs the
-/// core's new terminals, when it has one.
 pub async fn probe(socket: &Path) -> Result<(Hello, Option<u32>), Error> {
     let mut conn = Conn::open(socket).await?;
     let hello: Hello = conn
@@ -709,6 +708,10 @@ impl Conn {
         let stream = tokio::time::timeout(TIMEOUT, UnixStream::connect(socket))
             .await
             .map_err(|_| Error::Timeout)??;
+        // The socket is 0755: its folder alone keeps other users from serving one there.
+        if stream.peer_cred()?.uid() != rustix::process::getuid().as_raw() {
+            return Err(Error::Unsupported("is served by another user".to_owned()));
+        }
         let (reader, writer) = stream.into_split();
         Ok(Self {
             reader: BufReader::new(reader),
@@ -1079,6 +1082,64 @@ mod tests {
         assert!(l.agents().is_empty() && l.terminals.len() == 1);
     }
 
+    #[test]
+    fn notices_from_the_wire_follow_the_core() {
+        let mut l = live(10, json!([]));
+        let line = |v: Value| serde_json::to_vec(&v).unwrap();
+        let claude = terminal(
+            "t1",
+            json!({"state": "idle", "app": "claude-code"}),
+            "claude",
+        );
+        l.notice(&line(
+            json!({"jsonrpc": "2.0", "method": "event", "params": {
+                "seq": 11, "terminal": "t1", "type": "created", "data": claude,
+            }}),
+        ));
+        l.notice(&line(
+            json!({"jsonrpc": "2.0", "method": "heartbeat", "params": {"seq": 11}}),
+        ));
+        l.notice(b"not json");
+        assert_eq!(shown(&l)[0].3, 11);
+
+        let mut blocked = terminal(
+            "t1",
+            json!({"state": "blocked", "app": "claude-code"}),
+            "claude",
+        );
+        blocked["turn"] = json!(1);
+        let codex = terminal("t2", json!({"state": "working", "app": "codex"}), "codex");
+        l.notice(&line(
+            json!({"jsonrpc": "2.0", "method": "missed", "params": {
+                "seq": 40, "terminals": [blocked, codex],
+            }}),
+        ));
+        let id = |t: &str| format!("hc:{ID}:{t}");
+        assert_eq!(
+            shown(&l),
+            [
+                (id("t1"), "blocked".into(), Some("claude".into()), 40),
+                (id("t2"), "working".into(), Some("codex".into()), 40),
+            ]
+        );
+        l.notice(&line(
+            json!({"jsonrpc": "2.0", "method": "event", "params": {
+                "seq": 39, "terminal": "t2", "type": "removed", "data": {},
+            }}),
+        ));
+        assert_eq!(
+            l.agents().len(),
+            2,
+            "events up to the snapshot's seq are ignored"
+        );
+        l.notice(&line(
+            json!({"jsonrpc": "2.0", "method": "missed", "params": {
+                "seq": 50, "terminals": [],
+            }}),
+        ));
+        assert!(l.agents().is_empty());
+    }
+
     fn agent(status: &str) -> AgentInfo {
         serde_json::from_value(json!({
             "terminal_id": format!("hc:{ID}:t1"), "workspace_id": format!("hc:{ID}"),
@@ -1139,7 +1200,48 @@ mod tests {
             (1, 1, 1)
         );
         assert_eq!(snap.panes[0].terminal_id, agents[0].terminal_id);
-        assert_eq!(rt.workspace_list().await.unwrap()[0].label, GROUP_LABEL);
+        let poll = rt.poll().await.unwrap();
+        assert_eq!(poll.workspaces[0].label, GROUP_LABEL);
+        assert_eq!(poll.agents.len(), 1);
+        assert!(
+            !poll.herdr,
+            "herdr's agents are not known gone while it is down"
+        );
+    }
+
+    #[tokio::test]
+    async fn archive_refuses_a_herdr_core_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let drive = crate::drive::Driver::new(
+            dir.path().join("herdr.sock"),
+            vec![],
+            &[dir.path().to_owned()],
+        )
+        .unwrap()
+        .with_core(Some(followed(dir.path().join("core.sock"))));
+        let yes: crate::drive::Authorized = Arc::new(|| true);
+        let archive = |id: String| protocol::TaskArchiveParams {
+            op_id: protocol::OpId::new("a".repeat(22)).unwrap(),
+            terminal_id: protocol::TerminalId::new(id).unwrap(),
+            confirm: true,
+        };
+        assert_eq!(
+            drive
+                .task_archive(archive(format!("hc:{ID}:t1")), &yes)
+                .await,
+            Err((
+                protocol::ErrorCode::Internal,
+                crate::runtime::NOT_YET.to_owned()
+            ))
+        );
+        assert_eq!(
+            drive
+                .task_archive(archive("term_1".into()), &yes)
+                .await
+                .unwrap_err()
+                .0,
+            protocol::ErrorCode::HerdrUnavailable
+        );
     }
 
     #[tokio::test]

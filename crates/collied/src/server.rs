@@ -46,7 +46,7 @@ use crate::peers::{self, Peer, Store};
 use crate::pr_watch::{self, Wakes, Watch, Watches};
 use crate::pulls::{self, Pulls};
 use crate::push::{self, ActivityError, Push};
-use crate::runtime::herdr_core::Core;
+use crate::runtime::herdr_core::{self, Core};
 use crate::runtime::{self, Runtime};
 use crate::terminal::{self, Grants};
 use crate::transcript::Transcripts;
@@ -2748,14 +2748,17 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     let mut base: Option<Baseline> = None;
     let mut outage = false;
     let mut delay = RECONCILE_EVERY;
+    let mut held = Vec::new();
     loop {
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
             _ = shutdown.changed() => return,
         }
-        let polled = tokio::try_join!(state.runtime.agent_list(), state.runtime.workspace_list());
-        let (agents, workspaces) = match polled {
-            Ok(v) => v,
+        let (agents, workspaces, kept) = match state.runtime.poll().await {
+            Ok(p) => {
+                let kept = with_held(&p.agents, p.herdr, &mut held);
+                (p.agents, p.workspaces, kept)
+            }
             Err(e) => {
                 if !outage {
                     tracing::warn!(error = %e, "herdr unavailable, retrying with backoff");
@@ -2825,7 +2828,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         // give its pane id to a new pane. Any star not in `agents` as it was last seen, a
         // shell pane's included, takes the snapshot.
         let starred = lock(&state.stars).list();
-        if !lock(&state.stars).listed(&agents)
+        if !lock(&state.stars).listed(&kept)
             && let Ok(snap) = state.runtime.session_snapshot().await
             && lock(&state.stars).reconcile(&snap.panes) != starred
         {
@@ -2839,8 +2842,8 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                 }
             }
         }
-        state.approvals.observe(&agents, &workspaces).await;
-        for a in lock(&state.turns).observe(&agents, crate::now_ms()) {
+        state.approvals.observe(&kept, &workspaces).await;
+        for a in lock(&state.turns).observe(&kept, crate::now_ms()) {
             let Ok(terminal_id) = TerminalId::new(a.terminal_id.clone()) else {
                 continue;
             };
@@ -2855,21 +2858,71 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         lock(&state.live).observe(
             &state.push,
             &state.audit,
-            &agents,
+            &kept,
             &workspaces,
             &pending,
             &mut lock(&state.tracker),
         );
         let mut tracker = lock(&state.tracker);
-        tracker.retain(agents.iter().map(|a| a.terminal_id.as_str()));
+        tracker.retain(kept.iter().map(|a| a.terminal_id.as_str()));
         tracker.save();
     }
+}
+
+/// While a followed core answers in herdr's place, herdr's agents as it last listed them,
+/// beside what was polled, so approvals, Live Activities, status times and stars kept for
+/// them outlast the outage. The phone's list drops them all the same.
+fn with_held(
+    agents: &[runtime::AgentInfo],
+    herdr: bool,
+    held: &mut Vec<runtime::AgentInfo>,
+) -> Vec<runtime::AgentInfo> {
+    if herdr {
+        *held = agents
+            .iter()
+            .filter(|a| !herdr_core::owns(&a.terminal_id))
+            .cloned()
+            .collect();
+        return agents.to_vec();
+    }
+    agents.iter().chain(held.iter()).cloned().collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use protocol::TerminalId;
+
+    #[test]
+    fn herdr_agents_are_held_while_a_core_answers_in_its_place() {
+        let agent = |id: &str| -> runtime::AgentInfo {
+            serde_json::from_value(serde_json::json!({
+                "terminal_id": id, "workspace_id": "w1", "pane_id": id, "agent_status": "blocked",
+            }))
+            .unwrap()
+        };
+        let ids = |v: Vec<runtime::AgentInfo>| -> Vec<String> {
+            v.into_iter().map(|a| a.terminal_id).collect()
+        };
+        let mut held = Vec::new();
+        let both = [agent("term_1"), agent("hc:abc:t1")];
+        assert_eq!(
+            ids(with_held(&both, true, &mut held)),
+            ["term_1", "hc:abc:t1"]
+        );
+        let core = [agent("hc:abc:t1")];
+        assert_eq!(
+            ids(with_held(&core, false, &mut held)),
+            ["hc:abc:t1", "term_1"],
+            "herdr down: its agent stays for approvals, Live Activities and status times"
+        );
+        assert_eq!(
+            ids(with_held(&core, false, &mut held)),
+            ["hc:abc:t1", "term_1"]
+        );
+        assert_eq!(ids(with_held(&core, true, &mut held)), ["hc:abc:t1"]);
+        assert!(held.is_empty());
+    }
 
     #[test]
     fn disconnected_status_changes_skip_transcripts_and_preserve_status_times() {

@@ -261,7 +261,7 @@ impl Driver {
     /// Never trusts a cached `pane_id`: it changes on cross-workspace moves.
     pub(crate) async fn find_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
         self.runtime
-            .agent_list()
+            .agents_of(terminal_id.as_str())
             .await
             .map_err(herdr_fail)?
             .into_iter()
@@ -276,7 +276,11 @@ impl Driver {
     /// Read now, never from a cache: an agent herdr is still launching counts, though its
     /// pane has no `agent` yet.
     async fn pane_and_agent(&self, terminal_id: &TerminalId) -> Result<(PaneInfo, bool), Fail> {
-        let snap = self.runtime.session_snapshot().await.map_err(herdr_fail)?;
+        let snap = self
+            .runtime
+            .snapshot_of(terminal_id.as_str())
+            .await
+            .map_err(herdr_fail)?;
         let pane = snap
             .panes
             .into_iter()
@@ -1686,8 +1690,15 @@ impl Driver {
         auth: &Authorized,
         merged: Option<(&Cwd, &str, &Quiet<'_>)>,
     ) -> Reply {
+        if runtime::herdr_core::owns(terminal_id.as_str()) {
+            return fail(ErrorCode::Internal, runtime::NOT_YET);
+        }
         authorized(auth)?;
-        let snapshot = self.runtime.session_snapshot().await.map_err(herdr_fail)?;
+        let snapshot = self
+            .runtime
+            .snapshot_of(terminal_id.as_str())
+            .await
+            .map_err(herdr_fail)?;
         let pane = snapshot
             .panes
             .iter()
@@ -1765,8 +1776,11 @@ impl Driver {
                             ),
                         ));
                     }
-                    let workspace_closed =
-                        self.runtime.session_snapshot().await.is_ok_and(|snapshot| {
+                    let workspace_closed = self
+                        .runtime
+                        .snapshot_of(terminal_id.as_str())
+                        .await
+                        .is_ok_and(|snapshot| {
                             !snapshot
                                 .workspaces
                                 .iter()

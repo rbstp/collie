@@ -127,7 +127,7 @@ async fn scenario(core: &CoreSession, herdr: Option<&HerdrSession>) {
         1
     );
 
-    let workspaces = rt.workspace_list().await.unwrap();
+    let workspaces = rt.poll().await.unwrap().workspaces;
     let herdr_number = herdr_workspaces.iter().map(|w| w.number).max();
     let g = workspaces.iter().find(|w| w.workspace_id == group).unwrap();
     assert_eq!(
@@ -184,7 +184,7 @@ async fn scenario(core: &CoreSession, herdr: Option<&HerdrSession>) {
     .await;
     // Without herdr the followed core still answers, with nothing in it.
     assert_eq!(
-        rt.workspace_list().await.unwrap().len(),
+        rt.poll().await.unwrap().workspaces.len(),
         herdr_workspaces.len()
     );
 

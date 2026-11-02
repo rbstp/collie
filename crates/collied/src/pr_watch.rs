@@ -15,6 +15,7 @@ use tokio::time::timeout;
 use crate::drive::{Authorized, Driver, Fail, fail};
 use crate::pulls::{self, Check, Outcome, clean};
 use crate::runtime::AgentInfo;
+use crate::runtime::herdr_core::owns;
 use crate::{flock, peers};
 
 pub const EVERY_MINUTES: [u32; 4] = [2, 5, 15, 30];
@@ -592,11 +593,9 @@ impl Watches {
 
     /// Ends the watches of terminals missing from `agents`; a list with none is not trusted,
     /// since herdr answers before it restores its panes.
+    /// A runtime that lists no agent, or does not answer, keeps its agents' watches.
     pub fn retain_listed(&mut self, agents: &[AgentInfo]) -> bool {
-        if agents.is_empty() {
-            return false;
-        }
-        self.retain(|terminal_id, _| agents.iter().any(|a| a.terminal_id == terminal_id))
+        self.retain(|terminal_id, _| listed(agents, terminal_id))
     }
 
     pub fn retain_paired(&mut self, paired: impl Fn(&str) -> bool) -> bool {
@@ -726,18 +725,20 @@ impl Wakes {
         self.wakes.is_empty()
     }
 
-    /// Like `Watches::retain_listed`: a list with no agents is not trusted.
+    /// Like `Watches::retain_listed`: a runtime that lists no agent is not trusted.
     pub fn retain_listed(&mut self, agents: &[AgentInfo]) {
-        if agents.is_empty() {
-            return;
-        }
         let before = self.wakes.len();
-        self.wakes
-            .retain(|t, _| agents.iter().any(|a| a.terminal_id == *t));
+        self.wakes.retain(|t, _| listed(agents, t));
         if self.wakes.len() != before {
             self.save();
         }
     }
+}
+
+fn listed(agents: &[AgentInfo], terminal_id: &str) -> bool {
+    let core = owns(terminal_id);
+    !agents.iter().any(|a| owns(&a.terminal_id) == core)
+        || agents.iter().any(|a| a.terminal_id == terminal_id)
 }
 
 /// Only an idle or done Claude Code agent still on the watched branch is woken, through
@@ -1382,6 +1383,10 @@ mod tests {
             .unwrap()
         };
         assert!(!watches.retain_listed(&[]), "an empty list is not trusted");
+        assert!(
+            !watches.retain_listed(&[agent("hc:abc:t1")]),
+            "a herdr-core agent alone says nothing of herdr's"
+        );
         assert!(!watches.retain_listed(&[agent("t1"), agent("t2"), agent("t3")]));
         assert!(watches.retain_listed(&[agent("t1"), agent("t3"), agent("t9")]));
         assert_eq!(watches.shown("t2"), None);

@@ -71,12 +71,12 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     r.line(s, "service", d);
     let core = herdr_core::socket_path(|k| std::env::var_os(k));
     let probed = match &core {
-        Ok(socket) => herdr_core::probe(socket).await.ok(),
+        Ok(socket) => Some(herdr_core::probe(socket).await),
         Err(_) => None,
     };
     match &config {
         Some(config) => {
-            check_herdr(&mut r, config, probed.is_some()).await;
+            check_herdr(&mut r, config, matches!(probed, Some(Ok(_)))).await;
             check_tailnet(&mut r, config, &data_dir.join(config::TSNET_DIR));
         }
         None => {
@@ -789,15 +789,19 @@ const INHERITED: [&str; 3] = [
 fn report_core(
     r: &mut Report,
     socket: Result<PathBuf, String>,
-    probed: Option<(herdr_core::Hello, Option<u32>)>,
+    probed: Option<Result<(herdr_core::Hello, Option<u32>), runtime::Error>>,
 ) {
     let socket = match socket {
         Ok(s) => s,
         Err(e) => return r.line(Status::Warn, "herdr-core", e),
     };
     let shown = socket.display();
-    let Some((hello, holder)) = probed else {
-        return r.line(Status::Ok, "herdr-core", format!("not running: {shown}"));
+    let (hello, holder) = match probed {
+        Some(Ok(probed)) => probed,
+        Some(Err(runtime::Error::Unsupported(why))) => {
+            return r.line(Status::Fail, "herdr-core", format!("{shown}: {why}"));
+        }
+        _ => return r.line(Status::Ok, "herdr-core", format!("not running: {shown}")),
     };
     let detail = format!(
         "{shown}: herdr-core {} (generation {})",

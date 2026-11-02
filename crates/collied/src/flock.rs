@@ -6,6 +6,7 @@ use protocol::{
     Agent, AgentStatus, Flock, MachineInfo, Subagent, Terminal, TerminalId, Workspace, WorkspaceId,
 };
 
+use crate::runtime::herdr_core::owns;
 use crate::runtime::{AgentInfo, PaneInfo, SessionSnapshot, WorkspaceInfo};
 use crate::transcript::{Derived, Transcripts};
 
@@ -112,23 +113,26 @@ impl Stars {
     }
 
     pub fn reconcile(&mut self, panes: &[PaneInfo]) -> Vec<TerminalId> {
-        // herdr answers before it restores its panes, so a list with none is not trusted.
-        if !panes.is_empty() {
-            let next: BTreeMap<String, String> = self
-                .starred
-                .iter()
-                .filter_map(|(terminal_id, pane_id)| {
-                    panes
-                        .iter()
-                        .find(|p| &p.terminal_id == terminal_id)
-                        .or_else(|| panes.iter().find(|p| &p.pane_id == pane_id))
-                })
-                .map(|p| (p.terminal_id.clone(), p.pane_id.clone()))
-                .collect();
-            if next != self.starred {
-                self.starred = next;
-                self.save();
-            }
+        // herdr answers before it restores its panes, so a runtime that lists none, or does
+        // not answer, keeps its stars.
+        let listed = |core: bool| panes.iter().any(|p| owns(&p.terminal_id) == core);
+        let next: BTreeMap<String, String> = self
+            .starred
+            .iter()
+            .filter_map(|(terminal_id, pane_id)| {
+                if !listed(owns(terminal_id)) {
+                    return Some((terminal_id.clone(), pane_id.clone()));
+                }
+                panes
+                    .iter()
+                    .find(|p| &p.terminal_id == terminal_id)
+                    .or_else(|| panes.iter().find(|p| &p.pane_id == pane_id))
+                    .map(|p| (p.terminal_id.clone(), p.pane_id.clone()))
+            })
+            .collect();
+        if next != self.starred {
+            self.starred = next;
+            self.save();
         }
         self.list()
     }
@@ -656,6 +660,20 @@ mod tests {
         assert_eq!(ids(stars.reconcile(&[pane("t5", "w2:p1")])), ["t5"]);
         assert_eq!(
             ids(Stars::load(path.clone()).reconcile(&[pane("t5", "w2:p1")])),
+            ["t5"]
+        );
+
+        // While herdr is down, a followed core's panes do not end herdr's stars, and a
+        // herdr that lists none does not end the core's.
+        let core = |t: &str| pane(&format!("hc:abc:{t}"), &format!("hc:abc:{t}"));
+        stars.star(&core("t1"));
+        assert_eq!(ids(stars.reconcile(&[core("t1")])), ["hc:abc:t1", "t5"]);
+        assert_eq!(
+            ids(stars.reconcile(&[pane("t5", "w2:p1")])),
+            ["hc:abc:t1", "t5"]
+        );
+        assert_eq!(
+            ids(stars.reconcile(&[pane("t5", "w2:p1"), core("t2")])),
             ["t5"]
         );
 

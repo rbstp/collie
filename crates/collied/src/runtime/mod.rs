@@ -76,6 +76,14 @@ pub struct SessionSnapshot {
     pub agents: Vec<AgentInfo>,
 }
 
+pub struct Poll {
+    pub agents: Vec<AgentInfo>,
+    pub workspaces: Vec<WorkspaceInfo>,
+    /// False when a followed core answered in herdr's place: herdr's agents are then not
+    /// known to be gone, and what collied keeps for them must stay.
+    pub herdr: bool,
+}
+
 pub struct PaneProcesses {
     pub pids: Vec<u32>,
     pub attach: Option<String>,
@@ -97,7 +105,7 @@ pub fn herdr_session_label(session: Option<&str>) -> String {
     herdr::session_label(session, &herdr::SocketEnv::from_process())
 }
 
-const NOT_YET: &str = "not available for Herdr 2 agents yet";
+pub const NOT_YET: &str = "not available for Herdr 2 agents yet";
 
 fn herdr_only(id: &str) -> Result<(), Error> {
     if herdr_core::owns(id) {
@@ -155,13 +163,39 @@ impl Runtime {
         self.merge(herdr, |list, agents| list.extend(agents))
     }
 
-    /// The core's group is numbered after herdr's workspaces as this list has them.
-    pub async fn workspace_list(&self) -> Result<Vec<WorkspaceInfo>, Error> {
-        let herdr = herdr::workspace_list(&self.herdr).await;
-        self.merge(herdr, |list, agents| {
-            let group = herdr_core::group(&agents, list);
-            list.extend(group);
+    pub async fn poll(&self) -> Result<Poll, Error> {
+        let herdr = tokio::try_join!(
+            herdr::agent_list(&self.herdr),
+            herdr::workspace_list(&self.herdr)
+        );
+        let answered = herdr.is_ok();
+        let (agents, workspaces) = self.merge(herdr, |(list, workspaces), agents| {
+            workspaces.extend(herdr_core::group(&agents, workspaces));
+            list.extend(agents);
+        })?;
+        Ok(Poll {
+            agents,
+            workspaces,
+            herdr: answered,
         })
+    }
+
+    /// The agents of the runtime `id` belongs to, so a herdr agent's lookup still fails with
+    /// herdr's error while herdr is down.
+    pub async fn agents_of(&self, id: &str) -> Result<Vec<AgentInfo>, Error> {
+        if herdr_core::owns(id) {
+            self.agent_list().await
+        } else {
+            herdr::agent_list(&self.herdr).await
+        }
+    }
+
+    pub async fn snapshot_of(&self, id: &str) -> Result<SessionSnapshot, Error> {
+        if herdr_core::owns(id) {
+            self.session_snapshot().await
+        } else {
+            herdr::session_snapshot(&self.herdr).await
+        }
     }
 
     pub async fn agent_manifests(&self) -> Result<Vec<String>, Error> {
@@ -316,7 +350,6 @@ impl Runtime {
         herdr::pane_processes(&self.herdr, pane_id).await
     }
 
-    /// For a herdr-core agent: ends its program, then removes its terminal.
     pub async fn pane_close(&self, pane_id: &str) -> Result<(), Error> {
         if herdr_core::owns(pane_id) {
             return match &self.core {

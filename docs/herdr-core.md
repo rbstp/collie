@@ -1,6 +1,6 @@
 # herdr-core (Herdr 2) backend plan
 
-Spike for [#629](https://github.com/rbstp/collie/issues/629), 2026-11-01. Nothing here is built: this page is the plan, the evidence behind it and the follow-up issues. herdr's own behavior is in [architecture.md](architecture.md#herdr-integration-verified-against-093-source-and-live-socket).
+Spike for [#629](https://github.com/rbstp/collie/issues/629), 2026-11-01. This page is the plan, the evidence behind it and the follow-up issues. Phases 1 (the runtime boundary, #631) and 2 (agents and status, #632) are built; what collied does is in [architecture.md](architecture.md#herdr-core-herdr-2). herdr's own behavior is in [architecture.md](architecture.md#herdr-integration-verified-against-093-source-and-live-socket).
 
 ## Summary
 
@@ -91,7 +91,7 @@ So a herdr-core agent goes in a group of its own, never in a herdr workspace. Ph
 - `status.app` once the agent has reported: `claude-code` (Claude Code 2.1.316) and `codex` (codex-cli 0.166.0). collied maps those to its kinds `claude` and `codex`.
 - Before the first report, and for agents that never report, the basename of `foreground.argv[0]` (`foreground.name` is no help: Claude Code sets its process name to its version, `2.1.316`). Copilot is then `copilot` with status `unknown`.
 - Labels only on terminals collied starts (`collie.kind`), as a tie-breaker.
-- Codex reports OSC 7501 (its binary holds `]7501;state=`; live, it reported `idle`, then `working` while starting). Copilot CLI 1.0.105 does not: its bundle has no 7501 string, and live it reported nothing (`reported: false`) at its folder trust prompt. Codex also redraws its title with a spinner, one `title` event every 100 ms while it works; collied ignores title events for the flock.
+- Codex reports OSC 7501 (its binary holds `]7501;state=`; live, it reported `idle`, then `working` while starting). Copilot CLI 1.0.105 does not: its bundle has no 7501 string, and live it reported nothing (`reported: false`) at its folder trust prompt. Codex also redraws its title with a spinner, one `title` event every 100 ms while it works; collied applies title events with a leading spinner or status glyph stripped, so a spinner tick changes nothing the phone shows.
 
 ### Screen
 
@@ -151,8 +151,8 @@ So a herdr-core agent goes in a group of its own, never in a herdr workspace. Ph
 
 ## Shape
 
-- One boundary, `crates/collied/src/runtime`, with `herdr` (today's `herdr.rs`) and `core` implementations behind the calls server, drive, approvals, doctor and daemon make: list and watch agents, read text, read ANSI, prompt, type, keys, start, close. Callers stop naming herdr; the herdr implementation keeps today's behavior exactly.
-- herdr's wire types (`AgentInfo`, `PaneInfo`, `WorkspaceInfo`, `SessionSnapshot`, `AgentSession`, `PaneProcesses`) stay the shared model that flock, activity, turns, pr_watch and transcript read: they move from `herdr.rs` into `runtime` unchanged, herdr decodes into them as today, and herdr-core builds them (`pane_id` the address, `state_change_seq` as [Approvals](#approvals) defines it, `agent_session` from phase 5). Those modules change only their imports.
+- One boundary, `crates/collied/src/runtime`, with `herdr` (today's `herdr.rs`) and `herdr_core` implementations (not `core`, which would shadow Rust's `core` crate) behind the calls server, drive, approvals, doctor and daemon make: list and watch agents, read text, read ANSI, prompt, type, keys, start, close. Callers stop naming herdr; the herdr implementation keeps today's behavior exactly.
+- herdr's wire types (`AgentInfo`, `PaneInfo`, `WorkspaceInfo`, `SessionSnapshot`, `AgentSession`, `PaneProcesses`) stay the shared model that flock, activity, turns, pr_watch and transcript read: they move from `herdr.rs` into `runtime` unchanged, herdr decodes into them as today, and herdr-core builds them (`pane_id` the full `hc:<core id>:<address>` id, like `terminal_id`, so calls route by prefix; `state_change_seq` as [Approvals](#approvals) defines it, `agent_session` from phase 5). Those modules change only their imports.
 - Phone protocol unchanged. `Agent.kind` maps `claude-code` to `claude`; herdr-core's `error` state maps to `unknown`, so no new `AgentStatus` value.
 - Client: a tokio client in collied (line mode for RPC and events, frames only for attaches), about the size of `herdr.rs`. Herdr UI's `herdr-core-client` is the reference, not a dependency: it is `publish = false`, pulls in Herdr UI's backend, client, protocol and terminal crates, and runs on blocking threads. Generation 1, minimum 0.1.16 (`terminal.read`, `send` and `keys` are required; when they first shipped is unknown).
 - Emulator: `alacritty_terminal` 0.26.0 (Apache-2.0, allowed by `cargo deny`), as Herdr UI's `herdr-terminal` uses it. It also brings its pty modules, which collied does not use.
