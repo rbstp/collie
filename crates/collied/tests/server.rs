@@ -174,6 +174,7 @@ async fn scenario(
             attachments_dir: data_dir.join("attachments"),
             terminals: false,
             terminal_grant_ttl: collied::terminal::GRANT_TTL,
+            herdr_core: None,
         },
         herdr_socket.clone(),
         &collied::config::TasksConfig {
@@ -1300,6 +1301,7 @@ async fn terminal_phase(
             attachments_dir: data_dir.join("attachments"),
             terminals: true,
             terminal_grant_ttl: Duration::from_secs(3),
+            herdr_core: None,
         },
         herdr_socket.to_owned(),
     )

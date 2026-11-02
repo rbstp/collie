@@ -24,6 +24,7 @@ use tokio::task::JoinHandle;
 use tokio::{process::Command, time::timeout};
 
 use crate::draft::{self, InputBox};
+use crate::runtime::herdr_core::Core;
 use crate::runtime::{self, AgentInfo, PaneInfo, Runtime};
 use crate::transcript::{self, Transcripts};
 use crate::{flock, git, prompt, pulls, reflow};
@@ -95,8 +96,16 @@ pub(crate) fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, 
 
 pub fn herdr_fail(e: runtime::Error) -> Fail {
     tracing::debug!(error = %e, "herdr call failed");
-    let runtime::Error::Herdr { code, message } = &e else {
-        return (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned());
+    let (code, message) = match &e {
+        runtime::Error::Herdr { code, message } => (code, message),
+        runtime::Error::Unsupported(why) => return (ErrorCode::Internal, why.clone()),
+        runtime::Error::Core { kind, .. } if kind == "not_found" => {
+            return (ErrorCode::NotFound, "not found".to_owned());
+        }
+        runtime::Error::Core { kind, .. } => {
+            return (ErrorCode::Internal, format!("herdr-core refused: {kind}"));
+        }
+        _ => return (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned()),
     };
     let (code, message) = match code.as_str() {
         "agent_start_input_failed" | "pane_send_failed" if canonical_limit(message) => {
@@ -231,6 +240,11 @@ impl Driver {
         self
     }
 
+    pub fn with_core(mut self, core: Option<Arc<Core>>) -> Self {
+        self.runtime = self.runtime.with_core(core);
+        self
+    }
+
     pub async fn once<F>(
         &self,
         peer: &str,
@@ -247,7 +261,7 @@ impl Driver {
     /// Never trusts a cached `pane_id`: it changes on cross-workspace moves.
     pub(crate) async fn find_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
         self.runtime
-            .agent_list()
+            .agents_of(terminal_id.as_str())
             .await
             .map_err(herdr_fail)?
             .into_iter()
@@ -262,7 +276,11 @@ impl Driver {
     /// Read now, never from a cache: an agent herdr is still launching counts, though its
     /// pane has no `agent` yet.
     async fn pane_and_agent(&self, terminal_id: &TerminalId) -> Result<(PaneInfo, bool), Fail> {
-        let snap = self.runtime.session_snapshot().await.map_err(herdr_fail)?;
+        let snap = self
+            .runtime
+            .snapshot_of(terminal_id.as_str())
+            .await
+            .map_err(herdr_fail)?;
         let pane = snap
             .panes
             .into_iter()
@@ -483,6 +501,10 @@ impl Driver {
         lines: u16,
         low_data: bool,
     ) -> Result<Watcher, Fail> {
+        // Nothing reads a herdr-core screen yet: a watch would never send output.
+        if runtime::herdr_core::owns(terminal_id.as_str()) {
+            return fail(ErrorCode::Internal, runtime::NOT_YET);
+        }
         self.find_agent(&terminal_id).await?;
         let (tx, rx) = mpsc::channel(1);
         let task = tokio::spawn(
@@ -1672,8 +1694,15 @@ impl Driver {
         auth: &Authorized,
         merged: Option<(&Cwd, &str, &Quiet<'_>)>,
     ) -> Reply {
+        if runtime::herdr_core::owns(terminal_id.as_str()) {
+            return fail(ErrorCode::Internal, runtime::NOT_YET);
+        }
         authorized(auth)?;
-        let snapshot = self.runtime.session_snapshot().await.map_err(herdr_fail)?;
+        let snapshot = self
+            .runtime
+            .snapshot_of(terminal_id.as_str())
+            .await
+            .map_err(herdr_fail)?;
         let pane = snapshot
             .panes
             .iter()
@@ -1751,8 +1780,11 @@ impl Driver {
                             ),
                         ));
                     }
-                    let workspace_closed =
-                        self.runtime.session_snapshot().await.is_ok_and(|snapshot| {
+                    let workspace_closed = self
+                        .runtime
+                        .snapshot_of(terminal_id.as_str())
+                        .await
+                        .is_ok_and(|snapshot| {
                             !snapshot
                                 .workspaces
                                 .iter()

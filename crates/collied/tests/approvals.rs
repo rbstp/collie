@@ -459,6 +459,7 @@ impl Rig {
             &self.push,
             &self.audit_log,
             &agents,
+            &|_| false,
             &workspaces,
             &pending,
             tracker,

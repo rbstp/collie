@@ -37,6 +37,7 @@ When the CollieCore framework and the Xcode project are already current, `just -
 - UI tests must not format fixture text into assertion messages (CodeQL flags it).
 - Captured fixtures (for example `crates/collied/tests/fixtures`) must be scrubbed of personal paths, names and secrets before they are committed.
 - When a test needs a live herdr, create a scratch workspace (`herdr workspace create ... --label <name>`) and close it afterwards. Never send input to panes you did not create, and do not modify the user's agent CLI configuration.
+- When a test or check needs a live herdr-core, start a core of its own (`CoreSession` in `crates/e2e/tests/common` does): its own `HC_SESSION`, scratch `HOME`, `XDG_STATE_HOME`, `XDG_CONFIG_HOME` and `XDG_RUNTIME_DIR`, a clean environment (no `HERDR_*`, `CLAUDECODE`, `CLAUDE_CODE_*` or plugin variables), and stop only that core. Skip when `hc` is not on `PATH`, found without running it. Never run `hc` against the user's default session (`hc server status` starts a core), never stop or restart the user's core, and never attach to, read or send input to a terminal you did not create. collied under test is pointed at the scratch socket (`ServerConfig.herdr_core`), never left to discover the user's core.
 
 ## Protocol
 

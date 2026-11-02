@@ -12,7 +12,7 @@ use crate::keychain;
 
 use crate::config::{self, ApnsConfig, ApnsKey, Config};
 use crate::control::{self, Reply, Request};
-use crate::runtime::{self, Runtime};
+use crate::runtime::{self, Runtime, herdr_core};
 use crate::{hooks, push};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -69,9 +69,14 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     let started_ms = check_daemon(&mut r, &data_dir).await;
     let (s, d) = check_service(config_path_arg.as_deref(), &data_dir, started_ms);
     r.line(s, "service", d);
+    let core = herdr_core::socket_path(|k| std::env::var_os(k));
+    let probed = match &core {
+        Ok(socket) => Some(herdr_core::probe(socket).await),
+        Err(_) => None,
+    };
     match &config {
         Some(config) => {
-            check_herdr(&mut r, config).await;
+            check_herdr(&mut r, config, matches!(probed, Some(Ok(_)))).await;
             check_tailnet(&mut r, config, &data_dir.join(config::TSNET_DIR));
         }
         None => {
@@ -80,6 +85,7 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
             }
         }
     }
+    report_core(&mut r, core, probed);
     let peers = data_dir.join(config::PEERS_FILE);
     let (s, d) = check_private(&peers, Kind::File, (Status::Warn, "no paired phones"));
     r.line(s, "peers", d);
@@ -729,7 +735,19 @@ fn ownership(meta: &Metadata, want: u32) -> (Status, String) {
     }
 }
 
-async fn check_herdr(r: &mut Report, config: &Config) {
+/// herdr down is a failure only when herdr-core does not answer either.
+async fn check_herdr(r: &mut Report, config: &Config, core_answers: bool) {
+    let down = |r: &mut Report, detail: String| {
+        if core_answers {
+            r.line(
+                Status::Ok,
+                "herdr",
+                format!("not running ({detail}); herdr-core answers"),
+            );
+        } else {
+            r.line(Status::Fail, "herdr", detail);
+        }
+    };
     let socket = match runtime::herdr_socket(config.herdr.session.as_deref()) {
         Ok(p) => p,
         Err(e) => return r.line(Status::Fail, "herdr", e.to_string()),
@@ -737,7 +755,7 @@ async fn check_herdr(r: &mut Report, config: &Config) {
     let shown = socket.display();
     let meta = match std::fs::symlink_metadata(&socket) {
         Ok(m) => m,
-        Err(e) => return r.line(Status::Fail, "herdr", format!("{shown}: {e}")),
+        Err(e) => return down(r, format!("{shown}: {e}")),
     };
     if !meta.file_type().is_socket() {
         return r.line(Status::Fail, "herdr", format!("{shown}: not a socket"));
@@ -755,8 +773,146 @@ async fn check_herdr(r: &mut Report, config: &Config) {
                 pong.version, pong.protocol
             ),
         ),
-        Err(e) => r.line(Status::Fail, "herdr", format!("{shown}: ping: {e}")),
+        Err(e) => down(r, format!("{shown}: ping: {e}")),
     }
+}
+
+/// Session variables a core passes to every terminal when it inherited them from a herdr
+/// pane or a Claude Code session: herdr's hooks then report for that pane, and Claude Code
+/// saves no transcript.
+const INHERITED: [&str; 3] = [
+    "HERDR_PANE_ID",
+    "HERDR_SOCKET_PATH",
+    "CLAUDE_CODE_CHILD_SESSION",
+];
+
+fn report_core(
+    r: &mut Report,
+    socket: Result<PathBuf, String>,
+    probed: Option<Result<(herdr_core::Hello, Option<u32>), runtime::Error>>,
+) {
+    let socket = match socket {
+        Ok(s) => s,
+        Err(e) => return r.line(Status::Warn, "herdr-core", e),
+    };
+    let shown = socket.display();
+    let (hello, holder) = match probed {
+        Some(Ok(probed)) => probed,
+        Some(Err(runtime::Error::Unsupported(why))) => {
+            return r.line(Status::Fail, "herdr-core", format!("{shown}: {why}"));
+        }
+        _ => return r.line(Status::Ok, "herdr-core", format!("not running: {shown}")),
+    };
+    let detail = format!(
+        "{shown}: herdr-core {} (generation {})",
+        hello.version, hello.generation
+    );
+    match hello.problem() {
+        Some(why) => r.line(Status::Warn, "herdr-core", format!("{detail}: {why}")),
+        None => r.line(Status::Ok, "herdr-core", detail),
+    }
+    if let Some(folder) = socket.parent() {
+        let (s, d) = check_private(folder, Kind::Dir, (Status::Fail, "missing"));
+        r.line(s, "herdr-core", d);
+    }
+    let Some(pid) = holder else {
+        return;
+    };
+    match env_names(pid).filter(|n| !n.is_empty()) {
+        Some(names) => {
+            let held: Vec<&str> = INHERITED
+                .into_iter()
+                .filter(|n| names.iter().any(|have| have == n))
+                .collect();
+            if !held.is_empty() {
+                r.line(
+                    Status::Warn,
+                    "herdr-core",
+                    format!(
+                        "its terminals inherit {} from whatever started the core; start it outside herdr and Claude Code",
+                        held.join(", ")
+                    ),
+                );
+            }
+        }
+        None => r.line(
+            Status::Warn,
+            "herdr-core",
+            format!("could not read the environment of its holder (pid {pid})"),
+        ),
+    }
+}
+
+/// The names in `pid`'s environment; the values are never kept.
+#[cfg(target_os = "macos")]
+fn env_names(pid: u32) -> Option<Vec<String>> {
+    let mut mib = [
+        libc::CTL_KERN,
+        libc::KERN_PROCARGS2,
+        i32::try_from(pid).ok()?,
+    ];
+    let mut size: libc::size_t = 0;
+    // SAFETY: a size query: no buffer is written.
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; size];
+    // SAFETY: `buf` is writable for `size` bytes, which the call updates to what it wrote.
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buf.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    buf.truncate(size);
+    procargs_env_names(&buf)
+}
+
+/// KERN_PROCARGS2: argc, the executable path, NUL padding, argc arguments, then the
+/// environment, each NUL-terminated.
+#[cfg(any(target_os = "macos", test))]
+fn procargs_env_names(buf: &[u8]) -> Option<Vec<String>> {
+    let argc = usize::try_from(i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?)).ok()?;
+    let mut fields = buf[4..]
+        .split(|b| *b == 0)
+        .skip(1)
+        .skip_while(|f| f.is_empty());
+    for _ in 0..argc {
+        fields.next()?;
+    }
+    Some(env_names_of(fields.take_while(|f| !f.is_empty())))
+}
+
+#[cfg(target_os = "linux")]
+fn env_names(pid: u32) -> Option<Vec<String>> {
+    let raw = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    Some(env_names_of(
+        raw.split(|b| *b == 0).filter(|f| !f.is_empty()),
+    ))
+}
+
+fn env_names_of<'a>(entries: impl Iterator<Item = &'a [u8]>) -> Vec<String> {
+    entries
+        .filter_map(|e| e.split(|b| *b == b'=').next())
+        .map(|n| String::from_utf8_lossy(n).into_owned())
+        .collect()
 }
 
 // Read-only: the node is never started here because a running collied may own the state.
@@ -795,6 +951,25 @@ fn check_tailnet(r: &mut Report, config: &Config, tsnet: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_only_the_names_of_a_process_environment() {
+        // macOS hides a platform binary's environment, so the test reads its own.
+        let names = env_names(std::process::id()).unwrap();
+        let ours: Vec<String> = std::env::vars_os()
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        assert!(!names.is_empty());
+        assert!(
+            names.iter().all(|n| ours.contains(n) && !n.contains('=')),
+            "{names:?}"
+        );
+
+        let mut buf = 2i32.to_ne_bytes().to_vec();
+        buf.extend_from_slice(b"/bin/sh\0\0\0\0sh\0-c\0A=1\0HERDR_PANE_ID=w1:p1\0\0junk=2\0");
+        assert_eq!(procargs_env_names(&buf).unwrap(), ["A", "HERDR_PANE_ID"]);
+        assert_eq!(procargs_env_names(&buf[..2]), None);
+    }
 
     #[test]
     fn reports_the_status_line_tap() {
