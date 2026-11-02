@@ -61,6 +61,9 @@ pub const STRIPPED: [&str; 16] = [
 pub const TASK_KINDS: [&str; 2] = ["claude", "codex"];
 /// Set on the terminals collied starts as tasks, to the agent kind.
 const TASK_LABEL: &str = "collie.kind";
+/// Set on a worktree task's terminals, to the checkout collied created or opened for it:
+/// only that checkout is ever removed by an archive.
+const WORKTREE_LABEL: &str = "collie.worktree";
 
 /// A terminal the core holds, shell or agent, with the folders it works in.
 pub struct Occupant {
@@ -1069,6 +1072,7 @@ impl Core {
         cwd: &str,
         name: &str,
         kind: &str,
+        worktree: Option<&str>,
         cli: &Path,
         args: &[&str],
     ) -> Result<String, Error> {
@@ -1083,6 +1087,9 @@ impl Core {
             .ok_or_else(|| Error::Unsupported("the agent's path is not UTF-8".to_owned()))?;
         let mut labels = serde_json::Map::new();
         labels.insert(TASK_LABEL.to_owned(), json!(kind));
+        if let Some(checkout) = worktree {
+            labels.insert(WORKTREE_LABEL.to_owned(), json!(checkout));
+        }
         let mut conn = Conn::open(&self.socket).await?;
         let run: Run = conn
             .call(
@@ -1101,36 +1108,46 @@ impl Core {
         Ok(format!("{group}:{}", run.address))
     }
 
-    /// Whether collied started the terminal as a task: only then may an archive remove the
-    /// worktree it runs in.
-    pub fn task(&self, id: &str) -> bool {
-        let Ok((address, ..)) = self.terminal(id) else {
-            return false;
-        };
+    /// The checkout collied created or opened for the worktree task it started in `id`.
+    pub fn worktree(&self, id: &str) -> Option<String> {
+        let (address, ..) = self.terminal(id).ok()?;
         let inner = self.lock();
-        inner.live.as_ref().is_some_and(|live| {
-            live.terminals
-                .get(&address)
-                .is_some_and(|h| h.terminal.labels.contains_key(TASK_LABEL))
+        let t = &inner.live.as_ref()?.terminals.get(&address)?.terminal;
+        t.labels
+            .contains_key(TASK_LABEL)
+            .then(|| t.labels.get(WORKTREE_LABEL).cloned())
+            .flatten()
+    }
+
+    /// Whether `id` held a terminal that has finished: its program exited.
+    pub fn finished(&self, id: &str) -> bool {
+        self.terminal(id).is_ok_and(|(address, ..)| {
+            let inner = self.lock();
+            inner.live.as_ref().is_some_and(|live| {
+                live.terminals
+                    .get(&address)
+                    .is_some_and(|h| h.terminal.state == "finished")
+            })
         })
     }
 
-    /// Every live terminal on this machine, listed as an agent or not, shells included.
-    pub fn occupants(&self) -> Vec<Occupant> {
+    /// Every live terminal on this machine, listed as an agent or not, shells included;
+    /// `None` while the core is not followed, when nothing is known about them.
+    pub fn occupants(&self) -> Option<Vec<Occupant>> {
         let inner = self.lock();
-        let Some(live) = inner.live.as_ref() else {
-            return Vec::new();
-        };
-        (live.terminals.values())
-            .map(|h| &h.terminal)
-            .filter(|t| t.state == "live")
-            .map(|t| Occupant {
-                id: format!("{}:{}", live.group, t.address),
-                task: t.labels.contains_key(TASK_LABEL),
-                cwd: t.cwd.clone(),
-                foreground_cwd: t.foreground.as_ref().map(|f| f.cwd.clone()),
-            })
-            .collect()
+        let live = inner.live.as_ref()?;
+        Some(
+            (live.terminals.values())
+                .map(|h| &h.terminal)
+                .filter(|t| t.state == "live")
+                .map(|t| Occupant {
+                    id: format!("{}:{}", live.group, t.address),
+                    task: t.labels.contains_key(TASK_LABEL),
+                    cwd: t.cwd.clone(),
+                    foreground_cwd: t.foreground.as_ref().map(|f| f.cwd.clone()),
+                })
+                .collect(),
+        )
     }
 
     /// Only a terminal collied lists.
@@ -2382,7 +2399,7 @@ mod tests {
         let cli = Path::new("/opt/bin/codex");
         let args = super::super::herdr::agent_args("codex", Some(SESSION), false);
         assert_eq!(
-            core.start("/w", "collie-0a1b2c3d", "codex", cli, &args)
+            core.start("/w", "collie-0a1b2c3d", "codex", Some("/w"), cli, &args)
                 .await
                 .unwrap(),
             format!("hc:{ID}:t2")
@@ -2420,7 +2437,10 @@ mod tests {
             params["env"],
             json!({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
         );
-        assert_eq!(params["labels"], json!({"collie.kind": "codex"}));
+        assert_eq!(
+            params["labels"],
+            json!({"collie.kind": "codex", "collie.worktree": "/w"})
+        );
         assert_eq!(
             super::super::herdr::agent_args("codex", None, false),
             ["--no-daemon"]
@@ -2493,15 +2513,18 @@ mod tests {
         (dir, root, repo, checkout)
     }
 
-    /// An idle Codex started in `cwd` as t1, a task of collied's or not.
-    fn codex_in(cwd: &Path, task: bool) -> Value {
+    /// An idle Codex started in `cwd` as t1, with `labels`.
+    fn codex_in(cwd: &Path, labels: Value) -> Value {
         let mut t = terminal("t1", json!({"state": "idle", "app": "codex"}), "codex");
         t["cwd"] = json!(cwd);
         t["foreground"]["cwd"] = json!(cwd);
-        if task {
-            t["labels"] = json!({"collie.kind": "codex"});
-        }
+        t["labels"] = labels;
         t
+    }
+
+    /// The labels of a worktree task collied started in `checkout`.
+    fn worktree_task(checkout: &Path) -> Value {
+        json!({"collie.kind": "codex", "collie.worktree": checkout})
     }
 
     fn core_of(root: &Path, terminals: Value) -> Arc<Core> {
@@ -2519,11 +2542,18 @@ mod tests {
     }
 
     async fn archive(root: &Path, core: Arc<Core>) -> crate::drive::Reply {
+        archive_while(root, core, Arc::new(|| true)).await
+    }
+
+    async fn archive_while(
+        root: &Path,
+        core: Arc<Core>,
+        auth: crate::drive::Authorized,
+    ) -> crate::drive::Reply {
         let drive = crate::drive::Driver::new(root.join("herdr.sock"), vec![], &[root.to_owned()])
             .unwrap()
             .with_core(Some(core));
-        let yes: crate::drive::Authorized = Arc::new(|| true);
-        drive.task_archive(archive_params(), &yes).await
+        drive.task_archive(archive_params(), &auth).await
     }
 
     fn kill_and_rm(method: &str) -> Value {
@@ -2542,12 +2572,17 @@ mod tests {
 
     #[tokio::test]
     async fn archive_closes_only_an_agent_collie_did_not_start_or_in_a_main_checkout() {
-        for (task, main) in [(false, false), (true, true)] {
+        // Not collied's; a plain task whose folder is a linked worktree; one in the main
+        // checkout.
+        for (labels, main) in [
+            (json!({}), false),
+            (json!({"collie.kind": "codex"}), false),
+            (json!({"collie.kind": "codex"}), true),
+        ] {
             let (_dir, root, repo, checkout) = worktree();
             let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
             let folder = if main { &repo } else { &checkout };
-            let core = core_of(&root, json!([codex_in(folder, task)]));
-            assert_eq!(core.task(&format!("hc:{ID}:t1")), task);
+            let core = core_of(&root, json!([codex_in(folder, labels)]));
             let Ok(protocol::Response::TaskArchived { message }) = archive(&root, core).await
             else {
                 panic!("not archived");
@@ -2569,7 +2604,10 @@ mod tests {
         let mut shell = terminal("t2", Value::Null, "-zsh");
         shell["cwd"] = json!(repo);
         shell["foreground"]["cwd"] = json!(checkout.join("src"));
-        let core = core_of(&root, json!([codex_in(&checkout, true), shell]));
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout)), shell]),
+        );
         let (code, message) = archive(&root, core).await.unwrap_err();
         assert_eq!(code, protocol::ErrorCode::InvalidParams);
         assert!(message.contains("collie did not start"), "{message}");
@@ -2581,7 +2619,10 @@ mod tests {
     async fn archive_leaves_a_worktree_herdr_has_open_or_while_herdr_does_not_answer() {
         let (_dir, root, repo, checkout) = worktree();
         let seen = fake_core(&root.join("core.sock"), |_| Value::Null).await;
-        let core = core_of(&root, json!([codex_in(&checkout, true)]));
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout))]),
+        );
         // A socket that takes the connection and closes it unanswered: herdr runs but is busy.
         let listener = tokio::net::UnixListener::bind(root.join("herdr.sock")).unwrap();
         let busy = tokio::spawn(async move {
@@ -2623,18 +2664,161 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn archive_removes_a_worktree_task_checkout_after_ending_its_agents() {
+        let (_dir, root, _, checkout) = worktree();
+        let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout))]),
+        );
+        // Authorized while the checkout exists, so `gh poi` is skipped after the removal.
+        let held = checkout.clone();
+        let reply = archive_while(&root, core, Arc::new(move || held.exists())).await;
+        let Ok(protocol::Response::TaskArchived { message }) = reply else {
+            panic!("not archived: {reply:?}");
+        };
+        assert!(
+            message.starts_with("Removed worktree checkout"),
+            "{message}"
+        );
+        assert!(message.contains("gh poi was skipped"), "{message}");
+        assert!(!checkout.exists());
+        assert_eq!(
+            methods(&seen),
+            [json!("terminal.kill"), json!("terminal.rm")]
+        );
+    }
+
+    #[tokio::test]
+    async fn archive_leaves_a_worktree_a_herdr_pane_works_in() {
+        let (_dir, root, _, checkout) = worktree();
+        let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout))]),
+        );
+        static CHECKOUT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        CHECKOUT.set(checkout.display().to_string()).unwrap();
+        fake_herdr(&root.join("herdr.sock"), |method| {
+            (method == "session.snapshot").then(|| {
+                json!({"type": "session_snapshot", "snapshot": {"workspaces": [], "agents": [],
+                    "panes": [{"pane_id": "w1:p1", "terminal_id": "term_1", "workspace_id": "w1",
+                        "tab_id": "w1:t1", "cwd": "/", "foreground_cwd": CHECKOUT.get().unwrap()}]}})
+            })
+        });
+        let (_, message) = archive(&root, core).await.unwrap_err();
+        assert!(
+            message.contains("a herdr pane works in this checkout"),
+            "{message}"
+        );
+        assert!(checkout.exists());
+        assert!(methods(&seen).is_empty());
+    }
+
+    #[tokio::test]
+    async fn archive_closes_nothing_once_the_core_is_no_longer_followed() {
+        let (_dir, root, repo, checkout) = worktree();
+        let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout))]),
+        );
+        static FOLLOWED: std::sync::OnceLock<(Arc<Core>, String, String)> =
+            std::sync::OnceLock::new();
+        static SNAPSHOTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        assert!(
+            FOLLOWED
+                .set((
+                    core.clone(),
+                    repo.display().to_string(),
+                    checkout.display().to_string(),
+                ))
+                .is_ok()
+        );
+        // The events connection drops while archive asks herdr: the core forgets its terminals.
+        fake_herdr(&root.join("herdr.sock"), |method| {
+            let (core, repo, checkout) = FOLLOWED.get().unwrap();
+            match method {
+                "session.snapshot" => {
+                    if SNAPSHOTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+                        core.lock().live = None;
+                    }
+                    Some(json!({"type": "session_snapshot",
+                        "snapshot": {"workspaces": [], "panes": [], "agents": []}}))
+                }
+                "worktree.list" => Some(
+                    json!({"type": "worktree_list", "source": {"source_checkout_path": repo},
+                    "worktrees": [{"path": checkout, "branch": "feat", "open_workspace_id": null,
+                        "is_bare": false, "is_linked_worktree": true}]}),
+                ),
+                _ => None,
+            }
+        });
+        let (_, message) = archive(&root, core).await.unwrap_err();
+        assert!(message.contains("not followed"), "{message}");
+        assert!(message.contains("nothing was closed"), "{message}");
+        assert!(checkout.exists());
+        assert!(methods(&seen).is_empty());
+    }
+
+    #[tokio::test]
     async fn tasks_start_in_herdr_while_it_answers() {
         let dir = tempfile::tempdir().unwrap();
         let herdr = dir.path().join("herdr.sock");
         let rt =
             Runtime::new(herdr.clone()).with_core(Some(followed(dir.path().join("core.sock"))));
-        assert!(rt.task_core().await.is_some(), "herdr does not answer");
+        assert!(
+            rt.task_core().await.unwrap().is_some(),
+            "herdr is not running"
+        );
         let unfollowed = Runtime::new(herdr.clone())
             .with_core(Some(Arc::new(Core::new(dir.path().join("core.sock")))));
-        assert!(unfollowed.task_core().await.is_none());
+        assert!(unfollowed.task_core().await.unwrap().is_none());
+
+        // herdr runs but takes the connection and closes it unanswered.
+        let listener = tokio::net::UnixListener::bind(&herdr).unwrap();
+        let busy = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        assert!(rt.task_core().await.is_err(), "herdr does not answer");
+        busy.abort();
+        let _ = busy.await;
+        std::fs::remove_file(&herdr).unwrap();
 
         fake_herdr(&herdr, |_| None);
-        assert!(rt.task_core().await.is_none(), "herdr answers");
+        assert!(rt.task_core().await.unwrap().is_none(), "herdr answers");
+    }
+
+    #[tokio::test]
+    async fn a_task_herdr_core_cannot_start_creates_no_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let drive = crate::drive::Driver::new(
+            root.join("herdr.sock"),
+            vec![protocol::AgentKind::new("copilot").unwrap()],
+            std::slice::from_ref(&root),
+        )
+        .unwrap()
+        .with_core(Some(followed(root.join("core.sock"))));
+        let yes: crate::drive::Authorized = Arc::new(|| true);
+        let p = protocol::TaskNewParams {
+            op_id: protocol::OpId::new("n".repeat(22)).unwrap(),
+            cwd: protocol::Cwd::new(root.to_str().unwrap()).unwrap(),
+            agent: protocol::AgentKind::new("copilot").unwrap(),
+            prompt: Some(protocol::PromptText::new("hi".to_owned()).unwrap()),
+            label: None,
+            new_folder: Some(protocol::FolderName::new("made").unwrap()),
+            worktree: None,
+            clone: None,
+            resume: None,
+            ultracode: false,
+        };
+        let (reply, cwd) = drive.task_new(p, &yes).await;
+        assert_eq!(reply.unwrap_err().0, protocol::ErrorCode::InvalidParams);
+        assert!(cwd.is_none());
+        assert!(!root.join("made").exists());
     }
 
     #[tokio::test]

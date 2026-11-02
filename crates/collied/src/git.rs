@@ -248,6 +248,7 @@ pub(crate) async fn worktree_list(cwd: &Cwd) -> Result<WorktreeList, Fail> {
         let mut path = None;
         let mut branch = None;
         let mut bare = false;
+        let mut locked = false;
         for line in record {
             if let Some(p) = line.strip_prefix(b"worktree ") {
                 path = std::str::from_utf8(p).ok().map(str::to_owned);
@@ -255,6 +256,8 @@ pub(crate) async fn worktree_list(cwd: &Cwd) -> Result<WorktreeList, Fail> {
                 branch = std::str::from_utf8(name).ok().map(str::to_owned);
             } else if *line == b"bare" {
                 bare = true;
+            } else if *line == b"locked" || line.starts_with(b"locked ") {
+                locked = true;
             }
         }
         if let Some(path) = path {
@@ -264,6 +267,7 @@ pub(crate) async fn worktree_list(cwd: &Cwd) -> Result<WorktreeList, Fail> {
                 open_workspace_id: None,
                 is_bare: bare,
                 is_linked_worktree: !worktrees.is_empty(),
+                locked,
             });
         }
     }

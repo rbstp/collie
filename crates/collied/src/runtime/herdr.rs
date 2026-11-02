@@ -227,6 +227,9 @@ pub struct WorktreeInfo {
     pub open_workspace_id: Option<String>,
     pub is_bare: bool,
     pub is_linked_worktree: bool,
+    /// From git only, for a herdr-core task; herdr's answer is not read for it.
+    #[serde(skip)]
+    pub locked: bool,
 }
 
 #[derive(Debug, Deserialize)]
