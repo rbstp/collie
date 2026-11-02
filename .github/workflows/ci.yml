@@ -155,8 +155,8 @@ jobs:
           submodules: true
 
       # Overlaps the simulator's first boot on a fresh runner with the builds below. The boot
-      # saturates the runner for minutes, so set up go here takes minutes against seconds in
-      # rust; started later, the boot slows the cargo cache restore or the builds as much.
+      # saturates the runner for minutes: set up go takes 125 to 340 s here against 3 s in rust,
+      # and with the boot started after the rust toolchain, restoring the cargo cache took 369 s.
       - name: boot the simulator
         run: xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
 
@@ -229,8 +229,7 @@ jobs:
         run: xcrun simctl list runtimes | grep -q watchOS || xcodebuild -downloadPlatform watchOS
 
       - name: test
-        timeout-minutes: 45
-        run: just --no-deps ios-test never 2
+        run: just --no-deps ios-test never
 
   desktop-packaging:
     runs-on: ubuntu-24.04
