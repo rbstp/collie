@@ -24,6 +24,7 @@ use tokio::task::JoinHandle;
 use tokio::{process::Command, time::timeout};
 
 use crate::draft::{self, InputBox};
+use crate::runtime::herdr_core::Core;
 use crate::runtime::{self, AgentInfo, PaneInfo, Runtime};
 use crate::transcript::{self, Transcripts};
 use crate::{flock, git, prompt, pulls, reflow};
@@ -95,8 +96,16 @@ pub(crate) fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, 
 
 pub fn herdr_fail(e: runtime::Error) -> Fail {
     tracing::debug!(error = %e, "herdr call failed");
-    let runtime::Error::Herdr { code, message } = &e else {
-        return (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned());
+    let (code, message) = match &e {
+        runtime::Error::Herdr { code, message } => (code, message),
+        runtime::Error::Unsupported(why) => return (ErrorCode::Internal, why.clone()),
+        runtime::Error::Core { kind, .. } if kind == "not_found" => {
+            return (ErrorCode::NotFound, "not found".to_owned());
+        }
+        runtime::Error::Core { kind, .. } => {
+            return (ErrorCode::Internal, format!("herdr-core refused: {kind}"));
+        }
+        _ => return (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned()),
     };
     let (code, message) = match code.as_str() {
         "agent_start_input_failed" | "pane_send_failed" if canonical_limit(message) => {
@@ -228,6 +237,11 @@ impl Driver {
 
     pub fn with_transcripts(mut self, transcripts: Transcripts) -> Self {
         self.transcripts = transcripts;
+        self
+    }
+
+    pub fn with_core(mut self, core: Option<Arc<Core>>) -> Self {
+        self.runtime = self.runtime.with_core(core);
         self
     }
 

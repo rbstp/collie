@@ -1,8 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::Deserialize;
 
 pub mod herdr;
+pub mod herdr_core;
+
+use self::herdr_core::Core;
 
 pub use herdr::{Error, PaneRead};
 
@@ -65,7 +69,7 @@ pub struct AgentInfo {
     pub launch_pending: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct SessionSnapshot {
     pub workspaces: Vec<WorkspaceInfo>,
     pub panes: Vec<PaneInfo>,
@@ -77,9 +81,12 @@ pub struct PaneProcesses {
     pub attach: Option<String>,
 }
 
+/// herdr, and a herdr-core core beside it when one is followed. Calls are routed by id:
+/// `hc:` ids are herdr-core's and never reach herdr.
 #[derive(Clone)]
 pub struct Runtime {
     herdr: PathBuf,
+    core: Option<Arc<Core>>,
 }
 
 pub fn herdr_socket(session: Option<&str>) -> Result<PathBuf, herdr::InvalidSession> {
@@ -90,9 +97,43 @@ pub fn herdr_session_label(session: Option<&str>) -> String {
     herdr::session_label(session, &herdr::SocketEnv::from_process())
 }
 
+const NOT_YET: &str = "not available for Herdr 2 agents yet";
+
+fn herdr_only(id: &str) -> Result<(), Error> {
+    if herdr_core::owns(id) {
+        return Err(Error::Unsupported(NOT_YET.to_owned()));
+    }
+    Ok(())
+}
+
 impl Runtime {
     pub fn new(herdr: PathBuf) -> Self {
-        Self { herdr }
+        Self { herdr, core: None }
+    }
+
+    pub fn with_core(mut self, core: Option<Arc<Core>>) -> Self {
+        self.core = core;
+        self
+    }
+
+    pub fn core(&self) -> Option<&Arc<Core>> {
+        self.core.as_ref()
+    }
+
+    /// herdr's answer, plus the core's agents while it is followed. Without a followed core
+    /// this is herdr's answer unchanged, its error included.
+    fn merge<T: Default>(
+        &self,
+        herdr: Result<T, Error>,
+        add: impl FnOnce(&mut T, Vec<AgentInfo>),
+    ) -> Result<T, Error> {
+        let Some((core, agents)) = self.core.as_ref().and_then(|c| Some((c, c.agents()?))) else {
+            return herdr;
+        };
+        core.herdr_seen(herdr.as_ref().err());
+        let mut merged = herdr.unwrap_or_default();
+        add(&mut merged, agents);
+        Ok(merged)
     }
 
     pub async fn ping(&self) -> Result<herdr::Pong, Error> {
@@ -100,15 +141,27 @@ impl Runtime {
     }
 
     pub async fn session_snapshot(&self) -> Result<SessionSnapshot, Error> {
-        herdr::session_snapshot(&self.herdr).await
+        let herdr = herdr::session_snapshot(&self.herdr).await;
+        self.merge(herdr, |snap, agents| {
+            snap.workspaces
+                .extend(herdr_core::group(&agents, &snap.workspaces));
+            snap.panes.extend(agents.iter().map(herdr_core::pane));
+            snap.agents.extend(agents);
+        })
     }
 
     pub async fn agent_list(&self) -> Result<Vec<AgentInfo>, Error> {
-        herdr::agent_list(&self.herdr).await
+        let herdr = herdr::agent_list(&self.herdr).await;
+        self.merge(herdr, |list, agents| list.extend(agents))
     }
 
+    /// The core's group is numbered after herdr's workspaces as this list has them.
     pub async fn workspace_list(&self) -> Result<Vec<WorkspaceInfo>, Error> {
-        herdr::workspace_list(&self.herdr).await
+        let herdr = herdr::workspace_list(&self.herdr).await;
+        self.merge(herdr, |list, agents| {
+            let group = herdr_core::group(&agents, list);
+            list.extend(group);
+        })
     }
 
     pub async fn agent_manifests(&self) -> Result<Vec<String>, Error> {
@@ -116,14 +169,17 @@ impl Runtime {
     }
 
     pub async fn agent_get(&self, target: &str) -> Result<AgentInfo, Error> {
+        herdr_only(target)?;
         herdr::agent_get(&self.herdr, target).await
     }
 
     pub async fn pane_get(&self, pane_id: &str) -> Result<PaneInfo, Error> {
+        herdr_only(pane_id)?;
         herdr::pane_get(&self.herdr, pane_id).await
     }
 
     pub async fn pane_columns(&self, pane_id: &str) -> Result<Option<u16>, Error> {
+        herdr_only(pane_id)?;
         herdr::pane_columns(&self.herdr, pane_id).await
     }
 
@@ -133,6 +189,7 @@ impl Runtime {
         source: &str,
         lines: Option<u32>,
     ) -> Result<PaneRead, Error> {
+        herdr_only(pane_id)?;
         herdr::agent_read(&self.herdr, pane_id, source, lines).await
     }
 
@@ -142,30 +199,37 @@ impl Runtime {
         source: &str,
         lines: Option<u32>,
     ) -> Result<PaneRead, Error> {
+        herdr_only(pane_id)?;
         herdr::pane_read(&self.herdr, pane_id, source, lines).await
     }
 
     pub async fn agent_explain(&self, target: &str) -> Result<herdr::Explain, Error> {
+        herdr_only(target)?;
         herdr::agent_explain(&self.herdr, target).await
     }
 
     pub async fn detection_text(&self, pane_id: &str) -> Result<String, Error> {
+        herdr_only(pane_id)?;
         herdr::detection_text(&self.herdr, pane_id).await
     }
 
     pub async fn agent_prompt(&self, pane_id: &str, text: &str) -> Result<(), Error> {
+        herdr_only(pane_id)?;
         herdr::agent_prompt(&self.herdr, pane_id, text).await
     }
 
     pub async fn agent_send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<(), Error> {
+        herdr_only(pane_id)?;
         herdr::agent_send_keys(&self.herdr, pane_id, keys).await
     }
 
     pub async fn pane_send_text(&self, pane_id: &str, text: &str) -> Result<(), Error> {
+        herdr_only(pane_id)?;
         herdr::pane_send_text(&self.herdr, pane_id, text).await
     }
 
     pub async fn pane_send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<(), Error> {
+        herdr_only(pane_id)?;
         herdr::pane_send_keys(&self.herdr, pane_id, keys).await
     }
 
@@ -175,10 +239,12 @@ impl Runtime {
         text: &str,
         keys: &[&str],
     ) -> Result<(), Error> {
+        herdr_only(pane_id)?;
         herdr::pane_send_input(&self.herdr, pane_id, text, keys).await
     }
 
     pub async fn agent_focus(&self, pane_id: &str) -> Result<(), Error> {
+        herdr_only(pane_id)?;
         herdr::agent_focus(&self.herdr, pane_id).await
     }
 
@@ -202,6 +268,7 @@ impl Runtime {
     }
 
     pub async fn tab_create(&self, workspace_id: &str, cwd: &str) -> Result<(), Error> {
+        herdr_only(workspace_id)?;
         herdr::tab_create(&self.herdr, workspace_id, cwd).await
     }
 
@@ -229,18 +296,34 @@ impl Runtime {
     }
 
     pub async fn worktree_remove(&self, workspace_id: &str) -> Result<herdr::WorktreeInfo, Error> {
+        herdr_only(workspace_id)?;
         herdr::worktree_remove(&self.herdr, workspace_id).await
     }
 
+    /// A herdr-core group is a label, not a workspace: closing it would end every terminal in
+    /// the core, a desktop app's included, so it is refused.
     pub async fn workspace_close(&self, workspace_id: &str) -> Result<(), Error> {
+        if herdr_core::owns(workspace_id) {
+            return Err(Error::Unsupported(
+                "a Herdr 2 group cannot be closed; close its agents one at a time".to_owned(),
+            ));
+        }
         herdr::workspace_close(&self.herdr, workspace_id).await
     }
 
     pub async fn pane_processes(&self, pane_id: &str) -> Result<PaneProcesses, Error> {
+        herdr_only(pane_id)?;
         herdr::pane_processes(&self.herdr, pane_id).await
     }
 
+    /// For a herdr-core agent: ends its program, then removes its terminal.
     pub async fn pane_close(&self, pane_id: &str) -> Result<(), Error> {
+        if herdr_core::owns(pane_id) {
+            return match &self.core {
+                Some(core) => core.close(pane_id).await,
+                None => Err(Error::Unsupported(NOT_YET.to_owned())),
+            };
+        }
         herdr::pane_close(&self.herdr, pane_id).await
     }
 }

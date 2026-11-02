@@ -13,7 +13,7 @@ Documentation: <https://collie.rbstp.dev>
 
 ## Requirements
 
-- An Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.5
+- An Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.5; collied also lists the agents and status of a running herdr-core 0.1.16 (Herdr 2)
 - An iPhone on iOS 26 or later; an Apple Watch on watchOS 26 or later is optional
 - A personal Tailscale account
 - An Apple Developer account to build the app, and an APNs key for push notifications

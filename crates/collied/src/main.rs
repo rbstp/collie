@@ -416,6 +416,9 @@ async fn status(control_path: &Path) -> anyhow::Result<()> {
                 "herdr:     {}",
                 s.herdr_version.as_deref().unwrap_or("unreachable")
             );
+            if let Some(c) = &s.herdr_core {
+                println!("herdr-core: {}", herdr_core_line(c));
+            }
             if let Some(flock) = s.flock {
                 print_agents(&flock);
             } else if s.flock_too_large {
@@ -426,6 +429,21 @@ async fn status(control_path: &Path) -> anyhow::Result<()> {
         Some(other) => anyhow::bail!("unexpected reply: {other:?}"),
         None => Err(not_running()),
     }
+}
+
+fn herdr_core_line(c: &collied::runtime::herdr_core::Report) -> String {
+    let mut line = match (&c.version, c.generation) {
+        (Some(v), Some(g)) => format!("{} (generation {g})", collied::printable(v)),
+        _ => "not running".to_owned(),
+    };
+    line.push_str(&format!(", {}", collied::printable(&c.socket)));
+    if let Some(mode) = c.folder_mode {
+        line.push_str(&format!(", folder {mode:04o}"));
+    }
+    if !c.missing.is_empty() {
+        line.push_str(&format!(", lacks {}", c.missing.join(", ")));
+    }
+    line
 }
 
 fn print_agents(flock: &control::StatusFlock) {

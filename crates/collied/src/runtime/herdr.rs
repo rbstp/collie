@@ -34,6 +34,10 @@ pub enum Error {
     Herdr { code: String, message: String },
     #[error("response has neither result nor error")]
     Empty,
+    #[error("herdr-core error {kind}: {message}")]
+    Core { kind: String, message: String },
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 #[derive(Debug, thiserror::Error)]

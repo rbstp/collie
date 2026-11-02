@@ -46,6 +46,7 @@ use crate::peers::{self, Peer, Store};
 use crate::pr_watch::{self, Wakes, Watch, Watches};
 use crate::pulls::{self, Pulls};
 use crate::push::{self, ActivityError, Push};
+use crate::runtime::herdr_core::Core;
 use crate::runtime::{self, Runtime};
 use crate::terminal::{self, Grants};
 use crate::transcript::Transcripts;
@@ -86,6 +87,8 @@ pub struct ServerConfig {
     /// `[terminals] enabled`, read at start: no method changes it.
     pub terminals: bool,
     pub terminal_grant_ttl: Duration,
+    /// The herdr-core socket to follow; None follows none.
+    pub herdr_core: Option<PathBuf>,
 }
 
 pub struct ServerHandle {
@@ -399,6 +402,7 @@ impl State {
             sessions,
             peers,
             herdr_version,
+            herdr_core: self.runtime.core().map(|c| Box::new(c.report())),
             tags,
             flock,
             flock_too_large: false,
@@ -522,9 +526,11 @@ pub async fn start_with(
         Some(roots) => roots.clone(),
         None => vec![config::home_dir()?],
     };
+    let core = cfg.herdr_core.clone().map(|s| Arc::new(Core::new(s)));
     let drive = Arc::new(
         Driver::new(herdr_socket.clone(), tasks.agents.clone(), &roots)?
-            .with_transcripts(Transcripts::from_env()),
+            .with_transcripts(Transcripts::from_env())
+            .with_core(core.clone()),
     );
     let st = {
         let node = node.clone();
@@ -614,7 +620,7 @@ pub async fn start_with(
         cfg,
         dns_name,
         started_ms: crate::now_ms(),
-        runtime: Runtime::new(herdr_socket),
+        runtime: Runtime::new(herdr_socket).with_core(core.clone()),
         peers,
         pairing: Mutex::new(Pairing::default()),
         sessions: Mutex::new(Sessions {
@@ -644,7 +650,7 @@ pub async fn start_with(
     });
     let (shutdown, rx) = watch::channel(false);
     let (dead_tx, listener_dead) = watch::channel(false);
-    let tasks = vec![
+    let mut tasks = vec![
         tokio::spawn(accept_loop(listener, state.clone(), rx.clone(), dead_tx)),
         tokio::spawn(control::serve(control, state.clone(), rx.clone())),
         tokio::spawn(upkeep(
@@ -656,8 +662,11 @@ pub async fn start_with(
         tokio::spawn(copilot_usage(state.clone(), rx.clone())),
         tokio::spawn(pull_requests(state.clone(), rx.clone())),
         tokio::spawn(pr_watches(state.clone(), rx.clone())),
-        tokio::spawn(reconcile(state.clone(), rx)),
+        tokio::spawn(reconcile(state.clone(), rx.clone())),
     ];
+    if let Some(core) = core {
+        tasks.push(tokio::spawn(core.run(rx)));
+    }
     tracing::info!(host = %state.dns_name, port = state.cfg.port, "listening on the tailnet");
     Ok(ServerHandle {
         state,
@@ -2732,6 +2741,10 @@ fn observe_agent(
 }
 
 async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
+    // So a herdr-core-only machine does not see herdr's outage at start.
+    if let Some(core) = state.runtime.core() {
+        let _ = tokio::time::timeout(Duration::from_secs(5), core.settled()).await;
+    }
     let mut base: Option<Baseline> = None;
     let mut outage = false;
     let mut delay = RECONCILE_EVERY;
