@@ -244,7 +244,11 @@ pub(crate) async fn worktree_list(cwd: &Cwd) -> Result<WorktreeList, Fail> {
     }
     let lines: Vec<&[u8]> = out.split(|b| *b == 0).collect();
     let mut worktrees: Vec<WorktreeInfo> = Vec::new();
-    for record in lines.split(|line| line.is_empty()) {
+    for (index, record) in lines
+        .split(|line| line.is_empty())
+        .filter(|record| !record.is_empty())
+        .enumerate()
+    {
         let mut path = None;
         let mut branch = None;
         let mut bare = false;
@@ -266,7 +270,7 @@ pub(crate) async fn worktree_list(cwd: &Cwd) -> Result<WorktreeList, Fail> {
                 branch,
                 open_workspace_id: None,
                 is_bare: bare,
-                is_linked_worktree: !worktrees.is_empty(),
+                is_linked_worktree: index > 0,
                 locked,
             });
         }

@@ -1592,7 +1592,7 @@ impl Driver {
             WorkspaceId::new(pane.workspace_id.clone()),
             TerminalId::new(id.clone()),
         ) else {
-            return fail(ErrorCode::Internal, "herdr-core returned an invalid id");
+            return Err(left(invalid("herdr-core returned an invalid id")));
         };
         self.prompt_started(p, &pane, &name, &id, auth)
             .await
@@ -2159,14 +2159,7 @@ impl Driver {
         };
         let herdr = match self.runtime.herdr_snapshot().await {
             Ok(snapshot) => Some(snapshot),
-            Err(runtime::Error::Io(e))
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-                ) =>
-            {
-                None
-            }
+            Err(e) if runtime::not_running(&e) => None,
             Err(_) => return refused("herdr did not answer"),
         };
         if let Some(snapshot) = &herdr {
@@ -2197,6 +2190,11 @@ impl Driver {
             .collect();
         if occupants.iter().any(|o| !o.task) {
             return refused("a terminal collie did not start works in this checkout");
+        }
+        // Only the terminals of this worktree task end with it: another task in the checkout,
+        // such as a Resume there, has work of its own.
+        if (occupants.iter()).any(|o| o.worktree.as_deref() != Some(checkout.as_str())) {
+            return refused("another task works in this checkout");
         }
         let mut closed: Vec<&str> = Vec::new();
         let stopped = |closed: &[&str], (code, message): Fail| {
@@ -2241,8 +2239,9 @@ impl Driver {
             );
         }
         Ok(format!(
-            "Removed worktree checkout {} and closed its agents.",
-            checkout.as_str()
+            "Removed worktree checkout {} and closed {}.",
+            checkout.as_str(),
+            closed.join(", ")
         ))
     }
 

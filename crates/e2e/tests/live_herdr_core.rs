@@ -1415,6 +1415,29 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
         terminal_id: id.clone(),
         confirm: true,
     };
+    // A shell the test starts at the repository, then moves into the checkout with `cd`: the
+    // core must report its new folder, so the archive leaves the checkout alone.
+    let shell = run_argv(core, "collie-cd", &work, &["/bin/sh", "-i"]);
+    let cd = format!("cd '{}'", checkout.display());
+    core.hc(&["send", "--json", &shell, &cd]);
+    let moved = until("the shell's new folder", async || {
+        let t = core.hc(&["get", "--json", &shell]);
+        (t["foreground"]["cwd"].as_str() == checkout.to_str()).then_some(t)
+    })
+    .await;
+    eprintln!("foreground after cd: {}", moved["foreground"]);
+    let refused = drive.task_archive(archive(&codex), &yes).await;
+    let Err((_, message)) = refused else {
+        panic!("archived under a shell in the checkout: {refused:?}");
+    };
+    assert!(message.contains("did not start"), "{message}");
+    assert!(checkout.exists());
+    core.hc(&["kill", "--json", &shell]);
+    until("the shell to end", async || {
+        (core.hc(&["get", "--json", &shell])["state"] != "live").then_some(())
+    })
+    .await;
+
     let Ok(Response::TaskArchived { message }) = drive.task_archive(archive(&codex), &yes).await
     else {
         panic!("the worktree task was not archived");

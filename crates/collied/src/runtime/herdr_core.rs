@@ -70,6 +70,8 @@ pub struct Occupant {
     pub id: String,
     /// Started by collied as a task.
     pub task: bool,
+    /// The checkout collied recorded for the worktree task it started there.
+    pub worktree: Option<String>,
     pub cwd: String,
     pub foreground_cwd: Option<String>,
 }
@@ -115,7 +117,8 @@ pub fn cli(kind: &str) -> Option<PathBuf> {
     if !TASK_KINDS.contains(&kind) {
         return None;
     }
-    crate::usage::program(kind).filter(|p| p.to_str().is_some_and(|s| !s.contains('=')))
+    crate::usage::program(kind)
+        .filter(|p| p.is_absolute() && p.to_str().is_some_and(|s| !s.contains('=')))
 }
 
 /// The argv a task agent runs as: `env` drops each of `STRIPPED` first, since `terminal.run`'s
@@ -1103,7 +1106,10 @@ impl Core {
             )
             .await?;
         if !local(&run.address) {
-            return Err(not_found());
+            return Err(Error::Unsupported(format!(
+                "herdr-core started the agent as {:?}, on another machine; it was left running",
+                run.address
+            )));
         }
         Ok(format!("{group}:{}", run.address))
     }
@@ -1143,6 +1149,8 @@ impl Core {
                 .map(|t| Occupant {
                     id: format!("{}:{}", live.group, t.address),
                     task: t.labels.contains_key(TASK_LABEL),
+                    worktree: (t.labels.get(WORKTREE_LABEL).cloned())
+                        .filter(|_| t.labels.contains_key(TASK_LABEL)),
                     cwd: t.cwd.clone(),
                     foreground_cwd: t.foreground.as_ref().map(|f| f.cwd.clone()),
                 })
@@ -2681,8 +2689,112 @@ mod tests {
             message.starts_with("Removed worktree checkout"),
             "{message}"
         );
+        assert!(
+            message.contains(&format!("and closed hc:{ID}:t1.")),
+            "{message}"
+        );
         assert!(message.contains("gh poi was skipped"), "{message}");
         assert!(!checkout.exists());
+        assert_eq!(
+            methods(&seen),
+            [json!("terminal.kill"), json!("terminal.rm")]
+        );
+    }
+
+    fn task_in(address: &str, cwd: &Path, labels: Value) -> Value {
+        let mut t = codex_in(cwd, labels);
+        t["address"] = json!(address);
+        t
+    }
+
+    #[tokio::test]
+    async fn archive_leaves_a_worktree_another_task_works_in() {
+        let (_dir, root, _, checkout) = worktree();
+        let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
+        // A Resume started in the checkout: collied's, but not this worktree task's.
+        let resume = task_in("t2", &checkout, json!({"collie.kind": "claude"}));
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout)), resume]),
+        );
+        let (_, message) = archive(&root, core).await.unwrap_err();
+        assert!(
+            message.contains("another task works in this checkout"),
+            "{message}"
+        );
+        assert!(checkout.exists());
+        assert!(methods(&seen).is_empty());
+    }
+
+    #[tokio::test]
+    async fn archive_names_the_agents_it_closed_before_one_failed() {
+        static KILLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let (_dir, root, _, checkout) = worktree();
+        let seen = fake_core(&root.join("core.sock"), |method| match method {
+            "terminal.kill" if KILLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 => {
+                Value::Null
+            }
+            other => kill_and_rm(other),
+        })
+        .await;
+        let both = json!([
+            codex_in(&checkout, worktree_task(&checkout)),
+            task_in("t2", &checkout, worktree_task(&checkout)),
+        ]);
+        let (_, message) = archive(&root, core_of(&root, both)).await.unwrap_err();
+        assert!(
+            message.contains(&format!("could not close agent hc:{ID}:t2")),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("Closed hc:{ID}:t1 before that.")),
+            "{message}"
+        );
+        assert!(checkout.exists(), "the checkout stays");
+        assert_eq!(
+            methods(&seen),
+            [
+                json!("terminal.kill"),
+                json!("terminal.rm"),
+                json!("terminal.kill")
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn archive_refuses_a_locked_worktree_or_a_checkout_outside_the_roots() {
+        let (_dir, root, repo, checkout) = worktree();
+        let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
+        git(&repo, &["worktree", "lock", checkout.to_str().unwrap()]);
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout))]),
+        );
+        let (_, message) = archive(&root, core).await.unwrap_err();
+        assert!(message.contains("locked; nothing was closed"), "{message}");
+        assert!(checkout.exists());
+
+        let outside = tempfile::tempdir().unwrap();
+        let outside = std::fs::canonicalize(outside.path()).unwrap();
+        let core = core_of(&root, json!([codex_in(&checkout, worktree_task(&outside))]));
+        let (_, message) = archive(&root, core).await.unwrap_err();
+        assert!(message.ends_with("; nothing was closed"), "{message}");
+        assert!(outside.exists() && checkout.exists());
+        assert!(methods(&seen).is_empty());
+    }
+
+    #[tokio::test]
+    async fn archive_closes_only_when_git_no_longer_lists_the_recorded_checkout() {
+        let (_dir, root, repo, checkout) = worktree();
+        let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
+        let plain = repo.join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        let core = core_of(&root, json!([codex_in(&plain, worktree_task(&plain))]));
+        let Ok(protocol::Response::TaskArchived { message }) = archive(&root, core).await else {
+            panic!("not archived");
+        };
+        assert!(message.starts_with("Closed pane."), "{message}");
+        assert!(plain.exists() && checkout.exists());
         assert_eq!(
             methods(&seen),
             [json!("terminal.kill"), json!("terminal.rm")]
