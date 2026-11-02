@@ -1,6 +1,6 @@
 # Agents
 
-The **Agents** tab lists the herdr agents on every paired machine, each with its status: `idle`, `working`, `blocked` or `done`. A machine that is asleep or off shows as offline without slowing down the others. Pull down to retry every machine, or tap a machine's header to retry that one.
+The **Agents** tab lists the herdr agents on every paired machine, each with its status: `idle`, `working`, `blocked` or `done`. Agents in herdr-core (Herdr 2) appear in a group of their own named **Herdr 2**, after the machine's herdr workspaces; an agent that does not report its status there, such as Copilot CLI, shows as `unknown`. A machine that is asleep or off shows as offline without slowing down the others. Pull down to retry every machine, or tap a machine's header to retry that one.
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/agents-light.png" width="300" height="652" loading="lazy" alt="The Agents tab: a grid of six agents in three workspaces on one Mac, each card a preview of the agent's screen, one blocked on an approval">
@@ -42,7 +42,7 @@ Claude Code, Copilot CLI and Codex agents show their running subagents, each wit
 
 ## Agent actions
 
-Long-press an agent to follow it on the Lock Screen ([Live Activities](../notifications/live-activities.md)), close its pane or workspace, or [archive](new-task.md#archive) it. A session's **More** menu offers the same actions, plus [Git changes](git-changes.md), **Refresh**, and **Focus on** followed by the machine name, which brings the agent's pane to the front in herdr on that machine.
+Long-press an agent to follow it on the Lock Screen ([Live Activities](../notifications/live-activities.md)), close its pane or workspace, or [archive](new-task.md#archive) it. For a Herdr 2 agent, you can follow it and close it, which ends its program and removes its terminal; the machine refuses to close the Herdr 2 group, which would end every terminal in it, and Collie cannot yet show its screen or conversation, prompt it or answer its approvals. A session's **More** menu offers the same actions, plus [Git changes](git-changes.md), **Refresh**, and **Focus on** followed by the machine name, which brings the agent's pane to the front in herdr on that machine.
 
 ## Appearance
 

@@ -428,6 +428,99 @@ impl Drop for HerdrSession {
     }
 }
 
+/// A herdr-core core of the test's own: its own `HC_SESSION`, XDG folders and home under
+/// `root`, started from a clean environment, so it never reaches the user's core.
+pub struct CoreSession {
+    pub root: PathBuf,
+    pub work: PathBuf,
+    pub socket: PathBuf,
+    name: String,
+    running: bool,
+}
+
+impl CoreSession {
+    pub fn start(tag: &str) -> Self {
+        let pid = std::process::id();
+        let root = PathBuf::from(format!("/tmp/h{tag}-{pid}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let work = root.join("work");
+        for dir in [&root, &root.join("home"), &root.join("run"), &work] {
+            std::fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+        }
+        let name = format!("collie-{tag}-{pid}");
+        let socket = root.join("run/herdr-core").join(format!("{name}.sock"));
+        let session = Self {
+            root,
+            work,
+            socket,
+            name,
+            running: true,
+        };
+        let out = session.hc(&["server", "start", "--json"]);
+        assert!(out["pid"].is_u64(), "hc server start: {out}");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while StdUnixStream::connect(&session.socket).is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "dedicated herdr-core never answered"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        session
+    }
+
+    /// `hc` against this core only.
+    pub fn hc(&self, args: &[&str]) -> Value {
+        let out = isolated("hc", &self.root)
+            .env("HC_SESSION", &self.name)
+            .env("XDG_RUNTIME_DIR", self.root.join("run"))
+            .env("SHELL", "/bin/sh")
+            .args(args)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .unwrap();
+        serde_json::from_slice(&out.stdout).unwrap_or(Value::Null)
+    }
+
+    pub fn stop(&mut self) -> bool {
+        if !self.running {
+            return true;
+        }
+        self.hc(&["server", "stop", "--json"]);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            if StdUnixStream::connect(&self.socket).is_err() {
+                self.running = false;
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    }
+}
+
+impl Drop for CoreSession {
+    fn drop(&mut self) {
+        self.stop();
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Looks for `hc` on PATH without running it: some `hc` commands start the user's core.
+pub fn hc_installed() -> bool {
+    let installed = std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| {
+            std::fs::metadata(dir.join("hc"))
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+    });
+    if !installed {
+        println!("skipped: herdr-core (hc) is not installed");
+    }
+    installed
+}
+
 /// `root/bin` comes first on PATH, for executables a test provides to herdr's shells.
 pub fn isolated(program: &str, root: &Path) -> Command {
     let mut path = std::ffi::OsString::from(root.join("bin"));
@@ -481,6 +574,7 @@ pub fn server_config(data_dir: &Path, herdr_session: &str) -> ServerConfig {
         approval_ttl: collied::approvals::TTL,
         terminals: false,
         terminal_grant_ttl: collied::terminal::GRANT_TTL,
+        herdr_core: None,
     }
 }
 

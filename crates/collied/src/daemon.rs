@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 
 use crate::config::{self, Config};
 use crate::control;
+use crate::runtime::herdr_core;
 use crate::server::{self, ServerConfig};
 use crate::{approvals, push, runtime, terminal};
 
@@ -284,6 +285,9 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
             attachments_dir: config::attachments_dir()?,
             terminals: config.terminals.enabled,
             terminal_grant_ttl: terminal::GRANT_TTL,
+            herdr_core: herdr_core::socket_path(|k| std::env::var_os(k))
+                .inspect_err(|e| tracing::warn!(error = %e, "not following herdr-core"))
+                .ok(),
         },
         herdr_socket,
         &config.tasks,
