@@ -50,7 +50,7 @@ jobs:
             echo "ios=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          files="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          files="$(git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA")"
           printf '%s\n' "$files"
           # Only paths no test reads: tests read docs/protocol/ and docs/tailnet.md.
           if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/site/|docs/deploy-pages\.md$|README\.md$|AGENTS\.md$|CLAUDE\.md$)'; then
