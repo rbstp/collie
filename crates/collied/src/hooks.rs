@@ -21,14 +21,15 @@ struct Input {
     #[serde(default)]
     hook_event_name: Option<String>,
     session_id: String,
+    #[serde(default)]
     tool_name: String,
     #[serde(default)]
     tool_input: Value,
 }
 
-/// `collied hook`, Claude Code's PermissionRequest hook. It only reports the call to the
-/// daemon and never answers it: it prints nothing and exits 0, so Claude Code shows its
-/// dialog as usual, even when collied is not running.
+/// `collied hook`: Claude Code's PermissionRequest hook and Codex's SessionStart hook. It
+/// only reports to the daemon and never answers: it prints nothing and exits 0, so the agent
+/// goes on as usual, even when collied is not running.
 pub async fn run(control_path: &Path) {
     let mut stdin = std::io::stdin();
     let mut raw = Vec::new();
@@ -37,25 +38,32 @@ pub async fn run(control_path: &Path) {
     if read.is_err() {
         return;
     }
-    let Ok(input) = serde_json::from_slice::<Input>(&raw) else {
+    let terminal = std::env::var("HC_TERMINAL_ID").ok();
+    let Some(request) = request(&raw, terminal) else {
         return;
-    };
-    if input
-        .hook_event_name
-        .is_some_and(|e| e != "PermissionRequest")
-    {
-        return;
-    }
-    let shown = shown(&input.tool_name, &input.tool_input);
-    if Report::new(&input.tool_name, shown.clone()).is_none() {
-        return;
-    }
-    let request = Request::Hook {
-        session_id: input.session_id,
-        tool_name: input.tool_name,
-        shown,
     };
     let _ = tokio::time::timeout(DEADLINE, control::request(control_path, &request)).await;
+}
+
+/// A SessionStart outside a herdr-core terminal reports nothing: herdr's own hook binds it.
+fn request(raw: &[u8], terminal: Option<String>) -> Option<Request> {
+    let input = serde_json::from_slice::<Input>(raw).ok()?;
+    match input.hook_event_name.as_deref() {
+        Some("SessionStart") => Some(Request::Session {
+            terminal_id: terminal.filter(|t| !t.is_empty())?,
+            session_id: input.session_id,
+        }),
+        None | Some("PermissionRequest") => {
+            let shown = shown(&input.tool_name, &input.tool_input);
+            Report::new(&input.tool_name, shown.clone())?;
+            Some(Request::Hook {
+                session_id: input.session_id,
+                tool_name: input.tool_name,
+                shown,
+            })
+        }
+        Some(_) => None,
+    }
 }
 
 /// What the permission dialog shows of the call: for Bash the command, then Claude's
@@ -136,8 +144,10 @@ pub fn settings_path() -> anyhow::Result<PathBuf> {
     Ok(claude_dir()?.join("settings.json"))
 }
 
-pub fn installed(settings: &Value) -> bool {
-    settings["hooks"]["PermissionRequest"]
+/// Whether `collied hook` runs on `event`, in Claude Code's `settings.json` or Codex's
+/// `hooks.json`, which share this layout.
+pub fn installed(settings: &Value, event: &str) -> bool {
+    settings["hooks"][event]
         .as_array()
         .into_iter()
         .flatten()
@@ -241,12 +251,47 @@ mod tests {
         let other = json!({"type": "command", "command": "node permissionRequest.cjs"});
         let ours = json!({"type": "command", "command": "/Users/me/.cargo/bin/collied hook", "timeout": 5});
         let settings = |hooks: Value| json!({"hooks": {"PermissionRequest": [{"matcher": ".*", "hooks": hooks}]}});
-        assert!(installed(&settings(json!([other, ours]))));
-        assert!(!installed(&settings(json!([other]))));
-        assert!(!installed(
-            &json!({"hooks": {"PreToolUse": [{"hooks": [ours]}]}})
+        assert!(installed(
+            &settings(json!([other, ours])),
+            "PermissionRequest"
         ));
-        assert!(!installed(&json!({})));
+        assert!(!installed(&settings(json!([other])), "PermissionRequest"));
+        assert!(!installed(
+            &json!({"hooks": {"PreToolUse": [{"hooks": [ours]}]}}),
+            "PermissionRequest"
+        ));
+        assert!(!installed(&json!({}), "PermissionRequest"));
+        let codex = json!({"hooks": {"SessionStart": [
+            {"hooks": [{"type": "command", "command": "bash '/h/.codex/herdr-agent-state.sh' session"}]},
+            {"hooks": [{"type": "command", "command": "~/.cargo/bin/collied hook", "timeout": 5}]},
+        ]}});
+        assert!(installed(&codex, "SessionStart"));
+        assert!(!installed(&codex, "PermissionRequest"));
+    }
+
+    #[test]
+    fn codex_session_start_reports_only_from_a_herdr_core_terminal() {
+        let start = br#"{"session_id":"01a199ed-7993-7261-8219-300d543d764b","transcript_path":"/x.jsonl","cwd":"/w","hook_event_name":"SessionStart","model":"m","permission_mode":"default","source":"startup"}"#;
+        match request(start, Some("t3".into())) {
+            Some(Request::Session {
+                terminal_id,
+                session_id,
+            }) => assert_eq!(
+                (terminal_id.as_str(), session_id.as_str()),
+                ("t3", "01a199ed-7993-7261-8219-300d543d764b")
+            ),
+            other => panic!("{other:?}"),
+        }
+        assert!(request(start, None).is_none());
+        assert!(request(start, Some(String::new())).is_none());
+        let permission = br#"{"hook_event_name":"PermissionRequest","session_id":"s","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        assert!(matches!(
+            request(permission, Some("t3".into())),
+            Some(Request::Hook { .. })
+        ));
+        let stop = br#"{"hook_event_name":"Stop","session_id":"s"}"#;
+        assert!(request(stop, Some("t3".into())).is_none());
+        assert!(request(b"not json", Some("t3".into())).is_none());
     }
 
     #[test]

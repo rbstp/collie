@@ -36,6 +36,11 @@ pub enum Request {
         tool_name: String,
         shown: Vec<String>,
     },
+    /// Codex's SessionStart, from a herdr-core terminal (`HC_TERMINAL_ID`).
+    Session {
+        terminal_id: String,
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -285,6 +290,7 @@ pub async fn serve(listener: UnixListener, state: Arc<State>, mut shutdown: watc
 }
 
 async fn handle(stream: UnixStream, state: Arc<State>, shutdown: watch::Receiver<bool>) {
+    let peer = stream.peer_cred().ok().and_then(|c| c.pid());
     let (r, mut w) = stream.into_split();
     let mut r = BufReader::new(r);
     let req = match read_msg::<Request>(&mut r).await {
@@ -326,6 +332,18 @@ async fn handle(stream: UnixStream, state: Arc<State>, shutdown: watch::Receiver
         } => {
             if let Some(report) = crate::hooks::Report::new(&tool_name, shown) {
                 state.approvals.hook(session_id, report);
+            }
+            Reply::Noted
+        }
+        Request::Session {
+            terminal_id,
+            session_id,
+        } => {
+            let reporter = peer.and_then(|p| u32::try_from(p).ok());
+            if let (Some(core), Some(reporter)) = (state.runtime.core(), reporter)
+                && !core.bind(&terminal_id, &session_id, reporter)
+            {
+                tracing::info!(terminal = ?terminal_id, "Codex session report not bound to a herdr-core terminal");
             }
             Reply::Noted
         }

@@ -504,6 +504,11 @@ fn stamp(path: &Path) -> Option<(u64, SystemTime)> {
     Some((meta.len(), meta.modified().ok()?))
 }
 
+/// The session Claude Code process `pid` reports in its `sessions/<pid>.json`.
+pub(crate) fn claude_session(sessions: &Path, pid: u32) -> Option<String> {
+    claim(sessions, i32::try_from(pid).ok()?).map(|c| c.session)
+}
+
 /// Trusted only while that pid is alive and started before the file says it did, so a file
 /// left by a process whose pid was reused is refused.
 fn claim(sessions: &Path, pid: i32) -> Option<Claim> {

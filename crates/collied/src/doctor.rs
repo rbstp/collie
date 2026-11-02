@@ -74,9 +74,10 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
         Ok(socket) => Some(herdr_core::probe(socket).await),
         Err(_) => None,
     };
+    let core_answers = matches!(probed, Some(Ok(_)));
     match &config {
         Some(config) => {
-            check_herdr(&mut r, config, matches!(probed, Some(Ok(_)))).await;
+            check_herdr(&mut r, config, core_answers).await;
             check_tailnet(&mut r, config, &data_dir.join(config::TSNET_DIR));
         }
         None => {
@@ -129,6 +130,10 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     if let Some(codex) = codex {
         let (s, d) = check_codex_hook(&codex);
         r.line(s, "codex hook", d);
+        if codex.is_dir() {
+            let (s, d) = check_codex_session_hook(&codex, core_answers);
+            r.line(s, "codex hook", d);
+        }
     }
     let (s, d) = check_usage(&data_dir, crate::now_ms());
     r.line(s, "plan usage", d);
@@ -149,7 +154,7 @@ fn check_hooks() -> (Status, String) {
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
-    if hooks::installed(&settings) {
+    if hooks::installed(&settings, "PermissionRequest") {
         (
             Status::Ok,
             format!("PermissionRequest hook in {}", path.display()),
@@ -186,6 +191,31 @@ fn check_codex_hook(codex_home: &Path) -> (Status, String) {
             Status::Warn,
             format!("{} is older than v10; {fix}", path.display()),
         ),
+    }
+}
+
+/// collied's own SessionStart hook binds a Codex session to the herdr-core terminal it runs
+/// in, as herdr's hook does for a herdr pane; only herdr-core needs it.
+fn check_codex_session_hook(codex_home: &Path, core_answers: bool) -> (Status, String) {
+    let path = codex_home.join("hooks.json");
+    let hooks = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if hooks::installed(&hooks, "SessionStart") {
+        return (
+            Status::Ok,
+            format!("SessionStart hook `collied hook` in {}", path.display()),
+        );
+    }
+    let missing = format!(
+        "SessionStart hook `collied hook` not in {}; Herdr 2 Codex agents get no Chat, context or resume",
+        path.display()
+    );
+    if core_answers {
+        (Status::Warn, missing)
+    } else {
+        (Status::Ok, format!("{missing} (herdr-core is not running)"))
     }
 }
 
@@ -1008,6 +1038,22 @@ mod tests {
                 && d.contains("herdr integration install codex"),
             "{d}"
         );
+    }
+
+    #[test]
+    fn warns_about_collieds_codex_hook_only_while_herdr_core_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, d) = check_codex_session_hook(dir.path(), false);
+        assert!(s == Status::Ok && d.contains("not in"), "{d}");
+        let (s, d) = check_codex_session_hook(dir.path(), true);
+        assert!(s == Status::Warn && d.contains("Herdr 2 Codex"), "{d}");
+        std::fs::write(
+            dir.path().join("hooks.json"),
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"~/.cargo/bin/collied hook","timeout":5}]}]}}"#,
+        )
+        .unwrap();
+        let (s, d) = check_codex_session_hook(dir.path(), true);
+        assert!(s == Status::Ok && d.starts_with("SessionStart hook"), "{d}");
     }
 
     #[tokio::test]
