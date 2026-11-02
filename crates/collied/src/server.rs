@@ -196,7 +196,7 @@ pub struct State {
     machine: MachineInfo,
     dns_name: String,
     started_ms: u64,
-    runtime: Runtime,
+    pub(crate) runtime: Runtime,
     peers: Arc<Mutex<Store>>,
     pairing: Mutex<Pairing<mpsc::Sender<PairAttempt>>>,
     sessions: Mutex<Sessions>,
@@ -526,7 +526,10 @@ pub async fn start_with(
         Some(roots) => roots.clone(),
         None => vec![config::home_dir()?],
     };
-    let core = cfg.herdr_core.clone().map(|s| Arc::new(Core::new(s)));
+    let core = cfg.herdr_core.clone().map(|s| {
+        let sessions = crate::hooks::claude_dir().ok().map(|d| d.join("sessions"));
+        Arc::new(Core::new(s).with_claude_sessions(sessions))
+    });
     let drive = Arc::new(
         Driver::new(herdr_socket.clone(), tasks.agents.clone(), &roots)?
             .with_transcripts(Transcripts::from_env())

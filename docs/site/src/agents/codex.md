@@ -25,6 +25,16 @@
 
 2. Start Codex tasks from the phone, or run `codex --no-daemon` yourself.
 
+### Herdr 2
+
+herdr's hook does nothing in Herdr 2 (herdr-core), so Chat, the context ring and keeping an open session out of Resume need `collied`'s own hook there. Add a second entry to `SessionStart` in `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`), beside herdr's:
+
+```json
+{ "hooks": [{ "type": "command", "command": "~/.cargo/bin/collied hook", "timeout": 5 }] }
+```
+
+The next time Codex starts, it asks you to review the new hook: trust it. Run Codex with `--no-daemon` in Herdr 2 too; a Codex on the shared daemon reports every session from the terminal that started the daemon, so `collied` ignores those reports. A Codex that was already running reports its session at its next start, `/new` or resume. `collied doctor` checks the hook.
+
 ## Why `--no-daemon`
 
 With `--no-daemon`, each pane reports its own session, also after `/new` or a resume, but each window runs its own server and uses more memory. To move a session off a shared daemon, finish the current turn, then relaunch it in the same pane with its own session ID:

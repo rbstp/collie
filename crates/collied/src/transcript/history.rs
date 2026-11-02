@@ -30,10 +30,14 @@ impl Transcripts {
         self.read_history(agent, params).unwrap_or(HistoryPage {
             session: None,
             available: false,
-            unavailable_reason: Some(if herdr_core::owns(&agent.terminal_id) {
-                "Chat is not available for Herdr 2 agents yet."
-            } else if self.live_id(agent).is_some() {
+            unavailable_reason: Some(if self.live_id(agent).is_some() {
                 "The transcript for this session is not readable yet. Terminal remains available."
+            } else if herdr_core::owns(&agent.terminal_id) {
+                match agent.agent.as_deref() {
+                    Some("claude") => "Claude Code has not written its session file for this terminal, so Chat cannot safely identify this conversation. If Claude Code says transcript saving is off, the Herdr 2 core was started inside Claude Code: start the core from a plain terminal.",
+                    Some("codex") => "Codex has not reported its session ID to collied. Chat cannot safely identify this conversation. Add collied’s Codex SessionStart hook, run Codex with --no-daemon, then resume the session.",
+                    _ => "Chat is not available for this Herdr 2 agent.",
+                }
             } else if agent.agent.as_deref() == Some("copilot") {
                 "Chat cannot yet confirm which Copilot CLI conversation this pane shows, so it does not guess. It retries once the pane’s title shows the session’s name. Terminal remains available."
             } else {
@@ -1451,14 +1455,19 @@ mod tests {
             core.terminal_id = "hc:abc:t1".into();
             let page = reader.history(&core, &params(None, None, None));
             assert!(!page.available && page.messages.is_empty());
-            assert_eq!(
-                page.unavailable_reason.as_deref(),
-                Some("Chat is not available for Herdr 2 agents yet.")
-            );
+            let want = if kind == "claude" {
+                "session file"
+            } else {
+                "SessionStart hook"
+            };
+            assert!(page.unavailable_reason.unwrap().contains(want));
             agent.agent_session = identity;
             let page = reader.history(&agent, &params(None, None, None));
             assert!(page.available && !page.messages.is_empty());
             assert!(page.unavailable_reason.is_none());
+            core.agent_session = agent.agent_session.clone();
+            let page = reader.history(&core, &params(None, None, None));
+            assert!(page.available && !page.messages.is_empty());
         }
     }
 

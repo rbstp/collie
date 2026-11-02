@@ -19,7 +19,7 @@ A Claude Code, Codex or Copilot CLI session has two views: **Chat** shows the co
 - When an interactive prompt needs terminal keys, tap **Continue in Terminal**.
 
 > [!NOTE]
-> Chat needs the session ID that herdr's SessionStart integration reports, and retries until it arrives. Codex needs [herdr's hook](../agents/codex.md#set-up). Copilot CLI needs none, but Chat waits until it can tell which conversation the pane shows: see [Copilot CLI](../agents/copilot.md).
+> Chat needs the session ID that herdr's SessionStart integration reports, and retries until it arrives. Codex needs [herdr's hook](../agents/codex.md#set-up), and in Herdr 2 also [collied's](../agents/codex.md#herdr-2). In Herdr 2, Chat finds a Claude Code session from the file Claude Code keeps for its process, with no hook. Copilot CLI needs none, but Chat waits until it can tell which conversation the pane shows: see [Copilot CLI](../agents/copilot.md).
 
 ### Open a file
 

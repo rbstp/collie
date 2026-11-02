@@ -1215,7 +1215,7 @@ impl Driver {
         if open {
             return fail(
                 ErrorCode::InvalidParams,
-                "the session is already open in a herdr pane",
+                "the session is already open in another agent",
             );
         }
         Ok(())

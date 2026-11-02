@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use collie_core::{AgentState, CollieCore, MachineFlock, TerminalSource};
+use collied::config::TasksConfig;
 use collied::control::{Client, Reply, Request};
 use collied::drive::{Authorized, Driver, Watched};
 use collied::runtime::herdr_core::{Core, GROUP_LABEL};
@@ -20,14 +21,26 @@ use protocol::{
 };
 use tokio::sync::watch;
 
-// A stand-in agent that reports OSC 7501 as Claude Code does, and blocks once the test
-// creates `block` in its folder.
-const FAKE_AGENT: &str = r#"printf '\033]0;\342\240\213 Fix the flaky test\007'
+/// The session in the Claude Code transcript fixture.
+const CLAUDE_SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+const CODEX_SESSION: &str = "01a10f07-b5ed-79a3-989d-fa10b96c5cab";
+const CLOSED_SESSION: &str = "0a0a0a0a-0000-4000-8000-000000000001";
+
+/// A stand-in Claude Code: it writes its `sessions/<pid>.json` in `sessions`, reports OSC
+/// 7501 as Claude Code does, and blocks once the test creates `block` in its folder.
+fn fake_claude(sessions: &Path) -> String {
+    let sessions = sessions.display();
+    format!(
+        r#"mkdir -p '{sessions}'
+printf '{{"pid":%d,"sessionId":"{CLAUDE_SESSION}","cwd":"%s","startedAt":%s000}}' $$ "$PWD" "$(date +%s)" > '{sessions}'/$$.json
+printf '\033]0;\342\240\213 Fix the flaky test\007'
 printf '\033[1mready\033[0m\n'
 printf '\033]7501;state=working:app=claude-code\033\\'
 while [ ! -e block ]; do sleep 0.1; done
 printf '\033]7501;state=blocked:app=claude-code:kind=permission:msg=approve Bash\033\\'
-exec sleep 600"#;
+exec sleep 600"#
+    )
+}
 
 // Draws once a desktop client sized its terminal: styled text, then Claude Code's input box
 // with its dim placeholder, and a line longer than the terminal once the test creates `more`.
@@ -73,18 +86,14 @@ async fn until<T>(what: &str, mut ready: impl AsyncFnMut() -> Option<T>) -> T {
 }
 
 fn run(core: &CoreSession, name: &str, work: &Path, script: &str) -> String {
-    let started = core.hc(&[
-        "run",
-        "--bg",
-        "--json",
-        "--name",
-        name,
-        "--cwd",
-        work.to_str().unwrap(),
-        "/bin/sh",
-        "-c",
-        script,
-    ]);
+    run_argv(core, name, work, &["/bin/sh", "-c", script])
+}
+
+fn run_argv(core: &CoreSession, name: &str, work: &Path, argv: &[&str]) -> String {
+    let mut args = vec!["run", "--bg", "--json", "--name", name, "--cwd"];
+    args.push(work.to_str().unwrap());
+    args.extend(argv);
+    let started = core.hc(&args);
     started["address"]
         .as_str()
         .unwrap_or_else(|| panic!("hc run: {started}"))
@@ -103,10 +112,12 @@ async fn scenario(core: &CoreSession, herdr: Option<&HerdrSession>) {
         herdr_workspaces = herdr::workspace_list(&h.socket).await.unwrap();
     }
 
-    let agent = run(core, "collie-fake", &work, FAKE_AGENT);
+    let sessions = core.root.join("claude/sessions");
+    let agent = run(core, "collie-fake", &work, &fake_claude(&sessions));
     let shell = run(core, "collie-shell", &work, "exec sleep 600");
 
-    let followed = Arc::new(Core::new(core.socket.clone()));
+    let followed =
+        Arc::new(Core::new(core.socket.clone()).with_claude_sessions(Some(sessions.clone())));
     let (stop, stopped) = watch::channel(false);
     let task = tokio::spawn(followed.clone().run(stopped));
     tokio::time::timeout(Duration::from_secs(5), followed.settled())
@@ -130,6 +141,12 @@ async fn scenario(core: &CoreSession, herdr: Option<&HerdrSession>) {
     assert_eq!(working.name.as_deref(), Some("collie-fake"));
     assert_eq!(working.title.as_deref(), Some("Fix the flaky test"));
     assert_eq!(working.cwd.as_deref(), work.to_str());
+    // The foreground process comes with an event of its own, after the status.
+    let session = until("the Claude Code session", async || {
+        find("working").await?.agent_session.map(|s| s.value)
+    })
+    .await;
+    assert_eq!(session, CLAUDE_SESSION);
     TerminalId::new(working.terminal_id.clone()).unwrap();
     let listed = rt.agent_list().await.unwrap();
     assert!(
@@ -210,10 +227,24 @@ async fn scenario(core: &CoreSession, herdr: Option<&HerdrSession>) {
     task.await.unwrap();
 }
 
-/// The phone over the tailnet, on a machine with herdr-core and no herdr.
+/// The phone over the tailnet, on a machine with herdr-core and no herdr. collied reads
+/// Claude Code's and Codex's files from scratch folders, never the user's.
 #[test]
 fn live_herdr_core_phone() {
-    if !hc_installed() || !in_child("live_herdr_core_phone") {
+    if !hc_installed() {
+        return;
+    }
+    let agents = std::env::var("COLLIE_E2E_AGENTS")
+        .unwrap_or_else(|_| format!("/tmp/hca-{}", std::process::id()));
+    let claude = format!("{agents}/claude");
+    let codex = format!("{agents}/codex");
+    let env = [
+        ("COLLIE_E2E_AGENTS", agents.as_str()),
+        ("CLAUDE_CONFIG_DIR", claude.as_str()),
+        ("CODEX_HOME", codex.as_str()),
+    ];
+    if !in_child_with("live_herdr_core_phone", &env) {
+        let _ = std::fs::remove_dir_all(&agents);
         return;
     }
     let mut hc = CoreSession::start("hcp");
@@ -226,7 +257,13 @@ fn live_herdr_core_phone() {
         .unwrap();
     wait_ready(&net.mac, 1);
     wait_phone(&rt, &phone);
-    rt.block_on(phone_scenario(&root.0, &net, &phone, &hc));
+    rt.block_on(phone_scenario(
+        &root.0,
+        &net,
+        &phone,
+        &hc,
+        Path::new(&agents),
+    ));
     drop(phone);
     drop(rt);
     assert!(hc.stop(), "dedicated herdr-core did not stop");
@@ -248,28 +285,102 @@ async fn flock_until(
     panic!("the phone never saw {what}");
 }
 
-async fn phone_scenario(root: &Path, net: &Net, phone: &Arc<CollieCore>, hc: &CoreSession) {
+/// Transcripts for the fake agents' sessions and one closed Claude Code session, in `work`.
+fn transcripts(agents: &Path, work: &Path) {
+    let folder = work.to_str().unwrap();
+    let project: String = folder
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let project = agents.join("claude/projects").join(project);
+    std::fs::create_dir_all(&project).unwrap();
+    let claude = include_str!("../../collied/tests/fixtures/transcripts/claude.jsonl");
+    std::fs::write(project.join(format!("{CLAUDE_SESSION}.jsonl")), claude).unwrap();
+    std::fs::write(
+        project.join(format!("{CLOSED_SESSION}.jsonl")),
+        claude.replace(CLAUDE_SESSION, CLOSED_SESSION),
+    )
+    .unwrap();
+    let day = agents.join("codex/sessions/2026/10/05");
+    std::fs::create_dir_all(&day).unwrap();
+    std::fs::write(
+        day.join(format!("rollout-2026-10-05T22-25-26-{CODEX_SESSION}.jsonl")),
+        include_str!("../../collied/tests/fixtures/transcripts/codex.jsonl")
+            .replace("/Users/me/src/collie", folder),
+    )
+    .unwrap();
+}
+
+async fn phone_scenario(
+    root: &Path,
+    net: &Net,
+    phone: &Arc<CollieCore>,
+    hc: &CoreSession,
+    agents: &Path,
+) {
     let work = std::fs::canonicalize(&hc.work).unwrap();
-    let agent = run(hc, "collie-fake", &work, FAKE_AGENT);
+    transcripts(agents, &work);
+    let agent = run(
+        hc,
+        "collie-fake",
+        &work,
+        &fake_claude(&agents.join("claude/sessions")),
+    );
     let data_dir = root.join("collied");
-    let handle = server::start(
+    let handle = server::start_with(
         net.mac.clone(),
         ServerConfig {
             herdr_core: Some(hc.socket.clone()),
             ..server_config(&data_dir, "e2e")
         },
         root.join("no-herdr.sock"),
+        &TasksConfig {
+            roots: Some(vec![work.clone()]),
+            ..TasksConfig::default()
+        },
+        None,
     )
     .await
     .unwrap();
+    // A stand-in Codex: this test binary, run as `codex` (`fake_codex`).
+    let codex = hc.root.join("bin/codex");
+    std::fs::create_dir_all(codex.parent().unwrap()).unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), &codex).unwrap();
+    std::fs::write(
+        work.join("control"),
+        handle.control_path().to_str().unwrap(),
+    )
+    .unwrap();
+    let codex = run_argv(
+        hc,
+        "collie-codex",
+        &work,
+        &[
+            codex.to_str().unwrap(),
+            "fake_codex",
+            "--exact",
+            "--nocapture",
+        ],
+    );
     let (machine, _) = pair(&handle.control_path(), phone, LABEL).await;
     let m = machine.id.clone();
 
-    let f = flock_until(phone, &m, "the herdr-core agent", |f| {
-        f.agents.iter().any(|a| a.status == AgentState::Working)
+    let f = flock_until(phone, &m, "the herdr-core agents", |f| {
+        f.agents.iter().any(|a| a.status == AgentState::Working) && f.agents.len() == 2
     })
     .await;
-    let a = &f.agents[0];
+    let a = f
+        .agents
+        .iter()
+        .find(|a| a.kind.as_deref() == Some("claude"))
+        .unwrap();
+    let codex_id = f
+        .agents
+        .iter()
+        .find(|a| a.terminal_id.ends_with(&format!(":{codex}")))
+        .unwrap()
+        .terminal_id
+        .clone();
     let group = f
         .workspaces
         .iter()
@@ -308,6 +419,39 @@ async fn phone_scenario(root: &Path, net: &Net, phone: &Arc<CollieCore>, hc: &Co
         "the watch sends output"
     );
     phone.watch_agent(m.clone(), None, 50).await.unwrap();
+    let chat = phone
+        .agent_history(m.clone(), terminal_id.clone(), None, None, None)
+        .await
+        .unwrap();
+    assert!(chat.available, "{:?}", chat.unavailable_reason);
+    assert!(
+        chat.messages
+            .iter()
+            .any(|msg| msg.text.contains("fix the flaky approval test"))
+    );
+    std::fs::write(work.join("report"), "").unwrap();
+    let mut codex_chat = None;
+    for _ in 0..50 {
+        let page = phone
+            .agent_history(m.clone(), codex_id.clone(), None, None, None)
+            .await
+            .unwrap();
+        if page.available {
+            codex_chat = Some(page);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        codex_chat.is_some_and(|p| !p.messages.is_empty()),
+        "Codex's reported session"
+    );
+    let sessions = phone
+        .task_sessions(m.clone(), work.to_str().unwrap().to_owned())
+        .await
+        .unwrap();
+    let listed: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+    assert_eq!(listed, [CLOSED_SESSION], "open sessions are left out");
 
     let mut cli = Client::connect(&handle.control_path()).await.unwrap();
     let Reply::Status(status) = cli.call(&Request::Status).await.unwrap() else {
@@ -344,7 +488,8 @@ async fn phone_scenario(root: &Path, net: &Net, phone: &Arc<CollieCore>, hc: &Co
         .await
         .unwrap();
     assert!(hc.hc(&["get", "--json", &agent]).is_null());
-    flock_until(phone, &m, "the closed agent leave", |f| {
+    phone.close_pane(m.clone(), codex_id, true).await.unwrap();
+    flock_until(phone, &m, "the closed agents leave", |f| {
         f.agents.is_empty() && f.workspaces.is_empty()
     })
     .await;
@@ -533,4 +678,33 @@ async fn screen_scenario(core: &CoreSession) {
 
     stop.send_replace(true);
     task.await.unwrap();
+}
+
+/// Codex, as the phone scenario runs it in its herdr-core terminal: it reports OSC 7501, then
+/// its session over the control socket as `collied hook` does, once the test creates `report`.
+/// A process named `codex` that leads its terminal, which a copied shell cannot be on macOS.
+#[test]
+fn fake_codex() {
+    let exe = std::env::current_exe().unwrap();
+    if exe.file_name().and_then(|n| n.to_str()) != Some("codex") {
+        return;
+    }
+    use std::io::{BufRead, Write};
+    print!("\x1b]7501;state=idle:app=codex\x1b\\");
+    std::io::stdout().flush().unwrap();
+    while !Path::new("report").exists() {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let control = std::fs::read_to_string("control").unwrap();
+    let mut conn = std::os::unix::net::UnixStream::connect(control).unwrap();
+    let report = serde_json::json!({
+        "cmd": "session",
+        "terminal_id": std::env::var("HC_TERMINAL_ID").unwrap(),
+        "session_id": CODEX_SESSION,
+    });
+    writeln!(conn, "{report}").unwrap();
+    std::io::BufReader::new(conn)
+        .read_line(&mut String::new())
+        .unwrap();
+    std::thread::sleep(Duration::from_secs(600));
 }

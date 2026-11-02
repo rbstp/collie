@@ -16,6 +16,7 @@ use crate::prompt;
 use crate::runtime::AgentInfo;
 use crate::usage::Usage;
 
+pub(crate) use live::claude_session;
 pub(crate) use subagents::timestamp_ms;
 
 /// Only the end is read: transcripts reach tens of MB, and what is shown sits near the end.

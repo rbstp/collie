@@ -1,6 +1,6 @@
 # herdr-core (Herdr 2) backend plan
 
-Spike for [#629](https://github.com/rbstp/collie/issues/629), 2026-11-01. This page is the plan, the evidence behind it and the follow-up issues. Phases 1 (the runtime boundary, #631), 2 (agents and status, #632) and 3 (screens, #633) are built; what collied does is in [architecture.md](architecture.md#herdr-core-herdr-2). herdr's own behavior is in [architecture.md](architecture.md#herdr-integration-verified-against-093-source-and-live-socket).
+Spike for [#629](https://github.com/rbstp/collie/issues/629), 2026-11-01. This page is the plan, the evidence behind it and the follow-up issues. Phases 1 (the runtime boundary, #631), 2 (agents and status, #632), 3 (screens, #633) and 5 (sessions, #635) are built; what collied does is in [architecture.md](architecture.md#herdr-core-herdr-2). herdr's own behavior is in [architecture.md](architecture.md#herdr-integration-verified-against-093-source-and-live-socket).
 
 ## Summary
 
@@ -128,8 +128,8 @@ So a herdr-core agent goes in a group of its own, never in a herdr workspace. Ph
 
 - herdr's integration hooks (`herdr-agent-state.sh` for Claude Code, Codex's SessionStart hook) exit unless `HERDR_ENV=1` and `HERDR_PANE_ID` are set, and herdr-core has no `pane.report_agent_session`, so a herdr-core agent has no `agent_session`: no Chat, costs, context or resume exclusion, and the `collied hook` report (keyed by session id) binds to nothing.
 - Claude Code: collied already reads `~/.claude/sessions/<pid>.json` (`pid`, `sessionId`, `cwd`) for subagents. The terminal's `foreground.pid` gives the session id from it without a hook (read from an existing session file; not run under herdr-core).
-- An inherited `CLAUDE_CODE_CHILD_SESSION` breaks this: the spike's Claude Code drew "Transcript saving is off, inherited CLAUDE_CODE_CHILD_SESSION marker" on its first screen, so it wrote no transcript, and Chat, costs, context and resume have nothing to read. Whether it still writes its pid file was not checked. Stripping the variable when collied starts the agent avoids it; an agent started by Herdr UI or Herdr.app in such a core keeps it, which `doctor` reports.
-- Codex: collied's own SessionStart hook, reading `HC_TERMINAL_ID` from its environment and reporting it with the session id over the control socket, like `collied hook` does for permissions.
+- An inherited `CLAUDE_CODE_CHILD_SESSION` breaks this: the spike's Claude Code drew "Transcript saving is off, inherited CLAUDE_CODE_CHILD_SESSION marker" on its first screen, so it wrote no transcript, and Chat, costs, context and resume have nothing to read. It writes no `sessions/<pid>.json` either (checked with Claude Code 2.1.316 for #635), so collied finds no session for it. Stripping the variable when collied starts the agent avoids it; an agent started by Herdr UI or Herdr.app in such a core keeps it, which `doctor` reports.
+- Codex: collied's own SessionStart hook, reading `HC_TERMINAL_ID` from its environment and reporting it with the session id over the control socket, like `collied hook` does for permissions. Without `--no-daemon`, Codex runs the hook under its shared app-server, a child of the first Codex, so every session reports that first terminal's `HC_TERMINAL_ID` (verified with codex-cli 0.166.0); collied keeps a report only when the hook's process ancestry reaches the terminal's foreground process through exactly one `codex`.
 - Focus on the desktop is lost; everything else keyed on `HERDR_PANE_ID` follows from the session id.
 
 ### Socket discovery, access and the threat model

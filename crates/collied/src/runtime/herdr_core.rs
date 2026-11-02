@@ -14,7 +14,7 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::watch;
 
 use super::screen::Screen;
-use super::{AgentInfo, Error, PaneInfo, PaneRead, WorkspaceInfo};
+use super::{AgentInfo, AgentSession, Error, PaneInfo, PaneRead, WorkspaceInfo};
 
 pub const GENERATION: u32 = 1;
 pub const MIN_VERSION: &str = "0.1.16";
@@ -197,12 +197,15 @@ impl Terminal {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(from = "RawForeground")]
 struct Foreground {
+    pid: Option<u32>,
     cli: Option<String>,
     cwd: String,
 }
 
 #[derive(Deserialize)]
 struct RawForeground {
+    #[serde(default)]
+    pid: Option<u32>,
     #[serde(default)]
     argv: Vec<String>,
     #[serde(default)]
@@ -217,6 +220,7 @@ impl From<RawForeground> for Foreground {
             .and_then(|a| Path::new(a).file_name())
             .and_then(|n| n.to_str());
         Self {
+            pid: raw.pid,
             cli: name.filter(|n| AGENT_CLIS.contains(n)).map(str::to_owned),
             cwd: raw.cwd,
         }
@@ -383,10 +387,10 @@ impl Live {
         }
     }
 
-    fn agents(&self) -> Vec<AgentInfo> {
+    fn agents(&self, session: impl Fn(&str, &str, u32) -> Option<String>) -> Vec<AgentInfo> {
         self.terminals
             .values()
-            .filter_map(|h| agent(&self.group, h))
+            .filter_map(|h| agent(&self.group, h, &session))
             .collect()
     }
 }
@@ -398,7 +402,12 @@ fn local(address: &str) -> bool {
 }
 
 /// A terminal is an agent once it reports OSC 7501 or runs an agent CLI; plain shells are not.
-fn agent(group: &str, h: &Held) -> Option<AgentInfo> {
+/// `session` gives the session of an agent kind, terminal address and foreground pid.
+fn agent(
+    group: &str,
+    h: &Held,
+    session: &dyn Fn(&str, &str, u32) -> Option<String>,
+) -> Option<AgentInfo> {
     let t = &h.terminal;
     if t.state != "live" {
         return None;
@@ -418,6 +427,11 @@ fn agent(group: &str, h: &Held) -> Option<AgentInfo> {
         .unwrap_or("unknown");
     let id = format!("{group}:{}", t.address);
     let some = |s: &str| (!s.is_empty()).then(|| s.to_owned());
+    let pid = t.foreground.as_ref().and_then(|f| f.pid);
+    let session = kind
+        .as_deref()
+        .zip(pid)
+        .and_then(|(kind, pid)| session(kind, &t.address, pid));
     Some(AgentInfo {
         terminal_id: id.clone(),
         workspace_id: group.to_owned(),
@@ -430,7 +444,7 @@ fn agent(group: &str, h: &Held) -> Option<AgentInfo> {
         state_change_seq: h.seq,
         cwd: some(&t.cwd),
         foreground_cwd: t.foreground.as_ref().and_then(|f| some(&f.cwd)),
-        agent_session: None,
+        agent_session: session.map(|value| AgentSession { value }),
         interactive_ready: false,
         launch_pending: false,
     })
@@ -499,12 +513,17 @@ pub struct Report {
 struct Inner {
     hello: Option<Hello>,
     live: Option<Live>,
+    /// Codex sessions by terminal address, as collied's SessionStart hook reported them,
+    /// with the foreground pid they were reported under: a session holds only while that
+    /// process leads the terminal.
+    codex: BTreeMap<String, (u32, String)>,
 }
 
 /// One core, followed through `events.subscribe`. collied never starts a core: an absent
 /// socket means none runs.
 pub struct Core {
     socket: PathBuf,
+    claude_sessions: Option<PathBuf>,
     inner: Mutex<Inner>,
     settled: watch::Sender<bool>,
     herdr: AtomicU8,
@@ -533,6 +552,7 @@ impl Core {
     pub fn new(socket: PathBuf) -> Self {
         Self {
             socket,
+            claude_sessions: None,
             inner: Mutex::default(),
             settled: watch::channel(false).0,
             herdr: AtomicU8::new(0),
@@ -540,12 +560,63 @@ impl Core {
         }
     }
 
+    /// Claude Code's `sessions` folder, where each process keeps `<pid>.json`.
+    pub fn with_claude_sessions(mut self, dir: Option<PathBuf>) -> Self {
+        self.claude_sessions = dir;
+        self
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         crate::lock(&self.inner)
     }
 
+    /// herdr's hooks exit without `HERDR_PANE_ID`, so herdr-core agents get their session
+    /// here: Claude Code's from the file its foreground process keeps, Codex's from the hook.
     pub fn agents(&self) -> Option<Vec<AgentInfo>> {
-        self.lock().live.as_ref().map(Live::agents)
+        let inner = self.lock();
+        let live = inner.live.as_ref()?;
+        Some(live.agents(|kind, address, pid| {
+            match kind {
+                "claude" => {
+                    crate::transcript::claude_session(self.claude_sessions.as_deref()?, pid)
+                }
+                "codex" => inner
+                    .codex
+                    .get(address)
+                    .filter(|(bound, _)| *bound == pid)
+                    .map(|(_, session)| session.clone()),
+                _ => None,
+            }
+        }))
+    }
+
+    /// A Codex session reported by collied's SessionStart hook from `reporter` (the hook's
+    /// pid, from the control socket) for the terminal named by its `HC_TERMINAL_ID`. Kept
+    /// only when the hook runs under the Codex process that leads that terminal.
+    pub fn bind(&self, address: &str, session: &str, reporter: u32) -> bool {
+        if !local(address) || !crate::transcript::is_session_id(session) {
+            return false;
+        }
+        let mut inner = self.lock();
+        let Some(live) = inner.live.as_ref() else {
+            return false;
+        };
+        let Some(pid) = live
+            .terminals
+            .get(address)
+            .and_then(|h| h.terminal.foreground.as_ref()?.pid)
+        else {
+            return false;
+        };
+        if !reported_by(pid, reporter, process) {
+            return false;
+        }
+        let held: Vec<String> = live.terminals.keys().cloned().collect();
+        inner.codex.retain(|a, _| held.contains(a));
+        inner
+            .codex
+            .insert(address.to_owned(), (pid, session.to_owned()));
+        true
     }
 
     /// Returns once the first connection attempt is over, so a core that is running when
@@ -817,6 +888,70 @@ impl Core {
             .await?;
         Ok(())
     }
+}
+
+/// The hook runs under the Codex process that started the session, which must lead the
+/// terminal. Codex without `--no-daemon` runs it under its shared app-server, a second
+/// `codex` whose environment names whichever terminal started it, so that report is refused.
+fn reported_by(
+    foreground: u32,
+    reporter: u32,
+    process: impl Fn(u32) -> Option<(u32, String)>,
+) -> bool {
+    let mut pid = reporter;
+    let mut codex = 0;
+    for _ in 0..16 {
+        let Some((parent, name)) = process(pid) else {
+            return false;
+        };
+        codex += usize::from(name == "codex");
+        if pid == foreground {
+            return codex == 1;
+        }
+        if parent <= 1 {
+            return false;
+        }
+        pid = parent;
+    }
+    false
+}
+
+/// A process's parent and short name.
+#[cfg(target_os = "macos")]
+fn process(pid: u32) -> Option<(u32, String)> {
+    let size = std::mem::size_of::<libc::proc_bsdinfo>();
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    // SAFETY: `info` is a writable `proc_bsdinfo` of `size` bytes, what PROC_PIDTBSDINFO fills.
+    let n = unsafe {
+        libc::proc_pidinfo(
+            i32::try_from(pid).ok()?,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            i32::try_from(size).ok()?,
+        )
+    };
+    if usize::try_from(n).ok()? != size {
+        return None;
+    }
+    // SAFETY: zeroed, then filled whole by the call above.
+    let info = unsafe { info.assume_init() };
+    let comm: Vec<u8> = info
+        .pbi_comm
+        .iter()
+        .take_while(|c| **c != 0)
+        .map(|c| *c as u8)
+        .collect();
+    Some((info.pbi_ppid, String::from_utf8_lossy(&comm).into_owned()))
+}
+
+#[cfg(target_os = "linux")]
+fn process(pid: u32) -> Option<(u32, String)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let (head, rest) = stat.rsplit_once(')')?;
+    let name = head.split_once('(')?.1.to_owned();
+    let parent = rest.split_whitespace().nth(1)?.parse().ok()?;
+    Some((parent, name))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1262,8 +1397,12 @@ mod tests {
         );
     }
 
+    fn none(_: &str, _: &str, _: u32) -> Option<String> {
+        None
+    }
+
     fn shown(live: &Live) -> Vec<(String, String, Option<String>, u64)> {
-        live.agents()
+        live.agents(none)
             .into_iter()
             .map(|a| (a.terminal_id, a.agent_status, a.agent, a.state_change_seq))
             .collect()
@@ -1298,7 +1437,7 @@ mod tests {
                 (id("t4"), "unknown".into(), Some("pi".into()), 10),
             ]
         );
-        let a = &l.agents()[0];
+        let a = &l.agents(none)[0];
         assert_eq!(
             (a.pane_id.as_str(), a.workspace_id.as_str()),
             (id("t1").as_str(), format!("hc:{ID}").as_str())
@@ -1352,7 +1491,10 @@ mod tests {
             shown(&l),
             [(t1.clone(), "blocked".into(), Some("claude".into()), 13)]
         );
-        assert_eq!(l.agents()[0].title.as_deref(), Some("Fix the flaky test"));
+        assert_eq!(
+            l.agents(none)[0].title.as_deref(),
+            Some("Fix the flaky test")
+        );
 
         // A snapshot after a gap keeps the seq for the same state and turn, and moves it for
         // a new dialog: blocked, idle, blocked again with a later turn.
@@ -1384,7 +1526,7 @@ mod tests {
             "foreground",
             json!({"pid": 3, "name": "zsh", "argv": ["-zsh"], "cwd": "/w"}),
         );
-        assert!(l.agents().is_empty());
+        assert!(l.agents(none).is_empty());
         event(
             &mut l,
             28,
@@ -1403,7 +1545,7 @@ mod tests {
             "finished",
             json!({"exit_code": 0, "reason": "exited"}),
         );
-        assert!(l.agents().is_empty());
+        assert!(l.agents(none).is_empty());
         event(
             &mut l,
             30,
@@ -1420,7 +1562,7 @@ mod tests {
         );
         assert_eq!(shown(&l)[0].3, 30);
         event(&mut l, 32, "t2", "removed", json!({}));
-        assert!(l.agents().is_empty() && l.terminals.len() == 1);
+        assert!(l.agents(none).is_empty() && l.terminals.len() == 1);
     }
 
     #[test]
@@ -1469,7 +1611,7 @@ mod tests {
             }}),
         ));
         assert_eq!(
-            l.agents().len(),
+            l.agents(none).len(),
             2,
             "events up to the snapshot's seq are ignored"
         );
@@ -1478,7 +1620,7 @@ mod tests {
                 "seq": 50, "terminals": [],
             }}),
         ));
-        assert!(l.agents().is_empty());
+        assert!(l.agents(none).is_empty());
     }
 
     fn agent(status: &str) -> AgentInfo {
@@ -1611,6 +1753,101 @@ mod tests {
             kinds.iter().all(|k| matches!(*k, CREDIT | CLOSE)),
             "only credit and close follow an attach: {kinds:?}"
         );
+    }
+
+    const SESSION: &str = "01a199ed-7993-7261-8219-300d543d764b";
+
+    #[test]
+    fn sessions_come_from_claude_codes_file_and_codexs_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid = std::process::id();
+        let mut claude = terminal(
+            "t1",
+            json!({"state": "idle", "app": "claude-code"}),
+            "claude",
+        );
+        claude["foreground"]["pid"] = json!(pid);
+        let mut codex = terminal("t2", json!({"state": "idle", "app": "codex"}), "codex");
+        codex["foreground"]["pid"] = json!(pid);
+        let core = Core::new(dir.path().join("core.sock"))
+            .with_claude_sessions(Some(dir.path().to_owned()));
+        core.lock().live = Some(live(10, json!([claude, codex])));
+        let sessions = |core: &Core| -> Vec<Option<String>> {
+            core.agents()
+                .unwrap()
+                .into_iter()
+                .map(|a| a.agent_session.map(|s| s.value))
+                .collect()
+        };
+        assert_eq!(sessions(&core), [None, None]);
+
+        let started = crate::now_ms();
+        std::fs::write(
+            dir.path().join(format!("{pid}.json")),
+            json!({"pid": pid, "sessionId": SESSION, "cwd": "/w", "startedAt": started})
+                .to_string(),
+        )
+        .unwrap();
+        core.lock()
+            .codex
+            .insert("t2".into(), (pid + 1, SESSION.into()));
+        assert_eq!(
+            sessions(&core),
+            [Some(SESSION.into()), None],
+            "a report made under another foreground process does not hold"
+        );
+        core.lock().codex.insert("t2".into(), (pid, SESSION.into()));
+        assert_eq!(
+            sessions(&core),
+            [Some(SESSION.into()), Some(SESSION.into())]
+        );
+
+        assert!(
+            !core.bind("t2", SESSION, pid),
+            "the test is not run by Codex"
+        );
+        assert!(!core.bind("t9", SESSION, pid));
+        assert!(!core.bind("box/t2", SESSION, pid));
+        assert!(!core.bind("t2", "../x", pid));
+    }
+
+    #[test]
+    fn a_session_report_holds_only_from_the_codex_that_leads_the_terminal() {
+        let table = |rows: &'static [(u32, u32, &'static str)]| {
+            move |pid: u32| {
+                rows.iter()
+                    .find(|r| r.0 == pid)
+                    .map(|r| (r.1, r.2.to_owned()))
+            }
+        };
+        // collied hook, under sh, under the terminal's Codex (`--no-daemon`).
+        let own = table(&[
+            (30, 20, "collied"),
+            (20, 10, "sh"),
+            (10, 5, "codex"),
+            (5, 1, "hc"),
+        ]);
+        assert!(reported_by(10, 30, own));
+        // Under the shared app-server that terminal 10's Codex started.
+        let shared = table(&[
+            (30, 25, "collied"),
+            (25, 10, "codex"),
+            (10, 5, "codex"),
+            (5, 1, "hc"),
+        ]);
+        assert!(!reported_by(10, 30, shared));
+        // An npm install leads with node, which runs the native codex.
+        let npm = table(&[
+            (30, 15, "collied"),
+            (15, 10, "codex"),
+            (10, 5, "node"),
+            (5, 1, "hc"),
+        ]);
+        assert!(reported_by(10, 30, npm));
+        // From another terminal, or a vanished process.
+        let other = table(&[(30, 40, "collied"), (40, 1, "codex")]);
+        assert!(!reported_by(10, 30, other));
+        assert!(!reported_by(10, 30, table(&[])));
     }
 
     #[tokio::test]

@@ -2208,7 +2208,7 @@ async fn task_sessions_lists_the_folders_closed_sessions_and_resume_refusals_sta
     let refused = [
         (
             resume(&a, "claude", OPEN_SESSION),
-            "already open in a herdr pane",
+            "already open in another agent",
         ),
         (
             resume(&base.join("root/b"), "claude", CLAUDE_SESSION),
