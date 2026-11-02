@@ -108,12 +108,19 @@ extension XCUIApplication {
     // XCTest's private interaction options skip those two waits: 1 skips the wait before an event, 2 skips both.
     func choose(_ item: XCUIElement, opening open: () -> Void) {
         withInteractionOptions(2, open)
-        // The item exists before the menu has laid it out, and asking a frameless item for isHittable records a failure.
+        // The item exists before the menu has laid it out, and isHittable records a failure instead of returning false while
+        // the item's activation point is not valid yet.
+        var last = CGRect.null
         XCTAssertTrue(eventually(within: 15) {
-            guard let laidOut = try? item.snapshot().frame, !laidOut.isEmpty, frame.contains(laidOut) else { return false }
-            return item.isHittable
+            let laidOut = (try? item.snapshot())?.frame ?? .null
+            defer { last = laidOut }
+            return !laidOut.isEmpty && frame.contains(laidOut) && laidOut == last
         }, debugDescription)
-        withInteractionOptions(1) { item.tap() }
+        let settled = last
+        let center = item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        withInteractionOptions(1) { center.tap() }
+        // The open menu can drop the tap and stay open, so an item still where it was tapped was not chosen.
+        if !eventually(within: 3, { !item.exists || (try? item.snapshot())?.frame != settled }) { withInteractionOptions(1) { center.tap() } }
     }
 
     /// Rotates and waits for the window to follow. A rotation with the keyboard up in a session could leave the app never

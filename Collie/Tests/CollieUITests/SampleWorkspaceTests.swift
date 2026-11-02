@@ -95,6 +95,7 @@ final class SampleWorkspaceTests: XCTestCase {
         XCTAssertTrue(agent.appears(within: 5))
         agent.tap()
         app.choose(app.buttons["Git changes"]) { app.buttons["More"].tap() }
+        XCTAssertTrue(app.navigationBars["Git changes"].appears(within: 10))
         let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "sample-approval-tests")).firstMatch
         XCTAssertTrue(row.appears(within: 10))
         XCTAssertFalse(app.buttons["Select"].exists, "the session's own checkout is the only worktree")
