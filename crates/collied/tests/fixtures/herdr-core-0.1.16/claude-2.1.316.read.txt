@@ -1,0 +1,120 @@
+
+ ▐▛███▛█   Claude Code v2.1.316
+▝▜██████▀  Model 01 with high effort · Sample Plan
+ ▝▝   ▝▝   ~/src/demo/fixture/runs/sample/workspace
+
+⚠ 2 sample notices for this fixture · run /mcp
+  ⎿  SessionStart:startup hook error
+  ⎿  Failed with non-blocking status code: sample hook output for a fixture
+
+❯ Reply with the single word pong and nothing else. Do not use tools.
+
+⏺ pong
+
+⏺ Ran 1 stop hook
+  ⎿  Stop hook error: Failed with non-blocking status code: sample hook output for a fixture
+
+✻ Churned for 1s · done 8:54 PM
+
+❯ Reply with a markdown list of three fruits, each with a bold name and a one-line description. Do not use tools.
+
+⏺ - Apple: A crisp, sweet or tart fruit that keeps well and comes in thousands of varieties.
+  - Banana: A soft, starchy tropical fruit you peel by hand, rich in potassium.
+  - Mango: A juicy stone fruit with fragrant orange flesh, prized across South Asia.
+
+⏺ Ran 1 stop hook
+  ⎿  Stop hook error: Failed with non-blocking status code: sample hook output for a fixture
+
+✻ Worked for 2s · done 8:54 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                                                                              Stop hook error occurred · ctrl+o to see
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  s1 n/a (fixed) · s2 n/a | Sample status 042
+  ⏵⏵ auto mode on (shift+tab to cycle) · sample hint for fixtures · ← for agents

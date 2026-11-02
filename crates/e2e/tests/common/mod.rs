@@ -470,12 +470,18 @@ impl CoreSession {
     }
 
     /// `hc` against this core only.
-    pub fn hc(&self, args: &[&str]) -> Value {
-        let out = isolated("hc", &self.root)
-            .env("HC_SESSION", &self.name)
+    pub fn command(&self, args: &[&str]) -> Command {
+        let mut cmd = isolated("hc", &self.root);
+        cmd.env("HC_SESSION", &self.name)
             .env("XDG_RUNTIME_DIR", self.root.join("run"))
             .env("SHELL", "/bin/sh")
-            .args(args)
+            .args(args);
+        cmd
+    }
+
+    pub fn hc(&self, args: &[&str]) -> Value {
+        let out = self
+            .command(args)
             .stdin(Stdio::null())
             .stderr(Stdio::null())
             .output()
