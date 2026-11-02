@@ -774,7 +774,7 @@ impl Core {
                 continue;
             };
             let mut check = tokio::time::interval(SIZE_CHECK);
-            loop {
+            let resized = loop {
                 tokio::select! {
                     next = attach.next() => match next {
                         Ok(Some(bytes)) => {
@@ -782,19 +782,24 @@ impl Core {
                                 s.feed(&bytes);
                             }
                             if attach.credit(bytes.len()).await.is_err() {
-                                break;
+                                break false;
                             }
                         }
-                        Ok(None) | Err(_) => break,
+                        Ok(None) | Err(_) => break false,
                     },
                     _ = check.tick() => {
                         if self.size(&address) != Some(attach.size) {
-                            break;
+                            break true;
                         }
                     }
                 }
-            }
+            };
             *crate::lock(&slot) = None;
+            // A finished terminal stays listed until it is removed, and answers each attach
+            // with a paint and a close.
+            if !resized {
+                tokio::time::sleep(RETRY_FIRST).await;
+            }
         }
     }
 
